@@ -1,4 +1,5 @@
 import { ENCRYPTED_DATA_KEY_V1_BYTES } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
+import type { TeamMembershipHistoryPreparationResultV1 } from '@happier-dev/protocol/teams/membershipHistoryPreparationV1';
 import type { MembershipSessionDataKeyEnvelopeExceptionsV1, MembershipSessionDataKeyEnvelopeItemV1, MembershipSessionDataKeyEnvelopePageV1, PatchMembershipSessionDataKeyEnvelopesResultV1, PatchMembershipSessionDataKeyEnvelopesV1 } from '@happier-dev/protocol/sessions/encryption/membershipSessionDataKeyEnvelopes';
 
 import {
@@ -60,18 +61,7 @@ type RecipientUnavailableReason = Extract<
     { status: 'recipient_unavailable' }
 >['contentKey']['reason'];
 
-export type MembershipHistoryPreparationStatus =
-    | 'complete'
-    | 'incomplete'
-    | 'scope_changed'
-    /** The target Account cannot receive envelopes at all; membership stays active. */
-    | 'recipient_unavailable'
-    /** The membership now resolves to a different Account than the captured discovery target. */
-    | 'recipient_changed'
-    /** The addressed Team or Group membership disappeared while the pass was committing. */
-    | 'membership_changed'
-    /** The returned content key is not bound by the Account that claims it. */
-    | 'invalid_recipient_binding';
+export type MembershipHistoryPreparationStatus = TeamMembershipHistoryPreparationResultV1['status'];
 
 export type MembershipHistoryPreparationOutcome = Readonly<{
     status: MembershipHistoryPreparationStatus;

@@ -1,4 +1,4 @@
-import { type SessionMessageV1 } from '@happier-dev/protocol';
+import type { SessionMessageV1 } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
 import { describe, it, expect, vi } from 'vitest';
 import { encodeBase64 } from '@/encryption/base64';
 import { EncryptionCache } from './encryptionCache';
@@ -15,7 +15,11 @@ describe('SessionEncryption.decryptMessages (cache behavior)', () => {
   it('opens accepted delivery facts and refreshes unchanged ciphertext after settlement', async () => {
     const encryptor = new AES256Encryption(new Uint8Array(32).fill(4));
     const facts = { v: 1, acceptedAtMs: 1234, delivery: { kind: 'steer', turnId: 'turn-1' } } as const;
-    const [messageBytes, factBytes] = await encryptor.encrypt([{ role: 'user', content: { type: 'text', text: 'hello' } }, facts]);
+    const storedFacts = { ...facts, retired: true, delivery: { ...facts.delivery, retired: true } };
+    const [messageBytes, factBytes, malformedFactBytes] = await encryptor.encrypt([
+      { role: 'user', content: { type: 'text', text: 'hello' } }, storedFacts,
+      { ...storedFacts, delivery: { ...storedFacts.delivery, turnId: '' } },
+    ]);
     const sessionEnc = new SessionEncryption('s-accepted', encryptor, new EncryptionCache());
     const message = { id: 'm-accepted', seq: 1, localId: 'input-1', createdAt: 1, updatedAt: 1,
       content: { t: 'encrypted', c: encodeBase64(messageBytes, 'base64') } } as const;
@@ -23,6 +27,9 @@ describe('SessionEncryption.decryptMessages (cache behavior)', () => {
     const settled = { ...message, deliveryResolution: { v: 1, kind: 'provider_accepted',
       content: { t: 'encrypted', c: encodeBase64(factBytes, 'base64') } } } as const;
     expect((await sessionEnc.decryptMessage(settled))?.acceptedDelivery).toEqual(facts);
+    const malformed = { ...settled, deliveryResolution: { ...settled.deliveryResolution,
+      content: { t: 'encrypted', c: encodeBase64(malformedFactBytes, 'base64') } } } as const;
+    expect((await sessionEnc.decryptMessage(malformed))?.acceptedDelivery).toBeUndefined();
     const mismatched = { ...message, deliveryResolution: { v: 1, kind: 'provider_accepted',
       content: { t: 'plain', v: facts } } } as const;
     expect((await sessionEnc.decryptMessage(mismatched))?.acceptedDelivery).toBeUndefined();

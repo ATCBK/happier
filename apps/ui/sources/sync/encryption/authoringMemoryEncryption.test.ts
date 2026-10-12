@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { createAuthoringMemoryCipher } from './authoringMemoryEncryption';
-import { buildProjectLastOpenedMemoryKeyV1, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol';
+import { buildProjectLastOpenedMemoryKeyV1, buildWorkflowProjectMemoryKeyV1 } from '@happier-dev/protocol/account/authoringMemory';
+import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 
 describe('authoring memory Account envelope', () => {
     const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(3) };
     const randomBytes = (length: number) => new Uint8Array(length).fill(4);
+    it.each(['plain', 'e2ee'] as const)('projects typed retained Workflow project memory in %s without relaxing writes', mode => {
+        const key = buildWorkflowProjectMemoryKeyV1('workflow-one');
+        const value = { machineId: 'machine-one', directory: '/workspace', retired: true };
+        const cipher = createAuthoringMemoryCipher({ mode, material: mode === 'plain' ? null : material, randomBytes });
+        const content = (retained: typeof value | Readonly<{ machineId: number; directory: string; retired: boolean }>) =>
+            mode === 'plain' ? { t: 'plain' as const, v: retained } : { t: 'encrypted' as const, c: sealAccountScopedBlobCiphertext({
+                kind: 'authoring_memory', material, randomBytes, payload: { key, value: retained },
+            }) };
+        expect(cipher.open(key, content(value))).toEqual({ machineId: 'machine-one', directory: '/workspace' });
+        expect(() => cipher.open(key, content({ ...value, machineId: 17 }))).toThrow();
+        expect(() => cipher.seal(key, value)).toThrow();
+    });
     it('binds qualified Project timestamps in Plain and E2EE and rejects malformed retained values', () => {
         const key = buildProjectLastOpenedMemoryKeyV1({ serverId: 'home:one', projectKey: 'project/one' });
         const other = buildProjectLastOpenedMemoryKeyV1({ serverId: 'home:two', projectKey: 'project/one' });

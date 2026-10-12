@@ -1,4 +1,4 @@
-import { SessionDraftPrivatePayloadV2Schema, SessionDraftStoredContentEnvelopeV2Schema, createSessionDraftPrivatePayloadV2, canonicalSessionDraftAddressV2, isAccountOwnedDraftAddressV2, type SessionDraftAddressV2, type SessionDraftDocumentV2, type SessionDraftStoredContentEnvelopeV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { SessionDraftPrivatePayloadV2StoredSchema, SessionDraftStoredContentEnvelopeV2Schema, SessionDraftStoredContentEnvelopeV2StoredSchema, createSessionDraftPrivatePayloadV2, canonicalSessionDraftAddressV2, isAccountOwnedDraftAddressV2, type SessionDraftAddressV2, type SessionDraftDocumentV2, type SessionDraftStoredContentEnvelopeV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 
 import type { SessionDraftRepositoryCipher } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
@@ -22,9 +22,9 @@ type SessionDraftCipherOptions = Readonly<{
  * neighbouring row's plaintext can never be adopted under this address.
  */
 function parseBoundPayload(address: SessionDraftAddressV2, value: unknown, encryptedEpoch?: 1 | 2): SessionDraftDocumentV2 | null {
-    // A draft a 0.2 client wrote is a closed V1 payload, which this union
-    // already admits; no predecessor bridge stands between it and its reader.
-    const parsed = SessionDraftPrivatePayloadV2Schema.safeParse(value);
+    // The stored projection admits 0.2's V1 payload and drops retired fields
+    // while retaining the canonical address/document correspondence checks.
+    const parsed = SessionDraftPrivatePayloadV2StoredSchema.safeParse(value);
     if (!parsed.success) return null;
     const payload = parsed.data;
     if (encryptedEpoch !== undefined && payload.v !== encryptedEpoch) return null;
@@ -60,7 +60,9 @@ export function createSessionDraftCipher(options: SessionDraftCipherOptions): Se
             return SessionDraftStoredContentEnvelopeV2Schema.parse(sealed.content);
         },
         open: async (address, content): Promise<SessionDraftDocumentV2 | null> => {
-            if (!SessionDraftStoredContentEnvelopeV2Schema.safeParse(content).success) return null;
+            const parsed = SessionDraftStoredContentEnvelopeV2StoredSchema.safeParse(content);
+            if (!parsed.success) return null;
+            content = parsed.data;
             if (isAccountOwnedDraftAddressV2(address)) {
                 if (options.accountMode === 'plain') {
                     return content.t === 'plain' ? parseBoundPayload(address, content.v) : null;

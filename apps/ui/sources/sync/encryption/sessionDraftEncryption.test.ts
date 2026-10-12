@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionDraftDocumentV1, StrictJsonValue } from '@happier-dev/protocol';
-import {
-    NewSessionDraftDocumentV2Schema,
-    SessionDraftStoredContentEnvelopeV1Schema,
-} from '@happier-dev/protocol';
+import { NewSessionDraftDocumentV2Schema } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { SessionDraftStoredContentEnvelopeV1Schema } from '@happier-dev/protocol/drafts/sessionDrafts';
 
 import { createSessionDraftCipher } from './sessionDraftEncryption';
 import { SessionDraftContextUnavailableError } from '@/sync/ops/sessionDrafts/sessionDraftCipherError';
@@ -112,11 +110,12 @@ describe('sessionDraftEncryption', () => {
         }
     });
 
-    it('rejects the never-released hybrid execution-target field instead of widening V1', async () => {
+    it('drops retired draft fields while retaining the known document and exact address binding', async () => {
         const cipher = createSessionDraftCipher({
             accountMode: 'plain', accountCryptoMaterial: null,
             getSessionContext: () => null, randomBytes: (length) => new Uint8Array(length),
         });
+        const expected = document('newSession');
         const legacy = document('newSession');
         if (legacy.target.kind !== 'newSession') throw new Error('Expected newSession fixture');
         // The case is precisely a field the canonical authoring catalog does not
@@ -124,8 +123,14 @@ describe('sessionDraftEncryption', () => {
         (legacy.target.authoring as Record<string, unknown>).executionTarget = {
             mutationId: '00000000-0000-4000-8000-000000000020', value: { serverId: 'home-a', machineId: 'machine-a' },
         };
-        const envelope = { t: 'plain' as const, v: { v: 1 as const, address: newAddress, document: legacy } };
-        await expect(cipher.open(newAddress, envelope)).resolves.toBeNull();
+        const envelope = { t: 'plain' as const, retired: true, v: { v: 1 as const, retired: true,
+            address: { ...newAddress, retired: true }, document: { ...legacy, retired: true,
+                composer: { ...legacy.composer, text: { ...legacy.composer.text, retired: true } } } } };
+        await expect(cipher.open(newAddress, envelope)).resolves.toEqual(expected);
+        await expect(cipher.open({ ...newAddress, draftId: '00000000-0000-4000-8000-000000000002' }, envelope)).resolves.toBeNull();
+        await expect(cipher.open(newAddress, { ...envelope, v: { ...envelope.v,
+            document: { ...envelope.v.document, composer: { ...envelope.v.document.composer,
+                text: { ...envelope.v.document.composer.text, mutationId: 'invalid' } } } } })).resolves.toBeNull();
     });
 
     it('uses plain envelopes for plain targets and validates the single private address binding', async () => {

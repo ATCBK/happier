@@ -79,6 +79,19 @@ export function isRawAccountStorageEncryption(
     return value !== null && 'encryptRaw' in value;
 }
 
+// Preserve the captured transport's identity through this request-options
+// adapter so overlapping admission reads reach the API's live sharing owner.
+// Weak keys retain neither retired transports nor completed currentness values.
+const currentnessRequestAdapters = new WeakMap<ServerFetch, (path: string, init: RequestInit) => Promise<Response>>();
+function currentnessRequest(request: ServerFetch) {
+    let adapter = currentnessRequestAdapters.get(request);
+    if (!adapter) {
+        adapter = (path, init) => request(path, init, { includeAuth: false, retry: 'none' });
+        currentnessRequestAdapters.set(request, adapter);
+    }
+    return adapter;
+}
+
 /** Capture the cipher before awaiting the authoritative Account-mode/fingerprint read. */
 export async function resolveAccountStorageContext(
     credentials: AuthCredentials,
@@ -93,7 +106,7 @@ export async function resolveAccountStorageContext(
     try {
         const currentness = await fetchAccountEncryptionCurrentness(credentials, {
             ...(options.request ? {
-                request: (path, init) => options.request!(path, init, { includeAuth: false, retry: 'none' }),
+                request: currentnessRequest(options.request),
             } : {}),
         });
         if (currentness.mode === 'plain') return { mode: 'plain', encryption: null };

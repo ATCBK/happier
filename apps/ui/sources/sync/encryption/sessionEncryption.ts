@@ -1,5 +1,5 @@
 import type { SessionMessageV1 } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
-import { parseSessionMessageDeliveryResolutionV1, SessionMessageAcceptedDeliveryFactsV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
+import { readStoredSessionMessageDeliveryResolutionV1, SessionMessageAcceptedDeliveryFactsV1StoredSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
 import { deriveSessionMutationEqualityTagV1, SESSION_DISCUSSION_MUTATION_EQUALITY_HKDF_LABEL_V1, SESSION_INPUT_EQUALITY_HKDF_LABEL_V1 } from '@happier-dev/protocol/sessions/mutations/sessionMutationEqualityV1';
 import { projectSessionMetadataForWire } from '@happier-dev/protocol/sessions/metadata/terminalMetadata';
 import { encodeBase64 } from '@/encryption/base64';
@@ -117,7 +117,7 @@ export class SessionEncryption {
 
         const computeMessageFingerprint = (message: EncryptedApiMessage): string => {
             const messageRole = typeof message.messageRole === 'string' ? message.messageRole : 'null';
-            const resolution = parseSessionMessageDeliveryResolutionV1(message.deliveryResolution);
+            const resolution = readStoredSessionMessageDeliveryResolutionV1(message.deliveryResolution);
             const deliveryFingerprint = resolution?.kind === 'provider_accepted' && resolution.content.t === 'encrypted'
                 ? computeMessageCiphertextFingerprint(resolution.content.c) : 'none';
             return `${computeMessageCiphertextFingerprint(message.content.c)}:role:${messageRole}:delivery:${deliveryFingerprint}`;
@@ -199,7 +199,7 @@ export class SessionEncryption {
                 },
             );
             const acceptedContent = toDecrypt.map(({ message }) => {
-                const resolution = parseSessionMessageDeliveryResolutionV1(message.deliveryResolution);
+                const resolution = readStoredSessionMessageDeliveryResolutionV1(message.deliveryResolution);
                 return resolution?.kind === 'provider_accepted' && resolution.content.t === 'encrypted'
                     ? resolution.content.c : null;
             });
@@ -209,7 +209,7 @@ export class SessionEncryption {
                 { decryptName: 'sync.encryption.decryptMessages.acceptedDelivery', decryptFields: { messages: acceptedIndices.length } },
             ) : [];
             const acceptedDeliveryByIndex = new Map(acceptedIndices.map((index, position) => {
-                const parsed = SessionMessageAcceptedDeliveryFactsV1Schema.safeParse(acceptedFacts[position]);
+                const parsed = SessionMessageAcceptedDeliveryFactsV1StoredSchema.safeParse(acceptedFacts[position]);
                 return [index, parsed.success ? parsed.data : undefined] as const;
             }));
             if (!this.isCurrent()) return messages.map(() => null);

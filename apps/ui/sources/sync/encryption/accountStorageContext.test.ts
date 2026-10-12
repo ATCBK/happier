@@ -13,6 +13,8 @@ import type { ServerFetch } from '@/sync/http/client';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import type { AccountStorageCurrentnessUnavailableError as CurrentnessFailure } from './accountStorageContext';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { AbortController as ReactNativeAbortController } from 'abort-controller';
 
 installConnectedServicesCommonModuleMocks();
 const home = createHomeGovernanceHarness();
@@ -24,7 +26,7 @@ await import('@/sync/ops/actions/defaultActionExecutor');
 const runtime = await import('@/sync/syncEngine');
 const { Encryption } = await import('./encryption');
 const { AccountStorageCurrentnessUnavailableError, resolveAccountStorageContext } = await import('./accountStorageContext');
-const { AccountEncryptionCurrentnessReadinessError } = await import('@/sync/api/account/apiAccountEncryptionMode');
+const { AccountEncryptionCurrentnessReadinessError, fetchAccountEncryptionCurrentness, invalidateAccountEncryptionModeCache } = await import('@/sync/api/account/apiAccountEncryptionMode');
 afterEach(() => resetRuntimeFetch());
 
 const owner = 'storage-currentness-owner';
@@ -61,6 +63,142 @@ async function captureCurrentnessFailure(operation: Promise<unknown>): Promise<C
 }
 
 describe('Account storage currentness failure fidelity', () => {
+    it('admits and cancels currentness with the actual React Native AbortSignal implementation', async () => {
+        await withCurrentnessHome({ body: currentness('plain', null) }, async request => {
+            const controller = new ReactNativeAbortController();
+            // Native's legacy declaration omits newer DOM members; this is its real signal boundary.
+            const signal = controller.signal as AbortSignal;
+            expect(await fetchAccountEncryptionCurrentness({ token }, { request, signal })).toMatchObject({ mode: 'plain' });
+            controller.abort();
+            await expect(fetchAccountEncryptionCurrentness({ token }, { request, signal })).rejects.toMatchObject({ name: 'AbortError' });
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(1);
+        }, 'plain');
+    });
+    it('shares ambient reads only within the current scope revision and keeps captured transport separate', async () => {
+        const response = createDeferred<void>();
+        let version = 1;
+        await withCurrentnessHome({ select: () => ({ body: { ...currentness('plain', null), version }, respondAfter: response.promise }) }, async request => {
+            const first = fetchAccountEncryptionCurrentness({ token });
+            const second = fetchAccountEncryptionCurrentness({ token });
+            const captured = fetchAccountEncryptionCurrentness({ token }, { request });
+            version = 2;
+            invalidateAccountEncryptionModeCache();
+            const updated = fetchAccountEncryptionCurrentness({ token });
+            response.resolve();
+            expect(await Promise.all([first, second, captured, updated])).toMatchObject([
+                { version: 1 }, { version: 1 }, { version: 1 }, { version: 2 },
+            ]);
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(3);
+            version = 3;
+            expect(await fetchAccountEncryptionCurrentness({ token })).toMatchObject({ version: 3 });
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(4);
+        }, 'plain');
+    });
+
+    it('shares E2EE currentness while admitting each caller cipher independently', async () => {
+        const response = createDeferred<void>();
+        const cipher = await Encryption.create(secret);
+        await withCurrentnessHome({ body: currentness(), respondAfter: response.promise }, async request => {
+            const readable = resolveAccountStorageContext(credentials, { encryption: cipher, request });
+            const locked = resolveAccountStorageContext(credentials, { encryption: null, request });
+            const outcomes = Promise.allSettled([readable, locked]);
+            response.resolve();
+            expect(await outcomes).toEqual([
+                { status: 'fulfilled', value: { mode: 'e2ee', encryption: cipher } },
+                { status: 'rejected', reason: expect.objectContaining({ reason: 'encryption-material-unavailable' }) },
+            ]);
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(1);
+        });
+    });
+
+    it('shares overlapping storage admission reads but rereads fresh currentness after settlement', async () => {
+        const response = createDeferred<void>();
+        let version = 1;
+        await withCurrentnessHome({ select: () => ({ body: { ...currentness('plain', null), version }, respondAfter: response.promise }) }, async request => {
+            const first = resolveAccountStorageContext({ token }, { encryption: null, request });
+            const second = resolveAccountStorageContext({ token }, { encryption: null, request });
+            const starts = home.requestsFor('/v1/account/encryption/currentness').length;
+            response.resolve();
+            expect(await Promise.all([first, second])).toEqual([
+                { mode: 'plain', encryption: null }, { mode: 'plain', encryption: null },
+            ]);
+            expect(starts).toBe(1);
+            version = 2;
+            expect(await resolveAccountStorageContext({ token }, { encryption: null, request })).toEqual({ mode: 'plain', encryption: null });
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(2);
+            expect(await fetchAccountEncryptionCurrentness({ token }, { request })).toMatchObject({ version: 2 });
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(3);
+        }, 'plain');
+    });
+
+    it('shares a live failed currentness read and allows a subsequent same-transport recovery', async () => {
+        const response = createDeferred<void>();
+        let refused = true;
+        await withCurrentnessHome({ select: () => ({ status: refused ? 403 : 200,
+            body: refused ? { error: 'denied' } : currentness('plain', null), respondAfter: response.promise }) }, async request => {
+            const first = fetchAccountEncryptionCurrentness({ token }, { request });
+            const second = fetchAccountEncryptionCurrentness({ token }, { request });
+            const outcomes = Promise.allSettled([first, second]);
+            const starts = home.requestsFor('/v1/account/encryption/currentness').length;
+            response.resolve();
+            expect(await outcomes).toEqual([
+                { status: 'rejected', reason: expect.objectContaining({ status: 403 }) },
+                { status: 'rejected', reason: expect.objectContaining({ status: 403 }) },
+            ]);
+            expect(starts).toBe(1);
+            refused = false;
+            expect(await fetchAccountEncryptionCurrentness({ token }, { request })).toMatchObject({ mode: 'plain' });
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(2);
+        }, 'plain');
+    });
+
+    it('keeps distinct credential material and captured transports independent', async () => {
+        const response = createDeferred<void>();
+        await withCurrentnessHome({ body: currentness('plain', null), respondAfter: response.promise }, async request => {
+            const otherServerUrl = 'https://other-storage-currentness-owner.test';
+            const otherHome = await home.addHome({ name: 'Other currentness', serverUrl: otherServerUrl, accountId: owner,
+                accountEncryptionMode: 'plain', currentAccount: true });
+            home.answer(otherHome, 'GET /v1/account/encryption/currentness', { body: { ...currentness('plain', null), version: 7 }, respondAfter: response.promise });
+            const otherRequest: ServerFetch = (path, init) => home.request(new URL(path, otherServerUrl), init);
+            const first = fetchAccountEncryptionCurrentness(credentials, { request });
+            const changedMaterial = fetchAccountEncryptionCurrentness({ token, secret: encodeBase64(new Uint8Array(32).fill(12), 'base64url') }, { request });
+            const other = fetchAccountEncryptionCurrentness(credentials, { request: otherRequest });
+            response.resolve();
+            expect(await Promise.all([first, changedMaterial, other])).toMatchObject([{ version: 1 }, { version: 1 }, { version: 7 }]);
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(3);
+        }, 'plain');
+    });
+
+    it('isolates caller cancellation while sharing readers with the same signal', async () => {
+        const response = createDeferred<void>();
+        await withCurrentnessHome({ body: currentness('plain', null), respondAfter: response.promise }, async request => {
+            // The HTTP boundary completes or rejects each request under its own AbortSignal.
+            const cancellableRequest: ServerFetch = async (path, init) => {
+                const result = await request(path, init);
+                init?.signal?.throwIfAborted();
+                return result;
+            };
+            const cancelled = new AbortController();
+            const retained = new AbortController();
+            const first = fetchAccountEncryptionCurrentness({ token }, { request: cancellableRequest, signal: cancelled.signal });
+            const second = fetchAccountEncryptionCurrentness({ token }, { request: cancellableRequest, signal: retained.signal });
+            const third = fetchAccountEncryptionCurrentness({ token }, { request: cancellableRequest, signal: retained.signal });
+            const outcomes = Promise.allSettled([first, second, third]);
+            const starts = home.requestsFor('/v1/account/encryption/currentness').length;
+            cancelled.abort();
+            response.resolve();
+            expect(await outcomes).toMatchObject([
+                { status: 'rejected', reason: { name: 'AbortError' } },
+                { status: 'fulfilled', value: { mode: 'plain' } },
+                { status: 'fulfilled', value: { mode: 'plain' } },
+            ]);
+            expect(starts).toBe(2);
+            await expect(fetchAccountEncryptionCurrentness({ token }, { request: cancellableRequest, signal: cancelled.signal }))
+                .rejects.toMatchObject({ name: 'AbortError' });
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(2);
+        }, 'plain');
+    });
+
     it.each([{ status: 401, reason: 'unauthorized' }, { status: 403, reason: 'forbidden' }])(
         'preserves the actual HTTP $status refusal as $reason', async ({ status, reason }) => {
             await withCurrentnessHome({ status, body: { error: 'denied' } }, async request => {
