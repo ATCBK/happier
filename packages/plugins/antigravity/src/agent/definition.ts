@@ -20,15 +20,14 @@ export const AGENT_DEFINITION = Object.freeze({
     detectKey: ANTIGRAVITY_BINARY_NAME,
     flavorAliases: [ANTIGRAVITY_BINARY_NAME],
     cloudConnect: null,
-    connectedServices: {
-      supportedServiceIds: ['gemini'],
-    },
+    connectedServices: null,
     resume: { vendorResume: 'supported' as const, vendorResumeIdField: 'antigravitySessionId' },
     sessionStorage: { direct: false, persisted: true },
     sessionCapabilities: {
       sessionListing: 'unsupported',
       sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
       sessionRollback: { conversation: 'unsupported' },
+      usageLimitRecovery: { checkNow: 'supported' },
     },
     handoff: { vendorStateTransfer: 'unsupported' },
     localControl: {

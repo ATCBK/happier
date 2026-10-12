@@ -17,6 +17,28 @@ function response(status: number, body: unknown) {
 }
 // Antigravity ACP 1.3.0 onboard.py and bundled CCPA discovery schema; synthetic response evidence.
 describe('Antigravity qualified quota', () => {
+  it('reads wrapped summaries and project objects while preserving provider windows', async () => {
+    const quota = await readAntigravityQuota(context(async request => response(200, request.url.endsWith(':loadCodeAssist')
+      ? { currentTier: { id: 'free' }, cloudaicompanionProject: { id: 'project' } }
+      : { quotaSummary: { groups: [{ displayName: 'Provider group', buckets: [{ bucketId: 'window', window: 'weekly', remainingFraction: 0.4 }] }] } })));
+    expect(quota.limits[0]).toMatchObject({ providerLimitId: 'window', scope: 'weekly', windowDurationMs: 604800000, remainingPct: 40 });
+  });
+  it('preserves exact model versions when the provider only returns per-model quota', async () => {
+    const requests: string[] = [];
+    const quota = await readAntigravityQuota(context(async request => {
+      requests.push(request.url);
+      return response(200, request.url.endsWith(':loadCodeAssist') ? { currentTier: { id: 'free' }, cloudaicompanionProject: 'project' }
+        : request.url.endsWith(':retrieveUserQuotaSummary') ? { groups: [] }
+        : { buckets: [{ modelId: 'gemini-2.5-flash', remainingFraction: 0.2 }, { modelId: 'gemini-3-flash', tokenType: 'REQUESTS', remainingFraction: 0.8, remainingAmount: '80' }, { modelId: 'gemini-3-flash', tokenType: 'WTUS', remainingFraction: 0.4, remainingAmount: '40' }] });
+    }));
+    expect(requests.at(-1)).toBe('https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota');
+    expect(quota.limits).toMatchObject([
+      { id: 'model:gemini-2.5-flash', modelId: 'gemini-2.5-flash', remainingPct: 20, scope: 'model' },
+      { id: 'model:["gemini-3-flash","REQUESTS"]', modelId: 'gemini-3-flash', remainingPct: 80, scope: 'model', unit: 'requests' },
+      { id: 'model:["gemini-3-flash","WTUS"]', modelId: 'gemini-3-flash', remainingPct: 40, scope: 'model', unit: 'unknown', label: 'gemini-3-flash · WTUS' },
+    ]);
+  });
+
   it.each([false, true])('uses selected bearer/project and returned tier endpoint (GCP terms: %s)', async usesGcpTos => {
     const requests: Array<{ url: string; headers?: Readonly<Record<string, string>>; body?: Uint8Array }> = [];
     const quota = await readAntigravityQuota(context(async request => {

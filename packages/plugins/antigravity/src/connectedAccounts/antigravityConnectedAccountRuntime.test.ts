@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ConnectedAccountRuntime } from '@happier-dev/plugin-sdk/connected-accounts';
 import type { AgentConnectedAccountLaunchContributionV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
@@ -47,7 +50,7 @@ describe('Antigravity qualified Connected Account', () => {
     const mode = accountRuntime.authentication.modes['oauth-personal'];
     if (!mode || mode.kind !== 'oauthAuthorizationCode') throw new Error('Antigravity OAuth is unavailable');
     const descriptor = PLUGIN_MANIFEST.contributes.connectedAccountDescriptors.find(({ id }) => id === service.localId);
-    expect(descriptor?.authentication.modes).toEqual([expect.objectContaining({ id: 'oauth-personal', callbackUrl, pkce: 'required' })]);
+    expect(descriptor?.authentication.modes).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'oauth-personal', callbackUrl, pkce: 'required' })]));
     const attempted = store();
     const requests: Array<{ url: string; body?: Uint8Array; headers?: Readonly<Record<string, string>> }> = [];
     const context = { attempt: { kind: 'connect', attemptId: 'connect-selected' }, service, attemptCredentials: attempted, signal: new AbortController().signal,
@@ -76,6 +79,20 @@ describe('Antigravity qualified Connected Account', () => {
     expect(attempted.values.get('providerEmail')).toBe('selected@example.com');
   });
 
+  it('preserves an explicitly empty scope instead of claiming the requested grants', async () => {
+    const accountRuntime = await runtime();
+    const mode = accountRuntime.authentication.modes['oauth-personal'];
+    if (!mode || mode.kind !== 'oauthAuthorizationCode') throw new Error('Antigravity OAuth is unavailable');
+    const attempted = store();
+    const context = { attempt: { kind: 'connect', attemptId: 'connect-empty-grants' }, service, attemptCredentials: attempted, signal: new AbortController().signal,
+      services: { http: { async request(request: { url: string }) { return request.url.includes('/userinfo')
+        ? response(200, { sub: 'selected-google-account' }, request.url)
+        : response(200, { access_token: 'selected-access', refresh_token: 'selected-refresh', scope: '' }); } } },
+    } as Parameters<typeof mode.complete>[1];
+    await expect(mode.complete({ callbackUrl, code: 'code', state: 'state', pkceVerifier: 'verifier' }, context)).resolves.toMatchObject({ status: 'connected', scopes: [] });
+    expect(attempted.values.get('scopes')).toBe('[]');
+  });
+
   it.each([[401, 'rejected'], [503, 'connected']] as const)('uses an honest identity outcome after userinfo HTTP %s', async (status, outcome) => {
     const accountRuntime = await runtime();
     const mode = accountRuntime.authentication.modes['oauth-personal'];
@@ -97,6 +114,51 @@ describe('Antigravity qualified Connected Account', () => {
     }
   });
 
+  it.each([
+    ['oauth-personal', 'missing', 'reconnect'], ['oauth-personal', 'email-only', 'reconnect'], ['oauth-personal', 'verified', 'reconnect'],
+    ['native-import', 'missing', 'reconnect'], ['native-import', 'email-only', 'reconnect'], ['native-import', 'verified', 'reconnect'],
+    ['native-import', 'missing', 'connect'],
+  ] as const)('finalizes %s with %s identity for %s before staging a replacement grant', async (modeId, identityKind, attemptKind) => {
+    const home = await mkdtemp(join(tmpdir(), 'agy-reconnect-identity-'));
+    vi.stubEnv('GEMINI_HOME', home); vi.stubEnv('AGY_ACP_FORCE_FILE_STORAGE', '1');
+    try {
+      await mkdir(join(home, 'antigravity-acp'));
+      await writeFile(join(home, 'antigravity-acp/acp_token.json'), JSON.stringify({ client_id: '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com', refresh_token: 'native-replacement', project_id: 'replacement-project' }));
+      const accountRuntime = await runtime();
+      const mode = accountRuntime.authentication.modes[modeId];
+      if (!mode || (mode.kind !== 'manual' && mode.kind !== 'oauthAuthorizationCode')) throw new Error('Expected account acquisition mode');
+      const attempted = store();
+      const identity = identityKind === 'verified' ? { sub: 'stable-provider-account', email: 'stable@example.test' } : identityKind === 'email-only' ? { email: 'stable@example.test' } : {};
+      const context = { attempt: attemptKind === 'connect' ? { kind: 'connect', attemptId: 'identity-connect' } : { kind: 'reconnect', attemptId: 'identity-reconnect', account: { service, accountId: 'stable-provider-account' } },
+        service, attemptCredentials: attempted, signal: new AbortController().signal,
+        services: { logger: { warn() {} }, http: { async request(request: { url: string }) {
+          if (request.url.includes('/userinfo')) return response(200, identity, request.url);
+          if (request.url.includes('/tokeninfo')) return response(200, { azp: '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com', scope: scopes.join(' '), expires_in: '3600', ...identity }, request.url);
+          return response(200, { access_token: 'replacement-access', refresh_token: 'replacement-refresh', expires_in: 3600, scope: scopes.join(' ') }, request.url);
+        } } },
+      } as Parameters<typeof mode.complete>[1];
+      const outcome = mode.kind === 'manual'
+        ? await mode.complete({ fields: { source: 'acp' } }, context)
+        : await mode.complete({ callbackUrl, code: 'replacement-code', state: 'state', pkceVerifier: 'verifier' }, context);
+      const accepted = attemptKind === 'connect' || identityKind === 'verified';
+      expect(outcome.status).toBe(accepted ? 'connected' : 'rejected');
+      if (accepted) {
+        expect(attempted.values.get('accessToken')).toBe('replacement-access');
+        if (identityKind === 'verified') expect(outcome).toMatchObject({ accountId: 'stable-provider-account' });
+      } else expect(attempted.values.size).toBe(0);
+    } finally { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('does not invent grants for stored credentials with unknown scope', async () => {
+    const accountRuntime = await runtime();
+    const context = readContext(store(new Map([['accessToken', 'selected-access'], ['refreshToken', 'selected-refresh']])));
+    // These credential-read boundaries do not use the host services omitted by this fixture.
+    await expect(accountRuntime.status(context as Parameters<typeof accountRuntime.status>[0])).resolves.toMatchObject({ status: 'connected', scopes: [] });
+    const result = await accountRuntime.materialize({ kind: 'files', fileIds: ['antigravity-acp/acp_token.json'] }, context as Parameters<typeof accountRuntime.materialize>[1]);
+    if (result.kind !== 'files') throw new Error('Expected Antigravity token materialization');
+    expect(JSON.parse(new TextDecoder().decode(result.files['antigravity-acp/acp_token.json'])).scopes).toEqual([]);
+  });
+
   it('retains selected identity, refresh token and project when refreshing without replacement facts', async () => {
     const accountRuntime = await runtime();
     const credentials = store(new Map([['accessToken', 'old-access'], ['refreshToken', 'selected-refresh'], ['providerEmail', 'selected@example.com'], ['providerAccountId', 'selected-google-account'], ['projectId', 'selected-project'], ['scopes', JSON.stringify(scopes)]]));
@@ -104,9 +166,10 @@ describe('Antigravity qualified Connected Account', () => {
     const context = { ...readContext(credentials), operation: { operationId: 'refresh', configurationRevision: 'configuration-1' }, stagedCredentials: staged,
       services: { http: { async request() { return response(200, { access_token: 'new-access', expires_in: 3600 }); } } },
     } as Parameters<typeof accountRuntime.refresh>[0];
-    await expect(accountRuntime.refresh(context)).resolves.toMatchObject({ status: 'connected', displayName: 'selected@example.com' });
+    await expect(accountRuntime.refresh(context)).resolves.toMatchObject({ status: 'connected', displayName: 'selected@example.com', scopes });
     expect(staged.values.get('accessToken')).toBe('new-access');
     expect(staged.values.get('refreshToken')).toBe('selected-refresh');
+    expect(JSON.parse(staged.values.get('scopes') ?? 'null')).toEqual(scopes);
     expect(staged.values.get('providerAccountId')).toBe('selected-google-account');
     expect(staged.values.get('projectId')).toBe('selected-project');
   });
@@ -139,7 +202,7 @@ describe('Antigravity qualified Connected Account', () => {
 
   it('materializes only selected native files with the issuing client and retained project', async () => {
     const accountRuntime = await runtime();
-    const credentials = store(new Map([['accessToken', 'selected-access'], ['refreshToken', 'selected-refresh'], ['projectId', 'selected-project'], ['expiresAtMs', '1700003600000']]));
+    const credentials = store(new Map([['accessToken', 'selected-access'], ['refreshToken', 'selected-refresh'], ['projectId', 'selected-project'], ['expiresAtMs', '1700003600000'], ['scopes', JSON.stringify(scopes)]]));
     const materialized = await accountRuntime.materialize({ kind: 'files', fileIds: ['antigravity-acp/acp_token.json', 'antigravity-acp/settings.json'] }, readContext(credentials) as Parameters<typeof accountRuntime.materialize>[1]);
     expect(materialized.kind).toBe('files');
     if (materialized.kind !== 'files') throw new Error('Native files were not materialized');
@@ -163,6 +226,63 @@ describe('Antigravity qualified Connected Account', () => {
     await expect(adapter.verifyProviderOutcome({ target, selections: [{ ...selected, credentialRevision: null }], outcome: { kind: 'provider_activity', event: 'assistant_message_end' } })).resolves.toMatchObject({ status: 'unavailable' });
     await expect(adapter.verifyProviderOutcome({ target, selections: [{ ...selected, serviceId: 'happier.agent.gemini/gemini-account' }], outcome: { kind: 'provider_activity', event: 'assistant_message_end' } })).resolves.toMatchObject({ status: 'unavailable' });
     await expect(adapter.verifyProviderOutcome({ target, selections: [selected], outcome: { kind: 'provider_activity', event: 'assistant_message_end' } })).resolves.toMatchObject({ status: 'verified', targets: [{ serviceId: selected.serviceId, profileId: 'selected-account', groupId: 'pool-a', groupGeneration: 3, credentialRevision: 'revision-a' }] });
+    await expect(adapter.verifyProviderOutcome({ target, selections: [selected, selected], outcome: { kind: 'provider_activity', event: 'assistant_message_end' } })).resolves.toMatchObject({ status: 'unavailable' });
+    await expect(adapter.verifyProviderOutcome({ target, selections: [{ ...selected, generation: -1 }], outcome: { kind: 'provider_activity', event: 'assistant_message_end' } })).resolves.toMatchObject({ status: 'unavailable' });
+    const profile = { kind: 'profile' as const, serviceId: selected.serviceId, profileId: 'selected-profile', credentialRevision: 'profile-revision' };
+    await expect(adapter.verifyProviderOutcome({ target, selections: [profile], outcome: { kind: 'provider_activity', event: 'assistant_message_end' } })).resolves.toMatchObject({ status: 'verified', targets: [{ serviceId: profile.serviceId, profileId: profile.profileId, groupId: null, groupGeneration: null, credentialRevision: profile.credentialRevision }] });
+
   });
 
+});
+
+
+describe('Antigravity explicit native import', () => {
+  it.each([[200, 'rejected'], [503, 'outcomeUnknown']] as const)('does not refresh valid native access or stage unverified grants after tokeninfo HTTP %s', async (status, expected) => {
+    const home = await mkdtemp(join(tmpdir(), 'agy-native-import-grants-'));
+    vi.stubEnv('GEMINI_HOME', home); vi.stubEnv('AGY_ACP_FORCE_FILE_STORAGE', '1');
+    try {
+      await mkdir(join(home, 'antigravity-acp'));
+      await writeFile(join(home, 'antigravity-acp/acp_token.json'), JSON.stringify({ client_id: '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com', token: 'valid-native-access', refresh_token: 'native-refresh', expiry: new Date(Date.now() + 3_600_000).toISOString(), scopes }));
+      const accountRuntime = await runtime();
+      const mode = accountRuntime.authentication.modes['native-import'];
+      if (!mode || mode.kind !== 'manual') throw new Error('Native import unavailable');
+      const attempted = store();
+      const requests: string[] = [];
+      const context = { attempt: { kind: 'connect', attemptId: 'native-unverified' }, service, attemptCredentials: attempted, signal: new AbortController().signal,
+        services: { http: { async request(request: { url: string }) { requests.push(request.url); return response(status, { azp: '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com', expires_in: '3600' }, request.url); } } },
+      } as Parameters<typeof mode.complete>[1];
+      await expect(mode.complete({ fields: { source: 'acp' } }, context)).resolves.toMatchObject({ status: expected });
+      expect(requests).toHaveLength(1);
+      expect(new URL(requests[0]!).pathname).toBe('/tokeninfo');
+      expect(attempted.values.size).toBe(0);
+    } finally { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
+  });
+  it('imports the selected native ACP grant into ordinary OAuth attempt storage and materialization', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agy-native-import-'));
+    vi.stubEnv('GEMINI_HOME', home); vi.stubEnv('AGY_ACP_FORCE_FILE_STORAGE', '1');
+    try {
+      await mkdir(join(home, 'antigravity-acp'));
+      await writeFile(join(home, 'antigravity-acp/acp_token.json'), JSON.stringify({ client_id: '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com', refresh_token: 'native-refresh', scopes, project_id: 'native-project' }));
+      const accountRuntime = await runtime();
+      const mode = accountRuntime.authentication.modes['native-import'];
+      expect(mode?.kind).toBe('manual');
+      if (!mode || mode.kind !== 'manual') throw new Error('Native import unavailable');
+      const attempted = store();
+      const requests: string[] = [];
+      const context = { attempt: { kind: 'connect', attemptId: 'native-import' }, service, attemptCredentials: attempted, signal: new AbortController().signal,
+        services: { http: { async request(request: { url: string }) { requests.push(request.url); return request.url.includes('/tokeninfo')
+          ? response(200, { azp: '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com', sub: 'native-account', email: 'native@example.test', scope: scopes.join(' '), expires_in: '3600' }, request.url)
+          : response(200, { access_token: 'native-access', expires_in: 3600 }, request.url); } } },
+      } as Parameters<typeof mode.complete>[1];
+      await expect(mode.complete({ fields: { source: 'acp' } }, context)).resolves.toMatchObject({ status: 'connected', providerIdentity: { accountId: 'native-account', email: 'native@example.test' }, scopes });
+      expect(requests).toContain('https://oauth2.googleapis.com/token');
+      expect(attempted.values.get('refreshToken')).toBe('native-refresh');
+      expect(attempted.values.get('projectId')).toBe('native-project');
+      const read = readContext(attempted); read.configuration.target.modeId = 'native-import';
+      await expect(accountRuntime.status(read as Parameters<typeof accountRuntime.status>[0])).resolves.toMatchObject({ status: 'connected', scopes });
+      const files = await accountRuntime.materialize({ kind: 'files', fileIds: ['antigravity-acp/acp_token.json'] }, read as Parameters<typeof accountRuntime.materialize>[1]);
+      if (files.kind !== 'files') throw new Error('Expected OAuth materialization');
+      expect(JSON.parse(new TextDecoder().decode(files.files['antigravity-acp/acp_token.json']))).toMatchObject({ refresh_token: 'native-refresh', project_id: 'native-project', scopes });
+    } finally { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); }
+  });
 });

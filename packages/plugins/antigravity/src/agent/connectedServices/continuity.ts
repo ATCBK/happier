@@ -2,8 +2,17 @@ import type { AgentConnectedAccountLaunchContributionV1 } from '@happier-dev/plu
 
 export const antigravityConnectedAccountLaunch: AgentConnectedAccountLaunchContributionV1 = {
   environmentUses: [{ purpose: 'model_upstream', environmentKey: 'AGY_ACP_FORCE_FILE_STORAGE' }],
+  environmentUnsetUses: [
+    { purpose: 'model_upstream', environmentKey: 'AGY_ACP_CCPA_BASE_URL' },
+    { purpose: 'model_upstream', environmentKey: 'AGY_ACP_CCPA_PROJECT' },
+  ],
   stateSharingDescriptor: {
-    nativeHome: { environmentKey: 'GEMINI_HOME', defaultRelativePath: '.gemini' },
+    nativeHome: {
+      environmentKey: 'GEMINI_HOME',
+      defaultRelativePath: '.gemini',
+      materializedDirectoryName: 'gemini-home',
+      groupHome: 'selectedAccount',
+    },
     providerSupportStatus: 'supported',
     config: {
       supported: true, modes: ['linked', 'copied', 'isolated'],
@@ -26,7 +35,7 @@ export const antigravityConnectedAccountLaunch: AgentConnectedAccountLaunchContr
     },
     authIsolation: {
       mode: 'materialized_home',
-      secretEntries: ['antigravity-acp/acp_token.json', 'antigravity-acp/business_acp_token.json', 'antigravity-acp/settings.json'],
+      secretEntries: ['antigravity-acp/acp_token.json', 'antigravity-acp/acp_business_token.json', 'antigravity-acp/settings.json'],
     },
   },
   switchContinuity: {
@@ -39,6 +48,47 @@ export const antigravityConnectedAccountLaunch: AgentConnectedAccountLaunchContr
   },
   continuity: {
     generationApplicationScope: 'per_session_runtime',
+    runtimeAuthAdapter: {
+      classifyRuntimeAuthFailure() { return null; },
+      async materializeActiveProfile() { return { supported: true }; },
+      canHotApply() { return { supported: false, recovery: 'restart_rematerialize' }; },
+      async hotApply() { return { applied: false, reason: 'hot_apply_unsupported' }; },
+      async verifyActiveAccount() {
+        return { status: 'unavailable', retryable: true, reason: 'agy_provider_outcome_pending' };
+      },
+      async verifyProviderOutcome({ selections, outcome }) {
+        // The host checks this evidence against the registered runtime epoch.
+        // Process startup alone cannot prove the selected account is usable.
+        if (outcome.kind !== 'provider_activity' || outcome.event !== 'assistant_message_end') {
+          return { status: 'unavailable', reason: 'agy_provider_activity_required' };
+        }
+        const selection = selections.length === 1 ? selections[0] : undefined;
+        if (selection?.serviceId !== 'happier.agent.antigravity/antigravity-account'
+          || !selection.credentialRevision?.trim()) {
+          return { status: 'unavailable', reason: 'agy_exact_epoch_required' };
+        }
+        const profileId = selection.kind === 'profile' ? selection.profileId : selection.activeProfileId;
+        const isGroup = selection.kind === 'group';
+        if ((selection.kind !== 'profile' && !isGroup) || !profileId?.trim()
+          || (isGroup && (!selection.groupId?.trim() || selection.generation == null
+            || !Number.isInteger(selection.generation) || selection.generation < 0))) {
+          return { status: 'unavailable', reason: 'agy_exact_epoch_required' };
+        }
+        return {
+          status: 'verified',
+          source: 'agy_provider_activity',
+          targets: [{
+            serviceId: selection.serviceId,
+            profileId,
+            groupId: isGroup ? selection.groupId! : null,
+            groupGeneration: isGroup ? selection.generation! : null,
+            credentialRevision: selection.credentialRevision,
+          }],
+        };
+      },
+      async probeQuota() { return { status: 'unsupported' }; },
+      async refreshActiveProfile() { return { status: 'unsupported' }; },
+    },
     async verifyResumeReachable({ vendorResumeId, sessionFiles }) {
       const id = vendorResumeId?.trim();
       if (!id || id === '.' || id === '..' || /[\\/]/u.test(id)) {

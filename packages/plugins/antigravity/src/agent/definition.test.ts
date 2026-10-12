@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import { projectAgentCapabilitiesV2FromDefinition } from '@happier-dev/agents/definitions/agent-capabilities';
 
 import { AGENT_DEFINITION } from './definition.js';
 import { PLUGIN_MANIFEST } from '../manifest.js';
 
 describe('Antigravity agent definition', () => {
+  it('derives inactive check-now recovery from its definition', () => {
+    const capabilities = projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+      sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true },
+    });
+    expect(capabilities.sessions?.usageLimitRecovery?.inactive).toEqual(['checkNow']);
+    expect(PLUGIN_MANIFEST.contributes.agents[0]?.capabilities?.sessions?.usageLimitRecovery)
+      .toEqual(capabilities.sessions?.usageLimitRecovery);
+  });
   it('admits negotiated ACP modes without inventing static choices', () => {
     expect(AGENT_DEFINITION).toMatchObject({
       sessionModeDescriptor: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
@@ -21,9 +30,7 @@ describe('Antigravity agent definition', () => {
         cliSubcommand: 'antigravity',
         detectKey: 'agy',
         flavorAliases: ['agy'],
-        connectedServices: {
-          supportedServiceIds: ['gemini'],
-        },
+        connectedServices: null,
         sessionStorage: { direct: false, persisted: true },
         resume: { vendorResume: 'supported', vendorResumeIdField: 'antigravitySessionId' },
         handoff: { vendorStateTransfer: 'unsupported' },
@@ -45,8 +52,8 @@ describe('Antigravity agent definition', () => {
     expect(AGENT_DEFINITION).not.toHaveProperty('runtimeContributions');
     expect(PLUGIN_MANIFEST.contributes.agents[0]?.connectedAccounts).toEqual([
       expect.objectContaining({
-        service: { pluginId: 'happier.agent.gemini', localId: 'gemini-account' },
-        credentialKinds: ['token'],
+        service: 'antigravity-account',
+        credentialKinds: ['oauth'],
       }),
     ]);
     expect(AGENT_DEFINITION).not.toHaveProperty('agentCliRuntime');

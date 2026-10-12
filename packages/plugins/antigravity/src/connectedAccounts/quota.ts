@@ -32,7 +32,7 @@ async function request(context: Context, accessToken: string, endpoint: string, 
   try { return JSON.parse(new TextDecoder().decode(response.body)) as unknown; }
   catch { return malformed(); }
 }
-function limit(value: unknown, groupName: string | null): Limit {
+function limit(value: unknown, groupName: string | null, modelId?: string): Limit {
   const bucket = object(value);
   const id = text(bucket?.bucketId);
   if (!bucket || !id) return malformed();
@@ -44,11 +44,19 @@ function limit(value: unknown, groupName: string | null): Limit {
   const reset = resetText ? Date.parse(resetText) : Number.NaN;
   const window = text(bucket.window);
   const disabled = bucket.disabled === true;
-  return { id, providerLimitId: id, label: [text(bucket.displayName) ?? groupName ?? id, window].filter(Boolean).join(' · '),
+  const windowDurationMs = window === 'weekly' ? 604_800_000 : window === '5h' ? 18_000_000 : null;
+  return { id, providerLimitId: id,
+    ...(modelId ? { modelId, limitScope: 'model' as const } : { limitScope: 'account' as const }),
+    scope: modelId ? 'model' : window === 'weekly' ? 'weekly' : window === '5h' ? 'five_hour' : 'unknown',
+    ...(windowDurationMs ? { windowDurationMs } : {}),
+    confidence: fraction === null && remaining === null ? 'unknown' : 'exact',
+    label: [text(bucket.displayName) ?? groupName ?? id, window].filter(Boolean).join(' · '),
     used: capacity !== null && remaining !== null ? Math.max(0, capacity - remaining) : null,
     limit: capacity, remaining, remainingPct: fraction === null ? null : fraction * 100,
     utilizationPct: fraction === null ? null : (1 - fraction) * 100,
-    isExhausted: !disabled && (fraction === 0 || remaining === 0), unit: remaining === null ? 'unknown' : 'count',
+    isExhausted: !disabled && (fraction === 0 || remaining === 0),
+    unit: modelId ? text(bucket.tokenType) === 'REQUESTS' ? 'requests' : 'unknown'
+      : remaining === null ? 'unknown' : 'count',
     resetsAtMs: Number.isFinite(reset) && reset >= 0 ? reset : null,
     status: disabled || (fraction === null && remaining === null) ? 'unavailable' : 'ok',
     details: { ...(disabled ? { code: 'provider_disabled' } : {}), ...(window ? { rawScope: window } : {}),
@@ -61,11 +69,12 @@ export const readAntigravityQuota: NonNullable<ConnectedAccountRuntime['quota']>
   const explicitProject = text(await context.credentials.get('projectId'));
   const load = object(await request(context, accessToken, 'https://cloudcode-pa.googleapis.com', 'loadCodeAssist',
     { metadata: { ideType: 'ANTIGRAVITY' }, ...(explicitProject ? { cloudaicompanionProject: explicitProject } : {}) }));
-  const project = explicitProject ?? text(load?.cloudaicompanionProject);
+  const project = explicitProject ?? text(load?.cloudaicompanionProject) ?? text(object(load?.cloudaicompanionProject)?.id);
   if (!project || !object(load?.currentTier)) return malformed();
   // Entitlement reads never invoke onboarding or change the user's billing choice.
   const endpoint = object(load?.paidTier)?.usesGcpTos === true ? 'https://cloudcode-pa.googleapis.com' : 'https://daily-cloudcode-pa.googleapis.com';
-  const summary = object(await request(context, accessToken, endpoint, 'retrieveUserQuotaSummary', { project }));
+  const response = object(await request(context, accessToken, endpoint, 'retrieveUserQuotaSummary', { project }));
+  const summary = object(response?.quotaSummary) ?? response;
   let limits: Limit[];
   if (Array.isArray(summary?.groups)) {
     limits = summary.groups.flatMap(value => {
@@ -77,5 +86,21 @@ export const readAntigravityQuota: NonNullable<ConnectedAccountRuntime['quota']>
     // Deprecated buckets remain an explicit provider-contract response shape.
     limits = summary.buckets.map(bucket => limit(bucket, null));
   } else return malformed();
+  // Empty summaries can expose exact model meters through the provider quota endpoint.
+  // Preserve identities: a quota for one model version is never another model's allowance.
+  if (limits.length === 0) {
+    const quota = object(await request(context, accessToken, endpoint, 'retrieveUserQuota', { project }));
+    if (!Array.isArray(quota?.buckets)) return malformed();
+    limits = quota.buckets.map(value => {
+      const bucket = object(value);
+      const modelId = text(bucket?.modelId);
+      if (!bucket || !modelId) return malformed();
+      const tokenType = text(bucket.tokenType);
+      const quotaType = tokenType === 'TOKEN_TYPE_UNSPECIFIED' ? null : tokenType;
+      const bucketId = quotaType ? `model:${JSON.stringify([modelId, quotaType])}` : `model:${modelId}`;
+      const displayName = [modelId, quotaType === 'REQUESTS' ? 'Requests' : quotaType].filter(Boolean).join(' · ');
+      return limit({ ...bucket, bucketId, displayName }, null, modelId);
+    });
+  }
   return { observedAtMs: Date.now(), planLabel: text(object(load?.paidTier)?.name) ?? text(object(load?.currentTier)?.name), limits };
 };

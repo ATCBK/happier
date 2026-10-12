@@ -54,13 +54,10 @@ describe('Antigravity plugin manifest', () => {
         primary: 'sessions',
         connectedAccounts: [{
           purpose: 'model_upstream',
-          service: {
-            pluginId: 'happier.agent.gemini',
-            localId: 'gemini-account',
-          },
+          service: 'antigravity-account',
           required: false,
-          materializationKinds: ['environment'],
-          credentialKinds: ['token'],
+          materializationKinds: ['files', 'environment'],
+          credentialKinds: ['oauth'],
         }],
         capabilities: expect.objectContaining({
           surfaces: ['terminal', 'externalSessions'],
@@ -69,6 +66,7 @@ describe('Antigravity plugin manifest', () => {
             delivery: ['newTurn'],
             cancel: true,
             executionRunContext: { versions: [1] },
+            usageLimitRecovery: { inactive: ['checkNow'], active: ['checkNow'] },
           },
         }),
         surfaces: {

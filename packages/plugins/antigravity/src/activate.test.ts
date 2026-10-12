@@ -11,6 +11,7 @@ describe('Antigravity plugin activation', () => {
   it('reexports the activation compiled by its canonical public plugin definition', async () => {
     expect(Object.keys(PLUGIN_MANIFEST.contributes).sort()).toEqual([
       'agents',
+      'connectedAccountDescriptors',
       'managedDependencies',
       'systemTools',
     ]);
@@ -19,7 +20,7 @@ describe('Antigravity plugin activation', () => {
     }));
   });
 
-  it('registers auxiliary leaves only, leaving the session runtime to the host ACP owner', async () => {
+  it('registers provider leaves with the host ACP session runtime', async () => {
     const fixture = await createPluginTestkit({
       manifest: PLUGIN_MANIFEST,
       module: { activate },
@@ -37,7 +38,6 @@ describe('Antigravity plugin activation', () => {
       expect(registration?.sessionRunnerFactory).toBeUndefined();
       expect(registration?.daemonSpawnHooks).toBeUndefined();
       expect(registration?.preflightSessionControls).toBeUndefined();
-      expect(registration?.connectedAccountLaunch).toBeUndefined();
       expect(registration?.cliSessionCommand).toBeUndefined();
       expect(fixture.registration('hooks', 'resolve-prerequisites')).toBeUndefined();
 

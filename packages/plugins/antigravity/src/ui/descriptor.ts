@@ -10,7 +10,7 @@ export const ANTIGRAVITY_UI_DESCRIPTOR = Object.freeze({
     subtitleKey: 'profiles.aiBackend.antigravitySubtitleExperimental',
     permissionModeI18nPrefix: 'agentInput.codexPermissionMode',
     availability: { experimental: true },
-    connectedService: { serviceId: 'gemini', labelKey: 'agentInput.agent.antigravity', connectRoute: null },
+    connectedService: { serviceId: 'happier.agent.antigravity/antigravity-account', labelKey: 'agentInput.agent.antigravity', connectRoute: null },
     flavorAliases: ['agy'],
     permissions: {
       modeGroup: 'codexLike',

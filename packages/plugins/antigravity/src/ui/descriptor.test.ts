@@ -12,7 +12,7 @@ describe('Antigravity UI descriptor', () => {
       agentId: 'antigravity',
       display: {
         nameKey: 'agentInput.agent.antigravity',
-        connectedService: { serviceId: 'gemini' },
+        connectedService: { serviceId: 'happier.agent.antigravity/antigravity-account' },
         localControl: true,
       },
     });
