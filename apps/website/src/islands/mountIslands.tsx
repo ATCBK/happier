@@ -1,7 +1,7 @@
 import { StrictMode, type ComponentType } from 'react';
 import { createRoot, hydrateRoot } from 'react-dom/client';
 
-import { LocaleProvider } from '../i18n';
+import { LOCALES, LocaleProvider } from '../i18n';
 import type { Locale } from '../i18n/locales';
 import { ISLAND_ATTR, ISLAND_PROPS_ATTR, deserialiseIslandProps, type IslandProps } from './props';
 
@@ -101,7 +101,7 @@ function isNested(container: Element): boolean {
     return container.parentElement?.closest(`[${ISLAND_ATTR}]`) != null;
 }
 
-function mountOne(container: Element, locale: Locale, name: string, Component: IslandRenderer): void {
+function mountOne(container: Element, locale: Locale, name: string, Component: IslandRenderer, availableLocales: readonly Locale[]): void {
     const props = deserialiseIslandProps(name, container.getAttribute(ISLAND_PROPS_ATTR));
 
     /**
@@ -122,7 +122,7 @@ function mountOne(container: Element, locale: Locale, name: string, Component: I
      */
     const tree = (
         <StrictMode>
-            <LocaleProvider locale={locale} path={window.location.pathname}>
+            <LocaleProvider locale={locale} path={window.location.pathname} availableLocales={availableLocales}>
                 <Component {...props} />
             </LocaleProvider>
         </StrictMode>
@@ -156,7 +156,7 @@ function mountOne(container: Element, locale: Locale, name: string, Component: I
  * whose copy button does nothing and whose theme toggle is dead, and nothing
  * anywhere says so.
  */
-export function mountIslands(locale: Locale, islands: IslandMap): void {
+export function mountIslands(locale: Locale, islands: IslandMap, availableLocales: readonly Locale[] = LOCALES): void {
     const containers = Array.from(document.querySelectorAll<HTMLElement>(`[${ISLAND_ATTR}]`));
 
     for (const container of containers) {
@@ -175,7 +175,7 @@ export function mountIslands(locale: Locale, islands: IslandMap): void {
         if (isLoader(entry)) {
             void entry
                 .load()
-                .then((loaded) => mountOne(container, locale, name, resolveComponent(loaded, name)))
+                .then((loaded) => mountOne(container, locale, name, resolveComponent(loaded, name), availableLocales))
                 .catch((error: unknown) => {
                     // The prose stays on screen; only this island is dead. Name
                     // it, or a failed chunk reads as a component bug.
@@ -184,7 +184,7 @@ export function mountIslands(locale: Locale, islands: IslandMap): void {
             continue;
         }
 
-        mountOne(container, locale, name, entry);
+        mountOne(container, locale, name, entry, availableLocales);
     }
 }
 

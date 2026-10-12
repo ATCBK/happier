@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 
-import { DEFAULT_LOCALE, LOCALE_META, localeFromPathname, localePath, type Locale } from './locales';
+import { DEFAULT_LOCALE, LOCALES, LOCALE_META, localeFromPathname, localePath, type Locale } from './locales';
 import { en } from './messages/en';
 import { messagesFor, type Messages } from './messages/registry';
 
@@ -13,6 +13,8 @@ export { buildHeadTags, htmlLangFor } from './head';
 type LocaleContextValue = {
     locale: Locale;
     t: Messages;
+    /** Published alternatives for this route, supplied by its rendering entry. */
+    availableLocales: readonly Locale[];
     /**
      * The pathname being rendered, INCLUDING the locale prefix (`/es/security`).
      *
@@ -29,6 +31,7 @@ type LocaleContextValue = {
 const LocaleContext = createContext<LocaleContextValue>({
     locale: DEFAULT_LOCALE,
     t: en,
+    availableLocales: LOCALES,
     path: '/',
 });
 
@@ -48,6 +51,7 @@ const LocaleContext = createContext<LocaleContextValue>({
 export function LocaleProvider({
     locale,
     path,
+    availableLocales = LOCALES,
     children,
 }: {
     locale: Locale;
@@ -58,11 +62,12 @@ export function LocaleProvider({
      * served as its own file. Same input on both sides, so hydration matches.
      */
     path: string;
+    availableLocales?: readonly Locale[];
     children: ReactNode;
 }) {
     const value = useMemo<LocaleContextValue>(
-        () => ({ locale, t: messagesFor(locale), path }),
-        [locale, path],
+        () => ({ locale, t: messagesFor(locale), path, availableLocales }),
+        [locale, path, availableLocales],
     );
 
     return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;

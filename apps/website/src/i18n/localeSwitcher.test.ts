@@ -1,31 +1,82 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { createElement } from 'react';
+import { act } from 'preact/test-utils';
+import { renderToStaticMarkup } from 'react-dom/server';
+import * as ReactDOMClient from 'react-dom/client';
+import { describe, expect, it, vi } from 'vitest';
+
+import { App } from '../App';
+import { mount } from '../entries/_mount';
 
 import { LOCALES, LOCALE_META, SITE_ORIGIN, localePath, localeUrl, pathForLocale } from './index';
-import { ROUTES, localesFor, fileForRoute } from '../routes';
+import { ROUTES, localesFor, fileForRoute, findRoute, headTagsFor } from '../routes';
 
-/**
- * The switcher offers TEN languages on every page, and it does not check.
- *
- * It cannot: `findRoute()` lives in src/routes.tsx, which statically imports
- * every page component and every data module, and the footer renders on all 210
- * pages — importing it there would pull the whole site into the chunk every page
- * shares and undo the bundle split. So src/components/LocaleSwitcher.tsx maps
- * over LOCALES and trusts that every route has all of them.
- *
- * This is what makes that trust safe. The moment a route narrows its `locales`,
- * the switcher starts linking to a URL the build never wrote, and this test
- * fails instead — naming the route and pointing at the component.
- */
+// Renderer boundary capture keeps the actual framework implementation and permits root cleanup.
+vi.mock('react-dom/client', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('react-dom/client')>();
+    return {
+        ...actual,
+        createRoot: vi.fn(actual.createRoot),
+        hydrateRoot: vi.fn(actual.hydrateRoot),
+    };
+});
+
+/** The SSR footer and browser suggestion must consume the route's published alternatives. */
 describe('the footer locale switcher only ever links to pages that exist', () => {
-    it('gives every route every locale, which is what the switcher assumes', () => {
-        for (const route of ROUTES) {
-            expect(
-                [...localesFor(route)].sort(),
-                `${route.path} does not ship in every language, but ` +
-                    'src/components/LocaleSwitcher.tsx links to all of them from every page. ' +
-                    'Either give the route the missing locales, or make the switcher take the ' +
-                    "route's list — it cannot import findRoute() to ask.",
-            ).toEqual([...LOCALES].sort());
+    it.each(['/download', '/ja/security'])('renders only published footer alternatives on %s', (path) => {
+        const route = findRoute(path)!;
+        const container = document.createElement('div');
+        container.innerHTML = renderToStaticMarkup(createElement(App, { path }));
+        const switcher = container.querySelector('[data-section="locale-switcher"]');
+        expect(switcher?.tagName).toBe('DETAILS');
+        expect([...switcher!.querySelectorAll('a')].map((link) => link.getAttribute('href'))).toEqual(
+            localesFor(route).map((locale) => pathForLocale(locale, path)),
+        );
+    });
+
+    it.each(['/download', '/security'])('offers only a published browser-language alternative on %s', async (path) => {
+        const route = findRoute(path)!;
+        const savedHead = document.head.innerHTML;
+        const savedLanguages = Object.getOwnPropertyDescriptor(navigator, 'languages');
+        const savedActEnvironment = Object.getOwnPropertyDescriptor(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
+        // Capture real renderer roots only to dispose their effects after the page-entry test.
+        const rootSpy = vi.mocked(ReactDOMClient.createRoot);
+        const hydrationSpy = vi.mocked(ReactDOMClient.hydrateRoot);
+        try {
+            // Browser environment boundaries: served canonical head, preferred language and pathname.
+            document.head.innerHTML = headTagsFor(route, 'en');
+            document.body.innerHTML = `<div id="root">${renderToStaticMarkup(createElement(App, { path }))}</div>`;
+            history.replaceState(null, '', path);
+            localStorage.clear();
+            Object.defineProperty(navigator, 'languages', { configurable: true, value: ['ja-JP'] });
+            Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, value: true });
+            await act(async () => {
+                mount('en');
+                await vi.dynamicImportSettled();
+            });
+            const link = document.querySelector('[data-section="locale-suggestion"] a');
+            expect(link?.getAttribute('href') ?? null).toBe(
+                localesFor(route).includes('ja') ? pathForLocale('ja', path) : null,
+            );
+            expect([...document.querySelectorAll('[data-section="locale-switcher"] a')].map((a) => a.getAttribute('href'))).toEqual(
+                localesFor(route).map((locale) => pathForLocale(locale, path)),
+            );
+        } finally {
+            await act(async () => {
+                for (const result of [...rootSpy.mock.results, ...hydrationSpy.mock.results]) {
+                    if (result.type === 'return') result.value.unmount();
+                }
+            });
+            rootSpy.mockClear();
+            hydrationSpy.mockClear();
+            document.head.innerHTML = savedHead;
+            document.body.replaceChildren();
+            history.replaceState(null, '', '/');
+            localStorage.clear();
+            if (savedLanguages) Object.defineProperty(navigator, 'languages', savedLanguages);
+            else Reflect.deleteProperty(navigator, 'languages');
+            if (savedActEnvironment) Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', savedActEnvironment);
+            else Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT');
         }
     });
 
@@ -49,7 +100,7 @@ describe('the footer locale switcher only ever links to pages that exist', () =>
                 const fromPrefix = LOCALE_META[from].pathPrefix;
                 const currentPath = route.path === '/' ? fromPrefix || '/' : `${fromPrefix}${route.path}`;
 
-                for (const to of LOCALES) {
+                for (const to of localesFor(route)) {
                     const href = pathForLocale(to, currentPath);
                     expect(
                         built.has(fileForRoute(href)),
@@ -69,7 +120,7 @@ describe('the footer locale switcher only ever links to pages that exist', () =>
      */
     it('links to each page at exactly the URL it declares as canonical', () => {
         for (const route of ROUTES) {
-            for (const to of LOCALES) {
+            for (const to of localesFor(route)) {
                 const canonical = localeUrl(to, route.path).slice(SITE_ORIGIN.length);
                 for (const from of localesFor(route)) {
                     const fromPrefix = LOCALE_META[from].pathPrefix;

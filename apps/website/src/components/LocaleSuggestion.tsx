@@ -29,7 +29,7 @@ const CHOSEN_KEY = 'happier.locale.chosen';
  * without this component, and hydration has nothing to disagree about.
  */
 export function LocaleSuggestion() {
-    const { locale: current, path } = useI18n();
+    const { locale: current, path, availableLocales } = useI18n();
     const [suggested, setSuggested] = useState<Locale | null>(null);
 
     useEffect(() => {
@@ -47,8 +47,9 @@ export function LocaleSuggestion() {
         const languages = navigator.languages?.length
             ? [...navigator.languages]
             : [navigator.language].filter(Boolean);
-        setSuggested(suggestLocale(current, languages));
-    }, [current]);
+        const candidate = suggestLocale(current, languages);
+        setSuggested(candidate && availableLocales.includes(candidate) ? candidate : null);
+    }, [current, availableLocales]);
 
     if (!suggested) return null;
 

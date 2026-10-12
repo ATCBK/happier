@@ -2,7 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import '../styles/globals.css';
-import { LocaleProvider } from '../i18n';
+import { LOCALES, LOCALE_META, LocaleProvider } from '../i18n';
 import { LocaleSuggestion } from '../components/LocaleSuggestion';
 import type { Locale } from '../i18n/locales';
 import { armReveals, mountIslands } from '../islands';
@@ -54,7 +54,12 @@ export function mount(locale: Locale): void {
     initAnalytics();
     exposeAnalyticsControls();
 
-    mountIslands(locale, ISLANDS);
+    // The head's hreflang alternatives are already projected from the canonical
+    // route's locale list. Consume those rather than importing the page graph.
+    const availableLocales = LOCALES.filter((candidate) =>
+        document.head.querySelector(`link[rel="alternate"][hreflang="${LOCALE_META[candidate].htmlLang}"]`),
+    );
+    mountIslands(locale, ISLANDS, availableLocales);
     armReveals();
 
     /**
@@ -78,7 +83,7 @@ export function mount(locale: Locale): void {
     document.body.appendChild(suggestion);
     createRoot(suggestion).render(
         <StrictMode>
-            <LocaleProvider locale={locale} path={window.location.pathname}>
+            <LocaleProvider locale={locale} path={window.location.pathname} availableLocales={availableLocales}>
                 <PageScopedEffects />
                 <LocaleSuggestion />
             </LocaleProvider>
