@@ -97,6 +97,7 @@ function teamMemberRows(
         .map((membership) => ({
             principal: projectSessionAccessPrincipal({
                 kind: 'account', accountId: membership.accountId,
+                name: membership.account.name,
                 username: membership.account.username,
                 firstName: membership.account.firstName,
                 lastName: membership.account.lastName,

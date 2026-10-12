@@ -20,7 +20,7 @@ const actor = {
     v: 1 as const,
     serverId: 'home-a',
     accountId: 'alice-private-id',
-    profile: { firstName: 'Alice', lastName: 'Chen', username: 'alice', avatarUrl: null },
+    profile: { name: 'Alice Chen', firstName: 'Alice', lastName: 'Chen', username: 'alice', avatarUrl: null },
 };
 const defaults: SessionMessageAccountBylineProps = {
     messageId: 'message-1', actor,
@@ -55,7 +55,7 @@ describe('SessionMessageAccountByline', () => {
         const former = await renderScreen(<SessionMessageAccountByline {...defaults} actor={{ ...actor, profile: null }} />);
         expect(former.findHostByTestId('transcript-account-attribution:message-1')?.props.accessibilityLabel)
             .toBe('message.accountActorSentBy(name=message.accountActorFormerMember)');
-        const unnamed = await renderScreen(<SessionMessageAccountByline {...defaults} actor={{ ...actor, profile: { firstName: null, lastName: null, username: null, avatarUrl: null } }} />);
+        const unnamed = await renderScreen(<SessionMessageAccountByline {...defaults} actor={{ ...actor, profile: { name: null, firstName: null, lastName: null, username: null, avatarUrl: null } }} />);
         expect(unnamed.findHostByTestId('transcript-account-attribution:message-1')?.props.accessibilityLabel)
             .toBe('message.accountActorSentBy(name=message.accountActorUnnamedMember)');
         expect(JSON.stringify(former.tree.toJSON())).not.toContain(actor.accountId);

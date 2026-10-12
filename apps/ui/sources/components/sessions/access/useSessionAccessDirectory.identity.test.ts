@@ -12,13 +12,13 @@ import type { SessionAccessCandidateRowModel } from './sessionAccessEditorTypes'
 describe('shared directory viewer presentation', () => {
     it('prefers the scoped viewer profile to a generic audience name for that same person', () => {
         const principal = presentSharePrincipal({ ref: { kind: 'account', accountId: 'owner' }, viewerAccountId: 'owner', name: 'Person',
-            profile: { firstName: 'Avery', lastName: 'Owner', username: null, avatarUrl: null } });
+            profile: { name: 'Avery Owner', firstName: 'Avery', lastName: 'Owner', username: null, avatarUrl: null } });
         expect(principal.displayName).toBe('Avery Owner');
         expect(principal.secondaryLabel).toBe(t('shareSheet.you'));
     });
     it('uses the safe display profile avatar when no separate audience avatar is supplied', () => {
         const principal = presentSharePrincipal({ ref: { kind: 'account', accountId: 'owner' }, viewerAccountId: 'owner',
-            profile: { firstName: 'Avery', lastName: 'Owner', username: null, avatarUrl: 'https://directory-viewer.test/avery.png' } });
+            profile: { name: 'Avery Owner', firstName: 'Avery', lastName: 'Owner', username: null, avatarUrl: 'https://directory-viewer.test/avery.png' } });
         expect(principal.avatar?.imageUrl).toBe('https://directory-viewer.test/avery.png');
     });
     it('names the viewer through the captured Home profile and never borrows another Home profile', async () => {

@@ -53,6 +53,7 @@ function accountRow(index: number) {
     return {
         kind: 'account' as const,
         accountId: `account-${index}`,
+        name: null,
         username: `candidate_${String(index).padStart(2, '0')}`,
         firstName: null,
         lastName: null,
@@ -75,7 +76,7 @@ function group(teamId: string, id: string) {
 function membership(id: string, accountId: string, firstName: string, status: 'active' | 'suspended') {
     return {
         v: 1, id, teamId: 'team-a', accountId,
-        account: { accountId, firstName, lastName: null, username: null, avatarUrl: null },
+        account: { accountId, name: firstName, firstName, lastName: null, username: null, avatarUrl: null },
         role: 'member', status, historyAccess: 'from_join', management: { kind: 'native' },
         capabilities: {}, joinedAt: 1,
     };
@@ -243,12 +244,12 @@ describe('useSessionAccessDirectory', () => {
         vi.mocked(useTeamMembersRoster).mockReturnValue({
             rows: [{
                 v: 1, id: 'membership-11', teamId: 'team-a', accountId: 'account-11',
-                account: { accountId: 'account-11', firstName: 'Beyond', lastName: 'Page', username: null, avatarUrl: null },
+                account: { accountId: 'account-11', name: 'Chosen Name', firstName: 'Beyond', lastName: 'Page', username: null, avatarUrl: null },
                 role: 'member', status: 'active', historyAccess: 'from_join', management: { kind: 'native' },
                 capabilities: {}, joinedAt: 1,
             }, {
                 v: 1, id: 'membership-suspended', teamId: 'team-a', accountId: 'account-suspended',
-                account: { accountId: 'account-suspended', firstName: 'Suspended', lastName: null, username: null, avatarUrl: null },
+                account: { accountId: 'account-suspended', name: 'Suspended', firstName: 'Suspended', lastName: null, username: null, avatarUrl: null },
                 role: 'member', status: 'suspended', historyAccess: 'from_join', management: { kind: 'native' },
                 capabilities: {}, joinedAt: 1,
             }],
@@ -266,7 +267,7 @@ describe('useSessionAccessDirectory', () => {
         const people = latest.sections.find((section) => section.kind === 'account')!;
         const peopleRows = await people.resolveCandidates!('', new AbortController().signal);
         expect(peopleRows[0]).toMatchObject({
-            principal: { ref: { kind: 'account', accountId: 'account-11' } },
+            principal: { ref: { kind: 'account', accountId: 'account-11' }, displayName: 'Chosen Name' },
             teamMembership: { teamId: 'team-a', teamMembershipId: 'membership-11', accountId: 'account-11' },
         });
         expect(peopleRows.map((row) => row.principal.ref)).not.toContainEqual({ kind: 'account', accountId: 'account-suspended' });
