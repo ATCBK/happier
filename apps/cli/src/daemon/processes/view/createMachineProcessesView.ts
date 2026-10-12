@@ -34,6 +34,7 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
     let latestRead: ProcessOwnershipRead | undefined;
     let latestMetricAtMs: number | undefined;
     const listeners = new Set<() => void>();
+    const allProcessListeners = new Set<() => void>();
     let releaseLive: (() => void) | undefined;
     let unsubscribeVitals: (() => void) | undefined;
     let portsController: AbortController | undefined;
@@ -66,8 +67,9 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
         try {
             const initial = await routes.getSnapshot();
             if (signal.aborted) return;
+            const changed = ports?.generatedAt !== initial.generatedAt;
             ports = initial;
-            if (latestRead) notify();
+            if (changed && latestRead) notify();
             while (!signal.aborted) {
                 const answer = await routes.watchSnapshot({ sinceGeneratedAt: ports.generatedAt, signal });
                 if (signal.aborted) return;
@@ -75,8 +77,9 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
             }
         } catch { /* Inventory failure cannot manufacture process evidence or start a competing scanner. */ }
     }
-    function subscribe(listener: () => void) {
+    function subscribe(listener: () => void, scope: ProcessesProjectionInput['scope']) {
         listeners.add(listener);
+        if (scope === 'all') allProcessListeners.add(listener);
         if (listeners.size === 1) {
             clearTimeout(metricExpiry); metricExpiry = undefined;
             const controller = new AbortController();
@@ -85,8 +88,8 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                 const ownership = latestRead;
                 if (ticking || ownership?.status !== 'ok') return;
                 ticking = (async () => {
-                    const ownedPids = ownership.rows.flatMap(row => row.owner ? [row.pid] : []);
-                    const snapshot = await options.processOwnershipRuntime.readProcessMetrics(ownedPids);
+                    const metricPids = ownership.rows.flatMap(row => row.owner || allProcessListeners.size > 0 ? [row.pid] : []);
+                    const snapshot = await options.processOwnershipRuntime.readProcessMetrics(metricPids);
                     if (disposed || controller.signal.aborted || !listeners.size) return;
                     if (snapshot.status === 'ok') {
                         const owners = new Map<string, number[]>();
@@ -108,6 +111,7 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
         }
         return () => {
             listeners.delete(listener);
+            allProcessListeners.delete(listener);
             if (!listeners.size) {
                 unsubscribeVitals?.(); unsubscribeVitals = undefined;
                 releaseLive?.(); releaseLive = undefined;
@@ -117,11 +121,11 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                 if (disposed) clearMetrics();
                 else {
                     metricExpiry = setTimeout(() => {
-                        metricExpiry = undefined; clearMetrics(); latestRead = undefined; latestMetricAtMs = undefined;
+                        metricExpiry = undefined; clearMetrics(); latestRead = undefined; latestMetricAtMs = undefined; ports = undefined;
                     }, MACHINE_WATCH_WINDOW_MS);
                     metricExpiry.unref?.();
                 }
-                ports = undefined; requesterIdentities = undefined;
+                requesterIdentities = undefined;
             }
         };
     }
@@ -156,7 +160,8 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                 if (signal?.aborted || disposed) return { changed: false };
                 latestRead = read;
                 latestMetricAtMs = read.status === 'ok' ? read.snapshot.capturedAtMs : undefined;
-                return { changed: true, answer: project(read, request, requester, false, { identities }) };
+                ports = options.localServiceRoutes?.readCurrentSnapshot();
+                return { changed: true, answer: project(read, request, requester, false, { identities, ports }) };
             }
             const ownershipCapturedAtMs = latestRead?.status === 'ok' ? latestRead.snapshot.capturedAtMs : undefined;
             if (ownershipCapturedAtMs === undefined || Date.now() - ownershipCapturedAtMs >= MACHINE_WATCH_WINDOW_MS) {
@@ -177,7 +182,8 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
             if (signal?.aborted) controller.abort();
             watches.add(controller);
             try {
-                const answer = await parkWatch({ isNewer: newer, subscribe: listener => { requesterIdentities = identities; return subscribe(listener); }, read,
+                const answer = await parkWatch({ isNewer: newer,
+                    subscribe: listener => { requesterIdentities = identities; return subscribe(listener, request.scope); }, read,
                     signal: controller.signal, windowMs: MACHINE_WATCH_WINDOW_MS });
                 return answer.changed ? { changed: true, answer: answer.snapshot } : { changed: false };
             } finally { watches.delete(controller); signal?.removeEventListener('abort', abort); }

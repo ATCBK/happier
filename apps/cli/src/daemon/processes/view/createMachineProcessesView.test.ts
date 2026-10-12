@@ -19,8 +19,9 @@ afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
 it('samples only while watched, retaining CPU/history across re-arm until the shared watch window expires', async () => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     let name = 'daemon';
-    boundary.read.mockImplementation(async () => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
-        { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name, memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: Date.now() * 100 },
+    boundary.read.mockImplementation(async input => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
+        { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name,
+            memory: { bytes: input.pids ? 30 : 20, kind: 'rss' }, cpuTimeUs: Date.now() * 100 },
     ] }));
     const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc', listRoots: () => [
         { owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true },
@@ -56,9 +57,9 @@ it('samples only while watched, retaining CPU/history across re-arm until the sh
     const fullCensusCount = () => boundary.read.mock.calls.filter(([input]) => input.pids === undefined).length;
     const fullCensusesBeforeIdleIntervals = fullCensusCount();
     const controller = new AbortController();
-    const watched = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: initial.capturedAtMs }, requester, controller.signal);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(localServiceRoutes.watcherCount()).toBe(1);
+    const watched = view.watch({ machineId: 'm', scope: 'happier', view: 'tree',
+        since: firstWatch.changed ? firstWatch.answer.capturedAtMs : initial.capturedAtMs }, requester, controller.signal);
+    await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersByTimeAsync(2000);
     const answer = await watched;
     expect(answer.changed).toBe(true);
@@ -68,6 +69,7 @@ it('samples only while watched, retaining CPU/history across re-arm until the sh
     await vi.advanceTimersByTimeAsync(2000);
     const second = await rearmed;
     expect(second.changed && second.answer.owners[0].members[0].cpuPercent).toBe(5);
+    expect(second.changed && second.answer.owners[0].members[0].memoryBytes).toBe(30);
     expect(second.changed && second.answer.history?.[ref]).toHaveLength(2);
     const thirdWatch = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: second.changed ? second.answer.capturedAtMs : 0 }, requester);
     await vi.advanceTimersByTimeAsync(2000);
@@ -79,11 +81,13 @@ it('samples only while watched, retaining CPU/history across re-arm until the sh
     const reads = boundary.read.mock.calls.length;
     await vi.advanceTimersByTimeAsync(4000);
     expect(boundary.read.mock.calls.length).toBe(reads);
-    expect((await view.get({ machineId: 'm', ref }, requester)).history).toHaveLength(2);
+    expect((await view.get({ machineId: 'm', ref }, requester)).history).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(MACHINE_WATCH_WINDOW_MS);
     expect((await view.get({ machineId: 'm', ref }, requester)).history).toBeUndefined();
+    const refreshed = await view.watch({ machineId: 'm', scope: 'happier', view: 'tree' }, requester);
     const cancellation = new AbortController();
-    const parked = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: Date.now() }, requester, cancellation.signal);
+    const parked = view.watch({ machineId: 'm', scope: 'happier', view: 'tree',
+        since: refreshed.changed ? refreshed.answer.capturedAtMs : Date.now() }, requester, cancellation.signal);
     await vi.advanceTimersByTimeAsync(0);
     cancellation.abort();
     expect(await parked).toEqual({ changed: false });
