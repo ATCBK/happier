@@ -86,6 +86,14 @@ export type PluginWebhooksActionInputById = {
         };
         targetIntentEpoch: number;
     };
+    readonly "plugin.webhook.delivery.replay": {
+        deliveryId: string;
+        expectedRevision: number;
+    };
+    readonly "plugin.webhook.delivery.discard": {
+        deliveryId: string;
+        expectedRevision: number;
+    };
     readonly "plugin.webhook.endpoint.credential.configure": {
         webhookEndpointId: string;
         expectedRevision: number;
@@ -175,6 +183,18 @@ export type PluginWebhooksActionResultById = {
     } | {
         kind: 'unavailable';
         code: string;
+    };
+    readonly "plugin.webhook.delivery.replay": {
+        kind: 'requeued';
+        revision: number;
+    } | {
+        kind: 'revisionConflict' | 'unavailable' | 'replayLimit';
+    };
+    readonly "plugin.webhook.delivery.discard": {
+        kind: 'discarded';
+        revision: number;
+    } | {
+        kind: 'revisionConflict' | 'unavailable';
     };
     readonly "plugin.webhook.endpoint.credential.configure": {
         kind: 'configured' | 'alreadyConfigured';

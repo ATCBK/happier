@@ -289,6 +289,25 @@ export const PluginWebhookEndpointCredentialFinishRotationResultV1Schema = lazyZ
   }).strict(),
 ]));
 
+export const PLUGIN_WEBHOOK_DELIVERY_REPLAY_HTTP_PATH_V1 = '/v1/plugins/webhooks/deliveries/replay';
+export const PLUGIN_WEBHOOK_DELIVERY_DISCARD_HTTP_PATH_V1 = '/v1/plugins/webhooks/deliveries/discard';
+
+export const PluginWebhookDeliveryIdV1Schema = lazyZodSchema(() => z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u));
+export const PluginWebhookDeliveryReplayInputV1Schema = lazyZodSchema(() => z.object({
+  deliveryId: PluginWebhookDeliveryIdV1Schema,
+  expectedRevision: z.number().int().nonnegative().safe(),
+}).strict());
+export const PluginWebhookDeliveryReplayResultV1Schema = lazyZodSchema(() => z.union([
+  z.object({ kind: z.literal('requeued'), revision: z.number().int().nonnegative().safe() }).strict(),
+  z.object({ kind: z.enum(['revisionConflict', 'unavailable', 'replayLimit']) }).strict(),
+]));
+
+export const PluginWebhookDeliveryDiscardInputV1Schema = PluginWebhookDeliveryReplayInputV1Schema;
+export const PluginWebhookDeliveryDiscardResultV1Schema = lazyZodSchema(() => z.union([
+  z.object({ kind: z.literal('discarded'), revision: z.number().int().nonnegative().safe() }).strict(),
+  z.object({ kind: z.enum(['revisionConflict', 'unavailable']) }).strict(),
+]));
+
 export const PLUGIN_WEBHOOK_ACTION_IDS_V1 = Object.freeze([
   'plugin.webhook.endpoint.ensure',
   'plugin.webhook.endpoint.read',
@@ -297,6 +316,8 @@ export const PLUGIN_WEBHOOK_ACTION_IDS_V1 = Object.freeze([
   'plugin.webhook.endpoint.checkCorrespondence',
   'plugin.webhook.endpoint.convergeTarget',
   'plugin.webhook.delivery.movePending',
+  'plugin.webhook.delivery.replay',
+  'plugin.webhook.delivery.discard',
   'plugin.webhook.endpoint.credential.configure',
   'plugin.webhook.endpoint.credential.rotate',
   'plugin.webhook.endpoint.credential.finishRotation',
@@ -341,6 +362,8 @@ export const PluginWebhookActionHttpPathsV1 = Object.freeze({
   'plugin.webhook.endpoint.revoke': '/v1/plugins/webhooks/endpoints/revoke',
   'plugin.webhook.endpoint.retarget': '/v1/plugins/webhooks/endpoints/retarget',
   'plugin.webhook.delivery.movePending': '/v1/plugins/webhooks/deliveries/move-pending',
+  'plugin.webhook.delivery.replay': PLUGIN_WEBHOOK_DELIVERY_REPLAY_HTTP_PATH_V1,
+  'plugin.webhook.delivery.discard': PLUGIN_WEBHOOK_DELIVERY_DISCARD_HTTP_PATH_V1,
   'plugin.webhook.endpoint.credential.configure': '/v1/plugins/webhooks/endpoints/credentials/configure',
   'plugin.webhook.endpoint.credential.rotate': '/v1/plugins/webhooks/endpoints/credentials/rotate',
   'plugin.webhook.endpoint.credential.finishRotation': '/v1/plugins/webhooks/endpoints/credentials/finish-rotation',
@@ -354,6 +377,8 @@ export const PluginWebhookActionInputSchemasV1 = Object.freeze({
   'plugin.webhook.endpoint.checkCorrespondence': PluginWebhookEndpointCheckCorrespondenceInputV1Schema,
   'plugin.webhook.endpoint.convergeTarget': PluginWebhookEndpointConvergeTargetInputV1Schema,
   'plugin.webhook.delivery.movePending': PluginWebhookDeliveryMovePendingInputV1Schema,
+  'plugin.webhook.delivery.replay': PluginWebhookDeliveryReplayInputV1Schema,
+  'plugin.webhook.delivery.discard': PluginWebhookDeliveryDiscardInputV1Schema,
   'plugin.webhook.endpoint.credential.configure': PluginWebhookEndpointCredentialConfigureInputV1Schema,
   'plugin.webhook.endpoint.credential.rotate': PluginWebhookEndpointCredentialRotateInputV1Schema,
   'plugin.webhook.endpoint.credential.finishRotation': PluginWebhookEndpointCredentialFinishRotationInputV1Schema,
@@ -367,6 +392,8 @@ export const PluginWebhookActionOutputSchemasV1 = Object.freeze({
   'plugin.webhook.endpoint.checkCorrespondence': PluginWebhookEndpointCheckCorrespondenceResultV1Schema,
   'plugin.webhook.endpoint.convergeTarget': PluginWebhookEndpointConvergeTargetResultV1Schema,
   'plugin.webhook.delivery.movePending': PluginWebhookDeliveryMovePendingResultV1Schema,
+  'plugin.webhook.delivery.replay': PluginWebhookDeliveryReplayResultV1Schema,
+  'plugin.webhook.delivery.discard': PluginWebhookDeliveryDiscardResultV1Schema,
   'plugin.webhook.endpoint.credential.configure': PluginWebhookEndpointCredentialConfigureResultV1Schema,
   'plugin.webhook.endpoint.credential.rotate': PluginWebhookEndpointCredentialRotateResultV1Schema,
   'plugin.webhook.endpoint.credential.finishRotation': PluginWebhookEndpointCredentialFinishRotationResultV1Schema,

@@ -23,6 +23,7 @@ import {
 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { useActivePluginAccountAvailabilityReleaseClassifier } from '@/sync/domains/plugins/availability/projection';
 import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { canPublishCatalogReceipt } from '@/sync/store/settings/wholeCatalogReceiptOrdering';
 import { t } from '@/text';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -557,7 +558,8 @@ export const PluginWebhookAdministrationScreen = React.memo(function PluginWebho
         setStatus(current => current === null ? current : {
             ...current,
             endpoints: current.endpoints.map(endpoint => endpoint.webhookEndpointId !== endpointId
-                || endpoint.revision > acknowledgement.revision ? endpoint : { ...endpoint, ...acknowledgement }),
+                || !canPublishCatalogReceipt({ current: true, revision: acknowledgement.revision,
+                    retainedRevision: endpoint.revision }) ? endpoint : { ...endpoint, ...acknowledgement }),
         });
     }, []);
     const refresh = React.useCallback(async () => {

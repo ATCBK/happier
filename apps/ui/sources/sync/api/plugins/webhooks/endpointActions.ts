@@ -1,6 +1,6 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { PluginWebhookActionInputSchemasV1, PluginWebhookActionOutputSchemasV1, type PluginWebhookPresentUserActionIdV1 } from '@happier-dev/protocol/plugins/webhooks/endpointV1';
-import { PLUGIN_WEBHOOK_ACCOUNT_STATUS_HTTP_PATH_V1, PLUGIN_WEBHOOK_DELIVERY_DISCARD_HTTP_PATH_V1, PLUGIN_WEBHOOK_DELIVERY_REPLAY_HTTP_PATH_V1, PluginWebhookAccountStatusRequestV1Schema, PluginWebhookAccountStatusResultV1Schema, PluginWebhookDeliveryDiscardInputV1Schema, PluginWebhookDeliveryDiscardResultV1Schema, PluginWebhookDeliveryReplayInputV1Schema, PluginWebhookDeliveryReplayResultV1Schema, type PluginWebhookAccountStatusRequestV1 } from '@happier-dev/protocol/plugins/webhooks/statusV1';
+import { PLUGIN_WEBHOOK_ACCOUNT_STATUS_HTTP_PATH_V1, PluginWebhookAccountStatusRequestV1Schema, PluginWebhookAccountStatusResultV1Schema, PluginWebhookDeliveryDiscardInputV1Schema, PluginWebhookDeliveryDiscardResultV1Schema, PluginWebhookDeliveryReplayInputV1Schema, PluginWebhookDeliveryReplayResultV1Schema, type PluginWebhookAccountStatusRequestV1 } from '@happier-dev/protocol/plugins/webhooks/statusV1';
 
 import { serverFetch } from '@/sync/http/client';
 
@@ -64,8 +64,9 @@ export function createPluginWebhookAdministrationHttpClient(params: Readonly<{
     executeAction?: PluginWebhookEndpointUiActionExecutor;
 }> = {}): PluginWebhookAdministrationHttpClient {
     const request = params.request ?? serverFetch;
+    const executeAction = params.executeAction ?? createPluginWebhookEndpointHttpActionExecutor({ request });
     return Object.freeze({
-        executeAction: params.executeAction ?? createPluginWebhookEndpointHttpActionExecutor({ request }),
+        executeAction,
         readStatus: async (input: PluginWebhookAccountStatusRequestV1) => {
             const parsed = PluginWebhookAccountStatusRequestV1Schema.parse(input);
             return PluginWebhookAccountStatusResultV1Schema.parse(await requestWebhookJson(
@@ -76,17 +77,15 @@ export function createPluginWebhookAdministrationHttpClient(params: Readonly<{
         },
         replayDelivery: async (input: unknown) => {
             const parsed = PluginWebhookDeliveryReplayInputV1Schema.parse(input);
-            return PluginWebhookDeliveryReplayResultV1Schema.parse(await requestWebhookJson(
-                request,
-                PLUGIN_WEBHOOK_DELIVERY_REPLAY_HTTP_PATH_V1,
+            return PluginWebhookDeliveryReplayResultV1Schema.parse(await executeAction(
+                'plugin.webhook.delivery.replay',
                 parsed,
             ));
         },
         discardDelivery: async (input: unknown) => {
             const parsed = PluginWebhookDeliveryDiscardInputV1Schema.parse(input);
-            return PluginWebhookDeliveryDiscardResultV1Schema.parse(await requestWebhookJson(
-                request,
-                PLUGIN_WEBHOOK_DELIVERY_DISCARD_HTTP_PATH_V1,
+            return PluginWebhookDeliveryDiscardResultV1Schema.parse(await executeAction(
+                'plugin.webhook.delivery.discard',
                 parsed,
             ));
         },
@@ -99,12 +98,4 @@ export async function readActivePluginWebhookAccountStatus(
     input: PluginWebhookAccountStatusRequestV1,
 ) {
     return await activePluginWebhookAdministrationClient.readStatus(input);
-}
-
-export async function replayActivePluginWebhookDelivery(input: unknown) {
-    return await activePluginWebhookAdministrationClient.replayDelivery(input);
-}
-
-export async function discardActivePluginWebhookDelivery(input: unknown) {
-    return await activePluginWebhookAdministrationClient.discardDelivery(input);
 }
