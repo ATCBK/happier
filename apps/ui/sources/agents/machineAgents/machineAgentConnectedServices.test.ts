@@ -25,7 +25,7 @@ const entry: ConnectedServiceRegistryEntry = {
         provenance: 'external', sourceKind: 'installed',
         authentication: {
             defaultModeId: 'oauth',
-            modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'providerCheck' }],
+            modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'providerCheck' }],
         },
         capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
     },
@@ -119,7 +119,7 @@ describe('projectMachineAgentConnectedServices', () => {
     });
 
     it('fails closed while negotiation or the descriptor is absent or conflicted', () => {
-        for (const entries of [[], [{ ...entry, projectedDescriptor: undefined }], [{ ...entry, projectedDescriptorCandidates: [entry.projectedDescriptor!, entry.projectedDescriptor!] }]]) {
+        for (const entries of [[], [{ ...entry, projectedDescriptor: undefined }], [{ ...entry, executable: false, projectedDescriptorCandidates: [entry.projectedDescriptor!, entry.projectedDescriptor!] }]]) {
             expect(projectMachineAgentConnectedServices({ ...defaults, entries }).acme)
                 .toEqual([expect.objectContaining({ connected: false, healthy: false, profileLabel: null })]);
         }
@@ -134,7 +134,7 @@ describe('projectMachineAgentConnectedServices', () => {
         for (const projection of [
             { ...defaults, entries: [] },
             { ...defaults, entries: [{ ...entry, projectedDescriptor: undefined }] },
-            { ...defaults, entries: [{ ...entry, projectedDescriptorCandidates: [entry.projectedDescriptor!, entry.projectedDescriptor!] }] },
+            { ...defaults, entries: [{ ...entry, executable: false, projectedDescriptorCandidates: [entry.projectedDescriptor!, entry.projectedDescriptor!] }] },
             { ...defaults, accountTransport: 'indeterminate' as const },
         ]) {
             const connectedServices = projectMachineAgentConnectedServices(projection).acme;
@@ -196,6 +196,8 @@ describe('projectMachineAgentConnectedServices', () => {
             }] },
         }).codex).toEqual([expect.objectContaining({ connected: true, healthy: false })]);
         expect(projectMachineAgentConnectedServices({ ...legacyDefaults, entries: [] }).codex)
+            .toEqual([expect.objectContaining({ connected: false, healthy: false })]);
+        expect(projectMachineAgentConnectedServices({ ...legacyDefaults, entries: [{ ...legacyEntry, executable: false }] }).codex)
             .toEqual([expect.objectContaining({ connected: false, healthy: false })]);
         expect(projectMachineAgentConnectedServices({
             ...legacyDefaults, agents: defaults.agents, entries: [entry],

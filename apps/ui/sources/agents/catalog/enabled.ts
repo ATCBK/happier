@@ -4,7 +4,7 @@ import {
     getAgentBackendCompatibilityTargetKeys,
     readBackendTargetEnabled,
 } from '@/agents/backendCatalog/backendTargetEnablement';
-import { buildAgentUniverseBackendTargetKey, listExecutableAgentUniverseIds } from '@/agents/catalog/agentUniverse';
+import { readAgentUniverseBackendTargetKey, listExecutableAgentUniverseIds } from '@/agents/catalog/agentUniverse';
 import { getAgentModelConfig, isBundledAgentId } from '@happier-dev/agents';
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
@@ -15,7 +15,8 @@ export function isAgentEnabled(params: {
 }): boolean {
     if (isBundledAgentId(params.agentId)
         && listAgentExecutionTargetsV1(BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[params.agentId]).length === 0) return false;
-    const targetKey = buildAgentUniverseBackendTargetKey(params.agentId);
+    const targetKey = readAgentUniverseBackendTargetKey(params.agentId);
+    if (targetKey === null) return false;
     return readBackendTargetEnabled({
         backendEnabledByTargetKey: params.backendEnabledByTargetKey,
         canonicalTargetKey: targetKey,

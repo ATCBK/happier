@@ -1,4 +1,4 @@
-import type { MachineAgentInventoryItem } from '@happier-dev/protocol/capabilities';
+import { buildMachineAgentInventoryKey, type MachineAgentInventoryItem } from '@happier-dev/protocol/capabilities';
 import type { MachineAgent, MachineAgentConnectedService, MachineAgentSignIn } from './machineAgentTypes';
 import { resolveMachineAgentState } from './resolveMachineAgentState';
 import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
@@ -83,10 +83,12 @@ export function projectMachineAgentForCredential(agent: MachineAgent | null | un
 
 export function projectMachineAgent(input: Readonly<{
     agentId: string;
+    definitionId?: string;
     title: string;
     facts: MachineAgentInventoryItem | null;
     checking: boolean;
     stale: boolean;
+    staleReason?: MachineAgent['staleReason'];
     unavailableReason?: MachineAgent['unavailableReason'];
     connectedServices: readonly MachineAgentConnectedService[];
     job: MachineAgent['job'];
@@ -95,6 +97,9 @@ export function projectMachineAgent(input: Readonly<{
     const facts = input.facts;
     const agent = {
         agentId: input.agentId, title: input.title,
+        ...(input.definitionId ? { definitionId: input.definitionId } : {}),
+        ...(facts?.managed !== undefined ? { managed: facts.managed } : {}),
+        ...(facts?.fit ? { fit: facts.fit } : {}),
         installed: facts?.installed ?? false,
         version: facts?.version ?? null, latestVersion: facts?.latestVersion ?? null,
         update: facts?.update ?? null,
@@ -103,6 +108,9 @@ export function projectMachineAgent(input: Readonly<{
         install: { ...(facts?.install ?? { available: false, mode: 'none' as const, sizeBytes: null, guideUrl: null }), requiresVendorConsent: facts?.install.mode === 'vendor_recipe' },
         dependencies: (facts?.dependencies ?? []).map((dependency) => ({ ...dependency, title: input.dependencyTitlesByKey?.[dependency.key] ?? dependency.key })),
         job: input.job, stale: input.stale || Boolean(input.unavailableReason),
+        ...(input.stale || input.unavailableReason
+            ? { staleReason: input.staleReason ?? (input.unavailableReason ? 'error' as const : 'offline' as const) }
+            : {}),
         ...(input.unavailableReason ? { unavailableReason: input.unavailableReason } : {}),
     };
     return { ...agent, state: resolveMachineAgentState({ ...agent, known: facts !== null && !input.unavailableReason, checking: input.checking }) };
@@ -110,9 +118,9 @@ export function projectMachineAgent(input: Readonly<{
 
 /** Keep unchanged agent rows and nested facts stable across refresh and unrelated agent updates. */
 export function reconcileMachineAgents(previous: readonly MachineAgent[], incoming: readonly MachineAgent[]): readonly MachineAgent[] {
-    const previousById = new Map(previous.map((agent) => [agent.agentId, agent]));
+    const previousById = new Map(previous.map((agent) => [buildMachineAgentInventoryKey(agent), agent]));
     const reconciled = incoming.map((agent) => {
-        const prior = previousById.get(agent.agentId);
+        const prior = previousById.get(buildMachineAgentInventoryKey(agent));
         return prior && JSON.stringify(prior) === JSON.stringify(agent) ? prior : agent;
     });
     return previous.length === reconciled.length && reconciled.every((agent, index) => agent === previous[index]) ? previous : reconciled;

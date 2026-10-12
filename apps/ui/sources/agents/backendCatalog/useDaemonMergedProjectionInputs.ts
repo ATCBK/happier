@@ -19,7 +19,10 @@ import {
     loadDaemonMergedProjectionCacheEntry,
     readCachedDaemonMergedProjectionCacheEntry,
     readReusableDaemonMergedProjectionCacheEntry,
+    readDaemonMergedProjectionSummary,
+    subscribeDaemonMergedProjectionSummary,
     type DaemonMergedProjectionInputs,
+    type DaemonMergedProjectionSummary,
 } from './loadDaemonMergedProjectionInputs';
 
 /**
@@ -38,6 +41,23 @@ export type DaemonMergedProjectionInputsState = Readonly<{
 
 function normalizeKeyPart(value: string | null | undefined): string {
     return String(value ?? '').trim();
+}
+
+/** Inert session chrome shares the cache owner's summary and binding, never the detail hook's lifecycle. */
+export function useDaemonMergedProjectionSummary(params: Readonly<{
+    machineId: string | null | undefined;
+    serverId?: string | null;
+}>): DaemonMergedProjectionSummary {
+    useSetting('preferredLanguage');
+    const machineId = normalizeKeyPart(params.machineId);
+    const serverId = normalizeKeyPart(params.serverId);
+    const subscribe = React.useCallback((listener: () => void) => (
+        subscribeDaemonMergedProjectionSummary({ machineId, serverId }, listener)
+    ), [machineId, serverId]);
+    const getSnapshot = React.useCallback(() => (
+        readDaemonMergedProjectionSummary({ machineId, serverId })
+    ), [machineId, serverId]);
+    return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export function useDaemonMergedProjectionInputs(params: Readonly<{

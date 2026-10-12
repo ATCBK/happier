@@ -6,20 +6,17 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
 const machineRpc = vi.hoisted(() => vi.fn());
 
-// The network and presence of an applied transport are the system boundaries.
-// Settings, subscriptions, Account lifetime, projection cache and both readers stay real.
+// The network is the system boundary. Applied transport state, settings,
+// subscriptions, Account lifetime, cache and both readers stay real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: machineRpc,
-}));
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    getAppliedActiveServerSnapshot: () => ({ serverId: 'server-1', serverUrl: 'https://locale.example.test', generation: 1 }),
-    isAppliedActiveServerRuntimeAvailable: () => true,
 }));
 
 import type { StorageState } from '@/sync/store/types';
 import { storage } from '@/sync/domains/state/storageStore';
 import { registerStorageStateReader } from '@/sync/domains/state/storageStateReaderBridge';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { prepareWarmCacheEncryptionKey } from '@/sync/domains/state/warmCacheEncryptionKey';
 import { forgetPluginUiProjectionAdmissionSnapshots } from '@/sync/domains/plugins/ui/projectionWarmCache';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
@@ -75,6 +72,7 @@ describe('locale-narrowed daemon projection readers', () => {
             machines: { 'machine-1': createMachineFixture({ activeAt: Date.now() }) },
         } satisfies StorageState;
         registerStorageStateReader(() => state);
+        publishAppliedActiveServerSnapshot({ serverId: accountScope.serverId, serverUrl: 'https://locale.example.test', generation: accountNumber });
         setPreferredLanguageFromSettings('en');
         machineRpc.mockReset();
         machineRpc.mockImplementation(async ({ payload }: { payload: { locale: string } }) => ({
@@ -85,6 +83,7 @@ describe('locale-narrowed daemon projection readers', () => {
 
     afterEach(() => {
         standardCleanup();
+        publishAppliedActiveServerRuntimeAvailability(false);
         retireActiveServerAccountScopeLifetime();
         clearDaemonMergedProjectionCacheForTests();
     });

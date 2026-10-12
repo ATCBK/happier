@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { getAllAgentCatalogDefinitions } from '@happier-dev/agents';
-import { buildAgentUniverseBackendTargetKey, listAgentUniverseIds, listExecutableAgentUniverseIds } from './agentUniverse';
+import { buildAgentUniverseBackendTargetKey, readAgentUniverseBackendTargetKey, listAgentUniverseIds, listExecutableAgentUniverseIds } from './agentUniverse';
 import { ACCOUNT_BACKEND_SETTING_ANALYTICS } from '@/sync/domains/settings/registry/account/accountBackendSettingDefinitions';
 import { ACCOUNT_PERMISSION_SETTING_ANALYTICS } from '@/sync/domains/settings/registry/account/accountPermissionSettingDefinitions';
 
 describe('agentUniverse', () => {
+    it('classifies unresolvable presentation ids while strict key construction still rejects them', () => {
+        for (const id of ['custom-acp', '', 'bad:target']) {
+            expect(readAgentUniverseBackendTargetKey(id)).toBeNull();
+            expect(() => buildAgentUniverseBackendTargetKey(id)).toThrow();
+        }
+        expect(readAgentUniverseBackendTargetKey(' claude ')).toBe(buildAgentUniverseBackendTargetKey('claude'));
+        expect(readAgentUniverseBackendTargetKey('acme.agent/native')).toBe('agent:acme.agent/native');
+    });
+
     it('canonicalizes a bundled Agent id to its qualified Agent target', () => {
         expect(buildAgentUniverseBackendTargetKey('antigravity'))
             .toBe('agent:happier.agent.antigravity/antigravity');

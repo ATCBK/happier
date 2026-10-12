@@ -1,7 +1,7 @@
 import type { ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import type { TranslationKey, TranslationKeyNoParams } from '@/text';
 import type { Href } from 'expo-router';
-import type { ConnectedServiceId } from '@happier-dev/protocol';
+import type { ConnectedAccountServiceKey, ConnectedServiceId } from '@happier-dev/protocol';
 
 import {
     AGENT_IDS as SHARED_AGENT_IDS,
@@ -75,7 +75,7 @@ export type AgentCoreConfig = Readonly<{
          * UI presentation metadata for the service backing this agent.
          * When null, the agent has no account-level OAuth connection surface in the UI.
          */
-        serviceId: ConnectedServiceId | null;
+        serviceId: ConnectedAccountServiceKey | ConnectedServiceId | null;
         /**
          * Canonical translation key for the service label shown in account settings and provider surfaces.
          */

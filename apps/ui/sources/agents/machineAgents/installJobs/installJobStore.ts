@@ -231,12 +231,17 @@ export function startAgentInstallJob(target: AgentInstallJobTarget, intent: Agen
             state.records.set(target.agentId, record);
             publish(target, record.job);
         }
-        // Fetch daemon-owned timing/steps before polling, sharing any mount-time list request.
-        try { await ensureMachineAgentInstallJobs(target); } catch { /* Read still resumes the admitted job. */ }
-        requireCurrent(state);
         const record = state.records.get(target.agentId);
         if (!record) throw new AgentInstallJobRpcError('job_not_found');
-        void poll(target, record);
+        // Native admission is already acknowledged. Discovery must not turn that
+        // acknowledgement into a failed start if the Account retires while reading.
+        void (async () => {
+            // Fetch daemon-owned timing/steps before polling, sharing any mount-time list request.
+            try { await ensureMachineAgentInstallJobs(target); } catch { /* Read still resumes the admitted job. */ }
+            if (state.controller.signal.aborted) return;
+            const current = state.records.get(target.agentId);
+            if (current) void poll(target, current);
+        })();
         return record.job;
     })().finally(() => { state.starts.delete(target.agentId); });
     state.starts.set(target.agentId, promise);

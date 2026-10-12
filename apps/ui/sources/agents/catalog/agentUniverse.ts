@@ -5,7 +5,7 @@ import {
 } from '@happier-dev/agents';
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
-import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
+import { readBackendTargetKeyV2, resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 
 export function listAgentUniverseIds(): readonly AgentId[] {
     return getAllAgentCatalogDefinitions().map((definition) => definition.id);
@@ -23,4 +23,9 @@ export function buildAgentUniverseBackendTargetKey(id: string): string {
         kind: 'backend',
         backendId: normalizedId,
     });
+}
+
+/** Retained or derived presentation ids need not identify an executable target. */
+export function readAgentUniverseBackendTargetKey(id: string): string | null {
+    return readBackendTargetKeyV2({ kind: 'backend', backendId: id.trim() });
 }

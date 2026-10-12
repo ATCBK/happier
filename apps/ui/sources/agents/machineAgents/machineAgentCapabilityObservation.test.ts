@@ -4,6 +4,27 @@ import { createMachineAgentInventoryStore } from './machineAgentInventoryStore';
 import { isMachineAgentReady } from './resolveMachineAgentState';
 
 describe('machine agent capability observation', () => {
+    it('retains known update facts when launch detection omits them without retaining old authentication', () => {
+        const descriptors = [{ agentId: 'claude', title: 'Claude' }];
+        const row = { installed: true, version: '1.0.0', latestVersion: '2.0.0', update: { supported: true, command: null },
+            signIn: { status: 'signedIn', loginSupport: 'login_terminal' }, platform: { supported: true },
+            install: { available: true, mode: 'managed', sizeBytes: null, guideUrl: null }, dependencies: [] };
+        const store = createMachineAgentInventoryStore();
+        const publish = (data: Record<string, unknown>) => store.publish('machine', projectMachineAgentCapabilityObservation(descriptors, {
+            status: 'loaded', snapshot: { response: { protocolVersion: 1, results: {
+                'cli.claude': { ok: true, checkedAt: 12, data },
+            } } },
+        }, store.read('machine').agents));
+        publish(row);
+        expect(store.read('machine').agents[0].state).toBe('updateAvailable');
+        const { latestVersion: _latestVersion, ...launchFacts } = row;
+        publish({ ...launchFacts, signIn: { status: 'signedOut', loginSupport: 'login_terminal' } });
+        expect(store.read('machine').agents[0]).toMatchObject({ latestVersion: '2.0.0', state: 'needsSignIn' });
+        expect(isMachineAgentReady(store.read('machine').agents[0])).toBe(false);
+        publish({ ...row, latestVersion: null });
+        expect(store.read('machine').agents[0]).toMatchObject({ latestVersion: null, state: 'ready' });
+    });
+
     it('uses installed rather than legacy available, fails closed on incomplete rows, and preserves the last-known offline facts', () => {
         const descriptors = [{ agentId: 'antigravity', title: 'Antigravity' }];
         const row = { available: true, installed: false, version: null, latestVersion: null, update: { supported: false, command: null }, signIn: { status: 'signedIn', loginSupport: 'manual_only' }, platform: { supported: true }, install: { available: true, mode: 'vendor_recipe', sizeBytes: null, guideUrl: null }, dependencies: [{ key: 'agy-helper', installed: true, version: '1' }] };

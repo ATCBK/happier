@@ -16,19 +16,16 @@ vi.mock('phosphor-react-native', () => new Proxy({}, {
     get: (_target, name) => name === 'then' ? undefined : () => null,
 }));
 
-// The network and presence of an applied transport are system boundaries.
-// Settings, subscriptions, Account lifetime, cache and mounted readers stay real.
+// The network is the system boundary. Applied transport state, settings,
+// subscriptions, Account lifetime, cache and mounted readers stay real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
     machineRpcWithServerScope: machineRpc,
-}));
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    getAppliedActiveServerSnapshot: () => ({ serverId: 'server-1', serverUrl: 'https://locale.example.test', generation: 1 }),
-    isAppliedActiveServerRuntimeAvailable: () => true,
 }));
 
 import { storage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { prepareWarmCacheEncryptionKey } from '@/sync/domains/state/warmCacheEncryptionKey';
 import { forgetPluginUiProjectionAdmissionSnapshots, readPluginUiProjectionAdmissionSnapshot } from '@/sync/domains/plugins/ui/projectionWarmCache';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
@@ -79,6 +76,7 @@ describe('mounted locale-narrowed daemon projection readers', () => {
             settings: { ...settingsDefaults }, endpointStatus: 'online',
             machines: { 'machine-1': createMachineFixture({ activeAt: Date.now() }) },
         });
+        publishAppliedActiveServerSnapshot({ serverId: accountScope.serverId, serverUrl: 'https://locale.example.test', generation: 1 });
         applyRemoteLanguage('en', 1);
         machineRpc.mockReset();
         machineRpc.mockImplementation(async ({ payload }: { payload: { locale: string } }) => ({
@@ -89,6 +87,7 @@ describe('mounted locale-narrowed daemon projection readers', () => {
 
     afterEach(() => {
         standardCleanup();
+        publishAppliedActiveServerRuntimeAvailability(false);
         retireActiveServerAccountScopeLifetime();
         clearDaemonMergedProjectionCacheForTests();
     });
@@ -98,8 +97,10 @@ describe('mounted locale-narrowed daemon projection readers', () => {
             currentness: usePluginUiProjectionCurrentness({ machineId: 'machine-1' }),
             merged: useDaemonMergedProjectionInputs({ machineId: 'machine-1' }),
         }));
-        await vi.waitFor(() => expect(hook.getCurrent().currentness.phase).toBe('current'));
-        expect(hook.getCurrent().merged.phase).toBe('ready');
+        await vi.waitFor(() => {
+            expect(hook.getCurrent().currentness.phase).toBe('current');
+            expect(hook.getCurrent().merged.phase).toBe('ready');
+        });
         expect(translatedTitle(hook.getCurrent().currentness.pluginUiProjection)).toBe('Hello');
         const englishInputs = hook.getCurrent().merged.inputs;
         const englishUi = hook.getCurrent().currentness.pluginUiProjection;

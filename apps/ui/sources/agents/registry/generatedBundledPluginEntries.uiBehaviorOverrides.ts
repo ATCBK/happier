@@ -722,6 +722,7 @@ export const BUNDLED_CANONICAL_AGENT_UI_BEHAVIOR_DESCRIPTORS: Readonly<
 
 const CLAUDE_PREDECESSOR_MESSAGE_META_DEFAULTS = {
   "claudeCodeExperimentalAgentTeamsEnabled": false,
+  "claudeCodeIncludeInNativeHistory": false,
   "claudeDynamicModelProbeEnabled": true,
   "claudeLocalPermissionBridgeEnabled": true,
   "claudeLocalPermissionBridgeTimeoutSeconds": 600,

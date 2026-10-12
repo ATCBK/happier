@@ -4,6 +4,7 @@ import { isNewerVersion } from '@/updates/items/updateItem';
 /** Readiness is derived here; consumers only choose how to present this state. */
 export function resolveMachineAgentState(input: Pick<MachineAgent, 'installed' | 'platform' | 'signIn' | 'dependencies' | 'version' | 'latestVersion' | 'update' | 'job'> & Readonly<{
     known?: boolean;
+    fit?: MachineAgent['fit'];
     checking?: boolean;
     /** Launch must prove the selected credential, unlike aggregate inventory display. */
     requireSignedIn?: boolean;
@@ -15,6 +16,7 @@ export function resolveMachineAgentState(input: Pick<MachineAgent, 'installed' |
     if (input.job?.outcome === null) return 'installing';
     if (input.job?.outcome?.kind === 'failed' && input.job.outcome.code !== 'cancelled') return 'failed';
     if (input.known === false) return input.checking ? 'checking' : 'unknown';
+    if (input.fit?.kind === 'unknown') return 'unknown';
     if (!input.platform.supported) return 'unsupported';
     if (!input.installed || input.dependencies.some((dependency) => !dependency.installed)) return 'notInstalled';
     if (input.credentialRouteReady === false) return 'unknown';

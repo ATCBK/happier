@@ -121,6 +121,9 @@ export type MachineAgentJob = Readonly<{
 
 export type MachineAgent = Readonly<{
     agentId: AgentId;
+    definitionId?: string;
+    managed?: boolean;
+    fit?: MachineAgentInventoryItem['fit'];
     title: string;
     state: MachineAgentState;
     installed: boolean;
@@ -134,8 +137,10 @@ export type MachineAgent = Readonly<{
     job: MachineAgentJob | null;
     /** Last-known facts of a machine that is not answering right now. */
     stale: boolean;
+    /** Presence loss and failed checks both invalidate facts, but only presence loss means offline. */
+    staleReason?: 'offline' | 'error';
     /** The latest probe failed; retained facts cannot admit a Session. */
-    unavailableReason?: Omit<MachineAgentInventoryUnavailable, 'agentId'>;
+    unavailableReason?: Omit<MachineAgentInventoryUnavailable, 'agentId' | 'definitionId'>;
 }>;
 
 /** The native sign-in running in a machine terminal (T1), shared by the bottom pane, the form and the phone sheet. */

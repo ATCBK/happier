@@ -48,6 +48,28 @@ afterEach(() => {
 });
 
 describe('agent install job owner', () => {
+    it('retains the native acknowledgement when Account retirement interrupts initial hydration', async () => {
+        const target = { serverId: 'store-ack-retirement', accountId: 'store-account', machineId: 'machine', agentId: 'codex' };
+        const hydration = createDeferred<unknown>();
+        const reading = createDeferred<void>();
+        boundary.rpc.mockImplementation(async ({ method }: { method: string }) => {
+            if (method.endsWith('.start')) return { ok: true, jobId: 'job-acknowledged' };
+            if (method.endsWith('.list')) { reading.resolve(); return hydration.promise; }
+            throw new Error('A retired Account must not begin a cursor read');
+        });
+        const starting = startAgentInstallJob(target, 'update', { consent: { vendorRecipe: true } });
+        // Observe the genuine boundary phase. Native start already acknowledged this exact job;
+        // retirement affects its background projection, not that existing acknowledgement.
+        const acknowledgement = starting.then(job => ({ job }), error => ({ error }));
+        await reading.promise;
+        for (const listener of boundary.credentialListeners) listener({
+            serverId: target.serverId, serverUrl: 'https://ack-retirement.test', kind: 'credentials_removed',
+        });
+        hydration.resolve({ ok: true, jobs: [{ ...wireJob('codex', 'job-acknowledged'), intent: 'update' }] });
+        expect(await acknowledgement).toMatchObject({ job: { jobId: 'job-acknowledged', intent: 'update' } });
+        await act(async () => {});
+        expect(readAgentInstallJob(target)).toBeNull();
+    });
     it('reads successor Account facts through the inventory after the old detect retires', async () => {
         const { refreshMachineAgents } = await import('../useMachineAgents');
         const server = await upsertServerProfile({ serverUrl: 'https://inventory-switch.example.test' });

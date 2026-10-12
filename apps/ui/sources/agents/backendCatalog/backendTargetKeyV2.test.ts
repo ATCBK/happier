@@ -32,9 +32,9 @@ describe('resolveBackendTargetKeyV2', () => {
             kind: 'backend',
             backendId: 'custom-acp',
             configuredBackendId: 'instance-1',
-        })).toBe('backend:custom-acp:configured:instance-1');
+        })).toBe('agent:happier.agent.custom-acp/custom-acp:definition:instance-1');
         expect(resolveBackendTargetKeyV2('backend:custom-acp:configured:instance-1'))
-            .toBe('backend:custom-acp:configured:instance-1');
+            .toBe('agent:happier.agent.custom-acp/custom-acp:definition:instance-1');
         expect(resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'totally-custom-plugin-agent' }))
             .toBe('backend:totally-custom-plugin-agent');
     });
@@ -64,7 +64,7 @@ describe('resolveBackendTargetKeyV2', () => {
             kind: 'backend',
             backendId: 'examples.session-agent/session-agent',
             configuredBackendId: 'instance-1',
-        })).toBe('backend:examples.session-agent/session-agent:configured:instance-1');
+        })).toBe('agent:happier.agent.custom-acp/custom-acp:definition:instance-1');
     });
 
     it('matches persisted legacy keys against their canonical Agent target', () => {

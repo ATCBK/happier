@@ -1,4 +1,4 @@
-import type { MachineAgentInventoryDescriptor, MachineAgentInventoryItem, MachineAgentInventoryUnavailable } from '@happier-dev/protocol/capabilities';
+import { buildMachineAgentInventoryKey, type MachineAgentInventoryDescriptor, type MachineAgentInventoryItem, type MachineAgentInventoryUnavailable } from '@happier-dev/protocol/capabilities';
 import type { MachineAgent, MachineAgentConnectedService } from './machineAgentTypes';
 import { projectMachineAgent, reconcileMachineAgents } from './machineAgentModel';
 
@@ -33,8 +33,8 @@ export function createMachineAgentInventoryStore() {
             subscribers.add(listener); listeners.set(key, subscribers);
             return () => { subscribers.delete(listener); if (!subscribers.size) listeners.delete(key); };
         },
-        subscribeAgent(key: string, agentId: string, listener: () => void) {
-            const agentKey = JSON.stringify([key, agentId]);
+        subscribeAgent(key: string, agentId: string, listener: () => void, definitionId?: string) {
+            const agentKey = JSON.stringify([key, buildMachineAgentInventoryKey({ agentId, definitionId })]);
             const subscribers = agentListeners.get(agentKey) ?? new Set();
             subscribers.add(listener); agentListeners.set(agentKey, subscribers);
             return () => { subscribers.delete(listener); if (!subscribers.size) agentListeners.delete(agentKey); };
@@ -44,28 +44,30 @@ export function createMachineAgentInventoryStore() {
             if (observation.jobsByAgentId) jobsByScope.set(key, observation.jobsByAgentId);
             const jobs = jobsByScope.get(key);
             const factsById = factsByScope.get(key) ?? new Map<string, MachineAgentInventoryItem>();
-            for (const item of observation.items) factsById.set(item.agentId, item);
+            for (const item of observation.items) factsById.set(buildMachineAgentInventoryKey(item), item);
             factsByScope.set(key, factsById);
             const descriptors = observation.descriptors ?? (observation.items.length > 0 ? observation.items : previous.agents);
-            const unavailableById = new Map(observation.unavailable?.map(({ agentId, ...reason }) => [agentId, reason]));
-            const refreshedIds = new Set(observation.items.map((item) => item.agentId));
+            const unavailableById = new Map(observation.unavailable?.map(({ agentId, definitionId, ...reason }) => [buildMachineAgentInventoryKey({ agentId, definitionId }), reason]));
+            const refreshedIds = new Set(observation.items.map(buildMachineAgentInventoryKey));
+            const previousById = new Map(previous.agents.map(agent => [buildMachineAgentInventoryKey(agent), agent]));
             const agents = reconcileMachineAgents(previous.agents, descriptors.map((descriptor) => projectMachineAgent({
                 ...descriptor,
-                facts: factsById.get(descriptor.agentId) ?? null,
+                facts: factsById.get(buildMachineAgentInventoryKey(descriptor)) ?? null,
                 checking: observation.status === 'loading',
                 stale: observation.status === 'offline' || observation.status === 'error',
-                unavailableReason: unavailableById.get(descriptor.agentId)
-                    ?? (refreshedIds.has(descriptor.agentId) ? undefined : previous.agents.find((agent) => agent.agentId === descriptor.agentId)?.unavailableReason),
-                connectedServices: observation.connectedServicesByAgentId?.[descriptor.agentId] ?? previous.agents.find((agent) => agent.agentId === descriptor.agentId)?.signIn.connectedServices ?? [],
-                job: jobs ? jobs[descriptor.agentId] ?? null : previous.agents.find((agent) => agent.agentId === descriptor.agentId)?.job ?? null,
+                staleReason: observation.status === 'offline' ? 'offline' : observation.status === 'error' ? 'error' : undefined,
+                unavailableReason: unavailableById.get(buildMachineAgentInventoryKey(descriptor))
+                    ?? (refreshedIds.has(buildMachineAgentInventoryKey(descriptor)) ? undefined : previousById.get(buildMachineAgentInventoryKey(descriptor))?.unavailableReason),
+                connectedServices: observation.connectedServicesByAgentId?.[descriptor.agentId] ?? previousById.get(buildMachineAgentInventoryKey(descriptor))?.signIn.connectedServices ?? [],
+                job: jobs ? jobs[buildMachineAgentInventoryKey(descriptor)] ?? null : previousById.get(buildMachineAgentInventoryKey(descriptor))?.job ?? null,
                 dependencyTitlesByKey: observation.dependencyTitlesByKey,
             })));
             const lastCheckedAt = observation.lastCheckedAt ?? previous.lastCheckedAt;
             if (agents === previous.agents && observation.status === previous.status && lastCheckedAt === previous.lastCheckedAt) return;
             snapshots.set(key, { status: observation.status, agents, lastCheckedAt });
             for (const listener of listeners.get(key) ?? []) listener();
-            const prior = new Map(previous.agents.map((agent) => [agent.agentId, agent]));
-            const next = new Map(agents.map((agent) => [agent.agentId, agent]));
+            const prior = new Map(previous.agents.map((agent) => [buildMachineAgentInventoryKey(agent), agent]));
+            const next = new Map(agents.map((agent) => [buildMachineAgentInventoryKey(agent), agent]));
             for (const agentId of new Set([...prior.keys(), ...next.keys()])) {
                 if (prior.get(agentId) === next.get(agentId)) continue;
                 for (const listener of agentListeners.get(JSON.stringify([key, agentId])) ?? []) listener();

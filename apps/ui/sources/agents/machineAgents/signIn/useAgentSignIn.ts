@@ -227,9 +227,6 @@ export function useAgentSignIn(target: Readonly<{ serverId?: string | null; mach
     reportTerminalFailure: (failure: string) => {
       if (entry && boundTarget?.lifetime.isCurrent() && entry.state.terminalKey) { stopPolling(entry); publish(entry, { phase: 'failed', failure }); }
     },
-    beginConnect: (serviceId?: string) => boundTarget
-      ? startAgentSignInRpc(boundTarget, { agentId: boundTarget.agentId, method: 'connected', ...(serviceId ? { serviceId } : {}) })
-      : Promise.resolve(null),
   }), [boundTarget, entry]);
   return { ...state, state, terminalId: state.terminalKey ? entry?.terminalId ?? null : null,
     available: Boolean(boundTarget?.lifetime.isCurrent()), elapsedMs: state.startedAtMs === null ? 0 : Math.max(0, now - state.startedAtMs),

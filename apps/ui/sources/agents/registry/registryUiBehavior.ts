@@ -25,7 +25,7 @@ import type { Settings } from '@/sync/domains/settings/settings';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { CurrentSessionRunnerProcessIdentity } from '@/sync/domains/models/resolveSessionModelSelectionDisposition';
-import { buildAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
+import { readAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
 import type { GoalActionCapabilities } from '@/components/sessions/workState/goalActionVisibility';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput';
@@ -855,7 +855,8 @@ export function classifyAgentSessionComposerNonSteerablePayload(opts: {
                 sourceKind: 'configured',
             })
             : '')
-        || buildAgentUniverseBackendTargetKey(agentId);
+        || readAgentUniverseBackendTargetKey(agentId);
+    if (agentTargetKey === null) return null;
 
     return resolveAgentUiBehavior(agentId, resolveSessionMachineId(ownerMetadata))
         .sessionComposer?.classifyNonSteerablePayload?.({

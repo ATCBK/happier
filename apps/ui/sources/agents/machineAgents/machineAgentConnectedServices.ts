@@ -15,7 +15,7 @@ import {
 
 import type { MachineAgentConnectedService } from './machineAgentTypes';
 
-/** Passive inventory projection; the caller supplies one current Account/descriptor scope. */
+/** Passive inventory projection; entries come from this Machine's current descriptor scope. */
 export function projectMachineAgentConnectedServices(params: Readonly<{
     agents: readonly Readonly<{
         agentId: string;
@@ -46,14 +46,11 @@ export function projectMachineAgentConnectedServices(params: Readonly<{
             ? params.titleForService(entry)
             : entry?.shortName ?? (typeof projectedTitle === 'string' ? projectedTitle : projectedTitle?.fallback) ?? serviceId;
         const disconnected: MachineAgentConnectedService = { serviceId, title, connected: false, healthy: false, profileLabel: null };
-        if (!entry || params.accountTransport === 'indeterminate') return disconnected;
+        if (!entry || params.accountTransport === 'indeterminate' || entry.executable !== true) return disconnected;
 
         let options: readonly ConnectedServicesProfileOption[];
         if (params.accountTransport === 'advertised-v4') {
-            // The supplied registry snapshot is the descriptor authority. Conflicts never borrow
-            // another candidate's authentication modes or use the released scalar adapter.
-            const authentication = (entry.projectedDescriptorCandidates?.length ?? 0) > 1
-                ? null : entry.projectedDescriptor?.authentication;
+            const authentication = entry.projectedDescriptor?.authentication;
             if (!authentication) return disconnected;
             options = qualifiedOptions[serviceId] ?? [];
             const restricted = applyProjectedCredentialKindRestrictions({

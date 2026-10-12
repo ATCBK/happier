@@ -170,7 +170,7 @@ function matchesCurrentExternalLink(
     currentAgent: CurrentProjectedAgentCapabilities,
     providerSessionId: string | null,
 ): boolean {
-    const linkedSession = resolveLinkedExternalSessionMetadataV1(metadata);
+    const linkedSession = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
     if (!linkedSession.ok) {
         return linkedSession.error === 'linked_session_not_found';
     }
@@ -228,7 +228,7 @@ function hasUnconsumedReplaySeed(metadata: Record<string, unknown>): boolean {
 function canFreshSpawnMissingVendorResumeId(metadata: SessionMetadata): boolean {
     const record = asRecord(metadata);
     if (!record) return false;
-    const linkedSession = resolveLinkedExternalSessionMetadataV1(record);
+    const linkedSession = resolveLinkedExternalSessionMetadataV1(record, 'stored');
     if (linkedSession.ok || linkedSession.error !== 'linked_session_not_found') return false;
 
     const fork = readForkLineage(record);
@@ -252,7 +252,7 @@ export function canResumeSessionWithOptions(metadata: SessionMetadata | null | u
     const configuredAcpBackendId = resolveConfiguredAcpBackendId({ metadata });
     if (configuredAcpBackendId !== null) {
         const metadataRecord = asRecord(metadata);
-        const linkedSession = resolveLinkedExternalSessionMetadataV1(metadataRecord);
+        const linkedSession = resolveLinkedExternalSessionMetadataV1(metadataRecord, 'stored');
         if (linkedSession.ok || linkedSession.error !== 'linked_session_not_found') return false;
         return canConfiguredAcpBackendResume(configuredAcpBackendId, options);
     }

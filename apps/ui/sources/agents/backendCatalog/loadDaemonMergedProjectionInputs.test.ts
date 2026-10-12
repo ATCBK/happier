@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineProtocolNumber, defineProtocolObject, defineProtocolString } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createMachineFixture } from '@/dev/testkit';
+import { createPluginDeclarativeModelFixture } from '@/dev/testkit/fixtures/pluginDeclarativeModelFixture';
 import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
-import { createSocketIoAckTimeoutError } from '@happier-dev/sync-client';
+import { createPluginContributionIdentity, buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
@@ -21,6 +22,16 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
 });
+
+// Install the network boundary before preparing the real Sync graph once,
+// outside each test's hook deadline. Per-case state and transport still reset.
+network = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+({ storage } = await import('@/sync/domains/state/storage'));
+({ getMachineContributionRegistryProjectionRevision, publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision'));
+({ clearDaemonMergedProjectionCacheForTests } = await import('./loadDaemonMergedProjectionInputs'));
+const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+afterAll(() => { network.dispose(); });
 
 const projectionDescribeMock = vi.hoisted(() => vi.fn());
 const homeIds = new Map<string, string>();
@@ -90,6 +101,7 @@ const automationEligibleEvents = [{
         id: 'acme.events/repository/updated',
         identity: { pluginId: 'acme.events', localId: 'repository/updated' },
         occurrenceId: 'event-generation-a',
+        sourceCustody: { kind: 'development', registeredRootId: 'events-root' },
         title: 'Repository updated',
         description: null,
         payloadSchema: { type: 'object', additionalProperties: false },
@@ -126,7 +138,11 @@ const composerSurfaceCatalog = [{
         renderer: {
             kind: 'declarative' as const,
             contributionId: 'review-region-renderer',
-            model: { visible: true },
+            model: createPluginDeclarativeModelFixture({
+                pluginId: 'acme.composer', localId: 'review-region-renderer',
+                occurrenceId: 'composer-generation-a',
+                document: { version: 1, root: { kind: 'text', text: 'Review' } },
+            }),
         },
         availability: { state: 'available' as const, reason: 'available', diagnostics: [] },
     },
@@ -140,17 +156,21 @@ const composerSurfaceCatalog = [{
     },
     resourceCapability: { readable: true, dynamic: true },
     contributorTargetedContributions: {
-        target: { pluginId: 'acme.composer', occurrenceId: 'composer-generation-a' },
+        target: {
+            pluginId: 'acme.composer', occurrenceId: 'composer-generation-a',
+            sourceCustody: { kind: 'development', registeredRootId: 'composer-root' },
+        },
         points: [],
     },
 }] as const;
 
 describe('loadDaemonMergedProjectionCacheEntry', () => {
     beforeEach(async () => {
-        vi.resetModules();
+        network.resetRequests();
+        retireActiveServerAccountScopeLifetime();
+        storage.setState(storage.getInitialState(), true);
         activeAccountRestored = false;
         projectionDescribeMock.mockReset();
-        network = await installSessionOpsNetworkBoundary();
         // The network fixture publishes plain Machines, so their Account must
         // explicitly report plain mode rather than the old-server E2EE fallback.
         network.setHttpResponder(async (input) => new URL(String(input)).pathname === '/v1/account/encryption'
@@ -167,15 +187,16 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             const response = await projectionDescribeMock(request.targetId, { serverId: homeIds.get(request.serverUrl) });
             if (response.supported !== true) {
                 if (response.reason === 'not-supported') return { ok: false, error: 'Unsupported projection', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
-                if (response.reason === 'timeout') throw createSocketIoAckTimeoutError();
+                if (response.reason === 'timeout') {
+                    // This is the shared connection/setup owner's timeout fact,
+                    // not an unsolicited peer acknowledgement timeout.
+                    throw Object.assign(new Error('RPC connection setup timed out'), { code: 'MACHINE_RPC_TIMEOUT' });
+                }
                 throw new Error('Projection transport unavailable');
             }
             const { supported: _supported, ...envelope } = response;
             return { ok: true, result: { protocolVersion: 1, ...envelope } };
         });
-        ({ storage } = await import('@/sync/domains/state/storage'));
-        ({ getMachineContributionRegistryProjectionRevision, publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision'));
-        ({ clearDaemonMergedProjectionCacheForTests } = await import('./loadDaemonMergedProjectionInputs'));
         initialRevision = getMachineContributionRegistryProjectionRevision(projectionScope);
         clearDaemonMergedProjectionCacheForTests();
         const { registerStorageStateReader } = await import('@/sync/domains/state/storageStateReaderBridge');
@@ -190,10 +211,11 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
         serverScopedRpcSocketPool.resetForTests();
         resetScopedMachineTransportCacheForTests();
-        network.dispose();
     });
 
     it('publishes a background Home descriptor under its Account and retires only that Home when its request lifetime retires', async () => {
+        const agentIdentity = createPluginContributionIdentity({ pluginId: 'acme.agent', localId: 'agent' });
+        const agentId = buildQualifiedPluginContributionKey(agentIdentity);
         const { resolveAgentUiBehavior } = await import('@/agents/registry/registryUiBehavior');
         const { loadDaemonMergedProjectionCacheEntry, readCachedDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
         const homeA = await network.addHome('https://projection-a.example.test', 'account-a');
@@ -215,8 +237,8 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             projection: {
                 ...daemonProjection(1),
                 agentsById: {
-                    'acme.agent': {
-                        id: 'acme.agent', identity: { pluginId: 'acme', localId: 'agent' },
+                    [agentId]: {
+                        id: agentId, identity: agentIdentity,
                         title: 'Acme', channel: 'plugin', providerOwnedEnvironmentKeys: [],
                         ui: { behavior: { permissions: { footer: {
                             usePermissionUpdates: serverId === homeB.id,
@@ -234,9 +256,9 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             .map(({ serverUrl, token }) => [serverUrl, token ? parseToken(token) : null])).toEqual([
             [homeA.serverUrl, 'account-a'], [homeB.serverUrl, 'account-b'],
         ]);
-        expect(resolveAgentUiBehavior('acme.agent', 'shared-machine', scopeB).permissions?.footer?.usePermissionUpdates).toBe(true);
-        expect(resolveAgentUiBehavior('acme.agent', 'shared-machine').permissions?.footer?.usePermissionUpdates).toBe(false);
-        expect(resolveAgentUiBehavior('acme.agent', 'shared-machine', scopeA).permissions?.footer?.stopHandling).toBe('denyOnly');
+        expect(resolveAgentUiBehavior(agentId, 'shared-machine', scopeB).permissions?.footer?.usePermissionUpdates).toBe(true);
+        expect(resolveAgentUiBehavior(agentId, 'shared-machine').permissions?.footer?.usePermissionUpdates).toBe(false);
+        expect(resolveAgentUiBehavior(agentId, 'shared-machine', scopeA).permissions?.footer?.stopHandling).toBe('denyOnly');
 
         let complete!: (value: ReturnType<typeof projectionForHome>) => void;
         projectionDescribeMock.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
@@ -247,8 +269,8 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         await expect(pending).resolves.toBeNull();
         expect(readCachedDaemonMergedProjectionCacheEntry({ machineId: 'shared-machine', serverId: homeB.id })).toBeNull();
         expect(readCachedDaemonMergedProjectionCacheEntry({ machineId: 'shared-machine', serverId: homeA.id })?.kind).toBe('ready');
-        expect(resolveAgentUiBehavior('acme.agent', 'shared-machine', scopeB).permissions?.footer?.usePermissionUpdates).toBe(false);
-        expect(resolveAgentUiBehavior('acme.agent', 'shared-machine', scopeA).permissions?.footer?.stopHandling).toBe('denyOnly');
+        expect(resolveAgentUiBehavior(agentId, 'shared-machine', scopeB).permissions?.footer?.usePermissionUpdates).toBe(false);
+        expect(resolveAgentUiBehavior(agentId, 'shared-machine', scopeA).permissions?.footer?.stopHandling).toBe('denyOnly');
     });
 
     it('retains the last ready projection as inert cached metadata after a transport error', async () => {
@@ -399,6 +421,63 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
             expect(projectionDescribeMock).toHaveBeenCalledTimes(4);
         } finally {
             storage.setState({ machines: previousMachines });
+        }
+    });
+
+    it('lets inert catalog summaries observe publication and invalidation without starting daemon reads', async () => {
+        const { loadDaemonMergedProjectionCacheEntry, readDaemonMergedProjectionSummary, subscribeDaemonMergedProjectionSummary } = await import('./loadDaemonMergedProjectionInputs');
+        const account = createAccountLifetime('account-a');
+        const summaries = Array.from({ length: 100 }, () => readDaemonMergedProjectionSummary(projectionScope));
+        const unsubscribes = summaries.map((_, index) => subscribeDaemonMergedProjectionSummary(projectionScope, () => {
+            summaries[index] = readDaemonMergedProjectionSummary(projectionScope);
+        }));
+        try {
+            expect(summaries.every(summary => summary.inputs === null && !summary.current)).toBe(true);
+            expect(projectionDescribeMock).not.toHaveBeenCalled();
+            projectionDescribeMock.mockResolvedValue({ supported: true, projection: daemonProjection(7) });
+            await loadDaemonMergedProjectionCacheEntry({ ...projectionScope, accountLifetime: account.lifetime });
+            const published = readDaemonMergedProjectionSummary(projectionScope);
+            expect(published.current).toBe(true);
+            expect(summaries.every(summary => summary === published)).toBe(true);
+            publishMachineContributionRegistryProjectionInvalidation(projectionScope);
+            expect(summaries.every(summary => summary.inputs === published.inputs && !summary.current)).toBe(true);
+            expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
+        } finally {
+            for (const unsubscribe of unsubscribes) unsubscribe();
+        }
+    });
+
+    it.each(['settled', 'publishing'] as const)('keeps a reused settled projection while another same-Account reader remains mounted (%s)', async (joinAt) => {
+        const { loadDaemonMergedProjectionCacheEntry, readDaemonMergedProjectionSummary, subscribeDaemonMergedProjectionSummary } = await import('./loadDaemonMergedProjectionInputs');
+        const issuer = createAccountLifetime('account-a');
+        const reader = createAccountLifetime('account-a');
+        projectionDescribeMock.mockResolvedValue({ supported: true, projection: daemonProjection(7) });
+        const read = (accountLifetime: ActiveServerAccountScopeLifetime) => loadDaemonMergedProjectionCacheEntry({
+            ...projectionScope, accountLifetime, reuseFreshReady: true,
+        });
+        let observed = readDaemonMergedProjectionSummary(projectionScope);
+        let reused: ReturnType<typeof read> | null = null;
+        const unsubscribe = subscribeDaemonMergedProjectionSummary(projectionScope, () => {
+            observed = readDaemonMergedProjectionSummary(projectionScope);
+            // Publication notifies before the issuing promise leaves the
+            // in-flight owner; a synchronous sibling can join at that boundary.
+            if (joinAt === 'publishing' && observed.current && !reused) reused = read(reader.lifetime);
+        });
+        try {
+            await read(issuer.lifetime);
+            const published = readDaemonMergedProjectionSummary(projectionScope);
+            expect(published.current).toBe(true);
+            if (joinAt === 'settled') reused = read(reader.lifetime);
+            expect(reused).not.toBeNull();
+            await reused;
+            issuer.retire();
+            expect(observed).toBe(published);
+            await read(reader.lifetime);
+            expect(projectionDescribeMock).toHaveBeenCalledTimes(1);
+            reader.retire();
+            expect(observed).toEqual({ inputs: null, current: false });
+        } finally {
+            unsubscribe();
         }
     });
 

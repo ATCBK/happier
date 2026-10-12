@@ -12,6 +12,11 @@ const SELECTABLE_AGENT_IDS_IN_DISPLAY_ORDER = [
 const AVAILABLE_SELECTABLE_AGENT_IDS = SELECTABLE_AGENT_IDS_IN_DISPLAY_ORDER.filter((id) => CANONICAL_AGENT_IDS.includes(id));
 
 describe('agents/enabled', () => {
+    it('does not enable malformed retained ids by treating an absent preference as enabled', () => {
+        expect(isAgentEnabled({ agentId: '', backendEnabledByTargetKey: {} })).toBe(false);
+        expect(isAgentEnabled({ agentId: 'bad:target', backendEnabledByTargetKey: {} })).toBe(false);
+    });
+
     it('never treats an abstract Custom ACP contribution as an enabled executable Agent', () => {
         expect(isAgentEnabled({ agentId: 'custom-acp', backendEnabledByTargetKey: {} })).toBe(false);
         expect(getEnabledAgentIds({ backendEnabledByTargetKey: {} })).not.toContain('custom-acp');
