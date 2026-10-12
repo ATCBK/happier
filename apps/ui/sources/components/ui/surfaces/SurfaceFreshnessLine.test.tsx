@@ -1,0 +1,87 @@
+import * as React from 'react';
+import { act } from 'react-test-renderer';
+import { describe, expect, it, vi } from 'vitest';
+
+import { createDeferred, renderScreen } from '@/dev/testkit';
+
+import { SurfaceFreshnessLine, SurfaceFreshnessOnSheetProvider } from './SurfaceFreshnessLine';
+
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ View: 'View' });
+});
+
+function flattenStyle(style: unknown): Record<string, unknown> {
+    if (Array.isArray(style)) return Object.assign({}, ...style.map(flattenStyle));
+    return typeof style === 'object' && style !== null ? style as Record<string, unknown> : {};
+}
+
+describe('SurfaceFreshnessLine recovery', () => {
+    it('keeps Retry keyboard-visible and prevents reentry while its async action is pending', async () => {
+        const deferred = createDeferred<void>();
+        const retry = vi.fn(() => deferred.promise);
+        const screen = await renderScreen(<SurfaceFreshnessLine testID="stale" reason="Refresh failed" action={{ label: 'Retry', onPress: retry }} />);
+        const action = screen.findByTestId('stale-action')!;
+        await act(async () => { action.props.onFocus({}); });
+        expect(flattenStyle(screen.findByTestId('stale-action')!.props.style({ pressed: false })))
+            .toMatchObject({ outlineStyle: 'solid', outlineWidth: 2 });
+        let pending: unknown;
+        await act(async () => {
+            pending = action.props.onPress();
+            action.props.onPress();
+        });
+        expect(retry).toHaveBeenCalledOnce();
+        expect(screen.findByTestId('stale-action')!.props.accessibilityState).toMatchObject({ busy: true, disabled: true });
+        await act(async () => { deferred.resolve(); await pending; });
+        expect(screen.findByTestId('stale-action')!.props.accessibilityState).toMatchObject({ busy: false, disabled: false });
+    });
+});
+
+describe('SurfaceFreshnessLine placement', () => {
+    it('is a filled strip under a pane header, and a plain line on a sheet that already draws the surface', async () => {
+        const strip = await renderScreen(<SurfaceFreshnessLine testID="line" reason="Still reading" />);
+        expect(flattenStyle(strip.findByTestId('line')!.props.style).backgroundColor).not.toBe('transparent');
+        expect(flattenStyle(strip.findByTestId('line')!.props.style).borderTopWidth).toBeGreaterThan(0);
+
+        const onSheet = await renderScreen(
+            <SurfaceFreshnessOnSheetProvider><SurfaceFreshnessLine testID="line" reason="Still reading" /></SurfaceFreshnessOnSheetProvider>,
+        );
+        const style = flattenStyle(onSheet.findByTestId('line')!.props.style);
+        expect(style.backgroundColor).toBe('transparent');
+        expect(style.borderTopWidth ?? 0).toBe(0);
+        expect(style.borderBottomWidth ?? 0).toBe(0);
+        expect(style.paddingLeft).toBe(0);
+    });
+});
+
+
+describe('SurfaceFreshnessLine chip', () => {
+    it('is an inline status (no strip) whose steady, checking and behind states share the line\'s recovery', async () => {
+        const live = await renderScreen(<SurfaceFreshnessLine testID="chip" presentation="chip" signal="live" lead="Sampled while you look" reason="Live" />);
+        const liveStyle = flattenStyle(live.findByTestId('chip')!.props.style);
+        expect(liveStyle.backgroundColor).toBe('transparent');
+        expect(liveStyle.borderTopWidth ?? 0).toBe(0);
+        expect(liveStyle.paddingLeft).toBe(0);
+        expect(live.findByTestId('chip-signal')).not.toBeNull();
+        expect(live.findByTestId('chip-lead')).not.toBeNull();
+        expect(live.findByTestId('chip-spinner')).toBeNull();
+
+        const checking = await renderScreen(<SurfaceFreshnessLine testID="chip" presentation="chip" busy asOf={Date.now()} reason="Checking…" />);
+        expect(checking.findByTestId('chip')!.props['aria-busy']).toBe(true);
+        expect(checking.findByTestId('chip-spinner')).not.toBeNull();
+        expect(checking.findByTestId('chip-signal')).toBeNull();
+
+        const deferred = createDeferred<void>();
+        const retry = vi.fn(() => deferred.promise);
+        const behind = await renderScreen(
+            <SurfaceFreshnessLine testID="chip" presentation="chip" asOf={Date.now()} reason="" action={{ label: 'Retry', onPress: retry, testID: 'chip-retry' }} />,
+        );
+        const action = behind.findByTestId('chip-retry')!;
+        await act(async () => { action.props.onFocus({}); });
+        expect(flattenStyle(behind.findByTestId('chip-retry')!.props.style({ pressed: false })))
+            .toMatchObject({ outlineStyle: 'solid', outlineWidth: 2 });
+        await act(async () => { action.props.onPress(); action.props.onPress(); });
+        expect(retry).toHaveBeenCalledOnce();
+        await act(async () => { deferred.resolve(); });
+    });
+});

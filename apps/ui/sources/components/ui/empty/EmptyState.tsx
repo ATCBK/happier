@@ -14,6 +14,7 @@ import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { CenteredInfoTile } from '@/components/ui/lists/CenteredInfoTile';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -97,6 +98,8 @@ type EmptyStateProps = Readonly<{
      * glyph and type. `SurfaceStateCard` passes its container's size here.
      */
     size?: HappierStateSize;
+    /** `line` only: the row is waiting for its answer, so it leads with the quiet spinner a loading state line draws. */
+    lineLoading?: boolean;
     /** `line` only: the density of the rows it sits among. */
     lineDensity?: React.ComponentProps<typeof Item>['density'];
     testID?: string;
@@ -143,8 +146,10 @@ export const EmptyState = React.memo((props: EmptyStateProps) => {
     const inPageColumn = useListPresentation() === 'page' && !inSection;
 
     if (props.layout === 'line') {
-        // In a list line the ways forward are quiet inline links after the sentence ("Nothing in My
-        // work. Show all sessions"), never buttons: the rows around it stay the content.
+        // In a list line the ways forward are quiet inline links, never buttons: the rows around it
+        // stay the content. After a one-line statement ("Nothing in My work. Show all sessions") they
+        // follow it on the line; under an explanatory sentence they sit below it on its edge, so a
+        // wrapping sentence keeps the whole row width (lab ST "Nothing started yet").
         const lineLinks = [props.primaryAction, props.secondaryAction].filter(
             (entry): entry is EmptyStatePrimaryAction => entry !== undefined,
         );
@@ -155,9 +160,12 @@ export const EmptyState = React.memo((props: EmptyStateProps) => {
                 ))}
             </View>
         ) : props.action;
+        const linksBelowSentence = false && lineLinks.length > 0 && typeof props.subtitle === 'string';
         // Lab 0 "N": a line may lead with its kind's glyph (a ring while loading, a warning while failed),
         // small and quiet on the rows' edge.
-        const lineGlyph = props.icon ?? (props.iconName
+        const lineGlyph = props.lineLoading ? (
+            <ActivitySpinner size={HAPPIER_STATE_LINE_METRICS.glyphPx - 2} color={theme.colors.text.tertiary} />
+        ) : props.icon ?? (props.iconName
             ? <Icon name={props.iconName} size={HAPPIER_STATE_LINE_METRICS.glyphPx} color={theme.colors.text.tertiary} />
             : undefined);
         return (
@@ -167,13 +175,16 @@ export const EmptyState = React.memo((props: EmptyStateProps) => {
                 title={props.title}
                 titleStyle={stylesheet.lineTitle}
                 subtitle={typeof props.subtitle === 'string' ? props.subtitle : undefined}
+                subtitleTestID={props.subtitleTestID}
                 // The line's sentence is why the list is empty and what to do; it wraps, never cut.
                 subtitleLines={0}
                 mode="info"
                 showChevron={false}
                 density={props.lineDensity}
                 pressableStyle={props.lineRowStyle}
-                rightElement={lineAction ?? undefined}
+                rightElement={linksBelowSentence ? undefined : lineAction ?? undefined}
+                bottomElement={linksBelowSentence ? lineAction : undefined}
+                bottomElementInset="text"
             />
         );
     }
@@ -297,7 +308,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     actionStack: {
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     unavailableReason: {
         ...Typography.default(),
@@ -310,18 +321,18 @@ const stylesheet = StyleSheet.create((theme) => ({
     lineLinks: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     lineLink: {
         minHeight: LINE_LINK_MIN_TARGET_PX,
         justifyContent: 'center',
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
     },
     // A quiet inline link: primary ink with an underline, not a button and not an accent colour.
     lineLinkLabel: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body'),
+
         color: theme.colors.text.primary,
         textDecorationLine: 'underline',
     },
@@ -329,32 +340,32 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: 16,
-        rowGap: 12,
-        paddingVertical: 16,
+        columnGap: theme.space.s16,
+        rowGap: theme.space.s12,
+        paddingVertical: theme.space.s16,
         paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx + 2,
     },
     inlineMark: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     inlineCopy: {
         flexGrow: 1,
         flexShrink: 1,
         flexBasis: 220,
-        gap: 2,
+        gap: theme.space.s2,
     },
     inlineTitle: {
-        ...Typography.default('medium'),
-        fontSize: 14,
-        lineHeight: 20,
+
+        ...Typography.variant('label'),
+
         color: theme.colors.text.primary,
     },
     inlineSubtitle: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body'),
+
         color: theme.colors.text.secondary,
     },
 }));

@@ -100,6 +100,38 @@ export const motionTokens = {
         reducedCrossFadeMs: 120,
     },
     /**
+     * Home's atmosphere (plan R-10, R-13): a picture arrives over `readyFadeMs` and never holds Home's
+     * content; on send the ordered fade climbs the band over `sendDissolveMs`. Any other leaving (a
+     * picture taking over, a moment holding the planet) is a quicker `leaveFadeMs` fade on the exit
+     * curve. Reduced motion turns each into a `reducedCrossFadeMs` cross-fade.
+     */
+    atmosphere: {
+        readyFadeMs: 500,
+        leaveFadeMs: 300,
+        sendDissolveMs: 600,
+        reducedCrossFadeMs: 140,
+    },
+    /**
+     * A Session's guard moments (plan 50 GM, lab `rg`): the composer status line cross-fades between
+     * warning, stopped and waking over `lineCrossFadeMs`; the list row's word (idle time · Stops in ·
+     * Stopped) over `wordCrossFadeMs`; a fresh stop marker rises `markerRisePx` into the transcript over
+     * `markerRiseMs`. Reduced motion: the text changes at once.
+     */
+    guardMoment: {
+        lineCrossFadeMs: 200,
+        wordCrossFadeMs: 160,
+        markerRiseMs: 200,
+        markerRisePx: 6,
+    },
+    /**
+     * A carried object (a Board card picked up on the Canvas): it grows by `liftScale` as it leaves the
+     * surface, on the travel spring, and sinks back as it lands. Reduced motion: no scale; the shadow
+     * alone says it is lifted.
+     */
+    drag: {
+        liftScale: 1.02,
+    },
+    /**
      * Springs for things a person watches travel or reshape (the agent's cursor gliding to its next
      * target, a capsule morphing between states). Critically damped (`dampingRatio: 1`): it settles,
      * it never overshoots or wobbles, and a new target redirects it from where it is with its

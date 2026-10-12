@@ -1,16 +1,20 @@
 import {
     UI_SURFACE_ISOLATION_PROFILE_VERSION_V1,
     UiSurfaceExecutableApprovalKeyV1Schema,
-    admitCallerAuthoredUiSurfaceCapabilitiesV1,
     buildUiSurfaceExecutableApprovalKeyStringV1,
     createUiSurfaceExecutableSecurityFingerprintV1,
     createUiSurfaceRequestedCapabilitiesDigestV1,
-    PluginHostedHtmlSourceV1Schema,
-    type PluginUiHostMethodV1,
-    type NormalizedUiSurfaceCapabilityRequestV1,
     type UiSurfaceExecutableApprovalKeyV1,
+} from '@happier-dev/protocol/plugins/contributions/ui/executableSurfaceApprovalV1';
+import {
+    admitCallerAuthoredUiSurfaceCapabilitiesV1,
+    type NormalizedUiSurfaceCapabilityRequestV1,
+} from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
+import {
+    PluginHostedHtmlSourceV1Schema,
     type PluginHostedHtmlSourceV1,
-} from '@happier-dev/protocol/plugins/ui';
+} from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlSourceV1';
+import type { PluginUiHostMethodV1 } from '@happier-dev/protocol/plugins/ui/hostApiDefinition';
 
 import { buildHostedHtmlDocument } from '@/components/plugins/hostedWeb/buildHostedHtmlDocument';
 
@@ -21,6 +25,7 @@ export type PreparedCallerHostedHtmlSurface =
         frameSource: Readonly<{
             bundle: PluginHostedHtmlSourceV1;
             networkOrigins: NormalizedUiSurfaceCapabilityRequestV1['networkOrigins'];
+            network?: 'none' | 'open';
         }>;
         /** Audit/review rendering of the exact host shell; never rewrap this value. */
         document: string;
@@ -52,7 +57,7 @@ export type PreparedCallerHostedHtmlSurface =
  * identity, and builds the host-owned shell. Session access/revision/currentness
  * and remembered-approval storage remain with the outer Session owner.
  */
-export function prepareCallerHostedHtmlSurface(input: Readonly<{
+export async function prepareCallerHostedHtmlSurface(input: Readonly<{
     serverIdentityId: string;
     accountId: string;
     approvalSubject: string;
@@ -61,7 +66,7 @@ export function prepareCallerHostedHtmlSurface(input: Readonly<{
     admittedHostMethods: readonly PluginUiHostMethodV1[];
     frameIdentity: Readonly<{ instanceId: string; mountNonce: string }>;
     hostOrigin: string;
-}>): PreparedCallerHostedHtmlSurface {
+}>): Promise<PreparedCallerHostedHtmlSurface> {
     const source = PluginHostedHtmlSourceV1Schema.safeParse(input.source);
     if (!source.success) return Object.freeze({ kind: 'rejected', code: 'source_invalid' });
     const admission = admitCallerAuthoredUiSurfaceCapabilitiesV1({
@@ -76,7 +81,7 @@ export function prepareCallerHostedHtmlSurface(input: Readonly<{
     // source visible as typed unavailable and create no physical frame.
     if (
         admission.capabilities.hostMethods.length > 0
-        && admission.advertisedHostMethods.length === 0
+        && !admission.capabilities.hostMethods.some((method) => admission.advertisedHostMethods.includes(method))
     ) {
         return Object.freeze({ kind: 'rejected', code: 'capability_request_invalid' } as const);
     }
@@ -84,6 +89,7 @@ export function prepareCallerHostedHtmlSurface(input: Readonly<{
         source: source.data,
         isolationProfileVersion: UI_SURFACE_ISOLATION_PROFILE_VERSION_V1,
         networkOrigins: admission.capabilities.networkOrigins,
+        network: admission.capabilities.network,
     });
     const requestedCapabilitiesDigest = createUiSurfaceRequestedCapabilitiesDigestV1(admission.capabilities);
     const approval = UiSurfaceExecutableApprovalKeyV1Schema.safeParse({
@@ -96,14 +102,15 @@ export function prepareCallerHostedHtmlSurface(input: Readonly<{
     if (!approval.success) return Object.freeze({ kind: 'rejected', code: 'approval_scope_invalid' });
     let document: string;
     try {
-        document = buildHostedHtmlDocument(
+        document = await buildHostedHtmlDocument(
             source.data,
             {
                 identity: input.frameIdentity,
                 frameOrigin: 'null',
                 hostOrigin: input.hostOrigin,
             },
-            { networkOrigins: admission.capabilities.networkOrigins },
+            { network: admission.capabilities.network === 'origins' ? undefined : admission.capabilities.network,
+                networkOrigins: admission.capabilities.networkOrigins },
         );
     } catch {
         // A structurally valid bundle can still reference missing or invalid
@@ -115,6 +122,7 @@ export function prepareCallerHostedHtmlSurface(input: Readonly<{
         frameSource: Object.freeze({
             bundle: source.data,
             networkOrigins: admission.capabilities.networkOrigins,
+            network: admission.capabilities.network === 'origins' ? undefined : admission.capabilities.network,
         }),
         document,
         advertisedHostMethods: admission.advertisedHostMethods,

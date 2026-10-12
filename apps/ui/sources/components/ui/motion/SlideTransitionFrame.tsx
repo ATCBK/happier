@@ -115,12 +115,14 @@ type SlideTransitionLayerProps = Readonly<{
 }>;
 
 function SlideTransitionLayer(props: SlideTransitionLayerProps): React.ReactElement {
+    // React children may contain cyclic Context objects. Only motion inputs belong in the worklet.
+    const { role, progress, distance, maxBlurPx } = props;
     const layerStyle = useAnimatedStyle(() => {
         const style = resolveSlideLayerStyle({
-            role: props.role,
-            progress: props.progress.value,
-            distance: props.distance,
-            maxBlur: props.maxBlurPx,
+            role,
+            progress: progress.value,
+            distance,
+            maxBlur: maxBlurPx,
         });
         return {
             transform: [{ translateX: style.translateX }],

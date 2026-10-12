@@ -1,8 +1,11 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolveHappierScene } from '@happier-dev/plugin-ui/presentation';
+import { planetLightForProgress } from '@happier-dev/brand/planet';
 
 import { renderScreen } from '@/dev/testkit';
+import { PlanetCanvas } from '@/components/atmosphere/PlanetCanvas';
+import { createPlanetCanvasSceneCache } from '@/components/atmosphere/planetCanvasScene';
 import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 import { SceneArt } from './SceneArt';
@@ -32,8 +35,9 @@ describe('SceneArt', () => {
         expect(art?.props.accessibilityElementsHidden).toBe(true);
         // the planet layer ends just above the ground (y 45.6 of 64, at 232 / 160)
         expect(screen.findHostByTestId('scene-planet')?.props.style).toMatchObject({ height: 45.6 * 1.45, overflow: 'hidden' });
-        const planetDots = screen.findHostByTestId('scene-planet-body')!.findAll((node) => String(node.type) === 'Circle');
-        expect(planetDots.length).toBeGreaterThan(40);
+        const planet = screen.findAll(node => typeof node.type !== 'string' && node.props.mark?.size !== undefined)[0]!;
+        expect(planet.props.mark).toMatchObject({ radiusScale: 1.38, halo: 0.55, theme: 'light' });
+        expect(planet.props.width).toBeGreaterThan(0);
     });
 
     it('brings a rising planet up once, and holds it in place under reduced motion or a still request', async () => {
@@ -54,6 +58,47 @@ describe('SceneArt', () => {
         setReducedMotionPreferenceOverride(null);
         const resting = await renderScreen(<SceneArt scene={resolveHappierScene('inboxZero')} size="pane" still={false} />);
         expect(planetStyle(resting)).toMatchObject({ opacity: 1 });
+    });
+
+    it('renders a plugin planet look and placement through the scene core, including explicit zero and false', async () => {
+        const renderLook = async (style: 'airy' | 'rich' | undefined, fullness: number, digits: boolean) => {
+            const scene = resolveHappierScene({
+                name: 'acme.custom-planet', moment: 'dusk',
+                planetAt: { x: 88, y: 29, r: 30, style, fullness, digits },
+            }, 'page');
+            const screen = await renderScreen(<SceneArt scene={scene} size="page" still />);
+            const canvas = screen.findAllByType(PlanetCanvas)[0]!;
+            expect(canvas.props.options).toMatchObject({
+                R: 30 * 1.45, cx: 88 * 1.45, cy: 29 * 1.45,
+                view: { w: 232, h: 92.8 }, style, fullness,
+                light: planetLightForProgress(0.38),
+            });
+            expect(screen.findHostByTestId('scene-planet-body')?.props.style[0]).toMatchObject({ left: 0, top: 0, width: 232, height: 92.8 });
+            return createPlanetCanvasSceneCache()(canvas.props, 1);
+        };
+        const rich = await renderLook('rich', 0.7, true);
+        const airy = await renderLook('airy', 0, false);
+        expect(rich.body.length).toBeGreaterThan(airy.body.length);
+        expect(rich.cells.length).toBeGreaterThan(0);
+        expect(airy.cells).toEqual([]);
+        const hollow = await renderLook('rich', 0, true);
+        expect(rich.body).not.toEqual(hollow.body);
+        // Zero/false alone still select the authored scene path, without a truthy style to mask them.
+        expect((await renderLook(undefined, 0, false)).cells).toEqual([]);
+    });
+
+    it('keeps customized rising planets behind the ground and still under reduced motion', async () => {
+        const scene = resolveHappierScene({
+            name: 'acme.custom-dawn', moment: 'rising', planet: 'rising',
+            planetAt: { x: 112, r: 28, digits: true },
+        });
+        const moving = await renderScreen(<SceneArt scene={scene} size="pane" still={false} />);
+        expect(moving.findAllByType(PlanetCanvas)[0]!.props.options).toBeDefined();
+        expect(moving.findHostByTestId('scene-planet')?.props.style).toMatchObject({ height: 45.6 * 1.1, overflow: 'hidden' });
+        expect(planetStyle(moving).transform?.[0]?.translateY).toBeGreaterThan(0);
+        setReducedMotionPreferenceOverride(true);
+        const reduced = await renderScreen(<SceneArt scene={scene} size="pane" still={false} />);
+        expect(planetStyle(reduced)).toMatchObject({ opacity: 1, transform: [{ translateY: 0 }] });
     });
 
     it('draws a plugin prop in the scene ink at the host line width, mirrored when flipped', async () => {

@@ -1,8 +1,9 @@
 import * as React from 'react';
-import type { View } from 'react-native';
+import type { View, ViewStyle } from 'react-native';
 import Animated, {
     Easing,
     runOnJS,
+    type SharedValue,
     useAnimatedStyle,
     useSharedValue,
     withSequence,
@@ -120,3 +121,83 @@ export function RectFlightLayer(props: Readonly<{ style: ReturnType<typeof useRe
         </Animated.View>
     );
 }
+
+/** A rectangle in window coordinates (`measureInWindow`). */
+export type WindowFlightRect = Readonly<{ x: number; y: number; width: number; height: number }>;
+
+/** The enter's timing (MPG-32): the travel, then the trailing content's fade over its last part. */
+export const ENTER_FROM_RECT_MS = 320;
+export const ENTER_FROM_RECT_CONTENT_FADE_MS = 140;
+
+/**
+ * A destination that enters from where its origin was (a popover row → the machine page's header, lab
+ * `MO` 3): FLIP on the destination only, no cross-surface element. Given the origin's window rect, the
+ * target is measured (`onTarget`) and starts at the origin's top-left at the origin's scale, then runs to
+ * identity on the travel timing with a strong ease-out, compositor-only. A `null` origin, or reduced
+ * motion, applies no transform (reduced motion cross-fades instead). `ready` stays false only while an
+ * origin waits for its target's measure, so the caller can hold the first frame at opacity 0.
+ */
+export function useEnterFromRect(origin: WindowFlightRect | null, options: Readonly<{ reducedMotion: boolean }>): Readonly<{
+    style: ReturnType<typeof useAnimatedStyle<ViewStyle>>;
+    contentStyle: ReturnType<typeof useAnimatedStyle<ViewStyle>>;
+    onTarget: (target: WindowFlightRect | null) => void;
+    ready: boolean;
+}> {
+    const travels = origin !== null && !options.reducedMotion;
+    const progress = useSharedValue(travels ? 0 : 1);
+    const fade = useSharedValue(origin !== null && options.reducedMotion ? 0 : 1);
+    const dx = useSharedValue(0);
+    const dy = useSharedValue(0);
+    const scale = useSharedValue(1);
+    const [ready, setReady] = React.useState(!travels);
+    const started = React.useRef(false);
+    React.useEffect(() => {
+        if (origin === null || !options.reducedMotion || started.current) return;
+        started.current = true;
+        fade.value = withTiming(1, { duration: motionTokens.successMoment.reducedCrossFadeMs });
+    }, [fade, options.reducedMotion, origin]);
+    const onTarget = React.useCallback((target: WindowFlightRect | null) => {
+        if (!travels || started.current) return;
+        started.current = true;
+        if (!target || target.height <= 0) {
+            progress.value = 1;
+            setReady(true);
+            return;
+        }
+        startEnter({ origin: origin!, target, progress, dx, dy, scale });
+        setReady(true);
+    }, [dx, dy, origin, progress, scale, travels]);
+    const style = useAnimatedStyle<ViewStyle>(() => {
+        const remaining = 1 - progress.value;
+        return {
+            opacity: fade.value,
+            transform: [
+                { translateX: dx.value * remaining },
+                { translateY: dy.value * remaining },
+                { scale: 1 + (scale.value - 1) * remaining },
+            ],
+            transformOrigin: 'left top',
+        };
+    });
+    const contentStyle = useAnimatedStyle<ViewStyle>(() => {
+        const fadeFrom = 1 - ENTER_FROM_RECT_CONTENT_FADE_MS / ENTER_FROM_RECT_MS;
+        return { opacity: fade.value * Math.max(0, Math.min(1, (progress.value - fadeFrom) / (1 - fadeFrom))) };
+    });
+    return { style, contentStyle, onTarget, ready };
+}
+
+function startEnter(input: Readonly<{
+    origin: WindowFlightRect;
+    target: WindowFlightRect;
+    progress: SharedValue<number>;
+    dx: SharedValue<number>;
+    dy: SharedValue<number>;
+    scale: SharedValue<number>;
+}>): void {
+    input.dx.value = input.origin.x - input.target.x;
+    input.dy.value = input.origin.y - input.target.y;
+    input.scale.value = input.origin.height / input.target.height;
+    input.progress.value = 0;
+    input.progress.value = withTiming(1, { duration: ENTER_FROM_RECT_MS, easing: reanimatedMotionTokens.easing.stageCamera });
+}
+

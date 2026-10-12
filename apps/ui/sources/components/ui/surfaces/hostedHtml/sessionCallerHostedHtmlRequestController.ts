@@ -19,16 +19,20 @@ import {
 import {
     createPluginSurfaceResourceReadHandler,
     type PluginSurfaceResourceReadTransport,
+    type PluginSurfaceResourceBinding,
 } from '@/components/plugins/surfaces/pluginSurfaceResourceRead';
+import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
+import type { PluginUiLaunchInputV1 } from '@happier-dev/protocol/plugins/ui';
+import type { PluginResourceContextV1 } from '@happier-dev/protocol';
 import {
     createPluginSurfaceResourceWatchHandlers,
     type PluginSurfaceResourceWatchTransport,
 } from '@/components/plugins/surfaces/pluginSurfaceResourceWatch';
 
-type CurrentPluginTarget = Readonly<{
-    machineId: string;
-    serverId: string;
-    generation: number;
+export type CurrentCallerHostedHtmlPluginTarget = Readonly<{
+    machineId: string | null;
+    serverId: string | null;
+    generation: number | null;
     projection: PluginUiProjectionModel;
     isCurrent: () => boolean;
 }>;
@@ -60,20 +64,39 @@ function readExactQualifiedReference(value: unknown): Readonly<{ pluginId: strin
     return parsed.success ? parsed.data : null;
 }
 
-function assertProjectedResource(
-    target: CurrentPluginTarget,
-    reference: Readonly<{ pluginId: string; localId: string }>,
-): void {
-    const projected = target.projection.resourcesById[
-        buildQualifiedPluginContributionKey(reference)
-    ];
-    if (!projected || projected.pluginId !== reference.pluginId || projected.id !== reference.localId) {
-        throw new Error('plugin_resource_not_found');
-    }
+/** The viewer's exact current declaration selects the Resource's origin and context. */
+export function resolveCallerHostedHtmlResourceBindingV1(input: Readonly<{
+    target: CurrentCallerHostedHtmlPluginTarget;
+    reference: Readonly<{ pluginId: string; localId: string }>;
+    serverId: string;
+    sessionId?: string;
+    mountInstanceKey?: string;
+    launchInput?: PluginUiLaunchInputV1;
+}>): Readonly<{ machineId: string; serverId: string; expectedCallerOccurrenceId: string; context: PluginResourceContextV1 }> | null {
+    const { target, reference } = input;
+    if (!target.isCurrent()) return null;
+    const declarations = Object.values(target.projection.resourcesById).filter(row => row.pluginId === reference.pluginId && row.id === reference.localId);
+    const declaration = declarations.length === 1 ? declarations[0] : null;
+    const plugin = target.projection.installedPackagesById[reference.pluginId];
+    if (!declaration || declaration.pluginId !== reference.pluginId || declaration.id !== reference.localId
+        || !plugin?.enabled || !plugin.occurrenceId
+        || declaration.occurrenceId !== undefined && declaration.occurrenceId !== plugin.occurrenceId) return null;
+    const origin = readPluginUiContributionOrigin(declaration);
+    const packageOrigin = readPluginUiContributionOrigin(plugin);
+    const machineId = target.machineId ?? origin?.machineId;
+    const serverId = target.serverId ?? origin?.serverId;
+    if (!machineId || serverId !== input.serverId
+        || origin && (origin.phase !== 'current' || !origin.interactionEnabled || origin.machineId !== machineId || origin.serverId !== serverId)
+        || packageOrigin && (packageOrigin.machineId !== machineId || packageOrigin.serverId !== serverId)) return null;
+    const context = declaration.scope === 'global' ? { kind: 'global' as const }
+        : declaration.scope === 'session' && input.sessionId ? { kind: 'session' as const, sessionId: input.sessionId }
+        : declaration.scope === 'surface' && input.mountInstanceKey ? { kind: 'surface' as const, mountInstanceKey: input.mountInstanceKey,
+            launchInput: input.launchInput ?? {} } : null;
+    return context ? { machineId, serverId, expectedCallerOccurrenceId: plugin.occurrenceId, context } : null;
 }
 
 /**
- * Host-private request adapter for one caller-authored Session document.
+ * Host-private request adapter for a caller-authored document or saved widget.
  *
  * It deliberately creates no plugin caller. Qualified contributed Actions and
  * Resources resolve against the incumbent current daemon projection, then use
@@ -85,15 +108,17 @@ function assertProjectedResource(
  * even when its frame is visible on the UI surface.
  */
 export function createSessionCallerHostedHtmlRequestController(input: Readonly<{
-    sessionId: string;
+    sessionId?: string;
     serverId: string;
     serverIdentityId: string;
     accountId: string;
     executeHostAction: PluginSurfaceHostActionExecute;
     isAccountCurrent: () => boolean;
     /** Current exact-Home Session read authority supplied by the canonical Session projection. */
-    isSessionCurrent: () => boolean;
-    pluginTarget: CurrentPluginTarget | null;
+    isSessionCurrent?: () => boolean;
+    pluginTarget: CurrentCallerHostedHtmlPluginTarget | null;
+    mountInstanceKey?: string;
+    launchInput?: PluginUiLaunchInputV1;
     publishResourceEvent: (event: PluginUiResourceSubscriptionEventV1) => void;
     notify: (input: Readonly<{ requestId: string; message: string; severity: 'info' | 'warning' | 'error' }>) => void;
     dispatchAction?: typeof dispatchPluginSurfaceAction;
@@ -101,34 +126,28 @@ export function createSessionCallerHostedHtmlRequestController(input: Readonly<{
     watchResource?: Partial<PluginSurfaceResourceWatchTransport>;
 }>): SessionCallerHostedHtmlRequestController {
     let disposed = false;
-    const watchHandlersByPluginId = new Map<string, ResourceHandlers>();
-    const subscriptionPluginIds = new Map<string, string>();
-    const isCurrent = (): boolean => !disposed && input.isAccountCurrent() && input.isSessionCurrent();
-    const readPluginTarget = (): CurrentPluginTarget => {
+    const watchHandlersByResourceKey = new Map<string, ResourceHandlers>();
+    const subscriptionResourceKeys = new Map<string, string>();
+    const isCurrent = (): boolean => !disposed && input.isAccountCurrent()
+        && (input.sessionId === undefined || input.isSessionCurrent?.() === true);
+    const readPluginTarget = (): CurrentCallerHostedHtmlPluginTarget => {
         const target = input.pluginTarget;
         if (!target || !isCurrent() || !target.isCurrent()) {
             throw new Error('caller_surface_retired');
         }
         return target;
     };
-    const watchHandlers = (pluginId: string, target: CurrentPluginTarget): ResourceHandlers => {
-        const existing = watchHandlersByPluginId.get(pluginId);
+    const watchHandlers = (key: string, pluginId: string, target: CurrentCallerHostedHtmlPluginTarget, binding: PluginSurfaceResourceBinding): ResourceHandlers => {
+        const existing = watchHandlersByResourceKey.get(key);
         if (existing) return existing;
-        const occurrenceId = target.projection.installedPackagesById[pluginId]?.occurrenceId;
-        if (!occurrenceId) throw new Error('caller_surface_retired');
         const created = createPluginSurfaceResourceWatchHandlers({
             pluginId,
-            resource: {
-                machineId: target.machineId,
-                serverId: target.serverId,
-                expectedCallerOccurrenceId: occurrenceId,
-                context: { kind: 'session', sessionId: input.sessionId },
-            },
+            resource: binding,
             deliver: input.publishResourceEvent,
             isCurrent: () => isCurrent() && target.isCurrent(),
             ...(input.watchResource === undefined ? {} : { transport: input.watchResource }),
         });
-        watchHandlersByPluginId.set(pluginId, created);
+        watchHandlersByResourceKey.set(key, created);
         return created;
     };
 
@@ -139,7 +158,7 @@ export function createSessionCallerHostedHtmlRequestController(input: Readonly<{
             if (!parsed.success) throw new Error('caller_surface_action_invalid');
             const actionInput = parsed.data.input;
             const actionInputRecord = readJsonRecord(actionInput);
-            if (actionInputRecord
+            if (input.sessionId !== undefined && actionInputRecord
                 && Object.prototype.hasOwnProperty.call(actionInputRecord, 'sessionId')
                 && actionInputRecord.sessionId !== input.sessionId) {
                 throw new Error('caller_surface_session_mismatch');
@@ -157,7 +176,7 @@ export function createSessionCallerHostedHtmlRequestController(input: Readonly<{
                     serverId: input.serverId,
                     serverIdentityId: input.serverIdentityId,
                     runtimeAccountId: input.accountId,
-                    defaultSessionId: input.sessionId,
+                    ...(input.sessionId ? { defaultSessionId: input.sessionId } : {}),
                     actionRequestId: request.requestId,
                     surface: 'ui',
                     // Caller-authored HTML is executable automation, not a
@@ -172,18 +191,22 @@ export function createSessionCallerHostedHtmlRequestController(input: Readonly<{
                 return result.result as PluginUiJsonValueV1;
             }
             const target = readPluginTarget();
+            const action = target.projection.actionsById[buildQualifiedPluginContributionKey(parsed.data.action)];
+            const origin = readPluginUiContributionOrigin(action);
+            const machineId = target.machineId ?? origin?.machineId;
+            const serverId = target.serverId ?? origin?.serverId;
+            if (!machineId || serverId !== input.serverId || origin && (origin.phase !== 'current' || !origin.interactionEnabled
+                || origin.machineId !== machineId || origin.serverId !== serverId)) throw new Error('caller_surface_retired');
             const outcome = await (input.dispatchAction ?? dispatchPluginSurfaceAction)({
                 action: parsed.data.action,
                 ...(parsed.data.input === undefined ? {} : { input: parsed.data.input }),
                 resolveContributedAction: createPluginUiProjectedActionResolver(target.projection.actionsById),
                 contributedAction: {
-                    machineId: target.machineId,
-                    serverId: target.serverId,
-                    sessionId: input.sessionId,
+                    machineId,
+                    serverId,
+                    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
                 },
-                clientAction: {
-                    sessionId: input.sessionId,
-                },
+                ...(input.sessionId ? { clientAction: { sessionId: input.sessionId } } : {}),
                 invocationSurface: 'ui',
                 isContributedActionAvailable: target.isCurrent,
                 isCurrent: () => isCurrent() && target.isCurrent(),
@@ -198,17 +221,14 @@ export function createSessionCallerHostedHtmlRequestController(input: Readonly<{
             const reference = readExactQualifiedReference(record?.resource);
             if (!reference) throw new Error('caller_surface_resource_invalid');
             const target = readPluginTarget();
-            assertProjectedResource(target, reference);
+            const binding = resolveCallerHostedHtmlResourceBindingV1({ target, reference, serverId: input.serverId,
+                sessionId: input.sessionId, mountInstanceKey: input.mountInstanceKey, launchInput: input.launchInput });
+            if (!binding) throw new Error('plugin_resource_not_found');
             if (request.method === 'readResource') {
-                const occurrenceId = target.projection.installedPackagesById[reference.pluginId]?.occurrenceId;
-                if (!occurrenceId) throw new Error('caller_surface_retired');
                 const handler = createPluginSurfaceResourceReadHandler({
                     pluginId: reference.pluginId,
                     resource: {
-                        machineId: target.machineId,
-                        serverId: target.serverId,
-                        expectedCallerOccurrenceId: occurrenceId,
-                        context: { kind: 'session', sessionId: input.sessionId },
+                        ...binding,
                         ...(input.readResource === undefined ? {} : { read: input.readResource }),
                     },
                     isCurrent: () => isCurrent() && target.isCurrent(),
@@ -217,8 +237,17 @@ export function createSessionCallerHostedHtmlRequestController(input: Readonly<{
             }
             const parsedWatch = PluginUiResourceSubscriptionRequestV1Schema.safeParse(record);
             if (!parsedWatch.success) throw new Error('caller_surface_resource_invalid');
-            const result = await watchHandlers(reference.pluginId, target).watchResource(request, options);
-            subscriptionPluginIds.set(parsedWatch.data.subscriptionId, reference.pluginId);
+            const key = buildQualifiedPluginContributionKey(reference);
+            const previousKey = subscriptionResourceKeys.get(parsedWatch.data.subscriptionId);
+            if (previousKey && previousKey !== key) {
+                // Re-establishing one guest id retires its previous contextual
+                // owner before opening a Resource with a different scope.
+                await watchHandlersByResourceKey.get(previousKey)!.disposeHostResource({
+                    ...request, payload: { subscriptionId: parsedWatch.data.subscriptionId },
+                });
+            }
+            const result = await watchHandlers(key, reference.pluginId, target, binding).watchResource(request, options);
+            subscriptionResourceKeys.set(parsedWatch.data.subscriptionId, key);
             return result;
         }
         if (request.method === 'disposeHostResource') {
@@ -228,10 +257,10 @@ export function createSessionCallerHostedHtmlRequestController(input: Readonly<{
                 ? record.subscriptionId
                 : null;
             if (subscriptionId === null) throw new Error('caller_surface_resource_invalid');
-            const pluginId = subscriptionPluginIds.get(subscriptionId);
-            if (!pluginId) throw new Error('caller_surface_resource_invalid');
-            subscriptionPluginIds.delete(subscriptionId);
-            return await watchHandlersByPluginId.get(pluginId)!.disposeHostResource(request);
+            const resourceKey = subscriptionResourceKeys.get(subscriptionId);
+            if (!resourceKey) throw new Error('caller_surface_resource_invalid');
+            subscriptionResourceKeys.delete(subscriptionId);
+            return await watchHandlersByResourceKey.get(resourceKey)!.disposeHostResource(request);
         }
         if (request.method === 'notify') {
             const payload = request.payload;
@@ -255,9 +284,9 @@ export function createSessionCallerHostedHtmlRequestController(input: Readonly<{
         dispose(): void {
             if (disposed) return;
             disposed = true;
-            for (const handlers of watchHandlersByPluginId.values()) handlers.dispose();
-            watchHandlersByPluginId.clear();
-            subscriptionPluginIds.clear();
+            for (const handlers of watchHandlersByResourceKey.values()) handlers.dispose();
+            watchHandlersByResourceKey.clear();
+            subscriptionResourceKeys.clear();
         },
     });
 }

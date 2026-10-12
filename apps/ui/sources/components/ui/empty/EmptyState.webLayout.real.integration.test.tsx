@@ -110,3 +110,39 @@ it('keeps the naked add invitation inside a measured settings collection detail 
         host.remove();
     }
 });
+
+it('puts a list line\'s links under its sentence on the sentence\'s edge, not beside it', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+        await act(async () => root.render(
+            <View style={{ width: 360 }}>
+                <ItemList>
+                    <EmptyState
+                        layout="line"
+                        testID="line"
+                        title="No triggers"
+                        subtitle="Run a workflow here each time something happens: a turn ends, the session starts, a comment lands on its PR."
+                        subtitleTestID="line-sentence"
+                        primaryAction={{ label: 'Add a trigger', onPress: () => {}, testID: 'line-link' }}
+                    />
+                </ItemList>
+            </View>,
+        ));
+        const layout = await measureWebLayout(host, {
+            viewport: { width: 1200, height: 900 },
+            settle: async replay => { await act(replay); },
+        });
+        const sentence = layout.rect('line-sentence');
+        const link = layout.rect('line-link');
+        const row = layout.rect('line');
+        expect(link.top).toBeGreaterThanOrEqual(sentence.bottom - 1);
+        expect(link.left).toBeGreaterThanOrEqual(row.left);
+        expect(Math.abs(link.left - sentence.left)).toBeLessThanOrEqual(8);
+        expect(link.right).toBeLessThanOrEqual(row.right);
+    } finally {
+        await act(async () => root.unmount());
+        host.remove();
+    }
+});

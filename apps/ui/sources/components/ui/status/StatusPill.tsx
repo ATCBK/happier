@@ -74,6 +74,12 @@ export type StatusPillProps = Readonly<{
     /** Label type beyond the variant's role (the composer badge's heavier phrase). */
     labelStyle?: StyleProp<TextStyle>;
     /**
+     * A quieter second phrase after the label, on the same line ("Keep · main checkout"): regular
+     * weight, in `detailColor` (default: the label's colour). It truncates with the label.
+     */
+    detail?: string;
+    detailColor?: string;
+    /**
      * `rect` (default): the shared status geometry. `capsule`: a badge that is itself a control among
      * capsule chips (the composer status row).
      */
@@ -124,6 +130,11 @@ const stylesheet = StyleSheet.create(() => ({
         // from a preceding label style so phrase pills remain regular.
         fontWeight: FontWeights.regular,
         letterSpacing: 0,
+    },
+    // The detail keeps the label's size and line; only the weight steps down.
+    detail: {
+        ...Typography.default(),
+        fontWeight: FontWeights.regular,
     },
 }));
 
@@ -189,6 +200,9 @@ export function StatusPill(props: StatusPillProps): React.ReactElement {
                     style={[styles.label, labelVariantStyle, { color: foregroundColor }, props.labelStyle, props.labelNumberOfLines === undefined ? null : { flexShrink: 1 }]}
                 >
                     {props.label}
+                    {props.detail ? (
+                        <Text style={[styles.detail, { color: props.detailColor ?? foregroundColor }]}>{` · ${props.detail}`}</Text>
+                    ) : null}
                 </Text>
             </>
         </HappierBadge>

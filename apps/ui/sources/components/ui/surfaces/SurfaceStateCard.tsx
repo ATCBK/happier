@@ -1,8 +1,7 @@
-import { HAPPIER_STATE_LINE_METRICS, HAPPIER_STATE_SIZE_METRICS, HappierSurfaceStateFrame, HappierStateLine, HappierStateDetails, resolveHappierStateAnnouncement, resolveHappierStateFailureGlyph, type HappierSceneInput, type HappierStateSize, type HappierSurfaceStateKind } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_STATE_LINE_METRICS, HAPPIER_STATE_SIZE_METRICS, HappierSurfaceState, HappierSurfaceStateLiveLine, resolveHappierStateFailureGlyph, resolveHappierSurfaceStateQuiet, type HappierSceneInput, type HappierStateSize, type HappierSurfaceStateAction, type HappierSurfaceStateBindings, type HappierSurfaceStateKind, type HappierSurfaceStateLive } from '@happier-dev/plugin-ui/presentation';
 import { resolvePluginUiIconName } from '@/components/plugins/surfaces/iconToken/resolvePluginUiIconToken';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { Platform, View } from 'react-native';
+import { Platform } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
@@ -25,15 +24,10 @@ export type SurfaceStateKind = HappierSurfaceStateKind;
 export type SurfaceStateSize = HappierStateSize | 'line';
 export type SurfaceStateAccessibilitySemantics = 'status' | 'alert';
 
-export type SurfaceStateAction = Readonly<{
-    /** Already-translated action label. */
-    label: string;
-    onPress: () => void | Promise<unknown>;
-    testID?: string;
-    disabled?: boolean;
-    /** Pending work owned by the caller; returned promises also retain shared pending behavior. */
-    busy?: boolean;
-}>;
+/** A state replacing its container's facts, as distinct from a supplemental notice beside them. */
+export const SurfaceStateContentContext = React.createContext<((key: symbol, empty: boolean | null) => void) | null>(null);
+
+export type SurfaceStateAction = HappierSurfaceStateAction;
 
 const DEFAULT_ICONS: Partial<Record<SurfaceStateKind, IconName>> = {
     empty: 'tray',
@@ -55,38 +49,18 @@ const LINE_ICONS: Partial<Record<SurfaceStateKind, IconName | null>> = {
 const STILL_WAITING_AFTER_MS = 5_000;
 
 /** A present-tense line under the state: "Reconnecting · next try in 8 s", "Still waiting · 12 s". */
-export type SurfaceStateLive = Readonly<{
-    /** Already-translated. */
-    text: string;
-    /** Draws a small working ring before the text. */
-    busy?: boolean;
-}>;
+export type SurfaceStateLive = HappierSurfaceStateLive;
 
 const stylesheet = StyleSheet.create((theme) => ({
-    actions: {
-        flexDirection: 'row',
-        gap: 12,
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        justifyContent: 'center',
-    },
     detail: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 18,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         textAlign: 'center',
         opacity: 0.9,
-        marginTop: -10,
-    },
-    hiddenDiagnostic: {
-        width: 0,
-        height: 0,
+        marginTop: theme.space.s6,
     },
     detailsToggleLabel: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         // Quiet by size and placement, not by contrast: small text keeps the
         // secondary role so it stays legible.
         color: theme.colors.text.secondary,
@@ -98,10 +72,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
         textAlign: 'center',
     },
-    iconWrap: {
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
     quiet: {
         ...Typography.default(),
         color: theme.colors.text.tertiary,
@@ -112,12 +82,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
         textDecorationLine: 'underline',
     },
-    live: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
+    /** The inline recovery of a line (lab `.pj-line a`): ink, semibold, a soft hover; the same as the freshness line's. */
+    lineAction: {
+        ...Typography.default('semiBold'),
+        color: theme.colors.text.primary,
     },
+    /** A state line is prose: proportional figures, so host names and ids keep their natural spacing. */
+    lineText: {
+        ...Typography.default(),
+        color: theme.colors.text.secondary,
+    },
+    /** The live progress line's figures change in place, so they stay tabular. */
     liveText: {
         ...Typography.default(),
         color: theme.colors.text.secondary,
@@ -127,27 +102,16 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignSelf: 'stretch',
         width: '100%',
     },
-    liveAndActions: {
-        alignItems: 'center',
-        gap: 16,
-    },
-    inline: {
-        alignSelf: 'stretch',
-        gap: 4,
-    },
-    inlineFooter: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 8,
-    },
 }));
 
 /**
- * The ONE shared state composition for panes, details and app surfaces (audit XS-3; pane-states lab 0):
- * empty that invites, loading, unavailable/offline, error with cause and recovery, permission denied,
- * and the compact in-list line. Composes the canonical {@link EmptyState} (icon + title + copy + action
- * slot); stale content is not a card but {@link SurfaceFreshnessLine} over the retained content.
+ * Core's adapter over the ONE shared state composition (`HappierSurfaceState` in plugin-ui, which the
+ * public plugin `SurfaceState` renders too; audit XS-3, pane-states lab 0): empty that invites, loading,
+ * unavailable/offline, error with cause and recovery, permission denied, and the compact in-list line.
+ * This adapter binds core typography, `RoundButton`, glyphs and the canonical {@link EmptyState} tile, and
+ * keeps core's lifetimes private: the content-replacement report, the iOS announcer, the "Still waiting"
+ * clock and translations. Stale content is not a card but {@link SurfaceFreshnessLine} over the retained
+ * content.
  *
  * Size comes from the container: the right sidebar, details drawer and phone panes set it once through
  * `SurfaceStateSizeProvider`, an explicit `size` wins, and outside both the card keeps its unsized
@@ -162,6 +126,8 @@ const stylesheet = StyleSheet.create((theme) => ({
 export function SurfaceStateCard(props: Readonly<{
     testID?: string;
     kind: SurfaceStateKind;
+    /** This state replaces the body; an empty state can use compact room inside a widget group. */
+    replacesContent?: boolean;
     /** The container step; defaults to the enclosing `SurfaceStateSizeProvider`. */
     size?: SurfaceStateSize;
     /** Existing inline anatomy for a state inside a sheet; whole-pane states stay centered. */
@@ -210,15 +176,19 @@ export function SurfaceStateCard(props: Readonly<{
     accessibilitySemantics?: SurfaceStateAccessibilitySemantics;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const styles = stylesheet;
+    const reportContent = React.useContext(SurfaceStateContentContext);
+    const [contentKey] = React.useState(() => Symbol('surface-state'));
+    React.useEffect(() => {
+        if (!props.replacesContent || !reportContent) return;
+        reportContent(contentKey, props.kind === 'empty' && props.body === undefined);
+        return () => reportContent(contentKey, null);
+    }, [contentKey, props.replacesContent, props.kind, props.body, reportContent]);
     const containerSize = useSurfaceStateCardSize();
     const size = props.size ?? containerSize;
     const failureGlyph = resolveHappierStateFailureGlyph(props.kind, size === 'line');
     const kindIconName = failureGlyph ? resolvePluginUiIconName(failureGlyph) : undefined;
+    const animationEnabled = props.animationEnabled !== false;
 
-    // U8.5 craft S4: every kind shares the empty-state anatomy. The glyph stays calm in the secondary
-    // colour; the title carries the trouble, so a failure is never a red "!" on a muted card.
-    const glyphColor = theme.colors.text.secondary;
     const accessibilityAnnouncement = [props.title, props.reason, props.detail]
         .map((value) => value?.trim())
         .filter((value): value is string => Boolean(value))
@@ -227,7 +197,7 @@ export function SurfaceStateCard(props: Readonly<{
 
     // iOS has no live regions, so the card speaks through the canonical announcer on
     // mount and whenever its semantics or text change; web/Android use the live
-    // region on the root below (assertive for alerts, polite for status).
+    // region the shared composition puts on its root (assertive for alerts, polite for status).
     React.useEffect(() => {
         if (Platform.OS !== 'ios' || !props.accessibilitySemantics) return;
         const transitionKey = `${props.accessibilitySemantics}\u0000${accessibilityAnnouncement}`;
@@ -236,17 +206,16 @@ export function SurfaceStateCard(props: Readonly<{
         announceAccessibilityMessage(accessibilityAnnouncement);
     }, [accessibilityAnnouncement, props.accessibilitySemantics]);
 
-    const liveRegionProps = resolveHappierStateAnnouncement(props.accessibilitySemantics);
-
-    const diagnosticMarker = props.diagnosticCode ? (
-        // Nothing failed (or nothing to disclose in a line), so the code stays on the QA testID channel only.
-        <View
-            testID={props.testID ? `${props.testID}-diagnostic-${props.diagnosticCode}` : undefined}
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            style={styles.hiddenDiagnostic}
-        />
-    ) : null;
+    const bindings = useSurfaceStateBindings(props.testID, animationEnabled);
+    const shared = {
+        testID: props.testID,
+        kind: props.kind,
+        action: props.action,
+        secondaryAction: props.secondaryAction,
+        diagnosticCode: props.diagnosticCode,
+        accessibilitySemantics: props.accessibilitySemantics,
+        bindings,
+    } as const;
 
     if (size === 'line') {
         const lineIconName = props.iconName ?? kindIconName ?? LINE_ICONS[props.kind];
@@ -258,217 +227,140 @@ export function SurfaceStateCard(props: Readonly<{
                 testID={props.testID ? `${props.testID}-loading-spinner` : undefined}
                 size={HAPPIER_STATE_LINE_METRICS.glyphPx - 2}
                 color={theme.colors.text.tertiary}
-                animationEnabled={props.animationEnabled !== false}
+                animationEnabled={animationEnabled}
             />
         ) : props.icon ?? (lineIconName
             ? <Icon name={lineIconName} size={HAPPIER_STATE_LINE_METRICS.glyphPx} color={lineTint} />
             : undefined);
         return (
-            <View {...liveRegionProps}>
-                <HappierStateLine
-                    testID={props.testID}
-                    icon={lineGlyph}
-                    action={(
-                        <View style={{ flexDirection: 'row', gap: HAPPIER_STATE_LINE_METRICS.gapPx }}>
-                            {[props.action, props.secondaryAction].map((action, index) => action ? (
-                                <HappierPressable
-                                    key={index}
-                                    testID={action.testID ?? (props.testID ? `${props.testID}-${index === 0 ? 'action' : 'secondary-action'}` : undefined)}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={action.label}
-                                    disabled={action.disabled}
-                                    busy={action.busy}
-                                    onPress={action.onPress}
-                                    style={{ minHeight: HAPPIER_STATE_LINE_METRICS.minHeightPx, justifyContent: 'center' }}
-                                >
-                                    <Text style={[styles.quietLink, HAPPIER_STATE_LINE_METRICS.text]}>{action.label}</Text>
-                                </HappierPressable>
-                            ) : null)}
-                        </View>
-                    )}
-                ><Text style={[styles.liveText, HAPPIER_STATE_LINE_METRICS.text]}>{props.titleContent ?? props.title}{props.reason ? (props.reasonContent != null ? <>{' · '}{props.reasonContent}</> : ` · ${props.reason}`) : null}</Text></HappierStateLine>
-                {diagnosticMarker}
-            </View>
+            <HappierSurfaceState
+                {...shared}
+                size="line"
+                fillsContainer={props.replacesContent}
+                glyph={lineGlyph}
+                lineText={<>{props.titleContent ?? props.title}{props.reason ? (props.reasonContent != null ? <>{' · '}{props.reasonContent}</> : ` · ${props.reason}`) : null}</>}
+            />
         );
     }
 
     const metrics = size ? HAPPIER_STATE_SIZE_METRICS[size] : null;
     const glyphSize = props.layout === 'inline' ? HAPPIER_STATE_LINE_METRICS.glyphPx : metrics?.glyphPx ?? 32;
-    const icon = props.kind === 'loading' ? (
+    // Every kind shares the empty-state anatomy. The glyph stays calm in the secondary colour; the
+    // title carries the trouble, so a failure is never a red "!" on a muted card.
+    const glyph = props.kind === 'loading' ? (
         <ActivitySpinner
             testID={props.testID ? `${props.testID}-loading-spinner` : undefined}
             size={metrics ? glyphSize - 4 : 28}
             color={theme.colors.text.secondary}
-            animationEnabled={props.animationEnabled !== false}
+            animationEnabled={animationEnabled}
         />
     ) : props.icon ?? (
         <Icon
             name={props.iconName ?? kindIconName ?? DEFAULT_ICONS[props.kind]!}
             size={glyphSize}
-            color={glyphColor}
+            color={theme.colors.text.secondary}
         />
     );
-    const buttonStyle = metrics?.fullWidthActions ? styles.fullWidth : undefined;
-    const quietTextStyle = metrics
-        ? { fontSize: metrics.quiet.fontSize, lineHeight: metrics.quiet.lineHeight }
-        : { fontSize: 12, lineHeight: 17 };
-    const quietGap = metrics?.quietGapPx ?? 12;
-
+    // A sized loading state narrates a long wait on its own unless the caller says the present.
     const live = props.live
-        ? <SurfaceStateLiveLine testID={props.testID} live={props.live} textStyle={quietTextStyle} animationEnabled={props.animationEnabled !== false} />
-        : props.kind === 'loading' && size && props.animationEnabled !== false
-            ? <SurfaceStateStillWaiting testID={props.testID} textStyle={quietTextStyle} />
-            : null;
-
-    const quietLine = props.note || props.learnMore ? (
-        <Text
-            testID={props.testID ? `${props.testID}-note` : undefined}
-            style={[styles.quiet, quietTextStyle, { marginTop: quietGap }]}
-        >
-            {props.note ?? null}
-            {props.note && props.learnMore ? ' ' : null}
-            {props.learnMore ? (
-                <Text
-                    testID={props.testID ? `${props.testID}-learn-more` : undefined}
-                    accessibilityRole="link"
-                    onPress={() => { void props.learnMore!.onPress(); }}
-                    style={styles.quietLink}
-                >
-                    {props.learnMore.label}
-                </Text>
-            ) : null}
-        </Text>
-    ) : null;
-
-    const actions = props.action || props.secondaryAction ? (
-        <View style={[styles.actions, metrics?.fullWidthActions ? { flexDirection: 'column', alignItems: 'stretch', alignSelf: 'stretch' } : null]}>
-            {props.action ? (
-                <RoundButton
-                    testID={props.action.testID ?? (props.testID ? `${props.testID}-action` : undefined)}
-                    disabled={props.action.disabled}
-                    loading={props.action.busy}
-                    // Pointer panes keep a compact action; phone controls keep their touch-sized anatomy.
-                    size={size === 'phone' || size === undefined ? 'small' : 'mini'}
-                    display={props.kind === 'empty' || props.kind === 'success' ? undefined : 'secondary'}
-                    title={props.action.label}
-                    accessibilityLabel={props.action.label}
-                    style={buttonStyle}
-                    action={() => Promise.resolve(props.action!.onPress())}
-                />
-            ) : null}
-            {props.secondaryAction ? (
-                <RoundButton
-                    testID={props.secondaryAction.testID ?? (props.testID ? `${props.testID}-secondary-action` : undefined)}
-                    disabled={props.secondaryAction.disabled}
-                    loading={props.secondaryAction.busy}
-                    size={size === 'phone' || size === undefined ? 'small' : 'mini'}
-                    display="inverted"
-                    title={props.secondaryAction.label}
-                    textStyle={Typography.default()}
-                    accessibilityLabel={props.secondaryAction.label}
-                    style={buttonStyle}
-                    action={() => Promise.resolve(props.secondaryAction!.onPress())}
-                />
-            ) : null}
-        </View>
-    ) : undefined;
-
-    const iconSlot = (
-        <View
-            testID={props.testID ? `${props.testID}-icon` : undefined}
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            style={styles.iconWrap}
-        >
-            {icon}
-        </View>
-    );
-    const actionCaption = props.actionCaption && actions ? <Text style={[styles.liveText, quietTextStyle]}>{props.actionCaption}</Text> : null;
-    const supplemental = <>
-        {props.detail ? <Text testID={props.testID ? `${props.testID}-detail` : undefined} style={styles.detail}>{props.detail}</Text> : null}
-        {quietLine}
-        {props.diagnosticCode ? (
-            props.kind === 'loading' || props.kind === 'empty' || props.kind === 'success' || props.kind === 'denied'
-                ? diagnosticMarker
-                : <SurfaceStateDiagnosticDetails testID={props.testID} diagnosticCode={props.diagnosticCode} />
-        ) : null}
-    </>;
-    if (props.layout === 'inline') {
-        return <View testID={props.testID} {...liveRegionProps} style={styles.inline}>
+        ?? (props.kind === 'loading' && size && animationEnabled
+            ? <SurfaceStateStillWaiting testID={props.testID} size={size} bindings={bindings} />
+            : undefined);
+    const reason = props.detail ? <Text>
+        {props.reasonContent ?? (props.reason ? <Text>{props.reason}</Text> : null)}
+        {props.reasonContent != null || props.reason ? '\n' : null}
+        <Text testID={props.testID ? `${props.testID}-detail` : undefined} style={stylesheet.detail}>{props.detail}</Text>
+    </Text> : props.reasonContent ?? props.reason;
+    const tileBindings: HappierSurfaceStateBindings = {
+        ...bindings,
+        // Core's tile: the canonical EmptyState over the shared info tile, in core typography.
+        renderTile: (tile) => tile.layout === 'inline' ? (
             <EmptyState
                 layout="inline"
-                icon={iconSlot}
+                icon={tile.glyph}
                 title={props.title}
                 titleContent={props.titleContent}
-                subtitle={props.reasonContent ?? props.reason}
-                titleTestID={props.testID ? `${props.testID}-title` : undefined}
-                subtitleTestID={props.testID && props.reason != null ? `${props.testID}-reason` : undefined}
+                subtitle={reason}
+                titleTestID={tile.titleTestID}
+                subtitleTestID={props.reason != null ? tile.reasonTestID : undefined}
                 paddingHorizontal={0}
                 paddingVertical={0}
             />
-            {live ? <View style={{ alignItems: 'flex-start' }}>{live}</View> : null}
-            {props.body}
-            {actions ? <View style={[styles.inlineFooter, metrics?.fullWidthActions ? { flexDirection: 'column', alignItems: 'stretch' } : null]}>{actionCaption}{actions}</View> : null}
-            {supplemental}
-        </View>;
-    }
-
+        ) : (
+            <EmptyState
+                size={metrics ? tile.size : undefined}
+                icon={tile.glyph}
+                scene={props.scene}
+                animationEnabled={props.animationEnabled}
+                title={props.title}
+                titleContent={props.titleContent}
+                subtitle={reason}
+                titleTestID={tile.titleTestID}
+                subtitleTestID={props.reason != null ? tile.reasonTestID : undefined}
+                paddingHorizontal={metrics ? 0 : undefined}
+                action={tile.action}
+            />
+        ),
+    };
     return (
-        <HappierSurfaceStateFrame
-            testID={props.testID}
+        <HappierSurfaceState
+            {...shared}
             size={size}
-            accessibilitySemantics={props.accessibilitySemantics}
-        >
-                <EmptyState
-                    size={metrics ? size : undefined}
-                    icon={iconSlot}
-                    scene={props.scene}
-                    animationEnabled={props.animationEnabled}
-                    title={props.title}
-                    titleContent={props.titleContent}
-                    subtitle={props.reasonContent ?? props.reason}
-                    titleTestID={props.testID ? `${props.testID}-title` : undefined}
-                    subtitleTestID={props.testID && props.reason != null ? `${props.testID}-reason` : undefined}
-                    paddingHorizontal={metrics ? 0 : undefined}
-                    // The present reads with the copy, before the way forward (lab 0: title · copy · live · action).
-                    action={props.body ? (
-                        <View style={[styles.liveAndActions, styles.fullWidth]}>
-                            {live}
-                            <View style={styles.fullWidth}>{props.body}</View>
-                            {actionCaption}
-                            {actions}
-                        </View>
-                    ) : live && actions ? (
-                        <View style={[styles.liveAndActions, metrics?.fullWidthActions ? styles.fullWidth : null]}>
-                            {live}
-                            {actions}
-                        </View>
-                    ) : live ?? actions}
-                />
-                {supplemental}
-        </HappierSurfaceStateFrame>
+            layout={props.layout}
+            glyph={glyph}
+            live={live}
+            body={props.body}
+            actionCaption={props.actionCaption}
+            note={props.note}
+            learnMore={props.learnMore}
+            bindings={tileBindings}
+        />
     );
 }
 
-function SurfaceStateLiveLine(props: Readonly<{
-    testID?: string;
-    live: SurfaceStateLive;
-    textStyle: Readonly<{ fontSize: number; lineHeight: number }>;
-    animationEnabled: boolean;
-}>): React.ReactElement {
+/** Core's typography, buttons, spinner and disclosure for the shared state composition. */
+function useSurfaceStateBindings(testID: string | undefined, animationEnabled: boolean): HappierSurfaceStateBindings {
     const { theme } = useUnistyles();
-    return (
-        <View testID={props.testID ? `${props.testID}-live` : undefined} style={stylesheet.live}>
-            {props.live.busy ? (
-                <ActivitySpinner
-                    size={props.textStyle.fontSize}
-                    color={theme.colors.text.secondary}
-                    animationEnabled={props.animationEnabled}
-                />
-            ) : null}
-            <Text style={[stylesheet.liveText, props.textStyle]}>{props.live.text}</Text>
-        </View>
-    );
+    return React.useMemo<HappierSurfaceStateBindings>(() => ({
+        renderText: ({ role, metrics, testID: textTestID, onPress, children }) => {
+            if (role === 'quietLink') {
+                return <Text testID={textTestID} accessibilityRole="link" onPress={onPress} style={stylesheet.quietLink}>{children}</Text>;
+            }
+            const roleStyle = role === 'lineAction' ? stylesheet.lineAction : role === 'quiet' ? stylesheet.quiet
+                : role === 'live' ? stylesheet.liveText : stylesheet.lineText;
+            return <Text testID={textTestID} style={[roleStyle, metrics]}>{children}</Text>;
+        },
+        renderButton: ({ action, emphasis, tone, compact, fullWidth, testID: buttonTestID }) => (
+            <RoundButton
+                testID={buttonTestID}
+                disabled={action.disabled}
+                loading={action.busy}
+                // Pointer panes keep a compact action; phone controls keep their touch-sized anatomy.
+                size={compact ? 'mini' : 'small'}
+                display={emphasis === 'secondary' ? 'inverted' : tone === 'filled' ? undefined : 'secondary'}
+                textStyle={emphasis === 'secondary' ? Typography.default() : undefined}
+                title={action.label}
+                accessibilityLabel={action.label}
+                style={fullWidth ? stylesheet.fullWidth : undefined}
+                action={() => Promise.resolve(action.onPress())}
+            />
+        ),
+        renderSpinner: (sizePx) => (
+            <ActivitySpinner size={sizePx} color={theme.colors.text.secondary} animationEnabled={animationEnabled} />
+        ),
+        renderTile: () => null,
+        detailsLabel: t('common.details'),
+        // Quiet disclosure for the raw reason code: collapsed by default so the card leads with human
+        // copy, one tap away when someone needs to report or debug.
+        renderDetailsToggle: (open) => <>
+            <Icon name={open ? 'caret-down' : 'caret-right'} size={12} color={theme.colors.text.secondary} />
+            <Text accessible={false} style={stylesheet.detailsToggleLabel}>{t('common.details')}</Text>
+        </>,
+        renderDetailsCode: (detail) => (
+            <Text testID={testID ? `${testID}-details-code` : undefined} selectable style={stylesheet.detailsCode}>{detail}</Text>
+        ),
+        pressedFill: theme.colors.surface.pressed,
+    }), [animationEnabled, testID, theme]);
 }
 
 /**
@@ -477,7 +369,8 @@ function SurfaceStateLiveLine(props: Readonly<{
  */
 function SurfaceStateStillWaiting(props: Readonly<{
     testID?: string;
-    textStyle: Readonly<{ fontSize: number; lineHeight: number }>;
+    size: HappierStateSize;
+    bindings: HappierSurfaceStateBindings;
 }>): React.ReactElement | null {
     const [elapsedMs, setElapsedMs] = React.useState(0);
     React.useEffect(() => {
@@ -487,49 +380,11 @@ function SurfaceStateStillWaiting(props: Readonly<{
     }, []);
     if (elapsedMs < STILL_WAITING_AFTER_MS) return null;
     return (
-        <SurfaceStateLiveLine
+        <HappierSurfaceStateLiveLine
             testID={props.testID}
             live={{ text: t('surfaceState.stillWaiting', { seconds: Math.floor(elapsedMs / 1_000) }) }}
-            textStyle={props.textStyle}
-            animationEnabled
-        />
-    );
-}
-
-/**
- * Quiet disclosure for the raw reason code: collapsed by default so the card
- * leads with human copy, one tap away when someone needs to report or debug.
- */
-function SurfaceStateDiagnosticDetails(props: Readonly<{
-    testID?: string;
-    diagnosticCode: string;
-}>): React.ReactElement {
-    const { theme } = useUnistyles();
-    const styles = stylesheet;
-    const label = t('common.details');
-    return (
-        <HappierStateDetails
-            testID={props.testID}
-            markerTestID={props.testID ? `${props.testID}-diagnostic-${props.diagnosticCode}` : undefined}
-            label={label}
-            details={props.diagnosticCode}
-            renderToggle={(open) => <>
-                <Icon
-                    name={open ? 'caret-down' : 'caret-right'}
-                    size={12}
-                    color={theme.colors.text.secondary}
-                />
-                <Text accessible={false} style={styles.detailsToggleLabel}>{label}</Text>
-            </>}
-            renderDetails={(detail) => (
-                <Text
-                    testID={props.testID ? `${props.testID}-details-code` : undefined}
-                    selectable
-                    style={styles.detailsCode}
-                >
-                    {detail}
-                </Text>
-            )}
+            metrics={resolveHappierSurfaceStateQuiet(props.size).metrics}
+            bindings={props.bindings}
         />
     );
 }

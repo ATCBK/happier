@@ -25,8 +25,8 @@ describe('resolvePageBackPlacement', () => {
         expect(resolvePageBackPlacement({ paneWidthPx: 1100, columnMaxWidthPx })).toBe('gutter');
     });
 
-    it('falls back to the title row when the column fills the pane', () => {
-        expect(resolvePageBackPlacement({ paneWidthPx: 600, columnMaxWidthPx })).toBe('title-row');
+    it('falls back to a line above the title when the column fills the pane', () => {
+        expect(resolvePageBackPlacement({ paneWidthPx: 600, columnMaxWidthPx })).toBe('above-title');
     });
 
     it('switches exactly where the gutter stops fitting the control', () => {
@@ -35,7 +35,7 @@ describe('resolvePageBackPlacement', () => {
         // Leading space = half the pane's spare width + the column's own text inset.
         const fitsExactly = columnMaxWidthPx + 2 * (needed - textInset);
         expect(resolvePageBackPlacement({ paneWidthPx: fitsExactly, columnMaxWidthPx })).toBe('gutter');
-        expect(resolvePageBackPlacement({ paneWidthPx: fitsExactly - 2, columnMaxWidthPx })).toBe('title-row');
+        expect(resolvePageBackPlacement({ paneWidthPx: fitsExactly - 2, columnMaxWidthPx })).toBe('above-title');
     });
 
     it('does not place back before the pane has been measured', () => {
@@ -97,12 +97,15 @@ describe('PageHeader back control placement', () => {
         expect(titleRowLead(screen)).toBe('content');
     });
 
-    it('puts back on the title row when the gutter is too narrow', async () => {
+    it('puts back on its own line above the title when the gutter is too narrow, keeping the title on the content edge', async () => {
         const screen = await renderHeader();
         layoutPane(screen, 420);
         expect(screen.root.findAllByType('BackArrow' as never)).toHaveLength(1);
         expect(gutterBacks(screen)).toBe(0);
-        expect(titleRowLead(screen)).toBe('back');
+        // Title, purpose and sections share one left edge (DESIGN.md "Back stays out of the title").
+        expect(titleRowLead(screen)).toBe('content');
+        const line = screen.findHostByTestId('page-header-back-line');
+        expect(line?.findAllByType('BackArrow' as never)).toHaveLength(1);
     });
 
     it('keeps a leading mark on the content edge with back in the gutter', async () => {
@@ -111,4 +114,22 @@ describe('PageHeader back control placement', () => {
         expect(gutterBacks(screen)).toBe(1);
         expect(titleRowLead(screen)).toBe('content');
     });
+
+    it('places a back control that arrives after the pane was laid out, instead of hiding it while it measures forever', async () => {
+        const header = (control: typeof BackArrow | null) => (
+            <NavigationBackChromeProvider control={control}>
+                <PageHeader testID="page-header" title="Sharing" description="Who can use this machine." />
+            </NavigationBackChromeProvider>
+        );
+        // A phone pane lays out once on mount, before its back control (route-derived) is known.
+        const screen = await renderScreen(header(null));
+        const wrapper = screen.root.find((node: ReactTestInstance) => typeof node.type === 'string' && node.props.testID === 'page-header');
+        act(() => { wrapper.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 80 } } }); });
+        await act(async () => { screen.tree.update(header(BackArrow)); });
+        expect(gutterBacks(screen)).toBe(0);
+        const line = screen.findHostByTestId('page-header-back-line');
+        expect(line?.findAllByType('BackArrow' as never)).toHaveLength(1);
+        expect(line?.props.style).not.toContainEqual({ opacity: 0 });
+    });
 });
+

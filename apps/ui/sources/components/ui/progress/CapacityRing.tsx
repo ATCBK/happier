@@ -7,7 +7,7 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Svg, Circle } from 'react-native-svg';
+import { Svg, Circle, Defs, Path, Pattern } from 'react-native-svg';
 
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
@@ -20,6 +20,10 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
  *
  * Tone → color resolution stays with the caller (each arc takes a resolved
  * `color`): this primitive has no opinion about any domain's tone vocabulary.
+ *
+ * `segments` is the ring's donut form: the parts of ONE whole on the outer radius, end to end
+ * clockwise from 12 o'clock (a storage breakdown). A `hatched` part is one set aside — what would
+ * go in a cleanup — drawn as its colour's diagonal hatch so it reads apart from the solid parts.
  */
 export type CapacityRingProps = Readonly<{
     /** Single-arc fill fraction 0..1 (used when `rings` is not provided). */
@@ -28,6 +32,10 @@ export type CapacityRingProps = Readonly<{
     color?: string;
     /** Concentric arcs, OUTERMOST first. Overrides `ratio`/`color` when non-empty. */
     rings?: ReadonlyArray<{ ratio: number; color: string }>;
+    /** Parts of one whole (fractions 0..1, in order) on the outer radius. Overrides `rings`/`ratio` when non-empty. */
+    segments?: ReadonlyArray<CapacityRingSegment>;
+    /** Gap between adjacent parts, in px along the ring. Defaults to 2. */
+    segmentGap?: number;
     /** Outer diameter in px. */
     size?: number;
     strokeWidth?: number;
@@ -43,6 +51,9 @@ export type CapacityRingProps = Readonly<{
     progressTestID?: string;
     accessibilityLabel?: string;
 }>;
+
+/** `opacity` steps one ink into a family of tones (a breakdown's greys) without inventing colours. */
+export type CapacityRingSegment = Readonly<{ fraction: number; color: string; opacity?: number; pattern?: 'solid' | 'hatched' }>;
 
 /** Radial gap between adjacent concentric arcs. */
 const RING_GAP = 2.5;
@@ -63,6 +74,9 @@ export function CapacityRing(props: CapacityRingProps) {
     const trackColor = props.trackColor ?? theme.colors.border.default;
     const outerRadius = (size - strokeWidth) / 2;
 
+    const hatchId = `capacity-ring-hatch-${React.useId().replace(/[^a-z0-9]/giu, '')}`;
+    const segments = props.segments && props.segments.length > 0 ? props.segments : null;
+
     const arcs = props.rings && props.rings.length > 0
         ? props.rings
         : [{ ratio: props.ratio ?? 0, color: props.color ?? trackColor }];
@@ -82,7 +96,17 @@ export function CapacityRing(props: CapacityRingProps) {
                 viewBox={`0 0 ${size} ${size}`}
                 style={styles.ring}
             >
-                {arcs.map((arc, index) => {
+                {segments ? (
+                    <CapacityRingSegments
+                        segments={segments}
+                        size={size}
+                        radius={outerRadius}
+                        strokeWidth={strokeWidth}
+                        gap={props.segmentGap ?? 2}
+                        trackColor={trackColor}
+                        hatchId={hatchId}
+                    />
+                ) : arcs.map((arc, index) => {
                     const radius = outerRadius - index * (strokeWidth + RING_GAP);
                     if (radius < strokeWidth) return null;
                     const circumference = 2 * Math.PI * radius;
@@ -118,6 +142,62 @@ export function CapacityRing(props: CapacityRingProps) {
                 </View>
             ) : null}
         </View>
+    );
+}
+
+/**
+ * The donut: one track, then each non-empty part as a dash of its share of the circumference, offset
+ * to where the previous part ended. Parts are still (a breakdown is read, not watched filling).
+ */
+function CapacityRingSegments(props: Readonly<{
+    segments: ReadonlyArray<CapacityRingSegment>;
+    size: number;
+    radius: number;
+    strokeWidth: number;
+    gap: number;
+    trackColor: string;
+    hatchId: string;
+}>) {
+    const center = props.size / 2;
+    const circumference = 2 * Math.PI * props.radius;
+    const hatched = props.segments.find(segment => segment.pattern === 'hatched' && clamp01(segment.fraction) > 0);
+    // Pattern space follows the stroke, so the hatch keeps one pitch whatever the ring's size.
+    const pitch = Math.max(3, props.strokeWidth / 3);
+    let start = 0;
+    return (
+        <>
+            {hatched ? (
+                <Defs>
+                    <Pattern id={props.hatchId} width={pitch} height={pitch} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                        <Path d={`M0,0 L0,${pitch}`} stroke={hatched.color} strokeWidth={Math.max(1, pitch / 2.5)} />
+                    </Pattern>
+                </Defs>
+            ) : null}
+            <Circle cx={center} cy={center} r={props.radius} fill="none" stroke={props.trackColor} strokeWidth={props.strokeWidth} />
+            {props.segments.map((segment, index) => {
+                const fraction = clamp01(segment.fraction);
+                const offset = start;
+                start += fraction;
+                if (fraction === 0) return null;
+                const length = Math.max(0, fraction * circumference - props.gap);
+                return (
+                    <Circle
+                        key={index}
+                        cx={center}
+                        cy={center}
+                        r={props.radius}
+                        fill="none"
+                        stroke={segment.pattern === 'hatched' ? `url(#${props.hatchId})` : segment.color}
+                        strokeOpacity={segment.opacity}
+                        strokeWidth={props.strokeWidth}
+                        strokeLinecap="butt"
+                        strokeDasharray={`${length} ${circumference}`}
+                        strokeDashoffset={-offset * circumference}
+                        transform={`rotate(-90 ${center} ${center})`}
+                    />
+                );
+            })}
+        </>
     );
 }
 

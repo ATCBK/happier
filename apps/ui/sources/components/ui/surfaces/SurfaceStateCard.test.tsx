@@ -35,6 +35,12 @@ vi.mock('react-native', async () => {
  * only).
  */
 describe('SurfaceStateCard', () => {
+    it.each([undefined, 'inline'] as const)('reads failure detail before recovery in %s layout', async (layout) => {
+        const screen = await renderScreen(<SurfaceStateCard layout={layout} kind="error" title="Failed"
+            detail="The comparison could not be loaded." action={{ label: 'Retry', onPress: () => {} }} />);
+        const content = screen.getTextContent();
+        expect(content.indexOf('The comparison could not be loaded.')).toBeLessThan(content.indexOf('Retry'));
+    });
     it('keeps a caller-owned domain summary before recovery actions, without adding it to a line state', async () => {
         const onOpen = vi.fn();
         const screen = await renderScreen(<SurfaceStateCard testID="summary" layout="inline" kind="success" title="Ready" live={{ text: 'Last pushed' }} body={<span>Current commit</span>} actionCaption="Suggested next" action={{ label: 'Open PR', onPress: onOpen }} />);

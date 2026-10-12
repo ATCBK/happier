@@ -1,15 +1,13 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import type { PluginSurfaceTarget, SurfaceContext } from '@happier-dev/plugin-sdk/ui';
 
-import { formatUiSurfaceActionRequestV1 } from '@happier-dev/protocol/plugins/ui';
 import type {
     PluginHostedWebSecurityPolicyV1,
     PluginUiHostMethodV1,
     PluginUiJsonValueV1,
     PluginUiLaunchInputV1,
     PluginUiResourceSubscriptionEventV1,
-    UiSurfaceExecutableApprovalKeyV1,
-    NormalizedUiSurfaceCapabilityRequestV1,
 } from '@happier-dev/protocol/plugins/ui';
 
 import {
@@ -21,7 +19,7 @@ import { useUiSurfaceRendererMount } from '@/components/plugins/hostApi/useUiSur
 import { HostedFrameHost } from '@/components/ui/surfaces/framed/HostedFrameHost';
 import { UiSurfaceRendererHost } from '@/components/ui/surfaces/UiSurfaceRendererHost';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { BrowserFrameLoading } from '@/components/browser/frame/BrowserFrameLoading';
 import { t } from '@/text';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import type { HostedInlineDocumentFrameUnavailableCode } from '@/components/plugins/hostedWeb/hostedInlineDocumentFrameTypes';
@@ -29,24 +27,22 @@ import { createHostedFrameIntrinsicHeightReporter } from '@/components/plugins/h
 import { createUiSurfaceMountIdentity } from '@/components/plugins/hostApi/createUiSurfaceMountIdentity';
 import { useHostedFrameLifecycle } from '@/components/ui/surfaces/framed/useHostedFrameLifecycle';
 import {
+    createPluginSurfaceContext,
     usePluginSurfaceEnvironment,
-    type PluginSurfaceEnvironment,
 } from '@/components/plugins/surfaces/pluginSurfaceContext';
 import { resolveLocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/platform';
+import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
 import {
     prepareCallerHostedHtmlSurface,
     type PreparedCallerHostedHtmlSurface,
 } from './prepareCallerHostedHtmlSurface';
 
-const CALLER_FRAME_MESSAGES = new Set(['ready', 'error', 'heightChanged', 'hostApi']);
-/**
- * Posting into the person's own conversation is the one requested Action people
- * reason about by name, so the review says it in words instead of counting it
- * with the rest.
- */
-const SESSION_MESSAGE_SEND_ACTION_ID = 'session.message.send';
+const CALLER_FRAME_MESSAGES = new Set(['ready', 'error', 'heightChanged', 'hostApi', 'openExternal']);
+const openCallerExternalLink = async (url: string): Promise<void> => { await openExternalUrl(url); };
 const CALLER_SURFACE_STYLE = Object.freeze({ flex: 1, minHeight: 0 });
+const CALLER_MOUNT = Object.freeze({ kind: 'embedded' as const, role: 'callerHostedHtml', presentation: 'content' as const });
+const CALLER_TRANSLATIONS = Object.freeze({});
 const CALLER_SANDBOX = Object.freeze({
     scripts: true,
     sameOrigin: false,
@@ -66,13 +62,12 @@ function isJsonRecord(
 export type CallerHostedHtmlRuntime = Readonly<{
     serverIdentityId: string;
     accountId: string;
+    accountEncryptionMode: SurfaceContext['accountEncryptionMode'];
     hostOrigin: string;
     admittedHostMethods: readonly PluginUiHostMethodV1[];
-    isApproved: (approval: UiSurfaceExecutableApprovalKeyV1, approvalKey: string, capabilities: NormalizedUiSurfaceCapabilityRequestV1) => boolean;
-    approve: (approval: UiSurfaceExecutableApprovalKeyV1, approvalKey: string, capabilities: NormalizedUiSurfaceCapabilityRequestV1) => void;
-    revoke: (approval: UiSurfaceExecutableApprovalKeyV1, approvalKey: string) => void;
     createRequestController: (
         publishResourceEvent: (event: PluginUiResourceSubscriptionEventV1) => void,
+        mount?: Readonly<{ mountInstanceKey: string; input?: PluginUiLaunchInputV1 }>,
     ) => SessionCallerHostedHtmlRequestController;
     lifetime: Readonly<{
         isCurrent: () => boolean;
@@ -82,63 +77,37 @@ export type CallerHostedHtmlRuntime = Readonly<{
 
 /**
  * Session-authored HTML's thin authority adapter around the incumbent frame.
- * The outer Session record supplies revision/currentness and approval; the
+ * The outer Session record supplies revision/currentness and admitted policy; the
  * shared bridge supplies transport, negotiation, subscriptions and teardown.
  */
-/**
- * The mount's surface snapshot — one shape for the value the bridge is constructed with and the
- * value its context producer republishes, so a later push can never narrow what `context`
- * already answered.
- */
-function buildCallerHostedHtmlSurfaceSnapshot(input: Readonly<{
-    context: PluginUiJsonValueV1;
-    recordRevision: string;
-    capabilityManifest: Extract<PreparedCallerHostedHtmlSurface, { kind: 'admitted' }>['capabilityManifest'];
-    environment: PluginSurfaceEnvironment;
-}>) {
-    // The same environment facts, under the same names, that every installed surface's
-    // `SurfaceContext` carries from the one shared producer. An opaque isolated document
-    // cannot read the host's theme, text scale, direction or safe area itself.
-    return {
-        platform: input.environment.platform,
-        locale: input.environment.locale,
-        direction: input.environment.direction,
-        colorScheme: input.environment.colorScheme,
-        contrast: input.environment.contrast,
-        textScale: input.environment.textScale,
-        reducedMotion: input.environment.reducedMotion,
-        screenReaderEnabled: input.environment.screenReaderEnabled,
-        safeAreaInsets: input.environment.safeAreaInsets,
-        theme: input.environment.theme,
-        context: input.context,
-        callerHostedHtml: {
-            recordRevision: input.recordRevision,
-            capabilityManifest: input.capabilityManifest,
-        },
-    };
-}
-
 export function HostedHtmlSurfaceAdapter(props: Readonly<{
-    sessionId: string;
+    sessionId?: string;
     title: string;
     recordRevision: string;
     approvalSubject: string;
     source: unknown;
     requestedCapabilities?: unknown;
     input?: PluginUiLaunchInputV1;
-    surfaceContext: PluginUiJsonValueV1;
+    target: PluginSurfaceTarget;
     runtime: CallerHostedHtmlRuntime;
     onIntrinsicHeightChange?: (height: number) => void;
     testID: string;
 }>): React.ReactElement | null {
+    const launchInputKey = stableJsonStringify(props.input);
+    // Launch input belongs to the physical mount. Equivalent parent snapshots must
+    // not dispose its request controller or disconnect the still-running frame.
+    const launchInput = React.useMemo(() => props.input, [launchInputKey]);
     const logicalMountKey = stableJsonStringify({
         serverIdentityId: props.runtime.serverIdentityId,
         accountId: props.runtime.accountId,
         sessionId: props.sessionId,
+        target: props.target,
+        accountEncryptionMode: props.runtime.accountEncryptionMode,
         approvalSubject: props.approvalSubject,
         recordRevision: props.recordRevision,
         source: props.source,
         requestedCapabilities: props.requestedCapabilities,
+        input: launchInput,
     });
     const logicalInstanceId = React.useMemo(
         () => createUiSurfaceMountIdentity()?.instanceId ?? null,
@@ -174,9 +143,9 @@ export function HostedHtmlSurfaceAdapter(props: Readonly<{
         }
         setFrameUnavailable(code);
     }, [lifecycle.fail]);
-    const prepared = React.useMemo(() => frameIdentity === null
+    const preparation = React.useMemo(() => frameIdentity === null
         ? null
-        : prepareCallerHostedHtmlSurface({
+        : {
             serverIdentityId: props.runtime.serverIdentityId,
             accountId: props.runtime.accountId,
             approvalSubject: props.approvalSubject,
@@ -185,57 +154,38 @@ export function HostedHtmlSurfaceAdapter(props: Readonly<{
             admittedHostMethods: props.runtime.admittedHostMethods,
             frameIdentity,
             hostOrigin: props.runtime.hostOrigin,
-        }), [frameIdentity, props.approvalSubject, props.requestedCapabilities, props.runtime.accountId,
+        }, [frameIdentity, props.approvalSubject, props.requestedCapabilities, props.runtime.accountId,
         props.runtime.admittedHostMethods, props.runtime.hostOrigin, props.runtime.serverIdentityId, props.source]);
-    const requiresApproval = prepared?.kind === 'admitted'
-        && (prepared.capabilityManifest.requested.hostMethods.length > 0
-            || prepared.capabilityManifest.requested.resources.length > 0
-            || prepared.capabilityManifest.requested.actions.length > 0
-            || prepared.capabilityManifest.requested.networkOrigins.length > 0);
-    const approved = prepared?.kind === 'admitted'
-        && (!requiresApproval || props.runtime.isApproved(prepared.approval, prepared.approvalKey, prepared.capabilityManifest.requested));
-    // "Not now" is a local dismissal, not a recorded refusal: nothing is
-    // written, and a different request (a new approval key) is a new review.
-    const approvalKey = prepared?.kind === 'admitted' ? prepared.approvalKey : null;
-    const [reviewDeclined, setReviewDeclined] = React.useState(false);
-    React.useLayoutEffect(() => { setReviewDeclined(false); }, [approvalKey]);
-    // What the view asked for, said in this person's language. The exact
-    // manifest, fingerprint and revision stay on the card's diagnostics channel.
-    const capabilityReviewRows = React.useMemo((): readonly string[] => {
-        if (prepared?.kind !== 'admitted') return [];
-        const requested = prepared.capabilityManifest.requested;
-        const actionIds = requested.actions.map(formatUiSurfaceActionRequestV1);
-        const canSendMessages = actionIds.includes(SESSION_MESSAGE_SEND_ACTION_ID);
-        const otherActionCount = actionIds.length - (canSendMessages ? 1 : 0);
-        return [
-            ...(requested.resources.length > 0
-                ? [t('sessionBoard.hostedHtmlApproval.resources', { count: requested.resources.length })]
-                : []),
-            ...(otherActionCount > 0
-                ? [t('sessionBoard.hostedHtmlApproval.actions', { count: otherActionCount })]
-                : []),
-            ...(canSendMessages ? [t('sessionBoard.hostedHtmlApproval.sendMessages')] : []),
-            ...requested.networkOrigins.map(
-                (origin) => t('sessionBoard.hostedHtmlApproval.loadsFrom', { origin }),
-            ),
-        ];
-    }, [prepared]);
+    const [preparedResult, setPreparedResult] = React.useState<Readonly<{
+        input: NonNullable<typeof preparation>;
+        value: PreparedCallerHostedHtmlSurface;
+    }> | null>(null);
+    React.useEffect(() => {
+        if (preparation === null) return;
+        let current = true;
+        void prepareCallerHostedHtmlSurface(preparation).then(value => {
+            if (current && mount.isCurrent()) setPreparedResult({ input: preparation, value });
+        }).catch(() => {
+            if (current && mount.isCurrent()) setPreparedResult({ input: preparation, value: { kind: 'rejected', code: 'source_invalid' } });
+        });
+        return () => { current = false; };
+    }, [preparation, mount.isCurrent]);
+    const prepared = preparedResult?.input === preparation ? preparedResult.value : null;
     const heightReporter = React.useMemo(() => createHostedFrameIntrinsicHeightReporter({
         publish: (height) => props.onIntrinsicHeightChange?.(height),
         scheduleFrame: (callback) => requestAnimationFrame(callback),
         cancelFrame: (handle) => cancelAnimationFrame(handle),
     }), [mount.identity, props.onIntrinsicHeightChange]);
     React.useLayoutEffect(() => () => heightReporter.dispose(), [heightReporter]);
-    // Keyed on the request owner, not the runtime value: a runtime re-published
-    // only because some other item's approval changed keeps this mount's watches.
     const createRequestController = props.runtime.createRequestController;
     const requestController = React.useMemo(
         () => frameIdentity === null
             ? null
             : createRequestController(
                 (event) => { bridgeRef.current?.publishResourceSubscriptionEvent(event); },
+                { mountInstanceKey: frameIdentity.instanceId, input: launchInput },
             ),
-        [createRequestController, frameIdentity],
+        [createRequestController, frameIdentity, launchInput],
     );
     const authorizeRequest = React.useCallback((request: CallerHostedHtmlHostApiRequest): boolean => {
         if (prepared?.kind !== 'admitted') return false;
@@ -260,26 +210,25 @@ export function HostedHtmlSurfaceAdapter(props: Readonly<{
     const environment = usePluginSurfaceEnvironment(resolveLocalServicePreviewPlatform());
     const surfaceSnapshot = React.useMemo(() => (
         prepared?.kind === 'admitted'
-            ? buildCallerHostedHtmlSurfaceSnapshot({
-                context: props.surfaceContext,
-                recordRevision: props.recordRevision,
-                capabilityManifest: prepared.capabilityManifest,
+            ? createPluginSurfaceContext({
+                mount: CALLER_MOUNT,
+                target: props.target,
+                accountEncryptionMode: props.runtime.accountEncryptionMode,
                 environment,
+                translations: CALLER_TRANSLATIONS,
             })
             : null
-    ), [environment, prepared, props.recordRevision, props.surfaceContext]);
-    const surfaceContextRef = React.useRef(props.surfaceContext);
-    surfaceContextRef.current = props.surfaceContext;
+    ), [environment, prepared, props.target, props.runtime.accountEncryptionMode]);
     // Read at bridge construction so the first negotiation already carries the current
     // environment (before reveal); later changes are pushed, never a new bridge.
-    const environmentRef = React.useRef(environment);
-    environmentRef.current = environment;
+    const surfaceSnapshotRef = React.useRef(surfaceSnapshot);
+    surfaceSnapshotRef.current = surfaceSnapshot;
     const bridge = React.useMemo(() => {
-        if (frameIdentity === null || requestController === null || prepared?.kind !== 'admitted' || !approved) return null;
+        if (frameIdentity === null || requestController === null || prepared?.kind !== 'admitted' || surfaceSnapshotRef.current === null) return null;
         return createCallerHostedHtmlHostApiBridgeHandler({
             callerAuthority: {
                 kind: 'callerHostedHtml',
-                sessionId: props.sessionId,
+                ...(props.sessionId ? { sessionId: props.sessionId } : {}),
                 recordRevision: props.recordRevision,
             },
             requestIdPrefix: `session-html:${props.sessionId}:${props.recordRevision}`,
@@ -288,12 +237,7 @@ export function HostedHtmlSurfaceAdapter(props: Readonly<{
             authorizeRequest,
             canonicalHostApi: {
                 identity: frameIdentity,
-                surface: buildCallerHostedHtmlSurfaceSnapshot({
-                    context: surfaceContextRef.current,
-                    recordRevision: props.recordRevision,
-                    capabilityManifest: prepared.capabilityManifest,
-                    environment: environmentRef.current,
-                }),
+                surface: surfaceSnapshotRef.current,
                 methods: prepared.advertisedHostMethods,
                 activity: { active: true },
             },
@@ -301,16 +245,17 @@ export function HostedHtmlSurfaceAdapter(props: Readonly<{
             postToFrame: (message) => frameSink.current?.(message),
             bootstrap: {
                 frameOrigin: 'null',
-                ...(props.input === undefined ? {} : { launchInput: props.input }),
+                ...(launchInput === undefined ? {} : { launchInput }),
             },
             isCurrent: mount.isCurrent,
             onReadyStateChange: (state) => {
                 if (state.state === 'ready') lifecycle.markReady();
             },
             onGuestError: () => lifecycle.fail('guest_error'),
+            onOpenExternal: openCallerExternalLink,
             ...(props.onIntrinsicHeightChange ? { onHeightChanged: heightReporter.report } : {}),
         });
-    }, [approved, authorizeRequest, frameIdentity, heightReporter, lifecycle.fail, lifecycle.markReady, mount.isCurrent, prepared, props.input, props.recordRevision,
+    }, [authorizeRequest, frameIdentity, heightReporter, lifecycle.fail, lifecycle.markReady, mount.isCurrent, prepared, launchInput, props.recordRevision,
         props.sessionId, requestController?.handleRequest]);
     React.useEffect(() => {
         bridgeRef.current = bridge;
@@ -338,7 +283,7 @@ export function HostedHtmlSurfaceAdapter(props: Readonly<{
             />
         );
     }
-    if (prepared === null) return null;
+    if (prepared === null) return <BrowserFrameLoading testID={props.testID} host={props.title} />;
     if (prepared.kind !== 'admitted') {
         return (
             <SurfaceStateCard
@@ -347,42 +292,6 @@ export function HostedHtmlSurfaceAdapter(props: Readonly<{
                 title={t('sessionBoard.item.rendererUnavailable.title')}
                 reason={t('sessionBoard.item.rendererUnavailable.reason')}
                 diagnosticCode={prepared.code}
-                accessibilitySemantics="status"
-            />
-        );
-    }
-    if (!approved) {
-        if (reviewDeclined) {
-            return (
-                <SurfaceStateCard
-                    testID={`${props.testID}-declined`}
-                    kind="unavailable"
-                    title={t('sessionBoard.hostedHtmlApproval.declined.title')}
-                    reason={t('sessionBoard.hostedHtmlApproval.declined.reason')}
-                    action={{
-                        label: t('sessionBoard.hostedHtmlApproval.declined.review'),
-                        onPress: () => setReviewDeclined(false),
-                    }}
-                    accessibilitySemantics="status"
-                />
-            );
-        }
-        return (
-            <SurfaceStateCard
-                testID={`${props.testID}-approval`}
-                kind="warning"
-                title={t('sessionBoard.hostedHtmlApproval.title')}
-                reason={capabilityReviewRows.join('\n')}
-                detail={t('sessionBoard.hostedHtmlApproval.body')}
-                diagnosticCode={`${props.recordRevision}:${prepared.approval.executableSecurityFingerprint}`}
-                action={{
-                    label: t('sessionBoard.hostedHtmlApproval.allow'),
-                    onPress: () => props.runtime.approve(prepared.approval, prepared.approvalKey, prepared.capabilityManifest.requested),
-                }}
-                secondaryAction={{
-                    label: t('sessionBoard.hostedHtmlApproval.notNow'),
-                    onPress: () => setReviewDeclined(true),
-                }}
                 accessibilitySemantics="status"
             />
         );
@@ -418,7 +327,9 @@ export function HostedHtmlSurfaceAdapter(props: Readonly<{
           <HostedFrameHost
             title={props.title}
             bundle={prepared.frameSource.bundle}
+            network={prepared.frameSource.network}
             networkOrigins={prepared.frameSource.networkOrigins}
+            externalHttpLinks
             bootstrapConfig={{
                 identity: frameIdentity,
                 frameOrigin: 'null',
@@ -455,16 +366,6 @@ export function HostedHtmlSurfaceAdapter(props: Readonly<{
                 onMessage: bridge,
             }}
           />
-          {requiresApproval ? (
-              <RoundButton
-                  testID={`${props.testID}-revoke-approval`}
-                  size="small"
-                  display="inverted"
-                  title={t('common.reset')}
-                  accessibilityLabel={t('common.reset')}
-                  action={async () => { props.runtime.revoke(prepared.approval, prepared.approvalKey); }}
-              />
-          ) : null}
         </View>
     );
     return (

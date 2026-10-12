@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionAccessFixture, createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
-import type { PluginHostedWebBridgeEnvelopeV1 } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiHostApiSurfaceContextV1Schema, type PluginHostedWebBridgeEnvelopeV1 } from '@happier-dev/protocol/plugins/ui';
 import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/useSessionPluginRuntime';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { EMPTY_PLUGIN_BROWSER_PROJECTION } from '@/sync/domains/plugins/browser/targets';
@@ -12,6 +12,8 @@ import { storage } from '@/sync/domains/state/storage';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 import { setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import type { HomeCredentialMutationEvent } from '@/auth/storage/tokenStorage';
+import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
+import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
 
 const platformState = vi.hoisted(() => ({ current: 'web' }));
 const frameAvailability = vi.hoisted(() => ({ current: true }));
@@ -70,8 +72,10 @@ vi.mock('./hostedInlineDocumentFrameCapability', () => ({
 }));
 
 import { useSessionCallerHostedHtmlRuntime } from './useSessionCallerHostedHtmlRuntime';
-import { prepareCallerHostedHtmlSurface } from './prepareCallerHostedHtmlSurface';
 import { HostedHtmlSurfaceAdapter } from './HostedHtmlSurfaceAdapter';
+import { ApprovalVisualPreview } from '@/components/approvals/ApprovalVisualPreview';
+import { createPluginUiHostApiClient } from '@happier-dev/plugin-sdk/ui/client';
+import type { PluginUiHostApiWireEnvelopeV1 } from '@happier-dev/protocol/plugins/ui/client';
 
 const pluginRuntime: SessionPluginRuntimeState = {
     phase: 'current', interactionEnabled: true, machineId: 'machine-a', serverId: 'srv_home-a',
@@ -86,7 +90,7 @@ function CallerSurface(props: Readonly<{ runtime: SessionPluginRuntimeState; val
     return runtime ? <HostedHtmlSurfaceAdapter
         sessionId="session-a" title="Caller" recordRevision="revision-a" approvalSubject="item-a"
         source={source} requestedCapabilities={props.requestedCapabilities ?? contextCapabilities}
-        surfaceContext={{ value: props.value }} runtime={runtime} testID="caller-surface"
+        target={{ kind: 'session', sessionId: 'session-a' }} runtime={runtime} testID="caller-surface"
     /> : null;
 }
 
@@ -105,31 +109,27 @@ function readFrame(frame: Record<string, unknown>) {
     return { identity, bridge, send };
 }
 
-function prepare(requestedCapabilities: unknown, overrides: Record<string, unknown> = {}) {
-    const prepared = prepareCallerHostedHtmlSurface({
-        serverIdentityId: 'srv_home-a', accountId: 'account:srv_home-a', approvalSubject: 'item-a',
-        source: artifactHtmlBundleFromBodyV1('<main>Same document</main>'), requestedCapabilities,
-        admittedHostMethods: ['context', 'watchContext', 'readResource', 'watchResource', 'executeAction', 'notify'],
-        frameIdentity: { instanceId: 'frame-a', mountNonce: 'nonce-a' }, hostOrigin: 'https://app.happier.dev',
-        ...overrides,
-    });
-    if (prepared.kind !== 'admitted') throw new Error(prepared.code);
-    return prepared;
-}
-
 function publishSession(serverId = 'srv_home-a', sessionId = 'session-a') {
     storage.setState({ sessions: {
         [sessionId]: createSessionFixture({ id: sessionId, serverId }),
     } });
 }
 
-afterEach(() => { standardCleanup(); credentials.clear(); });
+afterEach(() => { standardCleanup(); credentials.clear(); vi.unstubAllGlobals(); invalidateAccountEncryptionModeCache(); });
 
 describe('useSessionCallerHostedHtmlRuntime', () => {
     beforeEach(async () => {
+        await act(async () => { await loadPluginUiHostSupport(); });
         platformState.current = 'web';
         frameAvailability.current = true;
         frames.length = 0;
+        // Only HTTP is replaced: exact-Home account capture, mode parsing and disclosure stay real.
+        vi.stubGlobal('fetch', async (input: string | URL | Request) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            if (url.pathname !== '/v1/account/encryption') throw new Error(`unexpected_request:${url}`);
+            return new Response(JSON.stringify({ mode: url.hostname.includes('home-b') ? 'e2ee' : 'plain', updatedAt: 1 }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } });
+        });
         for (const home of ['srv_home-a', 'srv_home-b']) {
             credentials.set(home, `account:${home}`);
             await upsertServerProfile({ serverUrl: `https://${home}.example.test`, name: home, source: 'manual' });
@@ -142,10 +142,80 @@ describe('useSessionCallerHostedHtmlRuntime', () => {
         });
     });
 
+    it('opens an inert approval preview without a Session or plugin runtime through the strict guest client', async () => {
+        storage.setState({ sessions: {} });
+        const screen = await renderScreen(<ApprovalVisualPreview artifactId="approval-a" serverId="srv_home-a"
+            preview={{ kind: 'html', title: 'Review', source, requestedCapabilities: { network: 'none' } }} testID="preview" />);
+        await vi.waitFor(() => expect(screen.findByTestId('physical-caller-frame')).not.toBeNull());
+        const frame = frames.at(-1)!;
+        expect(String(frame.html).match(/connect-src ([^;]*);/)?.[1]).toBe('data:');
+        const guest = readFrame(frame);
+        let sequence = 0;
+        await act(async () => {
+            await guest.send({ version: 1, identity: guest.identity, sequence: ++sequence, kind: 'ready', payload: { ready: true } });
+        });
+        const listeners = new Set<(message: unknown) => void>();
+        const detach = guest.bridge.attachHostMessages((message) => {
+            if (message && typeof message === 'object' && 'kind' in message && message.kind === 'hostApi' && 'payload' in message) {
+                for (const listener of listeners) listener(message.payload);
+            }
+        });
+        // The isolated guest's transport is the boundary; negotiate and decode
+        // using the public SDK client, without inventing an installed plugin.
+        vi.stubGlobal('__HAPPIER_PLUGIN_UI_HOST_API_CLIENT_V1__', {
+            identity: guest.identity,
+            transport: {
+                send: async (payload: PluginUiHostApiWireEnvelopeV1) => {
+                    const response = await guest.send({ version: 1, identity: guest.identity, sequence: ++sequence, kind: 'hostApi', payload });
+                    if (response && typeof response === 'object' && 'payload' in response) {
+                        for (const listener of listeners) listener(response.payload);
+                    }
+                },
+                subscribe: (listener: (message: unknown) => void) => {
+                    listeners.add(listener);
+                    return { dispose: () => { listeners.delete(listener); } };
+                },
+            },
+        });
+        const api = await createPluginUiHostApiClient();
+        const context = await api.context();
+        expect(PluginUiHostApiSurfaceContextV1Schema.safeParse(context).success).toBe(true);
+        expect(context).toMatchObject({ target: { kind: 'app' }, accountEncryptionMode: 'plain', theme: expect.any(Object) });
+        const watch = await api.watchContext(() => {});
+        for (const method of ['executeAction', 'readResource'] as const) {
+            expect(await guest.send({ version: 1, identity: guest.identity, sequence: ++sequence, kind: 'hostApi', payload: {
+                wireVersion: 1, kind: 'request', identity: guest.identity, requestId: `denied:${method}`, method, payload: {},
+            } })).toMatchObject({ kind: 'result', payload: { kind: 'error', error: { code: 'unsupported_method' } } });
+        }
+        expect(await guest.send({ version: 1, identity: guest.identity, sequence: ++sequence, kind: 'hostApi', payload: {
+            wireVersion: 1, kind: 'subscribe', identity: guest.identity, requestId: 'denied:watchResource',
+            method: 'watchResource', subscriptionId: 'denied-resource', payload: {},
+        } })).toMatchObject({ kind: 'result', payload: { kind: 'error', error: { code: 'unsupported_method' } } });
+        expect(screen.findByTestId('preview-hosted-html-unavailable')).toBeNull();
+        watch.dispose();
+        detach();
+    });
+
+    it('replays an admitted stored visual on a fresh viewer without device-local consent', async () => {
+        const capabilities = { hostMethods: ['context', 'watchContext'], networkOrigins: ['https://status.example.test'] };
+        const firstViewer = await renderScreen(<CallerSurface runtime={pluginRuntime} value="stored" requestedCapabilities={capabilities} />);
+        await vi.waitFor(() => expect(firstViewer.findByTestId('physical-caller-frame')).not.toBeNull());
+        const first = readFrame(frames.at(-1)!);
+        expect(firstViewer.findByTestId('caller-surface-approval')).toBeNull();
+        expect(firstViewer.findByTestId('caller-surface-revoke-approval')).toBeNull();
+        await firstViewer.unmount();
+        const secondViewer = await renderScreen(<CallerSurface runtime={pluginRuntime} value="stored" requestedCapabilities={capabilities} />);
+        await vi.waitFor(() => expect(secondViewer.findByTestId('physical-caller-frame')).not.toBeNull());
+        const second = readFrame(frames.at(-1)!);
+        expect(second.identity).not.toEqual(first.identity);
+        expect(secondViewer.findByTestId('caller-surface-approval')).toBeNull();
+        expect(await first.send({ version: 1, identity: first.identity, sequence: 1, kind: 'ready', payload: { ready: true } }))
+            .toMatchObject({ kind: 'error', payload: { code: 'stale_surface' } });
+    });
+
     it('keeps the physical mount across unrelated browser projection updates but retires it on credential loss', async () => {
         const screen = await renderScreen(<CallerSurface runtime={pluginRuntime} value="before" />);
-        await vi.waitFor(() => expect(screen.findByTestId('caller-surface-approval')).not.toBeNull());
-        await screen.pressByTestIdAsync('caller-surface-approval-action');
+        await vi.waitFor(() => expect(screen.findByTestId('physical-caller-frame')).not.toBeNull());
         const before = readFrame(frames.at(-1)!);
         const physicalFrame = screen.findByTestId('physical-caller-frame');
         const events: unknown[] = [];
@@ -165,12 +235,9 @@ describe('useSessionCallerHostedHtmlRuntime', () => {
         />);
         expect(readFrame(frames.at(-1)!).identity).toEqual(before.identity);
         expect(screen.findByTestId('physical-caller-frame')).toBe(physicalFrame);
-        expect(events).toContainEqual(expect.objectContaining({
-            kind: 'hostApi', payload: expect.objectContaining({
-                kind: 'subscription', subscriptionId: 'live-context',
-                event: expect.objectContaining({ surface: expect.objectContaining({ context: { value: 'after' } }) }),
-            }),
-        }));
+        // Parent-only bags are not public context, and an equivalent canonical
+        // snapshot must neither disconnect nor publish a spurious update.
+        expect(events).not.toContainEqual(expect.objectContaining({ kind: 'disconnected' }));
         await screen.update(<CallerSurface runtime={{ ...pluginRuntime, machineId: 'machine-b' }} value="after" />);
         const replacement = readFrame(frames.at(-1)!);
         expect(replacement.identity).not.toEqual(before.identity);
@@ -188,72 +255,20 @@ describe('useSessionCallerHostedHtmlRuntime', () => {
         detach();
     });
 
-    it('mounts a reduced request without another review, then requires review when authority grows', async () => {
-        const screen = await renderScreen(<CallerSurface runtime={pluginRuntime} value="same" />);
-        await vi.waitFor(() => expect(screen.findByTestId('caller-surface-approval')).not.toBeNull());
-        await screen.pressByTestIdAsync('caller-surface-approval-action');
+    it('retires the old policy frame before replaying a narrowed stored policy', async () => {
+        const screen = await renderScreen(<CallerSurface runtime={pluginRuntime} value="same"
+            requestedCapabilities={{ hostMethods: ['context', 'notify'], networkOrigins: ['https://status.example.test'] }} />);
+        await vi.waitFor(() => expect(screen.findByTestId('physical-caller-frame')).not.toBeNull());
         const original = readFrame(frames.at(-1)!);
+        expect(String(frames.at(-1)!.html).match(/connect-src ([^;]*);/)?.[1]?.split(' '))
+            .toEqual(['data:', 'https://status.example.test']);
         await screen.update(<CallerSurface runtime={pluginRuntime} value="same" requestedCapabilities={{ hostMethods: ['context'] }} />);
-        expect(screen.findByTestId('caller-surface-approval')).toBeNull();
         expect(screen.findByTestId('physical-caller-frame')).not.toBeNull();
+        expect(String(frames.at(-1)!.html).match(/connect-src ([^;]*);/)?.[1]?.split(' '))
+            .toEqual(['data:']);
         expect(readFrame(frames.at(-1)!).identity).not.toEqual(original.identity);
-        await screen.update(<CallerSurface runtime={pluginRuntime} value="same" requestedCapabilities={{ hostMethods: ['context', 'notify'] }} />);
-        expect(screen.findByTestId('caller-surface-approval')).not.toBeNull();
-        expect(screen.findByTestId('physical-caller-frame')).toBeNull();
-    });
-
-    it('reuses approval for a narrower request only within the same executable and authority, and revokes that approval', async () => {
-        const hook = await renderHook(() => useSessionCallerHostedHtmlRuntime('srv_home-a', 'session-a'));
-        await vi.waitFor(() => expect(hook.getCurrent()).not.toBeNull());
-        const full = prepare({ hostMethods: ['context', 'watchContext'],
-            resources: [{ pluginId: 'acme.review', localId: 'status' }],
-            actions: [{ pluginId: 'acme.review', localId: 'summarize' }],
-            networkOrigins: ['https://status.example.test'] });
-        const smaller = prepare({ hostMethods: ['context'], networkOrigins: ['https://status.example.test'] });
-        const initial = hook.getCurrent()!;
-        await act(async () => { initial.approve(full.approval, full.approvalKey, full.capabilityManifest.requested); });
-        const approved = hook.getCurrent()!;
-        expect(approved.lifetime).toBe(initial.lifetime);
-        expect(approved.isApproved(smaller.approval, smaller.approvalKey, smaller.capabilityManifest.requested)).toBe(true);
-        for (const changed of [
-            prepare({ ...full.capabilityManifest.requested, hostMethods: ['context', 'watchContext', 'notify'] }),
-            prepare({ ...full.capabilityManifest.requested, resources: [{ pluginId: 'acme.review', localId: 'other' }] }),
-            prepare({ ...full.capabilityManifest.requested, actions: [{ pluginId: 'acme.review', localId: 'other' }] }),
-            prepare({ ...full.capabilityManifest.requested, networkOrigins: ['https://other.example.test'] }),
-            prepare(full.capabilityManifest.requested, { approvalSubject: 'item-b' }),
-            prepare(full.capabilityManifest.requested, { accountId: 'account-b' }),
-            prepare(full.capabilityManifest.requested, { serverIdentityId: 'srv_home-b' }),
-            prepare(full.capabilityManifest.requested, { source: artifactHtmlBundleFromBodyV1('<main>Changed</main>') }),
-        ]) expect(approved.isApproved(changed.approval, changed.approvalKey, changed.capabilityManifest.requested)).toBe(false);
-        await act(async () => { approved.revoke(smaller.approval, smaller.approvalKey); });
-        expect(hook.getCurrent()!.isApproved(full.approval, full.approvalKey, full.capabilityManifest.requested)).toBe(false);
-        expect(hook.getCurrent()!.isApproved(smaller.approval, smaller.approvalKey, smaller.capabilityManifest.requested)).toBe(false);
-        expect(hook.getCurrent()!.lifetime).toBe(initial.lifetime);
-
-        // Separate consents cannot be combined to manufacture a broader one.
-        const context = prepare({ hostMethods: ['context'] });
-        const watch = prepare({ hostMethods: ['watchContext'] });
-        for (const request of [context, watch]) {
-            await act(async () => { hook.getCurrent()!.approve(request.approval, request.approvalKey, request.capabilityManifest.requested); });
-        }
-        const combined = prepare({ hostMethods: ['context', 'watchContext'] });
-        expect(hook.getCurrent()!.isApproved(combined.approval, combined.approvalKey, combined.capabilityManifest.requested)).toBe(false);
-    });
-
-    it('retains legacy boolean approvals only for their exact capability key', async () => {
-        const full = prepare({ hostMethods: ['context', 'watchContext'] });
-        const smaller = prepare({ hostMethods: ['context'] });
-        storage.setState((state) => ({ localSettings: {
-            ...state.localSettings,
-            uiSurfaceExecutableApprovalsV1: { [full.approvalKey]: true },
-        } }));
-        const hook = await renderHook(() => useSessionCallerHostedHtmlRuntime('srv_home-a', 'session-a'));
-        await vi.waitFor(() => expect(hook.getCurrent()).not.toBeNull());
-        const runtime = hook.getCurrent()!;
-        expect(runtime.isApproved(full.approval, full.approvalKey, full.capabilityManifest.requested)).toBe(true);
-        expect(runtime.isApproved(smaller.approval, smaller.approvalKey, smaller.capabilityManifest.requested)).toBe(false);
-        await act(async () => { runtime.revoke(full.approval, full.approvalKey); });
-        expect(hook.getCurrent()!.isApproved(full.approval, full.approvalKey, full.capabilityManifest.requested)).toBe(false);
+        expect(await original.send({ version: 1, identity: original.identity, sequence: 1, kind: 'ready', payload: { ready: true } }))
+            .toMatchObject({ kind: 'error', payload: { code: 'stale_surface' } });
     });
 
     it('retires when the canonical normalized Session loses read access and fails closed without that projection', async () => {
@@ -284,6 +299,7 @@ describe('useSessionCallerHostedHtmlRuntime', () => {
         expect(hook.getCurrent()).toMatchObject({
             serverIdentityId: 'srv_home-a',
             accountId: 'account:srv_home-a',
+            accountEncryptionMode: 'plain',
         });
 
         await act(async () => { publishSession('srv_home-b', 'shared-session'); });
@@ -292,6 +308,7 @@ describe('useSessionCallerHostedHtmlRuntime', () => {
         expect(hook.getCurrent()).toMatchObject({
             serverIdentityId: 'srv_home-b',
             accountId: 'account:srv_home-b',
+            accountEncryptionMode: 'e2ee',
         });
     });
 
@@ -324,26 +341,27 @@ describe('useSessionCallerHostedHtmlRuntime', () => {
         expect(hook.getCurrent()).toBeNull();
     });
 
-    it('keeps one physical mount lifetime and request owner while another item\'s approval changes', async () => {
-        // The real local-settings owner holds approvals; approving item B and
-        // revoking it must not hand item A a new mount lifetime or controller.
+    it('keeps the same runtime authority across unrelated local preference changes', async () => {
         const hook = await renderHook(() => useSessionCallerHostedHtmlRuntime('srv_home-a', 'session-a'));
         await vi.waitFor(() => expect(hook.getCurrent()).not.toBeNull());
         const before = hook.getCurrent()!;
-        const prepared = prepare({ hostMethods: ['context'] }, { approvalSubject: 'item-b' });
-        const { approval, approvalKey } = prepared;
-        expect(before.isApproved(approval, approvalKey, prepared.capabilityManifest.requested)).toBe(false);
+        await act(async () => { storage.setState((state) => ({ localSettings: {
+            ...state.localSettings, debugMode: !state.localSettings.debugMode,
+        } })); });
+        expect(hook.getCurrent()).toBe(before);
+    });
 
-        await act(async () => { before.approve(approval, approvalKey, prepared.capabilityManifest.requested); });
-        const approved = hook.getCurrent()!;
-        expect(approved.isApproved(approval, approvalKey, prepared.capabilityManifest.requested)).toBe(true);
-        expect(approved.lifetime).toBe(before.lifetime);
-        expect(approved.createRequestController).toBe(before.createRequestController);
-
-        await act(async () => { approved.revoke(approval, approvalKey); });
-        const revoked = hook.getCurrent()!;
-        expect(revoked.isApproved(approval, approvalKey, prepared.capabilityManifest.requested)).toBe(false);
-        expect(revoked.lifetime).toBe(before.lifetime);
+    it('withdraws prior guest authority while the canonical Account mode is revalidated', async () => {
+        const hook = await renderHook(() => useSessionCallerHostedHtmlRuntime('srv_home-a', undefined));
+        await vi.waitFor(() => expect(hook.getCurrent()).not.toBeNull());
+        const prior = hook.getCurrent()!;
+        // A real HTTP read stays pending; no second mode source or fabricated default.
+        vi.stubGlobal('fetch', (_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        }));
+        await act(async () => { invalidateAccountEncryptionModeCache(); });
+        expect(hook.getCurrent()).toBeNull();
+        expect(prior.lifetime.isCurrent()).toBe(false);
     });
 
     it.each(['ios', 'android'])('does not advertise caller HTML on %s without the native registrar', async (platform) => {

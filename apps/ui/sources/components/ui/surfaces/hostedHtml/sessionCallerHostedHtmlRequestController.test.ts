@@ -9,7 +9,7 @@ import {
     type ActionExecutorDeps,
 } from '@happier-dev/protocol';
 
-import type { MachinePluginUiResourceReadResult } from '@/sync/ops/machineContributionRegistryProjection';
+import type { MachinePluginUiResourceReadResult, MachinePluginUiResourceWatchNextResult } from '@/sync/ops/machineContributionRegistryProjection';
 import type {
     dispatchPluginSurfaceAction,
     PluginSurfaceHostActionExecute,
@@ -60,12 +60,78 @@ function projection(): PluginUiProjectionModel {
                 path: 'status.json',
                 digest: DIGEST,
                 contentType: 'application/json',
+                scope: 'session',
             },
         },
     };
 }
 
 describe('Session caller-hosted HTML request controller', () => {
+    it('replaces one guest watch across differently scoped Resources without leaving the predecessor live', async () => {
+        const base = projection();
+        const projected = { ...base, resourcesById: { ...base.resourcesById,
+            'acme.preview/global': { ...base.resourcesById['acme.preview/status']!, id: 'global', scope: 'global' as const },
+        } };
+        const nextSignals: AbortSignal[] = [];
+        const contexts: unknown[] = [];
+        const controller = createSessionCallerHostedHtmlRequestController({
+            sessionId: 'session-1', serverId: 'home-1', serverIdentityId: 'server-identity-1', accountId: 'viewer',
+            executeHostAction: async () => ({ ok: true, result: null }), isAccountCurrent: () => true, isSessionCurrent: () => true,
+            pluginTarget: { machineId: 'machine-1', serverId: 'home-1', generation: 7, projection: projected, isCurrent: () => true },
+            publishResourceEvent: () => {}, notify: () => {},
+            // The daemon long-poll is the genuine external boundary. Keep the
+            // canonical Resource watch lifecycle and its abort ownership real.
+            watchResource: {
+                open: async (_machine, options) => { contexts.push(options.context); return { supported: true,
+                    result: { ok: true, subscriptionId: options.subscriptionId, digest: DIGEST } }; },
+                next: async (_machine, options) => new Promise<MachinePluginUiResourceWatchNextResult>(resolve => {
+                    if (options.signal) nextSignals.push(options.signal);
+                    options.signal?.addEventListener('abort', () => resolve({ supported: false, reason: 'aborted' }), { once: true });
+                }),
+                close: async () => {},
+            },
+        });
+        try {
+            for (const localId of ['status', 'global']) await controller.handleRequest({ requestId: localId, method: 'watchResource',
+                payload: { subscriptionId: 'same-watch', resource: { pluginId: 'acme.preview', localId } } });
+            expect(contexts).toEqual([{ kind: 'session', sessionId: 'session-1' }, { kind: 'global' }]);
+            expect(nextSignals.map(signal => signal.aborted)).toEqual([true, false]);
+            await controller.handleRequest({ requestId: 'dispose', method: 'disposeHostResource', payload: { subscriptionId: 'same-watch' } });
+            expect(nextSignals.every(signal => signal.aborted)).toBe(true);
+        } finally { controller.dispose(); }
+    });
+    it('reads an app HTML copy Resource with viewer global context and no Session authority', async () => {
+        let current = true;
+        const base = projection();
+        const projected = { ...base, resourcesById: { ...base.resourcesById,
+            'acme.preview/status': { ...base.resourcesById['acme.preview/status']!, scope: 'global' as const,
+                hostOrigin: { machineId: 'machine-1', serverId: 'home-1', generation: 7, phase: 'current' as const, interactionEnabled: true, executionOrigin: null } },
+            'acme.preview/session-only': { ...base.resourcesById['acme.preview/status']!, id: 'session-only', scope: 'session' as const },
+            'acme.preview/foreign': { ...base.resourcesById['acme.preview/status']!, id: 'foreign', scope: 'global' as const,
+                hostOrigin: { machineId: 'foreign-machine', serverId: 'foreign-home', generation: 7, phase: 'current' as const, interactionEnabled: true, executionOrigin: null } },
+        } };
+        const reads: unknown[] = [];
+        const controller = createSessionCallerHostedHtmlRequestController({
+            serverId: 'home-1', serverIdentityId: 'server-identity-1', accountId: 'viewer',
+            executeHostAction: async () => ({ ok: true, result: null }),
+            isAccountCurrent: () => current,
+            isSessionCurrent: () => true,
+            pluginTarget: { machineId: null, serverId: null, generation: null, projection: projected, isCurrent: () => current },
+            publishResourceEvent: () => {}, notify: () => {},
+            readResource: async (machineId, options) => { reads.push({ machineId, options }); return { supported: true,
+                result: { ok: true, resource: options.resource, kind: 'config', contentType: 'application/json', digest: DIGEST, bytesBase64: 'e30=' } }; },
+        });
+        await expect(controller.handleRequest({ requestId: 'app-resource', method: 'readResource',
+            payload: { resource: { pluginId: 'acme.preview', localId: 'status' } } })).resolves.toMatchObject({ bytesBase64: 'e30=' });
+        expect(reads).toEqual([{ machineId: 'machine-1', options: expect.objectContaining({ context: { kind: 'global' } }) }]);
+        for (const localId of ['session-only', 'foreign']) await expect(controller.handleRequest({ requestId: localId, method: 'readResource',
+            payload: { resource: { pluginId: 'acme.preview', localId } } })).rejects.toThrow('plugin_resource_not_found');
+        expect(reads).toHaveLength(1);
+        current = false;
+        await expect(controller.handleRequest({ requestId: 'retired', method: 'readResource',
+            payload: { resource: { pluginId: 'acme.preview', localId: 'status' } } })).rejects.toThrow('caller_surface_retired');
+        controller.dispose();
+    });
     it('routes scripted destructive Actions through the shared approval floor before mutation', async () => {
         const sessionBoardAction = vi.fn(async () => ({
             v: 1 as const,

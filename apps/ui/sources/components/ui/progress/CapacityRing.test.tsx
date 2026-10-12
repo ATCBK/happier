@@ -30,6 +30,9 @@ vi.mock('react-native-svg', () => ({
     Svg: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
         React.createElement('Svg', props, props.children),
     Circle: (props: Record<string, unknown>) => React.createElement('Circle', props, null),
+    Defs: (props: { children?: React.ReactNode }) => React.createElement('Defs', null, props.children),
+    Pattern: (props: Record<string, unknown> & { children?: React.ReactNode }) => React.createElement('Pattern', props, props.children),
+    Path: (props: Record<string, unknown>) => React.createElement('Path', props, null),
 }));
 
 function renderRing(element: React.ReactElement): ReactTestRenderer {
@@ -118,5 +121,43 @@ describe('CapacityRing', () => {
             tree.update(<CapacityRing ratio={0.4} color="#0a0" progressTestID="p" />);
         });
         expect(withTimingSpy).not.toHaveBeenCalled();
+    });
+
+    it('draws the parts of one whole on one radius, end to end from the top, with a hatched part', () => {
+        const size = 100;
+        const strokeWidth = 10;
+        const tree = renderRing(
+            <CapacityRing
+                size={size}
+                strokeWidth={strokeWidth}
+                segmentGap={0}
+                segments={[
+                    { fraction: 0.5, color: '#111' },
+                    { fraction: 0, color: '#222' },
+                    { fraction: 0.25, color: '#333' },
+                    { fraction: 0.25, color: '#444', pattern: 'hatched' },
+                ]}
+            />,
+        );
+        const radius = (size - strokeWidth) / 2;
+        const circumference = 2 * Math.PI * radius;
+        const arcs = tree.root.findAllByType('Circle' as never)
+            .map(node => node.props as Readonly<{ r: number; stroke: string; strokeDasharray?: string; strokeDashoffset?: number }>)
+            .filter(props => props.strokeDasharray !== undefined);
+        // An empty part draws nothing; every drawn part shares the outer radius.
+        expect(arcs).toHaveLength(3);
+        expect(new Set(arcs.map(arc => arc.r))).toEqual(new Set([radius]));
+        const lengths = arcs.map(arc => Number(arc.strokeDasharray!.split(' ')[0]));
+        expect(lengths[0]).toBeCloseTo(circumference * 0.5, 4);
+        expect(lengths[1]).toBeCloseTo(circumference * 0.25, 4);
+        // Each part starts where the previous one ended.
+        expect(arcs.map(arc => Number(arc.strokeDashoffset))).toEqual([
+            expect.closeTo(0, 4), expect.closeTo(-circumference * 0.5, 4), expect.closeTo(-circumference * 0.75, 4),
+        ]);
+        // The set-aside part is its colour's hatch, not a flat fill.
+        const pattern = tree.root.findByType('Pattern' as never);
+        expect(arcs[2]!.stroke).toBe(`url(#${String(pattern.props.id)})`);
+        expect(pattern.findByType('Path' as never).props.stroke).toBe('#444');
+        expect(arcs[0]!.stroke).toBe('#111');
     });
 });

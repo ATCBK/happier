@@ -3,7 +3,8 @@ import { View } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import Svg, { Circle, Defs, Ellipse, G, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { useUnistyles } from 'react-native-unistyles';
-import { createPlanetDots, planetLightForProgress } from '@happier-dev/brand/planet';
+import { planetLightForProgress } from '@happier-dev/brand/planet';
+import { PlanetCanvas, type PlanetCanvasProps } from '@/components/atmosphere/PlanetCanvas';
 import {
     HAPPIER_SCENE_ART_METRICS,
     HAPPIER_SCENE_VIEWBOX,
@@ -163,9 +164,9 @@ function SceneMark(props: Readonly<{ mark: HappierResolvedSceneMark; paint: Scen
 }
 
 /**
- * One Daybreak dot planet (Brand `createPlanetDots`, the one planet source) on the scene's finer
- * lattice, hidden below its horizon. A rising planet comes up once when the scene appears, then rests;
- * an out-of-reach planet is drawn in the line ink.
+ * One Brand planet, hidden below its horizon. Default scenes retain their calibrated mark lattice;
+ * authored looks use the scene core in the full scene box so the digit field reaches beyond the limb.
+ * A rising planet comes up once when the scene appears, then rests.
  */
 function ScenePlanet(props: Readonly<{
     planet: HappierResolvedScenePlanet;
@@ -177,17 +178,39 @@ function ScenePlanet(props: Readonly<{
 }>): React.ReactElement {
     const { planet, paint } = props;
     const box = planet.r * PLANET_BOX_PER_RADIUS;
-    const dots = React.useMemo(() => createPlanetDots({
-        size: box,
-        rows: planet.rows,
-        theme: props.mode,
-        pose: planet.pose,
-        energy: planet.energy,
-        halo: SCENE_HALO,
-        warmth: planet.warm ? GOLDEN_WARMTH : 0,
-        ...(planet.progress !== undefined ? { light: planetLightForProgress(planet.progress) } : {}),
-    }).filter((dot) => dot.opacity > 0), [box, planet.energy, planet.pose, planet.progress, planet.rows, planet.warm, props.mode]);
     const boxPx = box * props.scale;
+    const customLook = planet.style !== undefined || planet.fullness !== undefined || planet.digits !== undefined;
+    const canvas = React.useMemo<PlanetCanvasProps>(() => customLook ? {
+        width: props.width,
+        height: HAPPIER_SCENE_VIEWBOX.height * props.scale,
+        options: {
+            R: planet.r * props.scale,
+            cx: planet.cx * props.scale,
+            cy: planet.cy * props.scale,
+            view: { w: props.width, h: HAPPIER_SCENE_VIEWBOX.height * props.scale },
+            theme: props.mode,
+            style: planet.style,
+            fullness: planet.fullness,
+            halo: SCENE_HALO,
+            field: planet.digits ? {} : 0,
+            ...(planet.progress !== undefined ? { light: planetLightForProgress(planet.progress) } : {}),
+        },
+    } : {
+        width: boxPx,
+        height: boxPx,
+        mark: {
+            size: box,
+            rows: planet.rows,
+            theme: props.mode,
+            pose: planet.pose,
+            energy: planet.energy,
+            halo: SCENE_HALO,
+            warmth: planet.warm ? GOLDEN_WARMTH : 0,
+            radiusScale: SCENE_DOT_SCALE,
+            ...(planet.ink ? { ink: paint.line, opacityScale: paint.ink * INK_PLANET_STRENGTH } : {}),
+            ...(planet.progress !== undefined ? { light: planetLightForProgress(planet.progress) } : {}),
+        },
+    }, [box, boxPx, customLook, paint.ink, paint.line, planet.cx, planet.cy, planet.digits, planet.energy, planet.fullness, planet.ink, planet.pose, planet.progress, planet.r, planet.rows, planet.style, planet.warm, props.mode, props.scale, props.width]);
     const riseBy = planet.r * props.scale * RISE_SHARE;
     const progress = useSharedValue(props.rises ? 0 : 1);
     React.useEffect(() => {
@@ -216,20 +239,9 @@ function ScenePlanet(props: Readonly<{
         >
             <Animated.View
                 testID="scene-planet-body"
-                style={[{ position: 'absolute', left: (planet.cx - box / 2) * props.scale, top: (planet.cy - box / 2) * props.scale, width: boxPx, height: boxPx }, riseStyle]}
+                style={[{ position: 'absolute', left: customLook ? 0 : (planet.cx - box / 2) * props.scale, top: customLook ? 0 : (planet.cy - box / 2) * props.scale, width: canvas.width, height: canvas.height }, riseStyle]}
             >
-                <Svg width={boxPx} height={boxPx} viewBox={`0 0 ${box} ${box}`}>
-                    {dots.map((dot) => (
-                        <Circle
-                            key={dot.id}
-                            cx={dot.x}
-                            cy={dot.y}
-                            r={dot.radius * SCENE_DOT_SCALE}
-                            fill={planet.ink ? paint.line : `rgb(${dot.rgb[0]},${dot.rgb[1]},${dot.rgb[2]})`}
-                            fillOpacity={planet.ink ? paint.ink * INK_PLANET_STRENGTH * dot.opacity : dot.opacity}
-                        />
-                    ))}
-                </Svg>
+                <PlanetCanvas {...canvas} />
             </Animated.View>
         </View>
     );
