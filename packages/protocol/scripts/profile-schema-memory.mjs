@@ -2,7 +2,10 @@
 // hstack-exec -- node --experimental-transform-types --expose-gc
 //   packages/protocol/scripts/profile-schema-memory.mjs protocol --native
 // Add --eager for the process-local construction control, --census for live
-// instance counts (instrumented memory is not comparable to the plain probe).
+// native Classic instance counts (Mini/Core and unresolved facades are not
+// instrumented; census memory is not comparable to the plain probe).
+// --allocation-profile includes the Inspector allocation tree for attribution.
+// --all-owners disables the top-owner preview for exact absence assertions.
 // classic / mini / core compare independent, equivalent strict-object families.
 // Census instrumentation is separate from the uninstrumented memory probe.
 import inspector from 'node:inspector';
@@ -125,9 +128,11 @@ if (['classic', 'mini', 'core'].includes(mode)) {
   }
   console.log(JSON.stringify({ mode, census, eager, node: process.version, before, after, elapsedMs: performance.now() - start,
     created: samples.length, live, derivedLive, outsideStacks,
-    ownersByLiveCount: [...counts].sort((a,b) => b[1].instances-a[1].instances).slice(0,20),
+    ownersByLiveCount: [...counts].sort((a,b) => b[1].instances-a[1].instances)
+      .slice(0, process.argv.includes('--all-owners') ? counts.size : 20),
     outsideSampledLiveBytes: sizes.get('outside protocol'),
-    ownersBySampledLiveBytes: [...sizes].filter(([owner]) => owner !== 'outside protocol').sort((a,b) => b[1]-a[1]).slice(0,20) }));
+    ownersBySampledLiveBytes: [...sizes].filter(([owner]) => owner !== 'outside protocol').sort((a,b) => b[1]-a[1]).slice(0,20),
+    ...(process.argv.includes('--allocation-profile') ? { allocationProfile: profile } : {}) }));
   unregister();
 }
 session.disconnect();

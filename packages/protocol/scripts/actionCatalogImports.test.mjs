@@ -1,5 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+test('keeps private Automation read projections cold during catalog import', () => {
+  // Count real Classic constructor allocations in a fresh native graph. This is
+  // instrumentation, not a replacement parser or a mocked schema factory.
+  const output = execFileSync(process.execPath, [
+    '--experimental-transform-types', '--expose-gc',
+    fileURLToPath(new URL('./profile-schema-memory.mjs', import.meta.url)),
+    'packages/protocol/src/automations/automationApiV3.ts', '--census', '--all-owners',
+  ], { cwd: fileURLToPath(new URL('../../../', import.meta.url)), encoding: 'utf8' });
+  const census = JSON.parse(output.trim());
+  const projections = census.ownersByLiveCount.find(([owner]) => owner.endsWith('/json/storedReadSchema.ts'));
+  assert.equal(projections?.[1].instances ?? 0, 0);
+});
 
 test('initializes the Action vocabulary before loading its payload catalog in native ESM', async () => {
   // Vitest transforms the module graph; native ESM also has to admit an ID-first
