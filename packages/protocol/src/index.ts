@@ -1,12 +1,29 @@
 export const HAPPY_PROTOCOL_PACKAGE = '@happier-dev/protocol';
+export * from './machines/machineMetadataFieldV1.js';
+export * from './machines/resources/machineResourcesPolicyV1.js';
+export * from './machines/vitals/machineVitalsAlertsV1.js';
+export * from './machines/vitals/machineVitalsSampleV1.js';
+export * from './machines/vitals/machineVitalsHistoryV1.js';
+export * from './machines/vitals/machineVitalsRpcV1.js';
+export * from './machines/processes/machineProcessesV1.js';
+export * from './storage/storageV1.js';
+export * from './machines/vitals/isSustainedV1.js';
+export * from './machines/vitals/evaluateMachineVitalsAlertsV1.js';
+export * from './machines/resources/machineResourceSummaryV1.js';
+export * from './machines/vitals/machineVitalsAttentionV1.js';
+export * from './machines/vitals/resolveMachineVitalsNextStepsV1.js';
 export * from './usage/usageModelPriceCatalog.js';
-export * from './usage/usageAggregation.js';
+export { createEmptyUsageTokens, createEmptyUsageCost, addUsageTokens, addUsageCost, addUsageCostForMode, withEffectiveUsageCost } from './usage/usageAggregation.js';
 export * from './usage/usageLeaderProjection.js';
 export { resolveUsageTokenCategories } from './usage/usageTokenCategories.js';
 export {
   resolveUsageCostBasis,
   resolveUsageCostFacts,
   resolveUsageCostFactForMode,
+  resolveUsageCostForSelection,
+  projectUsagePageCost,
+  type UsagePageCostSelection,
+  type UsagePageCostProjection,
   resolveEffectiveUsageCostUsd,
   resolveUsageCostMode,
   resolveUsageCostPresentationSource,
@@ -506,8 +523,10 @@ export {
 export {
   SessionMessageDeliveryResolutionV1Schema,
   SessionMessageAcceptedDeliveryFactsV1Schema,
+  SessionMessageAcceptedDeliveryFactsV1StoredSchema,
   SessionMessageAcceptedDeliveryContentV1Schema,
   parseSessionMessageDeliveryResolutionV1,
+  readStoredSessionMessageDeliveryResolutionV1,
   type SessionMessageDeliveryResolutionV1,
   type SessionMessageAcceptedDeliveryFactsV1,
   type SessionMessageAcceptedDeliveryContentV1,
@@ -853,6 +872,7 @@ export {
   normalizeBackendTargetRefV2InputToV1,
   normalizeBackendTargetRefV2InputToV2,
   readBackendTargetRefV2,
+  readBackendTargetKeyV2,
   writePersistedBackendTargetRefV2,
   type BackendTargetKeyV2,
   type BackendTargetRefV2,
@@ -1165,6 +1185,8 @@ export {
   PluginAgentCapabilitySurfacesV2Schema,
   PluginAgentToolsDeliveryV2Schema,
   PluginAgentToolsCapabilityV2Schema,
+  PluginAgentSkillsCapabilityV2Schema,
+  PluginAgentAcpSkillsSessionDeliveryV2Schema,
   PluginAgentStructuredOutputCapabilityV2Schema,
   PluginAgentSessionCapabilitiesV2Schema,
   PluginAgentExecutionRunCapabilitiesV2Schema,
@@ -1224,6 +1246,9 @@ export {
   type PluginAgentCapabilitySurfacesV2,
   type PluginAgentToolsDeliveryV2,
   type PluginAgentToolsCapabilityV2,
+  type PluginAgentSkillsCapabilityV2,
+  type PluginAgentAcpSkillsSessionDeliveryV2,
+  type PluginAgentAcpMcpInputPolicyV2,
   type PluginAgentStructuredOutputCapabilityV2,
   type PluginAgentSessionCapabilitiesV2,
   type PluginAgentExecutionRunCapabilitiesV2,
@@ -1885,8 +1910,6 @@ export {
 } from './plugins/ui/hostApiRequests.js';
 export {
   CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
-  CURRENT_UI_CONTEXT_MAX_COMMANDS_V1,
-  CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1,
   CurrentUiCommandDeclarationV1Schema,
   CurrentUiCommandDescriptorV1Schema,
   CurrentUiContextBoundedIncompletenessV1Schema,
@@ -2177,6 +2200,8 @@ export {
   AcpBackendAuthConfigV1Schema,
   AcpBackendCapabilitiesV1Schema,
   AcpBackendDefinitionV1Schema,
+  AcpBackendDefinitionV1StoredSchema,
+  AcpBackendLaunchV1Schema,
   AcpCatalogAuthSupportV1Schema,
   AcpCatalogCommandV1Schema,
   AcpCatalogSettingsV1Schema,
@@ -2184,6 +2209,7 @@ export {
   type AcpBackendAuthConfigV1,
   type AcpBackendCapabilitiesV1,
   type AcpBackendDefinitionV1,
+  type AcpBackendLaunchV1,
   type AcpCatalogAuthSupportV1,
   type AcpCatalogCommandV1,
   type AcpCatalogEnvValueRefV1,
@@ -2358,6 +2384,7 @@ export {
   buildProviderAccountUsageOpaqueLocalCredentialRef,
   openProviderAccountUsageSnapshotCiphertext,
   openSealedProviderAccountUsageSnapshot,
+  openProviderAccountUsageEncryptedContentV4,
   projectProviderAccountUsageSnapshotToConnectedServiceQuotaSnapshotV1,
   projectProviderAccountUsageToConnectedServiceQuotaSnapshot,
   ProviderAccountSubjectRefV1Schema,
@@ -2459,8 +2486,11 @@ export {
   ConnectedServiceQuotaRecoveryCreditStatusV1Schema,
   ConnectedServiceQuotaRecoveryCreditV1Schema,
   ConnectedServiceQuotaRecoveryCreditsV1Schema,
+  ConnectedServiceQuotaRecoveryCreditDetailsV1Schema,
+  ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema,
   ConnectedServiceQuotaMeterV1Schema,
   ConnectedServiceQuotaSnapshotV1Schema,
+  ConnectedServiceQuotaSnapshotV1StoredSchema,
   ConnectedServiceQuotaSourceV1Schema,
   ConnectedServiceQuotaUnitV1Schema,
   ConnectedServiceUsageSourceBindingKindV1Schema,
@@ -2519,6 +2549,8 @@ export {
   type ConnectedServiceQuotaRecoveryCreditStatusV1,
   type ConnectedServiceQuotaRecoveryCreditV1,
   type ConnectedServiceQuotaRecoveryCreditsV1,
+  type ConnectedServiceQuotaRecoveryCreditDetailsV1,
+  type ConnectedServiceQuotaRecoveryCreditDetailsByIdV1,
   type ConnectedServiceQuotaMeterV1,
   type ConnectedServiceQuotaSnapshotV1,
   type ConnectedServiceQuotaSourceV1,
@@ -2743,6 +2775,8 @@ export {
 export {
   ActivityWebhookPayloadV1Schema,
   ActivityWebhookTopicSchema,
+  MachineVitalsNotificationV1Schema,
+  MachineVitalsPushRoutingDataV1Schema,
   WorkflowRunUpdateKindV1Schema,
   WorkflowRunUpdateNotificationV1Schema,
   WorkflowRunUpdateReasonV1Schema,
@@ -2750,6 +2784,8 @@ export {
   buildActivityWebhookPayload,
   type ActivityWebhookPayloadV1,
   type ActivityWebhookTopic,
+  type MachineVitalsNotificationV1,
+  type MachineVitalsPushRoutingDataV1,
   type WorkflowRunUpdateKindV1,
   type WorkflowRunUpdateNotificationV1,
   type WorkflowRunUpdateReasonV1,
@@ -3023,6 +3059,8 @@ export {
   SessionSystemRecordPageResponseSchema,
   SessionSystemRecordPayloadSchema,
   SessionSystemRecordSchema,
+  SessionSystemRecordCreatorV1Schema,
+  type SessionSystemRecordCreatorV1,
   SessionSystemRecordUpsertRequestSchema,
   SessionSystemRecordUpsertResponseSchema,
   getSessionSystemRecordKindPolicy,
@@ -3306,16 +3344,19 @@ export {
 } from './crypto/base64.js';
 
 export {
-  McpServerBindingOverridesV1Schema,
-  McpServerBindingTargetV1Schema,
-  McpServerBindingV1Schema,
+  McpServerConfigOverrideFieldsV1Schema,
+  McpServerConfigOverrideV1Schema,
+  ReachPlaceV1Schema,
+  McpServerRuleV1Schema,
   McpServerCatalogEntryTransportV1Schema,
   McpServerCatalogEntryV1Schema,
   McpServersSettingsV1Schema,
   McpValueRefV1Schema,
-  type McpServerBindingOverridesV1,
-  type McpServerBindingTargetV1,
-  type McpServerBindingV1,
+  type McpServerConfigOverrideFieldsV1,
+  type McpServerConfigOverrideV1,
+  mcpPluginItemIdV1, isMcpPluginItemIdV1, type McpPluginItemV1,
+  type ReachPlaceV1,
+  type McpServerRuleV1,
   type McpServerCatalogEntryTransportV1,
   type McpServerCatalogEntryV1,
   type McpServersSettingsV1,
@@ -3349,11 +3390,18 @@ export {
   type McpServerActionIdV1, type McpServerActionRequestV1, type McpServerActionPortsV1,
 } from './mcp/servers/serverActionsV1.js';
 
-export {
-  resolveEffectiveServersV1,
-  type ResolveEffectiveServersV1Result,
-  type ResolvedMcpServerV1,
-} from './mcp/servers/resolveEffectiveServersV1.js';
+export { resolveReachV1, isReachPortableV1, type ReachContextV1, type ReachDecisionV1 } from './reach/resolveReachV1.js';
+export { ReachRuleV1Schema, ReachRuleDraftV1Schema, SkillRuleV1Schema, type ReachRuleV1, type ReachRulesV1, type ReachRuleDraftV1, type SkillRuleV1 } from './reach/reachRuleV1.js';
+export { ReachRulesChangeV1Schema, ReachRuleWriteV1Schema, applyReachRulesChangeV1, resolveCreateReachV1, groupReachRulesV1,
+  reachRulesToDraftsV1,
+  MIGRATED_STACK_RULE_ID_PREFIX_V1, isMigratedReachRuleIdV1, type ReachRulesChangeV1, type ReachRuleWriteV1 } from './reach/reachRulesChangeV1.js';
+export { projectReachForMachinesV1, type ReachProjectionV1 } from './reach/projectReachV1.js';
+export { SessionSkillSelectionAuthoringV1Schema, SessionSkillSelectionV1Schema, SessionCapabilitySelectionAuthoringV1Schema,
+  SessionCapabilitySelectionV1Schema, applySessionSelectionV1, type SessionSkillSelectionV1, type SessionCapabilitySelectionV1,
+  type CapabilitySelectionReasonV1 } from './reach/sessionCapabilitySelectionV1.js';
+export { resolveSessionCapabilitiesV1, projectMcpServerMaterializationV1, type CapabilityItemStateV1, type CapabilityMcpItemStateV1,
+  type ResolveSessionCapabilitiesV1Result, type ResolvedMcpServerV1, type McpServerMaterializationV1 } from './reach/resolveSessionCapabilitiesV1.js';
+export { resolveMcpServerConfigForContextV1, applyMcpServerConfigOverrideV1 } from './mcp/servers/resolveMcpServerConfigForContextV1.js';
 export {
   areSessionMcpSelectionsEquivalent,
   parseSessionMcpSelectionV1Json,
@@ -3365,19 +3413,14 @@ export {
   type SessionMcpSelectionV1,
 } from './mcp/servers/sessionSelectionV1.js';
 export {
-  resolveManagedSessionMcpSelectionV1,
-  type ManagedSessionMcpAvailabilityV1,
-  type ManagedSessionMcpPortabilityV1,
-  type ManagedSessionMcpReasonCodeV1,
-  type ManagedSessionMcpSelectionItemV1,
-  type ResolveManagedSessionMcpSelectionV1Result,
-} from './mcp/servers/resolveManagedSessionMcpSelectionV1.js';
-export {
   inferMcpServerAuthModeV1,
   type McpServerAuthModeV1,
 } from './mcp/servers/authModeV1.js';
 export {
   BuiltInMcpPreviewEntryV1Schema,
+  projectManagedMcpSelectionV1, projectManagedMcpPreviewEntriesV1,
+  type ManagedMcpSelectionProjectionV1, type ManagedMcpProjectionItemV1,
+  type ManagedSessionMcpAvailabilityV1, type ManagedSessionMcpPortabilityV1, type ManagedSessionMcpReasonCodeV1,
   DaemonMcpServersPreviewRequestSchema,
   DaemonMcpServersPreviewResponseSchema,
   DetectedMcpPreviewEntryV1Schema,
@@ -3529,6 +3572,12 @@ export {
   type SessionAgentTransitionDividerV1,
 } from './sessions/agentTransitionDivider.js';
 export { isReservedSessionMessageLocalId } from './sessions/reservedSessionMessageLocalId.js';
+export {
+  SESSION_CAPABILITY_NOTICE_SIDECAR_KEY,
+  SessionCapabilityNoticeV1Schema,
+  readSessionCapabilityNoticeV1,
+  type SessionCapabilityNoticeV1,
+} from './sessions/messages/sessionCapabilityNoticeV1.js';
 export {
   ComposerAgentContinuationIntentV1Schema,
   SESSION_AGENT_TRANSITION_CURRENT_VIEW_COMMITTED_CODES_V1,
@@ -4101,6 +4150,7 @@ export {
   type InstallableRegistryDiagnosticCode,
   type InstallableSource,
   type InstallableSourceKind,
+  type InstallChecksumStateV1,
   type InstallablesRegistry,
   type ResolveInstallablesRegistryInput,
 } from './installables/index.js';
@@ -5623,6 +5673,8 @@ export {
   ScmWorktreePruneResponseSchema,
   ScmWorktreeRemoveRequestSchema,
   ScmWorktreeRemoveResponseSchema,
+  ScmWorktreeRetireRequestSchema,
+  ScmWorktreeReinstateRequestSchema,
   type ScmWorktreeCreateRequest,
   type ScmWorktreeCreateResponse,
   type ScmWorktreeCommandResponse,
@@ -5630,6 +5682,8 @@ export {
   type ScmWorktreePruneResponse,
   type ScmWorktreeRemoveRequest,
   type ScmWorktreeRemoveResponse,
+  type ScmWorktreeRetireRequest,
+  type ScmWorktreeReinstateRequest,
 } from './scm/worktrees.js';
 export {
   normalizeWorktreeDisplayName,
@@ -7352,6 +7406,7 @@ export {
 export {
   SubagentCommandV1Schema,
   parseSubagentCommandV1,
+  resolveSubagentCommandStructuredSend,
   type SubagentCommandV1,
 } from './messages/structured/subagentCommandV1.js';
 
@@ -7576,11 +7631,16 @@ export { MEMORY_DOCUMENT_ACTION_IDS_V1, MEMORY_WRITE_ACTION_IDS_V1, isMemoryWrit
 export {
   PROMPT_BUNDLE_SCHEMA_LIMITS_V1,
   PromptBundleBodyV1Schema,
+  projectPromptBundleActionEntriesV1,
   PromptBundleEntryV1Schema,
+  PromptBundleCreateActionInputV1Schema,
+  PromptBundleUpdateActionInputV1Schema,
   PromptBundleSchemaIdV1Schema,
   validatePromptBundleBodyV1AgainstSchemaId,
   type PromptBundleBodyV1,
   type PromptBundleEntryV1,
+  type PromptBundleCreateActionInputV1,
+  type PromptBundleUpdateActionInputV1,
   type PromptBundleSchemaIdV1,
   type PromptBundleValidationResult,
 } from './prompts/library/promptBundleSchemas.js';
@@ -8133,6 +8193,9 @@ export {
 
 export {
   AccountDisplayProfileV1Schema,
+  resolveAccountDisplayLabelV1,
+  readAccountNameFromLegacyProfileV1,
+  projectAccountNameToLegacyFieldsV1,
   parseAccountDisplayProfileV1,
   type AccountDisplayProfileV1,
 } from './account/accountDisplayProfileV1.js';
@@ -8990,12 +9053,7 @@ export {
   type PluginComposerReferenceProviderContributionV1,
 } from './plugins/contributions/composerReferenceProviders.js';
 export {
-  MAX_PLUGIN_SEARCH_ITEMS_V1,
-  MAX_PLUGIN_SEARCH_ITEM_ID_UTF8_BYTES_V1,
-  MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1,
   MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1,
-  MAX_PLUGIN_SEARCH_SUBTITLE_CODE_POINTS_V1,
-  MAX_PLUGIN_SEARCH_TITLE_CODE_POINTS_V1,
   PluginSearchItemV1Schema,
   PluginSearchProviderContributionV1Schema,
   PluginSearchQueryV1Schema,
@@ -9124,7 +9182,9 @@ export {
 } from './runtime/input/composerAttachmentV1.js';
 export {
   AgentDispatchStructuredInputV1Schema,
+  HappierStructuredInputV1StoredSchema,
   RawIngressStructuredInputV1Schema,
+  RawIngressStructuredInputV1StoredSchema,
   hasRawComposerAttachmentSelectionV1,
   hasRawStructuredInputSemanticContentV1,
   readIngressComposerAttachmentSelectionV1,
@@ -9707,9 +9767,12 @@ export {
   type GlassBlurStep,
 } from './account/settings/glassSurfaceMaterials.js';
 export * from './account/settings/machineRetentionDefaultsV1.js';
+export * from './account/settings/machineOfflineAlertsV1.js';
 export * from './push/machineRemoteAlert.js';
 export * from './machines/managed/resolveMachineRetentionPolicyV1.js';
 export * from './machines/managed/managedIntentV1.js';
 export * from './workspaces/projectSetup/projectManifestV1.js';
 export * from './workspaces/projectSetup/projectManifestDocument.js';
 export { parseOauthAuthorizationResponse, type OauthAuthorizationResponse } from './connect/oauthAuthorizationResponse.js';
+
+export { PluginAtmospherePictureContributionV1Schema, type PluginAtmospherePictureContributionV1 } from './plugins/contributions/atmospherePictures.js';

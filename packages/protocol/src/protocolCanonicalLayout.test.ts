@@ -15,6 +15,7 @@ const allowedRootEntries = new Set([
     'index.exports.test.ts',
     'protocolCanonicalLayout.test.ts',
     'agents',
+    'reach',
 ]);
 
 const forbiddenRootEntries = new Set([

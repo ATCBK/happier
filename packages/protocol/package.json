@@ -3,31 +3,234 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "happier": {
-    "installFreshnessInputs": [
-      "src/auth/accountPasswordCredential.ts",
-      "src/crypto/base64.ts",
-      "src/crypto/canonicalDigest.ts",
-      "src/features/payload/capabilities/encryptionCapabilities.ts"
-    ]
-  },
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./actions/specs/capabilityRules": {
+      "happier-source": "./src/actions/specs/capabilityRules.ts",
+      "types": "./dist/actions/specs/capabilityRules.d.ts",
+      "default": "./dist/actions/specs/capabilityRules.js"
+    },
+    "./sessions/messages/sessionCapabilityNoticeV1": {
+      "happier-source": "./src/sessions/messages/sessionCapabilityNoticeV1.ts",
+      "types": "./dist/sessions/messages/sessionCapabilityNoticeV1.d.ts",
+      "default": "./dist/sessions/messages/sessionCapabilityNoticeV1.js"
+    },
+    "./usage/usageWorkEvidence": {
+      "happier-source": "./src/usage/usageWorkEvidence.ts",
+      "types": "./dist/usage/usageWorkEvidence.d.ts",
+      "default": "./dist/usage/usageWorkEvidence.js"
+    },
+    "./usage/usageWorkSources": {
+      "happier-source": "./src/usage/usageWorkSources.ts",
+      "types": "./dist/usage/usageWorkSources.d.ts",
+      "default": "./dist/usage/usageWorkSources.js"
+    },
+    "./usage/coach/buildUsageCoachRemedies": {
+      "happier-source": "./src/usage/coach/buildUsageCoachRemedies.ts",
+      "types": "./dist/usage/coach/buildUsageCoachRemedies.d.ts",
+      "default": "./dist/usage/coach/buildUsageCoachRemedies.js"
+    },
+    "./tools/toolMutationClassification": {
+      "happier-source": "./src/tools/toolMutationClassification.ts",
+      "types": "./dist/tools/toolMutationClassification.d.ts",
+      "default": "./dist/tools/toolMutationClassification.js"
+    },
+    "./actions/specs/bugReport": {
+      "happier-source": "./src/actions/specs/bugReport.ts",
+      "types": "./dist/actions/specs/bugReport.d.ts",
+      "default": "./dist/actions/specs/bugReport.js"
+    },
+    "./providers/modelFavoritesV1": {
+      "happier-source": "./src/providers/modelFavoritesV1.ts",
+      "types": "./dist/providers/modelFavoritesV1.d.ts",
+      "default": "./dist/providers/modelFavoritesV1.js"
+    },
+    "./actions/updatesActionFamily": {
+      "happier-source": "./src/actions/updatesActionFamily.ts",
+      "types": "./dist/actions/updatesActionFamily.d.ts",
+      "default": "./dist/actions/updatesActionFamily.js"
+    },
+    "./actions/clipboardActionFamily": {
+      "happier-source": "./src/actions/clipboardActionFamily.ts",
+      "types": "./dist/actions/clipboardActionFamily.d.ts",
+      "default": "./dist/actions/clipboardActionFamily.js"
+    },
+    "./actions/accountAuthorityRetirement": {
+      "happier-source": "./src/actions/accountAuthorityRetirement.ts",
+      "types": "./dist/actions/accountAuthorityRetirement.d.ts",
+      "default": "./dist/actions/accountAuthorityRetirement.js"
+    },
+    "./actions/pluginExecutionOriginActionFamily": {
+      "happier-source": "./src/actions/pluginExecutionOriginActionFamily.ts",
+      "types": "./dist/actions/pluginExecutionOriginActionFamily.d.ts",
+      "default": "./dist/actions/pluginExecutionOriginActionFamily.js"
+    },
+    "./connect/oauthAuthorizationResponse": {
+      "happier-source": "./src/connect/oauthAuthorizationResponse.ts",
+      "types": "./dist/connect/oauthAuthorizationResponse.d.ts",
+      "default": "./dist/connect/oauthAuthorizationResponse.js"
+    },
+    "./machines/resources/machineUsageAttribution": {
+      "happier-source": "./src/machines/resources/machineUsageAttribution.ts",
+      "types": "./dist/machines/resources/machineUsageAttribution.d.ts",
+      "default": "./dist/machines/resources/machineUsageAttribution.js"
+    },
+    "./machines/processes/machineProcessesV1": {
+      "happier-source": "./src/machines/processes/machineProcessesV1.ts",
+      "types": "./dist/machines/processes/machineProcessesV1.d.ts",
+      "default": "./dist/machines/processes/machineProcessesV1.js"
+    },
     "./machines/processes/spawnFailureV1": {
       "happier-source": "./src/machines/processes/spawnFailureV1.ts",
       "types": "./dist/machines/processes/spawnFailureV1.d.ts",
       "default": "./dist/machines/processes/spawnFailureV1.js"
+    },
+    "./actions/specs/machineProcesses": {
+      "happier-source": "./src/actions/specs/machineProcesses.ts",
+      "types": "./dist/actions/specs/machineProcesses.d.ts",
+      "default": "./dist/actions/specs/machineProcesses.js"
+    },
+    "./actions/specs/machineGuard": {
+      "happier-source": "./src/actions/specs/machineGuard.ts",
+      "types": "./dist/actions/specs/machineGuard.d.ts",
+      "default": "./dist/actions/specs/machineGuard.js"
+    },
+    "./actions/specs/machineGuardActivity": {
+      "happier-source": "./src/actions/specs/machineGuardActivity.ts",
+      "types": "./dist/actions/specs/machineGuardActivity.d.ts",
+      "default": "./dist/actions/specs/machineGuardActivity.js"
+    },
+    "./machines/guard/actionIdsV1": {
+      "happier-source": "./src/machines/guard/actionIdsV1.ts",
+      "types": "./dist/machines/guard/actionIdsV1.d.ts",
+      "default": "./dist/machines/guard/actionIdsV1.js"
+    },
+    "./machines/guard/guardViewV1": {
+      "happier-source": "./src/machines/guard/guardViewV1.ts",
+      "types": "./dist/machines/guard/guardViewV1.d.ts",
+      "default": "./dist/machines/guard/guardViewV1.js"
+    },
+    "./machines/guard/guardRpcV1": {
+      "happier-source": "./src/machines/guard/guardRpcV1.ts",
+      "types": "./dist/machines/guard/guardRpcV1.d.ts",
+      "default": "./dist/machines/guard/guardRpcV1.js"
+    },
+    "./machines/guard/guardStateV1": {
+      "happier-source": "./src/machines/guard/guardStateV1.ts",
+      "types": "./dist/machines/guard/guardStateV1.d.ts",
+      "default": "./dist/machines/guard/guardStateV1.js"
+    },
+    "./machines/guard/sessionGuardStateV1": {
+      "happier-source": "./src/machines/guard/sessionGuardStateV1.ts",
+      "types": "./dist/machines/guard/sessionGuardStateV1.d.ts",
+      "default": "./dist/machines/guard/sessionGuardStateV1.js"
+    },
+    "./machines/guard/terminalGuardStateV1": {
+      "happier-source": "./src/machines/guard/terminalGuardStateV1.ts",
+      "types": "./dist/machines/guard/terminalGuardStateV1.d.ts",
+      "default": "./dist/machines/guard/terminalGuardStateV1.js"
+    },
+    "./machines/guard/activityV1": {
+      "happier-source": "./src/machines/guard/activityV1.ts",
+      "types": "./dist/machines/guard/activityV1.d.ts",
+      "default": "./dist/machines/guard/activityV1.js"
+    },
+    "./machines/guard/guardPolicyV1": {
+      "happier-source": "./src/machines/guard/guardPolicyV1.ts",
+      "types": "./dist/machines/guard/guardPolicyV1.d.ts",
+      "default": "./dist/machines/guard/guardPolicyV1.js"
     },
     "./storage/storageV1": {
       "happier-source": "./src/storage/storageV1.ts",
       "types": "./dist/storage/storageV1.d.ts",
       "default": "./dist/storage/storageV1.js"
     },
+    "./actions/specs/storage": {
+      "happier-source": "./src/actions/specs/storage.ts",
+      "types": "./dist/actions/specs/storage.d.ts",
+      "default": "./dist/actions/specs/storage.js"
+    },
+    "./machines/vitals/machineVitalsAttentionV1": {
+      "happier-source": "./src/machines/vitals/machineVitalsAttentionV1.ts",
+      "types": "./dist/machines/vitals/machineVitalsAttentionV1.d.ts",
+      "default": "./dist/machines/vitals/machineVitalsAttentionV1.js"
+    },
+    "./machines/vitals/resolveMachineVitalsNextStepsV1": {
+      "happier-source": "./src/machines/vitals/resolveMachineVitalsNextStepsV1.ts",
+      "types": "./dist/machines/vitals/resolveMachineVitalsNextStepsV1.d.ts",
+      "default": "./dist/machines/vitals/resolveMachineVitalsNextStepsV1.js"
+    },
+    "./actions/specs/machineResources": {
+      "happier-source": "./src/actions/specs/machineResources.ts",
+      "types": "./dist/actions/specs/machineResources.d.ts",
+      "default": "./dist/actions/specs/machineResources.js"
+    },
+    "./machines/machineMetadataFieldV1": {
+      "happier-source": "./src/machines/machineMetadataFieldV1.ts",
+      "types": "./dist/machines/machineMetadataFieldV1.d.ts",
+      "default": "./dist/machines/machineMetadataFieldV1.js"
+    },
+    "./machines/resources/machineResourcesPolicyV1": {
+      "happier-source": "./src/machines/resources/machineResourcesPolicyV1.ts",
+      "types": "./dist/machines/resources/machineResourcesPolicyV1.d.ts",
+      "default": "./dist/machines/resources/machineResourcesPolicyV1.js"
+    },
+    "./machines/vitals/machineVitalsAlertsV1": {
+      "happier-source": "./src/machines/vitals/machineVitalsAlertsV1.ts",
+      "types": "./dist/machines/vitals/machineVitalsAlertsV1.d.ts",
+      "default": "./dist/machines/vitals/machineVitalsAlertsV1.js"
+    },
+    "./machines/account/revokeWithProviderCleanup": {
+      "happier-source": "./src/machines/account/revokeWithProviderCleanup.ts",
+      "types": "./dist/machines/account/revokeWithProviderCleanup.d.ts",
+      "default": "./dist/machines/account/revokeWithProviderCleanup.js"
+    },
+    "./actions/specs/machineVitals": {
+      "happier-source": "./src/actions/specs/machineVitals.ts",
+      "types": "./dist/actions/specs/machineVitals.d.ts",
+      "default": "./dist/actions/specs/machineVitals.js"
+    },
+    "./machines/vitals/listMachineVitalsSummariesV1": {
+      "happier-source": "./src/machines/vitals/listMachineVitalsSummariesV1.ts",
+      "types": "./dist/machines/vitals/listMachineVitalsSummariesV1.d.ts",
+      "default": "./dist/machines/vitals/listMachineVitalsSummariesV1.js"
+    },
     "./machines/vitals/machineVitalsSampleV1": {
       "happier-source": "./src/machines/vitals/machineVitalsSampleV1.ts",
       "types": "./dist/machines/vitals/machineVitalsSampleV1.d.ts",
       "default": "./dist/machines/vitals/machineVitalsSampleV1.js"
+    },
+    "./machines/vitals/machineVitalsHistoryV1": {
+      "happier-source": "./src/machines/vitals/machineVitalsHistoryV1.ts",
+      "types": "./dist/machines/vitals/machineVitalsHistoryV1.d.ts",
+      "default": "./dist/machines/vitals/machineVitalsHistoryV1.js"
+    },
+    "./machines/vitals/machineVitalsRpcV1": {
+      "happier-source": "./src/machines/vitals/machineVitalsRpcV1.ts",
+      "types": "./dist/machines/vitals/machineVitalsRpcV1.d.ts",
+      "default": "./dist/machines/vitals/machineVitalsRpcV1.js"
+    },
+    "./machines/vitals/isSustainedV1": {
+      "happier-source": "./src/machines/vitals/isSustainedV1.ts",
+      "types": "./dist/machines/vitals/isSustainedV1.d.ts",
+      "default": "./dist/machines/vitals/isSustainedV1.js"
+    },
+    "./machines/vitals/evaluateMachineVitalsAlertsV1": {
+      "happier-source": "./src/machines/vitals/evaluateMachineVitalsAlertsV1.ts",
+      "types": "./dist/machines/vitals/evaluateMachineVitalsAlertsV1.d.ts",
+      "default": "./dist/machines/vitals/evaluateMachineVitalsAlertsV1.js"
+    },
+    "./machines/vitals/effectiveMachineMemoryPressureV1": {
+      "happier-source": "./src/machines/vitals/effectiveMachineMemoryPressureV1.ts",
+      "types": "./dist/machines/vitals/effectiveMachineMemoryPressureV1.d.ts",
+      "default": "./dist/machines/vitals/effectiveMachineMemoryPressureV1.js"
+    },
+    "./machines/resources/machineResourceSummaryV1": {
+      "happier-source": "./src/machines/resources/machineResourceSummaryV1.ts",
+      "types": "./dist/machines/resources/machineResourceSummaryV1.d.ts",
+      "default": "./dist/machines/resources/machineResourceSummaryV1.js"
     },
     "./daemon/automationEligibleEvents": {
       "happier-source": "./src/daemon/automationEligibleEvents.ts",
@@ -74,6 +277,26 @@
       "types": "./dist/actions/settings/providerStateSharingMutations.d.ts",
       "default": "./dist/actions/settings/providerStateSharingMutations.js"
     },
+    "./actions/settings/machineTerminalHostSetting": {
+      "happier-source": "./src/actions/settings/machineTerminalHostSetting.ts",
+      "types": "./dist/actions/settings/machineTerminalHostSetting.d.ts",
+      "default": "./dist/actions/settings/machineTerminalHostSetting.js"
+    },
+    "./actions/settings/machineOfflineAlertSetting": {
+      "happier-source": "./src/actions/settings/machineOfflineAlertSetting.ts",
+      "types": "./dist/actions/settings/machineOfflineAlertSetting.d.ts",
+      "default": "./dist/actions/settings/machineOfflineAlertSetting.js"
+    },
+    "./push/machineRemoteAlert": {
+      "happier-source": "./src/push/machineRemoteAlert.ts",
+      "types": "./dist/push/machineRemoteAlert.d.ts",
+      "default": "./dist/push/machineRemoteAlert.js"
+    },
+    "./actions/settings/machineInstallablePolicySetting": {
+      "happier-source": "./src/actions/settings/machineInstallablePolicySetting.ts",
+      "types": "./dist/actions/settings/machineInstallablePolicySetting.d.ts",
+      "default": "./dist/actions/settings/machineInstallablePolicySetting.js"
+    },
     "./actions/settings/featurePreferenceMutations": {
       "happier-source": "./src/actions/settings/featurePreferenceMutations.ts",
       "types": "./dist/actions/settings/featurePreferenceMutations.d.ts",
@@ -99,110 +322,150 @@
       "types": "./dist/voice/settings/generatedBundledVoiceSelectionOptions.d.ts",
       "default": "./dist/voice/settings/generatedBundledVoiceSelectionOptions.js"
     },
-      "./voice/settings/externalProviderSettings": {
-        "happier-source": "./src/voice/settings/externalProviderSettings.ts",
-        "types": "./dist/voice/settings/externalProviderSettings.d.ts",
-        "default": "./dist/voice/settings/externalProviderSettings.js"
-      },
-      "./voice/settings/migrations/legacyAdapters": {
-        "happier-source": "./src/voice/settings/migrations/legacyAdapters.ts",
-        "types": "./dist/voice/settings/migrations/legacyAdapters.d.ts",
-        "default": "./dist/voice/settings/migrations/legacyAdapters.js"
-      },
-      "./voice/settings/migrations/speechProviders": {
-        "happier-source": "./src/voice/settings/migrations/speechProviders.ts",
-        "types": "./dist/voice/settings/migrations/speechProviders.d.ts",
-        "default": "./dist/voice/settings/migrations/speechProviders.js"
-      },
-      "./voice/settings/migrations/releasedVoiceSettingsCompatibility": {
-        "happier-source": "./src/voice/settings/migrations/releasedVoiceSettingsCompatibility.ts",
-        "types": "./dist/voice/settings/migrations/releasedVoiceSettingsCompatibility.d.ts",
-        "default": "./dist/voice/settings/migrations/releasedVoiceSettingsCompatibility.js"
-      },
-      "./voice/settings/localDirect": {
-        "happier-source": "./src/voice/settings/localDirect.ts",
-        "types": "./dist/voice/settings/localDirect.d.ts",
-        "default": "./dist/voice/settings/localDirect.js"
-      },
-      "./voice/settings/localConversation": {
-        "happier-source": "./src/voice/settings/localConversation.ts",
-        "types": "./dist/voice/settings/localConversation.d.ts",
-        "default": "./dist/voice/settings/localConversation.js"
-      },
-      "./voice/settings/handsFree": {
-        "happier-source": "./src/voice/settings/handsFree.ts",
-        "types": "./dist/voice/settings/handsFree.d.ts",
-        "default": "./dist/voice/settings/handsFree.js"
-      },
-      "./voice/settings/localStt": {
-        "happier-source": "./src/voice/settings/localStt.ts",
-        "types": "./dist/voice/settings/localStt.d.ts",
-        "default": "./dist/voice/settings/localStt.js"
-      },
-      "./voice/settings/localTts": {
-        "happier-source": "./src/voice/settings/localTts.ts",
-        "types": "./dist/voice/settings/localTts.d.ts",
-        "default": "./dist/voice/settings/localTts.js"
-      },
-      "./voice/settings/speechProvider": {
-        "happier-source": "./src/voice/settings/speechProvider.ts",
-        "types": "./dist/voice/settings/speechProvider.d.ts",
-        "default": "./dist/voice/settings/speechProvider.js"
-      },
-      "./voice/settings/dictation": {
-        "happier-source": "./src/voice/settings/dictation.ts",
-        "types": "./dist/voice/settings/dictation.d.ts",
-        "default": "./dist/voice/settings/dictation.js"
-      },
-      "./voice/settings/providerSettings": {
-        "happier-source": "./src/voice/settings/providerSettings.ts",
-        "types": "./dist/voice/settings/providerSettings.d.ts",
-        "default": "./dist/voice/settings/providerSettings.js"
-      },
-      "./voice/settings/voiceSettings": {
-        "happier-source": "./src/voice/settings/voiceSettings.ts",
-        "types": "./dist/voice/settings/voiceSettings.d.ts",
-        "default": "./dist/voice/settings/voiceSettings.js"
-      },
-      "./voice/settings/voiceSettingBindings": {
-        "happier-source": "./src/voice/settings/voiceSettingBindings.ts",
-        "types": "./dist/voice/settings/voiceSettingBindings.d.ts",
-        "default": "./dist/voice/settings/voiceSettingBindings.js"
-      },
-      "./voice/settings/voiceAgentSelection": {
-        "happier-source": "./src/voice/settings/voiceAgentSelection.ts",
-        "types": "./dist/voice/settings/voiceAgentSelection.d.ts",
-        "default": "./dist/voice/settings/voiceAgentSelection.js"
-      },
-      "./voice/settings/conversationLanguage": {
-        "happier-source": "./src/voice/settings/conversationLanguage.ts",
-        "types": "./dist/voice/settings/conversationLanguage.d.ts",
-        "default": "./dist/voice/settings/conversationLanguage.js"
-      },
-      "./agents/defaultAgent": {
-        "happier-source": "./src/agents/defaultAgent.ts",
-        "types": "./dist/agents/defaultAgent.d.ts",
-        "default": "./dist/agents/defaultAgent.js"
-      },
-      "./voice/settings/timing": {
-        "happier-source": "./src/voice/settings/timing.ts",
-        "types": "./dist/voice/settings/timing.d.ts",
-        "default": "./dist/voice/settings/timing.js"
-      },
+    "./voice/settings/externalProviderSettings": {
+      "happier-source": "./src/voice/settings/externalProviderSettings.ts",
+      "types": "./dist/voice/settings/externalProviderSettings.d.ts",
+      "default": "./dist/voice/settings/externalProviderSettings.js"
+    },
+    "./voice/settings/migrations/legacyAdapters": {
+      "happier-source": "./src/voice/settings/migrations/legacyAdapters.ts",
+      "types": "./dist/voice/settings/migrations/legacyAdapters.d.ts",
+      "default": "./dist/voice/settings/migrations/legacyAdapters.js"
+    },
+    "./voice/settings/migrations/speechProviders": {
+      "happier-source": "./src/voice/settings/migrations/speechProviders.ts",
+      "types": "./dist/voice/settings/migrations/speechProviders.d.ts",
+      "default": "./dist/voice/settings/migrations/speechProviders.js"
+    },
+    "./voice/settings/migrations/releasedVoiceSettingsCompatibility": {
+      "happier-source": "./src/voice/settings/migrations/releasedVoiceSettingsCompatibility.ts",
+      "types": "./dist/voice/settings/migrations/releasedVoiceSettingsCompatibility.d.ts",
+      "default": "./dist/voice/settings/migrations/releasedVoiceSettingsCompatibility.js"
+    },
+    "./voice/settings/localDirect": {
+      "happier-source": "./src/voice/settings/localDirect.ts",
+      "types": "./dist/voice/settings/localDirect.d.ts",
+      "default": "./dist/voice/settings/localDirect.js"
+    },
+    "./voice/settings/localConversation": {
+      "happier-source": "./src/voice/settings/localConversation.ts",
+      "types": "./dist/voice/settings/localConversation.d.ts",
+      "default": "./dist/voice/settings/localConversation.js"
+    },
+    "./voice/settings/handsFree": {
+      "happier-source": "./src/voice/settings/handsFree.ts",
+      "types": "./dist/voice/settings/handsFree.d.ts",
+      "default": "./dist/voice/settings/handsFree.js"
+    },
+    "./voice/settings/localStt": {
+      "happier-source": "./src/voice/settings/localStt.ts",
+      "types": "./dist/voice/settings/localStt.d.ts",
+      "default": "./dist/voice/settings/localStt.js"
+    },
+    "./voice/settings/localTts": {
+      "happier-source": "./src/voice/settings/localTts.ts",
+      "types": "./dist/voice/settings/localTts.d.ts",
+      "default": "./dist/voice/settings/localTts.js"
+    },
+    "./voice/settings/speechProvider": {
+      "happier-source": "./src/voice/settings/speechProvider.ts",
+      "types": "./dist/voice/settings/speechProvider.d.ts",
+      "default": "./dist/voice/settings/speechProvider.js"
+    },
+    "./voice/settings/dictation": {
+      "happier-source": "./src/voice/settings/dictation.ts",
+      "types": "./dist/voice/settings/dictation.d.ts",
+      "default": "./dist/voice/settings/dictation.js"
+    },
+    "./voice/settings/providerSettings": {
+      "happier-source": "./src/voice/settings/providerSettings.ts",
+      "types": "./dist/voice/settings/providerSettings.d.ts",
+      "default": "./dist/voice/settings/providerSettings.js"
+    },
+    "./voice/settings/voiceSettings": {
+      "happier-source": "./src/voice/settings/voiceSettings.ts",
+      "types": "./dist/voice/settings/voiceSettings.d.ts",
+      "default": "./dist/voice/settings/voiceSettings.js"
+    },
+    "./voice/settings/voiceSettingBindings": {
+      "happier-source": "./src/voice/settings/voiceSettingBindings.ts",
+      "types": "./dist/voice/settings/voiceSettingBindings.d.ts",
+      "default": "./dist/voice/settings/voiceSettingBindings.js"
+    },
+    "./voice/settings/voiceAgentSelection": {
+      "happier-source": "./src/voice/settings/voiceAgentSelection.ts",
+      "types": "./dist/voice/settings/voiceAgentSelection.d.ts",
+      "default": "./dist/voice/settings/voiceAgentSelection.js"
+    },
+    "./voice/settings/conversationLanguage": {
+      "happier-source": "./src/voice/settings/conversationLanguage.ts",
+      "types": "./dist/voice/settings/conversationLanguage.d.ts",
+      "default": "./dist/voice/settings/conversationLanguage.js"
+    },
+    "./agents/defaultAgent": {
+      "happier-source": "./src/agents/defaultAgent.ts",
+      "types": "./dist/agents/defaultAgent.d.ts",
+      "default": "./dist/agents/defaultAgent.js"
+    },
+    "./voice/settings/timing": {
+      "happier-source": "./src/voice/settings/timing.ts",
+      "types": "./dist/voice/settings/timing.d.ts",
+      "default": "./dist/voice/settings/timing.js"
+    },
+    "./serverConfig/homeSettingsOwnership": {
+      "happier-source": "./src/serverConfig/homeSettingsOwnership.ts",
+      "types": "./dist/serverConfig/homeSettingsOwnership.d.ts",
+      "default": "./dist/serverConfig/homeSettingsOwnership.js"
+    },
+    "./usage/usageCalendar": {
+      "happier-source": "./src/usage/usageCalendar.ts",
+      "types": "./dist/usage/usageCalendar.d.ts",
+      "default": "./dist/usage/usageCalendar.js"
+    },
+    "./usage/usageRecap": {
+      "happier-source": "./src/usage/usageRecap.ts",
+      "types": "./dist/usage/usageRecap.d.ts",
+      "default": "./dist/usage/usageRecap.js"
+    },
+    "./usage/usageWorkIntervals": {
+      "happier-source": "./src/usage/usageWorkIntervals.ts",
+      "types": "./dist/usage/usageWorkIntervals.d.ts",
+      "default": "./dist/usage/usageWorkIntervals.js"
+    },
+    "./automations/automationEventTestV1": {
+      "happier-source": "./src/automations/automationEventTestV1.ts",
+      "types": "./dist/automations/automationEventTestV1.d.ts",
+      "default": "./dist/automations/automationEventTestV1.js"
+    },
     "./usage/usageModelPriceCatalog": {
       "happier-source": "./src/usage/usageModelPriceCatalog.ts",
       "types": "./dist/usage/usageModelPriceCatalog.d.ts",
       "default": "./dist/usage/usageModelPriceCatalog.js"
+    },
+    "./usage/usageModelPriceSchemas": {
+      "happier-source": "./src/usage/usageModelPriceSchemas.ts",
+      "types": "./dist/usage/usageModelPriceSchemas.d.ts",
+      "default": "./dist/usage/usageModelPriceSchemas.js"
     },
     "./usage/usageCost": {
       "happier-source": "./src/usage/usageCost.ts",
       "types": "./dist/usage/usageCost.d.ts",
       "default": "./dist/usage/usageCost.js"
     },
+    "./usage/usageCostFacts": {
+      "happier-source": "./src/usage/usageCostFacts.ts",
+      "types": "./dist/usage/usageCostFacts.d.ts",
+      "default": "./dist/usage/usageCostFacts.js"
+    },
     "./usage/usageAggregation": {
       "happier-source": "./src/usage/usageAggregation.ts",
       "types": "./dist/usage/usageAggregation.d.ts",
       "default": "./dist/usage/usageAggregation.js"
+    },
+    "./usage/usageFilterOptions": {
+      "happier-source": "./src/usage/usageFilterOptions.ts",
+      "types": "./dist/usage/usageFilterOptions.d.ts",
+      "default": "./dist/usage/usageFilterOptions.js"
     },
     "./usage/usageLeaderProjection": {
       "happier-source": "./src/usage/usageLeaderProjection.ts",
@@ -953,6 +1216,11 @@
       "happier-source": "./src/actions/scopeActionFamily.ts",
       "types": "./dist/actions/scopeActionFamily.d.ts",
       "default": "./dist/actions/scopeActionFamily.js"
+    },
+    "./actions/diagnosticsActionFamily": {
+      "happier-source": "./src/actions/diagnosticsActionFamily.ts",
+      "types": "./dist/actions/diagnosticsActionFamily.d.ts",
+      "default": "./dist/actions/diagnosticsActionFamily.js"
     },
     "./actions/sessionCanvasActionFamily": {
       "happier-source": "./src/actions/sessionCanvasActionFamily.ts",
@@ -1719,6 +1987,11 @@
       "types": "./dist/teams/invitation.d.ts",
       "default": "./dist/teams/invitation.js"
     },
+    "./teams/membershipHistoryPreparationV1": {
+      "happier-source": "./src/teams/membershipHistoryPreparationV1.ts",
+      "types": "./dist/teams/membershipHistoryPreparationV1.d.ts",
+      "default": "./dist/teams/membershipHistoryPreparationV1.js"
+    },
     "./teams/principal": {
       "happier-source": "./src/teams/principal.ts",
       "types": "./dist/teams/principal.d.ts",
@@ -2143,6 +2416,11 @@
       "happier-source": "./src/sessions/follow/sessionFollowSourceKeyPreparationV1.ts",
       "types": "./dist/sessions/follow/sessionFollowSourceKeyPreparationV1.d.ts",
       "default": "./dist/sessions/follow/sessionFollowSourceKeyPreparationV1.js"
+    },
+    "./rpc/machineWatchWindow": {
+      "happier-source": "./src/rpc/machineWatchWindow.ts",
+      "types": "./dist/rpc/machineWatchWindow.d.ts",
+      "default": "./dist/rpc/machineWatchWindow.js"
     },
     "./rpc/methods": {
       "happier-source": "./src/rpc/methods.ts",
@@ -3409,6 +3687,11 @@
       "types": "./dist/sessions/board/actions.d.ts",
       "default": "./dist/sessions/board/actions.js"
     },
+    "./sessions/board/transcriptReference": {
+      "happier-source": "./src/sessions/board/transcriptReference.ts",
+      "types": "./dist/sessions/board/transcriptReference.d.ts",
+      "default": "./dist/sessions/board/transcriptReference.js"
+    },
     "./sessions/board/errors": {
       "happier-source": "./src/sessions/board/errors.ts",
       "types": "./dist/sessions/board/errors.d.ts",
@@ -3798,6 +4081,11 @@
       "happier-source": "./src/sessions/metadata/acpConfiguredBackendV1.ts",
       "types": "./dist/sessions/metadata/acpConfiguredBackendV1.d.ts",
       "default": "./dist/sessions/metadata/acpConfiguredBackendV1.js"
+    },
+    "./acp/catalog/registry/acpPlatformFitV1": {
+      "happier-source": "./src/acp/catalog/registry/acpPlatformFitV1.ts",
+      "types": "./dist/acp/catalog/registry/acpPlatformFitV1.d.ts",
+      "default": "./dist/acp/catalog/registry/acpPlatformFitV1.js"
     },
     "./acp/catalog/settingsV1": {
       "happier-source": "./src/acp/catalog/settingsV1.ts",
@@ -4444,6 +4732,11 @@
       "types": "./dist/voice/speechText.d.ts",
       "default": "./dist/voice/speechText.js"
     },
+    "./account/accountDisplayProfileV1": {
+      "happier-source": "./src/account/accountDisplayProfileV1.ts",
+      "types": "./dist/account/accountDisplayProfileV1.d.ts",
+      "default": "./dist/account/accountDisplayProfileV1.js"
+    },
     "./account/profile": {
       "happier-source": "./src/account/profile.ts",
       "types": "./dist/account/profile.d.ts",
@@ -4483,6 +4776,11 @@
       "happier-source": "./src/machines/machineFinitePolicyV1.ts",
       "types": "./dist/machines/machineFinitePolicyV1.d.ts",
       "default": "./dist/machines/machineFinitePolicyV1.js"
+    },
+    "./machines/machineReachabilityV1": {
+      "happier-source": "./src/machines/machineReachabilityV1.ts",
+      "types": "./dist/machines/machineReachabilityV1.d.ts",
+      "default": "./dist/machines/machineReachabilityV1.js"
     },
     "./machines/metadataUpdate": {
       "happier-source": "./src/machines/metadataUpdate.ts",
@@ -5664,6 +5962,16 @@
       "types": "./dist/voice/modelPacks/artifactRolesV1.d.ts",
       "default": "./dist/voice/modelPacks/artifactRolesV1.js"
     },
+    "./voice/modelPacks/artifactBindingV1": {
+      "happier-source": "./src/voice/modelPacks/artifactBindingV1.ts",
+      "types": "./dist/voice/modelPacks/artifactBindingV1.d.ts",
+      "default": "./dist/voice/modelPacks/artifactBindingV1.js"
+    },
+    "./voice/modelPacks/promotionIntentV1": {
+      "happier-source": "./src/voice/modelPacks/promotionIntentV1.ts",
+      "types": "./dist/voice/modelPacks/promotionIntentV1.d.ts",
+      "default": "./dist/voice/modelPacks/promotionIntentV1.js"
+    },
     "./daemon/contributionRegistryProjection": {
       "happier-source": "./src/daemon/contributionRegistryProjection.ts",
       "types": "./dist/daemon/contributionRegistryProjection.d.ts",
@@ -5744,20 +6052,10 @@
       "types": "./dist/plugins/contributions/mcp.d.ts",
       "default": "./dist/plugins/contributions/mcp.js"
     },
-    "./mcp/servers/resolveServerBindingV1": {
-      "happier-source": "./src/mcp/servers/resolveServerBindingV1.ts",
-      "types": "./dist/mcp/servers/resolveServerBindingV1.d.ts",
-      "default": "./dist/mcp/servers/resolveServerBindingV1.js"
-    },
-    "./mcp/servers/resolveEffectiveServersV1": {
-      "happier-source": "./src/mcp/servers/resolveEffectiveServersV1.ts",
-      "types": "./dist/mcp/servers/resolveEffectiveServersV1.d.ts",
-      "default": "./dist/mcp/servers/resolveEffectiveServersV1.js"
-    },
-    "./mcp/servers/resolveManagedSessionMcpSelectionV1": {
-      "happier-source": "./src/mcp/servers/resolveManagedSessionMcpSelectionV1.ts",
-      "types": "./dist/mcp/servers/resolveManagedSessionMcpSelectionV1.d.ts",
-      "default": "./dist/mcp/servers/resolveManagedSessionMcpSelectionV1.js"
+    "./mcp/servers/resolveMcpServerConfigForContextV1": {
+      "happier-source": "./src/mcp/servers/resolveMcpServerConfigForContextV1.ts",
+      "types": "./dist/mcp/servers/resolveMcpServerConfigForContextV1.d.ts",
+      "default": "./dist/mcp/servers/resolveMcpServerConfigForContextV1.js"
     },
     "./reach/reachPlaceV1": {
       "happier-source": "./src/reach/reachPlaceV1.ts", "types": "./dist/reach/reachPlaceV1.d.ts", "default": "./dist/reach/reachPlaceV1.js"
@@ -5768,8 +6066,20 @@
     "./reach/resolveReachV1": {
       "happier-source": "./src/reach/resolveReachV1.ts", "types": "./dist/reach/resolveReachV1.d.ts", "default": "./dist/reach/resolveReachV1.js"
     },
+    "./reach/reachRulesChangeV1": {
+      "happier-source": "./src/reach/reachRulesChangeV1.ts", "types": "./dist/reach/reachRulesChangeV1.d.ts", "default": "./dist/reach/reachRulesChangeV1.js"
+    },
     "./reach/projectReachV1": {
       "happier-source": "./src/reach/projectReachV1.ts", "types": "./dist/reach/projectReachV1.d.ts", "default": "./dist/reach/projectReachV1.js"
+    },
+    "./reach/sessionCapabilitySelectionV1": {
+      "happier-source": "./src/reach/sessionCapabilitySelectionV1.ts", "types": "./dist/reach/sessionCapabilitySelectionV1.d.ts", "default": "./dist/reach/sessionCapabilitySelectionV1.js"
+    },
+    "./reach/sessionCapabilityMetadataV1": {
+      "happier-source": "./src/reach/sessionCapabilityMetadataV1.ts", "types": "./dist/reach/sessionCapabilityMetadataV1.d.ts", "default": "./dist/reach/sessionCapabilityMetadataV1.js"
+    },
+    "./reach/resolveSessionCapabilitiesV1": {
+      "happier-source": "./src/reach/resolveSessionCapabilitiesV1.ts", "types": "./dist/reach/resolveSessionCapabilitiesV1.d.ts", "default": "./dist/reach/resolveSessionCapabilitiesV1.js"
     },
     "./activity/agentRequestNotificationContent": {
       "happier-source": "./src/activity/agentRequestNotificationContent.ts",
@@ -7111,6 +7421,16 @@
       "happier-source": "./src/connect/qualifiedConnectedAccountProjectionsV4.ts",
       "types": "./dist/connect/qualifiedConnectedAccountProjectionsV4.d.ts",
       "default": "./dist/connect/qualifiedConnectedAccountProjectionsV4.js"
+    },
+    "./mcp/oauth/mcpOAuthResourceV1": {
+      "happier-source": "./src/mcp/oauth/mcpOAuthResourceV1.ts",
+      "types": "./dist/mcp/oauth/mcpOAuthResourceV1.d.ts",
+      "default": "./dist/mcp/oauth/mcpOAuthResourceV1.js"
+    },
+    "./mcp/oauth/mcpOAuthClientIdentityV1": {
+      "happier-source": "./src/mcp/oauth/mcpOAuthClientIdentityV1.ts",
+      "types": "./dist/mcp/oauth/mcpOAuthClientIdentityV1.d.ts",
+      "default": "./dist/mcp/oauth/mcpOAuthClientIdentityV1.js"
     },
     "./connect/qualified-connected-account-persistence": {
       "happier-source": "./src/connect/qualifiedConnectedAccountPersistence.ts",
