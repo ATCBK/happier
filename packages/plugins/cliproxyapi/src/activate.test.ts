@@ -36,7 +36,7 @@ const healthySnapshot = Object.freeze({
 
 const healthyIdentity = Object.freeze({
   v: 1,
-  contractVersion: 'happier.cliproxyapi-managed/v1',
+  contractVersion: 'happier.cliproxyapi-managed/v2',
   sdkVersion: 'v7.2.95',
   wrapperBuildVersion: 'cliproxyapi-test-build',
   protocols: Object.freeze([
@@ -62,11 +62,6 @@ const healthyIdentity = Object.freeze({
   ]),
   modelListEnabled: true,
   sourceClass: 'connected_account',
-});
-
-const anthropicOnlyIdentity = Object.freeze({
-  ...healthyIdentity,
-  purposes: Object.freeze([healthyIdentity.purposes[1]!]),
 });
 
 const fullyBoundPurposeConfiguration = JSON.stringify({
@@ -96,22 +91,6 @@ const fullyBoundPurposeConfiguration = JSON.stringify({
       protocols: ['openai-chat', 'openai-responses', 'anthropic'],
     },
   ],
-});
-
-const anthropicOnlyPurposeConfiguration = JSON.stringify({
-  v: 3,
-  modelListEnabled: true,
-  purposes: [{
-    id: 'claude',
-    provider: 'claude',
-    consumer: {
-      pluginId: 'happier.provider.cliproxyapi',
-      localId: 'cliproxyapi',
-    },
-    purpose: 'anthropic-upstream',
-    allowedHttpsOrigin: 'https://api.anthropic.com',
-    protocols: ['openai-chat', 'openai-responses', 'anthropic'],
-  }],
 });
 
 function response(
@@ -305,8 +284,8 @@ describe('CLIProxyAPI public managed Provider activation', () => {
     expect(supervise).toHaveBeenCalledWith({
       id: 'cliproxyapi-managed',
       requestAuth: {
-        kind: 'connectedAccountCapabilityPath',
-        injectEnvironmentKey: 'HAPPIER_CLIPROXYAPI_REQUEST_AUTH_CAPABILITY_PATH',
+        kind: 'connectedAccountConsumerAccessPath',
+        injectEnvironmentKey: 'HAPPIER_CLIPROXYAPI_CONSUMER_ACCESS_PATH',
       },
       clientAccess: {
         kind: 'hostBearer',
@@ -375,7 +354,7 @@ describe('CLIProxyAPI public managed Provider activation', () => {
     if (!managedRuntime) throw new Error('CLIProxyAPI must declare a managed runtime');
     const runtime = captureRuntime();
     const service = createService(undefined, vi.fn(async () => response(
-      JSON.stringify(anthropicOnlyIdentity),
+      JSON.stringify(healthyIdentity),
     )));
     const supervise = vi.fn<ManagedServices['supervise']>(async () => service);
     const signal = new AbortController().signal;
@@ -399,7 +378,7 @@ describe('CLIProxyAPI public managed Provider activation', () => {
         launch: expect.objectContaining({
           env: expect.objectContaining({
             HAPPIER_CLIPROXYAPI_MANAGED_PURPOSE_CONFIGURATION:
-              anthropicOnlyPurposeConfiguration,
+              fullyBoundPurposeConfiguration,
           }),
         }),
       }),
@@ -411,11 +390,7 @@ describe('CLIProxyAPI public managed Provider activation', () => {
       catalogProbeEndpointTemplateIds,
     ));
     expect(admittedEndpointTemplateIds).toContain('cliproxyapi-anthropic');
-    expect(admittedEndpointTemplateIds).toEqual([
-      'cliproxyapi-openai-responses',
-      'cliproxyapi-openai-chat',
-      'cliproxyapi-anthropic',
-    ]);
+    expect(admittedEndpointTemplateIds).toEqual(managedRuntime.endpointTemplateIds);
   });
 
   it('disposes the newly supervised service when readiness fails', async () => {

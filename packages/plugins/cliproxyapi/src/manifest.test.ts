@@ -98,8 +98,8 @@ describe('CLIProxyAPI plugin manifest', () => {
           },
         }],
         endpointTemplateIds: [
-          'cliproxyapi-openai-responses',
           'cliproxyapi-openai-chat',
+          'cliproxyapi-openai-responses',
           'cliproxyapi-anthropic',
         ],
       },

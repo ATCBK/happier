@@ -51,11 +51,6 @@ export const CLIPROXYAPI_MANAGED_PURPOSE_FAMILIES = Object.freeze([
     authEntry: Object.freeze({ id: 'codex', provider: 'codex' }),
     // Proven downstream translations, independent of upstream authorization.
     protocols: Object.freeze(['openai-chat', 'openai-responses', 'anthropic']),
-    // Public Team broker declarations still require one purpose per endpoint.
-    endpointTemplateIds: Object.freeze([
-      'cliproxyapi-openai-responses',
-      'cliproxyapi-openai-chat',
-    ]),
     connectedAccount: Object.freeze({
       service: Object.freeze({
         pluginId: 'happier.agent.codex',
@@ -83,7 +78,6 @@ export const CLIPROXYAPI_MANAGED_PURPOSE_FAMILIES = Object.freeze([
     }),
     authEntry: Object.freeze({ id: 'claude', provider: 'claude' }),
     protocols: Object.freeze(['openai-chat', 'openai-responses', 'anthropic']),
-    endpointTemplateIds: Object.freeze(['cliproxyapi-anthropic']),
     connectedAccount: Object.freeze({
       service: Object.freeze({
         pluginId: 'happier.agent.claude',
@@ -106,7 +100,7 @@ export const CLIPROXYAPI_MANAGED_CONNECTED_ACCOUNTS = Object.freeze(
   CLIPROXYAPI_MANAGED_PURPOSE_FAMILIES.map((family) => Object.freeze({
     purpose: family.purpose,
     title: family.title,
-    endpointTemplateIds: [...family.endpointTemplateIds],
+    endpointTemplateIds: family.protocols.map((protocol) => resolveManagedEndpointTemplateId(protocol)!),
     ...family.connectedAccount,
   })),
 );
@@ -119,9 +113,8 @@ export const CLIPROXYAPI_MANAGED_REQUEST_AUTH_USES = Object.freeze(
 );
 
 export const CLIPROXYAPI_MANAGED_ENDPOINT_TEMPLATE_IDS = Object.freeze(
-  CLIPROXYAPI_MANAGED_PURPOSE_FAMILIES.flatMap((family) => [
-    ...family.endpointTemplateIds,
-  ]),
+  [...new Set(CLIPROXYAPI_MANAGED_PURPOSE_FAMILIES.flatMap((family) =>
+    family.protocols.map((protocol) => resolveManagedEndpointTemplateId(protocol)!)))],
 );
 
 function resolveManagedEndpointTemplateId(protocol: string) {
@@ -134,14 +127,16 @@ function resolveManagedEndpointTemplateId(protocol: string) {
     : protocol === 'openai-responses' ? 'cliproxyapi-openai-responses' : 'cliproxyapi-anthropic';
 }
 
-/** Canonical endpoint-to-purpose lookup shared by every managed CLIProxyAPI consumer. */
+/** Source-qualified upstream purpose with exact downstream endpoint/protocol admission. */
 export function resolveCLIProxyAPIManagedPurposeFamily(input: Readonly<{
   endpointTemplateId: string;
   protocol: string;
+  service: Readonly<{ pluginId: string; localId: string }>;
 }>): typeof CLIPROXYAPI_MANAGED_PURPOSE_FAMILIES[number] | null {
   if (resolveManagedEndpointTemplateId(input.protocol) !== input.endpointTemplateId) return null;
   return CLIPROXYAPI_MANAGED_PURPOSE_FAMILIES.find((family) => (
-    family.endpointTemplateIds.some((candidate) => candidate === input.endpointTemplateId)
+    family.connectedAccount.service.pluginId === input.service.pluginId
+    && family.connectedAccount.service.localId === input.service.localId
     && family.protocols.some((candidate) => candidate === input.protocol)
   )) ?? null;
 }
@@ -183,18 +178,13 @@ export function resolveCLIProxyAPIManagedBrokerApplication(input: Readonly<{
   endpointTemplateId: string;
   protocol: 'openai-chat' | 'openai-responses' | 'anthropic';
 }> | null {
-  const family = CLIPROXYAPI_MANAGED_PURPOSE_FAMILIES.find((candidate) =>
-    candidate.connectedAccount.service.pluginId === input.service.pluginId
-    && candidate.connectedAccount.service.localId === input.service.localId
-    && candidate.protocols.some((protocol) => protocol === input.protocol));
-  if (!family) return null;
   const application = projectCLIProxyAPIProviderConnectionApplication({
     agentTargetKey: input.protocol === 'anthropic'
       ? 'agent:happier.agent.claude/claude'
       : 'agent:happier.agent.codex/codex',
     protocol: input.protocol,
   });
-  return application && resolveCLIProxyAPIManagedPurposeFamily(application) === family
+  return application && resolveCLIProxyAPIManagedPurposeFamily({ ...application, service: input.service })
     ? application
     : null;
 }
