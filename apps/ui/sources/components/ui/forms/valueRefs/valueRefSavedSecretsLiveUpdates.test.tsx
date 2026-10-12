@@ -156,6 +156,20 @@ vi.mock('@/constants/Typography', () => ({
 }));
 
 describe('value ref saved secrets live updates', () => {
+    it('preserves an attested header reference when saving its existing editor value', async () => {
+        const { ValueRefEditorModal } = await import('./ValueRefEditorModal');
+        const onSubmit = vi.fn(() => true);
+        const initialValueRef = { t: 'sessionAttested', field: 'externalPrincipalId' } as const;
+        const screen = await renderScreen(React.createElement(ValueRefEditorModal, {
+            onClose: vi.fn(), kind: 'header', initialKey: 'X-Wilson-On-Behalf-Of',
+            initialValueRef, secrets: [], onSubmit,
+        }));
+        const save = screen.findByTestId('mcp.valueRefEditor.save');
+        if (!save) throw new Error('Missing value ref save control');
+        await act(async () => { save.props.onPress(); });
+        expect(onSubmit).toHaveBeenCalledWith({ key: 'X-Wilson-On-Behalf-Of', valueRef: initialValueRef });
+    });
+
     beforeEach(() => {
         resetLiveSecrets();
     });

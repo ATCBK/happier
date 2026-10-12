@@ -22,27 +22,27 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 
 type ValueRefKind = 'env' | 'header';
-type ValueRefSource = 'literal' | 'savedSecret';
+type ValueRefSource = McpValueRefV1['t'];
 
 const ENV_KEY_REGEX = /^[A-Z_][A-Z0-9_]*$/;
 const HEADER_KEY_REGEX = /^[A-Za-z0-9-]+$/;
 
 const stylesheet = StyleSheet.create((theme) => ({
     groupContent: {
-        padding: 16,
-        gap: 12,
+        padding: theme.space.s16,
+        gap: theme.space.s12,
     },
     fieldLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     textInput: {
         ...Typography.default('regular'),
         backgroundColor: theme.colors.input.background,
         borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         ...SETTINGS_TEXT_INPUT_METRICS,
         color: theme.colors.input.text,
         borderWidth: 0.5,
@@ -82,7 +82,7 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
     const styles = stylesheet;
     const catalog = useSavedSecretCatalog(props.scope === undefined ? undefined : { scope: props.scope });
 
-    const initialSource: ValueRefSource = props.initialValueRef.t === 'savedSecret' ? 'savedSecret' : 'literal';
+    const initialSource: ValueRefSource = props.initialValueRef.t;
 
     const [keyText, setKeyText] = React.useState(() => props.initialKey);
     const [source, setSource] = React.useState<ValueRefSource>(initialSource);
@@ -115,7 +115,7 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
         ];
     }, [theme.colors.text.secondary]);
 
-    const canSave = keyValid && (source === 'literal' || Boolean(secretId));
+    const canSave = keyValid && (source !== 'savedSecret' || Boolean(secretId));
 
     const pickSecret = React.useCallback(() => {
         Modal.show({
@@ -140,7 +140,10 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
             return;
         }
 
-        const valueRef: McpValueRefV1 = source === 'literal'
+        const valueRef: McpValueRefV1 = source === 'sessionAttested'
+            ? { t: 'sessionAttested', field: props.initialValueRef.t === 'sessionAttested'
+                ? props.initialValueRef.field : 'externalPrincipalId' }
+            : source === 'literal'
             ? { t: 'literal', v: literalValue }
             : { t: 'savedSecret', secretId: secretId ?? '' };
 
@@ -176,7 +179,7 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
                         onSelect={(id) => {
                             const next = id as ValueRefSource;
                             setSource(next);
-                            if (next === 'literal') return;
+                            if (next !== 'savedSecret') return;
                             if (!secretId) {
                                 pickSecret();
                             }
