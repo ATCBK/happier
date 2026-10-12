@@ -29,6 +29,7 @@
     "./happier-plugin-ui/react-native/channel-state-migrations/entry.cjs.bundle": "./dist/happier-plugin-ui/react-native/channel-state-migrations/entry.cjs.bundle"
   },
   "files": [
+    "assets",
     "dist",
     ".happier-plugin",
     "package.json"
@@ -48,14 +49,18 @@
   },
   "dependencies": {
     "@happier-dev/channels-protocol": "0.0.0",
+    "@noble/hashes": "^1.8.0",
     "@happier-dev/plugin-sdk": "0.0.0",
-    "@happier-dev/plugin-ui": "0.0.0"
+    "@happier-dev/plugin-ui": "0.0.0",
+    "unpdf": "1.8.1"
   },
   "devDependencies": {
+    "@types/node": ">=20",
     "@happier-dev/plugins-channel-discord": "0.0.0",
     "@happier-dev/plugins-channel-telegram": "0.0.0",
     "@happier-dev/plugins-scm-github": "0.0.0",
     "@types/react": "19.2.0",
+    "esbuild": "0.27.2",
     "react": "19.2.0",
     "react-native": "0.83.5",
     "typescript": "^5.9.2",

@@ -8,6 +8,7 @@ import {
   CONVERSATION_PROVIDERS_CONTRIBUTION_POINT_ID_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_ID_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_VERSION_V1,
+  MAX_CONVERSATION_OBSERVATION_AGE_MS,
 } from '@happier-dev/channels-protocol/v1';
 import {
   createPluginUiTestkit,
@@ -967,7 +968,7 @@ function offlineAmbiguousDeliveryRow() {
           bindingRevision: 1,
           bindingAuthorityEpoch: 1,
         },
-        content: 'Ambiguous delivery body.',
+        content: { text: 'Ambiguous delivery body.' },
         deliveryKey: 'delivery-offline-ambiguous',
         mentionPolicy: 'none',
         linkPreviewPolicy: 'default',
@@ -1534,7 +1535,7 @@ describe('Channels mounted provider setup recovery', () => {
         selectedTransport: 'socket',
         // Setup seeds the Channels domain freshness default, not the smallest
         // value an owner is allowed to configure.
-        maximumObservationAgeMs: 86_400_000,
+        maximumObservationAgeMs: MAX_CONVERSATION_OBSERVATION_AGE_MS,
       });
       expect(createRequest?.selectedActionInput).toEqual(selectedActionInput);
       // Prepare may reuse the exact selected settlement. Create is the one

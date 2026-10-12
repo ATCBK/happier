@@ -33,6 +33,7 @@ import {
 } from '@happier-dev/channels-protocol/v1';
 
 import { deliverConversationAutomationResultForInvocation } from './automationResultDelivery.js';
+import { startConversationForInvocation } from './conversationStart.js';
 import { BINDINGS_RESOURCE_RUNTIME } from './bindingsResource.js';
 import { createIngressSupervisor } from './checkpointedPollSupervisor.js';
 import {
@@ -73,19 +74,16 @@ import {
   readConversationPermissionMediationSourceCurrentnessForInvocation,
 } from './outwardDelivery.js';
 import { createConversationOutwardDeliverySupervisor } from './outwardDeliverySupervisor.js';
-import { waitForChannelsAccountRows } from './waitForAccountRows.js';
 import { createConversationPairingResourceRuntime } from './pairingResource.js';
 import {
   listConversationProviderConnectionsForInvocation,
   readConversationProviderConnectionForInvocation,
 } from './reconciliation.js';
-import { MAX_CHANNELS_BINDINGS_RESOURCE_BYTES } from './resourceBounds.js';
 import {
   CHANNELS_TRANSCRIPT_ACTIVITIES_RESOURCE_ID,
   TRANSCRIPT_ACTIVITIES_RESOURCE_RUNTIME,
 } from './transcriptActivitiesResource.js';
 import {
-  MAX_CHANNELS_SESSION_CONVERSATIONS_BYTES,
   SESSION_CONVERSATIONS_ATTENTION_CONTROL_STATE_RESOURCE_RUNTIME,
   SESSION_CONVERSATIONS_CONTROL_STATE_RESOURCE_RUNTIME,
   SESSION_CONVERSATIONS_RESOURCE_RUNTIME,
@@ -111,6 +109,8 @@ import {
   CHANNELS_PAGE_VIEW_ID,
 } from './sessionSurfaceIds.js';
 import { CHANNELS_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
+import { CHANNEL_FILE_ATTACHMENT } from './channelAttachment.js';
+import { CHANNEL_FILE_ATTACHMENT_RUNTIME } from './channelAttachmentRuntime.js';
 import {
   CHANNELS_PROVIDER_POINT_ID,
   PLUGIN_TARGETED_CONTRIBUTION_POINT_DEFINITIONS,
@@ -325,13 +325,11 @@ function createChannelsPlugin() {
   });
 
   async function runConversationIngressSupervisor(context: BackgroundServiceContext): Promise<void> {
-    await waitForChannelsAccountRows(context);
     if (context.signal.aborted) return;
     await requireActiveChannelsPluginRuntime().ingressSupervisor.run(context);
   }
 
   async function runConversationOutwardDeliverySupervisor(context: BackgroundServiceContext): Promise<void> {
-    await waitForChannelsAccountRows(context);
     if (context.signal.aborted) return;
     await requireActiveChannelsPluginRuntime().outwardDeliverySupervisor.run(context);
   }
@@ -366,6 +364,7 @@ function createChannelsPlugin() {
     version: '0.0.0',
     displayName: 'Conversation Channels',
     description: 'Connects external conversations to Happier sessions and automations.',
+    brand: { iconResourceId: 'brand-icon', monochrome: true },
     engines: { happier: '^0.0.0' },
     runtime: { apiVersion: 1 },
     entrypoints: { daemon: './.happier-plugin/daemon.js' },
@@ -375,6 +374,11 @@ function createChannelsPlugin() {
         capability: 'storage.account',
         reason: 'Read current Channel connection and binding state.',
         scope: { enabled: true },
+      }, {
+        id: 'bound-session',
+        capability: 'sessions',
+        reason: 'Observe bound Session transcript and Permission changes for Channel delivery, and place inbound attachments in bound Sessions.',
+        scope: { access: ['read', 'write'] },
       }],
       optional: [],
     },
@@ -382,8 +386,19 @@ function createChannelsPlugin() {
       [CHANNEL_STATE_COLLECTION_ID]: CHANNEL_STATE_COLLECTION,
       [CHANNEL_DELIVERIES_COLLECTION_ID]: CHANNEL_DELIVERIES_COLLECTION,
     },
+    events: {
+      'connections-invalidated-v1': {
+        declaration: {
+          kind: 'event',
+          title: 'Channel connections changed',
+          description: 'Content-free hint to reread the authoritative provider connection census.',
+          payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+        },
+      },
+    },
     contributionPoints: PLUGIN_TARGETED_CONTRIBUTION_POINT_DEFINITIONS,
     resources: {
+      'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
       'connections-v1': {
         source: 'dynamic',
         kind: 'config',
@@ -398,7 +413,6 @@ function createChannelsPlugin() {
         kind: 'config',
         scope: 'global',
         contentType: 'application/json',
-        maxBytes: MAX_CHANNELS_BINDINGS_RESOURCE_BYTES,
         hostAccess: ['account-storage'],
         runtime: BINDINGS_RESOURCE_RUNTIME,
       },
@@ -425,7 +439,6 @@ function createChannelsPlugin() {
         kind: 'config',
         scope: 'session',
         contentType: 'application/json',
-        maxBytes: MAX_CHANNELS_SESSION_CONVERSATIONS_BYTES,
         hostAccess: ['account-storage'],
         runtime: SESSION_CONVERSATIONS_RESOURCE_RUNTIME,
       },
@@ -471,6 +484,7 @@ function createChannelsPlugin() {
       },
     },
     composer: {
+      attachments: { 'channel-file': { ...CHANNEL_FILE_ATTACHMENT, runtime: CHANNEL_FILE_ATTACHMENT_RUNTIME } },
       controls: {
         [CHANNELS_SESSION_COMPOSER_CONTROL_ID]: {
           label: {
@@ -518,11 +532,20 @@ function createChannelsPlugin() {
     },
     ui: CHANNELS_UI,
     actions: {
+      [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart]: {
+        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.conversationStart,
+        title: 'Start conversation',
+        description: 'Starts an external thread for a configured audience and routes replies to the named Session.',
+        surfaces: ['cli', 'ui', 'agent', 'mcp', 'plugin'],
+        placementBindings: ['primary'], dangerLevel: 'writesRemote',
+        confirmation: { title: 'Start this conversation?', body: 'This sends to the configured audience and routes replies to the selected Session.', confirmLabel: 'Send' },
+        hostAccess: ['account-storage', 'bound-session'], run: startConversationForInvocation,
+      },
       [CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate]: {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPairingCreate,
         title: 'Create conversation pairing challenge',
         description: 'Creates a short-lived pairing challenge for a conversation connection.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -537,7 +560,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPairingFinalize,
         title: 'Finalize conversation pairing',
         description: 'Saves an authenticated pairing proposal as a paused conversation binding.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -552,7 +575,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPairingCancel,
         title: 'Cancel conversation pairing',
         description: 'Cancels an unfinished conversation pairing challenge or proposal.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['secondary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -567,7 +590,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionCreate,
         title: 'Create conversation connection',
         description: 'Saves a conversation connection and its transport configuration to the Account.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -597,7 +620,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionTransfer,
         title: 'Transfer conversation connection',
         description: 'Replaces a conversation connection’s provider setup and transport.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -612,7 +635,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPrepare,
         title: 'Prepare conversation connection',
         description: 'Prepares the selected conversation provider connection for setup.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         run: prepareConversationConnectionForInvocation,
       },
@@ -620,7 +643,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionRetest,
         title: 'Retest conversation connection',
         description: 'Re-probes a conversation connection and reconciles its readiness.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['secondary'],
         // The only Account write a retest can make is to the retained
         // readiness attention on the connection it re-probed: clearing the one
@@ -636,7 +659,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionUpdate,
         title: 'Update conversation connection',
         description: 'Saves an edited conversation connection policy to the Account.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -651,7 +674,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionDelete,
         title: 'Delete conversation connection',
         description: 'Disables and removes a conversation connection after transport cleanup.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -666,7 +689,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionAbandon,
         title: 'Abandon pending conversation connection stop',
         description: 'Accepts possible message loss so a pending connection stop can proceed.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['secondary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -681,7 +704,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.streamBaselineAccept,
         title: 'Accept conversation history baseline',
         description: 'Accepts the provider’s current replay baseline without replaying unavailable history.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -696,7 +719,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPollRetry,
         title: 'Retry blocked conversation poll',
         description: 'Clears blocked poll state so the conversation connection can retry.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -720,7 +743,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingResolve,
         title: 'Resolve conversation binding candidates',
         description: 'Resolves candidate conversations and principals for a binding.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['secondary'],
         hostAccess: ['account-storage'],
         run: resolveConversationBindingForInvocation,
@@ -729,7 +752,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingCreate,
         title: 'Create conversation binding',
         description: 'Saves an external conversation binding and its target policy to the Account.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -774,7 +797,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingDelete,
         title: 'Delete conversation binding',
         description: 'Disables a conversation binding while retained delivery custody finishes safely.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -789,7 +812,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.sessionProjectionBaselineAccept,
         title: 'Accept Session conversation transcript baseline',
         description: 'Resumes one paused Session conversation from the current transcript tail.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -804,7 +827,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.ingressRetry,
         title: 'Retry blocked conversation ingress',
         description: 'Re-enables a blocked conversation input for bounded retry.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {
@@ -819,7 +842,7 @@ function createChannelsPlugin() {
         ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.deliveryResolve,
         title: 'Resolve ambiguous conversation delivery',
         description: 'Records whether to accept or discard an ambiguous delivery outcome without resending.',
-        surfaces: ['cli', 'ui'],
+        surfaces: ['cli', 'ui', 'agent', 'mcp'],
         placementBindings: ['primary'],
         dangerLevel: 'writesLocal',
         confirmation: {

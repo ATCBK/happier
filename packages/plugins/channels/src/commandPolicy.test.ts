@@ -9,6 +9,32 @@ import {
 } from './commandPolicy.js';
 
 describe('Channels command policy', () => {
+  it('admits /stop only for allowlisted original humans targeting a Session', () => {
+    const input = {
+      command: classifyConversationCommand('/stop'),
+      actor: { principalId: 'person-1', kind: 'human' as const, isIntegrationSelf: false },
+      contentProvenance: 'original' as const,
+      actorAllowed: true,
+      allowBotSenders: true,
+      targetKind: 'session' as const,
+      approvalCommandsEnabled: false,
+      newSessionEnabled: false,
+      senderFeedback: 'eligibleRefusals' as const,
+    };
+    expect(decideConversationCommandPolicy(input)).toEqual({ kind: 'stop' });
+    for (const contentProvenance of ['forwarded', 'viaBot'] as const) {
+      expect(decideConversationCommandPolicy({ ...input, contentProvenance }))
+        .toEqual({ kind: 'ordinaryText' });
+    }
+    expect(decideConversationCommandPolicy({
+      ...input, actor: { ...input.actor, kind: 'bot' },
+    })).toEqual({ kind: 'ordinaryText' });
+    expect(decideConversationCommandPolicy({ ...input, actorAllowed: false }))
+      .toMatchObject({ kind: 'terminal', reason: 'actorNotAllowed', senderFeedbackEligible: false });
+    expect(decideConversationCommandPolicy({ ...input, targetKind: 'automation' }))
+      .toMatchObject({ kind: 'terminal', reason: 'commandNotAuthorized' });
+  });
+
   it('keeps the sender-feedback matrix closed to allowed attributable non-authorization failures', () => {
     for (const reason of [
       'messageTooOld',

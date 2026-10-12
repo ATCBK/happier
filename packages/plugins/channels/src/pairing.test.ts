@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-  MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
   type ConversationBindingTargetV1,
 } from '@happier-dev/channels-protocol/v1';
 
@@ -9,7 +7,6 @@ import { classifyConversationCommand } from './commands.js';
 import {
   createConversationPairingManager,
   MAX_CONVERSATION_PAIRING_TRACKED_REQUESTERS,
-  MAX_CONVERSATION_PAIRING_TOMBSTONES,
   type ConversationPairingBinding,
   type ConversationPairingBindingWriter,
 } from './pairing.js';
@@ -285,7 +282,7 @@ describe('Channels pre-binding pairing', () => {
     })).toEqual({ kind: 'consumed' });
   });
 
-  it('evicts the oldest consumed pairing token once the single tombstone budget is exceeded', () => {
+  it('retains exact consumed-token replay outcomes beyond the former tombstone budget', () => {
     const now = { value: 1_000 };
     // Distinct randomness per challenge: supersession retires the previous
     // token and a repeated one would exhaust the unique-token allocator.
@@ -317,11 +314,11 @@ describe('Channels pre-binding pairing', () => {
       target: sessionTarget,
     });
 
-    const evicted = supersede();
-    const retained = supersede();
-    // One more supersession than the declared budget, all inside the single
-    // ten-minute window, so nothing can be reclaimed by lazy expiry.
-    for (let index = 0; index < MAX_CONVERSATION_PAIRING_TOMBSTONES; index += 1) supersede();
+    const first = supersede();
+    const second = supersede();
+    // More supersessions than the former binding-derived budget, all inside
+    // the ten-minute token window, so lazy expiry cannot explain the result.
+    for (let index = 0; index < 513; index += 1) supersede();
 
     const probe = (token: string, principalId: string) => completePreBindingMessage(manager, {
       connectionId: 'connection-1',
@@ -332,13 +329,11 @@ describe('Channels pre-binding pairing', () => {
       command: classifyConversationCommand(`/pair ${token}`),
     });
 
-    expect(probe(evicted.manualToken, 'person-1')).toMatchObject({
+    expect(probe(first.manualToken, 'person-1')).toMatchObject({
       kind: 'silent',
-      ownerReason: 'tokenMismatch',
+      ownerReason: 'challengeConsumed',
     });
-    // The budget evicts in arrival order only: the next-oldest consumed token
-    // is still a tombstone, so this is an eviction bound and not a wipe.
-    expect(probe(retained.manualToken, 'person-2')).toMatchObject({
+    expect(probe(second.manualToken, 'person-2')).toMatchObject({
       kind: 'silent',
       ownerReason: 'challengeConsumed',
     });
@@ -992,7 +987,7 @@ describe('Channels pre-binding pairing', () => {
 
     // Account A reaches its real durable connection ceiling without blocking
     // a separately scoped Account B challenge in the same daemon process.
-    for (let index = 0; index < MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT; index += 1) {
+    for (let index = 0; index < 32; index += 1) {
       createAccountAChallenge(index);
     }
     const accountBChallenge = manager.createChallenge({
@@ -1007,8 +1002,8 @@ describe('Channels pre-binding pairing', () => {
 
     // Account A reaches its real durable binding ceiling, cycling across its
     // valid connection set, without process-global proposal state blocking B.
-    for (let index = 0; index < MAX_CONVERSATION_BINDINGS_PER_ACCOUNT; index += 1) {
-      const connectionIndex = index % MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT;
+    for (let index = 0; index < 256; index += 1) {
+      const connectionIndex = index % 32;
       const challenge = manager.createChallenge({
         connectionId: accountAConnection(connectionIndex),
         expectedConnectionRevision: 1,

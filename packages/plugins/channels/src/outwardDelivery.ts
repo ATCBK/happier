@@ -1,11 +1,12 @@
 import type {
-  ConversationDeliveryInputV1,
   ConversationDeliveryLinkPreviewPolicyV1,
   ConversationDeliveryMentionPolicyV1,
-  ConversationDeliveryReconcileInputV1,
-  ConversationOutboundTextUnitV1,
+  ConversationOutboundTextLimitV1,
   ConversationDeliveryReplyContextV1,
   ConversationDeliveryResultV1,
+  ConversationDeliveryContentV1,
+  ConversationDeliveryNewThreadV1,
+  ConversationStartSourceV1,
   ConversationResolvedEndpointV1,
   ConversationPermissionMediationSourceCurrentnessInputV1,
   ConversationPermissionMediationSourceCurrentnessResultV1,
@@ -16,17 +17,15 @@ import {
   ConversationBindingTargetV1Schema,
   ConversationBindingIdV1Schema,
   ConversationConnectionIdV1Schema,
-  ConversationDeliveryInputV1Schema,
-  ConversationDeliveryReconcileInputV1Schema,
   ConversationDeliveryReplyContextV1Schema,
-  ConversationDeliveryResultV1Schema,
+  ConversationDeliveryContentV1Schema,
+  ConversationDeliveryNewThreadV1Schema,
+  ConversationStartSourceV1Schema,
   ConversationProviderConnectionInputV1Schema,
+  ConversationOutboundTextLimitV1Schema,
   ConversationPermissionMediationSourceCurrentnessInputV1Schema,
   ConversationPermissionMediationSourceCurrentnessResultV1Schema,
   ConversationResolvedEndpointV1Schema,
-  CONVERSATION_OUTBOUND_TEXT_UNITS_V1,
-  MAX_CONVERSATION_DELIVERY_CHUNKS,
-  MAX_CONVERSATION_DELIVERY_TEXT_UTF8_BYTES,
   MAX_CONVERSATION_SESSION_IDEMPOTENCY_KEY_UTF8_BYTES,
   countConversationTextUnits,
 } from '@happier-dev/channels-protocol/v1';
@@ -38,18 +37,10 @@ import {
   isPluginError,
   PluginError,
   type PluginInvocationContext,
-  type TargetedContributionsService,
 } from '@happier-dev/plugin-sdk';
-import type {
-  JsonValue,
-} from '@happier-dev/plugin-sdk';
-import { pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
-import {
-  isPluginActionHandlerInvocationNotStartedAdvisory,
-  type AdmittedTargetedOperationExecutionHandle,
-  type ActionsService,
-  type PluginMachineExecutionOriginV1,
-} from '@happier-dev/plugin-sdk/actions';
+import type { JsonValue } from '@happier-dev/plugin-sdk';
+import { createProtocolStoredReadSchema, pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
 import {
   PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
   type PluginAccountCollectionForDefinition,
@@ -69,12 +60,12 @@ import {
   isConversationDeliveryAutomaticTerminal,
   isConversationDeliveryContentFree,
   isConversationDeliveryRetentionEligible,
+  hasPendingConversationThreadBinding,
   resolveConversationDeliveryCustody,
   retryConversationDeliveryAfterArchiveRecovery,
   settleConversationDeliveryForBindingDeletion,
   settleConversationDeliveryForConnectionDeletion,
   settleConversationDeliveryAttempt,
-  settleConversationDeliveryKnownNoEffectBeforeProvider,
   startConversationDeliveryAttempt,
   suppressConversationDeliveryAttempt,
   type ConversationDeliveryCustody,
@@ -85,12 +76,7 @@ import {
   signLengthPrefixedUtf8HmacSha256Base64Url,
   tryDecodeBase64Url,
 } from './privateRowIdentity.js';
-import { readCurrentProviderContributionForPersistedSelection } from './providerContributions.js';
 import type { PersistedConversationProviderContributionSelection } from './collections.js';
-import type {
-  ConversationSessionProjectionBinding,
-  ConversationSessionProjectionSource,
-} from './sessionProjection.js';
 import type { ConversationPendingPermissionRequest } from './permissionMediation.js';
 import { requireChannelsAccountStorage } from './requiredAccountStorage.js';
 
@@ -102,6 +88,12 @@ import { requireChannelsAccountStorage } from './requiredAccountStorage.js';
 type ConversationCollectionsModule = typeof import('./collections.js');
 type ConversationAccountLocalBindingPolicyModule = typeof import('./accountLocalBindingPolicy.js');
 
+const storedDeliveryContentSchema = createProtocolStoredReadSchema(ConversationDeliveryContentV1Schema);
+const storedDeliveryNewThreadSchema = createProtocolStoredReadSchema(ConversationDeliveryNewThreadV1Schema);
+const storedDeliveryEndpointSchema = createProtocolStoredReadSchema(ConversationResolvedEndpointV1Schema);
+const storedStartSourceSchema = createProtocolStoredReadSchema(ConversationStartSourceV1Schema);
+const storedOutboundTextLimitSchema = createProtocolStoredReadSchema(ConversationOutboundTextLimitV1Schema);
+
 let conversationCollectionsModulePromise: Promise<ConversationCollectionsModule> | undefined;
 let conversationAccountLocalBindingPolicyModulePromise: Promise<ConversationAccountLocalBindingPolicyModule> | undefined;
 
@@ -110,7 +102,7 @@ function loadConversationCollectionsModule(): Promise<ConversationCollectionsMod
   return conversationCollectionsModulePromise;
 }
 
-function loadConversationAccountLocalBindingPolicyModule(): Promise<ConversationAccountLocalBindingPolicyModule> {
+export function loadConversationAccountLocalBindingPolicyModule(): Promise<ConversationAccountLocalBindingPolicyModule> {
   conversationAccountLocalBindingPolicyModulePromise ??= import('./accountLocalBindingPolicy.js');
   return conversationAccountLocalBindingPolicyModulePromise;
 }
@@ -120,6 +112,7 @@ export type ConversationControlResponseKind =
   | 'newSession'
   | 'approval'
   | 'userAction'
+  | 'stop'
   | 'refusal'
   | 'recovery';
 
@@ -145,6 +138,7 @@ export type ConversationOutwardDeliveryRouteAuthority =
 
 /** The closed source identity carried by every Channels outward effect. */
 export type ConversationOutwardSourceV1 =
+  | ConversationStartSourceV1
   | Readonly<{ kind: 'sessionProjection'; sessionId: string; semanticItemId: string }>
   | AutomationResultDeliverySourceV1
   | Readonly<{ kind: 'permissionWait'; sessionId: string; turnId: string; requestId: string }>
@@ -162,7 +156,8 @@ type ConversationOutwardDeliveryObligationCommon = Readonly<{
   connectionId: string;
   source: ConversationOutwardSourceV1;
   endpoint: ConversationResolvedEndpointV1;
-  content: string;
+  content: ConversationDeliveryContentV1;
+  newThread?: ConversationDeliveryNewThreadV1;
   deliveryKey: string;
   replyContext?: ConversationDeliveryReplyContextV1;
   mentionPolicy: ConversationDeliveryMentionPolicyV1;
@@ -269,27 +264,11 @@ export interface ConversationOutwardDeliveryStore {
   >;
 }
 
-export type ConversationOutboundTextLimit = Readonly<{
-  maximum: number;
-  unit: ConversationOutboundTextUnitV1;
-}>;
+export type ConversationOutboundTextLimit = Readonly<ConversationOutboundTextLimitV1>;
 
 export type ConversationOutwardDeliveryPreCustodyRejection =
   | 'invalidObligation'
-  | 'invalidOutboundTextLimit'
-  | 'contentUtf8LimitExceeded'
-  | 'providerChunkLimitExceeded';
-
-type ConversationOutwardDeliveryKnownNoEffect = Extract<
-  ConversationOutwardDeliveryPreCustodyRejection,
-  'contentUtf8LimitExceeded' | 'providerChunkLimitExceeded'
->;
-
-function isConversationOutwardDeliveryKnownNoEffect(
-  rejection: ConversationOutwardDeliveryPreCustodyRejection,
-): rejection is ConversationOutwardDeliveryKnownNoEffect {
-  return rejection === 'contentUtf8LimitExceeded' || rejection === 'providerChunkLimitExceeded';
-}
+  | 'invalidOutboundTextLimit';
 
 function hasBoundedSourceId(value: unknown): value is string {
   return typeof value === 'string'
@@ -337,6 +316,8 @@ export function isConversationOutwardSourceV1(source: unknown): source is Conver
   if (source === null || typeof source !== 'object' || Array.isArray(source)) return false;
   const sourceRecord = source as Readonly<Record<string, unknown>>;
   switch (sourceRecord.kind) {
+    case 'conversationStart':
+      return ConversationStartSourceV1Schema.safeParse(source).success;
     case 'sessionProjection':
       return hasExactKeys(sourceRecord, ['kind', 'sessionId', 'semanticItemId'])
         && hasBoundedSourceId(sourceRecord.sessionId)
@@ -362,10 +343,10 @@ export function isConversationOutwardSourceV1(source: unknown): source is Conver
 
 export function validateConversationOutwardDeliveryBeforeCustody(input: Readonly<{
   obligation: ConversationOutwardDeliveryObligation;
-  outboundTextLimit: ConversationOutboundTextLimit;
+  outboundTextLimit?: ConversationOutboundTextLimit;
 }>): ConversationOutwardDeliveryPreCustodyRejection | null {
   const { obligation, outboundTextLimit } = input;
-  if (typeof obligation.content !== 'string'
+  if (!ConversationDeliveryContentV1Schema.safeParse(obligation.content).success
     || typeof obligation.deliveryKey !== 'string'
     || obligation.deliveryKey.length === 0
     || !isConversationOutwardSourceV1(obligation.source)
@@ -381,34 +362,25 @@ export function validateConversationOutwardDeliveryBeforeCustody(input: Readonly
       && !ConversationDeliveryReplyContextV1Schema.safeParse(obligation.replyContext).success)
     || countConversationTextUnits(obligation.deliveryKey, 'utf8Bytes')
       > MAX_CONVERSATION_SESSION_IDEMPOTENCY_KEY_UTF8_BYTES
-    || obligation.content.length === 0) {
+    || (obligation.newThread !== undefined
+      && !ConversationDeliveryNewThreadV1Schema.safeParse(obligation.newThread).success)
+    || ((obligation.source.kind === 'conversationStart') !== (obligation.newThread !== undefined))
+    || (obligation.newThread !== undefined && obligation.replyContext !== undefined)) {
     return 'invalidObligation';
   }
-  if (!Number.isSafeInteger(outboundTextLimit.maximum) || outboundTextLimit.maximum < 1) {
+  if (outboundTextLimit !== undefined && !ConversationOutboundTextLimitV1Schema.safeParse(outboundTextLimit).success) {
     return 'invalidOutboundTextLimit';
   }
-  if (!CONVERSATION_OUTBOUND_TEXT_UNITS_V1.includes(outboundTextLimit.unit)) {
-    return 'invalidOutboundTextLimit';
-  }
-  const contentUtf8Bytes = countConversationTextUnits(obligation.content, 'utf8Bytes');
-  if (contentUtf8Bytes > MAX_CONVERSATION_DELIVERY_TEXT_UTF8_BYTES) {
-    return 'contentUtf8LimitExceeded';
-  }
-  const providerUnits = countConversationTextUnits(obligation.content, outboundTextLimit.unit);
-  const maximumCompleteItemUnits = outboundTextLimit.maximum
-    > Math.floor(Number.MAX_SAFE_INTEGER / MAX_CONVERSATION_DELIVERY_CHUNKS)
-    ? Number.MAX_SAFE_INTEGER
-    : outboundTextLimit.maximum * MAX_CONVERSATION_DELIVERY_CHUNKS;
-  return providerUnits > maximumCompleteItemUnits ? 'providerChunkLimitExceeded' : null;
+  return null;
 }
 
 type JsonRecord = Readonly<Record<string, JsonValue>>;
-type StoredCollectionRow = Readonly<{
+export type StoredCollectionRow = Readonly<{
   rowId: string;
   revision: number;
   value: JsonValue;
 }>;
-type ChannelStateCollection = Pick<
+export type ChannelStateCollection = Pick<
   PluginAccountCollectionForDefinition<ConversationCollectionsModule['CHANNEL_STATE_COLLECTION']>,
   'get'
 >;
@@ -506,6 +478,7 @@ export interface ConversationOutwardDeliveryCollectionScanner {
       kind: 'ready';
       records: readonly ConversationOutwardDeliveryRecord[];
       nextCursor?: string;
+      nextRetryAt?: number;
     }>
     | Readonly<{ kind: 'unavailable'; reason: 'cancelled' | 'storageUnavailable' }>
   >;
@@ -596,6 +569,8 @@ function isJsonRecord(value: unknown): value is JsonRecord {
 
 function sourceIdentityParts(source: ConversationOutwardSourceV1): readonly string[] {
   switch (source.kind) {
+    case 'conversationStart':
+      return [source.kind, source.sessionId, source.requestId];
     case 'sessionProjection':
       return [source.kind, source.sessionId, source.semanticItemId];
     case 'automationResult':
@@ -618,7 +593,7 @@ function decodeBase64Url(value: string): Uint8Array | null {
   return tryDecodeBase64Url(value);
 }
 
-async function deriveConversationOutwardDeliveryCustodyId(input: Readonly<{
+export async function deriveConversationOutwardDeliveryCustodyId(input: Readonly<{
   routingIdentityKey: string;
   obligation: ConversationOutwardDeliveryObligation;
 }>): Promise<string | null> {
@@ -643,15 +618,15 @@ async function deriveConversationOutwardDeliveryCustodyId(input: Readonly<{
   }
 }
 
-function hasRetainedConversationOutwardDeliveryContent(
+export function hasRetainedConversationOutwardDeliveryContent(
   obligation: ConversationStoredOutwardDeliveryObligation,
 ): obligation is ConversationOutwardDeliveryObligation {
-  return typeof obligation.content === 'string';
+  return obligation.content !== null;
 }
 
 async function deriveConversationOutwardDeliveryContentFingerprint(input: Readonly<{
   routingIdentityKey: string;
-  content: string;
+  content: ConversationDeliveryContentV1;
 }>): Promise<string | null> {
   const keyMaterial = decodeBase64Url(input.routingIdentityKey);
   const subtle = globalThis.crypto?.subtle;
@@ -661,7 +636,7 @@ async function deriveConversationOutwardDeliveryContentFingerprint(input: Readon
     return await signLengthPrefixedUtf8HmacSha256Base64Url({
       subtle,
       key,
-      parts: ['channels:outward-delivery-content:v1', input.content],
+      parts: ['channels:outward-delivery-content:v1', input.content.text, input.content.html === undefined ? 'absent' : 'html', input.content.html ?? ''],
     });
   } catch {
     return null;
@@ -689,6 +664,7 @@ function sameConversationOutwardDeliveryLiveObligation(
     && left.linkPreviewPolicy === right.linkPreviewPolicy
     && pluginJsonValuesEqual(left.endpoint, right.endpoint)
     && pluginJsonValuesEqual(left.replyContext ?? null, right.replyContext ?? null)
+    && pluginJsonValuesEqual(left.newThread ?? null, right.newThread ?? null)
     && pluginJsonValuesEqual(left.routeAuthority, right.routeAuthority);
 }
 
@@ -704,7 +680,7 @@ async function matchesConversationOutwardDeliveryObligation(input: Readonly<{
     ? !sameConversationOutwardDeliveryCustodyIdentity(input.stored, input.incoming)
     : !sameConversationOutwardDeliveryLiveObligation(input.stored, input.incoming)) return false;
   if (hasRetainedConversationOutwardDeliveryContent(input.stored)) {
-    return input.stored.content === input.incoming.content;
+    return pluginJsonValuesEqual(input.stored.content, input.incoming.content);
   }
   if (input.routingIdentityKey === null) {
     // The connection row was physically deleted, destroying the routing
@@ -733,6 +709,9 @@ function readConversationDeliveryCustody(input: Readonly<{
   const providerMessageIds = value.providerMessageIds;
   const failedChunk = value.failedChunk;
   const archiveRecovery = value.archiveRecovery;
+  const endpoint = value.deliveryEndpoint == null ? undefined : storedDeliveryEndpointSchema.safeParse(value.deliveryEndpoint);
+  if (endpoint !== undefined && !endpoint.success) return null;
+  if (value.threadBindingPending !== undefined && typeof value.threadBindingPending !== 'boolean') return null;
   if (typeof state !== 'string'
     || !(CONVERSATION_DELIVERY_CUSTODY_STATES as readonly string[]).includes(state)
     || typeof attemptCount !== 'number'
@@ -757,6 +736,8 @@ function readConversationDeliveryCustody(input: Readonly<{
     ...(failedChunk === null ? {} : { failedChunk }),
     ...(retryNotBefore === undefined ? {} : { retryNotBefore }),
     ...(archiveRecovery === null ? {} : { archiveRecovery }),
+    ...(endpoint === undefined || !endpoint.success ? {} : { endpoint: endpoint.data }),
+    ...(value.threadBindingPending === undefined ? {} : { threadBindingPending: value.threadBindingPending }),
   } as ConversationDeliveryCustody;
 }
 
@@ -783,13 +764,18 @@ function readConversationOutwardDeliveryRecord(input: Readonly<{
   const updatedAt = row.value[collections.CHANNEL_DELIVERIES_FIELD.updatedAt];
   if (!isNonNegativeSafeInteger(createdAt) || !isNonNegativeSafeInteger(updatedAt)) return null;
   const payload = row.value.payload;
-  const source = payload.source;
+  const parsedStartSource = isJsonRecord(payload.source) && payload.source.kind === 'conversationStart'
+    ? storedStartSourceSchema.safeParse(payload.source) : undefined;
+  const source = parsedStartSource?.success ? parsedStartSource.data : payload.source;
   const bindingId = row.value[collections.CHANNEL_DELIVERIES_FIELD.bindingId];
   const content = payload.content;
+  const parsedContent = content === null ? undefined : storedDeliveryContentSchema.safeParse(content);
+  const newThread = payload.newThread === undefined ? undefined : storedDeliveryNewThreadSchema.safeParse(payload.newThread);
   const contentFingerprint = payload.contentFingerprint;
   if (!isConversationOutwardSourceV1(source)
-    || (typeof content !== 'string' && content !== null)
-    || (typeof content === 'string' && contentFingerprint !== undefined && contentFingerprint !== null)
+    || (parsedContent !== undefined && !parsedContent.success)
+    || (newThread !== undefined && !newThread.success)
+    || (content !== null && contentFingerprint !== undefined && contentFingerprint !== null)
     || typeof payload.deliveryKey !== 'string'
     || typeof payload.mentionPolicy !== 'string'
     || typeof payload.linkPreviewPolicy !== 'string'
@@ -807,9 +793,13 @@ function readConversationOutwardDeliveryRecord(input: Readonly<{
     retryNotBefore: row.value[collections.CHANNEL_DELIVERIES_FIELD.retryNotBefore],
   });
   if (custody === null) return null;
+  if ((source.kind === 'conversationStart') !== (newThread?.success === true)
+    || (source.kind === 'conversationStart' && bindingId === undefined)
+    || (source.kind !== 'conversationStart' && custody.threadBindingPending !== undefined)) return null;
   const projection = deriveConversationDeliveryProjection(custody);
+  const storedAttention = row.value[collections.CHANNEL_DELIVERIES_FIELD.attention];
   if (row.value[collections.CHANNEL_DELIVERIES_FIELD.terminal] !== projection.terminal
-    || row.value[collections.CHANNEL_DELIVERIES_FIELD.attention] !== projection.attention
+    || (storedAttention !== projection.attention && !(custody.state === 'retryDue' && storedAttention === false))
     || row.value[collections.CHANNEL_DELIVERIES_FIELD.retryNotBefore] !== projection.retryNotBefore) {
     return null;
   }
@@ -827,6 +817,7 @@ function readConversationOutwardDeliveryRecord(input: Readonly<{
         endpoint: endpoint.data,
         content: null,
         contentFingerprint,
+        ...(newThread?.success ? { newThread: newThread.data } : {}),
         deliveryKey: payload.deliveryKey,
         ...(replyContext.data === undefined ? {} : { replyContext: replyContext.data }),
         mentionPolicy: payload.mentionPolicy as ConversationDeliveryMentionPolicyV1,
@@ -840,6 +831,7 @@ function readConversationOutwardDeliveryRecord(input: Readonly<{
         endpoint: endpoint.data,
         content: null,
         contentFingerprint,
+        ...(newThread?.success ? { newThread: newThread.data } : {}),
         deliveryKey: payload.deliveryKey,
         ...(replyContext.data === undefined ? {} : { replyContext: replyContext.data }),
         mentionPolicy: payload.mentionPolicy as ConversationDeliveryMentionPolicyV1,
@@ -853,13 +845,15 @@ function readConversationOutwardDeliveryRecord(input: Readonly<{
       custody,
     };
   }
+  if (parsedContent === undefined || !parsedContent.success) return null;
   const obligation: ConversationStoredOutwardDeliveryObligation = bindingId === undefined
     ? {
       connectionId: row.value[collections.CHANNEL_DELIVERIES_FIELD.connectionId] as string,
       routeAuthority: payload.routeAuthority as ConversationOutwardDeliveryConnectionRouteAuthority,
       source,
       endpoint: endpoint.data,
-      content,
+      content: parsedContent.data,
+      ...(newThread?.success ? { newThread: newThread.data } : {}),
       deliveryKey: payload.deliveryKey,
       ...(replyContext.data === undefined ? {} : { replyContext: replyContext.data }),
       mentionPolicy: payload.mentionPolicy as ConversationDeliveryMentionPolicyV1,
@@ -871,7 +865,8 @@ function readConversationOutwardDeliveryRecord(input: Readonly<{
       routeAuthority: payload.routeAuthority as ConversationOutwardDeliveryBindingRouteAuthority,
       source,
       endpoint: endpoint.data,
-      content,
+      content: parsedContent.data,
+      ...(newThread?.success ? { newThread: newThread.data } : {}),
       deliveryKey: payload.deliveryKey,
       ...(replyContext.data === undefined ? {} : { replyContext: replyContext.data }),
       mentionPolicy: payload.mentionPolicy as ConversationDeliveryMentionPolicyV1,
@@ -919,6 +914,7 @@ function serializeConversationOutwardDeliveryRecord(input: Readonly<{
       contentFingerprint: input.obligation.content === null
         ? input.obligation.contentFingerprint
         : null,
+      ...(input.obligation.newThread === undefined ? {} : { newThread: input.obligation.newThread }),
       deliveryKey: input.obligation.deliveryKey,
       replyContext: input.obligation.replyContext ?? null,
       mentionPolicy: input.obligation.mentionPolicy,
@@ -930,6 +926,8 @@ function serializeConversationOutwardDeliveryRecord(input: Readonly<{
       providerMessageIds: input.custody.providerMessageIds,
       failedChunk: input.custody.failedChunk ?? null,
       archiveRecovery: input.custody.archiveRecovery ?? null,
+      ...(input.custody.endpoint === undefined ? {} : { deliveryEndpoint: input.custody.endpoint }),
+      ...(input.custody.threadBindingPending === undefined ? {} : { threadBindingPending: input.custody.threadBindingPending }),
     },
   };
 }
@@ -1042,6 +1040,7 @@ export async function resolveConversationOutwardDeliveryCustodyInAccountCollecti
   custodyId: string;
   expectedRevision: number;
   resolution: ConversationDeliveryResolutionDecision;
+  endpoint?: ConversationResolvedEndpointV1;
   signal?: AbortSignal;
   assertCurrent?: () => void;
   now?: () => number;
@@ -1113,11 +1112,22 @@ export async function resolveConversationOutwardDeliveryCustodyInAccountCollecti
       'Delivery resolution target is not canonical outward custody.',
     );
   }
+  if (record.obligation.newThread !== undefined && input.resolution === 'accepted') {
+    const endpoint = input.endpoint ?? record.custody.endpoint;
+    if (endpoint === undefined || endpoint.kind !== 'thread' || endpoint.parentId !== record.obligation.endpoint.id
+      || (record.custody.endpoint !== undefined && input.endpoint !== undefined
+        && !areConversationEndpointIdentitiesEqual(record.custody.endpoint, input.endpoint))) {
+      throw resolutionError('channels_delivery_resolve_endpoint_required', 'Accepting a started conversation requires its created thread endpoint.');
+    }
+  } else if (input.endpoint !== undefined) {
+    throw resolutionError('channels_delivery_resolve_endpoint_invalid', 'Only a started conversation acceptance can supply a created endpoint.');
+  }
   const transition = input.resolution === 'retryAfterUnarchive'
     ? retryConversationDeliveryAfterArchiveRecovery({ custody: record.custody })
     : resolveConversationDeliveryCustody({
       custody: record.custody,
       resolution: input.resolution,
+      ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
     });
   if (transition.kind !== 'resolved' && transition.kind !== 'retryReady') {
     throw resolutionError(
@@ -1411,7 +1421,9 @@ export function createConversationOutwardDeliveryCollectionStore(
         collections,
         custodyId,
         obligation,
-        custody: createReadyConversationDeliveryCustody(),
+        custody: { ...createReadyConversationDeliveryCustody(),
+          ...(obligation.newThread === undefined ? {} : { threadBindingPending: true }),
+        },
         createdAt,
         updatedAt: createdAt,
       });
@@ -1601,24 +1613,28 @@ export function createConversationOutwardDeliveryCollectionScanner(
           ...(scanInput.cursor === undefined ? {} : { cursor: scanInput.cursor }),
         }, { signal: input.signal });
         const records: ConversationOutwardDeliveryRecord[] = [];
+        let nextRetryAt: number | undefined;
         for (const row of page.rows) {
           const record = readConversationOutwardDeliveryRecord({
             collections,
             row: row as unknown as StoredCollectionRow,
           });
           if (record === null) continue;
-          if (record.custody.state === 'ready' || record.custody.state === 'attempting') {
+          if (record.custody.state === 'ready' || record.custody.state === 'attempting' || hasPendingConversationThreadBinding(record.custody)) {
             records.push(record);
             continue;
           }
           if (record.custody.state === 'retryDue'
             && (record.custody.retryNotBefore === undefined || record.custody.retryNotBefore <= scanInput.now)) {
             records.push(record);
+          } else if (record.custody.state === 'retryDue' && record.custody.retryNotBefore !== undefined) {
+            nextRetryAt = Math.min(nextRetryAt ?? Infinity, record.custody.retryNotBefore);
           }
         }
         return {
           kind: 'ready',
           records,
+          ...(nextRetryAt === undefined ? {} : { nextRetryAt }),
           ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
         };
       } catch (error) {
@@ -1740,7 +1756,8 @@ async function settleConversationOutwardDeliveriesForDeletion(input: Readonly<{
     }
     const settled = input.settle(record.custody);
     if (settled.kind === 'blocked') return settled;
-    return settled.kind === 'retained' || settled.custody.state === record.custody.state
+    return settled.kind === 'retained' || (settled.custody.state === record.custody.state
+      && settled.custody.threadBindingPending === record.custody.threadBindingPending)
       ? { kind: 'alreadySettled' }
       : { kind: 'needsSettlement' };
   };
@@ -1802,7 +1819,8 @@ async function settleConversationOutwardDeliveriesForDeletion(input: Readonly<{
       }
       const settled = input.settle(record.custody);
       if (settled.kind === 'blocked') return settled;
-      if (settled.kind === 'retained' || settled.custody.state === record.custody.state) continue;
+      if (settled.kind === 'retained' || (settled.custody.state === record.custody.state
+        && settled.custody.threadBindingPending === record.custody.threadBindingPending)) continue;
       const persisted = await store.compareAndSwap({
         custodyId: record.custodyId,
         expectedRevision: record.revision,
@@ -1832,16 +1850,12 @@ export async function settleConversationOutwardDeliveriesForConnectionDeletion(i
   return await settleConversationOutwardDeliveriesForDeletion({
     ...input,
     settle: (custody) => {
-      if (custody.state === 'delivered'
-        || custody.state === 'resolvedAccepted'
-        || custody.state === 'resolvedDiscarded'
-        || custody.state === 'connectionDeleted') {
-        return { kind: 'retained' };
-      }
       const settled = settleConversationDeliveryForConnectionDeletion({ custody });
       return settled.kind === 'notDeletable'
         ? { kind: 'blocked', reason: settled.reason }
-        : { kind: 'replace', custody: settled.custody };
+        : settled.kind === 'retained' && settled.custody === custody
+          ? { kind: 'retained' }
+          : { kind: 'replace', custody: settled.custody };
     },
   });
 }
@@ -1865,7 +1879,7 @@ export async function settleConversationOutwardDeliveriesForBindingDeletion(inpu
       const settled = settleConversationDeliveryForBindingDeletion({ custody });
       return settled.kind === 'notDeletable'
         ? { kind: 'blocked', reason: settled.reason }
-        : settled.kind === 'retained'
+        : settled.kind === 'retained' && settled.custody === custody
           ? settled
           : { kind: 'replace', custody: settled.custody };
     },
@@ -2207,13 +2221,7 @@ export type ConversationOutwardDeliveryReadyPreparation =
   | Readonly<{
     kind: 'ready';
     obligation: ConversationOutwardDeliveryObligation;
-    outboundTextLimit: ConversationOutboundTextLimit;
-    /**
-     * The provider limit was read from the current route and proves that this
-     * custody can never cross a provider boundary. It remains a custody fact,
-     * rather than making the source caller keep retrying an invalid request.
-     */
-    knownNoEffect?: ConversationOutwardDeliveryKnownNoEffect;
+    outboundTextLimit?: ConversationOutboundTextLimit;
   }>
   | Readonly<{
     kind: 'suppressed';
@@ -2254,7 +2262,7 @@ type ConversationOutwardDeliveryConnectionFacts = Readonly<{
   credentialRef: JsonValue | null;
   transportOrigin: PluginMachineExecutionOriginV1;
   routingIdentityKey: string;
-  outboundTextLimit: ConversationOutboundTextLimit;
+  outboundTextLimit?: ConversationOutboundTextLimit;
   providerAction: Readonly<{
     providerPluginId: string;
     providerContributionSelection: PersistedConversationProviderContributionSelection;
@@ -2266,6 +2274,7 @@ type ConversationOutwardDeliveryConnectionFacts = Readonly<{
 type ConversationOutwardDeliveryBindingFacts = Readonly<{
   revision: number;
   connectionId: string;
+  parentBindingId?: string;
   authorityEpoch: number;
   enabled: boolean;
   deletionState: 'none' | 'finalizingDelete';
@@ -2280,7 +2289,7 @@ type ConversationOutwardDeliveryBindingFacts = Readonly<{
  * authority to an optional action: corrupt durable state is unavailable before
  * ready custody, identity derivation, or provider I/O can begin.
  */
-function readConnectionFacts(input: Readonly<{
+export function readConnectionFacts(input: Readonly<{
   accountLocalBindingPolicy: ConversationAccountLocalBindingPolicyModule;
   row: StoredCollectionRow;
   connectionId: string;
@@ -2300,7 +2309,12 @@ function readConnectionFacts(input: Readonly<{
     return null;
   }
   const { payload } = connection;
-  const outboundTextLimit = payload.outboundTextLimit;
+  let outboundTextLimit: ConversationOutboundTextLimit | undefined;
+  if (payload.outboundTextLimit !== undefined) {
+    const parsed = storedOutboundTextLimitSchema.safeParse(payload.outboundTextLimit);
+    if (!parsed.success) return null;
+    outboundTextLimit = parsed.data;
+  }
   const providerConnection = ConversationProviderConnectionInputV1Schema.safeParse({
     v: 1,
     connectionId: input.connectionId,
@@ -2309,15 +2323,7 @@ function readConnectionFacts(input: Readonly<{
     providerConfig: payload.providerConfig,
     credentialRef: payload.credentialRef,
   });
-  if (!isJsonRecord(outboundTextLimit)
-    || typeof outboundTextLimit.maximum !== 'number'
-    || !Number.isSafeInteger(outboundTextLimit.maximum)
-    || outboundTextLimit.maximum < 1
-    || typeof outboundTextLimit.unit !== 'string'
-    || !CONVERSATION_OUTBOUND_TEXT_UNITS_V1.includes(
-      outboundTextLimit.unit as ConversationOutboundTextUnitV1,
-    )
-    || !providerConnection.success
+  if (!providerConnection.success
     || connection.providerPluginId !== connection.transportOrigin.materializationRef.pluginId) return null;
   return {
     revision: input.row.revision,
@@ -2327,10 +2333,7 @@ function readConnectionFacts(input: Readonly<{
     credentialRef: providerConnection.data.credentialRef,
     transportOrigin: connection.transportOrigin,
     routingIdentityKey: connection.routingIdentityKey,
-    outboundTextLimit: {
-      maximum: outboundTextLimit.maximum,
-      unit: outboundTextLimit.unit as ConversationOutboundTextUnitV1,
-    },
+    ...(outboundTextLimit === undefined ? {} : { outboundTextLimit }),
     providerAction: {
       providerPluginId: connection.providerPluginId,
       providerContributionSelection: connection.providerContributionSelection,
@@ -2374,7 +2377,7 @@ async function compactConversationOutwardDeliveryObligation(input: Readonly<{
   return { ...input.obligation, content: null, contentFingerprint };
 }
 
-function readBindingFacts(input: Readonly<{
+export function readBindingFacts(input: Readonly<{
   accountLocalBindingPolicy: ConversationAccountLocalBindingPolicyModule;
   row: StoredCollectionRow;
   bindingId: string;
@@ -2398,6 +2401,7 @@ function readBindingFacts(input: Readonly<{
   return {
     revision: input.row.revision,
     connectionId: binding.connectionId,
+    ...(binding.parentBindingId === undefined ? {} : { parentBindingId: binding.parentBindingId }),
     authorityEpoch: binding.authorityEpoch,
     enabled: binding.enabled,
     deletionState: binding.deletionState,
@@ -2410,7 +2414,7 @@ function readBindingFacts(input: Readonly<{
 type ConversationOutwardDeliveryRouteCurrentness =
   | Readonly<{
     kind: 'current';
-    outboundTextLimit: ConversationOutboundTextLimit;
+    outboundTextLimit?: ConversationOutboundTextLimit;
     connection: ConversationOutwardDeliveryConnectionFacts;
   }>
   | Readonly<{
@@ -2452,7 +2456,7 @@ function matchesSessionTarget(input: Readonly<{
  * display-only edit may change a Collection revision without changing the
  * endpoint, target, or semantic authority epochs.
  */
-async function checkConversationOutwardDeliveryRouteCurrentness(input: Readonly<{
+export async function checkConversationOutwardDeliveryRouteCurrentness(input: Readonly<{
   stateCollection: ChannelStateCollection;
   signal: AbortSignal;
   obligation: ConversationOutwardDeliveryObligation;
@@ -2499,7 +2503,7 @@ async function checkConversationOutwardDeliveryRouteCurrentness(input: Readonly<
       ? { kind: 'unavailable', reason: 'cancelled' }
       : {
         kind: 'current',
-        outboundTextLimit: connection.outboundTextLimit,
+        ...(connection.outboundTextLimit === undefined ? {} : { outboundTextLimit: connection.outboundTextLimit }),
         connection,
       };
   }
@@ -2532,6 +2536,11 @@ async function checkConversationOutwardDeliveryRouteCurrentness(input: Readonly<
     || (input.requireBindingRevision && routeAuthority.bindingRevision !== binding.revision)) {
     return { kind: 'suppressed', reason: 'staleAuthority' };
   }
+  const parent = await accountLocalBindingPolicy.readConversationBindingParentEligibility({
+    collection: input.stateCollection, binding, signal: input.signal,
+  });
+  if (parent.kind === 'unavailable') return parent;
+  if (parent.kind === 'notEligible') return { kind: 'suppressed', reason: 'bindingDisabled' };
   if (!areConversationEndpointIdentitiesEqual(input.obligation.endpoint, binding.endpoint)) {
     return { kind: 'suppressed', reason: 'audienceChanged' };
   }
@@ -2561,7 +2570,7 @@ async function checkConversationOutwardDeliveryRouteCurrentness(input: Readonly<
     ? { kind: 'unavailable', reason: 'cancelled' }
     : {
       kind: 'current',
-      outboundTextLimit: connection.outboundTextLimit,
+      ...(connection.outboundTextLimit === undefined ? {} : { outboundTextLimit: connection.outboundTextLimit }),
       connection,
     };
 }
@@ -2649,6 +2658,10 @@ async function readCurrentConversationPermissionWaitMediationSource(input: Reado
   });
   if (binding === null) return { kind: 'unavailable', reason: 'stateCorrupt' };
   if (!binding.enabled || binding.deletionState !== 'none') return { kind: 'notEligible' };
+  const parent = await accountLocalBindingPolicy.readConversationBindingParentEligibility({
+    collection: input.stateCollection, binding, signal: input.signal,
+  });
+  if (parent.kind !== 'eligible') return parent;
   if (binding.linkPreviewPolicy === undefined) {
     return { kind: 'unavailable', reason: 'stateCorrupt' };
   }
@@ -2701,7 +2714,8 @@ async function readCurrentConversationPermissionWaitMediationSource(input: Reado
 /**
  * Exact source-currentness operation for host-owned delayed work. It delegates
  * all binding/connection eligibility to the same retained-row reader used by
- * live permission mediation and reveals only the fail-closed boolean result.
+ * live permission mediation. Authoritative negatives return false; unavailable
+ * authority rejects so the host cannot mistake uncertainty for revocation.
  */
 export async function readConversationPermissionMediationSourceCurrentnessForInvocation(
   input: JsonValue,
@@ -2738,6 +2752,9 @@ export async function isConversationPermissionMediationSourceCurrent(input: Read
     bindingId: bindingId.data,
     signal: input.signal,
   });
+  if (current.kind === 'unavailable') {
+    throw new Error('conversation_source_currentness_unavailable');
+  }
   return current.kind === 'ready'
     && current.source.sourceRef === input.accepted.sourceRef
     && current.source.sourceRevisionOrEpoch === input.accepted.sourceRevisionOrEpoch
@@ -2829,7 +2846,7 @@ async function createConversationPermissionWaitOutwardDeliveryObligation(input: 
       requestId: request.requestId,
     },
     endpoint: input.current.endpoint,
-    content: renderConversationPendingPermissionRequest(request),
+    content: { text: renderConversationPendingPermissionRequest(request) },
     // The existing custody HMAC is length-prefixed over the exact source
     // tuple. Reusing it makes the provider key bounded, opaque, and immune to
     // delimiter collisions in provider-native request identifiers.
@@ -2909,16 +2926,15 @@ export async function prepareConversationOutwardDeliveryReady(input: Readonly<{
   if (currentness.kind !== 'current') return currentness;
   const rejection = validateConversationOutwardDeliveryBeforeCustody({
     obligation: input.obligation,
-    outboundTextLimit: currentness.outboundTextLimit,
+    ...(currentness.outboundTextLimit === undefined ? {} : { outboundTextLimit: currentness.outboundTextLimit }),
   });
-  if (rejection !== null && !isConversationOutwardDeliveryKnownNoEffect(rejection)) {
+  if (rejection !== null) {
     return { kind: 'invalid', reason: rejection };
   }
   return {
     kind: 'ready',
     obligation: input.obligation,
-    outboundTextLimit: currentness.outboundTextLimit,
-    ...(rejection === null ? {} : { knownNoEffect: rejection }),
+    ...(currentness.outboundTextLimit === undefined ? {} : { outboundTextLimit: currentness.outboundTextLimit }),
   };
 }
 
@@ -2950,30 +2966,6 @@ export async function acceptConversationOutwardDeliveryReady(input: Readonly<{
     if (ensured.kind === 'invalid') return { kind: 'invalid', reason: ensured.reason };
     if (ensured.kind === 'conflict') return { kind: 'invalid', reason: 'routeMismatch' };
     if (ensured.kind === 'retired') return ensured;
-    if (input.prepared.knownNoEffect !== undefined) {
-      const custody = settleConversationDeliveryKnownNoEffectBeforeProvider(ensured.record.custody);
-      if (custody !== null) {
-        const settled = await input.store.compareAndSwap({
-          custodyId: ensured.record.custodyId,
-          expectedRevision: ensured.record.revision,
-          custody,
-        });
-        if (settled.kind === 'updated') {
-          return {
-            kind: 'accepted',
-            custodyId: settled.record.custodyId,
-            custody: settled.record.custody,
-          };
-        }
-        if (settled.kind === 'invalid') return { kind: 'invalid', reason: settled.reason };
-        if (settled.kind === 'unavailable') {
-          return {
-            kind: 'unavailable',
-            reason: settled.reason === 'cancelled' ? 'cancelled' : 'storageUnavailable',
-          };
-        }
-      }
-    }
     return {
       kind: 'accepted',
       custodyId: ensured.record.custodyId,
@@ -3043,6 +3035,7 @@ const CONVERSATION_CONTROL_RESPONSE_KINDS = new Set<ConversationControlResponseK
   'newSession',
   'approval',
   'userAction',
+  'stop',
   'refusal',
   'recovery',
 ]);
@@ -3132,6 +3125,17 @@ function normalizeCurrentnessResult(value: unknown): ConversationOutwardDelivery
   return { kind: 'suppressed', reason: 'currentnessUnavailable' };
 }
 
+/** External-effect evidence cannot bind a returned thread to a different mailbox. */
+function normalizeConversationStartedThreadResult(
+  obligation: ConversationStoredOutwardDeliveryObligation,
+  result: ConversationDeliveryResultV1,
+): ConversationDeliveryResultV1 {
+  if (obligation.newThread === undefined || (result.kind !== 'delivered' && result.kind !== 'outcomeUnknown')
+    || result.endpoint === undefined
+    || (result.endpoint.kind === 'thread' && result.endpoint.parentId === obligation.endpoint.id)) return result;
+  return { kind: 'outcomeUnknown', ...(result.providerMessageIds === undefined ? {} : { providerMessageIds: result.providerMessageIds }) };
+}
+
 export type ConversationOutwardDeliveryResult =
   | Readonly<{ kind: 'settled'; custody: ConversationDeliveryCustody }>
   | Readonly<{ kind: 'retired' }>
@@ -3152,7 +3156,6 @@ export type ConversationOutwardDeliveryResult =
       | 'obligationConflict'
       | 'attemptInProgress'
       | 'notDue'
-      | 'attemptLimitReached'
       | 'custodyChangedBeforeAttempt'
       | 'cancelled'
       | 'connectionUnavailable'
@@ -3176,11 +3179,11 @@ type ConversationOutwardDeliveryPreEffectSuppression = Readonly<{
   reason: ConversationOutwardDeliverySuppressionReason;
 }>;
 
-type ConversationOutwardDeliveryProviderInvocationResult =
+export type ConversationOutwardDeliveryProviderInvocationResult =
   | ConversationDeliveryResultV1
   | ConversationOutwardDeliveryPreEffectSuppression;
 
-function isConversationOutwardDeliveryPreEffectSuppression(
+export function isConversationOutwardDeliveryPreEffectSuppression(
   value: ConversationOutwardDeliveryProviderInvocationResult,
 ): value is ConversationOutwardDeliveryPreEffectSuppression {
   return value.kind === 'suppressedBeforeProviderEffect';
@@ -3229,52 +3232,11 @@ async function persistConversationOutwardDeliverySuppression(input: Readonly<{
   };
 }
 
-/**
- * The durable counterpart of a current provider-bound size rejection. It may
- * run only before an attempt exists, so a crash can never erase ambiguity
- * about an already-started provider effect.
- */
-async function settleConversationOutwardDeliveryKnownNoEffectBeforeProvider(input: Readonly<{
-  store: ConversationOutwardDeliveryStore;
-  record: ConversationOutwardDeliveryRecord;
-  signal: AbortSignal;
-}>): Promise<ConversationOutwardDeliveryResult | null> {
-  if (input.signal.aborted) return { kind: 'notAttempted', reason: 'cancelled' };
-  const custody = settleConversationDeliveryKnownNoEffectBeforeProvider(input.record.custody);
-  if (custody === null) return null;
-  let persisted: Awaited<ReturnType<ConversationOutwardDeliveryStore['compareAndSwap']>>;
-  try {
-    persisted = await input.store.compareAndSwap({
-      custodyId: input.record.custodyId,
-      expectedRevision: input.record.revision,
-      custody,
-    });
-  } catch {
-    return {
-      kind: 'notAttempted',
-      reason: input.signal.aborted ? 'cancelled' : 'custodyUnavailable',
-    };
-  }
-  if (persisted.kind === 'unavailable') {
-    return {
-      kind: 'notAttempted',
-      reason: persisted.reason === 'storageUnavailable' ? 'custodyUnavailable' : persisted.reason,
-    };
-  }
-  if (persisted.kind === 'conflict') {
-    return { kind: 'notAttempted', reason: 'custodyChangedBeforeAttempt' };
-  }
-  if (persisted.kind === 'invalid') {
-    return { kind: 'notAttempted', reason: persisted.reason };
-  }
-  return { kind: 'settled', custody: persisted.record.custody };
-}
-
 /** The only outward delivery path: persist known no-effect or win custody, invoke, then settle. */
 export async function deliverConversationOutwardDelivery(input: Readonly<{
   store: ConversationOutwardDeliveryStore;
   obligation: ConversationOutwardDeliveryObligation;
-  /** Required for a new obligation; retained rows were already admitted through this bound. */
+  /** A provider-native ceiling when declared; retained rows were already admitted. */
   outboundTextLimit?: ConversationOutboundTextLimit;
   /**
    * The canonical scanner may redrive its exact parsed row without re-running
@@ -3292,21 +3254,12 @@ export async function deliverConversationOutwardDelivery(input: Readonly<{
 }>): Promise<ConversationOutwardDeliveryResult> {
   if (input.signal.aborted) return { kind: 'notAttempted', reason: 'cancelled' };
   let ensured: Awaited<ReturnType<ConversationOutwardDeliveryStore['ensure']>>;
-  let permanentPreProviderNoEffect = false;
   if (input.retainedRecord === undefined) {
-    const preCustodyRejection = input.outboundTextLimit === undefined
-      ? 'invalidOutboundTextLimit'
-      : validateConversationOutwardDeliveryBeforeCustody({
-        obligation: input.obligation,
-        outboundTextLimit: input.outboundTextLimit,
-      });
-    if (preCustodyRejection !== null) {
-      permanentPreProviderNoEffect = preCustodyRejection === 'contentUtf8LimitExceeded'
-        || preCustodyRejection === 'providerChunkLimitExceeded';
-      if (!permanentPreProviderNoEffect) {
-        return { kind: 'notAttempted', reason: preCustodyRejection };
-      }
-    }
+    const preCustodyRejection = validateConversationOutwardDeliveryBeforeCustody({
+      obligation: input.obligation,
+      outboundTextLimit: input.outboundTextLimit,
+    });
+    if (preCustodyRejection !== null) return { kind: 'notAttempted', reason: preCustodyRejection };
     try {
       ensured = await input.store.ensure(input.obligation);
     } catch {
@@ -3337,19 +3290,6 @@ export async function deliverConversationOutwardDelivery(input: Readonly<{
   }
   if (!hasRetainedConversationOutwardDeliveryContent(ensured.record.obligation)) {
     return { kind: 'notAttempted', reason: 'invalidRow' };
-  }
-
-  if (permanentPreProviderNoEffect) {
-    const settled = await settleConversationOutwardDeliveryKnownNoEffectBeforeProvider({
-      store: input.store,
-      record: ensured.record,
-      signal: input.signal,
-    });
-    if (settled !== null) return settled;
-    return {
-      kind: 'notAttempted',
-      reason: ensured.record.custody.state === 'attempting' ? 'attemptInProgress' : 'notDue',
-    };
   }
 
   const started = startConversationDeliveryAttempt({
@@ -3438,7 +3378,7 @@ export async function deliverConversationOutwardDelivery(input: Readonly<{
   const settled = settleConversationDeliveryAttempt({
     custody: claimed.record.custody,
     attemptId: input.attemptId,
-    result: providerResult,
+    result: normalizeConversationStartedThreadResult(claimed.record.obligation, providerResult),
     now: input.now(),
   });
   if (settled.kind === 'staleAttempt') {
@@ -3500,354 +3440,6 @@ export async function redriveConversationOutwardDelivery(input: Readonly<{
     signal: input.signal,
     authority: input.authority,
     deliver: input.deliver,
-  });
-}
-
-type ConversationOutwardDeliveryProviderActionInvocation = Readonly<{
-  action: AdmittedTargetedOperationExecutionHandle<JsonValue, ConversationDeliveryResultV1>;
-  input: ConversationDeliveryInputV1 | ConversationDeliveryReconcileInputV1;
-  expectedExecutionOrigin: PluginMachineExecutionOriginV1;
-}>;
-
-type ConversationOutwardDeliveryProviderActionBoundary = Readonly<{
-  authority: ConversationOutwardDeliveryAuthority;
-  invoke(signal: AbortSignal): Promise<ConversationOutwardDeliveryProviderInvocationResult>;
-}>;
-
-/**
- * Builds the provider Action input from the same connection snapshot that just
- * passed canonical route currentness. The raw provider config remains opaque
- * to Channels but is admitted by the public provider Action schema before
- * dispatch. No provider callback can choose a target or origin itself.
- */
-async function prepareConversationOutwardDeliveryProviderActionInvocation(input: Readonly<{
-  stateCollection: ChannelStateCollection;
-  targetedContributions: TargetedContributionsService;
-  record: ConversationOutwardDeliveryRecord;
-  signal: AbortSignal;
-  operation: 'deliver' | 'reconcile';
-}>): Promise<
-  | Readonly<{ kind: 'ready'; invocation: ConversationOutwardDeliveryProviderActionInvocation }>
-  | ConversationOutwardDeliveryCurrentnessResult
-> {
-  if (!hasRetainedConversationOutwardDeliveryContent(input.record.obligation)) {
-    return { kind: 'suppressed', reason: 'currentnessUnavailable' };
-  }
-  const currentness = await checkConversationOutwardDeliveryRouteCurrentness({
-    stateCollection: input.stateCollection,
-    signal: input.signal,
-    obligation: input.record.obligation,
-    requireBindingRevision: false,
-  });
-  if (currentness.kind === 'suppressed') return currentness;
-  if (currentness.kind === 'unavailable') {
-    return {
-      kind: 'suppressed',
-      reason: currentness.reason === 'cancelled' ? 'cancelled' : 'currentnessUnavailable',
-    };
-  }
-  const provider = currentness.connection.providerAction;
-  const contribution = await readCurrentProviderContributionForPersistedSelection({
-    context: {
-      targetedContributions: input.targetedContributions,
-      signal: input.signal,
-    },
-    providerPluginId: provider.providerPluginId,
-    providerContributionSelection: provider.providerContributionSelection,
-  });
-  const action = input.operation === 'deliver'
-    ? contribution.operations.messageDeliver
-    : contribution.operations.deliveryReconcile;
-  if (action === undefined) return { kind: 'suppressed', reason: 'currentnessUnavailable' };
-  const providerConnection = {
-    v: 1,
-    connectionId: input.record.obligation.connectionId,
-    providerConnectionKey: provider.providerConnectionKey,
-    providerConfigVersion: provider.providerConfigVersion,
-    providerConfig: provider.providerConfig,
-    credentialRef: currentness.connection.credentialRef,
-  };
-  const actionInput = input.operation === 'deliver'
-    ? ConversationDeliveryInputV1Schema.safeParse({
-      ...providerConnection,
-      endpoint: input.record.obligation.endpoint,
-      content: input.record.obligation.content,
-      deliveryKey: input.record.obligation.deliveryKey,
-      ...(input.record.obligation.replyContext === undefined
-        ? {}
-        : { replyContext: input.record.obligation.replyContext }),
-      mentionPolicy: input.record.obligation.mentionPolicy,
-      linkPreviewPolicy: input.record.obligation.linkPreviewPolicy,
-    })
-    : ConversationDeliveryReconcileInputV1Schema.safeParse({
-      ...providerConnection,
-      endpoint: input.record.obligation.endpoint,
-      deliveryKey: input.record.obligation.deliveryKey,
-    });
-  if (!actionInput.success) return { kind: 'suppressed', reason: 'currentnessUnavailable' };
-  return {
-    kind: 'ready',
-    invocation: {
-      action,
-      input: actionInput.data,
-      expectedExecutionOrigin: currentness.connection.transportOrigin,
-    },
-  };
-}
-
-function createConversationOutwardDeliveryProviderActionBoundary(input: Readonly<{
-  stateCollection: ChannelStateCollection;
-  targetedContributions: TargetedContributionsService;
-  actions: ActionsService;
-  operation: 'deliver' | 'reconcile';
-}>): ConversationOutwardDeliveryProviderActionBoundary {
-  let invocation: ConversationOutwardDeliveryProviderActionInvocation | undefined;
-  return {
-    authority: {
-      async checkCurrentness(check) {
-        invocation = undefined;
-        const prepared = await prepareConversationOutwardDeliveryProviderActionInvocation({
-          stateCollection: input.stateCollection,
-          targetedContributions: input.targetedContributions,
-          record: check.record,
-          signal: check.signal,
-          operation: input.operation,
-        });
-        if (prepared.kind !== 'ready') return prepared;
-        invocation = prepared.invocation;
-        return { kind: 'current' };
-      },
-    },
-    async invoke(signal) {
-      const current = invocation;
-      if (current === undefined) return { kind: 'outcomeUnknown' };
-      let execution: Awaited<ReturnType<ActionsService['executeAdmittedTargetedOperationWithExecutionOrigin']>>;
-      try {
-        execution = await input.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
-          current.action,
-          current.input,
-          {
-            signal,
-            expectedExecutionOrigin: current.expectedExecutionOrigin,
-          },
-        );
-      } catch (error) {
-        // This call is the canonical admitted Action transport. The advisory
-        // marker is retry-safe here only because it arrived through this host
-        // boundary; a standalone structural PluginError is not provenance.
-        if (isPluginActionHandlerInvocationNotStartedAdvisory(error)) {
-          return { kind: 'notDelivered', retry: 'safe' };
-        }
-        throw error;
-      }
-      // Origin equality is the host Actions owner's fence: a settled
-      // origin-bearing call already proves expected == before == after, so
-      // the returned origin is the settled transport authority.
-      const result = ConversationDeliveryResultV1Schema.safeParse(execution.result);
-      return result.success ? result.data : { kind: 'outcomeUnknown' };
-    },
-  };
-}
-
-/**
- * Executes an already-admitted custody row through the one provider Action
- * boundary. It retains the exact persisted obligation and cannot synthesize a
- * delivery key, route, or fallback send on restart.
- */
-export async function redriveConversationOutwardDeliveryThroughProviderAction(input: Readonly<{
-  stateCollection: ChannelStateCollection;
-  targetedContributions: TargetedContributionsService;
-  actions: ActionsService;
-  store: ConversationOutwardDeliveryStore;
-  record: ConversationOutwardDeliveryRecord;
-  attemptId: string;
-  now: () => number;
-  signal: AbortSignal;
-}>): Promise<ConversationOutwardDeliveryResult> {
-  if (!hasRetainedConversationOutwardDeliveryContent(input.record.obligation)) {
-    return isConversationDeliveryAutomaticTerminal(input.record.custody)
-      ? { kind: 'settled', custody: input.record.custody }
-      : { kind: 'notAttempted', reason: 'invalidRow' };
-  }
-  const currentness = await checkConversationOutwardDeliveryRouteCurrentness({
-    stateCollection: input.stateCollection,
-    signal: input.signal,
-    obligation: input.record.obligation,
-    requireBindingRevision: false,
-  });
-  if (currentness.kind === 'current') {
-    const rejection = validateConversationOutwardDeliveryBeforeCustody({
-      obligation: input.record.obligation,
-      outboundTextLimit: currentness.outboundTextLimit,
-    });
-    if (rejection !== null && isConversationOutwardDeliveryKnownNoEffect(rejection)) {
-      const settled = await settleConversationOutwardDeliveryKnownNoEffectBeforeProvider({
-        store: input.store,
-        record: input.record,
-        signal: input.signal,
-      });
-      if (settled !== null) return settled;
-    }
-  }
-  const boundary = createConversationOutwardDeliveryProviderActionBoundary({
-    stateCollection: input.stateCollection,
-    targetedContributions: input.targetedContributions,
-    actions: input.actions,
-    operation: 'deliver',
-  });
-  return await redriveConversationOutwardDelivery({
-    store: input.store,
-    record: input.record,
-    attemptId: input.attemptId,
-    now: input.now,
-    signal: input.signal,
-    authority: boundary.authority,
-    deliver: async ({ signal }) => await boundary.invoke(signal),
-  });
-}
-
-/** Fresh source producers share the exact provider Action/currentness boundary. */
-export async function deliverConversationOutwardDeliveryThroughProviderAction(input: Readonly<{
-  stateCollection: ChannelStateCollection;
-  targetedContributions: TargetedContributionsService;
-  actions: ActionsService;
-  store: ConversationOutwardDeliveryStore;
-  obligation: ConversationOutwardDeliveryObligation;
-  outboundTextLimit: ConversationOutboundTextLimit;
-  attemptId: string;
-  now: () => number;
-  signal: AbortSignal;
-}>): Promise<ConversationOutwardDeliveryResult> {
-  const boundary = createConversationOutwardDeliveryProviderActionBoundary({
-    stateCollection: input.stateCollection,
-    targetedContributions: input.targetedContributions,
-    actions: input.actions,
-    operation: 'deliver',
-  });
-  return await deliverConversationOutwardDelivery({
-    store: input.store,
-    obligation: input.obligation,
-    outboundTextLimit: input.outboundTextLimit,
-    attemptId: input.attemptId,
-    now: input.now,
-    signal: input.signal,
-    authority: boundary.authority,
-    deliver: async ({ signal }) => await boundary.invoke(signal),
-  });
-}
-
-/**
- * The Session projection source reaches custody only here. It re-reads the
- * current binding to construct the binding-scoped authority arm, derives the
- * bounded external delivery key from the incumbent opaque custody identity,
- * and then enters the same provider/currentness path as every other source.
- */
-export async function deliverConversationSessionProjectionOutwardDelivery(input: Readonly<{
-  stateCollection: ChannelStateCollection;
-  targetedContributions: TargetedContributionsService;
-  actions: ActionsService;
-  store: ConversationOutwardDeliveryStore;
-  binding: ConversationSessionProjectionBinding;
-  source: ConversationSessionProjectionSource;
-  content: string;
-  attemptId: string;
-  now: () => number;
-  signal: AbortSignal;
-}>): Promise<ConversationOutwardDeliveryResult> {
-  if (input.signal.aborted) return { kind: 'notAttempted', reason: 'cancelled' };
-  let accountLocalBindingPolicy: ConversationAccountLocalBindingPolicyModule;
-  try {
-    accountLocalBindingPolicy = await loadConversationAccountLocalBindingPolicyModule();
-  } catch {
-    return { kind: 'notAttempted', reason: 'custodyUnavailable' };
-  }
-  let bindingRow: StoredCollectionRow | null;
-  try {
-    bindingRow = await input.stateCollection.get(input.binding.bindingId, {
-      signal: input.signal,
-    }) as unknown as StoredCollectionRow | null;
-  } catch {
-    return {
-      kind: 'notAttempted',
-      reason: input.signal.aborted ? 'cancelled' : 'custodyUnavailable',
-    };
-  }
-  if (bindingRow === null) return { kind: 'notAttempted', reason: 'custodyChangedBeforeAttempt' };
-  const binding = readBindingFacts({
-    accountLocalBindingPolicy,
-    row: bindingRow,
-    bindingId: input.binding.bindingId,
-  });
-  const target = binding === null
-    ? { success: false as const }
-    : ConversationBindingTargetV1Schema.safeParse(binding.target);
-  if (binding === null
-    || !target.success
-    || target.data.kind !== 'session'
-    || binding.revision !== input.binding.revision
-    || binding.connectionId !== input.binding.connectionId
-    || target.data.sessionId !== input.binding.target.sessionId
-    || target.data.sessionId !== input.source.sessionId
-    || target.data.policy.deliveryMode !== input.binding.target.deliveryMode
-    || !binding.enabled
-    || binding.deletionState !== 'none'
-    || binding.linkPreviewPolicy === undefined) {
-    return { kind: 'notAttempted', reason: 'custodyChangedBeforeAttempt' };
-  }
-  let connectionRow: StoredCollectionRow | null;
-  try {
-    connectionRow = await input.stateCollection.get(binding.connectionId, {
-      signal: input.signal,
-    }) as unknown as StoredCollectionRow | null;
-  } catch {
-    return {
-      kind: 'notAttempted',
-      reason: input.signal.aborted ? 'cancelled' : 'custodyUnavailable',
-    };
-  }
-  if (connectionRow === null) return { kind: 'notAttempted', reason: 'connectionUnavailable' };
-  const connection = readConnectionFacts({
-    accountLocalBindingPolicy,
-    row: connectionRow,
-    connectionId: binding.connectionId,
-  });
-  if (connection === null) {
-    return { kind: 'notAttempted', reason: 'connectionCorrupt' };
-  }
-  const provisional: ConversationOutwardDeliveryObligation = {
-    connectionId: binding.connectionId,
-    bindingId: input.binding.bindingId,
-    routeAuthority: {
-      connectionAuthorityEpoch: connection.authorityEpoch,
-      bindingRevision: binding.revision,
-      bindingAuthorityEpoch: binding.authorityEpoch,
-    },
-    source: input.source,
-    endpoint: binding.endpoint,
-    content: input.content,
-    // The persistent identity deliberately excludes this derived public key.
-    deliveryKey: 'channels:delivery:v1:pending',
-    mentionPolicy: 'suppress',
-    linkPreviewPolicy: binding.linkPreviewPolicy,
-  };
-  const custodyId = await deriveConversationOutwardDeliveryCustodyId({
-    routingIdentityKey: connection.routingIdentityKey,
-    obligation: provisional,
-  });
-  if (custodyId === null) return { kind: 'notAttempted', reason: 'connectionCorrupt' };
-  return await deliverConversationOutwardDeliveryThroughProviderAction({
-    stateCollection: input.stateCollection,
-    targetedContributions: input.targetedContributions,
-    actions: input.actions,
-    store: input.store,
-    obligation: {
-      ...provisional,
-      deliveryKey: `channels:delivery:v1:${custodyId}`,
-    },
-    outboundTextLimit: connection.outboundTextLimit,
-    attemptId: input.attemptId,
-    now: input.now,
-    signal: input.signal,
   });
 }
 
@@ -3939,7 +3531,7 @@ export async function reconcileConversationOutwardDeliveryAttempt(input: Readonl
   const settled = settleConversationDeliveryAttempt({
     custody: claimed.record.custody,
     attemptId: input.recoveryAttemptId,
-    result: providerResult,
+    result: normalizeConversationStartedThreadResult(claimed.record.obligation, providerResult),
     now: input.now(),
   });
   if (settled.kind === 'staleAttempt') {
@@ -3959,49 +3551,6 @@ export async function reconcileConversationOutwardDeliveryAttempt(input: Readonl
     return { kind: 'settlementPending', custody: settled.custody, providerResult };
   }
   return { kind: 'settled', custody: persisted.record.custody };
-}
-
-/**
- * Reconciles one retained attempt through its owning provider Action. Like
- * redrive, this has no provider-specific recovery path outside the canonical
- * custody state machine; an unavailable optional reconciliation settles as
- * outcome-unknown rather than issuing a second message delivery.
- */
-export async function reconcileConversationOutwardDeliveryAttemptThroughProviderAction(input: Readonly<{
-  stateCollection: ChannelStateCollection;
-  targetedContributions: TargetedContributionsService;
-  actions: ActionsService;
-  store: ConversationOutwardDeliveryStore;
-  record: ConversationOutwardDeliveryRecord;
-  recoveryAttemptId: string;
-  staleAfterMs: number;
-  now: () => number;
-  signal: AbortSignal;
-}>): Promise<ConversationOutwardDeliveryRecoveryResult> {
-  const boundary = createConversationOutwardDeliveryProviderActionBoundary({
-    stateCollection: input.stateCollection,
-    targetedContributions: input.targetedContributions,
-    actions: input.actions,
-    operation: 'reconcile',
-  });
-  return await reconcileConversationOutwardDeliveryAttempt({
-    store: input.store,
-    record: input.record,
-    recoveryAttemptId: input.recoveryAttemptId,
-    staleAfterMs: input.staleAfterMs,
-    now: input.now,
-    signal: input.signal,
-    authority: boundary.authority,
-    reconcile: async ({ signal }) => {
-      const invocation = await boundary.invoke(signal);
-      // Recovery follows an earlier attempting send. Even when this optional
-      // reconciliation Action cannot start, that prior provider effect remains
-      // ambiguous and must not be rewritten as a no-effect suppression.
-      return isConversationOutwardDeliveryPreEffectSuppression(invocation)
-        ? { kind: 'outcomeUnknown' }
-        : invocation;
-    },
-  });
 }
 
 export function createReadyConversationOutwardDeliveryRecord(input: Readonly<{

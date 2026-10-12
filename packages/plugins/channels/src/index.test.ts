@@ -55,8 +55,7 @@ describe('Channels plugin daemon entry', () => {
     );
 
     // Both declared Collections are present, and each carries exactly the
-    // migration edges the manifest declares — today none, because neither
-    // Collection declares a readable schema version below its current one.
+    // migration edges the manifest declares, including the retained-row upgrades.
     expect(Object.keys(projection).sort()).toEqual(
       [CHANNEL_DELIVERIES_COLLECTION_ID, CHANNEL_STATE_COLLECTION_ID].sort(),
     );

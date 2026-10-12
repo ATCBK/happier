@@ -29,9 +29,6 @@ export type ConversationSessionBindingAttentionV1 = Readonly<{
   frontierRevision?: number;
 }>;
 
-/** The widest `{"bindingId":…,"reason":…}` entry this projection can serialize. */
-export const MAX_CONVERSATION_SESSION_BINDING_ATTENTION_ENTRY_BYTES = 240;
-
 const ATTENTION_REASONS: ReadonlySet<string> = new Set<ConversationSessionBindingAttentionReasonV1>([
   'connectionUnavailable',
   'providerCredentialInvalid',

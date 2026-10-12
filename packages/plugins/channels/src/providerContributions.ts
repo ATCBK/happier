@@ -15,14 +15,10 @@ type ProviderContributionReadContext = Readonly<{
 }>;
 
 /**
- * `definePlugin` owns both the declared point and the live reference, so the
- * reference lives in the module that also composes every daemon handler. This
- * owner is reached from the mounted Settings surface through the delivery
- * projections it reads, and a static edge would put that whole activation
- * spine in the React Native artifact. The concrete reference is therefore
- * loaded only when a provider contribution is actually resolved — the same
- * deferred-module shape the delivery owner already uses for the Collection
- * declarations.
+ * Daemon provider discovery reads the live point from the one `definePlugin`
+ * composition. Invocation-time loading keeps the manifest ↔ handler import
+ * cycle initialization-safe. Browser surfaces consume portable declarations
+ * and delivery projections without reaching this daemon selection owner.
  */
 type ChannelsManifestModule = typeof import('./manifest.js');
 

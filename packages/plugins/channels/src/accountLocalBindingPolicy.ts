@@ -9,10 +9,9 @@ import {
 import {
   CONVERSATION_BINDING_INPUT_MODES_V1,
   ConversationBindingV1Schema,
+  conversationThreadRouterAllowedPrincipalIdsV1,
   ConversationConnectionIdV1Schema,
   ConversationProviderConnectionStopInputV1Schema,
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-  MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
   MAX_CONVERSATION_OBSERVATION_AGE_MS,
   MIN_CONVERSATION_OBSERVATION_AGE_MS,
   conversationBindingInputModesForEndpointV1,
@@ -22,6 +21,7 @@ import {
   type ConversationBindingV1,
   type ConversationProviderConnectionStopInputV1,
 } from '@happier-dev/channels-protocol/v1';
+import { createProtocolStoredReadSchema } from '@happier-dev/plugin-sdk/protocol';
 
 import {
   CHANNEL_STATE_COLLECTION,
@@ -59,6 +59,7 @@ import {
 } from './commandPolicy.js';
 
 const MANAGEMENT_SUMMARY_MAX_CODE_POINTS = 28;
+const storedBindingSchema = createProtocolStoredReadSchema(ConversationBindingV1Schema);
 
 export type ChannelStateJsonRecord = Readonly<Record<string, JsonValue>>;
 export type ChannelStateRow = Readonly<{
@@ -97,6 +98,7 @@ export type ConversationBindingUpdateRow = Readonly<{
 
 export type ConversationBindingManagementRow = Readonly<{
   bindingId: string;
+  parentBindingId?: string;
   revision: number;
   connectionId: string;
   endpoint: Readonly<{
@@ -104,7 +106,7 @@ export type ConversationBindingManagementRow = Readonly<{
     label?: string;
   }>;
   target: Readonly<{
-    kind: 'session' | 'automation';
+    kind: 'session' | 'automation' | 'threadRouter';
     summary: string;
   }>;
   inputMode: 'directMentionsOnly' | 'addressedMessages' | 'allAllowedMessages';
@@ -750,36 +752,37 @@ export async function readConversationConnectionManagementRows(input: Readonly<{
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }>): Promise<Readonly<{ connections: readonly ConversationConnectionManagementRow[] }>> {
-  assertCurrent(input, 'channels_connection_update');
-  const page = await input.collection.query({
-    index: CHANNEL_STATE_INDEX_ID.byKind,
-    prefix: [CHANNEL_STATE_RECORD_KIND.connection],
-    order: 'asc',
-    limit: MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
-  }, input.signal === undefined ? undefined : { signal: input.signal });
-  assertCurrent(input, 'channels_connection_update');
-  if (page.nextCursor !== undefined) {
-    throw policyError(
-      'channels_connection_management_page_invalid',
-      'The Channels connection index exceeded the canonical connection bound.',
-    );
-  }
-  const connections = await Promise.all(page.rows.map(async (row) => {
-    const connection = projectConversationConnectionManagementRow(row);
-    const ingressConflict = await readConversationConnectionIngressConflictAttention({
-      collection: input.collection,
-      connectionId: connection.connectionId,
-      signal: input.signal,
-      assertCurrent: input.assertCurrent,
-    });
-    return {
-      ...connection,
-      attention: {
-        ...connection.attention,
-        ingressConflict,
-      },
-    };
-  }));
+  const connections: ConversationConnectionManagementRow[] = [];
+  let cursor: string | undefined;
+  do {
+    assertCurrent(input, 'channels_connection_update');
+    const page = await input.collection.query({
+      index: CHANNEL_STATE_INDEX_ID.byKind,
+      prefix: [CHANNEL_STATE_RECORD_KIND.connection],
+      order: 'asc',
+      limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
+      ...(cursor === undefined ? {} : { cursor }),
+    }, input.signal === undefined ? undefined : { signal: input.signal });
+    assertCurrent(input, 'channels_connection_update');
+    const projected = await Promise.all(page.rows.map(async (row) => {
+      const connection = projectConversationConnectionManagementRow(row);
+      const ingressConflict = await readConversationConnectionIngressConflictAttention({
+        collection: input.collection,
+        connectionId: connection.connectionId,
+        signal: input.signal,
+        assertCurrent: input.assertCurrent,
+      });
+      return {
+        ...connection,
+        attention: {
+          ...connection.attention,
+          ingressConflict,
+        },
+      };
+    }));
+    connections.push(...projected);
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
   assertCurrent(input, 'channels_connection_update');
   return { connections };
 }
@@ -811,12 +814,11 @@ export function readConversationBindingUpdateRow(input: Readonly<{
     throw policyError('channels_binding_set_enabled_corrupt', 'Binding enablement target is not a canonical retained binding row.');
   }
   try {
-    return {
-      payload,
-      binding: ConversationBindingV1Schema.parse({
+    const binding = storedBindingSchema.parse({
         v: ownChannelStateValue(value, CHANNEL_STATE_FIELD.version),
         id: rowBindingId,
         connectionId,
+        ...(ownChannelStateValue(payload, 'parentBindingId') === undefined ? {} : { parentBindingId: ownChannelStateValue(payload, 'parentBindingId') }),
         endpoint: ownChannelStateValue(payload, 'endpoint'),
         target: ownChannelStateValue(payload, 'target'),
         allowedPrincipalIds: ownChannelStateValue(payload, 'allowedPrincipalIds'),
@@ -830,14 +832,56 @@ export function readConversationBindingUpdateRow(input: Readonly<{
         deletionState: ownChannelStateValue(payload, 'deletionState'),
         createdAt: ownChannelStateValue(value, CHANNEL_STATE_FIELD.createdAt),
         updatedAt: ownChannelStateValue(value, CHANNEL_STATE_FIELD.updatedAt),
-      }),
-    };
+      });
+    const normalized = binding.target.kind === 'threadRouter'
+        ? { ...binding, allowedPrincipalIds: conversationThreadRouterAllowedPrincipalIdsV1(binding.target) }
+        : binding;
+    if (normalized.target.kind === 'threadRouter'
+      && transitionConversationBinding({ current: normalized, requested: normalized }).kind === 'rejected') {
+      throw policyError('channels_binding_set_enabled_corrupt', 'The persisted binding violates its authority relation.');
+    }
+    return { payload, binding: normalized };
   } catch (cause) {
     throw new PluginError({
       code: 'channels_binding_set_enabled_corrupt',
       message: 'Binding enablement target is not a complete valid persisted binding.',
     }, { cause });
   }
+}
+
+/** One live router policy for child admission, projection and outward effects. */
+export async function readConversationBindingParentEligibility(input: Readonly<{
+  collection: Pick<ChannelStateBindingCollection, 'get'>;
+  binding: Pick<ConversationBindingUpdateState, 'connectionId' | 'parentBindingId'>;
+  signal: AbortSignal;
+}>): Promise<
+  | Readonly<{ kind: 'eligible'; parent?: ChannelStateRow }>
+  | Readonly<{ kind: 'notEligible' }>
+  | Readonly<{ kind: 'unavailable'; reason: 'cancelled' | 'stateUnavailable' | 'stateCorrupt' }>
+> {
+  if (input.signal.aborted) return { kind: 'unavailable', reason: 'cancelled' };
+  const parentBindingId = input.binding.parentBindingId;
+  if (parentBindingId === undefined) return { kind: 'eligible' };
+  let stored: Awaited<ReturnType<ChannelStateBindingCollection['get']>>;
+  try {
+    stored = await input.collection.get(parentBindingId, { signal: input.signal });
+  } catch {
+    return { kind: 'unavailable', reason: input.signal.aborted ? 'cancelled' : 'stateUnavailable' };
+  }
+  if (input.signal.aborted) return { kind: 'unavailable', reason: 'cancelled' };
+  if (stored === null) return { kind: 'notEligible' };
+  const parent = asChannelStateRow(stored);
+  if (parent === undefined) return { kind: 'unavailable', reason: 'stateCorrupt' };
+  let current: ConversationBindingUpdateRow;
+  try {
+    current = readConversationBindingUpdateRow({ row: parent, bindingId: parentBindingId });
+  } catch {
+    return { kind: 'unavailable', reason: 'stateCorrupt' };
+  }
+  return current.binding.connectionId === input.binding.connectionId
+    && current.binding.target.kind === 'threadRouter'
+    && current.binding.enabled && current.binding.deletionState === 'none'
+    ? { kind: 'eligible', parent } : { kind: 'notEligible' };
 }
 
 export type ConversationBindingPolicyReadResult =
@@ -932,10 +976,10 @@ function projectConversationBindingManagementRow(
   const endpointLabel = current.binding.endpoint.label ?? current.binding.endpoint.parentLabel;
   const targetSummary = current.binding.target.kind === 'session'
     ? boundedSummary(current.binding.target.sessionId)
-    : boundedSummary(current.binding.target.automationId);
+    : current.binding.target.kind === 'automation' ? boundedSummary(current.binding.target.automationId) : 'threadRouter';
   const deliveryMode = current.binding.target.kind === 'session'
     ? current.binding.target.policy.deliveryMode
-    : current.binding.target.policy.resultDelivery;
+    : current.binding.target.kind === 'automation' ? current.binding.target.policy.resultDelivery : 'none';
   const approval: ConversationBindingManagementRow['approval'] = current.binding.target.kind !== 'session'
     ? { kind: 'notApplicable' }
     : current.binding.target.policy.approvals.kind === 'off'
@@ -946,6 +990,7 @@ function projectConversationBindingManagementRow(
       };
   return {
     bindingId: row.rowId,
+    ...(current.binding.parentBindingId === undefined ? {} : { parentBindingId: current.binding.parentBindingId }),
     revision: row.revision,
     connectionId: current.binding.connectionId,
     endpoint: {
@@ -965,9 +1010,8 @@ function projectConversationBindingManagementRow(
 }
 
 /**
- * The sole bounded binding-index reader for Resource and direct Account Data
- * consumers. It pages through the generic Data owner rather than treating the
- * Channels 256-row quota as a single protocol query page.
+ * The sole binding-index reader for Resource and direct Account Data consumers.
+ * It retains every row through the generic Data owner's bounded query pages.
  */
 export async function readConversationBindingManagementRows(input: Readonly<{
   collection: ChannelStateBindingCollection;
@@ -985,9 +1029,6 @@ export async function readConversationBindingManagementRows(input: Readonly<{
   automationId?: string;
 }>): Promise<Readonly<{ bindings: readonly ConversationBindingManagementRow[] }>> {
   const bindings: ConversationBindingManagementRow[] = [];
-  // Scanned rows, not admitted rows: a Session filter must still bound the
-  // Account-wide index it pages through.
-  let scannedCount = 0;
   let cursor: string | undefined;
   do {
     assertCurrent(input);
@@ -995,18 +1036,11 @@ export async function readConversationBindingManagementRows(input: Readonly<{
       index: CHANNEL_STATE_INDEX_ID.byKind,
       prefix: [CHANNEL_STATE_RECORD_KIND.binding],
       order: 'asc',
-      limit: Math.min(MAX_CONVERSATION_BINDINGS_PER_ACCOUNT - scannedCount, PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1),
+      limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
       ...(cursor === undefined ? {} : { cursor }),
     }, input.signal === undefined ? undefined : { signal: input.signal });
     assertCurrent(input);
     for (const row of page.rows) {
-      scannedCount += 1;
-      if (scannedCount > MAX_CONVERSATION_BINDINGS_PER_ACCOUNT) {
-        throw policyError(
-          'channels_binding_management_page_invalid',
-          'The Channels binding index exceeded the canonical binding bound.',
-        );
-      }
       const current = readConversationBindingManagementCurrentRow(row);
       if (input.sessionId !== undefined
         && (current.binding.target.kind !== 'session'
@@ -1021,12 +1055,6 @@ export async function readConversationBindingManagementRows(input: Readonly<{
       bindings.push(projectConversationBindingManagementRow(row, current));
     }
     if (page.nextCursor === undefined) return { bindings };
-    if (scannedCount >= MAX_CONVERSATION_BINDINGS_PER_ACCOUNT) {
-      throw policyError(
-        'channels_binding_management_page_invalid',
-        'The Channels binding index exceeded the canonical binding bound.',
-      );
-    }
     cursor = page.nextCursor;
   } while (true);
 }
@@ -1050,7 +1078,6 @@ export async function readConversationSessionBindingDeliveryTargets(input: Reado
     );
   }
   const targets: ConversationSessionBindingDeliveryTarget[] = [];
-  let bindingCount = 0;
   let cursor: string | undefined;
   do {
     assertCurrent(input);
@@ -1058,21 +1085,11 @@ export async function readConversationSessionBindingDeliveryTargets(input: Reado
       index: CHANNEL_STATE_INDEX_ID.byKind,
       prefix: [CHANNEL_STATE_RECORD_KIND.binding],
       order: 'asc',
-      limit: Math.min(
-        MAX_CONVERSATION_BINDINGS_PER_ACCOUNT - bindingCount,
-        PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
-      ),
+      limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
       ...(cursor === undefined ? {} : { cursor }),
     }, input.signal === undefined ? undefined : { signal: input.signal });
     assertCurrent(input);
     for (const row of page.rows) {
-      bindingCount += 1;
-      if (bindingCount > MAX_CONVERSATION_BINDINGS_PER_ACCOUNT) {
-        throw policyError(
-          'channels_binding_session_target_page_invalid',
-          'The Channels binding index exceeded the canonical binding bound.',
-        );
-      }
       let current: ConversationBindingUpdateRow;
       try {
         current = readConversationBindingUpdateRow({ row, bindingId: row.rowId });
@@ -1094,12 +1111,6 @@ export async function readConversationSessionBindingDeliveryTargets(input: Reado
       }));
     }
     if (page.nextCursor === undefined) return Object.freeze(targets);
-    if (bindingCount >= MAX_CONVERSATION_BINDINGS_PER_ACCOUNT) {
-      throw policyError(
-        'channels_binding_session_target_page_invalid',
-        'The Channels binding index exceeded the canonical binding bound.',
-      );
-    }
     cursor = page.nextCursor;
   } while (true);
 }

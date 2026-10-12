@@ -1,9 +1,6 @@
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 } from '@happier-dev/plugin-sdk/collections';
-import {
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-} from '@happier-dev/channels-protocol/v1';
 
 import {
   CHANNEL_DELIVERIES_COLLECTION,
@@ -13,6 +10,7 @@ import {
   CHANNEL_STATE_RECORD_KIND,
 } from './collections.js';
 import { requireChannelsAccountStorage } from './requiredAccountStorage.js';
+import { createSupervisorWake } from './supervisorWake.js';
 import {
   classifySupervisorFailure,
   isInactiveSupervisorCollectionFailure,
@@ -21,21 +19,27 @@ import {
   acceptConversationPermissionWaitOutwardDelivery,
   createConversationOutwardDeliveryCollectionScanner,
   createConversationOutwardDeliveryCollectionStore,
-  deliverConversationSessionProjectionOutwardDelivery,
   readConversationPermissionWaitMediationSource,
   redriveConversationOutwardDelivery,
-  redriveConversationOutwardDeliveryThroughProviderAction,
-  reconcileConversationOutwardDeliveryAttemptThroughProviderAction,
   type ConversationOutwardDeliveryRecord,
   type ConversationPermissionWaitMediationSource,
 } from './outwardDelivery.js';
+import {
+  deliverConversationSessionProjectionOutwardDelivery,
+  redriveConversationOutwardDeliveryThroughProviderAction,
+  reconcileConversationOutwardDeliveryAttemptThroughProviderAction,
+} from './outwardDeliveryProviderActions.js';
 import { finalizeConversationConnectionDeletesForInvocation } from './management.js';
+import { finishStartedConversationBinding } from './conversationStart.js';
+import { readConversationSessionInputReplyRelations, markConversationSessionInputRepliesProjected } from './ingress.js';
+import { hasPendingConversationThreadBinding, isConversationDeliveryAutomaticTerminal, type ConversationDeliveryCustody } from './deliveryCustody.js';
 import {
   readConversationPendingPermissions,
   type ConversationPendingPermissionProjection,
 } from './permissionMediation.js';
 import {
   createConversationSessionProjectionCollectionStore,
+  hasConversationInputOriginFromBinding,
   projectConversationSessionTranscriptPage,
   type ConversationSessionProjectionResult,
 } from './sessionProjection.js';
@@ -81,10 +85,9 @@ type PermissionWaitMediationSnapshot = Readonly<{
  *
  * `notBefore` is the exact wall clock at which that answer can first change:
  * the earliest terminal-entry `updatedAt` the finished pass retained plus the
- * recovery window, or one whole window from now when it retained nothing,
- * because a row that terminalizes after the pass cannot become eligible sooner
- * than that. It is a derived deadline rather than a polling interval, so it
- * delays no reclamation and needs no chosen number.
+ * retention window. An empty pass parks until a Collection invalidation;
+ * failed retirement instead uses the existing recovery interval. No deadline
+ * is invented for storage that contains nothing eligible to age.
  */
 export type ConversationOutwardRetentionSweepState = Readonly<{
   cursor?: string;
@@ -99,11 +102,13 @@ export type ConversationOutwardDeliveryCycleOptions = Readonly<{
   deliveryCursor?: string;
   retentionSweep?: ConversationOutwardRetentionSweepState;
   createAttemptId?: () => string;
+  observeSession?: (sessionId: string) => Promise<void>;
 }>;
 
 export type ConversationOutwardDeliveryCycleResult = Readonly<{
   nextDeliveryCursor?: string;
   nextRetentionSweep?: ConversationOutwardRetentionSweepState;
+  nextWakeAt?: number;
 }>;
 
 export type ConversationOutwardDeliverySupervisorOptions = Readonly<{
@@ -167,7 +172,6 @@ function earliestRetentionDeadlineAnchor(
 function advanceRetentionSweep(input: Readonly<{
   scanned: Readonly<{ nextCursor?: string }>;
   earliestRetainedAt: number | undefined;
-  retentionAt: number;
 }>): ConversationOutwardRetentionSweepState {
   if (input.scanned.nextCursor !== undefined) {
     return {
@@ -175,8 +179,9 @@ function advanceRetentionSweep(input: Readonly<{
       ...(input.earliestRetainedAt === undefined ? {} : { earliestRetainedAt: input.earliestRetainedAt }),
     };
   }
+  if (input.earliestRetainedAt === undefined) return {};
   return {
-    notBefore: (input.earliestRetainedAt ?? input.retentionAt) + OUTWARD_DELIVERY_RETENTION_MS,
+    notBefore: input.earliestRetainedAt + OUTWARD_DELIVERY_RETENTION_MS,
   };
 }
 
@@ -322,7 +327,7 @@ function canPhysicallyForgetOutwardCustody(input: Readonly<{
   // occurrence while their own frontier/handoff remains behind. Their
   // content-free terminal custody is therefore the dedupe proof until those
   // owners expose affirmative unreachability.
-  if (source.kind === 'sessionProjection' || source.kind === 'automationResult') return false;
+  if (source.kind === 'sessionProjection' || source.kind === 'automationResult' || source.kind === 'conversationStart') return false;
   // A control response is not a one-shot effect either: its identity is the
   // durable ingress row that produced it, and that row stays addressable until
   // ingress retention proves the occurrence past its replay horizon. Only that
@@ -377,9 +382,9 @@ async function readUnreachableControlSourceIds(input: Readonly<{
 async function readCurrentBindingIds(context: BackgroundServiceContext): Promise<readonly string[]> {
   const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
   const bindingIds: string[] = [];
-  // Connection currentness is a per-connection fact, and the Account holds at
-  // most 32 connections against 256 bindings. Reading it once per binding cost
-  // up to 256 serial gets for the same ≤32 answers, on the wake that also owns
+  // Connection currentness is a per-connection fact shared by its bindings.
+  // Reading it once per binding cost
+  // repeated serial gets for the same answers, on the wake that also owns
   // permission-wait redrive. The enumeration is one consistent read anyway: a
   // connection that changes mid-enumeration is re-read at every effect, which
   // is where currentness is actually enforced.
@@ -390,7 +395,7 @@ async function readCurrentBindingIds(context: BackgroundServiceContext): Promise
       index: CHANNEL_STATE_INDEX_ID.byKind,
       prefix: [CHANNEL_STATE_RECORD_KIND.binding],
       order: 'asc',
-      limit: Math.min(MAX_CONVERSATION_BINDINGS_PER_ACCOUNT - bindingIds.length, PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1),
+      limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
       ...(cursor === undefined ? {} : { cursor }),
     }, { signal: context.signal });
     for (const row of page.rows) {
@@ -405,7 +410,6 @@ async function readCurrentBindingIds(context: BackgroundServiceContext): Promise
       }
       if (current) bindingIds.push(bindingId);
     }
-    if (bindingIds.length >= MAX_CONVERSATION_BINDINGS_PER_ACCOUNT) return bindingIds;
     cursor = page.nextCursor;
   } while (cursor !== undefined && !context.signal.aborted);
   return bindingIds;
@@ -428,6 +432,19 @@ export async function runConversationOutwardDeliveryCycle(
   const createAttemptId = input.createAttemptId ?? defaultAttemptId;
   const { context } = input;
   if (context.signal.aborted) return {};
+  let nextWakeAt: number | undefined;
+  const noteDeadline = (at: number | undefined) => {
+    if (at !== undefined) nextWakeAt = Math.min(nextWakeAt ?? Infinity, at);
+  };
+  const noteCustody = (custody: ConversationDeliveryCustody) => {
+    if (hasPendingConversationThreadBinding(custody)) noteDeadline(now());
+    if (custody.state === 'retryDue') noteDeadline(custody.retryNotBefore ?? now());
+    if (custody.state === 'attempting' && custody.startedAt !== undefined) noteDeadline(custody.startedAt + staleAttemptAfterMs);
+  };
+  const workFailed = (boundary: OutwardDeliveryWorkFailureBoundary, detail: Parameters<typeof logOutwardDeliverySupervisorWorkFailure>[2] = {}) => {
+    noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+    logOutwardDeliverySupervisorWorkFailure(context, boundary, detail);
+  };
   const stateCollection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
   const deliveriesCollection = requireChannelsAccountStorage(context).collection(CHANNEL_DELIVERIES_COLLECTION);
   try {
@@ -436,7 +453,7 @@ export async function runConversationOutwardDeliveryCycle(
     await finalizeConversationConnectionDeletesForInvocation(context);
   } catch (error) {
     // The retained finalizing row remains the recovery source for the next wake.
-    logOutwardDeliverySupervisorWorkFailure(context, 'delete-finalization', { error });
+    workFailed('delete-finalization', { error });
   }
   if (context.signal.aborted) return {};
   const deliveryStore = createConversationOutwardDeliveryCollectionStore({
@@ -453,8 +470,14 @@ export async function runConversationOutwardDeliveryCycle(
   const redriveRetainedDelivery = async (
     record: ConversationOutwardDeliveryRecord,
   ): Promise<void> => {
+    if (hasPendingConversationThreadBinding(record.custody)) {
+      if (!await finishStartedConversationBinding({ record, store: deliveryStore, context })) {
+        noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+      }
+      return;
+    }
     if (record.custody.state === 'attempting') {
-      await reconcileConversationOutwardDeliveryAttemptThroughProviderAction({
+      const result = await reconcileConversationOutwardDeliveryAttemptThroughProviderAction({
         stateCollection,
         targetedContributions: context.services.targetedContributions,
         actions: context.services.actions,
@@ -465,9 +488,12 @@ export async function runConversationOutwardDeliveryCycle(
         now,
         signal: context.signal,
       });
+      if ('custody' in result) noteCustody(result.custody);
+      if (result.kind === 'notAttempted' && result.reason === 'attemptStillCurrent') noteCustody(record.custody);
+      if (result.kind === 'settlementPending' || (result.kind === 'notAttempted' && result.reason === 'custodyUnavailable')) noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
       return;
     }
-    await redriveConversationOutwardDeliveryThroughProviderAction({
+    const result = await redriveConversationOutwardDeliveryThroughProviderAction({
       stateCollection,
       targetedContributions: context.services.targetedContributions,
       actions: context.services.actions,
@@ -477,11 +503,15 @@ export async function runConversationOutwardDeliveryCycle(
       now,
       signal: context.signal,
     });
+    if ('custody' in result) noteCustody(result.custody);
+    if (result.kind === 'settlementPending' || (result.kind === 'notAttempted'
+      && ['custodyUnavailable', 'connectionUnavailable', 'custodyChangedBeforeAttempt'].includes(result.reason))) noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
   };
 
   let nextDeliveryCursor = input.deliveryCursor;
   let nextRetentionSweep = input.retentionSweep;
   const cycleResult = (): ConversationOutwardDeliveryCycleResult => ({
+    ...(nextWakeAt === undefined ? {} : { nextWakeAt }),
     ...(nextDeliveryCursor === undefined ? {} : { nextDeliveryCursor }),
     ...(nextRetentionSweep === undefined ? {} : { nextRetentionSweep }),
   });
@@ -494,10 +524,11 @@ export async function runConversationOutwardDeliveryCycle(
     });
     if (scanned.kind === 'unavailable') {
       if (scanned.reason !== 'cancelled') {
-        logOutwardDeliverySupervisorWorkFailure(context, 'delivery-scan');
+        workFailed('delivery-scan');
       }
     } else {
       nextDeliveryCursor = scanned.nextCursor;
+      noteDeadline(scanned.nextRetryAt);
       for (const record of scanned.records) {
         if (context.signal.aborted) return cycleResult();
         if (record.obligation.source.kind === 'permissionWait') {
@@ -511,7 +542,7 @@ export async function runConversationOutwardDeliveryCycle(
         } catch (error) {
           // The durable row stays eligible for a later wake. A failed owner
           // operation never authorizes a synthetic resend or cursor advance.
-          logOutwardDeliverySupervisorWorkFailure(context, 'delivery-operation', {
+          workFailed('delivery-operation', {
             error,
             connectionId: record.obligation.connectionId,
             ...(record.obligation.bindingId === undefined ? {} : { bindingId: record.obligation.bindingId }),
@@ -521,7 +552,7 @@ export async function runConversationOutwardDeliveryCycle(
     }
   } catch (error) {
     // Storage/action availability is re-evaluated next wake from durable rows.
-    logOutwardDeliverySupervisorWorkFailure(context, 'delivery-scan', { error });
+    workFailed('delivery-scan', { error });
   }
 
   if (context.signal.aborted) return cycleResult();
@@ -530,7 +561,7 @@ export async function runConversationOutwardDeliveryCycle(
   try {
     bindingIds = await readCurrentBindingIds(context);
   } catch (error) {
-    logOutwardDeliverySupervisorWorkFailure(context, 'binding-discovery', { error });
+    workFailed('binding-discovery', { error });
     return cycleResult();
   }
 
@@ -545,9 +576,14 @@ export async function runConversationOutwardDeliveryCycle(
     if (source.kind === 'notEligible') continue;
     if (source.kind === 'unavailable') {
       if (source.reason !== 'cancelled') {
-        logOutwardDeliverySupervisorWorkFailure(context, 'permission-mediation', { bindingId });
+        workFailed('permission-mediation', { bindingId });
       }
       continue;
+    }
+    try {
+      await input.observeSession?.(source.source.sessionId);
+    } catch (error) {
+      workFailed('transcript-projection', { error, bindingId });
     }
     let pending: ConversationPendingPermissionProjection;
     try {
@@ -565,7 +601,7 @@ export async function runConversationOutwardDeliveryCycle(
       });
     } catch (error) {
       if (!context.signal.aborted) {
-        logOutwardDeliverySupervisorWorkFailure(context, 'permission-mediation', { error, bindingId });
+        workFailed('permission-mediation', { error, bindingId });
       }
       continue;
     }
@@ -589,8 +625,9 @@ export async function runConversationOutwardDeliveryCycle(
       });
       if ((accepted.kind === 'unavailable' || accepted.kind === 'invalid')
         && !context.signal.aborted) {
-        logOutwardDeliverySupervisorWorkFailure(context, 'permission-mediation', { bindingId });
+        workFailed('permission-mediation', { bindingId });
       }
+      if (accepted.kind === 'accepted' && accepted.custody.state === 'ready') noteDeadline(now());
     }
     permissionMediationsByBindingId.set(bindingId, {
       source: source.source,
@@ -616,7 +653,7 @@ export async function runConversationOutwardDeliveryCycle(
       try {
         await redriveRetainedDelivery(record);
       } catch (error) {
-        logOutwardDeliverySupervisorWorkFailure(context, 'delivery-operation', {
+        workFailed('delivery-operation', {
           error,
           connectionId: record.obligation.connectionId,
           ...(record.obligation.bindingId === undefined ? {} : { bindingId: record.obligation.bindingId }),
@@ -645,7 +682,7 @@ export async function runConversationOutwardDeliveryCycle(
         },
       });
     } catch (error) {
-      logOutwardDeliverySupervisorWorkFailure(context, 'permission-mediation', {
+      workFailed('permission-mediation', {
         error,
         connectionId: record.obligation.connectionId,
         ...(record.obligation.bindingId === undefined ? {} : { bindingId: record.obligation.bindingId }),
@@ -667,19 +704,39 @@ export async function runConversationOutwardDeliveryCycle(
         bindingId,
         signal: context.signal,
         now,
-        deliver: async ({ binding, item, source }) => await deliverConversationSessionProjectionOutwardDelivery({
-          stateCollection,
-          targetedContributions: context.services.targetedContributions,
-          actions: context.services.actions,
-          store: deliveryStore,
-          binding,
-          source,
-          content: item.text,
-          attemptId: createAttemptId(),
-          now,
-          signal: context.signal,
-        }),
+        deliver: async ({ binding, item, source }) => {
+          const relations = await readConversationSessionInputReplyRelations({
+            stateCollection, bindingId: binding.bindingId, connectionId: binding.connectionId,
+            sessionId: source.sessionId, signal: context.signal,
+            consumedLocalIds: item.kind === 'assistantText'
+              ? item.consumedInputs.filter(({ origin }) => hasConversationInputOriginFromBinding(origin, binding.bindingId))
+                .map(({ localId }) => localId)
+              : [],
+          });
+          const replyContext = relations.at(-1)?.replyContext;
+          const result = await deliverConversationSessionProjectionOutwardDelivery({
+            stateCollection,
+            targetedContributions: context.services.targetedContributions,
+            actions: context.services.actions,
+            store: deliveryStore,
+            binding,
+            source,
+            content: item.text,
+            ...(replyContext === undefined ? {} : { replyContext }),
+            attemptId: createAttemptId(),
+            now,
+            signal: context.signal,
+          });
+          if ('custody' in result) noteCustody(result.custody);
+          if (result.kind === 'settlementPending') noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+          if (result.kind === 'retired' || ((result.kind === 'settled' || result.kind === 'suppressed')
+            && isConversationDeliveryAutomaticTerminal(result.custody))) {
+            await markConversationSessionInputRepliesProjected({ stateCollection, relations, seq: item.seq, signal: context.signal });
+          }
+          return result;
+        },
       });
+      if (projected.kind === 'advanced' && projected.hasMore) noteDeadline(now());
       if (projected.kind === 'historyGap') {
         if (projected.disposition === 'recorded') {
           logConversationSessionProjectionHistoryGap(context, { bindingId, reason: projected.reason });
@@ -688,7 +745,7 @@ export async function runConversationOutwardDeliveryCycle(
     } catch (error) {
       // Projection never receives a local replacement owner; its unchanged
       // frontier causes the canonical page to be re-read on the next wake.
-      logOutwardDeliverySupervisorWorkFailure(context, 'transcript-projection', { error, bindingId });
+      workFailed('transcript-projection', { error, bindingId });
     }
   }
 
@@ -716,7 +773,7 @@ export async function runConversationOutwardDeliveryCycle(
     });
     if (scanned.kind === 'unavailable') {
       if (scanned.reason !== 'cancelled') {
-        logOutwardDeliverySupervisorWorkFailure(context, 'delivery-retention');
+        workFailed('delivery-retention');
       }
     } else {
       let earliestRetainedAt = earliestRetentionDeadlineAnchor(
@@ -724,7 +781,7 @@ export async function runConversationOutwardDeliveryCycle(
         scanned.earliestRetainedUpdatedAt,
       );
       if (context.signal.aborted) {
-        nextRetentionSweep = advanceRetentionSweep({ scanned, earliestRetainedAt, retentionAt });
+        nextRetentionSweep = advanceRetentionSweep({ scanned, earliestRetainedAt });
         return cycleResult();
       }
       if (scanned.records.length > 0) {
@@ -745,23 +802,23 @@ export async function runConversationOutwardDeliveryCycle(
           })),
         });
         if (retired.kind === 'unavailable' && retired.reason !== 'cancelled') {
-          logOutwardDeliverySupervisorWorkFailure(context, 'delivery-retention');
+          workFailed('delivery-retention');
         }
         if (retired.kind !== 'retired') {
           // A row this pass selected but did not retire — lost CAS or refused
           // storage — is already past the window, so the pass is not exhausted.
-          // Anchoring at the cutoff resolves the deadline to this wake, and the
-          // next one rescans exactly as it did before a pass carried one.
+          // Carry the existing recovery interval instead of parking for the
+          // retention horizon or repeatedly retrying at this same instant.
           earliestRetainedAt = earliestRetentionDeadlineAnchor(
             earliestRetainedAt,
-            retentionAt - OUTWARD_DELIVERY_RETENTION_MS,
+            retentionAt + RECONCILIATION_INTERVAL_MS - OUTWARD_DELIVERY_RETENTION_MS,
           );
         }
       }
-      nextRetentionSweep = advanceRetentionSweep({ scanned, earliestRetainedAt, retentionAt });
+      nextRetentionSweep = advanceRetentionSweep({ scanned, earliestRetainedAt });
     }
   } catch (error) {
-    logOutwardDeliverySupervisorWorkFailure(context, 'delivery-retention', { error });
+    workFailed('delivery-retention', { error });
   }
   return cycleResult();
 }
@@ -800,34 +857,73 @@ export function createConversationOutwardDeliverySupervisor(
     if (context.signal.aborted) abortFromContext();
     else context.signal.addEventListener('abort', abortFromContext, { once: true });
     let deliveryCursor: string | undefined;
+    let deliveryDeadline: number | undefined;
     let retentionSweep: ConversationOutwardRetentionSweepState | undefined;
+    const wake = createSupervisorWake(supervisorController.signal);
+    const observations: Array<{ dispose(): void }> = [];
+    const sessions = new Map<string, { dispose(): void }>();
+    const invalidate = () => {
+      deliveryCursor = undefined;
+      deliveryDeadline = undefined;
+      retentionSweep = undefined;
+      wake.wake();
+    };
     running = (async () => {
       try {
+        const account = requireChannelsAccountStorage(context);
+        for (const definition of [CHANNEL_STATE_COLLECTION, CHANNEL_DELIVERIES_COLLECTION]) {
+          observations.push(account.collection(definition).watch({ kind: 'collection' }, invalidate));
+        }
         while (!supervisorController.signal.aborted) {
+          wake.reset();
+          const observedSessions = new Set<string>();
+          let nextWakeAt: number | undefined;
           const workerContext = {
             ...context,
             signal: supervisorController.signal,
           } satisfies BackgroundServiceContext;
           try {
+            if (deliveryCursor === undefined) deliveryDeadline = undefined;
             const cycle = await runCycle({
               context: workerContext,
               now: clock.now,
               staleAttemptAfterMs,
+              observeSession: async sessionId => {
+                observedSessions.add(sessionId);
+                if (sessions.has(sessionId)) return;
+                const session = await context.services.sessions.get(sessionId, { signal: supervisorController.signal });
+                if (session !== null) sessions.set(sessionId, session.watch(invalidate));
+              },
               ...(deliveryCursor === undefined ? {} : { deliveryCursor }),
               ...(retentionSweep === undefined ? {} : { retentionSweep }),
             });
             deliveryCursor = cycle.nextDeliveryCursor;
             retentionSweep = cycle.nextRetentionSweep;
+            if (wake.isInvalidated()) {
+              deliveryCursor = undefined;
+              retentionSweep = undefined;
+            }
+            nextWakeAt = cycle.nextWakeAt;
+            if (nextWakeAt !== undefined) deliveryDeadline = Math.min(deliveryDeadline ?? Infinity, nextWakeAt);
+            nextWakeAt = deliveryDeadline;
+            if (deliveryCursor !== undefined || retentionSweep?.cursor !== undefined) nextWakeAt = clock.now();
+            else if (retentionSweep?.notBefore !== undefined) {
+              nextWakeAt = Math.min(nextWakeAt ?? Infinity, retentionSweep.notBefore);
+            }
+            for (const [id, observation] of sessions) {
+              if (!observedSessions.has(id)) { observation.dispose(); sessions.delete(id); }
+            }
           } catch (error) {
             // Leave the cursor unchanged so a transient failure cannot skip
             // a durable row. The next wake repeats canonical discovery.
             if (!supervisorController.signal.aborted) {
               logOutwardDeliverySupervisorCycleFailure(workerContext, error);
+              nextWakeAt = clock.now() + reconciliationIntervalMs;
             }
           }
           if (supervisorController.signal.aborted) break;
           try {
-            await clock.sleep(reconciliationIntervalMs, supervisorController.signal);
+            await wake.wait(clock, nextWakeAt);
           } catch {
             if (!supervisorController.signal.aborted) {
               throw new Error('Outward delivery supervisor wait failed.');
@@ -835,6 +931,8 @@ export function createConversationOutwardDeliverySupervisor(
           }
         }
       } finally {
+        for (const observation of [...observations, ...sessions.values()]) observation.dispose();
+        wake.dispose();
         context.signal.removeEventListener('abort', abortFromContext);
         controller = null;
       }

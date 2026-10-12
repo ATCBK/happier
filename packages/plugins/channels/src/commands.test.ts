@@ -55,10 +55,14 @@ describe('Channels command evidence', () => {
       initialPrompt: 'investigate this',
     });
     expect(classifyConversationCommand('/new')).toEqual({ kind: 'newSession' });
+    expect(classifyConversationCommand(' \u2003/stop\u00a0')).toEqual({ kind: 'stop' });
     expect(classifyConversationCommand('/unknown command')).toEqual({ kind: 'ordinaryText' });
   });
 
   it('never upgrades malformed recognized commands into ordinary or session-scope authority', () => {
+    expect(classifyConversationCommand('/stop extra')).toEqual({
+      kind: 'malformedCommand', command: 'stop',
+    });
     expect(classifyConversationCommand('/pair ABCD2345 extra')).toEqual({
       kind: 'malformedCommand',
       command: 'pair',

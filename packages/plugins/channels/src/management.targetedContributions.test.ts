@@ -404,7 +404,7 @@ describe('native SCM session PR binding owner', () => {
     expect(active).toHaveLength(1);
     expect(active[0]?.value.payload).toMatchObject({ target: { scopedTrigger: { triggerRevision: 1 } } });
     expect([...collection.rows.values()].filter((row) => row.value['record-kind'] === 'binding')).toHaveLength(2);
-    await expect(manageSessionPullRequestBindingForInvocation({ kind: 'list', sessionId: 'session-1' }, context)).resolves.toEqual({ kind: 'links', sessionId: 'session-1', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 12 }] });
+    await expect(manageSessionPullRequestBindingForInvocation({ kind: 'list', sessionId: 'session-1' }, context)).resolves.toEqual({ kind: 'links', sessionId: 'session-1', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 12, url: 'https://github.com/acme/widgets/pull/12' }] });
     await manageSessionPullRequestBindingForInvocation({ ...scoped, pullRequest: { repository: 'acme/widgets', number: 13 }, target: { ...scoped.target, triggerRevision: 2 } }, context);
     const observers = [...collection.rows.values()].filter((row) => row.value['record-kind'] === 'binding' && typeof row.value.payload === 'object' && row.value.payload !== null && !Array.isArray(row.value.payload) && Reflect.get(row.value.payload, 'enabled') === true);
     expect(observers).toHaveLength(1);
@@ -544,7 +544,7 @@ function durablePushCreateInput(input: Readonly<{
 }
 
 describe('prepareConversationConnectionForInvocation targeted provider selection', () => {
-  it('resolves the selected admitted contributor and binds its exact selected account to the setup handle', async () => {
+  it.each([true, false])('resolves the selected admitted contributor and binds its exact selected account to the setup handle (native limit: %s)', async (hasNativeLimit) => {
     const executeAdmittedTargetedOperationWithExecutionOrigin = vi.fn(async (action: unknown, actionInput: unknown, options: unknown) => {
       expect(action).toBe(setupAction);
       expect(actionInput).toEqual({ source: 'test' });
@@ -561,7 +561,8 @@ describe('prepareConversationConnectionForInvocation targeted provider selection
           recommendedTransport: 'socket',
           overlapSafety: 'safe',
           replayContinuity: 'none',
-          outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' },
+          ...(hasNativeLimit ? { outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' } } : {}),
+          recommendedMaximumObservationAgeMs: 30 * 86_400_000,
           setupGuidance: {
             externalUrl: 'https://provider.example.test/install',
             requiredPermissionsLabel: 'Read messages, Send messages',
@@ -584,19 +585,23 @@ describe('prepareConversationConnectionForInvocation targeted provider selection
       }),
     });
 
-    await expect(prepareConversationConnectionForInvocation({
+    const prepared = await prepareConversationConnectionForInvocation({
       providerSelection,
       providerSetupInput: { source: 'test' },
       credentialRef: selectedCredentialRef,
-    }, context)).resolves.toMatchObject({
+    }, context);
+    expect(prepared).toMatchObject({
       kind: 'ready',
       supportedTransports: ['socket'],
       recommendedTransport: 'socket',
+      recommendedMaximumObservationAgeMs: 30 * 86_400_000,
       setupGuidance: {
         externalUrl: 'https://provider.example.test/install',
         requiredPermissionsLabel: 'Read messages, Send messages',
       },
     });
+    if (hasNativeLimit) expect(prepared).toHaveProperty('outboundTextLimit', { maximum: 4_000, unit: 'unicodeCodePoints' });
+    else expect(prepared).not.toHaveProperty('outboundTextLimit');
     expect(executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledOnce();
   });
 
@@ -981,7 +986,7 @@ describe('deleteConversationConnectionForInvocation transport ownership', () => 
 });
 
 describe('createConversationConnectionForInvocation targeted provider selection', () => {
-  it('reruns the exact setup and test handles, then rejoins after a committed Account write loses its response', async () => {
+  it.each([true, false])('reruns the exact setup and test handles, then rejoins after a committed Account write loses its response (native limit: %s)', async (hasNativeLimit) => {
     const collection = createMutableConnectionStateCollection();
     seedConnectionIdentityKey(collection);
     const controller = new AbortController();
@@ -1016,7 +1021,7 @@ describe('createConversationConnectionForInvocation targeted provider selection'
             recommendedTransport: 'socket',
             overlapSafety: 'safe',
             replayContinuity: 'none',
-            outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' },
+            ...(hasNativeLimit ? { outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' } } : {}),
           },
           executionOrigin,
         };
@@ -1096,6 +1101,8 @@ describe('createConversationConnectionForInvocation targeted provider selection'
         },
       },
     });
+    if (hasNativeLimit) expect(connection.value.payload).toHaveProperty('outboundTextLimit', { maximum: 4_000, unit: 'unicodeCodePoints' });
+    else expect(connection.value.payload).not.toHaveProperty('outboundTextLimit');
   });
 
   it('preserves a quota refusal from the identity-key singleton without a connection, reservation, or later effect', async () => {
@@ -1883,7 +1890,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
     });
   });
 
-  it('re-runs setup/test, then stops the frozen old socket transport through its exact retired origin', async () => {
+  it.each([true, false])('re-runs setup/test, then stops the frozen old socket transport through its exact retired origin (native limit: %s)', async (hasNativeLimit) => {
     const connectionId = 'connection-transfer-same-config-new-origin';
     const oldExecutionOrigin = {
       serverIdentityId: 'srv-example',
@@ -1947,7 +1954,7 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
             recommendedTransport: 'socket',
             overlapSafety: 'safe',
             replayContinuity: 'none',
-            outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' },
+            ...(hasNativeLimit ? { outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' } } : {}),
           },
           executionOrigin: replacementExecutionOrigin,
         };
@@ -1997,6 +2004,9 @@ describe('transferConversationConnectionForInvocation targeted provider selectio
       authorityEpoch: 5,
     });
     expect(executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledTimes(3);
+    const transferredPayload = collection.rows.get(connectionId)?.value.payload;
+    if (hasNativeLimit) expect(transferredPayload).toHaveProperty('outboundTextLimit', { maximum: 4_000, unit: 'unicodeCodePoints' });
+    else expect(transferredPayload).not.toHaveProperty('outboundTextLimit');
     expect(stopInvocations).toEqual([{
       operationInput: {
         v: 1,

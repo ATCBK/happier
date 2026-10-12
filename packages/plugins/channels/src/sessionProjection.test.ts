@@ -208,7 +208,7 @@ function delivered(): ConversationOutwardDeliveryResult {
 }
 
 describe('Conversation Session mirror projection', () => {
-  it('delivers only closed collaborator items in page order and advances its durable frontier after custody settles', async () => {
+  it('suppresses its own user input but delivers its final answer and collaborator items before advancing', async () => {
     const store = new MemoryProjectionStore(binding(), frontier());
     const actionService = actions({
       ok: true,
@@ -252,7 +252,7 @@ describe('Conversation Session mirror projection', () => {
           itemId: 'semantic-6',
           turnId: 'turn-6',
           final: 'completed',
-          text: 'do not echo the reply to its source binding',
+          text: 'deliver the final answer to its source binding',
           consumedInputs: [{
             localId: 'local-4',
             origin: {
@@ -311,7 +311,7 @@ describe('Conversation Session mirror projection', () => {
       },
       { signal },
     );
-    expect(deliveredItems).toEqual(['semantic-5', 'semantic-7']);
+    expect(deliveredItems).toEqual(['semantic-5', 'semantic-6', 'semantic-7']);
     expect(store.updates).toEqual([{
       bindingId: 'binding-1',
       expectedBindingRevision: 7,
@@ -324,7 +324,7 @@ describe('Conversation Session mirror projection', () => {
         revision: 5,
       },
     }]);
-    expect(result).toEqual({ kind: 'advanced', hasMore: false, deliveredItemCount: 2 });
+    expect(result).toEqual({ kind: 'advanced', hasMore: false, deliveredItemCount: 3 });
   });
 
   it('does not advance across a delivery that is not durably terminal', async () => {
@@ -558,13 +558,13 @@ describe('Conversation Session projection no-history baseline', () => {
 });
 
 describe('Conversation Session projection retained frontier', () => {
-  it('accepts one exact persisted history gap at the current transcript tail', async () => {
+  it('accepts a persisted history gap with retired fields at the current transcript tail', async () => {
     const collection = new MemoryProjectionCollection();
     collection.rows.set('binding-1', persistedProjectionBindingRow());
     const frontierRow = createConversationSessionProjectionFrontierRow({
       bindingId: 'binding-1',
       targetSessionId: 'session-1',
-      transcriptCursor: { kind: 'historyGap', reason: 'cursorRejected', reportedAt: 100 },
+      transcriptCursor: { kind: 'historyGap', reason: 'cursorRejected', reportedAt: 100, retiredCursor: 'old' },
       lastScannedSeq: 8,
       revision: 5,
       now: 100,

@@ -8,7 +8,6 @@ import {
 } from '@happier-dev/plugin-ui';
 import {
   CONVERSATION_CORE_PLUGIN_ID_V1,
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
   MAX_CONVERSATION_OBSERVATION_AGE_MS,
   MIN_CONVERSATION_OBSERVATION_AGE_MS,
   conversationSessionBindingDeliveryModeForOmittedFieldV1,
@@ -358,7 +357,7 @@ export function isBindingEndpointAudience(value: unknown): value is BindingEndpo
 }
 
 export function isBindingTargetKind(value: unknown): value is BindingTargetKind {
-  return value === 'session' || value === 'automation';
+  return value === 'session' || value === 'automation' || value === 'threadRouter';
 }
 
 export function isBindingInputMode(value: unknown): value is BindingInputMode {
@@ -380,6 +379,7 @@ export function deliveryModeMatchesTarget(
   targetKind: BindingTargetKind,
   deliveryMode: BindingDeliveryMode,
 ): boolean {
+  if (targetKind === 'threadRouter') return deliveryMode === 'none';
   return targetKind === 'session'
     ? deliveryMode === 'repliesOnly' || deliveryMode === 'mirrorSession'
     : deliveryMode === 'finalResult' || deliveryMode === 'none';
@@ -390,7 +390,7 @@ export function parseBindingApproval(
   targetKind: BindingTargetKind,
 ): BindingApproval | undefined {
   if (!isRecord(value)) return undefined;
-  if (targetKind === 'automation') {
+  if (targetKind !== 'session') {
     return value.kind === 'notApplicable' ? { kind: 'notApplicable' } : undefined;
   }
   if (value.kind === 'off') return { kind: 'off' };
@@ -404,6 +404,7 @@ export function parseBindingApproval(
 export function parseBinding(value: unknown): ChannelsBinding | undefined {
   if (!isRecord(value) || !isRecord(value.endpoint) || !isRecord(value.target)) return undefined;
   const bindingId = value.bindingId;
+  const parentBindingId = value.parentBindingId;
   const revision = value.revision;
   const connectionId = value.connectionId;
   const audience = value.endpoint.audience;
@@ -414,6 +415,7 @@ export function parseBinding(value: unknown): ChannelsBinding | undefined {
   const deliveryMode = value.deliveryMode;
   const deletionState = value.deletionState;
   if (!isNonEmptyString(bindingId)
+    || (parentBindingId !== undefined && !isNonEmptyString(parentBindingId))
     || !isPositiveSafeInteger(revision)
     || !isNonEmptyString(connectionId)
     || !isBindingEndpointAudience(audience)
@@ -431,6 +433,7 @@ export function parseBinding(value: unknown): ChannelsBinding | undefined {
   if (approval === undefined || typeof enabled !== 'boolean') return undefined;
   return {
     bindingId,
+    ...(parentBindingId === undefined ? {} : { parentBindingId }),
     revision,
     connectionId,
     endpoint: {
@@ -449,9 +452,6 @@ export function parseBinding(value: unknown): ChannelsBinding | undefined {
 export function parseBindingsValue(decoded: unknown): ParsedBindings {
   if (!isRecord(decoded) || !Array.isArray(decoded.bindings)) {
     return { kind: 'invalid', reason: 'shape' };
-  }
-  if (decoded.bindings.length > MAX_CONVERSATION_BINDINGS_PER_ACCOUNT) {
-    return { kind: 'invalid', reason: 'binding' };
   }
 
   const bindings: ChannelsBinding[] = [];

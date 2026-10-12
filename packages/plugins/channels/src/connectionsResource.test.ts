@@ -87,7 +87,7 @@ function outwardDeliveryObligation(controlId: string): ConversationOutwardDelive
     routeAuthority: { connectionAuthorityEpoch: 1 },
     source: { kind: 'controlResponse', controlId, controlKind: 'refusal' },
     endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1' },
-    content: 'A delivery result needs attention.',
+    content: { text: 'A delivery result needs attention.' },
     deliveryKey: `delivery:${controlId}`,
     mentionPolicy: 'suppress',
     linkPreviewPolicy: 'suppress',

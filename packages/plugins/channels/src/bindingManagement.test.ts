@@ -43,6 +43,78 @@ const sessionTarget = {
   },
 } as const;
 
+const routerTarget = {
+  kind: 'threadRouter',
+  principalGroups: [{ id: 'sales', principalIds: ['person-1'] }],
+  routes: [{ id: 'intake', when: { group: 'sales', forwarded: 'any' }, recipe: { agentId: 'claude' }, policy: sessionTarget.policy }],
+} as const;
+
+describe('thread router management', () => {
+  it('rejects a route referencing an absent principal group before writing', async () => {
+    const collection = createCollection([connectionRow()]);
+    await expect(management.createConversationBindingForInvocation(bindingCreateInput({
+      ...routerTarget,
+      routes: [{ ...routerTarget.routes[0], when: { group: 'missing', forwarded: 'any' } }],
+    }), context(collection, vi.fn()))).rejects.toMatchObject({ code: 'channels_router_group_not_found' });
+    expect(collection.batches).toHaveLength(0);
+  });
+
+  it('creates one ordinary child and frontier under current router and connection guards', async () => {
+    const inheritedPolicy = { inboundDebounceMs: 0, allowBotSenders: true, linkPreviewPolicy: 'providerDefault', senderFeedback: 'eligibleRefusals' } as const;
+    const collection = createCollection([connectionRow(), bindingRow(routerTarget, 5, { enabled: true, ...inheritedPolicy })]);
+    const execute = vi.fn(async () => ({ ok: true, projection: 'externalShareableV1', sessionId: 'session-1', scannedThroughSeq: 0, hasMore: false, items: [] }));
+    const invocation = context(collection, execute);
+    const request = { routerBindingId: 'binding-1', expectedRouterRevision: 5, expectedConnectionRevision: 4,
+      endpoint: { kind: 'thread' as const, audience: 'shared' as const, id: 'topic-1', parentId: 'chat-1' },
+      sessionId: 'session-1', allowedPrincipalIds: ['person-1'], policy: sessionTarget.policy };
+    const first = await management.createConversationThreadBindingForInvocation(request, invocation);
+    const replay = await management.createConversationThreadBindingForInvocation(request, invocation);
+    expect(first).toMatchObject({ kind: 'created', binding: { parentBindingId: 'binding-1', allowedPrincipalIds: ['person-1'], target: sessionTarget, ...inheritedPolicy } });
+    expect(replay).toEqual(first);
+    expect([...collection.rows.values()].filter((row) => row.value['record-kind'] === 'binding')).toHaveLength(2);
+    expect([...collection.rows.values()].filter((row) => row.value['record-kind'] === 'projection-frontier')).toHaveLength(1);
+    expect(collection.batches[0]).toEqual(expect.arrayContaining([
+      { kind: 'assert', rowId: 'connection-1', expectedRevision: 4 },
+      { kind: 'assert', rowId: 'binding-1', expectedRevision: 5 },
+    ]));
+    if (first.kind !== 'created') throw new Error('Expected a created child.');
+    const childRow = collection.rows.get(first.binding.id)!;
+    collection.rows.set(first.binding.id, { ...childRow, revision: childRow.revision + 1, value: { ...childRow.value, payload: { ...childRow.value.payload, enabled: false } } });
+    expect(await management.createConversationThreadBindingForInvocation(request, invocation)).toMatchObject({ kind: 'created', binding: { enabled: false } });
+    collection.rows.delete(first.binding.id);
+    collection.tombstones.set(first.binding.id, { rowId: first.binding.id, revision: childRow.revision + 2 });
+    const frontierRow = [...collection.rows.values()].find((row) => row.value['record-kind'] === 'projection-frontier')!;
+    collection.rows.delete(frontierRow.rowId);
+    collection.tombstones.set(frontierRow.rowId, { rowId: frontierRow.rowId, revision: frontierRow.revision + 1 });
+    expect(await management.createConversationThreadBindingForInvocation(request, invocation)).toMatchObject({ kind: 'created', revision: childRow.revision + 3, binding: { id: first.binding.id, target: sessionTarget } });
+  });
+
+  it('narrows the route policy to its admitted child audience through the existing revocation owner', async () => {
+    const collection = createCollection([connectionRow(), bindingRow({ ...routerTarget, principalGroups: [{ id: 'sales', principalIds: ['person-1', 'person-2'] }] }, 5, { enabled: true })]);
+    const execute = vi.fn(async () => ({ ok: true, projection: 'externalShareableV1', sessionId: 'session-1', scannedThroughSeq: 0, hasMore: false, items: [] }));
+    const result = await management.createConversationThreadBindingForInvocation({
+      routerBindingId: 'binding-1', expectedRouterRevision: 5, expectedConnectionRevision: 4,
+      endpoint: { kind: 'thread', audience: 'shared', id: 'topic-2', parentId: 'chat-1' },
+      sessionId: 'session-1', allowedPrincipalIds: ['person-1'], policy: { ...sessionTarget.policy,
+        approvals: { kind: 'enabled', maximumScope: 'request', principalIds: ['person-2'] },
+        newSession: { kind: 'enabled', principalIds: ['person-2'], recipe: {} },
+      },
+    }, context(collection, execute));
+    expect(result).toMatchObject({ kind: 'created', binding: { target: sessionTarget } });
+  });
+
+  it('refuses a child input mode its shared-thread provider cannot deliver', async () => {
+    const collection = createCollection([connectionRow({ sharedEndpointInputModes: ['directMentionsOnly'] }), bindingRow(routerTarget, 5, { enabled: true })]);
+    const execute = vi.fn(async () => ({ ok: true, projection: 'externalShareableV1', sessionId: 'session-1', scannedThroughSeq: 0, hasMore: false, items: [] }));
+    await expect(management.createConversationThreadBindingForInvocation({
+      routerBindingId: 'binding-1', expectedRouterRevision: 5, expectedConnectionRevision: 4,
+      endpoint: { kind: 'thread', audience: 'shared', id: 'restricted-topic', parentId: 'chat-1' },
+      sessionId: 'session-1', allowedPrincipalIds: ['person-1'], policy: sessionTarget.policy,
+    }, context(collection, execute))).rejects.toMatchObject({ code: 'channels_binding_create_input_mode_unsupported' });
+    expect(collection.batches).toHaveLength(0);
+  });
+});
+
 const approvalEnabledSessionTarget = {
   ...sessionTarget,
   policy: {
@@ -158,11 +230,15 @@ function providerContributionSnapshot(
 
 function createCollection(initial: readonly StateRow[]) {
   const rows = new Map(initial.map((row) => [row.rowId, row]));
+  // The real Collection hides tombstones from get, but returns their exact
+  // revisions on an absent-create conflict so a numeric put can resurrect.
+  const tombstones = new Map<string, Readonly<{ rowId: string; revision: number }>>();
   const batches: StateMutation[][] = [];
   const gets: string[] = [];
   const queries: StateQueryInput[] = [];
   return {
     rows,
+    tombstones,
     batches,
     gets,
     queries,
@@ -198,16 +274,17 @@ function createCollection(initial: readonly StateRow[]) {
       // fake cannot silently exercise a shape the writer never receives.
       const conflicts = operations.flatMap((operation) => {
         const rowId = operation.kind === 'put' ? operation.value.id : operation.rowId;
-        const current = rows.get(rowId);
+        const current = rows.get(rowId) ?? tombstones.get(rowId);
         const matches = operation.expectedRevision === 'absent'
           ? current === undefined
           : current?.revision === operation.expectedRevision;
-        return matches ? [] : [{ rowId, revision: current?.revision ?? 0, deleted: false as const }];
+        return matches ? [] : [{ rowId, revision: current?.revision ?? 0, deleted: tombstones.has(rowId) }];
       });
       if (conflicts.length > 0) return { status: 'conflict' as const, conflicts };
       const results = operations.flatMap((operation) => {
         if (operation.kind !== 'put') return [];
-        const revision = (rows.get(operation.value.id)?.revision ?? 0) + 1;
+        const revision = (rows.get(operation.value.id)?.revision ?? tombstones.get(operation.value.id)?.revision ?? 0) + 1;
+        tombstones.delete(operation.value.id);
         rows.set(operation.value.id, { rowId: operation.value.id, revision, value: operation.value });
         return [{ rowId: operation.value.id, revision, deleted: false as const }];
       });
@@ -408,7 +485,7 @@ describe('Channels target-persisting binding management', () => {
     const scopedTrigger = { sessionId: 'session-1', triggerId: 'trigger-1', triggerRevision: 0, triggerKind: 'prComment', principalPolicy: 'repositoryWriters', pullRequest: { repository: 'acme/widgets', number: 7 } } as const;
     const collection = createCollection([connectionRow(), bindingRow({ ...automationTarget, policy: { resultDelivery: 'none' }, scopedTrigger }, 5, { enabled: true, endpoint: { kind: 'githubPullRequest', audience: 'shared', id: 'pr-7', pullRequest: scopedTrigger.pullRequest } })]);
     const invocation = context(collection, vi.fn(async () => ({ ok: true, projection: 'externalShareableV1', sessionId: 'session-1', items: [], scannedThroughSeq: 0, hasMore: false })));
-    await expect(manage({ kind: 'list', sessionId: 'session-1' }, invocation)).resolves.toEqual({ kind: 'links', sessionId: 'session-1', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 7 }] });
+    await expect(manage({ kind: 'list', sessionId: 'session-1' }, invocation)).resolves.toEqual({ kind: 'links', sessionId: 'session-1', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 7, url: 'https://github.com/acme/widgets/pull/7' }] });
     await expect(manage({ kind: 'removeTrigger', sessionId: 'session-1', triggerId: 'trigger-1' }, invocation)).resolves.toEqual({ kind: 'removed' });
     expect(collection.rows.get('binding-1')?.value.payload).toMatchObject({ enabled: false, target: { scopedTrigger } });
     await expect(manage({ kind: 'list', sessionId: 'session-1' }, invocation)).resolves.toMatchObject({ pullRequestLinks: [{ repository: 'acme/widgets', number: 7 }] });
@@ -1504,7 +1581,7 @@ describe('Channels target-persisting binding management', () => {
     expect(read).toEqual(expect.any(Function));
     if (typeof read !== 'function') return;
 
-    const bindings = Array.from({ length: 256 }, (_, index) => {
+    const bindings = Array.from({ length: 257 }, (_, index) => {
       const id = `binding-${String(index + 1).padStart(3, '0')}`;
       return {
         ...bindingRow(sessionTarget),
@@ -1538,7 +1615,7 @@ describe('Channels target-persisting binding management', () => {
           endpoint: { audience: 'direct', label: 'Support binding-001' },
           target: { kind: 'session', summary: 'session-1' },
         }),
-        expect.objectContaining({ bindingId: 'binding-256' }),
+        expect.objectContaining({ bindingId: 'binding-257' }),
       ]),
     }));
     expect(collection.batches).toHaveLength(0);
@@ -1554,7 +1631,7 @@ describe('Channels target-persisting binding management', () => {
         prefix: ['binding'],
         order: 'asc',
         cursor: 'binding-200',
-        limit: 56,
+        limit: 200,
       }),
     ]);
   });

@@ -6,6 +6,7 @@ import { isPluginActionApprovalRequestCreated } from '@happier-dev/plugin-sdk/ac
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type { PluginAccountCollectionForDefinition } from '@happier-dev/plugin-sdk/collections';
+import { createProtocolStoredReadSchema, defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defineProtocolUnion } from '@happier-dev/plugin-sdk/protocol';
 
 import {
   CHANNEL_STATE_COLLECTION,
@@ -15,6 +16,7 @@ import {
 import {
   asChannelStateRow as asStoredCollectionRow,
   readConversationBindingUpdateRow,
+  readConversationBindingParentEligibility,
   type ChannelStateRow as StoredCollectionRow,
 } from './accountLocalBindingPolicy.js';
 import { isConversationDeliveryAutomaticTerminal } from './deliveryCustody.js';
@@ -37,6 +39,7 @@ export type ConversationSessionProjectionBinding = Readonly<{
   bindingId: string;
   revision: number;
   connectionId: string;
+  parentBindingId?: string;
   target: Readonly<{
     sessionId: string;
     deliveryMode: 'repliesOnly' | 'mirrorSession';
@@ -65,6 +68,16 @@ export type ConversationSessionProjectionHistoryGap = Readonly<{
   reason: ConversationSessionProjectionHistoryGapReason;
   reportedAt: number;
 }>;
+const storedSessionProjectionHistoryGapSchema = createProtocolStoredReadSchema(defineProtocolObject({
+  kind: defineProtocolLiteral('historyGap'),
+  reason: defineProtocolUnion([
+    defineProtocolLiteral('cursorRejected'),
+    defineProtocolLiteral('frontierCursorInvalid'),
+    defineProtocolLiteral('projectionRegression'),
+    defineProtocolLiteral('cursorUnavailable'),
+  ]),
+  reportedAt: defineProtocolNumber({ integer: true, minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+}, { policy: 'closed' }));
 
 /**
  * The Channel-state owner supplies one current binding/frontier view and
@@ -169,19 +182,8 @@ function isPositiveSafeInteger(value: unknown): value is number {
 export function readConversationSessionProjectionHistoryGap(
   value: JsonValue,
 ): ConversationSessionProjectionHistoryGap | null {
-  if (!isJsonRecord(value)
-    || value.kind !== 'historyGap'
-    || (value.reason !== 'cursorRejected'
-      && value.reason !== 'frontierCursorInvalid'
-      && value.reason !== 'projectionRegression'
-      && value.reason !== 'cursorUnavailable')
-    || !isNonNegativeSafeInteger(value.reportedAt)
-    || Object.keys(value).length !== 3) return null;
-  return {
-    kind: 'historyGap',
-    reason: value.reason,
-    reportedAt: value.reportedAt,
-  };
+  const parsed = storedSessionProjectionHistoryGapSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /** One deterministic state-row identity per binding; no opaque delivery identity is reused here. */
@@ -236,6 +238,7 @@ function readProjectionBinding(input: Readonly<{
     bindingId: input.bindingId,
     revision: input.row.revision,
     connectionId: binding.connectionId,
+    ...(binding.parentBindingId === undefined ? {} : { parentBindingId: binding.parentBindingId }),
     target: {
       sessionId: binding.target.sessionId,
       deliveryMode: binding.target.policy.deliveryMode,
@@ -300,6 +303,10 @@ export function createConversationSessionProjectionCollectionStore(
       if (bindingRow === undefined) return { kind: 'bindingUnavailable' };
       const binding = readProjectionBinding({ row: bindingRow, bindingId: readInput.bindingId });
       if (binding === null) return { kind: 'bindingUnavailable' };
+      const parent = await readConversationBindingParentEligibility({
+        collection: input.stateCollection, binding, signal: readInput.signal,
+      });
+      if (parent.kind !== 'eligible') return { kind: 'bindingUnavailable' };
       const frontierRowId = createConversationSessionProjectionFrontierRowId(readInput.bindingId);
       let frontierRow: StoredCollectionRow | undefined;
       try {
@@ -512,7 +519,7 @@ export async function acceptConversationSessionProjectionBaseline(input: Readonl
   };
 }
 
-function hasOriginFromBinding(
+export function hasConversationInputOriginFromBinding(
   origin: Readonly<{
     sourceAuthority?: Readonly<{ mediatorPluginId: string; sourceRef: string }>;
   }>,
@@ -529,12 +536,12 @@ function shouldProjectItem(input: Readonly<{
   const { binding, item } = input;
   if (binding.target.deliveryMode === 'repliesOnly') {
     return item.kind === 'assistantText'
-      && item.consumedInputs.some(({ origin }) => hasOriginFromBinding(origin, binding.bindingId));
+      && item.consumedInputs.some(({ origin }) => hasConversationInputOriginFromBinding(origin, binding.bindingId));
   }
   if (item.kind === 'userText') {
-    return !hasOriginFromBinding(item.origin, binding.bindingId);
+    return !hasConversationInputOriginFromBinding(item.origin, binding.bindingId);
   }
-  return !item.consumedInputs.some(({ origin }) => hasOriginFromBinding(origin, binding.bindingId));
+  return true;
 }
 
 function isProjectionDeliveryTerminal(result: ConversationOutwardDeliveryResult): boolean {

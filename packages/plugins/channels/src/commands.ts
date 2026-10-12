@@ -22,8 +22,9 @@ export type ConversationCommandClassification =
     }>[];
   }>
   | Readonly<{ kind: 'newSession'; initialPrompt?: string }>
+  | Readonly<{ kind: 'stop' }>
   | Readonly<{ kind: 'ordinaryText' }>
-  | Readonly<{ kind: 'malformedCommand'; command: 'pair' | 'approve' | 'answer' | 'newSession' }>;
+  | Readonly<{ kind: 'malformedCommand'; command: 'pair' | 'approve' | 'answer' | 'newSession' | 'stop' }>;
 
 const NORMALIZED_CROCKFORD_TOKEN = /^[0123456789ABCDEFGHJKMNPQRSTVWXYZ]{8}$/u;
 
@@ -157,6 +158,12 @@ export function classifyConversationCommand(text: string): ConversationCommandCl
     return initialPrompt.length === 0
       ? { kind: 'newSession' }
       : { kind: 'newSession', initialPrompt };
+  }
+
+  if (command === '/stop') {
+    return arguments_.length === 0
+      ? { kind: 'stop' }
+      : { kind: 'malformedCommand', command: 'stop' };
   }
 
   return { kind: 'ordinaryText' };

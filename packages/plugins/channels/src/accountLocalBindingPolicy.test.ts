@@ -114,6 +114,27 @@ function frozenOldStop(overrides: Readonly<Record<string, JsonValue>> = {}): Jso
 }
 
 describe('readConversationConnectionUpdateRow frozen provider selection', () => {
+  it('enumerates the 33rd connection after a short first Collection page', async () => {
+    const rows = Array.from({ length: 33 }, (_unused, index) => {
+      const connectionId = `connection-${index}`;
+      return { rowId: connectionId, revision: 1, value: createCurrentConversationConnectionFixture({
+        connectionId, authority: replacementAuthority, transport: { kind: 'socket' },
+        overlapSafety: 'safe', replayContinuity: 'sessionBound',
+      }) };
+    });
+    const collection = {
+      async query(request: Readonly<{ index?: string; cursor?: string; limit: number }>) {
+        assertChannelsTestCollectionQueryLimit(request.limit);
+        if (request.index !== CHANNEL_STATE_INDEX_ID.byKind) return { rows: [], changeCursor: 1 };
+        return request.cursor === undefined
+          ? { rows: rows.slice(0, 32), nextCursor: 'after-32', changeCursor: 1 }
+          : { rows: rows.slice(32), changeCursor: 1 };
+      },
+    };
+    const result = await readConversationConnectionManagementRows({ collection: collection as never });
+    expect(result.connections.map(row => row.connectionId)).toEqual(rows.map(row => row.rowId));
+  });
+
   it.each(['current', 'retired'] as const)('rejects source-only %s transport custody with a typed corrupt result', (slot) => {
     const sourceOrigin = {
       serverIdentityId: 'server-example',

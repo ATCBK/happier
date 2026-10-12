@@ -17,6 +17,7 @@ import {
   type AutomationResultDeliverySourceV1,
 } from '@happier-dev/plugin-sdk/automations';
 import type { PluginInvocationCaller, PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { createProtocolStoredReadSchema, defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defineProtocolString, defineProtocolUnion } from '@happier-dev/plugin-sdk/protocol';
 
 import {
   CHANNEL_DELIVERIES_COLLECTION,
@@ -60,30 +61,31 @@ export type ConversationAutomationResultDeliveryPreparation =
     code: 'contractIncompatible' | 'invalidCustodyRequest' | 'unauthorizedCaller';
   }>;
 
-type JsonRecord = Readonly<Record<string, unknown>>;
-
 type ParsedConversationAutomationResultHandoff = Readonly<{
   route: ConversationAutomationResultRouteV1;
 }>;
 
-function isJsonRecord(value: unknown): value is JsonRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function hasExactKeys(record: JsonRecord, expected: readonly string[]): boolean {
-  const actual = Object.keys(record);
-  return actual.length === expected.length
-    && actual.every((key) => expected.includes(key));
-}
-
-function isPositiveSafeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
-}
-
-function isLinkPreviewPolicy(value: unknown): value is ConversationDeliveryLinkPreviewPolicyV1 {
-  return typeof value === 'string'
-    && (CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1 as readonly string[]).includes(value);
-}
+const positiveSafeIntegerSchema = defineProtocolNumber({ integer: true, minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
+// Automation persists this provider-private route as opaque JSON. Project its
+// known facts here; the outer Automation Action still uses strict admission.
+const storedAutomationResultRouteSchema = createProtocolStoredReadSchema(defineProtocolObject({
+  v: defineProtocolLiteral(1),
+  kind: defineProtocolLiteral('conversationAutomationResultDelivery'),
+  connectionId: ConversationConnectionIdV1Schema,
+  bindingId: ConversationBindingIdV1Schema,
+  bindingRevision: positiveSafeIntegerSchema,
+  connectionAuthorityEpoch: positiveSafeIntegerSchema,
+  bindingAuthorityEpoch: positiveSafeIntegerSchema,
+  endpoint: ConversationResolvedEndpointV1Schema,
+  reply: defineProtocolObject({
+    providerMessageId: defineProtocolString(),
+    providerReplyToMessageId: defineProtocolString().optional(),
+  }, { policy: 'closed' }),
+  linkPreviewPolicy: defineProtocolUnion([
+    defineProtocolLiteral(CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1[0]),
+    defineProtocolLiteral(CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1[1]),
+  ]),
+}, { policy: 'closed' }));
 
 function isExactAutomationRunCaller(input: Readonly<{
   caller: PluginInvocationCaller | undefined;
@@ -98,45 +100,16 @@ function isExactAutomationRunCaller(input: Readonly<{
 }
 
 function readRoute(opaqueContext: unknown): ParsedConversationAutomationResultHandoff | undefined {
-  if (!isJsonRecord(opaqueContext) || !hasExactKeys(opaqueContext, [
-    'v',
-    'kind',
-    'connectionId',
-    'bindingId',
-    'bindingRevision',
-    'connectionAuthorityEpoch',
-    'bindingAuthorityEpoch',
-    'endpoint',
-    'reply',
-    'linkPreviewPolicy',
-  ])) return undefined;
-  const context = opaqueContext;
-  if (context.v !== 1
-    || context.kind !== 'conversationAutomationResultDelivery'
-    || typeof context.connectionId !== 'string'
-    || !ConversationConnectionIdV1Schema.safeParse(context.connectionId).success
-    || typeof context.bindingId !== 'string'
-    || !ConversationBindingIdV1Schema.safeParse(context.bindingId).success
-    || !isPositiveSafeInteger(context.bindingRevision)
-    || !isPositiveSafeInteger(context.connectionAuthorityEpoch)
-    || !isPositiveSafeInteger(context.bindingAuthorityEpoch)
-    || !isLinkPreviewPolicy(context.linkPreviewPolicy)) return undefined;
-
-  const endpoint = ConversationResolvedEndpointV1Schema.safeParse(context.endpoint);
-  if (!endpoint.success) return undefined;
-  if (!isJsonRecord(context.reply)
-    || !hasExactKeys(context.reply, context.reply.providerReplyToMessageId === undefined
-      ? ['providerMessageId']
-      : ['providerMessageId', 'providerReplyToMessageId'])
-    || typeof context.reply.providerMessageId !== 'string'
-    || !ConversationDeliveryReplyContextV1Schema.safeParse({
+  const parsed = storedAutomationResultRouteSchema.safeParse(opaqueContext);
+  if (!parsed.success) return undefined;
+  const context = parsed.data;
+  if (!ConversationDeliveryReplyContextV1Schema.safeParse({
       replyToMessageId: context.reply.providerMessageId,
     }).success
     || (context.reply.providerReplyToMessageId !== undefined
-      && (typeof context.reply.providerReplyToMessageId !== 'string'
-        || !ConversationDeliveryReplyContextV1Schema.safeParse({
+      && !ConversationDeliveryReplyContextV1Schema.safeParse({
           replyToMessageId: context.reply.providerReplyToMessageId,
-        }).success))) return undefined;
+        }).success)) return undefined;
 
   return {
     route: {
@@ -145,7 +118,7 @@ function readRoute(opaqueContext: unknown): ParsedConversationAutomationResultHa
       bindingRevision: context.bindingRevision,
       connectionAuthorityEpoch: context.connectionAuthorityEpoch,
       bindingAuthorityEpoch: context.bindingAuthorityEpoch,
-      endpoint: endpoint.data,
+      endpoint: context.endpoint,
       replyContext: { replyToMessageId: context.reply.providerMessageId },
       linkPreviewPolicy: context.linkPreviewPolicy,
     },
@@ -237,7 +210,7 @@ export async function deliverConversationAutomationResultForInvocation(
     },
     source: admission.source,
     endpoint: admission.route.endpoint,
-    content: admission.input.result.text,
+    content: { text: admission.input.result.text },
     deliveryKey: `automation:${admission.source.resultId}`,
     replyContext: admission.route.replyContext,
     mentionPolicy: 'suppress',

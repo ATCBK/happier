@@ -23,8 +23,6 @@ import {
   CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1,
   CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1,
   CONVERSATION_MANAGEMENT_ACTION_IDS_V1,
-  MAX_CONVERSATION_DELIVERY_ATTEMPTS,
-  MAX_CONVERSATION_DELIVERY_CHUNKS,
   MAX_CONVERSATION_SESSION_IDEMPOTENCY_KEY_UTF8_BYTES,
   SESSION_PULL_REQUEST_BINDING_ACTION_ID_V1,
   SessionPullRequestBindingInputV1Schema,
@@ -45,8 +43,6 @@ import {
   CHANNEL_STATE_RECORD_KIND,
 } from './collections.js';
 import { CONVERSATION_DELIVERY_CUSTODY_STATES } from './deliveryCustody.js';
-import { MAX_CHANNELS_BINDINGS_RESOURCE_BYTES } from './resourceBounds.js';
-import { MAX_CHANNELS_SESSION_CONVERSATIONS_BYTES } from './sessionConversationsResource.js';
 
 /**
  * `PluginManifest` types every contribution entry as `{ id, [key: string]: unknown }`,
@@ -131,6 +127,32 @@ async function listPluginSourceUrls(directory: URL): Promise<readonly URL[]> {
 }
 
 describe('Channels core manifest', () => {
+  it('makes every management Action requestable by agents and MCP without changing confirmation policy', () => {
+    const observational = new Set([
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionRetest,
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead,
+      CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve,
+    ]);
+    for (const id of Object.values(CONVERSATION_MANAGEMENT_ACTION_IDS_V1)) {
+      const action = PLUGIN_MANIFEST.contributes.actions?.find((entry) => entry.id === id);
+      expect(action, id).toBeDefined();
+      expect(action?.surfaces, id).toEqual(expect.arrayContaining(['agent', 'mcp']));
+      if (id === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart) {
+        expect(action?.hostAccess).toEqual(['account-storage', 'bound-session']);
+      }
+      if (observational.has(id)) {
+        expect(action?.dangerLevel, id).toBe('safe');
+        expect(action?.confirmation, id).toBeUndefined();
+      } else {
+        expect(action?.dangerLevel, id).toBe(id === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart ? 'writesRemote' : 'writesLocal');
+        expect(action?.confirmation, id).toMatchObject({
+          title: expect.any(String), body: expect.any(String), confirmLabel: expect.any(String),
+        });
+      }
+    }
+  });
+
   it('consumes the canonical Composer control-state Resource contract through public SDK UI', () => {
     const resources = PLUGIN_MANIFEST.contributes?.resources ?? [];
 
@@ -185,7 +207,9 @@ describe('Channels core manifest', () => {
       'accountCollections',
       'actions',
       'backgroundServices',
+      'composerAttachments',
       'composerControls',
+      'events',
       'pluginContributionPoints',
       'resources',
       'sessionHeaderActions',
@@ -341,6 +365,17 @@ describe('Channels core manifest', () => {
     expect(ui?.translations?.[0]?.messages).not.toHaveProperty('plugins.channels.surface.backToConnections');
   });
 
+  it('leaves Channels encoded-row ceilings to the deployment Collection owner', () => {
+    const parsed = parsePluginManifest(PLUGIN_MANIFEST);
+    if (!parsed.ok) throw new Error(parsed.diagnostics.map(diagnostic => diagnostic.message).join('; '));
+    const collections = parsed.manifest.contributes.accountCollections ?? [];
+    expect(collections.map(({ id }) => id)).toEqual([
+      CHANNEL_STATE_COLLECTION_ID,
+      CHANNEL_DELIVERIES_COLLECTION_ID,
+    ]);
+    for (const collection of collections) expect(collection).not.toHaveProperty('quota');
+  });
+
   it('declares the Account storage access its C1 reconciliation readers consume', () => {
     const manifest: PluginManifest = PLUGIN_MANIFEST;
     const collections = manifest.contributes?.accountCollections ?? [];
@@ -352,6 +387,11 @@ describe('Channels core manifest', () => {
         capability: 'storage.account',
         reason: 'Read current Channel connection and binding state.',
         scope: { enabled: true },
+      }, {
+        id: 'bound-session',
+        capability: 'sessions',
+        reason: 'Observe bound Session transcript and Permission changes for Channel delivery, and place inbound attachments in bound Sessions.',
+        scope: { access: ['read', 'write'] },
       }],
       optional: [],
     });
@@ -362,8 +402,8 @@ describe('Channels core manifest', () => {
     ]);
     expect(collections?.find(({ id }) => id === CHANNEL_STATE_COLLECTION_ID)).toMatchObject({
       id: CHANNEL_STATE_COLLECTION_ID,
-      schemaVersion: 3,
-      readableSchemaVersions: [1, 2],
+      schemaVersion: 4,
+      readableSchemaVersions: [1, 2, 3],
       migrations: [{
         id: 'channel-state-v1-to-v2',
         fromSchemaVersion: 1,
@@ -372,6 +412,10 @@ describe('Channels core manifest', () => {
         id: 'channel-state-v2-to-v3',
         fromSchemaVersion: 2,
         toSchemaVersion: 3,
+      }, {
+        id: 'channel-state-v3-to-v4',
+        fromSchemaVersion: 3,
+        toSchemaVersion: 4,
       }],
       rowIdField: CHANNEL_STATE_FIELD.id,
       serverReadable: [
@@ -419,28 +463,13 @@ describe('Channels core manifest', () => {
           ],
         },
       ],
-      quota: {
-        maxRowEncodedBytes: 256 * 1024,
-        maxRowsByIndexPrefix: [
-          {
-            indexId: CHANNEL_STATE_INDEX_ID.byKind,
-            prefix: [CHANNEL_STATE_RECORD_KIND.connection],
-            maxRows: 32,
-          },
-          {
-            indexId: CHANNEL_STATE_INDEX_ID.byKind,
-            prefix: [CHANNEL_STATE_RECORD_KIND.binding],
-            maxRows: 256,
-          },
-        ],
-      },
       uiQueries: [],
       relations: [],
     });
-
     expect(collections?.find(({ id }) => id === CHANNEL_DELIVERIES_COLLECTION_ID)).toMatchObject({
       id: CHANNEL_DELIVERIES_COLLECTION_ID,
-      schemaVersion: 1,
+      schemaVersion: 2,
+      readableSchemaVersions: [1],
       rowIdField: CHANNEL_DELIVERIES_FIELD.id,
       serverReadable: [
         CHANNEL_DELIVERIES_FIELD.recordKind,
@@ -481,7 +510,6 @@ describe('Channels core manifest', () => {
           ],
         },
       ],
-      quota: { maxRowEncodedBytes: 512 * 1024 },
       uiQueries: [],
       relations: [],
     });
@@ -500,429 +528,11 @@ describe('Channels core manifest', () => {
         },
       },
     });
-    expect(manifest.contributes?.actions).toEqual([
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPairingCreate,
-        title: 'Create conversation pairing challenge',
-        description: 'Creates a short-lived pairing challenge for a conversation connection.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Create conversation pairing challenge?',
-          body: 'This creates a short-lived pairing challenge for the selected connection.',
-          confirmLabel: 'Create challenge',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingFinalize,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPairingFinalize,
-        title: 'Finalize conversation pairing',
-        description: 'Saves an authenticated pairing proposal as a paused conversation binding.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Finalize conversation pairing?',
-          body: 'This saves the authenticated pairing proposal as a paused conversation binding.',
-          confirmLabel: 'Finalize pairing',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCancel,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPairingCancel,
-        title: 'Cancel conversation pairing',
-        description: 'Cancels an unfinished conversation pairing challenge or proposal.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['secondary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Cancel conversation pairing?',
-          body: 'This cancels the selected unfinished pairing challenge or proposal.',
-          confirmLabel: 'Cancel pairing',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionCreate,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionCreate,
-        title: 'Create conversation connection',
-        description: 'Saves a conversation connection and its transport configuration to the Account.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Create conversation connection?',
-          body: 'This saves the connection and its current transport configuration to this Happier Account.',
-          confirmLabel: 'Create connection',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: SESSION_PULL_REQUEST_BINDING_ACTION_ID_V1,
-        title: 'Manage session pull request binding',
-        description: 'Attaches native SCM PR links and scoped triggers through conversation bindings.',
-        inputSchema: SessionPullRequestBindingInputV1Schema.jsonSchema,
-        resultSchema: SessionPullRequestBindingResultV1Schema.jsonSchema,
-        scopes: ['global'],
-        surfaces: ['cli', 'ui', 'plugin', 'agent', 'mcp'],
-        placementBindings: ['commandPalette'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Manage session pull request binding?',
-          body: 'This can attach a pull request to the selected session or change its scoped conversation trigger bindings.',
-          confirmLabel: 'Continue',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionTransfer,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionTransfer,
-        title: 'Transfer conversation connection',
-        description: 'Replaces a conversation connection’s provider setup and transport.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Transfer conversation connection?',
-          body: 'This replaces the saved provider setup and transport while retaining exact old-stop custody.',
-          confirmLabel: 'Transfer connection',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPrepare,
-        title: 'Prepare conversation connection',
-        description: 'Prepares the selected conversation provider connection for setup.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'safe',
-        execution: { target: 'daemon' },
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionRetest,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionRetest,
-        title: 'Retest conversation connection',
-        description: 'Re-probes a conversation connection and reconciles its readiness.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['secondary'],
-        dangerLevel: 'safe',
-        execution: { target: 'daemon' },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionUpdate,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionUpdate,
-        title: 'Update conversation connection',
-        description: 'Saves an edited conversation connection policy to the Account.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Update conversation connection?',
-          body: 'This saves the edited connection policy to this Happier Account.',
-          confirmLabel: 'Update connection',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionDelete,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionDelete,
-        title: 'Delete conversation connection',
-        description: 'Disables and removes a conversation connection after transport cleanup.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Delete conversation connection?',
-          body: 'This disables the connection and waits for exact transport-stop proof before cleanup.',
-          confirmLabel: 'Delete connection',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionAbandon,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionAbandon,
-        title: 'Abandon pending conversation connection stop',
-        description: 'Accepts possible message loss so a pending connection stop can proceed.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['secondary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Accept possible message loss?',
-          body: 'This permits the connection lifecycle to continue without claiming the old physical transport stopped.',
-          confirmLabel: 'Accept possible loss',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.streamBaselineAccept,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.streamBaselineAccept,
-        title: 'Accept conversation history baseline',
-        description: 'Accepts the provider’s current replay baseline without replaying unavailable history.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Accept a new conversation history baseline?',
-          body: 'This accepts the provider’s current replay baseline and resumes the saved connection without replaying unavailable history.',
-          confirmLabel: 'Accept baseline',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPollRetry,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.connectionPollRetry,
-        title: 'Retry blocked conversation poll',
-        description: 'Clears blocked poll state so the conversation connection can retry.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Retry this blocked conversation poll?',
-          body: 'This clears the saved blocked poll state so the current connection can retry it.',
-          confirmLabel: 'Retry poll',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingRead,
-        title: 'Read conversation binding',
-        description: 'Reads the saved conversation binding policy and details.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui', 'agent', 'mcp'],
-        placementBindings: ['secondary'],
-        dangerLevel: 'safe',
-        execution: { target: 'daemon' },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingResolve,
-        title: 'Resolve conversation binding candidates',
-        description: 'Resolves candidate conversations and principals for a binding.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['secondary'],
-        dangerLevel: 'safe',
-        execution: { target: 'daemon' },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingCreate,
-        title: 'Create conversation binding',
-        description: 'Saves an external conversation binding and its target policy to the Account.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Create conversation binding?',
-          body: 'This saves the external conversation binding and its target policy to this Happier Account.',
-          confirmLabel: 'Create binding',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingUpdate,
-        title: 'Update conversation binding',
-        description: 'Saves an edited external conversation binding policy to the Account.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui', 'agent', 'mcp'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Update conversation binding?',
-          body: 'This saves the edited external conversation binding policy to this Happier Account.',
-          confirmLabel: 'Update binding',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingSetEnabled,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingSetEnabled,
-        title: 'Set conversation binding enabled state',
-        description: 'Changes whether a conversation binding may route eligible messages.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui', 'agent', 'mcp'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Change conversation binding enabled state?',
-          body: 'This changes whether the binding may route eligible external messages to its saved target.',
-          confirmLabel: 'Save binding state',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingDelete,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.bindingDelete,
-        title: 'Delete conversation binding',
-        description: 'Disables a conversation binding while retained delivery custody finishes safely.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Delete conversation binding?',
-          body: 'This immediately disables new binding effects while retained ingress and delivery custody finish safely.',
-          confirmLabel: 'Delete binding',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.sessionProjectionBaselineAccept,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.sessionProjectionBaselineAccept,
-        title: 'Accept Session conversation transcript baseline',
-        description: 'Resumes one paused Session conversation from the current transcript tail.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Continue without unavailable transcript history?',
-          body: 'This resumes the conversation from the Session’s current transcript tail without replaying unavailable history.',
-          confirmLabel: 'Accept baseline',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.ingressRetry,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.ingressRetry,
-        title: 'Retry blocked conversation ingress',
-        description: 'Re-enables a blocked conversation input for bounded retry.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Retry this blocked conversation input?',
-          body: 'This re-enables the same frozen admission request for bounded retry.',
-          confirmLabel: 'Retry input',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.deliveryResolve,
-        ...CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1.deliveryResolve,
-        title: 'Resolve ambiguous conversation delivery',
-        description: 'Records whether to accept or discard an ambiguous delivery outcome without resending.',
-        scopes: ['global'],
-        surfaces: ['cli', 'ui'],
-        placementBindings: ['primary'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        confirmation: {
-          title: 'Record this delivery decision?',
-          body: 'This records whether you accept or discard the current delivery outcome. It does not resend the message.',
-          confirmLabel: 'Record decision',
-        },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.observationIngest,
-        ...CONVERSATION_CORE_PROVIDER_ACTION_DECLARATIONS_V1.observationIngest,
-        title: 'Ingest authenticated provider observation',
-        description: 'Ingests one authenticated observation from a conversation provider.',
-        scopes: ['global'],
-        surfaces: ['plugin'],
-        dangerLevel: 'safe',
-        execution: { target: 'daemon' },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList,
-        ...CONVERSATION_CORE_PROVIDER_ACTION_DECLARATIONS_V1.connectionsList,
-        title: 'List current provider connections',
-        description: 'Lists the current provider connections available to the Channels runtime.',
-        scopes: ['global'],
-        surfaces: ['plugin'],
-        dangerLevel: 'safe',
-        execution: { target: 'daemon' },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionRead,
-        ...CONVERSATION_CORE_PROVIDER_ACTION_DECLARATIONS_V1.connectionRead,
-        title: 'Read current provider connection',
-        description: 'Reads one current provider connection for the Channels runtime.',
-        scopes: ['global'],
-        surfaces: ['plugin'],
-        dangerLevel: 'safe',
-        execution: { target: 'daemon' },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.permissionMediationSourceCurrentness,
-        ...CONVERSATION_CORE_PROVIDER_ACTION_DECLARATIONS_V1.permissionMediationSourceCurrentness,
-        title: 'Check mediated conversation source currentness',
-        description: 'Checks whether one accepted mediated source witness is still current.',
-        scopes: ['global'],
-        surfaces: ['plugin'],
-        dangerLevel: 'safe',
-        execution: { target: 'daemon' },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.transportFactReport,
-        ...CONVERSATION_CORE_PROVIDER_ACTION_DECLARATIONS_V1.transportFactReport,
-        title: 'Report current transport fact',
-        description: 'Reports the current transport fact for a provider connection.',
-        scopes: ['global'],
-        surfaces: ['plugin'],
-        dangerLevel: 'safe',
-        execution: { target: 'daemon' },
-        hostAccess: ['account-storage'],
-      },
-      {
-        id: CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.automationResultDeliver,
-        ...CONVERSATION_CORE_PROVIDER_ACTION_DECLARATIONS_V1.automationResultDeliver,
-        title: 'Accept Automation result delivery custody',
-        description: 'Accepts custody of one Automation result for conversation delivery.',
-        scopes: ['global'],
-        surfaces: ['plugin'],
-        dangerLevel: 'writesLocal',
-        execution: { target: 'daemon' },
-        hostAccess: ['account-storage'],
-      },
-    ]);
-    expect(manifest.contributes?.resources).toEqual([
+    for (const id of [CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList, CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionRead]) {
+      const action = manifest.contributes?.actions?.find((entry) => entry.id === id);
+      expect(action?.hostAccess, id).toEqual(expect.arrayContaining(['account-storage']));
+    }
+    expect(manifest.contributes?.resources?.filter((resource) => resource.source === 'dynamic')).toEqual([
       {
         id: 'connections-v1',
         source: 'dynamic',
@@ -944,7 +554,6 @@ describe('Channels core manifest', () => {
         // artifact already carried.
         scope: 'global',
         contentType: 'application/json',
-        maxBytes: MAX_CHANNELS_BINDINGS_RESOURCE_BYTES,
         hostAccess: ['account-storage'],
       },
       {
@@ -976,7 +585,6 @@ describe('Channels core manifest', () => {
         contentType: 'application/json',
         // The canonical Account-wide bindings ceiling plus the one attention
         // entry each of the 256 bindings can carry.
-        maxBytes: MAX_CHANNELS_SESSION_CONVERSATIONS_BYTES,
         hostAccess: ['account-storage'],
       },
       {
@@ -1069,6 +677,10 @@ describe('Channels core manifest', () => {
     expect(isValidPluginJsonSchemaValue(validate, {
       ...connection,
       payload: connectionWithoutOutboundTextLimit,
+    })).toBe(true);
+    expect(isValidPluginJsonSchemaValue(validate, {
+      ...connection,
+      payload: { ...connection.payload, outboundTextLimit: { maximum: 0, unit: 'unicodeCodePoints' } },
     })).toBe(false);
     for (const providerPluginId of [
       'telegram',
@@ -1907,7 +1519,7 @@ describe('Channels core manifest', () => {
           bindingAuthorityEpoch: 1,
         },
         endpoint: { kind: 'thread', audience: 'shared', id: 'thread-1', parentId: 'channel-1' },
-        content: 'Please unarchive the thread before retrying.',
+        content: { text: 'Please unarchive the thread before retrying.' },
         deliveryKey: 'binding-1:recovery-1',
         replyContext: null,
         mentionPolicy: 'suppress',
@@ -1979,7 +1591,7 @@ describe('Channels core manifest', () => {
           bindingAuthorityEpoch: 1,
         },
         endpoint: { kind: 'direct', audience: 'direct', id: 'direct-1' },
-        content: 'Retrying shortly.',
+        content: { text: 'Retrying shortly.' },
         deliveryKey: 'binding-1:retry-1',
         replyContext: null,
         mentionPolicy: 'suppress',
@@ -2006,7 +1618,7 @@ describe('Channels core manifest', () => {
       ...retryDue,
       payload: {
         ...retryDue.payload,
-        attemptCount: MAX_CONVERSATION_DELIVERY_ATTEMPTS + 1,
+        attemptCount: Number.MAX_SAFE_INTEGER + 1,
       },
     })).toBe(false);
     const { [CHANNEL_DELIVERIES_FIELD.retryNotBefore]: _connectionDeleteRetryNotBefore, ...connectionDeleted } = {
@@ -2065,7 +1677,7 @@ describe('Channels core manifest', () => {
       ...partial,
       payload: {
         ...partial.payload,
-        failedChunk: MAX_CONVERSATION_DELIVERY_CHUNKS + 1,
+        failedChunk: Number.MAX_SAFE_INTEGER + 1,
       },
     })).toBe(false);
     expect(isValidPluginJsonSchemaValue(validate, {

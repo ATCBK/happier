@@ -29,14 +29,13 @@ import {
   ConversationProviderSetupOutcomeV1Schema,
   ConversationPrincipalResolveInputV1Schema,
   ConversationPrincipalResolveResultV1Schema,
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-  MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
   MAX_CONVERSATION_OBSERVATION_AGE_MS,
   SessionPullRequestBindingInputV1Schema,
   resolveSessionPullRequestLinksV1,
   type SessionPullRequestBindingResultV1,
   areConversationEndpointIdentitiesEqual,
   conversationBindingPolicyForOmittedFieldsV1,
+  conversationThreadRouterAllowedPrincipalIdsV1,
   hasCanonicalConversationResolutionCandidateOrderV1,
   type ConversationBindingCreateResultV1,
   type ConversationBindingCreateInputV1,
@@ -77,6 +76,7 @@ import {
   type ConversationBindingInputModeV1,
   type ConversationBindingTargetV1,
   type ConversationBindingV1,
+  type ConversationSessionBindingTargetV1,
   type ConversationResolvedEndpointV1,
   type ConversationResolvedPrincipalV1,
   type ConversationTransportFactReportResultV1,
@@ -129,6 +129,7 @@ import {
 } from './reconciliation.js';
 import {
   transitionConversationBinding,
+  revokeConversationBindingPrincipals,
   type ConversationBindingStateV1,
 } from './bindingTransition.js';
 import {
@@ -1273,6 +1274,7 @@ function sameConversationBindingTarget(
   right: ConversationBindingTargetV1,
 ): boolean {
   if (left.kind !== right.kind) return false;
+  if (left.kind === 'threadRouter' && right.kind === 'threadRouter') return pluginJsonValuesEqual(left, right);
   if (left.kind === 'automation' && right.kind === 'automation') {
     return left.automationId === right.automationId
       && pluginJsonValuesEqual(left.scopedTrigger ?? null, right.scopedTrigger ?? null)
@@ -1446,8 +1448,13 @@ async function verifyAutomationBindingTarget(
 async function resolveBindingTargetForPersistence(
   target: ConversationBindingTargetV1,
   context: PluginInvocationContext,
+  resolvedPrincipalIds?: readonly string[],
 ): Promise<ConversationBindingTargetV1 | ConversationAutomationTargetNotVerifiedResult> {
-  if (target.kind === 'session') return target;
+  if (target.kind === 'threadRouter' && (resolvedPrincipalIds === undefined
+    || conversationThreadRouterAllowedPrincipalIdsV1(target).some((id) => !resolvedPrincipalIds.includes(id)))) {
+    throw pluginError('channels_router_principal_not_resolved', 'Every router group member must be resolved for this connection before persistence.');
+  }
+  if (target.kind !== 'automation') return target;
   // A conversation binding is an additional invocation source for an
   // Automation the Account already owns: several bindings may name the same
   // target, so persistence only asks whether that target is still current.
@@ -1467,12 +1474,14 @@ async function verifyPairingTargetForFeedback(
   context: PluginInvocationContext,
 ): Promise<ConversationAutomationTargetNotVerifiedResult | null> {
   if (target.kind === 'session') return null;
+  if (target.kind === 'threadRouter') throw pluginError('channels_pairing_router_unsupported', 'Thread routers require provider-resolved principal groups through binding creation.');
   const verification = await verifyAutomationBindingTarget(target, context);
   return verification.kind === 'notVerified' ? verification : null;
 }
 
 type ConversationBindingRowCreateInput = Readonly<{
   bindingId: string;
+  parentBindingId?: string;
   connectionId: string;
   endpoint: ConversationResolvedEndpointV1;
   target: ConversationBindingTargetV1;
@@ -1495,9 +1504,10 @@ function createConversationBindingRow(input: ConversationBindingRowCreateInput):
     v: 1,
     id: input.bindingId,
     connectionId: input.connectionId,
+    ...(input.parentBindingId === undefined ? {} : { parentBindingId: input.parentBindingId }),
     endpoint: input.endpoint,
     target: input.target,
-    allowedPrincipalIds: [...input.allowedPrincipalIds],
+    allowedPrincipalIds: input.target.kind === 'threadRouter' ? conversationThreadRouterAllowedPrincipalIdsV1(input.target) : [...input.allowedPrincipalIds],
     allowBotSenders: input.allowBotSenders,
     inputMode: input.inputMode,
     inboundDebounceMs: input.inboundDebounceMs,
@@ -1520,6 +1530,7 @@ function createConversationBindingRow(input: ConversationBindingRowCreateInput):
       [CHANNEL_STATE_FIELD.createdAt]: binding.createdAt,
       [CHANNEL_STATE_FIELD.updatedAt]: binding.updatedAt,
       payload: {
+        ...(binding.parentBindingId === undefined ? {} : { parentBindingId: binding.parentBindingId }),
         endpoint: binding.endpoint,
         target: binding.target,
         allowedPrincipalIds: binding.allowedPrincipalIds,
@@ -1542,6 +1553,7 @@ function assertNewConversationBindingCanPersist(binding: ConversationBindingV1):
     current: binding,
     requested: {
       connectionId: binding.connectionId,
+      ...(binding.parentBindingId === undefined ? {} : { parentBindingId: binding.parentBindingId }),
       endpoint: binding.endpoint,
       target: binding.target,
       allowedPrincipalIds: binding.allowedPrincipalIds,
@@ -1554,6 +1566,7 @@ function assertNewConversationBindingCanPersist(binding: ConversationBindingV1):
     },
   });
   if (validation.kind !== 'rejected') return;
+  if (validation.code === 'routerGroupNotFound') throw pluginError('channels_router_group_not_found', 'A route must name a configured principal group or any.');
   if (validation.code === 'duplicateAllowedPrincipal') {
     throw pluginError(
       'channels_binding_create_duplicate_allowed_principal',
@@ -2059,7 +2072,7 @@ function connectionRows(input: Readonly<{
       transport,
       overlapSafety: input.setup.overlapSafety,
       replayContinuity: input.setup.replayContinuity,
-      outboundTextLimit: input.setup.outboundTextLimit,
+      ...(input.setup.outboundTextLimit === undefined ? {} : { outboundTextLimit: input.setup.outboundTextLimit }),
       // The provider-authenticated shared-endpoint delivery truth. It is a
       // Channels fact rather than opaque provider configuration because the
       // binding policy owner and the surface that offers that policy both
@@ -2482,7 +2495,10 @@ export async function prepareConversationConnectionForInvocation(
     ...transportSelection,
     overlapSafety: prepared.setup.overlapSafety,
     replayContinuity: prepared.setup.replayContinuity,
-    outboundTextLimit: prepared.setup.outboundTextLimit,
+    ...(prepared.setup.outboundTextLimit === undefined ? {} : { outboundTextLimit: prepared.setup.outboundTextLimit }),
+    ...(prepared.setup.recommendedMaximumObservationAgeMs === undefined
+      ? {}
+      : { recommendedMaximumObservationAgeMs: prepared.setup.recommendedMaximumObservationAgeMs }),
     ...(prepared.setup.sharedEndpointInputModes === undefined
       ? {}
       : { sharedEndpointInputModes: prepared.setup.sharedEndpointInputModes }),
@@ -4248,55 +4264,54 @@ export async function finalizeConversationConnectionDeletesForInvocation(
       finalizationPluginFailure = error;
     }
   };
-  let connectionPage: Awaited<ReturnType<ChannelStateCollection['query']>> | undefined;
-  try {
-    connectionPage = await collection.query({
-      index: CHANNEL_STATE_INDEX_ID.byKind,
-      prefix: [CHANNEL_STATE_RECORD_KIND.connection],
-      order: 'asc',
-      // The connection quota is the census bound; the relation-row page bound
-      // happens to share its current value but answers a different question.
-      limit: Math.min(
-        MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
-        PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
-      ),
-    }, { signal: context.signal });
-  } catch (error) {
-    // Binding finalization is independently enumerable from the same existing
-    // bounded census, so an unavailable connection page must not manufacture
-    // a second recovery mechanism or starve already-finalizing bindings.
-    recordFinalizationFailure(error);
-  }
-  if (connectionPage !== undefined) {
-    for (const stored of connectionPage.rows) {
-      if (context.signal.aborted) return;
-      const row = asChannelStateRow(stored);
-      if (row === undefined || row.value[CHANNEL_STATE_FIELD.recordKind] !== CHANNEL_STATE_RECORD_KIND.connection) {
-        continue;
-      }
-      const connectionId = own(row.value, CHANNEL_STATE_FIELD.connectionId);
-      if (typeof connectionId !== 'string') continue;
-      try {
-        const current = readConversationConnectionUpdateRow({ row, connectionId });
-        if (!finalizingDeleteIsAuthorized(current)) continue;
-        await finalizeConversationConnectionDelete({ connectionId, context });
-      } catch (error) {
-        // Retain the canonical rows untouched; the next existing wake re-reads
-        // them rather than treating an unavailable or malformed row as deleted.
-        recordFinalizationFailure(error);
+  let connectionCursor: string | undefined;
+  do {
+    let connectionPage: Awaited<ReturnType<ChannelStateCollection['query']>> | undefined;
+    try {
+      connectionPage = await collection.query({
+        index: CHANNEL_STATE_INDEX_ID.byKind,
+        prefix: [CHANNEL_STATE_RECORD_KIND.connection],
+        order: 'asc',
+        limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
+        ...(connectionCursor === undefined ? {} : { cursor: connectionCursor }),
+      }, { signal: context.signal });
+    } catch (error) {
+      // Binding finalization is independently enumerable from the same existing
+      // bounded census, so an unavailable connection page must not manufacture
+      // a second recovery mechanism or starve already-finalizing bindings.
+      recordFinalizationFailure(error);
+    }
+    if (connectionPage === undefined) break;
+    {
+      for (const stored of connectionPage.rows) {
+        if (context.signal.aborted) return;
+        const row = asChannelStateRow(stored);
+        if (row === undefined || row.value[CHANNEL_STATE_FIELD.recordKind] !== CHANNEL_STATE_RECORD_KIND.connection) {
+          continue;
+        }
+        const connectionId = own(row.value, CHANNEL_STATE_FIELD.connectionId);
+        if (typeof connectionId !== 'string') continue;
+        try {
+          const current = readConversationConnectionUpdateRow({ row, connectionId });
+          if (!finalizingDeleteIsAuthorized(current)) continue;
+          await finalizeConversationConnectionDelete({ connectionId, context });
+        } catch (error) {
+          // Retain the canonical rows untouched; the next existing wake re-reads
+          // them rather than treating an unavailable or malformed row as deleted.
+          recordFinalizationFailure(error);
+        }
       }
     }
-  }
+    connectionCursor = connectionPage.nextCursor;
+  } while (connectionCursor !== undefined);
   if (context.signal.aborted) return;
 
-  // The binding quota is the established bounded census, but it exceeds the
-  // canonical query page bound, so the census is read as consecutive pages of
+  // The census is read as consecutive request-bounded pages of
   // the same existing index. The keyset cursor is loop-local: finalization
   // still owns no persisted cursor, scanner, or cleanup scheduler, and a crash
   // or conflict simply resumes from current rows on the next wake.
   let bindingCursor: string | undefined;
-  let remainingBindings = MAX_CONVERSATION_BINDINGS_PER_ACCOUNT;
-  while (remainingBindings > 0) {
+  for (;;) {
     if (context.signal.aborted) return;
     let bindingPage: Awaited<ReturnType<ChannelStateCollection['query']>> | undefined;
     try {
@@ -4304,7 +4319,7 @@ export async function finalizeConversationConnectionDeletesForInvocation(
         index: CHANNEL_STATE_INDEX_ID.byKind,
         prefix: [CHANNEL_STATE_RECORD_KIND.binding],
         order: 'asc',
-        limit: Math.min(remainingBindings, PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1),
+        limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
         ...(bindingCursor === undefined ? {} : { cursor: bindingCursor }),
       }, { signal: context.signal });
     } catch (error) {
@@ -4313,7 +4328,6 @@ export async function finalizeConversationConnectionDeletesForInvocation(
     if (bindingPage === undefined) break;
     for (const stored of bindingPage.rows) {
       if (context.signal.aborted) return;
-      remainingBindings -= 1;
       const row = asChannelStateRow(stored);
       if (row === undefined || row.value[CHANNEL_STATE_FIELD.recordKind] !== CHANNEL_STATE_RECORD_KIND.binding) {
         continue;
@@ -4338,6 +4352,108 @@ export async function finalizeConversationConnectionDeletesForInvocation(
   if (finalizationFailed) throw new Error('Channels delete finalization failed.');
 }
 
+export type ConversationThreadBindingCreateResult =
+  | Readonly<{ kind: 'created'; binding: ConversationBindingV1; revision: number }>
+  | Readonly<{ kind: 'stale' }>
+  | Readonly<{ kind: 'unavailable'; reason: 'routerNotFound' | 'routerDisabled' | 'connectionNotFound' | 'connectionDeleting' }>;
+
+/** Ingress and settled starts share the normal binding/frontier writer and its guarded batch. */
+export async function createConversationThreadBindingForInvocation(input: Readonly<{
+  routerBindingId: string;
+  expectedRouterRevision: number;
+  expectedConnectionRevision: number;
+  endpoint: ConversationResolvedEndpointV1;
+  sessionId: string;
+  allowedPrincipalIds: readonly string[];
+  policy: ConversationSessionBindingTargetV1['policy'];
+}>, context: PluginInvocationContext): Promise<ConversationThreadBindingCreateResult> {
+  const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
+  const routerRow = await collection.get(input.routerBindingId, { signal: context.signal });
+  assertNotAborted(context.signal);
+  if (routerRow === null) return { kind: 'unavailable', reason: 'routerNotFound' };
+  const router = readConversationBindingUpdateRow({ row: routerRow, bindingId: input.routerBindingId }).binding;
+  if (router.target.kind !== 'threadRouter' || router.deletionState !== 'none') return { kind: 'unavailable', reason: 'routerDisabled' };
+  if (input.endpoint.kind !== 'thread' || input.endpoint.parentId !== router.endpoint.id) {
+    throw pluginError('channels_thread_binding_endpoint_mismatch', 'A thread binding must belong to its router endpoint.');
+  }
+  const connectionRow = await collection.get(router.connectionId, { signal: context.signal });
+  assertNotAborted(context.signal);
+  if (connectionRow === null) return { kind: 'unavailable', reason: 'connectionNotFound' };
+  const connection = readConversationConnectionUpdateRow({ row: connectionRow, connectionId: router.connectionId });
+  if (connection.lifecycle.deletionState !== 'none') return { kind: 'unavailable', reason: 'connectionDeleting' };
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle === undefined) throw pluginError('channels_connection_crypto_unavailable', 'The runtime cannot derive a private thread identity.');
+  const key = await importHmacSha256Key(subtle, base64UrlBytes(connection.routingIdentityKey));
+  const bindingId = `binding-thread-${await signLengthPrefixedUtf8HmacSha256Base64Url({
+    subtle, key, parts: ['channels:thread-binding:v1', router.id, input.endpoint.kind, input.endpoint.audience, input.endpoint.id, input.endpoint.parentId ?? ''],
+  })}`;
+  const rejoin = async (): Promise<Extract<ConversationThreadBindingCreateResult, { kind: 'created' }> | null> => {
+    const retained = await collection.get(bindingId, { signal: context.signal });
+    assertNotAborted(context.signal);
+    if (retained === null) return null;
+    const binding = readConversationBindingUpdateRow({ row: retained, bindingId }).binding;
+    if (binding.parentBindingId !== router.id || binding.target.kind !== 'session' || binding.target.sessionId !== input.sessionId
+      || !areConversationEndpointIdentitiesEqual(binding.endpoint, input.endpoint)) {
+      throw pluginError('channels_thread_binding_conflict', 'The retained thread binding has different target authority.');
+    }
+    return { kind: 'created', binding, revision: retained.revision };
+  };
+  const existing = await rejoin();
+  if (existing !== null) return existing;
+  if (routerRow.revision !== input.expectedRouterRevision || connectionRow.revision !== input.expectedConnectionRevision) return { kind: 'stale' };
+  // Revocation owns policy narrowing: an explicit empty approver or /new set
+  // becomes off, while an omitted set continues to inherit this child audience.
+  const parentAudience = [...new Set([...conversationThreadRouterAllowedPrincipalIdsV1(router.target), ...input.allowedPrincipalIds])];
+  const narrowed = revokeConversationBindingPrincipals({
+    allowedPrincipalIds: parentAudience,
+    target: { kind: 'session', sessionId: input.sessionId, policy: input.policy },
+    revokedPrincipalIds: parentAudience.filter((id) => !input.allowedPrincipalIds.includes(id)),
+  });
+  if (narrowed.kind !== 'revoked') throw pluginError('channels_thread_binding_audience_invalid', 'A thread binding requires an admitted audience.');
+  const candidate = createConversationBindingRow({
+    bindingId, parentBindingId: router.id, connectionId: router.connectionId,
+    endpoint: input.endpoint, target: narrowed.target, allowedPrincipalIds: input.allowedPrincipalIds,
+    allowBotSenders: router.allowBotSenders,
+    inboundDebounceMs: router.inboundDebounceMs,
+    linkPreviewPolicy: router.linkPreviewPolicy,
+    senderFeedback: router.senderFeedback,
+    inputMode: 'allAllowedMessages', enabled: true,
+  });
+  assertNewConversationBindingCanPersist(candidate.binding);
+  assertConversationBindingInputModeIsDeliverable({
+    audience: candidate.binding.endpoint.audience,
+    inputMode: candidate.binding.inputMode,
+    sharedEndpointInputModes: readConversationConnectionSharedEndpointInputModes(connection.payload),
+    operation: 'channels_binding_create',
+  });
+  const frontier = await createSessionProjectionFrontierForBinding({ bindingId, target: candidate.binding.target, context });
+  const expectedRevisions = new Map<string, number | 'absent'>([[bindingId, 'absent']]);
+  const frontierId = createConversationSessionProjectionFrontierRowId(bindingId);
+  if (frontier !== null) expectedRevisions.set(frontierId, 'absent');
+  for (;;) {
+    assertNotAborted(context.signal);
+    const result = await collection.batch([
+      { kind: 'assert', rowId: router.connectionId, expectedRevision: input.expectedConnectionRevision },
+      { kind: 'assert', rowId: router.id, expectedRevision: input.expectedRouterRevision },
+      { kind: 'put', value: candidate.row, expectedRevision: expectedRevisions.get(bindingId)! },
+      ...(frontier === null ? [] : [{ kind: 'put' as const, value: frontier, expectedRevision: expectedRevisions.get(frontierId)! }]),
+    ], { signal: context.signal });
+    assertNotAborted(context.signal);
+    if (result.status !== 'conflict') {
+      const revision = result.results.find((entry) => entry.rowId === bindingId && !entry.deleted)?.revision;
+      if (revision === undefined) throw pluginError('channels_thread_binding_result_invalid', 'The thread binding batch omitted its retained row result.', true);
+      return { kind: 'created', binding: candidate.binding, revision };
+    }
+    if (result.conflicts.some((entry) => entry.rowId === router.id || entry.rowId === router.connectionId)) return { kind: 'stale' };
+    const retained = await rejoin();
+    if (retained !== null) return retained;
+    // Collection get hides tombstones. Its exact CAS conflict publishes the
+    // revision needed to resurrect this same binding and frontier identities.
+    if (result.conflicts.length === 0 || result.conflicts.some((entry) => !entry.deleted || entry.revision === null || !expectedRevisions.has(entry.rowId))) return { kind: 'stale' };
+    for (const entry of result.conflicts) if (entry.revision !== null) expectedRevisions.set(entry.rowId, entry.revision);
+  }
+}
+
 /** Creates one binding only after the target owner has verified its current Automation version. */
 export async function createConversationBindingForInvocation(
   input: JsonValue,
@@ -4359,7 +4475,7 @@ export async function createConversationBindingForInvocation(
   // can answer for this exact binding rather than for the target alone.
   const scopedIdentity = createInput.target.kind === 'automation'
     ? createInput.target.scopedTrigger
-    : createInput.target.pullRequestLink === undefined ? undefined : { sessionId: createInput.target.sessionId, pullRequest: createInput.target.pullRequestLink };
+    : createInput.target.kind !== 'session' || createInput.target.pullRequestLink === undefined ? undefined : { sessionId: createInput.target.sessionId, pullRequest: createInput.target.pullRequestLink };
   const scopedBindingIdentity = scopedIdentity === undefined ? undefined : JSON.stringify([
     createInput.connectionId, endpoint.kind, endpoint.audience, endpoint.id, endpoint.parentId ?? null,
     scopedIdentity.sessionId, scopedIdentity.pullRequest.repository, scopedIdentity.pullRequest.number,
@@ -4427,7 +4543,7 @@ export async function createConversationBindingForInvocation(
   let connectionRowForPersistence: StateRow;
   let projectionFrontier: Awaited<ReturnType<typeof createSessionProjectionFrontierForBinding>> = null;
   if (createInput.target.kind === 'automation') {
-    const target = await resolveBindingTargetForPersistence(createInput.target, context);
+    const target = await resolveBindingTargetForPersistence(createInput.target, context, allowedPrincipalIds);
     if (target.kind === 'notVerified') return target;
     // The Automation verifier is an external boundary. Reuse the incumbent
     // resolver witness check so its result cannot persist after either the
@@ -4443,7 +4559,7 @@ export async function createConversationBindingForInvocation(
     connectionRowForPersistence = finalCurrent.row;
     candidate = createCandidate(target);
   } else {
-    const target = await resolveBindingTargetForPersistence(createInput.target, context);
+    const target = await resolveBindingTargetForPersistence(createInput.target, context, allowedPrincipalIds);
     if (target.kind === 'notVerified') return target;
     candidate = createCandidate(target);
     projectionFrontier = await createSessionProjectionFrontierForBinding({
@@ -4497,7 +4613,7 @@ export async function createConversationBindingForInvocation(
   return { kind: 'created', binding: candidate.binding };
 }
 
-async function readSessionPullRequestBindings(sessionId: string, context: PluginInvocationContext): Promise<Array<{ row: StateRow; binding: ConversationBindingV1 }>> {
+async function readSessionPullRequestBindings(sessionId: string | undefined, context: PluginInvocationContext): Promise<Array<{ row: StateRow; binding: ConversationBindingV1 }>> {
   const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
   const bindings: Array<{ row: StateRow; binding: ConversationBindingV1 }> = [];
   let cursor: string | undefined;
@@ -4507,12 +4623,59 @@ async function readSessionPullRequestBindings(sessionId: string, context: Plugin
       const row = asChannelStateRow(candidate);
       if (row === undefined) throw pluginError('channels_pr_link_corrupt', 'The binding collection returned an invalid row.');
       const { binding } = readConversationBindingUpdateRow({ row, bindingId: row.rowId });
-      const scopeSessionId = binding.target.kind === 'session' ? binding.target.sessionId : binding.target.scopedTrigger?.sessionId;
-      if (scopeSessionId === sessionId && binding.deletionState === 'none') bindings.push({ row, binding });
+      const scopeSessionId = binding.target.kind === 'session' ? binding.target.sessionId : binding.target.kind === 'automation' ? binding.target.scopedTrigger?.sessionId : undefined;
+      const pr = binding.target.kind === 'session' ? binding.target.pullRequestLink : binding.target.kind === 'automation' ? binding.target.scopedTrigger?.pullRequest : undefined;
+      if (scopeSessionId !== undefined && pr !== undefined && (sessionId === undefined || scopeSessionId === sessionId)
+        && binding.deletionState === 'none') bindings.push({ row, binding });
     }
     cursor = page.nextCursor;
   } while (cursor !== undefined);
   return bindings;
+}
+
+/** The incumbent poll refreshes retained PR links; the existing Account Actions own settlement. */
+export async function refreshSessionPullRequestBindingsForInvocation(input: Readonly<{
+  connectionRow: StateRow;
+  endpoints: readonly ConversationResolvedEndpointV1[];
+}>, context: PluginInvocationContext): Promise<void> {
+  const current = await readSessionPullRequestBindings(undefined, context);
+  const next = current.map(entry => {
+    if (entry.binding.connectionId !== input.connectionRow.rowId || entry.binding.endpoint.kind !== 'githubPullRequest') return entry;
+    const pr = entry.binding.target.kind === 'session' ? entry.binding.target.pullRequestLink : entry.binding.target.kind === 'automation' ? entry.binding.target.scopedTrigger?.pullRequest : undefined;
+    let endpoint = entry.binding.endpoint;
+    for (const observed of input.endpoints) {
+      if (observed.kind !== 'githubPullRequest' || observed.pullRequestState === undefined
+        || !areConversationEndpointIdentitiesEqual(endpoint, observed)
+        || observed.pullRequest?.repository !== pr?.repository || observed.pullRequest?.number !== pr?.number
+        || observed.pullRequestState.observedAt <= (endpoint.pullRequestState?.observedAt ?? -1)) continue;
+      endpoint = { ...endpoint, pullRequest: observed.pullRequest, pullRequestState: observed.pullRequestState };
+    }
+    return endpoint === entry.binding.endpoint ? entry : { ...entry, binding: { ...entry.binding, endpoint } };
+  });
+  const before = new Map(resolveSessionPullRequestLinksV1(current.map(entry => entry.binding)).map(row => [row.sessionId, row.pullRequestLinks]));
+  for (const { sessionId, pullRequestLinks } of resolveSessionPullRequestLinksV1(next.map(entry => entry.binding))) {
+    const terminal = (link: typeof pullRequestLinks[number]) => link.state === 'merged' || link.state === 'closed';
+    // Standing belongs to a Session. Closing one PR must never hide its other open/unknown PRs.
+    if (!pullRequestLinks.every(terminal) || before.get(sessionId)?.every(terminal)) continue;
+    for (const [id, value] of [
+      ['session.read_state.set', { sessionId, state: 'read' }],
+      ['session.attention.set', { sessionId, standing: false }],
+    ] as const) {
+      const result = await context.services.actions.execute(id, value, { signal: context.signal });
+      if (isPluginActionApprovalRequestCreated(result)) throw pluginError('channels_pr_settlement_not_applied', 'PR settlement requires an Account Action decision.', true);
+    }
+  }
+  const collection = requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION);
+  for (let index = 0; index < next.length; index += 1) {
+    const previous = current[index]!;
+    const updated = next[index]!;
+    if (previous === updated) continue;
+    const result = await commitConversationBindingMutation({ collection, row: previous.row,
+      current: readConversationBindingUpdateRow({ row: previous.row, bindingId: previous.binding.id }),
+      connectionRow: input.connectionRow, binding: updated.binding,
+      updatedAt: Date.now(), signal: context.signal });
+    if (result.kind !== 'updated') throw pluginError('channels_pr_observation_conflict', 'PR observation lost its retained binding revision.', true);
+  }
 }
 
 async function disableSessionPullRequestTriggerBindings(input: Readonly<{ sessionId: string; triggerId: string; triggerRevision?: number; exceptBindingId?: string }>, context: PluginInvocationContext): Promise<void> {
@@ -4668,6 +4831,7 @@ async function mutateConversationBinding(
     const verifiedTarget = await resolveBindingTargetForPersistence(
       updateInput.target ?? current.binding.target,
       context,
+      audience?.allowedPrincipalIds ?? current.binding.allowedPrincipalIds,
     );
     if (verifiedTarget.kind === 'notVerified') {
       if (operation === 'channels_binding_set_enabled') {
@@ -5329,6 +5493,7 @@ function transferConnectionValue(input: Readonly<{
 }>): JsonRecord {
   const {
     pairingDeepLinkTemplate: _oldPairingDeepLinkTemplate,
+    outboundTextLimit: _oldOutboundTextLimit,
     // The replacement provider re-authenticates its own shared-endpoint
     // delivery truth. Retaining the predecessor's would leave the surface and
     // the binding writer deciding from a capability nothing proved.
@@ -5359,7 +5524,7 @@ function transferConnectionValue(input: Readonly<{
         },
       overlapSafety: input.prepared.setup.overlapSafety,
       replayContinuity: input.prepared.setup.replayContinuity,
-      outboundTextLimit: input.prepared.setup.outboundTextLimit,
+      ...(input.prepared.setup.outboundTextLimit === undefined ? {} : { outboundTextLimit: input.prepared.setup.outboundTextLimit }),
       ...(input.prepared.setup.sharedEndpointInputModes === undefined
         ? {}
         : { sharedEndpointInputModes: [...input.prepared.setup.sharedEndpointInputModes] }),

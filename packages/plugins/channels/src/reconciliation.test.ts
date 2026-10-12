@@ -2,7 +2,6 @@ import type { PluginInvocationCaller, PluginInvocationContext } from '@happier-d
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ConversationProviderConnectionsSnapshotV1Schema,
-  MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
 } from '@happier-dev/channels-protocol/v1';
 
 import {
@@ -430,8 +429,7 @@ describe('Conversation provider reconciliation', () => {
     })).toEqual({});
   });
 
-  it('admits only 0/1/32 exact-keyed reconciliation snapshots and rejects the 33rd or a duplicate child ID', () => {
-    expect(MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT).toBe(32);
+  it('admits the 33rd exact-keyed reconciliation snapshot and still rejects duplicate child IDs', () => {
     const invocation = {
       caller: caller({
         pluginId: 'happier.channel.discord',
@@ -458,17 +456,17 @@ describe('Conversation provider reconciliation', () => {
 
     const atLimit = listConversationProviderConnectionsForCaller({
       ...invocation,
-      connections: matchingStates(MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT),
+      connections: matchingStates(32),
     });
     expect(Object.entries(atLimit).every(([connectionId, snapshot]) => (
       connectionId === snapshot.connectionId
     ))).toBe(true);
-    expect(Object.keys(atLimit)).toHaveLength(MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT);
+    expect(Object.keys(atLimit)).toHaveLength(32);
 
-    expect(() => listConversationProviderConnectionsForCaller({
+    expect(Object.keys(listConversationProviderConnectionsForCaller({
       ...invocation,
-      connections: matchingStates(MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT + 1),
-    })).toThrow('connection limit');
+      connections: matchingStates(32 + 1),
+    }))).toHaveLength(33);
 
     const duplicate = reconciliationConnectionState({
       connectionId: 'connection-duplicate',

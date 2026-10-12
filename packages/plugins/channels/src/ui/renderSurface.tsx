@@ -98,9 +98,6 @@ import {
   conversationBindingPolicyForOmittedFieldsV1,
   conversationSessionBindingDeliveryModeForOmittedFieldV1,
   CONVERSATION_CORE_PLUGIN_ID_V1,
-  CONVERSATION_OBSERVATION_AGE_MS_FOR_OMITTED_FIELD_V1,
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-  MAX_CONVERSATION_INBOUND_DEBOUNCE_MS,
   MAX_CONVERSATION_OBSERVATION_AGE_MS,
   MIN_CONVERSATION_OBSERVATION_AGE_MS,
   type ConversationBindingTargetV1,
@@ -3300,7 +3297,7 @@ function bindingApprovalAudienceLabel(target: BindingEditorTarget, t: Translate)
 function bindingEditorDebounceMs(value: string): number | undefined {
   if (!/^\d+$/.test(value)) return undefined;
   const parsed = Number(value);
-  return isNonNegativeSafeInteger(parsed) && parsed <= MAX_CONVERSATION_INBOUND_DEBOUNCE_MS
+  return isNonNegativeSafeInteger(parsed)
     ? parsed
     : undefined;
 }
@@ -5481,7 +5478,7 @@ function BindingPolicyControls(props: Readonly<{
           tone="danger"
           value={props.t(
             'plugins.channels.surface.bindingEditDebounceInvalid',
-            `Enter a whole number from 0 to ${MAX_CONVERSATION_INBOUND_DEBOUNCE_MS}.`,
+            'Enter a whole number from 0 to 5000.',
           )}
         />
       )}
@@ -10702,6 +10699,7 @@ function ProviderSetupPicker(props: Readonly<{
           overlapSafety,
           replayContinuity,
           outboundTextLimit,
+          recommendedMaximumObservationAgeMs,
           setupGuidance,
         } = prepared.data;
         setRemediationSetupOperation(undefined);
@@ -10717,7 +10715,7 @@ function ProviderSetupPicker(props: Readonly<{
               : null,
             supportedTransports,
             selectedTransport,
-            maximumObservationAgeMs: String(CONVERSATION_OBSERVATION_AGE_MS_FOR_OMITTED_FIELD_V1),
+            maximumObservationAgeMs: String(recommendedMaximumObservationAgeMs ?? MAX_CONVERSATION_OBSERVATION_AGE_MS),
             presentation: {
               providerDisplayName: resolveProviderDisplayName(operation.contributor.pluginId)
                 ?? props.t('plugins.channels.surface.providerFallback', 'Integration provider'),
@@ -12303,7 +12301,7 @@ function SessionConversationActions(props: Readonly<{
     return (
       <Stack gap="small" testID={`channels-session-conversation-unlink-confirm:${binding.bindingId}`}>
         <Text
-          variant="caption"
+          variant="micro"
           tone="secondary"
           value={t(
             'plugins.channels.session.unlinkConfirm',
@@ -12452,7 +12450,7 @@ function SessionConversationRow(props: Readonly<{
         <Stack gap="small" testID={`channels-session-conversation-attention:${binding.bindingId}`}>
           <Row gap="xsmall" align="center">
             <Icon name="warning" size="small" tone="warning" />
-            <Text variant="caption" tone="warning" value={sessionBindingAttentionTitle(attention.reason, t)} />
+            <Text variant="micro" tone="warning" value={sessionBindingAttentionTitle(attention.reason, t)} />
           </Row>
           {attention.reason === 'transcriptHistoryGap'
             ? <SessionProjectionGapRecoveryAction attention={attention} onRefresh={props.onRefresh} t={t} />

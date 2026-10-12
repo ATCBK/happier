@@ -1,6 +1,5 @@
 import {
   areConversationEndpointIdentitiesEqual,
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
   type ConversationBindingTargetV1,
   type ConversationBindingV1,
   type ConversationPairingResourceV1,
@@ -26,25 +25,8 @@ export const MAX_CONVERSATION_PAIRING_FAILED_ATTEMPTS_PER_REQUESTER = 5;
  * pairing state.
  */
 export const MAX_CONVERSATION_PAIRING_TRACKED_REQUESTERS = 128;
-export const MAX_CONVERSATION_PAIRING_TOMBSTONES = MAX_CONVERSATION_BINDINGS_PER_ACCOUNT * 2;
 
 type PairingIdKind = 'challenge' | 'proposal' | 'binding';
-
-/**
- * The single eviction rule for every bounded terminal-pairing record, whether
- * it is a bare tombstone set or a tombstone carrying its own expiry. Insertion
- * order is arrival order, so the oldest entry is the one that leaves once the
- * one declared budget is exceeded.
- */
-function evictOldestBeyondTombstoneBudget(target: Readonly<{
-  size: number;
-  keys(): IterableIterator<string>;
-  delete(key: string): boolean;
-}>): void {
-  if (target.size <= MAX_CONVERSATION_PAIRING_TOMBSTONES) return;
-  const oldest = target.keys().next().value;
-  if (oldest !== undefined) target.delete(oldest);
-}
 
 /**
  * Whether a repeated create matches the frozen content of the challenge its
@@ -240,33 +222,26 @@ export function createConversationPairingManager(dependencies: Readonly<{
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
 
-  function addBoundedTombstone(target: Set<string>, id: string): void {
+  function addTombstone(target: Set<string>, id: string): void {
     target.add(id);
-    evictOldestBeyondTombstoneBudget(target);
   }
 
   /**
-   * Records the one terminal reason for a challenge under the single bounded
-   * tombstone budget. A later reason replaces an earlier one in place, so a
+   * Records the one terminal reason for a challenge. A later reason replaces an earlier one in place, so a
    * superseded (consumed) challenge can never still read as expired.
    */
   function recordTerminalChallenge(challengeId: string, reason: 'expired' | 'consumed'): void {
     terminalChallengeReasonById.set(challengeId, reason);
-    evictOldestBeyondTombstoneBudget(terminalChallengeReasonById);
   }
 
   /**
    * A consumed token is a terminal-challenge tombstone like any other: it only
    * has to outlive its own challenge window so a replayed `/pair` reads
-   * `challengeConsumed` instead of `tokenMismatch`. Lazy expiry alone left it
-   * bounded by pairing-operation rate rather than by a contract, so an owner
-   * create/cancel loop grew daemon memory without limit inside one window.
-   * It therefore shares the single tombstone budget rather than owning a
-   * second eviction rule.
+   * `challengeConsumed` instead of `tokenMismatch`. The existing challenge
+   * expiry removes it; there is no unrelated Account-binding count budget.
    */
   function recordConsumedToken(token: string, expiresAt: number): void {
     consumedTokens.set(token, expiresAt);
-    evictOldestBeyondTombstoneBudget(consumedTokens);
   }
 
   /**
@@ -306,7 +281,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
         proposals.delete(proposalId);
         proposalByCensusId.delete(proposal.censusId);
         changed = true;
-        if (proposal.state === 'proposed') addBoundedTombstone(expiredProposalIds, proposalId);
+        if (proposal.state === 'proposed') addTombstone(expiredProposalIds, proposalId);
         if (proposal.finalizeIdempotencyKey !== undefined) {
           proposalByFinalizeKey.delete(proposal.finalizeIdempotencyKey);
         }
@@ -741,7 +716,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
       if (dependencies.now() >= proposal.expiresAt && proposal.state === 'proposed') {
         proposals.delete(proposal.proposalId);
         proposalByCensusId.delete(proposal.censusId);
-        addBoundedTombstone(expiredProposalIds, proposal.proposalId);
+        addTombstone(expiredProposalIds, proposal.proposalId);
         publishChange();
         return { kind: 'expired' };
       }

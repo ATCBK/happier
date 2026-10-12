@@ -1,13 +1,8 @@
-import { CHANNELS_PLUGIN } from './manifest.js';
+import { CHANNEL_COLLECTION_MIGRATIONS } from './collectionMigrations.js';
 
 /**
- * The universal CJS migration entry is callable so the host can evaluate it
- * without activating the plugin. Both declarations and callbacks are projected
- * from the one authored `definePlugin` value.
+ * The build binds the captured canonical manifest around these pure callbacks.
  */
 export function collectionMigrations() {
-  return Object.freeze({
-    manifest: CHANNELS_PLUGIN.manifest,
-    collectionMigrations: CHANNELS_PLUGIN.collectionMigrations,
-  });
+  return CHANNEL_COLLECTION_MIGRATIONS;
 }

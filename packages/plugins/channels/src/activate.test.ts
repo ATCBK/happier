@@ -27,7 +27,6 @@ import {
   ConversationConnectionIdV1Schema,
   ConversationProviderConnectionStopInputV1Schema,
   ConversationProvidersContributionProtocolV1,
-  MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
   SESSION_PULL_REQUEST_BINDING_ACTION_ID_V1,
 } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
@@ -662,6 +661,65 @@ async function createProviderReconciliationAction(query: ReconciliationQuery) {
 }
 
 describe('Channels core activation', () => {
+  it('starts a conversation through the registered Action with an owner group and 120KB HTML in one custody row', async () => {
+    const state = createMutableChannelStateCollection();
+    const deliveries = createMutableChannelStateCollection();
+    state.rows.set('connection-start', { rowId: 'connection-start', revision: 4, value: reconciliationConnection('connection-start') });
+    state.rows.set('router-start', { rowId: 'router-start', revision: 2, value: {
+      id: 'router-start', 'record-kind': 'binding', v: 1, 'connection-id': 'connection-start',
+      'binding-id': 'router-start', 'created-at': 1, 'updated-at': 1,
+      payload: { endpoint: { kind: 'direct', audience: 'direct', id: 'mailbox' },
+        target: { kind: 'threadRouter', principalGroups: [{ id: 'brief', principalIds: ['owner@example.com'] }], routes: [] },
+        enabled: true, deletionState: 'none', authorityEpoch: 1,
+        inputMode: 'allAllowedMessages', allowBotSenders: false, allowedPrincipalIds: ['owner@example.com'],
+        linkPreviewPolicy: 'suppress', senderFeedback: 'off',
+        inboundDebounceMs: 0, pairing: { kind: 'off' },
+      },
+    } });
+    const core = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate },
+      services: { sessions: { get: async (id: string) => id === 'missing-session' ? null : ({
+        summary: async () => ({ id, state: 'archived', hasAttestedContext: id === 'attested-session' ? true
+          : id === 'unknown-attestation-session' ? undefined : false }),
+      }) } as unknown as PluginServices['sessions'], actions: { execute: async (_action: unknown, input: unknown) => {
+        const sessionId = (input as Readonly<{ sessionId: string }>).sessionId;
+        return sessionId !== 'missing-session' ? { ok: true, projection: 'externalShareableV1', sessionId,
+          scannedThroughSeq: 0, nextCursor: '0', hasMore: false, items: [] }
+          : { ok: false, sessionId, error: 'not_found' };
+      } } as unknown as PluginServices['actions'], storage: { account: { collection: (definition: Readonly<{ id: string }>) =>
+        definition.id === CHANNEL_DELIVERIES_COLLECTION.id ? deliveries : state,
+      } } as unknown as PluginServices['storage'] },
+    });
+    const content = { text: 'Brief', html: '<p>' + 'a'.repeat(120 * 1024) + '</p>' };
+    try {
+      await expect(core.invokeAction('conversation/start-v1', {
+        routerBindingId: 'router-start', audienceGroupId: 'unknown', subject: 'Brief', content, sessionId: 'session-brief',
+      })).rejects.toMatchObject({ code: 'channels_conversation_start_audience_not_found' });
+      expect(deliveries.rows.size).toBe(0);
+      for (const sessionId of ['attested-session', 'unknown-attestation-session']) {
+        await expect(core.invokeAction('conversation/start-v1', {
+          routerBindingId: 'router-start', audienceGroupId: 'brief', subject: 'Brief', content, sessionId,
+        })).rejects.toMatchObject({ code: 'channels_conversation_start_session_attestation_unavailable' });
+        expect(deliveries.rows.size).toBe(0);
+      }
+      await expect(core.invokeAction('conversation/start-v1', {
+        routerBindingId: 'router-start', audienceGroupId: 'brief', subject: 'Brief', content, sessionId: 'missing-session',
+      })).rejects.toMatchObject({ code: 'channels_conversation_start_session_unavailable' });
+      expect(deliveries.rows.size).toBe(0);
+      await expect(core.invokeAction('conversation/start-v1', {
+        routerBindingId: 'router-start', audienceGroupId: 'brief', subject: 'Brief', content, sessionId: 'session-brief',
+      })).resolves.toMatchObject({ kind: 'accepted' });
+      expect(deliveries.rows.size).toBe(1);
+      expect([...deliveries.rows.values()][0]?.value.payload).toMatchObject({
+        content, newThread: { recipients: ['owner@example.com'], subject: 'Brief' },
+        source: { kind: 'conversationStart', sessionId: 'session-brief' }, state: 'ready',
+      });
+      await expect(core.invokeAction('conversation/start-v1', {
+        routerBindingId: 'router-start', audienceGroupId: 'brief', subject: 'Brief', content, sessionId: 'session-brief',
+        recipients: ['external@example.com'],
+      })).rejects.toBeDefined();
+      expect(deliveries.rows.size).toBe(1);
+    } finally { await core.dispose(); }
+  });
   it('wires each canonical management declaration to its manifest Action and registered executor', async () => {
     const managementActionKeys = Object.keys(
       CONVERSATION_MANAGEMENT_ACTION_IDS_V1,
@@ -679,11 +737,9 @@ describe('Channels core activation', () => {
         );
         if (!manifestAction) throw new Error(`Missing manifest Action '${id}'.`);
         expect(manifestAction.surfaces).toEqual(
-          id === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead
-            || id === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate
-            || id === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingSetEnabled
-            ? ['cli', 'ui', 'agent', 'mcp']
-            : ['cli', 'ui'],
+          id === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart
+            ? ['cli', 'ui', 'agent', 'mcp', 'plugin']
+            : ['cli', 'ui', 'agent', 'mcp'],
         );
         const serializedInputSchema = JSON.parse(JSON.stringify(declaration.inputSchema));
         const serializedResultSchema = JSON.parse(JSON.stringify(declaration.resultSchema));
@@ -718,6 +774,9 @@ describe('Channels core activation', () => {
         family: 'backgroundServices',
         localId: service.id,
       })),
+      ...(contributes.composerAttachments ?? []).map((attachment) => ({
+        family: 'composerAttachments', localId: attachment.id,
+      })),
       ...(contributes.resources ?? [])
         .filter((resource) => resource.source === 'dynamic')
         .map((resource) => ({ family: 'resources', localId: resource.id })),
@@ -738,6 +797,10 @@ describe('Channels core activation', () => {
       expect(expected.filter((entry) => entry.family === 'resources')).toHaveLength(8);
       expect(expected.filter((entry) => entry.family === 'backgroundServices')).toHaveLength(2);
       expect(activation.registrations()).toEqual(expected);
+      expect(contributes.composerAttachments?.find((attachment) => attachment.id === 'channel-file')?.runtime)
+        .toEqual({ resolveForDispatch: true });
+      expect(activation.registration('composerAttachments', 'channel-file')?.resolveForDispatch)
+        .toBeTypeOf('function');
       expect(activation.registration('actions', CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1.connectionsList))
         .toBeDefined();
       expect(activation.registration('actions', CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate))
@@ -1049,7 +1112,7 @@ describe('Channels core activation', () => {
         routeAuthority: { connectionAuthorityEpoch: 4 },
         source: { kind: 'controlResponse', controlId: 'delivery-resolution', controlKind: 'recovery' },
         endpoint: { kind: 'direct', audience: 'direct', id: 'conversation-private' },
-        content: 'The private delivery body stays in custody.',
+        content: { text: 'The private delivery body stays in custody.' },
         deliveryKey: 'control:delivery-resolution',
         mentionPolicy: 'suppress',
         linkPreviewPolicy: 'suppress',
@@ -1302,7 +1365,7 @@ describe('Channels core activation', () => {
       const delivery = [...deliveries.rows.values()][0];
       expect(delivery?.value.payload).toMatchObject({
         source,
-        content: 'Completed.',
+        content: { text: 'Completed.' },
         deliveryKey: 'automation:handoff-1',
         replyContext: { replyToMessageId: 'message-1' },
         state: 'ready',
@@ -3151,7 +3214,7 @@ describe('Channels core activation', () => {
     const hiddenPrincipalId = 'principal-id-resource-bound-must-not-be-projected';
     const hiddenProviderConnectionKey = 'provider-connection-key-resource-bound-must-not-be-projected';
     const hiddenProviderConfigMarker = 'provider-config-resource-bound-must-not-be-projected';
-    const connections = Array.from({ length: MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT }, (_unused, index) => {
+    const connections = Array.from({ length: 32 }, (_unused, index) => {
       const connectionId = Array.from({ length: 96 }, (_unusedBit, bit) => (
         bit < 5 && (index & (1 << bit)) !== 0 ? String.fromCharCode(92) : '"'
       )).join('');
@@ -3455,7 +3518,7 @@ describe('Channels core activation', () => {
     }
   });
 
-  it('fails rather than following a cursor past the total eligible connection budget', async () => {
+  it('reconciles eligible connections on every cursor page', async () => {
     const connections = Array.from(
       { length: 32 },
       (_value, index) => reconciliationConnection(`connection-${index}`),
@@ -3480,58 +3543,15 @@ describe('Channels core activation', () => {
     });
 
     try {
-      await expect(provider.invokeAction('reconcile', {})).rejects.toMatchObject({
-        code: 'plugin_action_execution_failed',
-      });
+      const reconciled = await provider.invokeAction('reconcile', {});
+      expect(Object.keys(reconciled as object)).toHaveLength(33);
+      expect(reconciled).toMatchObject({ 'connection-32': { connectionId: 'connection-32' } });
       expect(requests
         .filter((request) => request.prefix?.[0] === 'connection')
         .map(({ cursor, limit }) => ({ cursor, limit })))
-        .toEqual([{ cursor: undefined, limit: 32 }]);
-    } finally {
-      await provider.dispose();
-      await core.dispose();
-    }
-  });
-
-  it('uses the total remaining binding budget across a cursor chain', async () => {
-    const connection = reconciliationConnection('connection-1');
-    const bindings = Array.from(
-      { length: 256 },
-      (_value, index) => reconciliationBinding({
-        bindingId: `binding-${index}`,
-        connectionId: connection.id,
-        requiresFullSharedMessageContent: index === 255,
-      }),
-    );
-    const requests: ReconciliationQueryRequest[] = [];
-    const { core, provider } = await createProviderReconciliationAction(async (request) => {
-      requests.push(request);
-      if (request.prefix?.[0] === 'connection') {
-        return { rows: collectionRows([connection]), changeCursor: 1 };
-      }
-      if (request.cursor === undefined) {
-        return {
-          rows: collectionRows(bindings.slice(0, 200)),
-          nextCursor: 'bindings-after-200',
-          changeCursor: 1,
-        };
-      }
-      if (request.cursor === 'bindings-after-200') {
-        return { rows: collectionRows(bindings.slice(200)), changeCursor: 1 };
-      }
-      return { rows: [], changeCursor: 1 };
-    });
-
-    try {
-      await expect(provider.invokeAction('reconcile', {})).resolves.toMatchObject({
-        [connection.id]: { requiresFullSharedMessageContent: true },
-      });
-      expect(requests
-        .filter((request) => request.prefix?.[0] === 'binding')
-        .map(({ cursor, limit }) => ({ cursor, limit })))
         .toEqual([
           { cursor: undefined, limit: 200 },
-          { cursor: 'bindings-after-200', limit: 56 },
+          { cursor: 'connection-overflow', limit: 200 },
         ]);
     } finally {
       await provider.dispose();
@@ -3539,13 +3559,14 @@ describe('Channels core activation', () => {
     }
   });
 
-  it('fails rather than following a cursor past the total eligible binding budget', async () => {
+  it('includes the last binding across the complete cursor chain', async () => {
     const connection = reconciliationConnection('connection-1');
     const bindings = Array.from(
       { length: 257 },
       (_value, index) => reconciliationBinding({
         bindingId: `binding-${index}`,
         connectionId: connection.id,
+        requiresFullSharedMessageContent: index === 256,
       }),
     );
     const requests: ReconciliationQueryRequest[] = [];
@@ -3572,15 +3593,16 @@ describe('Channels core activation', () => {
     });
 
     try {
-      await expect(provider.invokeAction('reconcile', {})).rejects.toMatchObject({
-        code: 'plugin_action_execution_failed',
+      await expect(provider.invokeAction('reconcile', {})).resolves.toMatchObject({
+        [connection.id]: { requiresFullSharedMessageContent: true },
       });
       expect(requests
         .filter((request) => request.prefix?.[0] === 'binding')
         .map(({ cursor, limit }) => ({ cursor, limit })))
         .toEqual([
           { cursor: undefined, limit: 200 },
-          { cursor: 'bindings-after-200', limit: 56 },
+          { cursor: 'bindings-after-200', limit: 200 },
+          { cursor: 'binding-overflow', limit: 200 },
         ]);
     } finally {
       await provider.dispose();

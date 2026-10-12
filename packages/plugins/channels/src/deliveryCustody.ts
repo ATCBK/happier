@@ -1,9 +1,9 @@
 import type {
   ConversationDeliveryArchiveRecoveryV1,
   ConversationDeliveryResultV1,
+  ConversationResolvedEndpointV1,
   ConversationSessionLastDeliveryOutcomeV1,
 } from '@happier-dev/channels-protocol/v1';
-import { MAX_CONVERSATION_DELIVERY_ATTEMPTS } from '@happier-dev/channels-protocol/v1';
 
 import { conversationRetryDelayMs } from './retryBackoff.js';
 
@@ -58,11 +58,14 @@ export type ConversationDeliveryCustody = Readonly<{
   failedChunk?: number;
   retryNotBefore?: number;
   archiveRecovery?: ConversationDeliveryArchiveRecoveryV1;
+  /** A start retains reply-routing work in this same delivery custody. */
+  threadBindingPending?: boolean;
+  endpoint?: ConversationResolvedEndpointV1;
 }>;
 
 type StartResult =
   | Readonly<{ kind: 'started'; custody: ConversationDeliveryCustody }>
-  | Readonly<{ kind: 'notStartable'; reason: 'attemptInProgress' | 'notDue' | 'attemptLimitReached' }>;
+  | Readonly<{ kind: 'notStartable'; reason: 'attemptInProgress' | 'notDue' }>;
 type StaleAttemptRecoveryClaimResult =
   | Readonly<{ kind: 'reclaimed'; custody: ConversationDeliveryCustody }>
   | Readonly<{ kind: 'notRecoverable'; reason: 'notAttempting' | 'attemptStillCurrent' }>;
@@ -77,6 +80,7 @@ type ArchiveRetryResult =
   | Readonly<{ kind: 'notRetryable' }>;
 type ConnectionDeletionResult =
   | Readonly<{ kind: 'connectionDeleted'; custody: ConversationDeliveryCustody }>
+  | Readonly<{ kind: 'retained'; custody: ConversationDeliveryCustody }>
   | Readonly<{ kind: 'notDeletable'; reason: 'externalEffectMayExist' }>;
 type BindingDeletionResult =
   | Readonly<{ kind: 'suppressed'; custody: ConversationDeliveryCustody }>
@@ -85,22 +89,6 @@ type BindingDeletionResult =
 
 export function createReadyConversationDeliveryCustody(): ConversationDeliveryCustody {
   return { state: 'ready', attemptCount: 0, providerMessageIds: [] };
-}
-
-/**
- * A local validation can prove that no provider effect is possible before an
- * attempt begins. It may terminalize only custody that remains unattempted or
- * retryable, never a claimed provider attempt.
- */
-export function settleConversationDeliveryKnownNoEffectBeforeProvider(
-  custody: ConversationDeliveryCustody,
-): ConversationDeliveryCustody | null {
-  if (custody.state !== 'ready' && custody.state !== 'retryDue') return null;
-  return {
-    state: 'notDelivered',
-    attemptCount: custody.attemptCount,
-    providerMessageIds: [],
-  };
 }
 
 export function startConversationDeliveryAttempt(input: Readonly<{
@@ -119,17 +107,15 @@ export function startConversationDeliveryAttempt(input: Readonly<{
     && input.startedAt < input.custody.retryNotBefore) {
     return { kind: 'notStartable', reason: 'notDue' };
   }
-  if (input.custody.attemptCount >= MAX_CONVERSATION_DELIVERY_ATTEMPTS) {
-    return { kind: 'notStartable', reason: 'attemptLimitReached' };
-  }
   return {
     kind: 'started',
     custody: {
       state: 'attempting',
-      attemptCount: input.custody.attemptCount + 1,
+      attemptCount: Math.min(Number.MAX_SAFE_INTEGER, input.custody.attemptCount + 1),
       attemptId: input.attemptId,
       startedAt: input.startedAt,
       providerMessageIds: input.custody.providerMessageIds,
+      ...(input.custody.threadBindingPending === undefined ? {} : { threadBindingPending: input.custody.threadBindingPending }),
     },
   };
 }
@@ -165,15 +151,18 @@ export function claimStaleConversationDeliveryAttemptRecovery(input: Readonly<{
       attemptId: input.recoveryAttemptId,
       startedAt: input.recoveredAt,
       providerMessageIds: input.custody.providerMessageIds,
+      ...(input.custody.threadBindingPending === undefined ? {} : { threadBindingPending: input.custody.threadBindingPending }),
     },
   };
 }
 
 function attemptResultBase(custody: ConversationDeliveryCustody): Pick<
   ConversationDeliveryCustody,
-  'attemptCount'
+  'attemptCount' | 'threadBindingPending'
 > {
-  return { attemptCount: custody.attemptCount };
+  return { attemptCount: custody.attemptCount,
+    ...(custody.threadBindingPending === undefined ? {} : { threadBindingPending: custody.threadBindingPending }),
+  };
 }
 
 export function settleConversationDeliveryAttempt(input: Readonly<{
@@ -188,13 +177,24 @@ export function settleConversationDeliveryAttempt(input: Readonly<{
 
   const base = attemptResultBase(input.custody);
   switch (input.result.kind) {
+    case 'notReady': {
+      // A typed provider refusal precedes submission. The same no-effect
+      // transition owns retry/attention; unsupported never becomes ambiguous.
+      const permanent = input.result.reason === 'unsupported' || input.result.reason === 'credentialInvalid'
+        || input.result.reason === 'permissionMissing' || input.result.reason === 'invalidConfiguration';
+      return settleConversationDeliveryAttempt({ ...input, result: {
+        kind: 'notDelivered', retry: permanent ? 'never' : input.result.retryAfterMs === undefined ? 'safe' : 'after',
+        ...(permanent || input.result.retryAfterMs === undefined ? {} : { retryAfterMs: input.result.retryAfterMs }),
+      } });
+    }
     case 'delivered':
       return {
         kind: 'settled',
         custody: {
           ...base,
-          state: 'delivered',
+          state: input.custody.threadBindingPending === true && input.result.endpoint === undefined ? 'outcomeUnknown' : 'delivered',
           providerMessageIds: input.result.providerMessageIds,
+          ...(input.result.endpoint === undefined ? {} : { endpoint: input.result.endpoint }),
         },
       };
     case 'partial':
@@ -208,17 +208,21 @@ export function settleConversationDeliveryAttempt(input: Readonly<{
         },
       };
     case 'notDelivered': {
-      const mayRetry = input.result.retry !== 'never'
-        && input.custody.attemptCount < MAX_CONVERSATION_DELIVERY_ATTEMPTS;
+      const mayRetry = input.result.retry !== 'never';
       if (mayRetry) {
+        const providerWaitMs = input.result.retryAfterMs;
+        // A zero wait permits retry but must not turn persistent no-effect
+        // failures into a hot loop. Positive provider waits stay authoritative.
+        const delayMs = providerWaitMs !== undefined && providerWaitMs > 0
+          ? providerWaitMs
+          : conversationRetryDelayMs(input.custody.attemptCount);
         return {
           kind: 'settled',
           custody: {
             ...base,
             state: 'retryDue',
             providerMessageIds: [],
-            retryNotBefore: input.now + (input.result.retryAfterMs
-              ?? conversationRetryDelayMs(input.custody.attemptCount)),
+            retryNotBefore: Math.min(Number.MAX_SAFE_INTEGER, input.now + delayMs),
           },
         };
       }
@@ -248,6 +252,7 @@ export function settleConversationDeliveryAttempt(input: Readonly<{
           ...base,
           state: 'outcomeUnknown',
           providerMessageIds: input.result.providerMessageIds ?? [],
+          ...(input.result.endpoint === undefined ? {} : { endpoint: input.result.endpoint }),
         },
       };
   }
@@ -334,8 +339,8 @@ export function deriveConversationDeliveryProjection(custody: ConversationDelive
 }> {
   const attention = deriveConversationDeliveryAttention(custody);
   return {
-    terminal: isConversationDeliveryAutomaticTerminal(custody),
-    attention: attention.notDelivered || attention.partial || attention.outcomeUnknown,
+    terminal: isConversationDeliveryAutomaticTerminal(custody) && !hasPendingConversationThreadBinding(custody),
+    attention: attention.retryDue || attention.notDelivered || attention.partial || attention.outcomeUnknown,
     ...(custody.state === 'retryDue' && custody.retryNotBefore !== undefined
       ? { retryNotBefore: custody.retryNotBefore }
       : {}),
@@ -343,7 +348,14 @@ export function deriveConversationDeliveryProjection(custody: ConversationDelive
 }
 
 export function isConversationDeliveryRetentionEligible(custody: ConversationDeliveryCustody): boolean {
-  return (CONVERSATION_DELIVERY_RETENTION_ELIGIBLE_STATES as readonly string[]).includes(custody.state);
+  return !hasPendingConversationThreadBinding(custody)
+    && (CONVERSATION_DELIVERY_RETENTION_ELIGIBLE_STATES as readonly string[]).includes(custody.state);
+}
+
+/** Successful external delivery must finish ordinary reply routing before retirement. */
+export function hasPendingConversationThreadBinding(custody: ConversationDeliveryCustody): boolean {
+  return custody.threadBindingPending === true
+    && (custody.state === 'delivered' || custody.state === 'resolvedAccepted');
 }
 
 /**
@@ -364,14 +376,19 @@ export function isConversationDeliveryContentFree(custody: ConversationDeliveryC
 }
 
 /**
- * Deletion can settle only work with no external effect or effect ambiguity.
- * Replaying an already-settled finalizer preserves the same durable custody.
+ * Deletion settles proven no-effect work and retains finished effect evidence.
+ * Finished starts lose only their uncompleted reply-binding intent; ambiguous
+ * effects remain with recovery. Replaying the finalizer preserves custody.
  */
 export function settleConversationDeliveryForConnectionDeletion(input: Readonly<{
   custody: ConversationDeliveryCustody;
 }>): ConnectionDeletionResult {
   if (input.custody.state === 'connectionDeleted') {
     return { kind: 'connectionDeleted', custody: input.custody };
+  }
+  if (input.custody.state === 'delivered' || input.custody.state === 'resolvedAccepted'
+    || input.custody.state === 'resolvedDiscarded') {
+    return retainConversationDeliveryForRouteDeletion(input.custody);
   }
   if (input.custody.state !== 'ready'
     && input.custody.state !== 'retryDue'
@@ -387,6 +404,13 @@ export function settleConversationDeliveryForConnectionDeletion(input: Readonly<
       providerMessageIds: [],
     },
   };
+}
+
+function retainConversationDeliveryForRouteDeletion(custody: ConversationDeliveryCustody): Readonly<{
+  kind: 'retained'; custody: ConversationDeliveryCustody;
+}> {
+  return { kind: 'retained', custody: hasPendingConversationThreadBinding(custody)
+    ? { ...custody, threadBindingPending: false } : custody };
 }
 
 /**
@@ -413,7 +437,7 @@ export function settleConversationDeliveryForBindingDeletion(input: Readonly<{
     || input.custody.state === 'resolvedAccepted'
     || input.custody.state === 'resolvedDiscarded'
     || input.custody.state === 'connectionDeleted') {
-    return { kind: 'retained', custody: input.custody };
+    return retainConversationDeliveryForRouteDeletion(input.custody);
   }
   return { kind: 'notDeletable', reason: 'externalEffectMayExist' };
 }
@@ -421,6 +445,7 @@ export function settleConversationDeliveryForBindingDeletion(input: Readonly<{
 export function resolveConversationDeliveryCustody(input: Readonly<{
   custody: ConversationDeliveryCustody;
   resolution: 'accepted' | 'discarded';
+  endpoint?: ConversationResolvedEndpointV1;
 }>): ResolveResult {
   if (input.custody.state !== 'partial' && input.custody.state !== 'outcomeUnknown') {
     return { kind: 'notResolvable' };
@@ -431,6 +456,10 @@ export function resolveConversationDeliveryCustody(input: Readonly<{
       state: input.resolution === 'accepted' ? 'resolvedAccepted' : 'resolvedDiscarded',
       attemptCount: input.custody.attemptCount,
       providerMessageIds: input.custody.providerMessageIds,
+      ...(input.custody.threadBindingPending === undefined ? {} : {
+        threadBindingPending: input.resolution === 'accepted' && input.custody.threadBindingPending,
+      }),
+      ...((input.endpoint ?? input.custody.endpoint) === undefined ? {} : { endpoint: input.endpoint ?? input.custody.endpoint }),
       ...(input.custody.failedChunk === undefined ? {} : { failedChunk: input.custody.failedChunk }),
     },
   };
@@ -451,6 +480,8 @@ export function retryConversationDeliveryAfterArchiveRecovery(input: Readonly<{
   }
   return {
     kind: 'retryReady',
-    custody: createReadyConversationDeliveryCustody(),
+    custody: { ...createReadyConversationDeliveryCustody(),
+      ...(input.custody.threadBindingPending === undefined ? {} : { threadBindingPending: input.custody.threadBindingPending }),
+    },
   };
 }

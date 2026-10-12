@@ -32,6 +32,15 @@ function binding(overrides: Partial<ConversationBindingStateV1> = {}): Conversat
 }
 
 describe('Conversation binding transition', () => {
+  it('derives router authority from groups, preserves child parentage, and rejects missing route groups', () => {
+    const policy = { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only', approvals: { kind: 'off' }, newSession: { kind: 'off' } } as const;
+    const router = { kind: 'threadRouter', principalGroups: [{ id: 'sales', principalIds: ['principal-ada', 'principal-grace'] }], routes: [{ id: 'intake', when: { group: 'sales', forwarded: 'any' }, recipe: {}, policy }] } as const;
+    const current = binding();
+    expect(transitionConversationBinding({ current, requested: { ...current, target: router } })).toMatchObject({ kind: 'updated', binding: { allowedPrincipalIds: ['principal-ada', 'principal-grace'] } });
+    expect(transitionConversationBinding({ current, requested: { ...current, target: { ...router, routes: [{ ...router.routes[0], when: { group: 'missing', forwarded: 'any' } }] } } })).toEqual({ kind: 'rejected', code: 'routerGroupNotFound' });
+    const child = binding({ parentBindingId: 'binding-router' });
+    expect(transitionConversationBinding({ current: child, requested: { ...child, enabled: false } })).toMatchObject({ binding: { parentBindingId: 'binding-router' } });
+  });
   it('refuses changing a scoped trigger to a different authenticated PR endpoint', () => {
     const current = binding({ endpoint: { kind: 'githubPullRequest', audience: 'shared', id: 'pr-5', pullRequest: { repository: 'acme/widgets', number: 5 } }, target: {
       kind: 'automation', automationId: 'automation-1', policy: { resultDelivery: 'none' },

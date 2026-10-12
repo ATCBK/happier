@@ -17,8 +17,6 @@ import type {
 } from '@happier-dev/channels-protocol/v1';
 import {
   isConversationBindingInputModeDeliverableV1,
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-  MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
 } from '@happier-dev/channels-protocol/v1';
 
 import type { ConversationBindingInputModeV1 } from '@happier-dev/channels-protocol/v1';
@@ -192,7 +190,6 @@ export async function readConversationBindingInputModesNoLongerDeliverable(input
   const read = await readCollectionValuesByKind({
     context: input.context,
     kind: CHANNEL_STATE_RECORD_KIND.binding,
-    limit: MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
   });
   return bindingInputModesNoLongerDeliverable({
     connectionId: input.connectionId,
@@ -280,9 +277,6 @@ function projectReconciliationSnapshotForCaller(
 function reconciliationSnapshotMap(
   snapshots: readonly ConversationProviderConnectionReconciliationSnapshotV1[],
 ): ConversationProviderConnectionsSnapshotV1 {
-  if (snapshots.length > MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT) {
-    throw new Error('Channel reconciliation snapshot exceeds the connection limit.');
-  }
   const result = Object.create(null) as Record<
     string,
     ConversationProviderConnectionReconciliationSnapshotV1
@@ -344,7 +338,6 @@ function bindingPolicyFromCollectionValue(
 async function readCollectionValuesByKind(input: Readonly<{
   context: PluginInvocationContext;
   kind: typeof CHANNEL_STATE_RECORD_KIND.connection | typeof CHANNEL_STATE_RECORD_KIND.binding;
-  limit: number;
 }>): Promise<ReconciliationCollectionRead> {
   const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
   const values: JsonValue[] = [];
@@ -352,15 +345,11 @@ async function readCollectionValuesByKind(input: Readonly<{
   let observedCursor: number | undefined;
 
   for (;;) {
-    const remaining = input.limit - values.length;
-    if (remaining <= 0) {
-      throw new Error(`Channel reconciliation ${input.kind} rows exceed the account limit.`);
-    }
     const page = await collection.query({
       index: CHANNEL_STATE_INDEX_ID.byKind,
       prefix: [input.kind],
       order: 'asc',
-      limit: Math.min(remaining, PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1),
+      limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1,
       ...(cursor === undefined ? {} : { cursor }),
     }, { signal: input.context.signal });
     if (observedCursor !== undefined && page.changeCursor !== observedCursor) {
@@ -368,9 +357,6 @@ async function readCollectionValuesByKind(input: Readonly<{
     }
     observedCursor = page.changeCursor;
     values.push(...page.rows.map((row) => row.value));
-    if (values.length > input.limit) {
-      throw new Error(`Channel reconciliation ${input.kind} rows exceed the account limit.`);
-    }
     if (page.nextCursor === undefined) {
       return { values, changeCursor: page.changeCursor };
     }
@@ -392,12 +378,10 @@ async function readCurrentReconciliationState(
     readCollectionValuesByKind({
       context,
       kind: CHANNEL_STATE_RECORD_KIND.connection,
-      limit: MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
     }),
     readCollectionValuesByKind({
       context,
       kind: CHANNEL_STATE_RECORD_KIND.binding,
-      limit: MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
     }),
   ]);
   if (connectionRead.changeCursor !== bindingRead.changeCursor) {

@@ -185,6 +185,34 @@ function invocationContext(collections: Readonly<{
 }
 
 describe('Conversation Automation result delivery admission', () => {
+  it('reads retained route fields while ignoring retired root, endpoint and reply fields', () => {
+    const retained = input();
+    const prepared = prepareConversationAutomationResultDelivery({
+      caller,
+      input: {
+        ...retained,
+        opaqueContext: {
+          ...retained.opaqueContext,
+          retiredRoute: 'old',
+          automationTarget: { automationId: 'other-automation', resultDelivery: 'finalResult' },
+          endpoint: { ...retained.opaqueContext.endpoint, retiredEndpoint: 'old' },
+          reply: { ...retained.opaqueContext.reply, retiredReply: 'old' },
+        },
+      },
+    });
+    expect(prepared).toMatchObject({ kind: 'prepared', route: {
+      endpoint: retained.opaqueContext.endpoint,
+      replyContext: { replyToMessageId: 'message-1' },
+    } });
+    if (prepared.kind === 'prepared') expect(prepared.route.endpoint).not.toHaveProperty('retiredEndpoint');
+    expect(prepareConversationAutomationResultDelivery({
+      caller, input: { ...retained, retiredRequestField: true },
+    })).toEqual({ kind: 'blocked', code: 'invalidCustodyRequest' });
+    expect(prepareConversationAutomationResultDelivery({
+      caller, input: { ...retained, opaqueContext: { ...retained.opaqueContext, bindingAuthorityEpoch: 0 } },
+    })).toEqual({ kind: 'blocked', code: 'invalidCustodyRequest' });
+  });
+
   it('creates real outward custody once and rejoins it after a lost accepted response', async () => {
     const state = new MemoryAccountCollection();
     const deliveries = new MemoryAccountCollection();
@@ -214,7 +242,7 @@ describe('Conversation Automation result delivery admission', () => {
           automationRunId: 'run-1',
           resultId: 'handoff-1',
         },
-        content: 'The Automation completed.',
+        content: { text: 'The Automation completed.' },
         state: 'ready',
       },
     });
@@ -388,7 +416,7 @@ describe('Conversation Automation result delivery admission', () => {
     expect(authorizedRow?.value).toMatchObject({
       payload: {
         source: { kind: 'automationResult', resultId: 'handoff-1#2' },
-        content: 'The Automation completed.',
+        content: { text: 'The Automation completed.' },
         state: 'ready',
       },
     });
@@ -513,7 +541,7 @@ describe('Conversation Automation result delivery admission', () => {
     expect(prepareConversationAutomationResultDelivery({
       input: {
         ...input(),
-        opaqueContext: { ...input().opaqueContext, connectionId: 'connection-2', extra: true },
+        opaqueContext: { ...input().opaqueContext, connectionId: '', extra: true },
       },
       caller,
     })).toEqual({ kind: 'blocked', code: 'invalidCustodyRequest' });
@@ -522,10 +550,7 @@ describe('Conversation Automation result delivery admission', () => {
         ...input(),
         opaqueContext: {
           ...input().opaqueContext,
-          automationTarget: {
-            automationId: 'automation-1',
-            resultDelivery: 'finalResult',
-          },
+          reply: { providerMessageId: '' },
         },
       },
       caller,

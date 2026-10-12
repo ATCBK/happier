@@ -2,7 +2,6 @@ import type { PluginAccountStorageScope } from '@happier-dev/plugin-sdk/storage'
 import { SessionIndexedIdentifierMaxLengthV1 } from '@happier-dev/plugin-sdk/sessions';
 import {
   MAX_CONVERSATION_BINDING_ID_ASCII_BYTES,
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
   MAX_CONVERSATION_CONNECTION_ID_ASCII_BYTES,
   MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS,
 } from '@happier-dev/channels-protocol/v1';
@@ -14,7 +13,7 @@ import {
 } from './collections.js';
 import { PLUGIN_MANIFEST } from './manifest.js';
 import { BINDINGS_RESOURCE_RUNTIME } from './bindingsResource.js';
-import { declaredResourceMaxBytes, resourceText } from './testkit/resourceContract.js';
+import { resourceText } from './testkit/resourceContract.js';
 
 import { assertChannelsTestCollectionQueryLimit } from './testkit/collectionQueryBound.js';
 class MemoryAccountCollection {
@@ -212,24 +211,23 @@ describe('Channels bindings Resource', () => {
     )).rejects.toMatchObject({ code: 'channels_bindings_resource_binding_row_invalid' });
   });
 
-  it('rejects a binding page beyond the canonical 256-row bound', async () => {
+  it('includes the 257th binding through request-bounded paging', async () => {
     const state = new MemoryAccountCollection();
-    for (let index = 0; index <= MAX_CONVERSATION_BINDINGS_PER_ACCOUNT; index += 1) {
+    for (let index = 0; index <= 256; index += 1) {
       const binding = bindingRecord({ bindingId: `binding-${String(index).padStart(3, '0')}` });
       state.rows.set(binding.id, { rowId: binding.id, revision: index + 1, value: binding });
     }
 
-    await expect(BINDINGS_RESOURCE_RUNTIME.read(
-      resourceReadOptions(accountStorageFor(state)),
-    )).rejects.toMatchObject({ code: 'channels_bindings_resource_binding_page_invalid' });
+    const result = await BINDINGS_RESOURCE_RUNTIME.read(resourceReadOptions(accountStorageFor(state)));
+    expect(JSON.parse(resourceText(result)).bindings).toHaveLength(257);
   });
 
-  it('keeps the full canonical 256-row projection within its declared Resource byte bound', async () => {
+  it('keeps large management projections content-free and summaries bounded', async () => {
     const state = new MemoryAccountCollection();
     const maximumEscapedSummary = String.fromCharCode(0).repeat(
       MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS,
     );
-    for (let index = 0; index < MAX_CONVERSATION_BINDINGS_PER_ACCOUNT; index += 1) {
+    for (let index = 0; index < 256; index += 1) {
       const bindingPrefix = `binding-${String(index).padStart(3, '0')}-`;
       const connectionPrefix = `connection-${String(index).padStart(3, '0')}-`;
       const bindingId = `${bindingPrefix}${'b'.repeat(MAX_CONVERSATION_BINDING_ID_ASCII_BYTES - bindingPrefix.length)}`;
@@ -256,13 +254,11 @@ describe('Channels bindings Resource', () => {
       endpoint: Readonly<{ label?: string }>;
       target: Readonly<{ summary: string }>;
     }>[] }>;
-    expect(projection.bindings).toHaveLength(MAX_CONVERSATION_BINDINGS_PER_ACCOUNT);
+    expect(projection.bindings).toHaveLength(256);
     expect(projection.bindings.every((binding) => (
       Array.from(binding.endpoint.label ?? '').length <= 28
       && Array.from(binding.target.summary).length <= 28
     ))).toBe(true);
-    expect(new TextEncoder().encode(resourceText(serialized)).byteLength)
-      .toBeLessThanOrEqual(declaredResourceMaxBytes('bindings-v1'));
   });
 
   it('invalidates the current snapshot on a binding-row change and disposes its one Collection watch', () => {

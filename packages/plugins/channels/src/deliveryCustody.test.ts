@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ConversationDeliveryResultV1 } from '@happier-dev/channels-protocol/v1';
 
 import {
   claimStaleConversationDeliveryAttemptRecovery,
@@ -15,6 +16,95 @@ import {
 } from './deliveryCustody.js';
 
 describe('Channels outward delivery custody', () => {
+  it('settles typed unsupported delivery as permanent no-effect custody with owner attention', () => {
+    const settled = settleConversationDeliveryAttempt({
+      custody: { state: 'attempting', attemptCount: 1, attemptId: 'unsupported-start', startedAt: 1,
+        providerMessageIds: [], threadBindingPending: true },
+      attemptId: 'unsupported-start', now: 2, result: { kind: 'notReady', reason: 'unsupported' },
+    });
+    expect(settled).toMatchObject({ kind: 'settled', custody: { state: 'notDelivered', providerMessageIds: [] } });
+    if (settled.kind !== 'settled') throw new Error('Expected settlement');
+    expect(deriveConversationDeliveryProjection(settled.custody)).toEqual({ terminal: true, attention: true });
+    expect(startConversationDeliveryAttempt({ custody: settled.custody, attemptId: 'resend', startedAt: 3 }))
+      .toEqual({ kind: 'notStartable', reason: 'notDue' });
+  });
+  it('preserves started-thread binding work across an owner-approved no-effect archive retry', () => {
+    expect(retryConversationDeliveryAfterArchiveRecovery({ custody: {
+      state: 'notDelivered', attemptCount: 1, providerMessageIds: [],
+      archiveRecovery: 'unarchiveAndRetry', threadBindingPending: true,
+    } })).toMatchObject({ kind: 'retryReady', custody: { state: 'ready', threadBindingPending: true } });
+  });
+  it('keeps a delivered start recoverable until its ordinary child binding is recorded, without resending', () => {
+    const endpoint = { kind: 'thread', audience: 'shared', id: 'thread-1', parentId: 'mailbox' } as const;
+    const started = startConversationDeliveryAttempt({
+      custody: { ...createReadyConversationDeliveryCustody(), threadBindingPending: true },
+      attemptId: 'start', startedAt: 1,
+    });
+    if (started.kind !== 'started') throw new Error('Expected start');
+    const settled = settleConversationDeliveryAttempt({
+      custody: started.custody, attemptId: 'start', now: 2,
+      result: { kind: 'delivered', providerMessageIds: ['message'], endpoint },
+    });
+    if (settled.kind !== 'settled') throw new Error('Expected settlement');
+    expect(settled.custody).toMatchObject({ endpoint, threadBindingPending: true });
+    expect(deriveConversationDeliveryProjection(settled.custody).terminal).toBe(false);
+    expect(isConversationDeliveryRetentionEligible(settled.custody)).toBe(false);
+    expect(startConversationDeliveryAttempt({ custody: settled.custody, attemptId: 'resend', startedAt: 3 }))
+      .toEqual({ kind: 'notStartable', reason: 'notDue' });
+  });
+  it('honors positive provider Retry-After for a sixth no-effect retry and keeps attention visible', () => {
+    const result = settleConversationDeliveryAttempt({
+      custody: { state: 'attempting', attemptCount: 5, attemptId: 'attempt-5', startedAt: 100, providerMessageIds: [] },
+      attemptId: 'attempt-5',
+      result: { kind: 'notDelivered', retry: 'after', retryAfterMs: 12_000 },
+      now: 100,
+    });
+    expect(result).toMatchObject({ kind: 'settled', custody: { state: 'retryDue', retryNotBefore: 12_100 } });
+    if (result.kind !== 'settled') throw new Error('Expected settlement');
+    expect(deriveConversationDeliveryProjection(result.custody)).toMatchObject({ terminal: false, attention: true });
+    expect(startConversationDeliveryAttempt({ custody: result.custody, attemptId: 'attempt-6', startedAt: 12_100 }))
+      .toMatchObject({ kind: 'started', custody: { attemptCount: 6 } });
+  });
+  it.each(['safe', 'zeroRetryAfter'] as const)('keeps growing %s no-effect backoff beyond five attempts and never starts before the due time', (retryPolicy) => {
+    let custody = createReadyConversationDeliveryCustody();
+    let now = 0;
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      const started = startConversationDeliveryAttempt({ custody, attemptId: `attempt-${attempt}`, startedAt: now });
+      expect(started.kind).toBe('started');
+      if (started.kind !== 'started') throw new Error('Expected retry to start');
+      const settled = settleConversationDeliveryAttempt({
+        custody: started.custody, attemptId: `attempt-${attempt}`, now,
+        result: retryPolicy === 'safe'
+          ? { kind: 'notDelivered', retry: 'safe' }
+          : { kind: 'notDelivered', retry: 'after', retryAfterMs: 0 },
+      });
+      if (settled.kind !== 'settled') throw new Error('Expected retry settlement');
+      custody = settled.custody;
+      const due = now + 1_000 * 2 ** (attempt - 1);
+      expect(custody).toMatchObject({ state: 'retryDue', retryNotBefore: due });
+      expect(deriveConversationDeliveryProjection(custody)).toMatchObject({ terminal: false, attention: true });
+      expect(startConversationDeliveryAttempt({ custody, attemptId: 'early', startedAt: due - 1 }))
+        .toEqual({ kind: 'notStartable', reason: 'notDue' });
+      now = due;
+    }
+    const terminalResults = [
+      { kind: 'delivered', providerMessageIds: ['accepted'] },
+      { kind: 'partial', providerMessageIds: ['accepted'], failedChunk: 1, retrySafe: false },
+      { kind: 'outcomeUnknown' },
+    ] satisfies readonly ConversationDeliveryResultV1[];
+    for (const result of terminalResults) {
+      const acceptedAttempt = startConversationDeliveryAttempt({
+        custody: createReadyConversationDeliveryCustody(), attemptId: 'effect', startedAt: now,
+      });
+      if (acceptedAttempt.kind !== 'started') throw new Error('Expected effect attempt');
+      const terminal = settleConversationDeliveryAttempt({
+        custody: acceptedAttempt.custody, attemptId: 'effect', now, result,
+      });
+      if (terminal.kind !== 'settled') throw new Error('Expected effect settlement');
+      expect(startConversationDeliveryAttempt({ custody: terminal.custody, attemptId: 'resend', startedAt: now }))
+        .toEqual({ kind: 'notStartable', reason: 'notDue' });
+    }
+  });
   it('reclaims only a stale attempting custody with a new CAS-fenced reconciliation attempt identity', () => {
     const attempting = {
       state: 'attempting' as const,
@@ -163,7 +253,7 @@ describe('Channels outward delivery custody', () => {
     })).toEqual({ kind: 'notRetryable' });
   });
 
-  it('persists a bounded fallback retry-not-before when a safe provider result has no hint while preserving explicit hints', () => {
+  it('persists growing fallback retry-not-before without a positive provider wait while preserving positive hints', () => {
     const initialAttempt = startConversationDeliveryAttempt({
       custody: createReadyConversationDeliveryCustody(),
       attemptId: 'attempt-1',
@@ -192,7 +282,7 @@ describe('Channels outward delivery custody', () => {
       now: 100,
     })).toMatchObject({
       kind: 'settled',
-      custody: { state: 'retryDue', retryNotBefore: 100 },
+      custody: { state: 'retryDue', retryNotBefore: 1_100 },
     });
 
     expect(startConversationDeliveryAttempt({

@@ -21,9 +21,14 @@ import {
   CONVERSATION_DELIVERY_ARCHIVE_RECOVERY_KINDS_V1,
   CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1,
   CONVERSATION_DELIVERY_MENTION_POLICIES_V1,
-  CONVERSATION_OUTBOUND_TEXT_UNITS_V1,
   CONVERSATION_TRANSPORT_KINDS_V1,
   ConversationBindingIdV1Schema,
+  ConversationDeliveryContentV1JsonSchema,
+  ConversationOutboundTextLimitV1JsonSchema,
+  ConversationDeliveryNewThreadV1JsonSchema,
+  ConversationStartSourceV1JsonSchema,
+  ConversationAllowedPrincipalIdsV1JsonSchema,
+  ConversationInboundDebounceMsV1JsonSchema,
   ConversationBindingIdV1JsonSchema,
   ConversationConnectionIdV1Schema,
   ConversationConnectionIdV1JsonSchema,
@@ -35,11 +40,6 @@ import {
   ConversationIngressAutomationEventCandidateV1JsonSchema,
   ConversationNormalizedIngressV1JsonSchema,
   MAX_CONVERSATION_APPROVAL_REQUEST_ID_UTF8_BYTES,
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-  MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
-  MAX_CONVERSATION_DELIVERY_ATTEMPTS,
-  MAX_CONVERSATION_DELIVERY_CHUNKS,
-  MAX_CONVERSATION_DELIVERY_TEXT_UTF8_BYTES,
   MAX_CONVERSATION_ENDPOINT_STABLE_ID_UTF8_BYTES,
   MIN_CONVERSATION_OBSERVATION_AGE_MS,
   MAX_CONVERSATION_OBSERVATION_AGE_MS,
@@ -60,23 +60,23 @@ import { createConversationNewSessionCreationKey } from './commands.js';
 import { CONVERSATION_NON_ADMISSION_REASONS } from './commandPolicy.js';
 import { MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS } from './connectionPollFailureBounds.js';
 
-/** Canonical Data contribution identifiers; never publish camelCase aliases. */
-export const CHANNEL_STATE_COLLECTION_ID = 'channel-state';
-export const CHANNEL_DELIVERIES_COLLECTION_ID = 'channel-deliveries';
-export const CHANNEL_STATE_MIGRATIONS_ARTIFACT_ID = 'channel-state-migrations';
-
-export const CHANNEL_STATE_FIELD = {
-  id: 'id',
-  recordKind: 'record-kind',
-  version: 'v',
-  connectionId: 'connection-id',
-  bindingId: 'binding-id',
-  terminal: 'terminal',
-  attention: 'attention',
-  dueAt: 'due-at',
-  createdAt: 'created-at',
-  updatedAt: 'updated-at',
-} as const;
+import {
+  CHANNEL_COLLECTION_MIGRATIONS,
+  CHANNEL_DELIVERIES_COLLECTION_ID,
+  CHANNEL_STATE_COLLECTION_ID,
+  CHANNEL_STATE_FIELD,
+  CHANNEL_STATE_MIGRATIONS_ARTIFACT_ID,
+  CHANNEL_STATE_RECORD_KIND,
+} from './collectionMigrations.js';
+export {
+  CHANNEL_DELIVERIES_COLLECTION_ID,
+  CHANNEL_STATE_COLLECTION_ID,
+  CHANNEL_STATE_FIELD,
+  CHANNEL_STATE_MIGRATIONS_ARTIFACT_ID,
+  CHANNEL_STATE_RECORD_KIND,
+  migrateChannelStateV1ToV2,
+  migrateChannelStateV2ToV3,
+} from './collectionMigrations.js';
 
 export const CHANNEL_STATE_INDEX_ID = {
   byKind: 'by-kind',
@@ -108,17 +108,6 @@ export const CHANNEL_DELIVERIES_RECORD_KIND = {
   outwardDelivery: 'outward-delivery',
 } as const;
 
-export const CHANNEL_STATE_RECORD_KIND = {
-  connection: 'connection',
-  binding: 'binding',
-  connectionIdentityKey: 'connection-identity-key',
-  connectionReservation: 'connection-reservation',
-  ingressObligation: 'ingress-obligation',
-  ingressCensus: 'ingress-census',
-  checkpoint: 'checkpoint',
-  projectionFrontier: 'projection-frontier',
-  sessionRotation: 'session-rotation',
-} as const;
 
 /** Fixed singleton row; opaque reservation rows never reuse this identity. */
 export const CHANNEL_STATE_FIXED_ROW_ID = {
@@ -131,8 +120,6 @@ const MAX_SAFE_INTEGER = 9_007_199_254_740_991;
 const MAX_PLUGIN_ID_LENGTH = 256;
 const MAX_DISPLAY_LABEL_LENGTH = 256;
 const MAX_PRINCIPAL_ID_LENGTH = 256;
-export const MAX_CHANNEL_STATE_ROW_BYTES = 256 * 1024;
-const MAX_CHANNEL_DELIVERY_ROW_BYTES = 512 * 1024;
 
 const JSON_VALUE_SCHEMA = {} satisfies PluginJsonSchema;
 const NULL_SCHEMA = { type: 'null' } satisfies PluginJsonSchema;
@@ -559,15 +546,7 @@ const CONNECTION_PAYLOAD_SCHEMA = {
     // Provider setup validates the exact unit and bounded template before this
     // private connection snapshot is written. These facts are re-read by the
     // single custody/pairing paths; list/read never project either one.
-    outboundTextLimit: {
-      type: 'object',
-      properties: {
-        maximum: POSITIVE_SAFE_INTEGER_SCHEMA,
-        unit: { type: 'string', enum: [...CONVERSATION_OUTBOUND_TEXT_UNITS_V1] },
-      },
-      required: ['maximum', 'unit'],
-      additionalProperties: false,
-    },
+    outboundTextLimit: ConversationOutboundTextLimitV1JsonSchema,
     // The provider-authenticated shared-endpoint delivery truth. Optional
     // because a provider that declares no restriction asserts every mode is
     // deliverable; the binding policy owner reads that absence the same way.
@@ -633,7 +612,6 @@ const CONNECTION_PAYLOAD_SCHEMA = {
     'transport',
     'overlapSafety',
     'replayContinuity',
-    'outboundTextLimit',
     'providerConnectionKey',
     'providerConfigVersion',
     'providerConfig',
@@ -688,17 +666,13 @@ const BINDING_DELETION_CONSISTENCY_SCHEMA: PluginJsonSchema = {
 const BINDING_PAYLOAD_SCHEMA = {
   type: 'object',
   properties: {
+    parentBindingId: ConversationBindingIdV1JsonSchema,
     endpoint: RESOLVED_ENDPOINT_SCHEMA,
     target: ConversationBindingTargetV1JsonSchema,
-    allowedPrincipalIds: {
-      type: 'array',
-      minItems: 1,
-      maxItems: 256,
-      items: PRINCIPAL_ID_SCHEMA,
-    },
+    allowedPrincipalIds: ConversationAllowedPrincipalIdsV1JsonSchema,
     allowBotSenders: BOOLEAN_SCHEMA,
     inputMode: { type: 'string', enum: [...CONVERSATION_BINDING_INPUT_MODES_V1] },
-    inboundDebounceMs: { type: 'integer', minimum: 0, maximum: 5_000 },
+    inboundDebounceMs: ConversationInboundDebounceMsV1JsonSchema,
     linkPreviewPolicy: { type: 'string', enum: ['suppress', 'providerDefault'] },
     senderFeedback: { type: 'string', enum: ['off', 'eligibleRefusals'] },
     authorityEpoch: POSITIVE_SAFE_INTEGER_SCHEMA,
@@ -837,6 +811,7 @@ const FROZEN_SESSION_INGRESS_TARGET_SCHEMA: PluginJsonSchema = {
         },
       ],
     },
+    stop: { type: 'boolean', const: true },
   },
   required: [
     'kind',
@@ -971,6 +946,16 @@ const INGRESS_OBLIGATION_PAYLOAD_SCHEMA = {
       items: OCCURRENCE_ID_SCHEMA,
     },
     censusId: OPAQUE_ROUTING_ROW_ID_SCHEMA,
+    sessionInput: {
+      type: 'object',
+      properties: {
+        sessionId: boundedString(MAX_PLUGIN_ID_LENGTH),
+        localId: { type: 'string', minLength: 1 },
+        projectedReplySeq: nullable(POSITIVE_SAFE_INTEGER_SCHEMA),
+      },
+      required: ['sessionId', 'localId', 'projectedReplySeq'],
+      additionalProperties: false,
+    },
     target: nullable(FROZEN_INGRESS_TARGET_SCHEMA),
     sourceAuthority: {
       type: 'object',
@@ -991,7 +976,7 @@ const INGRESS_OBLIGATION_PAYLOAD_SCHEMA = {
             type: 'object' as const,
             properties: {
               phase: { type: 'string' as const, const: phase },
-              attemptCount: { type: 'integer' as const, minimum: 0, maximum: MAX_CONVERSATION_DELIVERY_ATTEMPTS },
+              attemptCount: { type: 'integer' as const, minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
               dueAt: nullable(NON_NEGATIVE_SAFE_INTEGER_SCHEMA),
             },
             required: ['phase', 'attemptCount', 'dueAt'],
@@ -1008,6 +993,7 @@ const INGRESS_OBLIGATION_PAYLOAD_SCHEMA = {
     // user-action Action. It is not an answer-result cache; absence means the
     // pending projection has not yet supplied the live turn.
     userActionAnswerTurnId: nullable(boundedString(MAX_PLUGIN_ID_LENGTH)),
+    stopOutcome: { type: 'string', enum: ['cancelled', 'refused', 'unconfirmed'] },
     disposition: nullable(INGRESS_TERMINAL_DISPOSITION_SCHEMA),
     nonAdmission: INGRESS_NON_ADMISSION_SCHEMA,
   },
@@ -1141,7 +1127,6 @@ const INGRESS_CENSUS_PAYLOAD_SCHEMA = {
     matchedBindings: {
       type: 'array',
       minItems: 0,
-      maxItems: MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
       items: INGRESS_CENSUS_MATCHED_BINDING_SCHEMA,
     },
   },
@@ -1447,100 +1432,16 @@ const STATE_RECORDS: readonly StateRecordDefinition[] = [
   },
 ];
 
-function isChannelStateJsonRecord(value: JsonValue | undefined): value is Readonly<Record<string, JsonValue>> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 /**
- * Pure target-artifact migration for DATA-EU7. Generic Data owns all source
- * reads, target staging, index readiness, and the authoritative cutover; this
- * callback transforms only the logical census shape it owns.
- */
-export function migrateChannelStateV1ToV2(
-  value: Readonly<Record<string, JsonValue>>,
-): Readonly<Record<string, JsonValue>> {
-  if (value[CHANNEL_STATE_FIELD.recordKind] !== CHANNEL_STATE_RECORD_KIND.ingressCensus) {
-    return value;
-  }
-  const payload = value.payload;
-  if (!isChannelStateJsonRecord(payload)) {
-    throw new Error('A V1 ingress census must contain an object payload.');
-  }
-  return {
-    ...value,
-    [CHANNEL_STATE_FIELD.attention]: false,
-    payload: { ...payload, conflict: null, compacted: null },
-  };
-}
-
-function removeProviderSelectionGeneration(value: JsonValue | undefined): Readonly<Record<string, JsonValue>> {
-  if (!isChannelStateJsonRecord(value)) {
-    throw new Error('A V2 provider contribution selection must be an object.');
-  }
-  const { immutableGenerationId: _retired, ...stableSelection } = value;
-  return stableSelection;
-}
-
-/**
- * Contracts Channels persistence to stable contribution identity. Generation
- * is executable currentness owned by the host snapshot and must not strand an
- * otherwise-current connection after slot replacement or daemon restart.
- */
-export function migrateChannelStateV2ToV3(
-  value: Readonly<Record<string, JsonValue>>,
-): Readonly<Record<string, JsonValue>> {
-  const payload = value.payload;
-  if (!isChannelStateJsonRecord(payload)) return value;
-  if (value[CHANNEL_STATE_FIELD.recordKind] === CHANNEL_STATE_RECORD_KIND.connection) {
-    const pendingOldTransportStop = payload.pendingOldTransportStop;
-    return {
-      ...value,
-      payload: {
-        ...payload,
-        providerContributionSelection: removeProviderSelectionGeneration(
-          payload.providerContributionSelection,
-        ),
-        ...(isChannelStateJsonRecord(pendingOldTransportStop)
-          ? {
-            pendingOldTransportStop: {
-              ...pendingOldTransportStop,
-              providerContributionSelection: removeProviderSelectionGeneration(
-                pendingOldTransportStop.providerContributionSelection,
-              ),
-            },
-          }
-          : {}),
-      },
-    };
-  }
-  if (value[CHANNEL_STATE_FIELD.recordKind] === CHANNEL_STATE_RECORD_KIND.ingressObligation) {
-    const target = payload.target;
-    if (!isChannelStateJsonRecord(target) || target.kind !== 'event') return value;
-    return {
-      ...value,
-      payload: {
-        ...payload,
-        target: {
-          ...target,
-          providerContributionSelection: removeProviderSelectionGeneration(
-            target.providerContributionSelection,
-          ),
-        },
-      },
-    };
-  }
-  return value;
-}
-
-/**
- * One strict V3 Account Collection contract for all Channels configuration,
+ * One strict V4 Account Collection contract for all Channels configuration,
  * ingress, checkpoint, projection-frontier, and rotation state. Every row
  * family remains explicit; no later core phase gets an opaque escape hatch.
  */
 export const CHANNEL_STATE_COLLECTION = defineAccountCollection({
   id: CHANNEL_STATE_COLLECTION_ID,
-  schemaVersion: 3,
-  readableSchemaVersions: [1, 2],
+  schemaVersion: 4,
+  readableSchemaVersions: [1, 2, 3],
   schema: {
     type: 'object',
     properties: {
@@ -1653,40 +1554,16 @@ export const CHANNEL_STATE_COLLECTION = defineAccountCollection({
   ],
   uiQueries: [],
   relations: [],
-  migrations: [{
-    id: 'channel-state-v1-to-v2',
-    fromSchemaVersion: 1,
-    toSchemaVersion: 2,
-    migrate: migrateChannelStateV1ToV2,
-  }, {
-    id: 'channel-state-v2-to-v3',
-    fromSchemaVersion: 2,
-    toSchemaVersion: 3,
-    migrate: migrateChannelStateV2ToV3,
-  }],
+  migrations: CHANNEL_COLLECTION_MIGRATIONS[CHANNEL_STATE_COLLECTION_ID],
   migrationArtifact: {
     artifactId: CHANNEL_STATE_MIGRATIONS_ARTIFACT_ID,
     exportName: 'collectionMigrations',
-  },
-  quota: {
-    maxRowEncodedBytes: MAX_CHANNEL_STATE_ROW_BYTES,
-    maxRowsByIndexPrefix: [
-      {
-        indexId: CHANNEL_STATE_INDEX_ID.byKind,
-        prefix: [CHANNEL_STATE_RECORD_KIND.connection],
-        maxRows: MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
-      },
-      {
-        indexId: CHANNEL_STATE_INDEX_ID.byKind,
-        prefix: [CHANNEL_STATE_RECORD_KIND.binding],
-        maxRows: MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-      },
-    ],
   },
 });
 
 const DELIVERY_SOURCE_SCHEMA: PluginJsonSchema = {
   oneOf: [
+    ConversationStartSourceV1JsonSchema,
     {
       type: 'object',
       properties: {
@@ -1716,7 +1593,7 @@ const DELIVERY_SOURCE_SCHEMA: PluginJsonSchema = {
         controlId: boundedString(MAX_PLUGIN_ID_LENGTH),
         controlKind: {
           type: 'string',
-          enum: ['pairing', 'newSession', 'approval', 'userAction', 'refusal', 'recovery'],
+          enum: ['pairing', 'newSession', 'approval', 'userAction', 'stop', 'refusal', 'recovery'],
         },
       },
       required: ['kind', 'controlId', 'controlKind'],
@@ -1761,7 +1638,6 @@ const DELIVERY_ATTEMPT_ID_SCHEMA = nullable(boundedString(MAX_PLUGIN_ID_LENGTH))
 const DELIVERY_STARTED_AT_SCHEMA = nullable(NON_NEGATIVE_SAFE_INTEGER_SCHEMA);
 const DELIVERY_PROVIDER_MESSAGE_IDS_SCHEMA: PluginJsonSchema = {
   type: 'array',
-  maxItems: MAX_CONVERSATION_DELIVERY_CHUNKS,
   items: boundedString(MAX_CONVERSATION_PROVIDER_MESSAGE_ID_UTF8_BYTES),
 };
 const EMPTY_DELIVERY_PROVIDER_MESSAGE_IDS_SCHEMA: PluginJsonSchema = {
@@ -1772,7 +1648,7 @@ const EMPTY_DELIVERY_PROVIDER_MESSAGE_IDS_SCHEMA: PluginJsonSchema = {
 const DELIVERY_CHUNK_INDEX_SCHEMA = {
   type: 'integer',
   minimum: 0,
-  maximum: MAX_CONVERSATION_DELIVERY_CHUNKS,
+  maximum: Number.MAX_SAFE_INTEGER,
 } satisfies PluginJsonSchema;
 const DELIVERY_FAILED_CHUNK_SCHEMA = nullable(DELIVERY_CHUNK_INDEX_SCHEMA);
 const DELIVERY_ARCHIVE_RECOVERY_SCHEMA = nullable({
@@ -1924,7 +1800,7 @@ const DELIVERY_PAYLOAD_CONTENT_RETENTION_SCHEMA: PluginJsonSchema = {
   oneOf: [
     {
       properties: {
-        content: { type: 'string', minLength: 1, maxLength: MAX_CONVERSATION_DELIVERY_TEXT_UTF8_BYTES },
+        content: ConversationDeliveryContentV1JsonSchema,
         contentFingerprint: nullable(OPAQUE_ROUTING_ROW_ID_SCHEMA),
       },
       required: ['content'],
@@ -1955,7 +1831,10 @@ const DELIVERY_PAYLOAD_SCHEMA: PluginJsonSchema = {
     source: DELIVERY_SOURCE_SCHEMA,
     routeAuthority: DELIVERY_ROUTE_AUTHORITY_SCHEMA,
     endpoint: RESOLVED_ENDPOINT_SCHEMA,
-    content: nullable({ type: 'string', minLength: 1, maxLength: MAX_CONVERSATION_DELIVERY_TEXT_UTF8_BYTES }),
+    content: nullable(ConversationDeliveryContentV1JsonSchema),
+    newThread: ConversationDeliveryNewThreadV1JsonSchema,
+    deliveryEndpoint: RESOLVED_ENDPOINT_SCHEMA,
+    threadBindingPending: BOOLEAN_SCHEMA,
     contentFingerprint: nullable(OPAQUE_ROUTING_ROW_ID_SCHEMA),
     deliveryKey: boundedString(MAX_CONVERSATION_SESSION_IDEMPOTENCY_KEY_UTF8_BYTES),
     replyContext: nullable({
@@ -1979,7 +1858,7 @@ const DELIVERY_PAYLOAD_SCHEMA: PluginJsonSchema = {
     attemptCount: {
       type: 'integer',
       minimum: 0,
-      maximum: MAX_CONVERSATION_DELIVERY_ATTEMPTS,
+      maximum: Number.MAX_SAFE_INTEGER,
     },
     attemptId: DELIVERY_ATTEMPT_ID_SCHEMA,
     startedAt: DELIVERY_STARTED_AT_SCHEMA,
@@ -2038,7 +1917,7 @@ const DELIVERY_ROW_REQUIRED = [
 function deliveryRowStateSchema(input: Readonly<{
   state: ConversationDeliveryCustodyStateSelection;
   terminal: boolean;
-  attention: boolean;
+  attention?: boolean;
   attemptId: PluginJsonSchema;
   startedAt: PluginJsonSchema;
   providerMessageIds: PluginJsonSchema;
@@ -2053,10 +1932,23 @@ function deliveryRowStateSchema(input: Readonly<{
       ...(input.hasRetryNotBefore === true
         ? { [CHANNEL_DELIVERIES_FIELD.retryNotBefore]: NON_NEGATIVE_SAFE_INTEGER_SCHEMA }
         : {}),
-      [CHANNEL_DELIVERIES_FIELD.terminal]: { type: 'boolean', const: input.terminal },
-      [CHANNEL_DELIVERIES_FIELD.attention]: { type: 'boolean', const: input.attention },
+      [CHANNEL_DELIVERIES_FIELD.terminal]: input.state === 'delivered' || input.state === 'resolvedAccepted'
+        ? BOOLEAN_SCHEMA : { type: 'boolean', const: input.terminal },
+      [CHANNEL_DELIVERIES_FIELD.attention]: input.attention === undefined
+        ? BOOLEAN_SCHEMA
+        : { type: 'boolean', const: input.attention },
       payload: deliveryPayloadStateSchema(input),
     },
+    ...(input.state === 'delivered' || input.state === 'resolvedAccepted' ? {
+      oneOf: [
+        { properties: { terminal: { const: false }, payload: {
+          properties: { threadBindingPending: { const: true } }, required: ['threadBindingPending'],
+        } } },
+        { properties: { terminal: { const: true }, payload: {
+          properties: { threadBindingPending: { const: false } },
+        } } },
+      ],
+    } : {}),
     required: [
       ...DELIVERY_ROW_REQUIRED,
       ...(input.hasRetryNotBefore === true ? [CHANNEL_DELIVERIES_FIELD.retryNotBefore] : []),
@@ -2080,7 +1972,7 @@ const DELIVERY_ROW_STATE_CONSISTENCY_SCHEMA: PluginJsonSchema = {
     deliveryRowStateSchema({
       state: 'retryDue',
       terminal: false,
-      attention: false,
+      // Existing dev rows may carry false; new writes derive true from custody.
       attemptId: NULL_SCHEMA,
       startedAt: NULL_SCHEMA,
       providerMessageIds: EMPTY_DELIVERY_PROVIDER_MESSAGE_IDS_SCHEMA,
@@ -2178,7 +2070,8 @@ const DELIVERY_ROW_STATE_CONSISTENCY_SCHEMA: PluginJsonSchema = {
  */
 export const CHANNEL_DELIVERIES_COLLECTION = defineAccountCollection({
   id: CHANNEL_DELIVERIES_COLLECTION_ID,
-  schemaVersion: 1,
+  schemaVersion: 2,
+  readableSchemaVersions: [1],
   schema: {
     type: 'object',
     properties: {
@@ -2254,11 +2147,13 @@ export const CHANNEL_DELIVERIES_COLLECTION = defineAccountCollection({
   ],
   uiQueries: [],
   relations: [],
-  // No readable schema version below the current one, so there is no
-  // ordered migration edge to declare and none to implement in the
-  // executable half.
-  migrations: [],
-  quota: { maxRowEncodedBytes: MAX_CHANNEL_DELIVERY_ROW_BYTES },
+  // Dependency-owned endpoint/revision schema changes do not rewrite custody.
+  // The shared candidate executor still validates every retained target row.
+  migrations: CHANNEL_COLLECTION_MIGRATIONS[CHANNEL_DELIVERIES_COLLECTION_ID],
+  migrationArtifact: {
+    artifactId: CHANNEL_STATE_MIGRATIONS_ARTIFACT_ID,
+    exportName: 'collectionMigrations',
+  },
 });
 
 /**

@@ -17,6 +17,7 @@ export const CONVERSATION_NON_ADMISSION_REASONS = [
   'commandNotAuthorized',
   'targetUnavailable',
   'permissionCeilingUnavailable',
+  'routeNotMatched',
 ] as const;
 
 export type ConversationNonAdmissionReason =
@@ -80,7 +81,7 @@ export type ConversationCommandPolicyInput = Readonly<{
 export type ConversationCommandPolicyResult =
   | Readonly<{ kind: 'ordinaryText' }>
   | Extract<ConversationCommandClassification, Readonly<{
-    kind: 'approve' | 'userActionAnswer' | 'newSession';
+    kind: 'approve' | 'userActionAnswer' | 'newSession' | 'stop';
   }>>
   | Readonly<{
     kind: 'terminal';
@@ -119,6 +120,10 @@ export function decideConversationCommandPolicy(
   if (input.actor.kind === 'bot' && !input.allowBotSenders) return terminal(input, 'botSenderDisabled');
 
   const command = input.command;
+  if ((command.kind === 'stop' || (command.kind === 'malformedCommand' && command.command === 'stop'))
+    && (input.contentProvenance !== 'original' || input.actor.kind === 'bot')) {
+    return { kind: 'ordinaryText' };
+  }
   if (input.contentProvenance !== 'original'
     && (command.kind === 'pair'
       || command.kind === 'approve'
@@ -139,12 +144,17 @@ export function decideConversationCommandPolicy(
       ? input.approvalCommandsEnabled
       : command.command === 'answer'
         ? input.targetKind === 'session'
-        : command.command === 'newSession'
-          ? input.targetKind === 'session' && input.newSessionEnabled
-          : false;
+        : command.command === 'stop'
+          ? input.targetKind === 'session'
+          : command.command === 'newSession'
+            ? input.targetKind === 'session' && input.newSessionEnabled
+            : false;
     return terminal(input, 'malformedCommand', commandEligible);
   }
   if (command.kind === 'pair') return terminal(input, 'commandNotAuthorized');
+  if (command.kind === 'stop') {
+    return input.targetKind === 'session' ? command : terminal(input, 'commandNotAuthorized');
+  }
   if (command.kind === 'approve') {
     return input.approvalCommandsEnabled
       ? command

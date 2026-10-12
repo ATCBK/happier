@@ -4,6 +4,7 @@ import {
   channelsStatusNeedsYou,
   connectionStatus,
   readChannelsPageLocation,
+  parseBinding,
   type ChannelsConnection,
 } from './conversationRows.js';
 
@@ -17,6 +18,15 @@ describe('readChannelsPageLocation', () => {
 });
 
 const t = (_key: string, fallback: string): string => fallback;
+
+it('preserves router and child relations from the binding Resource without treating routers as sessions or automations', () => {
+  const row = { bindingId: 'router-1', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'direct' },
+    target: { kind: 'threadRouter', summary: 'threadRouter' }, inputMode: 'allAllowedMessages', deliveryMode: 'none', approval: { kind: 'notApplicable' }, enabled: true, deletionState: 'none' };
+  expect(parseBinding(row)).toEqual(row);
+  const child = { ...row, bindingId: 'child-1', parentBindingId: 'router-1', target: { kind: 'session', summary: 'session-1' }, deliveryMode: 'repliesOnly', approval: { kind: 'off' } };
+  expect(parseBinding(child)).toEqual(child);
+  expect(parseBinding({ ...row, deliveryMode: 'finalResult' })).toBeUndefined();
+});
 
 function connection(attention: Partial<ChannelsConnection['attention']> = {}): ChannelsConnection {
   return {

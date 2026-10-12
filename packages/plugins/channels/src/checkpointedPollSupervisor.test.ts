@@ -1,15 +1,15 @@
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
+import { PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 } from '@happier-dev/plugin-sdk/collections';
 import { PluginError, type PluginServices } from '@happier-dev/plugin-sdk';
 import {
-  MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
   MAX_CONVERSATION_RECEIVE_WAIT_MS,
-  MIN_CONVERSATION_OBSERVATION_AGE_MS,
 } from '@happier-dev/channels-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createIngressSupervisor, type IngressSupervisorOptions } from './checkpointedPollSupervisor.js';
 
 import { assertChannelsTestCollectionQueryLimit } from './testkit/collectionQueryBound.js';
+import { createCurrentConversationConnectionFixture } from './testkit/currentConnectionFixture.js';
 function connectionRows(count: number): readonly Readonly<{
   rowId: string;
   revision: number;
@@ -38,6 +38,7 @@ function backgroundContext(
   logger?: Pick<PluginServices['logger'], 'warn'>,
 ): BackgroundServiceContext {
   const collection = {
+    watch: () => ({ dispose() {} }),
     async query(request: Readonly<{ limit?: number }>) {
       assertChannelsTestCollectionQueryLimit(request.limit);
       if (query !== undefined) return await query();
@@ -70,14 +71,181 @@ function backgroundContext(
 }
 
 describe('Checkpointed poll supervisor', () => {
-  it('reconstructs each wake and leaves retry eligibility to the persisted connection owner', async () => {
+  it.each([0, 1])('performs no idle periodic reads with %i enabled socket connections and wakes on collection invalidation', async (count) => {
+    vi.useFakeTimers();
+    const generation = new AbortController();
+    const listeners: Array<() => void> = [];
+    const value = createCurrentConversationConnectionFixture({
+      connectionId: 'connection-1',
+      transport: { kind: 'socket' },
+      replayContinuity: 'sessionBound',
+      authority: {
+        providerPluginId: 'example.channel.provider',
+        providerContributionSelection: { contributionId: 'test-provider' },
+        providerSetupInput: {},
+        credentialRef: null,
+        transportOrigin: {
+          serverIdentityId: 'srv_account_one',
+          materializationRef: {
+            pluginId: 'example.channel.provider', machineId: 'machine-1', materializationId: 'provider-1',
+          },
+        },
+        providerConnectionKey: 'provider-connection-1',
+        providerConfig: {},
+        routingIdentityKey: 'a'.repeat(43),
+        integrationPrincipal: { id: 'principal-1' },
+        authorityEpoch: 1,
+      },
+    });
+    const row = { rowId: value.id, revision: 1, value };
+    const query = vi.fn(async (request: Readonly<{ prefix?: readonly unknown[] }>) => ({
+      rows: request.prefix?.[0] === 'connection' && count === 1 ? [row] : [], changeCursor: 1,
+    }));
+    const dispose = vi.fn();
+    const emit = vi.fn(async () => ({ status: 'admitted', sequence: 1, subscriberCount: 0 }));
+    const context = backgroundContext(generation.signal);
+    const collection = {
+      query,
+      get: vi.fn(async (id: string) => count === 1 && id === row.rowId ? row : null),
+      watch: (_request: unknown, listener: () => void) => {
+        listeners.push(listener);
+        return { dispose };
+      },
+    };
+    const supervisor = createIngressSupervisor();
+    const run = supervisor.run({
+      ...context,
+      services: {
+        ...context.services,
+        storage: { account: { collection: () => collection } },
+        events: { plugin: { emit } },
+      } as unknown as PluginServices,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const initialReads = query.mock.calls.length;
+      const initialGets = collection.get.mock.calls.length;
+      expect(initialReads).toBeGreaterThan(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      console.info('FIX-WAKE ingress measurement', {
+        enabledSocketConnections: count,
+        startupQueries: initialReads,
+        startupGets: initialGets,
+        queriesPerMinute: query.mock.calls.length - initialReads,
+        getsPerMinute: collection.get.mock.calls.length - initialGets,
+      });
+      expect(query).toHaveBeenCalledTimes(initialReads);
+      expect(collection.get).toHaveBeenCalledTimes(initialGets);
+      expect(listeners.length).toBeGreaterThan(0);
+      for (const notify of listeners) notify();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(query.mock.calls.length).toBeGreaterThan(initialReads);
+      expect(emit).toHaveBeenCalledWith('connections-invalidated-v1', {}, { signal: expect.any(AbortSignal) });
+    } finally {
+      generation.abort();
+      await run;
+      await supervisor.dispose();
+      vi.useRealTimers();
+    }
+    expect(dispose).toHaveBeenCalled();
+  });
+
+  it('preserves connection invalidation while an ineligible poll read is still outstanding', async () => {
+    vi.useFakeTimers();
+    const generation = new AbortController();
+    const listeners: Array<() => void> = [];
+    const value = createCurrentConversationConnectionFixture({
+      connectionId: 'connection-1', transport: { kind: 'socket' }, replayContinuity: 'sessionBound',
+      authority: {
+        providerPluginId: 'example.channel.provider',
+        providerContributionSelection: { contributionId: 'test-provider' },
+        providerSetupInput: {}, credentialRef: null,
+        transportOrigin: { serverIdentityId: 'srv_account_one', materializationRef: {
+          pluginId: 'example.channel.provider', machineId: 'machine-1', materializationId: 'provider-1',
+        } },
+        providerConnectionKey: 'provider-connection-1', providerConfig: {},
+        routingIdentityKey: 'a'.repeat(43), integrationPrincipal: { id: 'principal-1' }, authorityEpoch: 1,
+      },
+    });
+    const row = { rowId: value.id, revision: 1, value };
+    let release: (() => void) | undefined;
+    const heldRead = new Promise<void>(resolve => { release = resolve; });
+    const get = vi.fn(async () => {
+      if (get.mock.calls.length === 1) await heldRead;
+      return row;
+    });
+    const collection = {
+      get,
+      async query(request: Readonly<{ prefix?: readonly unknown[] }>) {
+        return { rows: request.prefix?.[0] === 'connection' ? [row] : [], changeCursor: 1 };
+      },
+      watch: (_request: unknown, notify: () => void) => { listeners.push(notify); return { dispose() {} }; },
+    };
+    const context = backgroundContext(generation.signal);
+    const supervisor = createIngressSupervisor();
+    const running = supervisor.run({ ...context, services: {
+      ...context.services, storage: { account: { collection: () => collection } },
+      events: { plugin: { emit: async () => ({ status: 'admitted', sequence: 1, subscriberCount: 0 }) } },
+    } as unknown as PluginServices });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(get).toHaveBeenCalledTimes(1);
+      for (const notify of listeners) notify();
+      await vi.advanceTimersByTimeAsync(0);
+      release?.();
+      await vi.advanceTimersByTimeAsync(0);
+      // The invalidation must be consumed after the older in-flight read has
+      // settled, not overwritten by that read's ineligible outcome.
+      expect(get.mock.calls.length).toBeGreaterThanOrEqual(4);
+    } finally {
+      release?.(); generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers();
+    }
+  });
+
+  it('recovers an unavailable earliest-due query at the existing recovery deadline', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const generation = new AbortController();
+    const deadlineReads: number[] = [];
+    const collection = {
+      watch: () => ({ dispose() {} }),
+      async query(request: Readonly<{ index: string; range?: Readonly<{ upper?: number }> }>) {
+        if (request.index === 'by-ingress-due' && request.range?.upper === undefined) {
+          deadlineReads.push(Date.now());
+          if (deadlineReads.length === 1) throw new Error('Unavailable storage boundary.');
+        }
+        return { rows: [], changeCursor: 1 };
+      },
+    };
+    const supervisor = createIngressSupervisor();
+    const context = backgroundContext(generation.signal);
+    const running = supervisor.run({
+      ...context,
+      services: { ...context.services, storage: { account: { collection: () => collection } } } as unknown as PluginServices,
+    });
+    const outcome = running.then(() => undefined, error => error);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(deadlineReads).toEqual([0]);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(deadlineReads).toEqual([0]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(deadlineReads).toEqual([0, 1_000]);
+      generation.abort();
+      expect(await outcome).toBeUndefined();
+    } finally {
+      generation.abort(); await outcome; await supervisor.dispose(); vi.useRealTimers();
+    }
+  });
+
+  it('fires the poll retry at its deadline without an intervening periodic tick', async () => {
     let now = 1_000_000;
     const generation = new AbortController();
     const callTimes: number[] = [];
     const calls: string[] = [];
     const runDueWork = vi.fn(async (input: Readonly<{ now: number; limit: number }>) => {
       calls.push('due');
-      expect(input).toEqual({ now, limit: MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT });
+      expect(input).toEqual({ now, limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 });
       return 0;
     });
     const runPoll = vi.fn(async (input: Readonly<{ connectionId: string; waitMs: number }>) => {
@@ -101,8 +269,8 @@ describe('Checkpointed poll supervisor', () => {
 
     await supervisor.run(backgroundContext(generation.signal));
 
-    expect(callTimes).toEqual([1_000_000, 1_001_000]);
-    expect(calls).toEqual(['due', 'poll', 'due', 'poll']);
+    expect(callTimes).toEqual([1_000_000, 1_002_000]);
+    expect(calls.filter(call => call === 'poll')).toEqual(['poll', 'poll']);
     await supervisor.dispose();
   });
 
@@ -129,27 +297,24 @@ describe('Checkpointed poll supervisor', () => {
     await supervisor.run(backgroundContext(generation.signal));
 
     expect(retentionInputs).toEqual([
-      { now: 2_000_000, limit: MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT },
-      { now: 2_001_000, limit: MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT, cursor: 'retention:next' },
+      { now: 2_000_000, limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 },
+      { now: 2_000_000, limit: PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1, cursor: 'retention:next' },
     ]);
     await supervisor.dispose();
   });
 
-  it('sweeps ingress retention once per shortest enforceable horizon instead of on every wake', async () => {
-    const wakesPerSweep = MIN_CONVERSATION_OBSERVATION_AGE_MS / 1_000;
+  it('sweeps ingress retention at its owner-provided expiry deadline', async () => {
     let now = 3_000_000;
     const generation = new AbortController();
     const retentionAt: number[] = [];
-    let pollCalls = 0;
     const supervisor = createIngressSupervisor({
       runDueWork: async () => 0,
       runRetention: async (input) => {
         retentionAt.push(input.now);
-        return {};
+        if (retentionAt.length === 2) generation.abort(new Error('expiry observed'));
+        return { nextRetentionAt: 3_007_321 };
       },
       runPoll: async () => {
-        pollCalls += 1;
-        if (pollCalls > wakesPerSweep) generation.abort(new Error('test complete'));
         return { kind: 'ineligible' as const };
       },
       reconciliationIntervalMs: 1_000,
@@ -161,30 +326,23 @@ describe('Checkpointed poll supervisor', () => {
 
     await supervisor.run(backgroundContext(generation.signal));
 
-    // Every one of those wakes polled; only the startup pass and the wake that
-    // reached the next coarse deadline re-scanned the census collection.
-    expect(pollCalls).toBe(wakesPerSweep + 1);
-    expect(retentionAt).toEqual([3_000_000, 3_000_000 + MIN_CONVERSATION_OBSERVATION_AGE_MS]);
+    expect(retentionAt).toEqual([3_000_000, 3_007_321]);
     await supervisor.dispose();
   });
 
-  it('holds a failed retention page to the next coarse deadline instead of re-failing every wake', async () => {
+  it('retries a failed retention page at the existing recovery deadline', async () => {
     let now = 4_000_000;
     const generation = new AbortController();
     const logger = { warn: vi.fn() };
     let retentionCalls = 0;
-    let pollCalls = 0;
     const supervisor = createIngressSupervisor({
       runDueWork: async () => 0,
       runRetention: async () => {
         retentionCalls += 1;
+        if (retentionCalls === 2) generation.abort(new Error('test complete'));
         throw new Error('secret retention detail');
       },
       runPoll: async () => {
-        pollCalls += 1;
-        if (pollCalls > MIN_CONVERSATION_OBSERVATION_AGE_MS / 1_000) {
-          generation.abort(new Error('test complete'));
-        }
         return { kind: 'ineligible' as const };
       },
       reconciliationIntervalMs: 1_000,
@@ -197,7 +355,8 @@ describe('Checkpointed poll supervisor', () => {
     await supervisor.run(backgroundContext(generation.signal, undefined, logger));
 
     expect(retentionCalls).toBe(2);
-    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(now).toBe(4_001_000);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenNthCalledWith(
       1,
       '[Channels] ingress supervisor work failed',
@@ -426,8 +585,7 @@ describe('Checkpointed poll supervisor', () => {
       generation.signal,
       async () => ({ rows: connectionRows(3), changeCursor: 1 }),
     ));
-    // One long-polling provider must not hold the other 31 supported
-    // connections behind it: a serial sweep only ever reaches connection-1.
+    // One long-polling provider must not hold other connections behind it.
     await vi.waitFor(() => expect(started).toEqual([
       'connection-1',
       'connection-2',
@@ -452,7 +610,7 @@ describe('Checkpointed poll supervisor', () => {
       runPoll: async (input) => {
         polls.push(input.connectionId);
         if (input.connectionId === 'connection-1') await slowPoll;
-        return { kind: 'ineligible' as const };
+        return { kind: 'retry' as const, retryAfterMs: 20 };
       },
       reconciliationIntervalMs: 20,
     });
@@ -511,7 +669,7 @@ describe('Checkpointed poll supervisor', () => {
       },
       runPoll: async (input) => {
         polls.push(input.connectionId);
-        return { kind: 'ineligible' as const };
+        return { kind: 'retry' as const, retryAfterMs: 20 };
       },
       reconciliationIntervalMs: 20,
     });
@@ -577,12 +735,11 @@ describe('Checkpointed poll supervisor', () => {
       runRetention: (() => {
         retentionCalls += 1;
         if (retentionCalls === 1) throw new Error('synchronous retention failure');
+        generation.abort(new Error('retention recovered'));
         return Promise.resolve({});
       }) as IngressSupervisorOptions['runRetention'],
       runPoll: async () => ({ kind: 'ineligible' as const }),
-      // A failed page is held to the next coarse deadline, so the sweep this
-      // asserts is the one the failure rescheduled — not an extra wake.
-      reconciliationIntervalMs: MIN_CONVERSATION_OBSERVATION_AGE_MS,
+      reconciliationIntervalMs: 1_000,
       clock: {
         now: () => now,
         async sleep(delayMs) { now += delayMs; },

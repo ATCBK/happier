@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { activate } from './activate.js';
 import { CHANNEL_DELIVERIES_COLLECTION } from './collections.js';
 import { PLUGIN_MANIFEST } from './manifest.js';
-import { waitForChannelsAccountRows } from './waitForAccountRows.js';
 
 function collectionBoundary(onRead?: (reads: number) => void) {
   const listeners = new Set<() => void>();
@@ -39,6 +38,7 @@ function backgroundContext(state: ReturnType<typeof collectionBoundary>, deliver
       definition.id === CHANNEL_DELIVERIES_COLLECTION.id ? deliveries : state
     ) } },
     logger: { warn: vi.fn() },
+    events: { plugin: { emit: vi.fn(async () => ({ status: 'admitted', sequence: 1, subscriberCount: 0 })) } },
   } as unknown as PluginServices;
   return {
     surface: 'background',
@@ -68,8 +68,8 @@ describe('registered Channels background service idle demand', () => {
         expect(initialReads).toBeGreaterThan(0);
         await vi.advanceTimersByTimeAsync(10_000);
         expect(state.reads + deliveries.reads).toBe(initialReads);
-        expect(state.listeners.size).toBe(1);
-        expect(deliveries.listeners.size).toBe(1);
+        expect(state.listeners.size).toBe(id === 'ingress-supervisor' ? 3 : 1);
+        expect(deliveries.listeners.size).toBe(id === 'ingress-supervisor' ? 0 : 1);
 
         state.reset();
         await vi.advanceTimersByTimeAsync(0);
@@ -81,7 +81,8 @@ describe('registered Channels background service idle demand', () => {
         state.populate();
         await vi.advanceTimersByTimeAsync(0);
         expect(state.reads + deliveries.reads).toBeGreaterThan(resetReads);
-        expect(state.listeners.size + deliveries.listeners.size).toBe(0);
+        // Watches now belong to the active supervisor, not an initial waiter.
+        expect(state.listeners.size + deliveries.listeners.size).toBeGreaterThan(0);
       } finally {
         generation.abort();
         await run;
@@ -92,34 +93,4 @@ describe('registered Channels background service idle demand', () => {
     },
   );
 
-  it('does not lose a mutation that arrives during the empty reread', async () => {
-    const generation = new AbortController();
-    const state = collectionBoundary(reads => { if (reads === 2) state.populate(); });
-    const deliveries = collectionBoundary();
-    await waitForChannelsAccountRows(backgroundContext(state, deliveries, generation.signal));
-    expect(state.reads).toBe(3);
-    expect(state.listeners.size + deliveries.listeners.size).toBe(0);
-  });
-
-  it('retires an empty parked observation on generation cancellation', async () => {
-    const generation = new AbortController();
-    const state = collectionBoundary();
-    const deliveries = collectionBoundary();
-    const run = waitForChannelsAccountRows(backgroundContext(state, deliveries, generation.signal));
-    await vi.waitFor(() => expect(state.reads).toBe(2));
-    generation.abort();
-    await run;
-    expect(state.listeners.size + deliveries.listeners.size).toBe(0);
-  });
-
-  it('leaves an unavailable initial census with the existing active retry owner', async () => {
-    const generation = new AbortController();
-    const state = collectionBoundary(() => { throw new Error('private transport detail'); });
-    const deliveries = collectionBoundary();
-    const context = backgroundContext(state, deliveries, generation.signal);
-    await waitForChannelsAccountRows(context);
-    expect(state.listeners.size + deliveries.listeners.size).toBe(0);
-    expect(context.services.logger.warn).toHaveBeenCalledOnce();
-    expect(JSON.stringify(vi.mocked(context.services.logger.warn).mock.calls)).not.toContain('private');
-  });
 });

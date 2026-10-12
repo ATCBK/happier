@@ -4,12 +4,14 @@ import {
   PluginMachineExecutionOriginV1JsonSchema,
 } from '@happier-dev/plugin-sdk/collections';
 import { QualifiedConnectedAccountRefJsonSchema } from '@happier-dev/plugin-sdk/connected-accounts';
-import { PluginContributionIdentityV1JsonSchema } from '@happier-dev/plugin-sdk/manifest';
+import { PluginContributionIdentityV1JsonSchema, compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
+import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { PluginWebhookEndpointIdV1JsonSchema } from '@happier-dev/plugin-sdk/webhooks';
 import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 import {
   ConversationAuthenticatedObservationShellV1JsonSchema,
   ConversationBindingTargetV1JsonSchema,
+  ConversationBindingV1Schema,
   ConversationNormalizedIngressV1JsonSchema,
   ConversationScopedPullRequestTriggerV1Schema,
 } from '@happier-dev/channels-protocol/v1';
@@ -27,6 +29,7 @@ import {
 } from './collections.js';
 import { MAX_CONVERSATION_POLL_FAILURE_ATTEMPTS } from './connectionPollFailureBounds.js';
 import { collectionMigrations, PLUGIN_MANIFEST } from './manifest.js';
+import { createCurrentConversationConnectionFixture } from './testkit/currentConnectionFixture.js';
 
 /**
  * The shipped static declarations and their executable half, both projected by
@@ -84,6 +87,56 @@ function findChannelStateRecordPayload(recordKind: string): PluginJsonSchema | u
 }
 
 describe('Channels collection declarations', () => {
+  it.each([
+    { principalCount: 1, inboundDebounceMs: 5_001 },
+    { principalCount: 257, inboundDebounceMs: 0 },
+  ])('persists public binding policy beyond former limits: %j', ({ principalCount, inboundDebounceMs }) => {
+    const { id, connectionId, v, createdAt, updatedAt, ...payload } = ConversationBindingV1Schema.parse({
+      v: 1, id: 'binding-1', connectionId: 'connection-1', createdAt: 0, updatedAt: 0,
+      endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1' },
+      target: { kind: 'session', sessionId: 'session-1', policy: {
+        deliveryMode: 'repliesOnly', permissionCeiling: 'read-only',
+        approvals: { kind: 'off' }, newSession: { kind: 'off' },
+      } },
+      allowedPrincipalIds: Array.from({ length: principalCount }, (_unused, index) => `principal-${index}`),
+      allowBotSenders: false, inputMode: 'allAllowedMessages', inboundDebounceMs,
+      linkPreviewPolicy: 'suppress', senderFeedback: 'off', authorityEpoch: 1,
+      enabled: true, deletionState: 'none',
+    });
+    const row = {
+      id, v, 'record-kind': 'binding', 'connection-id': connectionId, 'binding-id': id,
+      'created-at': createdAt, 'updated-at': updatedAt, payload,
+    };
+    expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema), row)).toBe(true);
+  });
+
+  it('migrates retained v3 provider identities without changing materialized authority or provider-owned bytes', async () => {
+    const current = createCurrentConversationConnectionFixture({
+      connectionId: 'connection-1',
+      authority: {
+        providerPluginId: 'happier.channel.telegram',
+        providerContributionSelection: { contributionId: 'telegram' },
+        providerSetupInput: { immutableGenerationId: 'provider-owned-data' },
+        credentialRef: null,
+        transportOrigin: { serverIdentityId: 'srv_account_one', materializationRef: {
+          pluginId: 'happier.channel.telegram', machineId: 'machine-1', materializationId: 'retained-materialization',
+        } },
+        providerConnectionKey: 'provider-connection', providerConfig: {}, routingIdentityKey: 'a'.repeat(43),
+        integrationPrincipal: { id: 'principal-1' }, authorityEpoch: 1,
+      },
+    });
+    // Serialize through the same plain JSON boundary as a retained logical row.
+    const retained = JSON.parse(JSON.stringify({ ...current, payload: {
+      ...current.payload, providerContributionSelection: { contributionId: 'telegram', immutableGenerationId: 'retired-generation' },
+    } })) as Readonly<Record<string, JsonValue>>;
+    const migration = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']?.find((edge) => edge.fromSchemaVersion === 3);
+    expect(migration).toBeDefined();
+    const migrated = await migration?.migrate(retained);
+    expect(migrated).toEqual(current);
+    expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema), migrated)).toBe(true);
+    expect(retained).toMatchObject({ payload: { providerContributionSelection: { immutableGenerationId: 'retired-generation' } } });
+  });
+
   it('declares no Account-mode identity tags in either static Collection contract', () => {
     const expectedIdentityFields = [
       { id: 'channel-state', identityFields: [] },
@@ -242,11 +295,11 @@ describe('Channels collection declarations', () => {
     ]);
   });
 
-  it('declares the V3 stable provider-selection shape and its ordered pure migrations', () => {
+  it('declares the V4 transport-origin contract and its ordered retained-row migrations', () => {
     const censusPayload = findChannelStateRecordPayload(
       CHANNEL_STATE_RECORD_KIND.ingressCensus,
     );
-    const [v1ToV2, v2ToV3] = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state'] ?? [];
+    const [v1ToV2, v2ToV3, v3ToV4] = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state'] ?? [];
     const staticDeclaration = CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS.find(
       (collection) => collection.id === 'channel-state',
     );
@@ -267,8 +320,8 @@ describe('Channels collection declarations', () => {
       },
     } as const;
 
-    expect(CHANNEL_STATE_COLLECTION.schemaVersion).toBe(3);
-    expect(CHANNEL_STATE_COLLECTION.readableSchemaVersions).toEqual([1, 2]);
+    expect(CHANNEL_STATE_COLLECTION.schemaVersion).toBe(4);
+    expect(CHANNEL_STATE_COLLECTION.readableSchemaVersions).toEqual([1, 2, 3]);
     expect(JSON.parse(JSON.stringify(CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS)))
       .toEqual(CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS);
     expect(staticDeclaration?.migrations).toEqual([{
@@ -279,6 +332,10 @@ describe('Channels collection declarations', () => {
       id: 'channel-state-v2-to-v3',
       fromSchemaVersion: 2,
       toSchemaVersion: 3,
+    }, {
+      id: 'channel-state-v3-to-v4',
+      fromSchemaVersion: 3,
+      toSchemaVersion: 4,
     }]);
     expect(staticDeclaration).not.toHaveProperty('migrations.0.migrate');
     expect(censusPayload?.required).toContain('conflict');
@@ -293,6 +350,8 @@ describe('Channels collection declarations', () => {
       attention: false,
       payload: { ...source.payload, conflict: null, compacted: null },
     });
+    const retainedV3 = { ...source, attention: false, payload: { ...source.payload, conflict: null, compacted: null } };
+    expect(v3ToV4?.migrate(retainedV3)).toEqual(retainedV3);
     expect(v2ToV3?.migrate({
       id: 'connection-1',
       'record-kind': 'connection',
@@ -396,31 +455,6 @@ describe('Channels collection declarations', () => {
         attentionForbidden,
       ]));
     }
-  });
-
-  it('declares exact generic indexed-prefix quotas for live connection and binding rows', () => {
-    expect(CHANNEL_STATE_COLLECTION.quota).toEqual({
-      maxRowEncodedBytes: 256 * 1024,
-      maxRowsByIndexPrefix: [
-        {
-          indexId: CHANNEL_STATE_INDEX_ID.byKind,
-          prefix: [CHANNEL_STATE_RECORD_KIND.connection],
-          maxRows: 32,
-        },
-        {
-          indexId: CHANNEL_STATE_INDEX_ID.byKind,
-          prefix: [CHANNEL_STATE_RECORD_KIND.binding],
-          maxRows: 256,
-        },
-      ],
-    });
-  });
-
-  it('declares a 512 KiB delivery row quota without widening Channel state rows', () => {
-    expect(CHANNEL_DELIVERIES_COLLECTION.quota).toEqual({
-      maxRowEncodedBytes: 512 * 1024,
-    });
-    expect(CHANNEL_STATE_COLLECTION.quota?.maxRowEncodedBytes).toBe(256 * 1024);
   });
 
   it('admits body-free not-delivered custody through the canonical delivery schema', () => {
@@ -562,6 +596,7 @@ describe('Channels collection declarations', () => {
           'approval',
           'userActionAnswer',
           'newSession',
+          'stop',
         ],
         required: [
           'kind',

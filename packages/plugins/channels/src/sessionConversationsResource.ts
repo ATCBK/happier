@@ -17,7 +17,6 @@ import {
 } from './accountLocalBindingPolicy.js';
 import {
   projectConversationSessionBindingAttentions,
-  MAX_CONVERSATION_SESSION_BINDING_ATTENTION_ENTRY_BYTES,
   type ConversationSessionBindingAttentionV1,
 } from './sessionBindingAttention.js';
 import {
@@ -31,33 +30,14 @@ import {
   readConversationOutwardDeliveryLastDeliveries,
 } from './outwardDelivery.js';
 import {
-  MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-  MAX_CONVERSATION_BINDING_ID_ASCII_BYTES,
   ConversationSessionLastDeliveriesV1Schema,
 } from '@happier-dev/channels-protocol/v1';
 import {
   requireChannelsResourceAccountStorage,
   requireChannelsResourceSessionId,
 } from './requiredAccountStorage.js';
-import { MAX_CHANNELS_BINDINGS_RESOURCE_BYTES } from './resourceBounds.js';
 import { readConversationSessionProjectionHistoryGap } from './sessionProjection.js';
 
-/**
- * The Session projection publishes the SAME management row shape as the
- * Account-wide `bindings-v1` Resource, and in the worst case every one of the
- * 256 Account bindings targets one Session. Its ceiling is therefore that
- * Resource's declared ceiling plus the attention and last-delivery entry each
- * binding can additionally carry. Printable ASCII ids can escape to two bytes
- * per character; the remaining entry bytes come from its widest scalar values.
- */
-export const MAX_CHANNELS_SESSION_CONVERSATIONS_BYTES = MAX_CHANNELS_BINDINGS_RESOURCE_BYTES
-  + (MAX_CONVERSATION_BINDINGS_PER_ACCOUNT * MAX_CONVERSATION_SESSION_BINDING_ATTENTION_ENTRY_BYTES)
-  + ',"lastDeliveries":[]'.length
-  + (MAX_CONVERSATION_BINDINGS_PER_ACCOUNT * (
-    (MAX_CONVERSATION_BINDING_ID_ASCII_BYTES * 2)
-    + JSON.stringify({ bindingId: '', atMs: Number.MAX_SAFE_INTEGER, outcome: 'notDelivered' }).length
-    + 1
-  ));
 
 /**
  * The Session's own external conversations plus the one attention projection
@@ -131,8 +111,7 @@ async function readChannelsSessionConversationsProjection(
       }
     }
     frontierCursor = frontierPage.nextCursor;
-  } while (frontierCursor !== undefined
-    && transcriptHistoryGapBindingIds.size < MAX_CONVERSATION_BINDINGS_PER_ACCOUNT);
+  } while (frontierCursor !== undefined);
   return {
     bindings,
     attention: projectConversationSessionBindingAttentions({

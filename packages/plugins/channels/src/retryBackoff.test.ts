@@ -3,16 +3,16 @@ import { describe, expect, it } from 'vitest';
 import { conversationRetryDelayMs } from './retryBackoff.js';
 
 describe('Channels retry backoff', () => {
-  it('doubles from the base delay and saturates at the ceiling', () => {
+  it('keeps doubling beyond five attempts without a local delay ceiling', () => {
     expect([0, 1, 2, 3, 4, 5, 6, 20].map(conversationRetryDelayMs)).toEqual([
       1_000,
       1_000,
       2_000,
       4_000,
       8_000,
-      8_000,
-      8_000,
-      8_000,
+      16_000,
+      32_000,
+      524_288_000,
     ]);
   });
 

@@ -1,4 +1,4 @@
-import { areConversationEndpointIdentitiesEqual } from '@happier-dev/channels-protocol/v1';
+import { areConversationEndpointIdentitiesEqual, conversationThreadRouterAllowedPrincipalIdsV1 } from '@happier-dev/channels-protocol/v1';
 import type {
   ConversationBindingInputModeV1,
   ConversationBindingTargetV1,
@@ -18,6 +18,7 @@ export type ConversationBindingEndpointV1 = ConversationResolvedEndpointV1;
 /** The private logical binding payload, after generic Collection validation. */
 export type ConversationBindingStateV1 = Readonly<{
   connectionId: string;
+  parentBindingId?: string;
   endpoint: ConversationBindingEndpointV1;
   target: ConversationBindingTargetV1;
   allowedPrincipalIds: readonly string[];
@@ -52,7 +53,11 @@ export type ConversationBindingTransitionResultV1 =
       | 'duplicateAllowedPrincipal'
       | 'policyPrincipalNotAllowed'
       | 'pullRequestCorrespondenceMismatch'
-      | 'authorityEpochExhausted';
+      | 'authorityEpochExhausted'
+      | 'parentBindingImmutable'
+      | 'routerGroupNotFound'
+      | 'routerDuplicateId'
+      | 'routerAudienceEmpty';
   }>;
 
 const MAX_SAFE_INTEGER = 9_007_199_254_740_991;
@@ -77,6 +82,7 @@ function sameTargetIdentity(
   if (left.kind === 'automation' && right.kind === 'automation') {
     return left.automationId === right.automationId && pluginJsonValuesEqual(left.scopedTrigger ?? null, right.scopedTrigger ?? null);
   }
+  if (left.kind === 'threadRouter' && right.kind === 'threadRouter') return pluginJsonValuesEqual(left, right);
   return false;
 }
 
@@ -128,6 +134,7 @@ function sameTargetAuthority(
       && pluginJsonValuesEqual(left.scopedTrigger ?? null, right.scopedTrigger ?? null)
       && left.policy.resultDelivery === right.policy.resultDelivery;
   }
+  if (left.kind === 'threadRouter' && right.kind === 'threadRouter') return pluginJsonValuesEqual(left, right);
   return false;
 }
 
@@ -151,16 +158,15 @@ function hasDuplicate(values: readonly string[]): boolean {
  * before a create or update can persist stale approval or /new principals.
  */
 function hasPolicyPrincipalOutsideAllowlist(
-  target: ConversationBindingTargetV1,
+  policy: ConversationSessionBindingTargetV1['policy'],
   allowedPrincipalIds: readonly string[],
 ): boolean {
-  if (target.kind !== 'session') return false;
   const allowed = new Set(allowedPrincipalIds);
-  const approvals = target.policy.approvals.kind === 'enabled'
-    ? target.policy.approvals.principalIds
+  const approvals = policy.approvals.kind === 'enabled'
+    ? policy.approvals.principalIds
     : undefined;
-  const newSession = target.policy.newSession.kind === 'enabled'
-    ? target.policy.newSession.principalIds
+  const newSession = policy.newSession.kind === 'enabled'
+    ? policy.newSession.principalIds
     : undefined;
   return (approvals?.some((principalId) => !allowed.has(principalId)) ?? false)
     || (newSession?.some((principalId) => !allowed.has(principalId)) ?? false);
@@ -201,6 +207,7 @@ function sameBinding(
   right: ConversationBindingStateV1,
 ): boolean {
   return left.connectionId === right.connectionId
+    && left.parentBindingId === right.parentBindingId
     && sameEndpoint(left.endpoint, right.endpoint)
     && sameTargetAuthority(left.target, right.target)
     && sameStringSequence(left.allowedPrincipalIds, right.allowedPrincipalIds)
@@ -221,8 +228,20 @@ export function transitionConversationBinding(input: Readonly<{
   current: ConversationBindingStateV1;
   requested: ConversationBindingRequestedStateV1;
 }>): ConversationBindingTransitionResultV1 {
-  const { current, requested } = input;
-  const pullRequest = requested.target.kind === 'session' ? requested.target.pullRequestLink : requested.target.scopedTrigger?.pullRequest;
+  const { current } = input;
+  const requested = input.requested.target.kind === 'threadRouter'
+    ? { ...input.requested, allowedPrincipalIds: conversationThreadRouterAllowedPrincipalIdsV1(input.requested.target) }
+    : input.requested;
+  if (current.parentBindingId !== requested.parentBindingId) return { kind: 'rejected', code: 'parentBindingImmutable' };
+  if (requested.target.kind === 'threadRouter') {
+    const groups = new Set(requested.target.principalGroups.map((group) => group.id));
+    const routes = new Set(requested.target.routes.map((route) => route.id));
+    if (groups.size !== requested.target.principalGroups.length || routes.size !== requested.target.routes.length) return { kind: 'rejected', code: 'routerDuplicateId' };
+    if (requested.target.routes.some((route) => route.when.group !== 'any' && !groups.has(route.when.group))) return { kind: 'rejected', code: 'routerGroupNotFound' };
+    if (requested.allowedPrincipalIds.length === 0) return { kind: 'rejected', code: 'routerAudienceEmpty' };
+    if (requested.target.routes.some((route) => hasPolicyPrincipalOutsideAllowlist(route.policy, requested.allowedPrincipalIds))) return { kind: 'rejected', code: 'policyPrincipalNotAllowed' };
+  }
+  const pullRequest = requested.target.kind === 'session' ? requested.target.pullRequestLink : requested.target.kind === 'automation' ? requested.target.scopedTrigger?.pullRequest : undefined;
   if (pullRequest !== undefined && (requested.endpoint.kind !== 'githubPullRequest'
     || !pluginJsonValuesEqual(requested.endpoint.pullRequest ?? null, pullRequest)
     || (requested.target.kind === 'automation' && requested.target.policy.resultDelivery !== 'none'))) {
@@ -234,7 +253,7 @@ export function transitionConversationBinding(input: Readonly<{
   if (hasDuplicate(requested.allowedPrincipalIds)) {
     return { kind: 'rejected', code: 'duplicateAllowedPrincipal' };
   }
-  if (hasPolicyPrincipalOutsideAllowlist(requested.target, requested.allowedPrincipalIds)) {
+  if (requested.target.kind === 'session' && hasPolicyPrincipalOutsideAllowlist(requested.target.policy, requested.allowedPrincipalIds)) {
     return { kind: 'rejected', code: 'policyPrincipalNotAllowed' };
   }
 
@@ -262,6 +281,7 @@ export function transitionConversationBinding(input: Readonly<{
 
   const next: ConversationBindingStateV1 = {
     connectionId: requested.connectionId,
+    ...(current.parentBindingId === undefined ? {} : { parentBindingId: current.parentBindingId }),
     endpoint: requested.endpoint,
     target,
     allowedPrincipalIds: requested.allowedPrincipalIds,
@@ -335,6 +355,17 @@ export function revokeConversationBindingPrincipals(input: Readonly<{
   );
   if (allowedPrincipalIds.length === 0) {
     return { kind: 'rejected', code: 'audienceWouldBeEmpty' };
+  }
+  if (input.target.kind === 'threadRouter') {
+    return { kind: 'revoked', allowedPrincipalIds, target: {
+      ...input.target,
+      principalGroups: input.target.principalGroups.map((group) => ({ ...group, principalIds: group.principalIds.filter((id) => !revoked.has(id)) })),
+      routes: input.target.routes.map((route) => ({ ...route, policy: {
+        ...route.policy,
+        approvals: withoutRevokedPolicyPrincipals(route.policy.approvals, revoked),
+        newSession: withoutRevokedPolicyPrincipals(route.policy.newSession, revoked),
+      } })),
+    } };
   }
   if (input.target.kind !== 'session') {
     return { kind: 'revoked', allowedPrincipalIds, target: input.target };

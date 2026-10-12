@@ -161,7 +161,7 @@ function bindingDeliveryObligation(
     },
     source: { kind: 'controlResponse', controlId, controlKind: 'recovery' },
     endpoint: { kind: 'direct', audience: 'direct', id: 'chat-1' },
-    content: `Private delivery body for ${controlId}.`,
+    content: { text: `Private delivery body for ${controlId}.` },
     deliveryKey: `delivery:${controlId}`,
     mentionPolicy: 'suppress',
     linkPreviewPolicy: 'suppress',
