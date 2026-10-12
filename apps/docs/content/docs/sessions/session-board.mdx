@@ -86,8 +86,13 @@ approval policy; pending approval does not mean the item has been saved.
 
 For supported Session widgets, **Add to…** also saves a library definition before
 placing an independent instance. If placement fails or waits for approval after
-saving, the library copy remains. Native built-in widgets, including Usage widgets,
-currently cannot be saved or shared as library definitions from a Session.
+saving, the library copy remains. In 0.3 development source, native built-in
+widgets, including Usage widgets, can also be saved and copied this way. Their
+saved definition retains the widget's identity, declared inputs, bindings and
+policy; the destination reads live data using its viewer's ordinary authority.
+Saving does not freeze that data into a snapshot. An anonymous public link
+shows a clear unavailable state for live widgets that need a Happier viewer
+connection, including built-ins; it never reads with the author's credentials.
 
 Credentialed shared widgets use each viewer's own existing Connected Account
 purpose selection, qualified to the declared Resource consumer. A missing

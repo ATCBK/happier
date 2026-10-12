@@ -3,6 +3,15 @@ import { test } from 'node:test';
 
 import { readDiscriminatedMembers, renderRuntimeEventReferenceMarkdown } from './generateRuntimeEventReference.mjs';
 
+test('places every current runtime event in the generated reference', async () => {
+  const { AgentSessionRuntimeEventV1Schema } = await import('../../../packages/protocol/dist/runtime/agentSessionV1.js');
+  const markdown = await renderRuntimeEventReferenceMarkdown();
+  const core = AgentSessionRuntimeEventV1Schema._def.schema ?? AgentSessionRuntimeEventV1Schema;
+  for (const kind of readDiscriminatedMembers(core._def.options[0])) {
+    assert.ok(markdown.includes(`\`${kind}\``), `missing runtime event ${kind}`);
+  }
+});
+
 const literal = (value) => ({ _def: { value } });
 const member = (disc, value) => ({ shape: { [disc]: literal(value) } });
 const union = (disc, values) => ({ _def: { discriminator: disc, options: values.map((v) => member(disc, v)) } });

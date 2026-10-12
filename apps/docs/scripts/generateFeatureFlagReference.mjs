@@ -1,6 +1,6 @@
 /**
- * Renders the feature-flag reference from the protocol catalog and the client
- * registry.
+ * Renders the feature-flag reference from the protocol catalog and its shared
+ * preference registry, which the client consumes.
  *
  * The hand-written page documented 3 of 71 flags. That is not a gap anyone
  * could have closed by hand and kept closed: the flags that decide whether
@@ -12,10 +12,10 @@
  *   - `@happier-dev/protocol`'s `FEATURE_CATALOG` — the 71 canonical ids, their
  *     descriptions, whether the server or the client owns them, and their
  *     dependencies. Imported from the built package.
- *   - `apps/ui/.../uiFeatureRegistry.ts` — which of those the app exposes as a
+ *   - `packages/protocol/.../featurePreferenceMutations.ts` — which flags the app exposes as a
  *     user-facing toggle, and whether it is experimental and on by default.
- *     Parsed from source because the client is not importable from a plain Node
- *     script; `collectUiToggles` asserts it found all 71 ids, so a shape change
+ *     Parsed from the canonical registry source; `collectUiToggles` asserts it
+ *     found every catalog id, so a shape change
  *     fails here rather than silently publishing a short list.
  *
  * Regenerate with `yarn --cwd apps/docs generate:reference`.
@@ -28,7 +28,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..');
 
 const CATALOG_DIST = join(REPO, 'packages', 'protocol', 'dist', 'features', 'catalog.js');
-const UI_REGISTRY = join(REPO, 'apps', 'ui', 'sources', 'sync', 'domains', 'features', 'registry', 'uiFeatureRegistry.ts');
+const UI_REGISTRY = join(REPO, 'packages', 'protocol', 'src', 'actions', 'settings', 'featurePreferenceMutations.ts');
 const TRANSLATIONS = join(REPO, 'apps', 'ui', 'sources', 'text', 'translations', 'en.ts');
 const ENV_SCHEMA = join(REPO, 'apps', 'server', 'sources', 'app', 'features', 'catalog', 'featureEnvSchema.ts');
 export const OUTPUT_PATH = join(HERE, '..', 'content', 'docs', 'extras', 'feature-flags.mdx');
@@ -86,7 +86,7 @@ export function collectUiToggles(source, featureIds) {
   }
   const missing = featureIds.filter((id) => !seen.has(id));
   if (missing.length) {
-    throw new Error(`uiFeatureRegistry.ts did not yield entries for: ${missing.join(', ')}`);
+    throw new Error(`feature preference registry did not yield entries for: ${missing.join(', ')}`);
   }
   return toggles;
 }

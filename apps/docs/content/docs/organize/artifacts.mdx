@@ -51,6 +51,16 @@ Copying a Session visual into an Artifact creates independent saved content;
 later edits to either original do not update the other. It uses normal Artifact
 access and approval, not the source Session's audience or creator authority.
 
+In 0.3 development source, saving a typed Session visual makes a reusable widget
+definition. This includes native built-in widgets: the copy keeps its declared
+inputs, bindings and policy, and reads live data with the destination viewer's
+authority. Sharing that definition with an Account does not grant access to
+its data sources. Anonymous public links show an unavailable state for built-ins,
+installed widgets and other live Resource-backed definitions that need a Happier
+viewer connection. They never use the author's credentials or silently display
+a frozen snapshot. Static declarative visuals and HTML bundles can render in
+the public viewer under their saved policy.
+
 ## Save a document
 
 Choose **New document**, enter a title and content, then **Save**. Use **Edit**

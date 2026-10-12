@@ -51,4 +51,10 @@ integration and transport exposure.
 
 ## Agent rule
 
+In 0.3 development, remote MCP OAuth sign-in is host-owned. Agent plugins
+receive the host's stdio bridge configuration, not its OAuth tokens or client
+registration secrets. The bridge obtains a current bearer for each request
+through the existing Connected Accounts broker. Plugins do not register the
+reserved MCP sign-in service or implement a parallel token store.
+
 Agent-specific MCP configuration belongs in the agent leaf or manifest descriptors. Shared runtime code should not branch on `agentId` to discover MCP servers.

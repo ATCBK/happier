@@ -8,21 +8,25 @@
  * agent, every model provider, every voice engine, both version-control
  * backends and all four hosting forges.
  *
- * The CLI's admitted source registry contains both bundled membership and the
- * normalized cold manifests. Use it directly so ordinary source publication
+ * The CLI's admitted source registry identifies bundled membership and the
+ * normalized cold manifest projections. Read those so ordinary source publication
  * and documentation share one authority without requiring packed artifacts.
  * Metadata and locator ids are cross-checked before rendering.
  *
  * Regenerate with `yarn --cwd apps/docs generate:reference`.
  */
+import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..');
+const CLI_ROOT = join(REPO, 'apps', 'cli');
 const REGISTRY = join(
-  REPO, 'apps', 'cli', 'src', 'plugins', 'projection', 'registry', 'sources', 'generatedBundledPluginManifests.ts',
+  CLI_ROOT, 'src', 'plugins', 'projection', 'registry', 'sources', 'generatedBundledPluginManifests.ts',
 );
+const MANIFEST_INGRESS = join(REPO, 'packages', 'protocol', 'src', 'plugins', 'manifest', 'ingest.ts');
+const SOURCE_RUNTIME = join(REPO, 'packages', 'cli-common', 'registerSourceRuntime.mjs');
 export const OUTPUT_PATH = join(HERE, '..', 'content', 'docs', 'plugins', 'bundled.mdx');
 
 /**
@@ -115,9 +119,25 @@ export function contributedFamilies(contributes) {
     .sort();
 }
 
-function readPlugins(locators) {
+function readPlugins(locators, { ingestPluginManifestV2, formatPluginManifestIngestionDiagnostics }) {
   return locators.map((entry) => {
-    const manifest = entry.manifest;
+    const manifestPath = join(CLI_ROOT, entry.manifestRelativePath);
+    let bytes;
+    try {
+      bytes = readFileSync(manifestPath);
+    } catch (error) {
+      // An admitted projection missing inside this checkout is broken input,
+      // not an unbuilt sibling that the generated-page checker may skip.
+      throw new Error(`Cannot read bundled manifest projection for '${entry.pluginId}': ${manifestPath}`, { cause: error });
+    }
+    const ingestion = ingestPluginManifestV2(bytes);
+    if (!ingestion.ok) {
+      throw new Error(`Invalid bundled manifest projection for '${entry.pluginId}': ${formatPluginManifestIngestionDiagnostics(ingestion.diagnostics)}`);
+    }
+    const manifest = ingestion.manifest;
+    if (manifest.id !== entry.pluginId) {
+      throw new Error(`Bundled manifest id '${manifest.id}' does not match locator '${entry.pluginId}'`);
+    }
     return {
       id: manifest.id,
       name: manifest.displayName ?? manifest.id,
@@ -201,9 +221,15 @@ ${table(['Family', 'Plugins'], familyRows)}
 }
 
 export async function renderBundledPluginReferenceMarkdown() {
-  const { BUNDLED_FIRST_PARTY_PLUGIN_METADATA: metadata, BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: locators } = await readBundledPluginRegistry();
+  // The ordinary docs command is plain Node. Reuse the canonical source-tool
+  // loader so schema imports consume authored workspace source, not stale dist.
+  await import(pathToFileURL(SOURCE_RUNTIME).href);
+  const [{ BUNDLED_FIRST_PARTY_PLUGIN_METADATA: metadata, BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: locators }, ingress] = await Promise.all([
+    readBundledPluginRegistry(),
+    import(pathToFileURL(MANIFEST_INGRESS).href),
+  ]);
   return renderBundledPluginMarkdown({
-    plugins: readPlugins(locators),
+    plugins: readPlugins(locators, ingress),
     bundledIds: new Set(metadata.map((entry) => entry.pluginId)),
   });
 }

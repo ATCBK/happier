@@ -139,9 +139,12 @@ connects one repository at a time: setup verifies the selected repository
 against your GitHub Connected Account credential. Each conversation is a single
 issue or pull request in that repository — you point a binding at it by number.
 Comments on that issue or pull request arrive as channel messages, and replies
-are posted back as comments on it. The provider sends one mention-neutralized
-comment; GitHub's API decides whether to accept it, without a guessed local
-byte ceiling splitting one answer into several comments. GitHub has no webhook delivery in this preview: inbound
+are posted back as comments on it. In the current development source, Channels
+splits long replies at the GitHub provider's declared limit of 65,536 Unicode
+code points per comment, preserving the complete reply in one delivery record.
+The provider replaces `@` with `＠` to suppress notification mentions without
+growing a chunk beyond that limit. GitHub's API still decides whether to accept
+each comment. GitHub has no webhook delivery in this preview: inbound
 messages arrive through checkpointed polling, so a connected machine needs to
 wake up for the poll to advance.
 

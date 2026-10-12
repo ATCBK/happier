@@ -58,20 +58,19 @@ Guide: [Happier MCP (external)](/extending/happier-as-mcp-server)
 
 ## How the MCP settings screen is organized
 
-The MCP settings screen has three tabs:
+In the current development UI, the MCP settings screen is a server collection. On larger screens, selecting a server opens its details beside the list; on phones, it opens a separate details page.
 
-### Configured
+### Saved servers
 
 Shows the MCP servers that you manage directly in Happier.
 
-Use this tab to:
+Use the collection to:
 
 - review your saved servers
 - edit or remove them
 - add a new server
-- quick-install common presets
 
-### Detected
+### Found on this machine
 
 Shows MCP servers Happier found in provider-native config files on the selected machine.
 
@@ -81,9 +80,9 @@ Today, Happier can detect provider-native MCP servers for:
 - **Codex**
 - **OpenCode**
 
-Detected servers are shown as **read-only**. You can use this view to understand what the selected backend already has configured, or import those definitions into Happier-managed MCP settings.
+Found definitions are shown as **read-only** until you import them into Happier-managed MCP settings. Discovery does not mean an Agent will load the definition in a Happier session: Codex's native MCP definitions are not included in its Happier-session preview.
 
-### Preview
+### What sessions get
 
 Shows the effective tool picture for a specific combination of:
 
@@ -91,7 +90,7 @@ Shows the effective tool picture for a specific combination of:
 - machine
 - workspace or directory
 
-Use this tab when you want to answer:
+Open the session preview from the collection's tools when you want to answer:
 
 - “What will this session actually see?”
 - “Which Happier-managed servers apply here by default?”
@@ -100,7 +99,7 @@ Use this tab when you want to answer:
 
 ## Add a server
 
-When you add a new MCP server in Happier, you can start from three entry points:
+Use the collection's Add menu to configure a server, import JSON, or import a definition found on a machine.
 
 ### Configure
 
@@ -144,19 +143,6 @@ Import JSON is useful when a project tells you to paste something like:
 ```
 
 Happier parses the supported fields, lets you review the result, and then converts it into normal Happier-managed MCP entries.
-
-### Quick install
-
-Use this when you want a fast setup for common developer MCP servers.
-
-Current curated presets:
-
-- **Playwright**
-- **Context7**
-- **Sequential Thinking**
-- **GitHub**
-
-Some presets install immediately. Others can ask for follow-up auth mapping, such as a saved secret or a machine environment variable.
 
 ## What “Applies to” means
 
@@ -222,7 +208,7 @@ This is the fastest way to catch:
 
 ## Detected provider-native MCP servers
 
-The **Detected** tab shows MCP servers already configured in the selected provider’s own config files.
+**Found on this machine** shows MCP definitions found in the selected Agent's own config files.
 
 This is useful when:
 
@@ -234,17 +220,17 @@ Important:
 
 - detected entries are **informational and read-only**
 - they are refreshed for the selected machine and directory
-- provider-native and Happier-managed MCP can both matter for the final session picture
+- only native sources loaded by the selected Agent in Happier contribute to its session preview
 
 ## Preview before starting a session
 
-The **Preview** tab shows what a session should use for a specific context.
+The session preview shows what a session should use for a specific context.
 
 It combines:
 
 - the built-in Happier tool surface
 - Happier-managed MCP servers that apply by default
-- provider-native detected MCP servers for the selected backend/context
+- provider-native detected MCP servers that the selected Agent loads in Happier for this context
 - Happier-managed servers that are available but not currently applied
 
 Use Preview when you want confidence before starting an important session, especially across multiple machines or workspaces.
@@ -328,7 +314,7 @@ Use strict mode when you want the startup behavior to be fail-closed instead of 
 ### Use Playwright everywhere on one machine
 
 1. Open **Settings → MCP servers**
-2. Add **Playwright** from **Quick install**
+2. Add a local-command server using Playwright's MCP configuration
 3. Set **Applies to → One machine**
 4. Test it
 5. Start sessions on that machine and confirm the MCP chip includes it
@@ -369,9 +355,9 @@ Check:
 - the selected backend’s tool-delivery support
 - the new-session MCP chip, which can override Happier-managed defaults per session
 
-Also use the **Preview** tab to confirm the effective result before starting the session.
+Also use the session preview to confirm the effective result before starting the session.
 
-### “Detected does not show what I expected”
+### “Found on this machine does not show what I expected”
 
 Check:
 
@@ -379,7 +365,7 @@ Check:
 - the selected directory/workspace
 - whether the backend stores MCP config in user-level files, project files, or both
 
-The Detected tab is context-sensitive and refreshes based on the selected machine and directory.
+The machine discovery view is context-sensitive and refreshes based on the selected machine and directory. A definition found for Codex does not appear as a loaded native server in a Happier-session preview.
 
 ### “Test fails”
 
@@ -396,7 +382,7 @@ That is expected.
 
 MCP settings apply on the **next session start**. Start a new session to pick up the updated configuration.
 
-## Related pages
+## Related
 
 - [Happier tools & actions](/extending/happier-tools)
 - [Connected services](/accounts/connected-services)

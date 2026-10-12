@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   categorize,
@@ -75,7 +79,46 @@ test('the bundled Machine family is categorized without dropping its plugins', a
 });
 
 // CodeBuddy is admitted by ordinary source publication without a packed plugin.json.
-test('source-admitted CodeBuddy is included without requiring a packed plugin artifact', async () => {
+test('source-admitted CodeBuddy and Email are included without requiring packed plugin artifacts', async () => {
   const markdown = await renderBundledPluginReferenceMarkdown();
   assert.ok(markdown.includes('`happier.agent.codebuddy`'));
+  assert.ok(markdown.includes('`happier.channel.email`'));
+});
+
+test('the normal docs renderer reads source projections without caller-provided TypeScript preloads', () => {
+  const rendererUrl = new URL('./generateBundledPluginReference.mjs', import.meta.url).href;
+  const output = execFileSync(process.execPath, ['--input-type=module', '-e', `
+    const { renderBundledPluginReferenceMarkdown } = await import(${JSON.stringify(rendererUrl)});
+    const markdown = await renderBundledPluginReferenceMarkdown();
+    console.log(markdown.includes('happier.channel.email'));
+  `], { encoding: 'utf8' });
+  assert.equal(output.trim(), 'true');
+});
+
+test('missing or mismatched admitted projections fail instead of skipping or publishing another plugin', async (t) => {
+  const emailPath = fileURLToPath(new URL('../../cli/assets/bundled-plugin-manifests/channel-email.json', import.meta.url));
+  const discordBytes = fs.readFileSync(new URL('../../cli/assets/bundled-plugin-manifests/channel-discord.json', import.meta.url));
+  const readFileSync = fs.readFileSync;
+  for (const [bytes, expected] of [
+    [null, /Cannot read bundled manifest projection for 'happier\.channel\.email'/],
+    [discordBytes, /Bundled manifest id 'happier\.channel\.discord' does not match locator 'happier\.channel\.email'/],
+  ]) {
+    // Filesystem bytes are the external boundary; ingress and rendering stay real.
+    t.mock.method(fs, 'readFileSync', (path, ...args) => {
+      if (path !== emailPath) return readFileSync(path, ...args);
+      if (bytes !== null) return bytes;
+      throw Object.assign(new Error('Missing projection'), { code: 'ENOENT' });
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(renderBundledPluginReferenceMarkdown(), (error) => {
+        assert.match(error.message, expected);
+        assert.notEqual(error.code, 'ENOENT');
+        return true;
+      });
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  }
 });

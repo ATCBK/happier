@@ -17,10 +17,15 @@ internet — which is disabled by default and remains a development feature.
 | Capability | Status | Default |
 | --- | --- | --- |
 | Detecting local services and listing them in the launchpad | Shipped | On |
-| Opening a private preview from the app | Shipped, but needs signing keys and a relay port allowlist | Feature on, transport unconfigured |
+| Opening a private preview from the app | Shipped, with a usable signer and a relay port allowlist | Feature on; relay tunnel and ports need configuration |
 | Public exposure through a shareable secret link | Development only | Off |
 
 Private previews are the normal path and the rest of this page is mostly about them.
+
+In unreleased 0.3 development builds, every Home derives its route-grant signer from its
+existing master secret by default, including generic, Team/shared, dev, QA, preview and
+self-hosted Homes. Explicit signing variables remain an operator override. This signer
+default is a development-source contract, not a stable or preview availability claim.
 
 <Callout type="warn">
   **Public exposure is not a released availability claim.** Leave
@@ -33,7 +38,8 @@ Private previews are the normal path and the rest of this page is mostly about t
 
 - A relay you control the environment of. All of this is server-side; **nothing is
   configured on the machine running the dev server.**
-- The ability to generate and store a private key as an environment variable.
+- For an explicit override, the ability to generate and store a private key as an
+  environment variable.
 - A rough idea of which ports your people actually develop on. The relay needs an explicit
   allowlist and it starts empty.
 
@@ -45,7 +51,7 @@ Worth thirty seconds, because every failure below is one of these three steps re
    `127.0.0.1:5173` on this machine".
 2. **The relay mints a route grant.** A short-lived Ed25519-signed token that names the
    account, the machine, the flow, the route and the exact destination port. This is the
-   step that needs signing keys, and the one that is unconfigured out of the box.
+   step that needs a usable signer. In 0.3 development, the Home derives it automatically.
 3. **Bytes ride the existing machine connection.** The relay forwards the HTTP request
    over the machine's socket as framed envelopes, the daemon opens a loopback connection
    to the port, and the response comes back the same way. The destination must be a
@@ -86,9 +92,42 @@ These are development-source contracts, not certification of a loaded Project jo
 native-device support or released availability. The private relay configuration below
 continues to apply.
 
+### Process ownership and restart in development
+
+In the current unreleased 0.3 source, a service's process attribution comes from
+the same ownership evidence as the [Processes](/accounts/processes) tab. A port
+is not proof of ownership, and access to a Machine is not ownership of another
+operating-system user's process. A detected listener is checked again before
+termination, including whether it is still the expected process and listening
+on that port. If the listener is the terminal's own shell, freeing the port asks
+you to confirm that this closes the terminal.
+
+**Start again** reuses the service definition reviewed at its original start.
+A changed definition is refused until the existing service-start review has
+shown the actual new effect and you accept it. Declining starts nothing. The
+Processes Action does not inherit a different service Action's approval or
+bypass this definition review. These development contracts do not certify the
+integrated authenticated restart journey.
+
 ## Turn on private previews
 
-### 1. Generate a route grant signing key
+### 1. Use the Home's default signer
+
+In 0.3 development, leave all four `HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_*`
+variables unset to derive a stable Ed25519 signer from `HANDY_MASTER_SECRET` under the
+`happier.machine-route-grant.v1` domain. This works on every Home, regardless of runtime
+purpose. Local-data server runtimes load or create the existing `handy-master-secret.txt`
+in their data directory; managed stacks retain the same master secret. Servers using
+external backends already require `HANDY_MASTER_SECRET` for authentication.
+
+The same master secret produces the same signing key after restart. Keep it with the
+Home's existing retained data. Rotation uses the existing mechanism: change the master
+secret or set an explicit signing override below. Machines learn the public key from
+the authenticated server feature snapshot; they need no additional configuration.
+
+### 2. Optional: configure an explicit signer
+
+Use this override when you want to control the signing key or its expiry.
 
 The private key is a **32-byte Ed25519 seed, base64url-encoded without padding**. The
 relay derives the public key from it.
@@ -110,11 +149,11 @@ $bytes = New-Object byte[] 32
 
 Padding characters and `+` / `/` are rejected, so do not skip the substitution.
 
-### 2. Set the four signing variables
+Set the key id and private key; the public key and expiry are optional:
 
 ```bash
 HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID=relay-2026-08
-HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY=<the value from step 1>
+HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY=<the generated value>
 # Optional:
 HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PUBLIC_KEY=<derived public key, base64url>
 HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_EXPIRES_AT=1788000000000
@@ -124,7 +163,8 @@ HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_EXPIRES_AT=1788000000000
   tell which key signed it, which is what makes rotation possible. Change it whenever you
   change the private key.
 - **`…_PRIVATE_KEY`** is the seed. Without it — or without the key id — the relay behaves as
-  if the whole feature does not exist.
+  if the whole feature does not exist once any override field is present. Partial or
+  invalid overrides refuse signing even when the Home has a usable master secret.
 - **`…_PUBLIC_KEY`** is optional and is only ever checked, never trusted: the relay derives
   the real public key from the seed and refuses to start signing if the two disagree. Set it
   if you want a guard against pasting a mismatched pair.
@@ -176,14 +216,16 @@ rather than in the logs. Each sentence maps to exactly one thing:
 | "Local service previews are turned off on the server." | `HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED` |
 | "Public previews are turned off on the server." | `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED` — expected, and correct |
 
-Signing keys are the one prerequisite with no sentence of its own, because the relay does
-not advertise the feature at all when they are missing. Its symptoms:
+An unavailable signer has no sentence of its own, because the relay does not advertise
+route grants when signing refuses. In 0.3 development, check for a missing master secret
+or a partial, invalid or expired explicit override; otherwise signing is derived by default.
+Its symptoms:
 
 - **Opening a preview fails with a server error**, and the relay logs
   `local_service_preview_tunnel_unavailable:grant_signing_unavailable`.
 - **The route grant endpoint returns `404 Not Found`** rather than an error explaining
   itself. This is deliberate: a relay with no signing keys does not claim to offer route
-  grants. A 404 there is the signature of missing keys, not a bad URL.
+  grants. A 404 there can indicate unavailable signing authority rather than a bad URL.
 
 Two more that look alike and are not:
 
@@ -235,33 +277,54 @@ release certification. The default stays off regardless.
 ## Stored-content public links in 0.3 development
 
 Public links for Sessions and documents publish stored content rather than a
-port on a Machine. They share the isolated-host and rate-limiter configuration
-above, but have their own public-sharing feature decision. They do not require
+port on a Machine. This is **development-only, unreleased 0.3 behavior**. They
+have their own public-sharing feature decision and retain the public rate-limiter
+requirement. They do not require
 enabling public local-service exposure or configuring its lifetime and audit
 policy.
 
 Before creating these links, the Home operator must provide:
 
 - An HTTPS `HAPPIER_PUBLIC_SERVER_URL`.
-- `HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN`, a domain whose
-  wildcard DNS and TLS certificate route each resource's HTTPS hostname to this
-  Home. These origins must differ from the API origin.
+- A viewer origin: preferably
+  `HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN`, with wildcard DNS
+  and TLS routing each resource's separate HTTPS hostname to this Home. When
+  that domain is unavailable, the Home owner can enable **Allow public links on
+  this hostname** in **Home administration → Reach** to use the configured HTTPS
+  public server address instead.
 - `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_CHECKER=fixed_window`,
   with positive `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_MAX_REQUESTS`
   and `HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__RATE_LIMIT_WINDOW_MS` values
   chosen for the deployment's traffic policy.
 
-Restart the server after configuring these prerequisites. Without a usable
-isolated origin or limiter, creation returns HTTP 503
+The hostname option is off by default and applies live. An explicit deployment
+value for `HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH` overrides the saved Home setting;
+the row shows **Fixed by your deployment**. Admins can read it, but only owners
+can change it. Restart after changing restart-applied isolated-host or limiter
+configuration. An isolated domain stays preferred when configured.
+
+Links on the Home's own hostname use the same restricted HTML sandbox. PDFs are
+download-only there; isolated share hosts retain inline PDF preview. Turning the
+option off blocks links on the main hostname without deleting their stored
+shares. Turning it back on restores those links, subject to expiry, revocation,
+use limits and the configured limiter.
+
+This option does not supply a fallback for local-service public exposure,
+private local-service web previews, or private HTML Artifact previews. Those
+still need isolated origins. A single-hostname HTTPS endpoint, including
+Tailscale Serve, does not change who can reach that endpoint.
+
+Without an admitted viewer origin or limiter, creation returns HTTP 503
 `public_share_isolation_unavailable`. No link is created; the app keeps it Off.
 An HTTP-only local deployment cannot provide these public links by enabling
-the sharing feature alone.
+the sharing feature or the hostname option alone.
 
 See [Session sharing](/accounts/session-sharing#public-links) for creating and
 managing a link once the Home is ready.
 
 ## Related
 
+- [Processes](/accounts/processes) — development-only ownership evidence, exact cleanup selections and service restart review.
 - [Feature environment variables](/self-hosting/feature-env) — the generated index of every `HAPPIER_FEATURE_*` variable, including the rest of the tunnel family.
 - [Environment variables](/self-hosting/env) — the complete server runtime surface.
 - [Feature flags](/extras/feature-flags) — how these server gates map to what clients show.
