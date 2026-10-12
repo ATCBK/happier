@@ -116,7 +116,6 @@ export function SessionListSample(props: Readonly<{
                 density={density}
                 first={index === 0}
                 last={index === group.rows.length - 1}
-                statusTone={row.status?.tone === 'attention' ? 'attention' : undefined}
                 identity={density === 'minimal' ? null : <AvatarGradient id={row.id} size={SESSION_LIST_ROW_IDENTITY_METRICS[density].slotSize} />}
                 title={<SessionListRowTitle density={density}>{row.title}</SessionListRowTitle>}
                 trailing={density === 'minimal' && row.status

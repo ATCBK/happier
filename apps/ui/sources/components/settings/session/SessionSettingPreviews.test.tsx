@@ -5,11 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installMessageViewCommonModuleMocks } from '@/components/sessions/transcript/messageViewTestHelpers';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
- * The settings store is the boundary: every settings hook a preview mounts is recorded here, with the
- * real store hooks still answering underneath.
+ * Observational spies record settings reads without replacing the real store hooks.
  *
  * A preview may read only the rendering environment every real component honours: the text scale
  * (the app `Text` primitive), the content width (row max width) and the syntax-tokenization budget
@@ -21,33 +20,7 @@ const RENDERING_ENVIRONMENT_READS = new Set([
     'useLocalSetting:uiContentWidthMode',
     'useSetting:filesDiffTokenizationMaxBytes',
 ]);
-const settingsReads = vi.hoisted(() => ({ keys: [] as string[] }));
-
-function recordingSettingsHooks<T extends Record<string, any>>(actual: T): Partial<T> {
-    const wrap = (name: string) => (...args: unknown[]) => {
-        settingsReads.keys.push(`${name}:${String(args[0] ?? '')}`);
-        return actual[name](...args);
-    };
-    return {
-        useSetting: wrap('useSetting'),
-        useSettings: wrap('useSettings'),
-        useSettingMutable: wrap('useSettingMutable'),
-        useLocalSetting: wrap('useLocalSetting'),
-        useLocalSettingMutable: wrap('useLocalSettingMutable'),
-    } as unknown as Partial<T>;
-}
-
-installMessageViewCommonModuleMocks({
-    storage: async (importOriginal) => {
-        const actual = await importOriginal<Record<string, any>>();
-        return { ...actual, ...recordingSettingsHooks(actual) };
-    },
-});
-
-vi.mock('@/sync/store/hooks', async (importOriginal) => {
-    const actual = await importOriginal<Record<string, any>>();
-    return { ...actual, ...recordingSettingsHooks(actual) };
-});
+installMessageViewCommonModuleMocks();
 
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
@@ -56,10 +29,26 @@ vi.mock('@expo/vector-icons', () => ({
 // Keep the existing full preview graph's import order before list-only cases;
 // its real storage graph contains reciprocal facade imports.
 await import('./SessionSettingPreviews');
+const hooks = await import('@/sync/store/hooks');
+// Observe the settled real facade. A partial-module replacement during its reciprocal
+// imports leaves already-loaded Text adapters holding unobserved original hooks.
+const settingsHookSpies = [
+    ['useSetting', vi.spyOn(hooks, 'useSetting')],
+    ['useSettings', vi.spyOn(hooks, 'useSettings')],
+    ['useSettingMutable', vi.spyOn(hooks, 'useSettingMutable')],
+    ['useLocalSetting', vi.spyOn(hooks, 'useLocalSetting')],
+    ['useLocalSettingMutable', vi.spyOn(hooks, 'useLocalSettingMutable')],
+] as const;
+function readSettingsKeys() {
+    return settingsHookSpies.flatMap(([name, spy]) => spy.mock.calls.map(args => `${name}:${String(args[0] ?? '')}`));
+}
+function clearSettingsReads() {
+    for (const [, spy] of settingsHookSpies) spy.mockClear();
+}
 
 afterEach(() => {
     standardCleanup();
-    settingsReads.keys.length = 0;
+    clearSettingsReads();
 });
 
 describe('Session settings previews', () => {
@@ -71,12 +60,12 @@ describe('Session settings previews', () => {
             ? <SessionListDensityPreview density="detailed" />
             : <SessionListLayoutPreview layout="layout:projects" />;
         const screen = await renderScreen(preview());
-        expect(settingsReads.keys).toContain('useLocalSetting:uiFontScale');
-        settingsReads.keys.length = 0;
+        expect(readSettingsKeys()).toContain('useLocalSetting:uiFontScale');
+        clearSettingsReads();
 
         await screen.update(preview());
 
-        expect(settingsReads.keys).toEqual([]);
+        expect(readSettingsKeys()).toEqual([]);
     });
 
     it('keeps changed list-preview choices and descendant font-scale subscriptions responsive', async () => {
@@ -107,11 +96,11 @@ describe('Session settings previews', () => {
             const originalSize = StyleSheet.flatten(text().props.style).fontSize;
             expect(originalSize).toBeGreaterThan(0);
             expect(originalSize).toBeLessThan(detailedSize);
-            settingsReads.keys.length = 0;
+            clearSettingsReads();
 
             await act(async () => { getStorage().getState().applyLocalSettings({ uiFontScale: 1.4 }, { persist: false }); });
 
-            expect(settingsReads.keys).toContain('useLocalSetting:uiFontScale');
+            expect(readSettingsKeys()).toContain('useLocalSetting:uiFontScale');
             expect(StyleSheet.flatten(text().props.style).fontSize).toBeCloseTo(originalSize * 1.4);
         } finally {
             await act(async () => { getStorage().getState().applyLocalSettings({ uiFontScale: originalScale }, { persist: false }); });
@@ -150,6 +139,6 @@ describe('Session settings previews', () => {
         for (const source of sources) {
             expect(source).toMatchObject({ kind: 'readOnly', sessionId: 'settings-preview', actions: null, navigate: null });
         }
-        expect([...new Set(settingsReads.keys.filter((key) => !RENDERING_ENVIRONMENT_READS.has(key)))]).toEqual([]);
+        expect([...new Set(readSettingsKeys().filter((key) => !RENDERING_ENVIRONMENT_READS.has(key)))]).toEqual([]);
     });
 });

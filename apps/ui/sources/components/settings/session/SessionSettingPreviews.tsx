@@ -252,7 +252,9 @@ export const ToolStylePreview = React.memo(function ToolStylePreview(props: Read
 function readToolMessage(id: string, path: string): ToolCallMessage {
     return {
         kind: 'tool-call', id, localId: null, createdAt: 0, children: [],
-        tool: { name: 'Read', state: 'completed', input: { file_path: path }, createdAt: 0, startedAt: 0, completedAt: 0, description: null, result: '' },
+        // A real file's lines, so the row previews as a read does (an empty result reads "Details unavailable").
+        tool: { name: 'Read', state: 'completed', input: { file_path: path }, createdAt: 0, startedAt: 0, completedAt: 0, description: null,
+            result: 'export function scheduleReconnect(delay: number) {\n  retryTimer = setTimeout(retry, delay);\n}\n' },
     };
 }
 
@@ -358,12 +360,12 @@ export function SessionComposerSample(props: Readonly<{ layout: 'wrap' | 'scroll
         ];
     return (
         <View style={{ flex: props.width === undefined ? 1 : undefined, overflow: 'hidden', justifyContent: 'flex-end' }} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-            <View style={{ width: props.width ?? CANVAS_WIDTH, transform: [{ scale: props.width === undefined ? CANVAS_SCALE : 1 }], transformOrigin: 'bottom left', padding: 10 }}>
+            <View style={{ width: props.width ?? CANVAS_WIDTH, transform: [{ scale: props.width === undefined ? CANVAS_SCALE : 1 }], transformOrigin: 'bottom left', padding: theme.space.s10 }}>
                 <View style={panelStyle}>
-                    <Text style={{ paddingHorizontal: 8, paddingVertical: 10, color: theme.colors.input.placeholder, fontSize: 15 }}>
+                    <Text style={{ paddingHorizontal: theme.space.s8, paddingVertical: theme.space.s10, color: theme.colors.input.placeholder, fontSize: 15 }}>
                         {t('session.inputPlaceholder')}
                     </Text>
-                    <View style={{ flexDirection: 'row', flexWrap: props.layout === 'scroll' ? 'nowrap' : 'wrap', columnGap: 6, rowGap: 2 }}>
+                    <View style={{ flexDirection: 'row', flexWrap: props.layout === 'scroll' ? 'nowrap' : 'wrap', columnGap: theme.space.s6, rowGap: theme.space.s2 }}>
                         {chips}
                     </View>
                 </View>
@@ -418,14 +420,14 @@ export const EmbeddedChatPreview = React.memo(function EmbeddedChatPreview(props
                 importantForAccessibility="no-hide-descendants"
                 accessibilityElementsHidden
             >
-                <View style={{ width: EMBEDDED_CHAT_CANVAS_WIDTH, transform: [{ scale }], transformOrigin: 'bottom left', padding: 10, gap: 10 }}>
+                <View style={{ width: EMBEDDED_CHAT_CANVAS_WIDTH, transform: [{ scale }], transformOrigin: 'bottom left', padding: theme.space.s10, gap: theme.space.s10 }}>
                     <View style={{ alignSelf: 'flex-end', maxWidth: '100%' }}>
                         <UserMessageBubble theme={theme}>
                             <Text style={{ color: theme.colors.message.user.foreground }}>{t('settingsSessionPages.preview.userMessage')}</Text>
                         </UserMessageBubble>
                     </View>
                     <View style={panelStyle}>
-                        <Text style={{ paddingHorizontal: 8, paddingVertical: 10, color: theme.colors.input.placeholder, fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE }}>
+                        <Text style={{ paddingHorizontal: theme.space.s8, paddingVertical: theme.space.s10, color: theme.colors.input.placeholder, fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE }}>
                             {t('session.inputPlaceholder')}
                         </Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
