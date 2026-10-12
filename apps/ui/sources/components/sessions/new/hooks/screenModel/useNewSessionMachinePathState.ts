@@ -10,6 +10,7 @@ import { normalizeOptionalParam } from '@/profileRouteParams';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveDefaultDirectoryForMachine } from '@/utils/sessions/machineDefaultDirectory';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { useStableRecentPathsResolver } from '@/utils/sessions/useStableRecentPathsForMachine';
@@ -46,6 +47,7 @@ export type NewSessionInitialPlacement = Readonly<{
  */
 export function resolveNewSessionInitialPlacement(input: Readonly<{
     isBot?: boolean;
+    scope?: Parameters<typeof isMachineReachable>[0];
     serverId: string | null;
     machines: ReadonlyArray<Machine>;
     recentMachinePaths: ReadonlyArray<Readonly<{ machineId: string; path: string }>>;
@@ -66,6 +68,7 @@ export function resolveNewSessionInitialPlacement(input: Readonly<{
         ? (input.persistedExecutionTarget?.kind === 'machine' ? input.persistedExecutionTarget.target.machineId : null)
         : input.serverId
             ? requestedMachineId || persistedMachineId || resolvePreferredLaunchMachineId({
+                scope: input.scope,
                 machines: input.machines,
                 recentMachinePaths: input.recentMachinePaths,
                 preferredMachineId: null,
@@ -171,6 +174,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
     getBestPathForMachine: (machineId: string | null) => string;
 }> {
     const reachabilityRevision = useMachineReachabilityRevision();
+    const { binding } = useServerCredentialAccountScopeBinding(params.serverId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const recentMachinePaths = React.useMemo((): RecentMachinePathsList => {
         return Array.isArray(params.recentMachinePaths) ? (params.recentMachinePaths as any[]).slice() as any : [];
     }, [params.recentMachinePaths]);
@@ -182,11 +187,12 @@ export function useNewSessionMachinePathState(params: Readonly<{
 
     const resolveMachineId = React.useCallback((preferredMachineId: string | null): string | null => (
         resolvePreferredLaunchMachineId({
-            machines: params.machines.filter(machine => isMachineReachable(params.serverId, machine)),
+            scope,
+            machines: params.machines.filter(machine => isMachineReachable(scope, machine)),
             preferredMachineId,
             recentMachinePaths,
         })
-    ), [params.machines, params.serverId, reachabilityRevision, recentMachinePaths]);
+    ), [params.machines, scope, reachabilityRevision, recentMachinePaths]);
 
     const getBestPathForMachine = React.useCallback((machineId: string | null): string => (
         resolveDefaultDirectoryForMachine({
@@ -244,6 +250,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
     // A route/seeded machine is an exact target. Do not pair its directory
     // with a persisted or preferred machine while that target hydrates.
     const [initialPlacement] = React.useState(() => resolveNewSessionInitialPlacement({
+        scope,
         isBot: params.isBot,
         serverId: params.serverId,
         machines: params.machines,
@@ -307,7 +314,6 @@ export function useNewSessionMachinePathState(params: Readonly<{
         || params.persistedExecutionTarget != null
         || Boolean(params.requestedManagedMachineSelection),
     );
-    const selectedMachineOnlineSeenByIdRef = React.useRef<Map<string, boolean>>(new Map());
     const lastAppliedPersistedMachineIdRef = React.useRef<string>('');
     const lastAppliedExecutionTargetRequestKeyRef = React.useRef<string | null>(
         params.executionTargetRequestKey ?? null,
@@ -602,36 +608,22 @@ export function useNewSessionMachinePathState(params: Readonly<{
             lastAppliedPersistedMachineIdRef.current = '';
             return;
         }
-        const persistedMachine = params.machines.find(machine => machine.id === reconciledPersistedMachineId) ?? null;
-        const preferredMachineId = resolveMachineId(reconciledPersistedMachineId);
-        const preferredMachine = preferredMachineId
-            ? params.machines.find(machine => machine.id === preferredMachineId) ?? null
-            : null;
-        // A stored draft is remembered authoring, not a fresh exact-target command. If that
-        // machine has retired or is offline, restore onto the best reachable machine instead of
-        // leaving Start blocked by an unreachable historical instance. Explicit route and user
-        // selections remain exact through their separate owners above.
-        const recoversPersistedMachine = preferredMachineId !== null
-            && preferredMachineId !== reconciledPersistedMachineId
-            && preferredMachine !== null
-            && isMachineReachable(params.serverId, preferredMachine)
-            && (persistedMachine === null || !isMachineReachable(params.serverId, persistedMachine));
-        const restoredMachineId = recoversPersistedMachine ? preferredMachineId : reconciledPersistedMachineId;
-        const restorationKey = `${reconciledPersistedMachineId}:${restoredMachineId}`;
-        if (restorationKey === lastAppliedPersistedMachineIdRef.current) {
+        // Reopening a draft restores authored placement, including an absent or offline
+        // Machine. Availability controls Start; only an explicit choice changes its target.
+        if (reconciledPersistedMachineId === lastAppliedPersistedMachineIdRef.current) {
             return;
         }
 
-        lastAppliedPersistedMachineIdRef.current = restorationKey;
-        hasCommittedExactTargetRef.current = !recoversPersistedMachine;
-        if (restoredMachineId === selectedMachineIdRef.current) {
+        lastAppliedPersistedMachineIdRef.current = reconciledPersistedMachineId;
+        hasCommittedExactTargetRef.current = true;
+        if (reconciledPersistedMachineId === selectedMachineIdRef.current) {
             return;
         }
 
-        setSelectedMachineIdState(restoredMachineId);
+        setSelectedMachineIdState(reconciledPersistedMachineId);
         hasUserEditedPathRef.current = false;
         applyCommittedSelectedPath(
-            (recoversPersistedMachine ? '' : getPersistedPathForMachine(restoredMachineId)) || getBestPathForMachine(restoredMachineId),
+            getPersistedPathForMachine(reconciledPersistedMachineId) || getBestPathForMachine(reconciledPersistedMachineId),
         );
     }, [
         applyCommittedSelectedPath,
@@ -641,9 +633,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
         params.persistedExecutionTarget,
         params.persistedManagedMachineSelection,
         params.persistedPath,
-        params.machines,
         resolvePersistedMachineId,
-        resolveMachineId,
         setSelectedMachineIdState,
     ]);
 
@@ -684,22 +674,13 @@ export function useNewSessionMachinePathState(params: Readonly<{
         applyCommittedSelectedPath(getPersistedPathForMachine(machineIdToUse) || getBestPathForMachine(machineIdToUse));
     }, [applyCommittedSelectedPath, getBestPathForMachine, getPersistedPathForMachine, hasMachine, resolveMachineId, selectedMachineId]);
 
-    React.useEffect(() => {
-        if (!selectedMachineId) return;
-        const machine = params.machines.find((m) => m.id === selectedMachineId);
-        if (!machine) return;
-        if (!isMachineReachable(params.serverId, machine)) return;
-        selectedMachineOnlineSeenByIdRef.current.set(selectedMachineId, true);
-    }, [params.machines, params.serverId, reachabilityRevision, selectedMachineId]);
-
-    // If we implicitly selected an offline machine, upgrade to the best available online machine
-    // once machine snapshots hydrate. Keep explicit user/route choices stable.
+    // An automatic default follows current reachability, including a machine that was
+    // online earlier. Explicit user/route choices and authored directories stay exact.
     React.useEffect(() => {
         if (selectedMachineId === null) return;
         if (hasCommittedExactTargetRef.current) return;
         if (hasUserSelectedMachineRef.current) return;
         if (normalizeMachineIdParam(params.machineIdParam)) return;
-        if (selectedMachineOnlineSeenByIdRef.current.get(selectedMachineId) === true) return;
 
         const machineIdToUse = resolveMachineId(selectedMachineId);
         if (!machineIdToUse || machineIdToUse === selectedMachineId) return;

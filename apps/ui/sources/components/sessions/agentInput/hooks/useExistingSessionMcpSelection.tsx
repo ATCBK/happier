@@ -2,16 +2,15 @@ import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import {
     SessionMcpSelectionV1Schema,
-    readSessionMcpSelectionV1FromMetadata,
     type SessionMcpSelectionV1,
 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
 
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import { useNewSessionMcpSelection } from '@/components/sessions/new/hooks/useNewSessionMcpSelection';
 import { Modal } from '@/modal';
-import { computeNextSessionMcpSelectionMetadata } from '@/sync/engine/overrides/sessionMcpSelectionPublish';
-import { sync } from '@/sync/sync';
 import { t } from '@/text';
+import { useSessionCapabilities } from '@/sync/domains/capabilities/session/useSessionCapabilities';
+import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 const DEFAULT_MCP_SELECTION = SessionMcpSelectionV1Schema.parse({});
 
@@ -44,12 +43,11 @@ export function useExistingSessionMcpSelection(params: Readonly<{
     serverId?: string | null;
     isReadOnly: boolean;
     sessionActive: boolean;
+    applySelection: (selection: SessionMcpSelectionV1) => Promise<void>;
 }>): AgentInputExtraActionChip | null {
     const router = useRouter();
-    const persistedSelection = React.useMemo(
-        () => readSessionMcpSelectionV1FromMetadata(params.sessionMetadata) ?? DEFAULT_MCP_SELECTION,
-        [params.sessionMetadata],
-    );
+    const capabilities = useSessionCapabilities(params.sessionId, params.sessionMetadata);
+    const persistedSelection = capabilities.selection.mcp;
     const persistedSelectionRef = React.useRef(persistedSelection);
     persistedSelectionRef.current = persistedSelection;
     const [optimisticSelection, setOptimisticSelection] = React.useState(persistedSelection);
@@ -80,13 +78,7 @@ export function useExistingSessionMcpSelection(params: Readonly<{
         writeQueueRef.current = writeQueueRef.current
             .catch(() => undefined)
             .then(async () => {
-                await sync.patchSessionMetadataWithRetry(
-                    params.sessionId,
-                    (metadata) => computeNextSessionMcpSelectionMetadata(metadata, next, {
-                        sessionActive: params.sessionActive,
-                    }),
-                    { serverId: params.serverId ?? null },
-                );
+                await params.applySelection(next);
             })
             .catch(() => {
                 const rollback = resolveExistingSessionMcpSelectionRollback({
@@ -100,15 +92,20 @@ export function useExistingSessionMcpSelection(params: Readonly<{
                 setOptimisticSelection(rollback);
                 Modal.alert(t('common.error'), t('errors.operationFailed'));
             });
-    }, [params.isReadOnly, params.serverId, params.sessionActive, params.sessionId]);
+    }, [params.applySelection, params.isReadOnly]);
 
+    const capabilitySelection = React.useMemo(() => ({ ...capabilities.selection, mcp: optimisticSelection }), [capabilities.selection, optimisticSelection]);
+    const setCapabilitySelection = React.useCallback<React.Dispatch<React.SetStateAction<SessionCapabilitySelectionV1>>>((next) => {
+        const value = typeof next === 'function' ? next({ ...capabilities.selection, mcp: optimisticSelectionRef.current }) : next;
+        setSelection(value.mcp ?? DEFAULT_MCP_SELECTION);
+    }, [capabilities.selection, setSelection]);
     const selection = useNewSessionMcpSelection({
         selectedMachineId: params.agentId ? params.machineId : null,
         selectedPath: params.directory,
         agentType: params.agentId ?? '',
         targetServerId: params.serverId ?? null,
-        mcpSelection: optimisticSelection,
-        setMcpSelection: setSelection,
+        capabilitySelection,
+        setCapabilitySelection,
         onOpenSettings: () => router.push('/settings/mcp'),
     });
 

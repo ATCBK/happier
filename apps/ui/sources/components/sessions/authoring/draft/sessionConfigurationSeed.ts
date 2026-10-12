@@ -99,7 +99,7 @@ export function buildNewSessionTempDataFromSessionConfiguration(params: Readonly
         modelSelection: snapshot.agentTarget
             ? rekeyCompatibilityModelSelection(snapshot.modelSelection, snapshot.agentTarget)
             : snapshot.modelSelection,
-        mcpSelection: snapshot.mcpSelection,
+        capabilitySelection: snapshot.capabilitySelection,
         connectedServices: snapshot.connectedServices,
         terminal: snapshot.terminal,
         windowsRemoteSessionLaunchMode: null,

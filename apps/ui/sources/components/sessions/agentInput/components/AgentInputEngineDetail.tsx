@@ -13,6 +13,7 @@ import type {
   SessionConfigOptionControl,
   SessionConfigOptionValueId,
 } from "@/sync/domains/sessionControl/configOptionsControl";
+import { SessionModelApplyTimingContext } from "@/components/sessions/modelPicker/SessionModelSourceBrowseHandoff";
 import { Text } from "@/components/ui/text/Text";
 import { t } from "@/text";
 
@@ -33,6 +34,8 @@ type AgentInputEngineDetailProps = Readonly<{
   selectedModelId?: string;
   modelSummary?: React.ReactNode;
   modelNotes?: ReadonlyArray<string>;
+  /** When a model change takes effect; the default surface carries it inside `modelSummary`. */
+  modelApplyTiming?: string;
   modelEmptyText?: string;
   canEnterCustomModel?: boolean;
   modelProbe?: OptionPickerProbeState;
@@ -163,13 +166,25 @@ export function AgentInputEngineDetail(props: AgentInputEngineDetailProps) {
     props.onToggleFavoriteModel,
   ]);
 
+  // A replacing model surface draws its own running line; it gets the same timing and notes the
+  // default surface would have shown, so a running session says when a change applies either way.
+  const modelNotes = props.modelNotes;
+  const applyTiming = React.useMemo(() => (
+    props.modelApplyTiming ? { timing: props.modelApplyTiming, notes: modelNotes ?? [] } : null
+  ), [modelNotes, props.modelApplyTiming]);
+  const modelContentOverride = props.modelContentOverride !== undefined && applyTiming ? (
+    <SessionModelApplyTimingContext.Provider value={applyTiming}>
+      {props.modelContentOverride}
+    </SessionModelApplyTimingContext.Provider>
+  ) : props.modelContentOverride;
+
   const sections: Record<"model" | "config", React.ReactNode | null> =
     {
       model: hasModelSection
         ? wrapSection(
             surfaceVariant,
             "model",
-            props.modelContentOverride ?? <OptionPickerOverlay
+            modelContentOverride ?? <OptionPickerOverlay
               title={t("agentInput.model.title")}
               summary={props.modelSummary}
               notes={props.modelNotes ?? []}

@@ -43,12 +43,15 @@ vi.mock('@/sync/api/session/sessionAccessApi', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/api/session/sessionAccessApi')>();
     return {
         ...actual,
-        createSessionAccessClient: (options: unknown) => {
+        createSessionAccessClient: (options: Parameters<typeof actual.createSessionAccessClient>[0]) => {
             publication.clientOptions.push(options);
             const withFormat = (settings: Record<string, unknown> | null) => settings === null ? null : {
-                ...settings, keyDerivation: 'fragment_v1', isolatedOrigin: 'https://public-viewer.example.test',
+                ...settings, keyDerivation: 'fragment_v1', viewerOrigin: 'https://public-viewer.example.test',
             };
             return {
+                // Keep the new transcript/policy owner real even in this
+                // incumbent publication reconciliation harness.
+                readPublicVisualNetworkConsequence: actual.createSessionAccessClient(options).readPublicVisualNetworkConsequence,
                 getPublicLink: async () => withFormat(await publication.getPublicLink()),
                 createPublicLink: async (input: unknown) => {
                     const issue = (options as { onPublicLinkIssued?: (material: { lookupId: string; secret: string }) => void })
@@ -71,11 +74,14 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithSer
     runWithServerRequestAuthorityForServerAccountScope: async (
         options: { scope: unknown },
         run: (authority: unknown) => Promise<unknown>,
-    ) => run({ scope: options.scope, context: { credentials: { token: 'token', secret: new Uint8Array() } } }),
+    ) => run({ scope: options.scope, context: { credentials: { token: 'token', secret: new Uint8Array() } },
+        request: async () => new Response(JSON.stringify({ messages: [], hasMore: false, nextBeforeSeq: null })),
+    }),
 }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority', () => ({
     readSessionSnapshotForAuthority: async () => ({
-        session: { ...sessionFixture({ managePublicLink: true }), encryptionMode: 'plain' },
+        session: { ...sessionFixture({ managePublicLink: true }), encryptionMode: 'plain',
+            access: { capabilities: { managePublicLink: true, readTranscript: true } } },
         callerDataKeyEnvelope: null,
     }),
 }));
@@ -149,7 +155,7 @@ const shownUrl = (screen: RenderScreenResult) => screen.findByTestId('session-pu
 /** Make a link through the card: Create public link (or New link…), then Create in the options. */
 async function makeLink(screen: RenderScreenResult): Promise<void> {
     await screen.pressByTestIdAsync(screen.findByTestId('session-public-link-create') ? 'session-public-link-create' : 'session-public-link-new');
-    await vi.waitFor(() => expect(screen.findByTestId('session-public-link-options-create')).not.toBeNull());
+    await vi.waitFor(() => expect(screen.findHostByTestId('session-public-link-options-create')?.props.accessibilityState).toMatchObject({ disabled: false }));
     await screen.pressByTestIdAsync('session-public-link-options-create');
 }
 
@@ -227,6 +233,7 @@ describe('SessionPublicLinkSection', () => {
         const screen = await renderScreen(<PublicLink />);
         await vi.waitFor(() => expect(status(screen)).toBe('Off'));
         await screen.pressByTestIdAsync('session-public-link-create');
+        await vi.waitFor(() => expect(screen.findHostByTestId('session-public-link-options-create')?.props.accessibilityState).toMatchObject({ disabled: false }));
         await act(async () => { screen.pressByTestId('session-public-link-options-create'); });
         await act(async () => { screen.pressByTestId('session-public-link-options-create'); });
         expect(publication.createPublicLink).toHaveBeenCalledTimes(1);

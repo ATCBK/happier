@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it } from 'vitest';
+import { SessionSurfaceItemV1Schema } from '@happier-dev/protocol/sessions/board';
 
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { projectSessionBoard } from '@/sync/domains/session/board';
@@ -281,9 +282,11 @@ describe('shared Board item editor through the real Board Actions', () => {
         await act(async () => {
             if (mode === 'approval') {
                 if (continuation?.actionId !== 'session.board.item.upsert') throw new Error('missing upsert continuation');
+                if (!('item' in continuation.expectedInput)) throw new Error('editor continuation must retain its authored item');
                 const committedActions = realBoardActions(async (_path, init) => init?.method === 'PUT'
                     ? createdAck(itemId) : new Response(JSON.stringify({ record: null })));
-                const committed = await committedActions.upsertItem(continuation.expectedInput);
+                const committed = await committedActions.upsertItem({ ...continuation.expectedInput,
+                    item: SessionSurfaceItemV1Schema.parse(continuation.expectedInput.item) });
                 if (committed.status !== 'ok') throw new Error('approval execution did not commit');
                 await continuation.onSucceeded(committed.value);
             } else if (mode === 'unknown') {

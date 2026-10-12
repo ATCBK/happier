@@ -1,4 +1,5 @@
 import React from 'react';
+import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { Pressable, type View as RNView } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { SelectionList } from '@/components/ui/selectionList';
@@ -11,6 +12,7 @@ import { describeMachineSharedOwnership } from '@/sync/domains/machines/machineO
 import { t } from '@/text';
 import { resolveMachinePickerPresence } from './resolveMachinePickerPresence';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { buildMachineSelectionBuckets } from './machineSelection/buildMachineSelectionBuckets';
 import type { MachineDestinationPurposeV1 } from '@happier-dev/protocol/machines/pools';
@@ -103,6 +105,8 @@ export function MachineSelector({
 }: MachineSelectorProps) {
     const { theme } = useUnistyles();
     const reachabilityRevision = useMachineReachabilityRevision();
+    const { binding } = useServerCredentialAccountScopeBinding(serverId ?? getAppliedActiveServerSnapshot().serverId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const [dropdownOpen, setDropdownOpen] = React.useState(false);
     const demandedWorkerFacts = useMachineDestinationWorkerStatus({
         purpose,
@@ -125,6 +129,7 @@ export function MachineSelector({
     }, [machineOptionTestIdPrefix]);
     const selectedMachineId = selectedMachine?.id ?? null;
     const bucketModel = React.useMemo(() => buildMachineSelectionBuckets({
+        scope,
         machines,
         recentMachines,
         favoriteMachines,
@@ -143,6 +148,9 @@ export function MachineSelector({
         selectedMachineId,
         showFavorites,
         showRecent,
+        serverId,
+        reachabilityRevision,
+        scope,
     ]);
     const visibleMachines = bucketModel.visibleMachines;
     // One naming owner for every machine this selector shows, telling same-named machines apart.
@@ -188,8 +196,8 @@ export function MachineSelector({
         isFavorite: boolean,
         iconName: IconName,
     ): DropdownMenuItem => {
-        const presence = resolveMachinePickerPresence(machine, undefined, serverId);
-        const eligibility = resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, serverId ?? ''), machine);
+        const presence = resolveMachinePickerPresence(machine, undefined, scope);
+        const eligibility = resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, serverId ?? ''), machine, scope);
         const purposeEligible = eligibility.eligible;
         const unavailable = !presence.selectable || !purposeEligible;
         return {
@@ -209,7 +217,7 @@ export function MachineSelector({
             ),
             rightElement: renderFavoriteToggle(machine, isFavorite),
         };
-    }, [disableOfflineMachines, getMachineOptionTestID, purpose, reachabilityRevision, resolveMachinePlacementFacts, serverId, renderFavoriteToggle, theme.colors.text.secondary]);
+    }, [disableOfflineMachines, getMachineOptionTestID, purpose, reachabilityRevision, resolveMachinePlacementFacts, serverId, scope, renderFavoriteToggle, theme.colors.text.secondary]);
 
     const dropdownItems = React.useMemo(() => {
         const favoriteItems = showFavorites
@@ -262,8 +270,8 @@ export function MachineSelector({
                     onSelect={(machineId) => {
                         const machine = machineById.get(machineId);
                         if (!machine) return;
-                        if (!resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, serverId ?? ''), machine).eligible) return;
-                        if (disableOfflineMachines && !resolveMachinePickerPresence(machine, undefined, serverId).selectable) return;
+                        if (!resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, serverId ?? ''), machine, scope).eligible) return;
+                        if (disableOfflineMachines && !resolveMachinePickerPresence(machine, undefined, scope).selectable) return;
                         onSelect(machine);
                     }}
                     rowKind="item"
@@ -306,7 +314,9 @@ export function MachineSelector({
 }
 
 function MachineSelectorList(props: MachineSelectorProps) {
-    const groupServerId = props.serverId ?? '';
+    const groupServerId = props.serverId ?? getAppliedActiveServerSnapshot().serverId;
+    const { binding } = useServerCredentialAccountScopeBinding(groupServerId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const groups = React.useMemo(() => [{
         serverId: groupServerId, serverName: '', loading: false, signedOut: false,
         machines: props.machines.map((machine) => ({ ...machine, serverId: groupServerId, serverName: '' })),
@@ -315,9 +325,9 @@ function MachineSelectorList(props: MachineSelectorProps) {
         recent: props.recentSectionTitle, favorites: props.favoritesSectionTitle, all: props.allSectionTitle,
     }), [props.recentSectionTitle, props.favoritesSectionTitle, props.allSectionTitle]);
     const resolveAvailability = React.useCallback((machine: Machine) => {
-        const presence = resolveMachinePickerPresence(machine, undefined, groupServerId);
+        const presence = resolveMachinePickerPresence(machine, undefined, scope);
         return { selectable: presence.selectable || (props.disableOfflineMachines === false && presence.status === 'offline') };
-    }, [props.disableOfflineMachines]);
+    }, [props.disableOfflineMachines, scope]);
     const selectMachine = React.useCallback((machine: Machine) => {
         const original = props.machines.find((candidate) => candidate.id === machine.id);
         if (original) props.onSelect(original);

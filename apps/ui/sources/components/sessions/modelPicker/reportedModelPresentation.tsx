@@ -52,6 +52,8 @@ export function reportedModelSummary(status: ReportedModelStatus, modelLabel: st
 export function ReportedModelSummary(props: Readonly<{
     status: ReportedModelStatus;
     modelLabel: string;
+    /** When a change takes effect ("Applies from your next message"), on the same line. */
+    applyTiming?: string;
 }>) {
     const { theme } = useUnistyles();
     return (
@@ -63,6 +65,7 @@ export function ReportedModelSummary(props: Readonly<{
             />
             <Text style={styles.label}>
                 {reportedModelSummary(props.status, props.modelLabel)}
+                {props.applyTiming ? ` · ${props.applyTiming}` : null}
             </Text>
         </View>
     );

@@ -5,21 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
     PluginHostedWebBridgeEnvelopeV1,
-    UiSurfaceExecutableApprovalKeyV1,
 } from '@happier-dev/protocol/plugins/ui';
 
 import type { CallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
+import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
 import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
-import { t } from '@/text';
+import { SessionWidgetHost } from './SessionWidgetHost';
 import type { SessionBoardItemProjection, SessionBoardMountHost } from '@/sync/domains/session/board';
 
 const state = vi.hoisted(() => ({
     frames: [] as Record<string, unknown>[],
-    approvals: [] as Array<Readonly<{ approval: UiSurfaceExecutableApprovalKeyV1; key: string }>>,
     requests: [] as string[],
-    approved: true,
-    approvedKeys: [] as string[],
-    revokedKeys: [] as string[],
     controllersCreated: 0,
     controllersDisposed: 0,
     session: null as ReturnType<typeof createSessionFixture> | null,
@@ -87,17 +83,12 @@ function runtime(): CallerHostedHtmlRuntime {
     return {
         serverIdentityId: 'server-identity-a',
         accountId: 'account-a',
+        accountEncryptionMode: 'plain',
         hostOrigin: 'https://app.example.com',
         // A trusted installed-plugin-only method is deliberately present in the
         // runtime ceiling. The caller manifest must still expose only its exact
         // reviewed request.
-        admittedHostMethods: ['context', 'executeAction', 'notify', 'readClipboard'],
-        isApproved: (approval, approvalKey) => {
-            state.approvals.push({ approval, key: approvalKey });
-            return state.approved;
-        },
-        approve: (_approval, key) => { state.approvedKeys.push(key); },
-        revoke: (_approval, key) => { state.revokedKeys.push(key); },
+        admittedHostMethods: ['context', 'watchContext', 'executeAction', 'notify', 'readClipboard'],
         createRequestController: () => {
             state.controllersCreated += 1;
             return {
@@ -132,7 +123,7 @@ function readFrameBridge(frame: Record<string, unknown>) {
         { data: message, origin: 'null' } as MessageEvent,
         { consumeTransientActivation: () => false },
     );
-    return { identity: config.identity, onMessage };
+    return { identity: config.identity, bootstrap: config, onMessage };
 }
 
 async function renderPlacement(
@@ -141,7 +132,6 @@ async function renderPlacement(
     renderedItem: SessionBoardItemProjection = item,
     executableCurrentness: 'current' | 'stale' | 'offline' | 'unverified' = 'current',
 ) {
-    const { SessionWidgetHost } = await import('./SessionWidgetHost');
     return await renderScreen(<SessionWidgetHost
         sessionId="session-1"
         item={renderedItem}
@@ -162,21 +152,18 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         vi.restoreAllMocks();
     });
 
-    beforeEach(() => {
+    beforeEach(async () => {
         standardCleanup();
+        await act(async () => { await loadPluginUiHostSupport(); });
         state.frames = [];
-        state.approvals = [];
         state.requests = [];
-        state.approved = true;
-        state.approvedKeys = [];
-        state.revokedKeys = [];
         state.controllersCreated = 0;
         state.controllersDisposed = 0;
         state.openedExternalUrls = [];
         state.session = createSessionFixture({ id: 'session-1' });
     });
 
-    it('mounts the neutral hosted frame with revision-bound lifecycle, exact approval and reduced API', async () => {
+    it('mounts the neutral hosted frame with revision-bound lifecycle and the stored reduced API', async () => {
         await renderPlacement('details', 'details');
         expect(state.frames).toHaveLength(1);
         const first = state.frames[0]!;
@@ -185,19 +172,13 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
             title: 'Caller card',
             sandbox: 'allow-scripts',
         });
-        expect(first.html).toEqual(expect.stringContaining(
-            "connect-src https://api.example.com; frame-src 'none'; worker-src 'none'; object-src 'none'",
-        ));
+        expect(String(first.html).match(/connect-src ([^;]*);/)?.[1]?.split(' ')).toContain('https://api.example.com');
+        expect(first.html).toContain("frame-src 'none'; worker-src 'none'; object-src 'none'");
         expect(first.html).toEqual(expect.stringContaining('<main>caller-owned</main>'));
-        expect(JSON.stringify(first)).not.toContain('pluginId');
-        expect(state.approvals).toHaveLength(1);
-        expect(state.approvals[0]!.approval).toMatchObject({
-            serverIdentityId: 'server-identity-a',
-            accountId: 'account-a',
-            approvalSubject: '["session-record","server-identity-a","session-1","surface/item.v1","caller-widget-1"]',
-        });
-
         const bridge = readFrameBridge(first);
+        // The generated SDK necessarily contains plugin vocabulary; authority
+        // comes from the host bootstrap, not a source-text substring.
+        expect(bridge.bootstrap).not.toHaveProperty('authorPlugin');
         await bridge.onMessage({
             version: 1,
             identity: bridge.identity,
@@ -218,7 +199,7 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
             },
         })).resolves.toMatchObject({
             kind: 'result',
-            payload: { kind: 'negotiated', methods: ['context', 'executeAction', 'notify'] },
+            payload: { kind: 'negotiated', methods: ['context', 'watchContext', 'executeAction', 'notify'] },
         });
         await expect(bridge.onMessage({
             version: 1,
@@ -238,13 +219,10 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
                 kind: 'result',
                 result: {
                     surface: {
-                        callerHostedHtml: {
-                            recordRevision: 'revision-7',
-                            capabilityManifest: {
-                                version: 1,
-                                advertisedHostMethods: ['context', 'executeAction', 'notify'],
-                            },
-                        },
+                        mount: { kind: 'embedded', role: 'callerHostedHtml', presentation: 'content' },
+                        target: { kind: 'session', sessionId: 'session-1' },
+                        accountEncryptionMode: 'plain',
+                        theme: expect.any(Object),
                     },
                 },
             },
@@ -277,11 +255,9 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         expect(state.frames).toHaveLength(1);
         const secondBridge = readFrameBridge(state.frames[0]!);
         expect(secondBridge.identity).not.toEqual(bridge.identity);
-        expect(state.approvals.at(-1)?.key).toBe(state.approvals[0]?.key);
     });
 
     it('retires the executable bridge while retained Board bytes are stale and remounts a fresh lifetime after reconnect', async () => {
-        const { SessionWidgetHost } = await import('./SessionWidgetHost');
         const mountedRuntime = runtime();
         const renderWidget = (
             executableCurrentness: 'current' | 'stale' | 'offline' | 'unverified',
@@ -362,7 +338,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
     });
 
     it('binds each frame lifetime to the exact Home, Session, item and revision', async () => {
-        const { SessionWidgetHost } = await import('./SessionWidgetHost');
         const mountedRuntime = runtime();
         const renderWidget = (
             sessionId: string,
@@ -411,110 +386,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         })).resolves.toMatchObject({ kind: 'error', payload: { code: 'stale_surface' } });
     });
 
-    it('reviews requested capabilities as localized rows, keeps machine identity on the diagnostics channel, and exposes revoke after mounting', async () => {
-        state.approved = false;
-        const review = await renderPlacement('details', 'details');
-        expect(state.frames).toHaveLength(0);
-        const text = review.getTextContent();
-        expect(text).toContain(t('sessionBoard.hostedHtmlApproval.title'));
-        expect(text).toContain(t('sessionBoard.hostedHtmlApproval.body'));
-        expect(text).toContain(t('sessionBoard.hostedHtmlApproval.actions', { count: 1 }));
-        expect(text).toContain(t('sessionBoard.hostedHtmlApproval.loadsFrom', { origin: 'https://api.example.com' }));
-        // This fixture asks for no resources and no message sending: no row is invented for them.
-        expect(text).not.toContain(t('sessionBoard.hostedHtmlApproval.sendMessages'));
-        expect(text).not.toContain(t('sessionBoard.hostedHtmlApproval.resources', { count: 0 }));
-        // The exact revision, fingerprint and manifest are QA diagnostics, never spoken copy.
-        expect(text).not.toContain('revision-7');
-        expect(text).not.toContain('{');
-        expect(text).not.toMatch(/\b[a-z0-9]+(?:_[a-z0-9]+)+\b/);
-        expect(review.findAll((node) => typeof node.props?.testID === 'string'
-            && node.props.testID.startsWith('caller-widget-hosted-html-approval-diagnostic-revision-7'))).not.toHaveLength(0);
-        await review.pressByTestId('caller-widget-hosted-html-approval-action');
-        expect(state.approvedKeys).toEqual([state.approvals[0]!.key]);
-
-        standardCleanup();
-        state.approved = true;
-        const mounted = await renderPlacement('details', 'details');
-        expect(state.frames).toHaveLength(1);
-        await mounted.pressByTestId('caller-widget-hosted-html-revoke-approval');
-        expect(state.revokedKeys).toEqual([state.approvals.at(-1)!.key]);
-    });
-
-    it('names message sending as its own fixed row only when the view asks for it', async () => {
-        state.approved = false;
-        const review = await renderPlacement('details', 'details', {
-            ...item,
-            state: {
-                kind: 'ready' as const,
-                item: {
-                    ...item.state.item,
-                    source: {
-                        ...item.state.item.source,
-                        requestedCapabilities: {
-                            ...item.state.item.source.requestedCapabilities,
-                            actions: ['session.message.send', 'session.board.get'] as const,
-                        },
-                    },
-                },
-            },
-        } satisfies SessionBoardItemProjection);
-        const text = review.getTextContent();
-        expect(text).toContain(t('sessionBoard.hostedHtmlApproval.sendMessages'));
-        // Message sending is not double-counted as a generic action.
-        expect(text).toContain(t('sessionBoard.hostedHtmlApproval.actions', { count: 1 }));
-    });
-
-    it('lets the person decline for now without recording a decision and review again later', async () => {
-        state.approved = false;
-        const review = await renderPlacement('details', 'details');
-        await review.pressByTestIdAsync('caller-widget-hosted-html-approval-secondary-action');
-        expect(state.approvedKeys).toEqual([]);
-        expect(state.revokedKeys).toEqual([]);
-        expect(state.frames).toHaveLength(0);
-        expect(review.findByTestId('caller-widget-hosted-html-approval')).toBeNull();
-        expect(review.getTextContent()).toContain(t('sessionBoard.hostedHtmlApproval.declined.title'));
-        await review.pressByTestIdAsync('caller-widget-hosted-html-declined-action');
-        expect(review.findByTestId('caller-widget-hosted-html-approval')).not.toBeNull();
-        expect(state.approvedKeys).toEqual([]);
-    });
-
-    it('reuses approval across equivalent record revisions and invalidates it when capabilities change', async () => {
-        if (item.state.kind !== 'ready' || item.state.item.source.kind !== 'hostedHtml') {
-            throw new Error('caller-hosted HTML fixture must remain ready');
-        }
-        await renderPlacement('details', 'details');
-        const originalKey = state.approvals.at(-1)!.key;
-
-        standardCleanup();
-        state.frames = [];
-        await renderPlacement('details', 'details', { ...item, revision: 'revision-8' });
-        expect(state.frames).toHaveLength(1);
-        expect(state.approvals.at(-1)!.key).toBe(originalKey);
-
-        standardCleanup();
-        state.frames = [];
-        const changedCapabilities = {
-            ...item,
-            revision: 'revision-9',
-            state: {
-                kind: 'ready' as const,
-                item: {
-                    ...item.state.item,
-                    source: {
-                        ...item.state.item.source,
-                        requestedCapabilities: {
-                            ...item.state.item.source.requestedCapabilities,
-                            hostMethods: ['context', 'executeAction', 'notify', 'readResource'] as const,
-                            resources: [{ pluginId: 'acme.preview', localId: 'status' }],
-                        },
-                    },
-                },
-            },
-        } satisfies SessionBoardItemProjection;
-        await renderPlacement('details', 'details', changedCapabilities);
-        expect(state.approvals.at(-1)!.key).not.toBe(originalKey);
-    });
-
     it('keeps rejected caller content visible as a typed unavailable state instead of a blank card', async () => {
         if (item.state.kind !== 'ready' || item.state.item.source.kind !== 'hostedHtml') {
             throw new Error('caller-hosted HTML fixture must remain ready');
@@ -548,7 +419,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
     it('fails closed without a frame or authority bridge when secure mount identity entropy is unavailable, then recovers with a fresh identity', async () => {
         const { randomUUID } = await import('@/platform/randomUUID');
         const randomUuidSpy = vi.spyOn(await import('@/platform/randomUUID'), 'randomUUID');
-        const { SessionWidgetHost } = await import('./SessionWidgetHost');
         const mountedRuntime = runtime();
         const renderWidget = (renderedItem: SessionBoardItemProjection) => (
             <SessionWidgetHost
@@ -570,7 +440,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         expect(state.frames).toHaveLength(1);
         const firstBridge = readFrameBridge(state.frames[0]!);
         expect(state.controllersCreated).toBe(1);
-        const approvalCount = state.approvals.length;
 
         randomUuidSpy.mockImplementation(() => {
             throw new Error('secure_entropy_unavailable');
@@ -581,7 +450,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         expect(state.frames).toHaveLength(0);
         expect(state.controllersCreated).toBe(1);
         expect(state.controllersDisposed).toBe(1);
-        expect(state.approvals).toHaveLength(approvalCount);
         expect(screen.findByTestId('caller-widget-hosted-html-unavailable')).not.toBeNull();
         expect(screen.findByTestId(
             'caller-widget-hosted-html-unavailable-diagnostic-hosted_web_profile_isolation_unavailable',
@@ -665,7 +533,6 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         if (item.state.kind !== 'ready' || item.state.item.source.kind !== 'hostedHtml') {
             throw new Error('caller-hosted HTML fixture must remain ready');
         }
-        const { SessionWidgetHost } = await import('./SessionWidgetHost');
         const mountedRuntime = runtime();
         const renderWidget = (renderedItem: SessionBoardItemProjection) => (
             <SessionWidgetHost
@@ -732,10 +599,9 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
         })).resolves.toMatchObject({ kind: 'error', payload: { code: 'stale_surface' } });
     });
 
-    it('denies identity-valid activated external navigation while admitted Host API methods still work', async () => {
+    it('opens trusted external links through the shared frame without adding Host API grants', async () => {
         await renderPlacement('details', 'details');
         const frame = state.frames.at(-1)!;
-        expect(String(frame.html)).not.toContain('__HAPPIER_UI_FRAME_EXTERNAL_LINKS_V1__');
         const bridge = readFrameBridge(frame);
         await expect(bridge.onMessage({
             version: 1,
@@ -758,7 +624,10 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
             },
         })).resolves.toMatchObject({
             kind: 'result',
-            payload: { kind: 'result', result: { surface: { callerHostedHtml: { recordRevision: 'revision-7' } } } },
+            payload: { kind: 'result', result: { surface: {
+                mount: { kind: 'embedded', role: 'callerHostedHtml', presentation: 'content' },
+                target: { kind: 'session', sessionId: 'session-1' }, accountEncryptionMode: 'plain',
+            } } },
         });
 
         const webMessageBridge = frame.webMessageBridge as Readonly<{
@@ -777,9 +646,9 @@ describe('SessionWidgetHost caller-authored hosted HTML', () => {
                 payload: { url: 'https://example.com/docs' },
             },
             origin: 'null',
-        } as MessageEvent, { consumeTransientActivation }))).resolves.toBeUndefined();
+        } as MessageEvent, { consumeTransientActivation }))).resolves.toMatchObject({ kind: 'ack' });
 
-        expect(consumeTransientActivation).not.toHaveBeenCalled();
-        expect(state.openedExternalUrls).toEqual([]);
+        expect(consumeTransientActivation).toHaveBeenCalled();
+        expect(state.openedExternalUrls).toEqual(['https://example.com/docs']);
     });
 });

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { presentNativeRouteSourceLabel, presentSessionRouteChange, presentSessionRouteChip, resolveSessionRoutePresentation, type SessionRoutePresentationInput } from '@/providers/session/resolveSessionRoutePresentation';
+import { presentArmedSessionRouteSource, presentNativeRouteSourceLabel, presentSessionRouteChip, resolveSessionRoutePresentation, type SessionRoutePresentationInput } from '@/providers/session/resolveSessionRoutePresentation';
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
 import { selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/hooks/server/connectedServices/useConnectedMetadataCatalog';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -34,9 +34,14 @@ import {
 import { useProjectedConnectedServicesRegistry } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { NewSessionConnectedServicesSelectionContent } from '@/components/sessions/new/components/NewSessionConnectedServicesSelectionContent';
 import type { SessionRouteSources } from '@/components/sessions/new/components/useSessionRouteSourceSections';
-import { SessionRoutePendingChange, type SessionRoutePendingChangeProps } from '@/components/sessions/agentInput/components/SessionRoutePendingChange';
 import { useTeamCredentialSelectionCoordinator } from '@/components/sessions/teamCredentials/useTeamCredentialSelectionCoordinator';
 import { buildConnectedServicesBindingsPayload } from '@/components/sessions/new/modules/connectedServicesNewSessionBindings';
+import { buildNewSessionConfigurationDraft, buildNewSessionTempDataFromSessionConfiguration } from '@/components/sessions/authoring/draft/sessionConfigurationSeed';
+import type { ExistingSessionAuthoringSnapshotSession } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
+import { buildNewSessionLaunchRouteParams } from '@/components/sessions/new/navigation/newSessionRouteParams';
+import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolveQualifiedConnectedServiceRegistryDisplayName } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
 import { resolveConnectedServicesAuthLabel, resolveConnectedServicesAuthWarningTranslationKey } from '@/components/settings/connectedServices/model/resolveConnectedServicesAuthLabel';
 import { ActionListSection } from '@/components/ui/lists/ActionListSection';
@@ -51,6 +56,7 @@ import {
     type ConnectedServicesServiceBinding,
 } from '@/sync/domains/connectedServices/connectedServicesAgentOptionStateBindings';
 import { readSessionConnectedServiceBindings } from '@/sync/domains/connectedServices/readSessionConnectedServiceBindings';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import {
     applyProjectedCredentialKindRestrictions,
     buildQualifiedConnectedAccountGroupOptionsByServiceId,
@@ -58,7 +64,7 @@ import {
     resolveProjectedConnectedAccountServiceKeys,
 } from '@/sync/domains/connectedServices/qualifiedConnectedAccountServiceOptions';
 import {
-    setSessionConnectedServiceAuthBinding,
+    type setSessionConnectedServiceAuthBinding,
     type SessionConnectedServiceAuthSwitchErrorCode,
     type SessionConnectedServiceAuthSwitchResult as DaemonSessionConnectedServiceAuthSwitchResult,
 } from '@/sync/ops/connectedServices/sessionAuthSwitch';
@@ -85,6 +91,11 @@ export type SessionConnectedServicesAuthSwitchResult = Readonly<{
     routePresentation: ReturnType<typeof resolveSessionRoutePresentation> | null;
     /** The applied account or pool the Agent's own models run through; null for its own sign-in. */
     nativeSourceLabel: string | null;
+    /**
+     * The source a route or model change armed for the next message continues through (D15), or null
+     * when nothing is armed. The send control names it; the send owner applies it.
+     */
+    armedRouteSourceLabel: string | null;
     connectedServicesAuthChip: AgentInputExtraActionChip | null;
     statusBadges: ReadonlyArray<AgentInputStatusBadge>;
     restartState: SessionConnectedServicesAuthSwitchRestartState;
@@ -428,12 +439,10 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
     route?: Omit<SessionRoutePresentationInput, 'native'>;
     /** The session Agent's Gateways and Providers for the "Runs through" popover; omitted, it names none. */
     routeSources?: SessionRouteSources;
-    /**
-     * The session's existing restart for a changed route, offered from the popover's Now / Next block.
-     * `restart` is absent while the session has no restart to run for the pending change.
-     */
-    pendingRouteRestart?: Readonly<{ agentName: string; restart?: () => void | Promise<void>; disabled?: boolean }> | null;
+    nativeAgentTargetKey?: string | null;
     sessionId: string;
+    /** The readable source configuration for a fresh, independently authored Session. */
+    sessionConfiguration?: ExistingSessionAuthoringSnapshotSession;
     agentId: string | null | undefined;
     machineId: string | null | undefined;
     serverId?: string | null;
@@ -459,6 +468,7 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
     intentionalRestartSignals?: ReadonlyArray<SessionIntentionalRestartSignal>;
     /** Passive Provider runtime failures enter the existing generic recovery owner. */
     passiveProviderRecoveryServiceId?: ConnectedAccountServiceKey | null;
+    applyBinding: typeof setSessionConnectedServiceAuthBinding;
 }>): SessionConnectedServicesAuthSwitchResult {
     const accountProfile = useProfile();
     const { present } = useConnectedAccountIdentityPrivacy();
@@ -577,6 +587,47 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
         [connectedServicesRegistry.entries],
     );
 
+    const freshSessionConfiguration = params.sessionConfiguration && readSessionOwnerMetadataView(params.sessionConfiguration)
+        ? params.sessionConfiguration
+        : null;
+
+    const startFreshUnderSelectedAccount = React.useCallback((serviceId: string, selectedBinding: ConnectedServicesServiceBinding) => {
+        const lifetime = binding ?? captureActiveServerAccountScopeLifetime();
+        const source = freshSessionConfiguration;
+        if (!lifetime?.isCurrent() || !source || source.id !== params.sessionId || !params.machineId) return;
+        if (params.serverId && !selectActiveServerAccountScopeForServer(lifetime.scope, params.serverId)) return;
+        const configuration = buildNewSessionTempDataFromSessionConfiguration({ session: source, machineId: params.machineId });
+        if (!configuration.agentTarget) return;
+        const bindings = buildConnectedServicesBindingsPayload({
+            supportedConnectedServiceIds,
+            connectedServiceProfileOptionsByServiceId: profileOptionsByServiceId,
+            connectedServiceAccountGroupOptionsByServiceId: groupOptionsByServiceId,
+            connectedServicesBindingsByServiceId: { ...metadataBindingsByServiceId, [serviceId]: selectedBinding },
+            defaultProfileByServiceId: params.settings.connectedServicesDefaultProfileByServiceId,
+            accountGroupsFeatureEnabled,
+            emitWhenAllNative: true,
+        });
+        if (!bindings) return;
+        const targetKey = buildBackendTargetKeyV2(configuration.agentTarget);
+        const outcome = seedAndOpenNewSession({
+            seed: { placement: { kind: 'exactTarget', serverId: lifetime.scope.serverId, machineId: params.machineId,
+                ...(configuration.directory ? { directory: configuration.directory } : {}) } },
+            configurationDraft: buildNewSessionConfigurationDraft({ ...configuration,
+                backendNewSessionOptionStateByTargetKey: { ...configuration.backendNewSessionOptionStateByTargetKey,
+                    [targetKey]: { ...configuration.backendNewSessionOptionStateByTargetKey?.[targetKey], connectedServices: bindings } },
+            }),
+            scope: lifetime.scope, isCurrent: lifetime.isCurrent,
+            navigateToNewSession: ({ draftId }) => router.push({ pathname: '/new',
+                params: buildNewSessionLaunchRouteParams({ draftId, targetServerId: lifetime.scope.serverId }) }),
+        });
+        if (outcome.kind === 'opened') {
+            setActionableState(null);
+            setProviderSessionDiagnosticActionState(null);
+        }
+    }, [accountGroupsFeatureEnabled, binding, groupOptionsByServiceId, metadataBindingsByServiceId, params.machineId,
+        params.serverId, params.sessionId, freshSessionConfiguration, params.settings.connectedServicesDefaultProfileByServiceId,
+        profileOptionsByServiceId, router, supportedConnectedServiceIds]);
+
     const setBindingForService = React.useCallback((serviceId: string, binding: ConnectedServicesServiceBinding, options?: SetBindingForServiceOptions) => {
         const agentId = typeof params.agentId === 'string' ? params.agentId.trim() : '';
         const machineId = params.machineId;
@@ -630,14 +681,6 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
                     ))) return;
                     teamVisibilityGrantConsent = { teamId: selectedResource.teamId };
                 }
-            }
-            if (!options?.skipConfirm && params.sessionActive !== false) {
-                const confirmed = await Modal.confirm(
-                    t('connectedServices.authSwitch.confirmTitle'),
-                    t('connectedServices.authSwitch.confirmBody'),
-                    { confirmText: t('connectedServices.authSwitch.confirmAction') },
-                );
-                if (!confirmed) return;
             }
         const previousBindings = optimisticBindingsByServiceId;
         const nextBindings = {
@@ -698,7 +741,7 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
             setOptimisticBindingsByServiceId(previousBindings);
             return;
         }
-        void setSessionConnectedServiceAuthBinding({
+        void params.applyBinding({
             sessionId: params.sessionId,
             agentId,
             machineId,
@@ -762,8 +805,8 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
                             presentAuthSwitchDiagnosticAlert({
                                 presentation: diagnosticPresentation,
                                 retry: () => setBindingForService(serviceId, binding),
-                                startFreshUnderSelectedAccount: diagnosticServiceId
-                                    ? () => setBindingForService(serviceId, binding, { rematerializeServiceId: diagnosticServiceId })
+                                startFreshUnderSelectedAccount: diagnosticServiceId && freshSessionConfiguration
+                                    ? () => startFreshUnderSelectedAccount(serviceId, binding)
                                     : undefined,
                                 resumeCurrentAccount: dismiss,
                                 openConnectedAccounts: () => router.push('/(app)/settings/connected-services'),
@@ -810,8 +853,8 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
                 presentAuthSwitchDiagnosticAlert({
                     presentation: diagnosticPresentation,
                     retry: () => setBindingForService(serviceId, binding),
-                    startFreshUnderSelectedAccount: diagnosticServiceId
-                        ? () => setBindingForService(serviceId, binding, { rematerializeServiceId: diagnosticServiceId })
+                    startFreshUnderSelectedAccount: diagnosticServiceId && freshSessionConfiguration
+                        ? () => startFreshUnderSelectedAccount(serviceId, binding)
                         : undefined,
                     resumeCurrentAccount: dismiss,
                     openConnectedAccounts: () => router.push('/(app)/settings/connected-services'),
@@ -866,16 +909,19 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
         accountGroupsFeatureEnabled,
         groupOptionsByServiceId,
         optimisticBindingsByServiceId,
+        params.applyBinding,
         params.agentId,
         params.machineId,
         params.serverId,
         params.sessionId,
+        freshSessionConfiguration,
         params.sessionActive,
         params.settings.connectedServicesDefaultProfileByServiceId,
         profileOptionsByServiceId,
         resolveProfileActionRoute,
         router,
         supportedConnectedServiceIds,
+        startFreshUnderSelectedAccount,
     ]);
 
     /**
@@ -927,11 +973,14 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
 
     const popoverContent = React.useCallback((
         { requestClose, maxHeight }: AgentInputContentPopoverRenderArgs,
-        pendingChange?: Omit<SessionRoutePendingChangeProps, 'onKeepCurrent'> | null,
+        armedNote?: string | null,
+        appliedRoute?: ReturnType<typeof resolveSessionRoutePresentation>['applied'],
     ) => (
         <NewSessionConnectedServicesSelectionContent
-            topContent={pendingChange ? <SessionRoutePendingChange {...pendingChange} onKeepCurrent={requestClose} /> : undefined}
+            armedNote={armedNote}
             routeSources={params.routeSources}
+            nativeAgentTargetKey={params.nativeAgentTargetKey ?? undefined}
+            appliedRoute={appliedRoute}
             supportedServiceIds={supportedConnectedServiceIds}
             profileOptionsByServiceId={profileOptionsByServiceId}
             groupOptionsByServiceId={groupOptionsByServiceId}
@@ -965,11 +1014,14 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
         params.teamNameById,
         params.serverId,
         params.routeSources,
+        params.nativeAgentTargetKey,
         profileOptionsByServiceId,
         resolveOptionAvailability,
         resolveProfileActionRoute,
         router,
         setBindingForService,
+        freshSessionConfiguration,
+        startFreshUnderSelectedAccount,
         supportedConnectedServiceIds,
     ]);
 
@@ -1000,6 +1052,7 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
         ? resolveSessionRoutePresentation({ ...params.route, native: appliedNativeRoute })
         : null, [appliedNativeRoute, params.route]);
     const nativeSourceLabel = supportedConnectedServiceIds.length > 0 ? presentNativeRouteSourceLabel(appliedNativeRoute) : null;
+    const armedRouteSourceLabel = routePresentation ? presentArmedSessionRouteSource(routePresentation, appliedNativeRoute) : null;
 
     const connectedServicesAuthChip = React.useMemo<AgentInputExtraActionChip | null>(() => {
         const target = params.armedContinuationAgent;
@@ -1074,7 +1127,7 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
                     subtitle: !defaultsReady ? unavailableLabel : warningKey ? t(warningKey) : undefined,
                     disabled: true,
                 }]} />,
-                maxHeightCap: 560, maxWidthCap: 560,
+                agentId: params.agentId,
                 testID: 'session-connected-services-auth-chip',
             });
         }
@@ -1096,29 +1149,20 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
             : label.connectedCount === supportedConnectedServiceIds.length
                 ? 'connected' as const
                 : 'mixed' as const;
-        // "Runs through …", or "Now via …" + "Change pending" while the runtime still applies the old route.
+        // "Runs through …", or "Next via …" while a route or model change is armed for the next message (D15).
         const routeChip = routePresentation
             ? presentSessionRouteChip(routePresentation, { label: label.label, authSource })
             : null;
-        const routeChange = routePresentation && params.pendingRouteRestart
-            ? presentSessionRouteChange(routePresentation, { label: label.label })
+        const armedSource = routePresentation
+            ? presentArmedSessionRouteSource(routePresentation, { label: label.label })
             : null;
-        const pendingChange = routeChange && params.pendingRouteRestart ? {
-            ...routeChange,
-            agentName: params.pendingRouteRestart.agentName,
-            onRestart: params.pendingRouteRestart.restart,
-            restartDisabled: params.pendingRouteRestart.disabled,
-        } : null;
+        const armedNote = armedSource ? t('connectedServices.authChip.armedNote', { source: armedSource }) : null;
         return createConnectedServicesAuthActionChip({
             label: routeChip?.label ?? label.label,
-            changePendingLabel: routeChip?.changePending ? t('connectedServices.authChip.changePending') : null,
             connectedCount: label.connectedCount,
             authSource,
-            popoverContent: pendingChange
-                ? (args: AgentInputContentPopoverRenderArgs) => popoverContent(args, pendingChange)
-                : popoverContent,
-            maxHeightCap: 560,
-            maxWidthCap: 560,
+            popoverContent: (args: AgentInputContentPopoverRenderArgs) => popoverContent(args, armedNote, routePresentation?.applied),
+            agentId: params.agentId,
             testID: 'session-connected-services-auth-chip',
         });
     }, [
@@ -1139,10 +1183,10 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
         optimisticBindingsByServiceId,
         params.settings.connectedServicesDefaultProfileByServiceId,
         popoverContent,
-        params.pendingRouteRestart,
         profileOptionsByServiceId,
         resolveServiceTitle,
         routePresentation,
+        params.agentId,
         supportedConnectedServiceIds,
     ]);
 
@@ -1243,11 +1287,10 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
                                 providerDiagnosticActionState.serviceId,
                                 providerDiagnosticActionState.binding,
                             ),
-                            startFreshUnderSelectedAccount: diagnosticServiceId
-                                ? () => setBindingForService(
+                            startFreshUnderSelectedAccount: diagnosticServiceId && freshSessionConfiguration
+                                ? () => startFreshUnderSelectedAccount(
                                     providerDiagnosticActionState.serviceId,
                                     providerDiagnosticActionState.binding,
-                                    { rematerializeServiceId: diagnosticServiceId },
                                 )
                                 : undefined,
                             resumeCurrentAccount: dismiss,
@@ -1300,9 +1343,11 @@ export function useSessionConnectedServicesAuthSwitch(params: Readonly<{
         providerSessionDiagnosticActionState,
         resolveProfileActionRoute,
         restartRetryState,
+        freshSessionConfiguration,
+        startFreshUnderSelectedAccount,
         router,
         setBindingForService,
     ]);
 
-    return { routePresentation, nativeSourceLabel, connectedServicesAuthChip, statusBadges, restartState, actionableState };
+    return { routePresentation, nativeSourceLabel, armedRouteSourceLabel, connectedServicesAuthChip, statusBadges, restartState, actionableState };
 }

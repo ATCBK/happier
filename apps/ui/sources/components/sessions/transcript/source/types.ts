@@ -17,7 +17,9 @@ export type TranscriptHistoryState = Readonly<{
     isLoadingNewer?: boolean;
     targetWindow?: Readonly<{ windowId: string; targetSeq: number; olderCursor: number | null; newerCursor: number | null }> | null;
 }>;
-export type SessionTranscriptSubmitOptions = Pick<NonNullable<Parameters<typeof sync.submitMessage>[4]>, 'callerSurface'>;
+export type SessionTranscriptSubmitOptions = Pick<NonNullable<Parameters<typeof sync.submitMessage>[4]>, 'callerSurface'> & Readonly<{
+    permissionModeOverride?: import('@/sync/domains/permissions/permissionTypes').PermissionMode;
+}>;
 export type SessionTranscriptActions = Readonly<{
     respondToPermission(params: Omit<SessionPermissionRespondRpcParamsV1, 'answers'>): Promise<void>;
     answerUserAction(params: Pick<SessionPermissionRespondRpcParamsV1, 'id'> & Required<Pick<SessionPermissionRespondRpcParamsV1, 'answers'>>): Promise<void>;

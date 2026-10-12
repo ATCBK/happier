@@ -49,6 +49,7 @@ describe('Session server-start candidate selection', () => {
         };
 
         const selection = resolveSessionServerStartCandidateSelection({
+            accountScope: { serverId: 'server-selected', accountId: 'selected-account' },
             mountedTarget: { serverId: 'server-mounted', machineId: 'shared-machine-id' },
             selectedCandidate: candidate,
             activeServerId: 'server-mounted',

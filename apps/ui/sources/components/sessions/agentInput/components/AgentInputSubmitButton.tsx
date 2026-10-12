@@ -15,10 +15,7 @@ import type { VoiceDictationSnapshot } from '@/voice/dictation/VoiceDictationCon
 import { Icon } from '@/components/ui/icons/Icon';
 import type { Theme } from '@/theme';
 
-import {
-    resolveAgentContinuationSubmitPresentation,
-    resolveArmedSubmitContinuation,
-} from './agentContinuationSubmitPresentation';
+import { resolveArmedSubmitPresentation } from './agentContinuationSubmitPresentation';
 
 /**
  * The submit control's touch target reaches above and below its box.
@@ -135,6 +132,11 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
      * says so, at the moment of consequence.
      */
     armedContinuationTarget?: Readonly<{ agentId: string; label: string }> | null;
+    /**
+     * A route or model change for the running Agent, armed for the next message
+     * (D15): pressing send restarts it on that source, then sends.
+     */
+    armedRouteContinuation?: Readonly<{ sourceLabel: string }> | null;
     /** Exact selected picker mark for an external/machine-qualified target. */
     armedContinuationIdentityMark?: React.ReactNode;
     onSend: () => void;
@@ -175,20 +177,16 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
     // an inert one, so it keeps naming the switch it would take.
     // The composer's engine chip reads the SAME armed target and only skips this
     // narrowing, so the two cannot name different Agents.
-    const armedTarget = resolveArmedSubmitContinuation({
-        armedContinuationTarget: props.armedContinuationTarget,
-        otherActionHoldsSubmit: showDictation || showStopWhenEmpty,
-    });
     const canonicalIdentityMark = React.isValidElement<Record<string, unknown>>(
         props.armedContinuationIdentityMark,
     ) ? props.armedContinuationIdentityMark : null;
-    const armedContinuation = armedTarget
-        ? resolveAgentContinuationSubmitPresentation({
-            agentId: armedTarget.agentId,
-            agentLabel: armedTarget.label,
-            hasIdentityMark: canonicalIdentityMark !== null,
-        })
-        : null;
+    const armed = resolveArmedSubmitPresentation({
+        armedContinuationTarget: props.armedContinuationTarget,
+        armedRouteContinuation: props.armedRouteContinuation,
+        otherActionHoldsSubmit: showDictation || showStopWhenEmpty,
+        hasIdentityMark: canonicalIdentityMark !== null,
+    });
+    const armedContinuation = armed?.presentation ?? null;
 
     const submitPress = React.useCallback(() => {
         if (dictationTranscribing) return;
@@ -214,7 +212,7 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
     ]);
 
     if (armedContinuation) {
-        const canonicalMark = canonicalIdentityMark
+        const canonicalMark = armed?.kind === 'agent' && canonicalIdentityMark
             ? React.cloneElement(canonicalIdentityMark, {
                 size: armedContinuation.markSize,
                 testID: 'agent-input-continuation-submit-logo',

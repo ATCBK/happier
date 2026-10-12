@@ -31,6 +31,8 @@ export type LocalServicePublicPreviewCreateOptions = Readonly<{
 }>;
 
 export type LocalServicePublicPreviewActions = Readonly<{
+    /** Same Home used by the Action executor, including background-Home controls. */
+    serverId?: string;
     create: (
         target: LocalServicePublicPreviewActionTarget,
         options?: LocalServicePublicPreviewCreateOptions,
@@ -109,10 +111,9 @@ function defaultCreateRequest(
             previewId,
             mode: options?.mode ?? 'secret_link',
             ttlMs: options?.ttlMs ?? DEFAULT_LOCAL_SERVICE_PUBLIC_PREVIEW_TTL_MS,
-            // UX-5: the create control is gated behind a `Modal.confirm` in
-            // `LocalServicePublicPreviewControls`, so reaching this builder means the user
-            // acknowledged the public-exposure consent. The daemon `publicPreview.create`
-            // chokepoint rejects any create request without this acknowledgement.
+            // The create control follows the configurable Action approval policy.
+            // This preserves the raw daemon acknowledgement format after either
+            // the user's review or their policy waiver admits the Action.
             confirmation: { acknowledged: true },
         }
         : null;
@@ -138,6 +139,7 @@ export function createLocalServicePublicPreviewActions(
     const copyToClipboard = input.copyToClipboard ?? setClipboardStringSafe;
 
     return {
+        serverId: normalizeNonEmptyString(input.serverId),
         async create(target, options) {
             if ('id' in target && target.workspace && input.serverId
                 && !areServerProfileIdentifiersEquivalent(target.workspace.serverId, input.serverId)) return undefined;

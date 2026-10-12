@@ -60,7 +60,7 @@ export function resolveManagedMachineArchiveChoiceAvailability(input: Readonly<{
     const controller = input.controller?.id === controllerMachineId ? input.controller : undefined;
     const custodianAccountId = controller?.access?.custodian.accountId ?? input.custodianAccountId;
     const eligibility = controller || input.controllerOwnership
-        ? resolveMachineDestinationPurposeEligibility('trigger', input.controllerOwnership ? { ownership: input.controllerOwnership } : undefined, controller)
+        ? resolveMachineDestinationPurposeEligibility('trigger', input.controllerOwnership ? { ownership: input.controllerOwnership } : undefined, controller, null)
         : { eligible: false as const, reason: 'access_unavailable' as const };
     const nativeEffects = (['stop', 'delete'] as const).filter(effect => input.draft.receipt.retentionCapabilities.supportedIntents.includes(effect));
     return {

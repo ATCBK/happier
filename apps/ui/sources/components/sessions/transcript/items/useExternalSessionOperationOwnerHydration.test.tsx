@@ -336,14 +336,21 @@ describe('useExternalSessionOperationOwnerHydration', () => {
         expect(hook.getCurrent().progress).toBeNull();
         expect(hook.getCurrent().status).toBe('unavailable');
 
+        // The failed request can also make the scoped machine projection unreachable.
+        // That observation must not remove the exact owner's recovery action.
+        await hook.rerender({ presentation: createPresentation(), isExactOwner: true, machineOnline: false });
+        expect(hook.getCurrent().status).toBe('unavailable');
+
         await act(async () => {
             hook.getCurrent().checkAgain();
             await flushHookEffects({ cycles: 1, turns: 1 });
         });
 
         expect(machineExternalSessionOperationStatusSpy).toHaveBeenCalledTimes(2);
-        expect(hook.getCurrent().status).toBe('ready');
         expect(hook.getCurrent().progress).toEqual(progress);
+        await hook.rerender({ presentation: createPresentation(), isExactOwner: true, machineOnline: true });
+        expect(hook.getCurrent().status).toBe('ready');
+        expect(machineExternalSessionOperationStatusSpy).toHaveBeenCalledTimes(2);
 
         // No polling: a settled read is not re-issued by pressing again.
         await act(async () => {

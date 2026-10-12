@@ -1,11 +1,21 @@
 import { act } from 'react-test-renderer';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createMachineFixture, renderHook } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 
-import { useNewSessionMachinePathState } from './useNewSessionMachinePathState';
 import { createManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
+
+const network = await installSessionOpsNetworkBoundary();
+beforeAll(async () => {
+    await network.addHome('https://server-a', 'account-a');
+    await network.addHome('https://server-b', 'account-b');
+    await network.addHome('https://server-c', 'account-c');
+});
+beforeEach(() => network.resetRequests());
+afterAll(() => network.dispose());
+const { useNewSessionMachinePathState } = await import('./useNewSessionMachinePathState');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -89,6 +99,19 @@ function renderMachinePathState(initialProps: HookParams) {
 }
 
 describe('useNewSessionMachinePathState', () => {
+    it('keeps the committed folder for submission when an uncommitted picker edit is blank', async () => {
+        const hook = await renderMachinePathState({
+            machines: toMachines({ id: 'machine-a', metadata: { homeDir: '/home/alice' } }),
+            recentMachinePaths: [], machineIdParam: 'machine-a', pathParam: '/',
+        });
+        await act(async () => hook.getCurrent().setDraftSelectedPath('  '));
+        expect(hook.getCurrent().directoryIntent).toEqual({ kind: 'path', path: '/' });
+        expect(hook.getCurrent().getRequestedPath()).toBe('/');
+        await act(async () => hook.getCurrent().setDraftSelectedPath('/authored/repo'));
+        expect(hook.getCurrent().getRequestedPath()).toBe('/authored/repo');
+        await hook.unmount();
+    });
+
     it('defaults Bot drafts to the selected machine home while ordinary drafts keep their recent folder', async () => {
         const initial = { machines: toMachines({ id: 'machine-a', metadata: { homeDir: '/home/alice' } },
             { id: 'machine-b', metadata: { homeDir: 'C:\\Users\\bob\\' } }),
@@ -221,6 +244,8 @@ describe('useNewSessionMachinePathState', () => {
     });
 
     it('keeps a reviewed managed recipe unallocated, preserves authored input on enrollment, and clears it on a replacement target', async () => {
+        const home = await network.addHome('https://server-a', 'account-a');
+        const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
         const draft = createManagedMachineSelectionDraft({
             selection: { kind: 'preset', homeId: 'srv-home-a', id: 'preset-a', revision: 3 },
             receipt: {
@@ -233,7 +258,8 @@ describe('useNewSessionMachinePathState', () => {
                 preset: { id: 'preset-a', revision: 3, name: 'Guest' },
             },
         });
-        const hook = await renderMachinePathState({ machines: toMachines({ id: 'host' }),
+        const hook = await renderMachinePathState({ serverId: resolveServerProfileScopeId(home),
+            machines: toMachines({ id: 'host', activeAt: Date.now() }),
             recentMachinePaths: [], machineIdParam: null, pathParam: null });
         await act(async () => {
             hook.getCurrent().setSelectedPath('/authored');
@@ -815,10 +841,13 @@ describe('useNewSessionMachinePathState', () => {
         await hook.unmount();
     });
 
-    it('recovers a retained offline machine to an online launch machine and its directory', async () => {
+    it('retains an offline persisted machine and its authored directory', async () => {
         const now = Date.now();
+        const home = await network.addHome('https://server-a', 'account-a');
+        const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
 
         const hook = await renderMachinePathState({
+            serverId: resolveServerProfileScopeId(home),
             machines: toMachines(
                 { id: 'machine-online', metadata: { homeDir: '/online' }, active: true, activeAt: now - 10_000 },
                 { id: 'machine-offline', metadata: { homeDir: '/offline' }, active: false, activeAt: now - 10 * 60_000 },
@@ -834,8 +863,8 @@ describe('useNewSessionMachinePathState', () => {
         });
 
         expect(getSelection(hook.getCurrent())).toEqual({
-            selectedMachineId: 'machine-online',
-            selectedPath: '/online',
+            selectedMachineId: 'machine-offline',
+            selectedPath: '/repo/stale',
         });
 
         await hook.unmount();
@@ -918,8 +947,11 @@ describe('useNewSessionMachinePathState', () => {
 
     it('treats machines as eligible for initial selection when they are online via activeAt even if active=false', async () => {
         const now = Date.now();
+        const home = await network.addHome('https://server-a', 'account-a');
+        const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
 
         const hook = await renderMachinePathState({
+            serverId: resolveServerProfileScopeId(home),
             machines: toMachines(
                 { id: 'machine-stale-active', metadata: { homeDir: '/stale' }, active: true, activeAt: now - 3 * 60_000 },
                 // Real server snapshots can report recent activeAt while leaving `active` false.
@@ -943,8 +975,11 @@ describe('useNewSessionMachinePathState', () => {
 
     it('prefers an online machine from recent paths over an offline one', async () => {
         const now = Date.now();
+        const home = await network.addHome('https://server-a', 'account-a');
+        const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
 
         const hook = await renderMachinePathState({
+            serverId: resolveServerProfileScopeId(home),
             machines: toMachines(
                 { id: 'machine-offline', metadata: { homeDir: '/offline' }, activeAt: now - 3 * 60_000 },
                 { id: 'machine-online', metadata: { homeDir: '/online' }, activeAt: now - 10_000 },
@@ -967,8 +1002,12 @@ describe('useNewSessionMachinePathState', () => {
 
     it('upgrades an implicitly selected offline machine to an online replacement once machines hydrate', async () => {
         const now = Date.now();
+        const home = await network.addHome('https://server-a', 'account-a');
+        const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
+        const serverId = resolveServerProfileScopeId(home);
 
         const hook = await renderMachinePathState({
+            serverId,
             machines: toMachines(
                 { id: 'machine-old', metadata: { homeDir: '/old' }, activeAt: now - 3 * 60_000 },
             ),
@@ -983,6 +1022,7 @@ describe('useNewSessionMachinePathState', () => {
         });
 
         await hook.rerender({
+            serverId,
             machines: toMachines(
                 { id: 'machine-old', metadata: { homeDir: '/old' }, activeAt: now - 3 * 60_000 },
                 { id: 'machine-new', metadata: { homeDir: '/new' }, activeAt: now - 10_000 },
@@ -1087,8 +1127,11 @@ describe('useNewSessionMachinePathState', () => {
         await hook.unmount();
     });
 
-    it('recovers an absent persisted machine to an available launch machine', async () => {
+    it('retains an absent persisted machine and its authored directory', async () => {
+        const home = await network.addHome('https://server-a', 'account-a');
+        const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
         const hook = await renderMachinePathState({
+            serverId: resolveServerProfileScopeId(home),
             machines: toMachines({ id: 'machine-b', metadata: { homeDir: '/b' }, active: true, activeAt: Date.now() }),
             recentMachinePaths: [{ machineId: 'machine-b', path: '/b/repo' }],
             machineIdParam: null,
@@ -1098,15 +1141,18 @@ describe('useNewSessionMachinePathState', () => {
         });
 
         expect(getSelection(hook.getCurrent())).toEqual({
-            selectedMachineId: 'machine-b',
-            selectedPath: '/b/repo',
+            selectedMachineId: 'machine-a',
+            selectedPath: '/a/repo',
         });
 
         await hook.unmount();
     });
 
-    it('preserves the current selection when it becomes offline but still exists', async () => {
+    it.each(['default', 'machine', 'directory'] as const)('reconciles an offline selection without replacing explicit authoring: %s', async (choice) => {
         const now = Date.now();
+        const home = await network.addHome('https://server-a', 'account-a');
+        const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
+        const serverId = resolveServerProfileScopeId(home);
         const initialMachines = toMachines(
             { id: 'machine-old', metadata: { homeDir: '/Users/leeroy' }, activeAt: now - 5_000 },
             { id: 'machine-new', metadata: { homeDir: '/Users/leeroy/new-home' }, activeAt: now - 10_000 },
@@ -1117,6 +1163,7 @@ describe('useNewSessionMachinePathState', () => {
         );
 
         const hook = await renderMachinePathState({
+            serverId,
             machines: initialMachines,
             recentMachinePaths: [{ machineId: 'machine-old', path: '/repo/old' }],
             machineIdParam: null,
@@ -1128,7 +1175,11 @@ describe('useNewSessionMachinePathState', () => {
             selectedPath: '/repo/old',
         });
 
+        if (choice === 'machine') await act(async () => hook.getCurrent().setSelectedMachineId('machine-old'));
+        if (choice === 'directory') await act(async () => hook.getCurrent().setSelectedPath('/repo/authored'));
+
         await hook.rerender({
+            serverId,
             machines: updatedMachines,
             recentMachinePaths: [
                 { machineId: 'machine-old', path: '/repo/old' },
@@ -1139,8 +1190,8 @@ describe('useNewSessionMachinePathState', () => {
         });
 
         expect(getSelection(hook.getCurrent())).toEqual({
-            selectedMachineId: 'machine-old',
-            selectedPath: '/repo/old',
+            selectedMachineId: choice === 'default' ? 'machine-new' : 'machine-old',
+            selectedPath: choice === 'default' ? '/repo/new' : choice === 'directory' ? '/repo/authored' : '/repo/old',
         });
 
         await hook.unmount();

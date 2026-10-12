@@ -4,9 +4,9 @@ import { normalizeUsageQuery, UsageQuerySchema } from '@happier-dev/protocol/inp
 import { VoiceTrackedSessionAddressV1Schema } from '@happier-dev/protocol/sessions/follow/voiceTrackedTargetsCompatibilityV1';
 
 import { createActionInputForm, type ActionInputFormAccountLifetime } from '@/components/plugins/actions/actionInputForm';
-import { USAGE_PERIODS, getUsagePeriodDefinition, resolveUsagePeriodStartTimeSeconds } from '@/sync/api/account/usagePeriods';
-import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
-import { getPreferredLanguage, t } from '@/text';
+import { USAGE_PERIODS, getUsagePeriodDefinition } from '@/sync/api/account/usagePeriods';
+import { formatUsageCalendarPeriod } from '@/sync/domains/usage/usageCalendarPresentation';
+import { t } from '@/text';
 
 type HostPickerRequest = Parameters<NonNullable<InputTypePickerHostV1['openHostPicker']>>[0];
 
@@ -29,9 +29,8 @@ export function createHostInputTypePickerForm(params: Readonly<{
         ? normalizeUsageQuery(current) : normalizeUsageQuery({});
 
     if (projection === 'period') {
-        const offset = UsageQuerySchema.shape.timeZoneOffsetMinutes.parse(params.draftInput?.timeZoneOffsetMinutes);
         const options: InputOption[] = USAGE_PERIODS.map(period => ({
-            value: { startMs: resolveUsagePeriodStartTimeSeconds(period, params.nowMs, offset) * 1000, endMs: params.nowMs },
+            value: { relative: period },
             label: t(getUsagePeriodDefinition(period).translationKey),
         }));
         if (current !== undefined && !options.some(option => isSameInputOptionValue(option.value, current))) {
@@ -81,9 +80,6 @@ export function describeHostInputTypePickerValue(reference: HostPickerRequest['r
         return admitted.value === null ? t('usage.board.page.filterAll')
             : Array.isArray(admitted.value) ? t('usage.board.page.filterCount', { count: admitted.value.length }) : String(admitted.value);
     }
-    const period = UsageQuerySchema.shape.period.parse(admitted.value);
-    const format = (time: number) => formatWithCachedDateTimeFormatter(time, getPreferredLanguage(), { dateStyle: 'medium', timeStyle: 'short' });
-    return period.startMs === undefined && period.endMs === undefined ? t('usage.allTime')
-        : [period.startMs === undefined ? t('usage.allTime') : format(period.startMs),
-            ...(period.endMs === undefined ? [] : [format(period.endMs)])].join(' – ');
+    if (reference.field !== 'period') return null;
+    return formatUsageCalendarPeriod(UsageQuerySchema.shape.period.parse(admitted.value));
 }

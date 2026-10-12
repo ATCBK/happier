@@ -12,7 +12,7 @@ import { buildWidgetDefinitionActions, buildWidgetInstanceActions, orderWidgetMe
 import { useWidgetDefinitionFlows } from '@/components/widgets/definitions/useWidgetDefinitionFlows';
 import { useWidgetInputsEditor } from '@/components/widgets/surface/useWidgetInputsEditor';
 import { useWidgetInstanceDescriptor } from '@/components/widgets/surface/useWidgetInstanceDescriptor';
-import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
+import { widgetProvidedContext, type WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { readWidgetDescriptor } from '@/components/widgets/widgetCatalog';
 import type { WidgetInputBindingsV1, WidgetInstanceV1, WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { t } from '@/text';
@@ -109,14 +109,14 @@ function InstanceItemFrame(props: SessionCompanionItemFrameProps & Readonly<{ co
     });
     const editInputs = inputs.editInputs;
     const beginRename = renaming.begin;
-    const definition = useWidgetDefinitionFlows({ instance, scope, anchorRef: inputs.anchorRef, editInputs, testID: props.testID });
+    const definition = useWidgetDefinitionFlows({ instance, scope, providedContext: widgetProvidedContext(context), anchorRef: inputs.anchorRef, editInputs, testID: props.testID });
     // The lab order (dbind E): this copy's entries, how it sits here, About, then Remove last.
     const actions = React.useMemo<readonly ItemAction[]>(() => orderWidgetMenu({
         instance: buildWidgetInstanceActions({ editInputs, onRename: beginRename }),
         frame: props.actions.filter((action) => !isRemoval(action)),
-        definition: buildWidgetDefinitionActions({ onAbout: definition.about }),
+        definition: buildWidgetDefinitionActions({ onAbout: definition.about, onAddTo: definition.addTo }),
         remove: props.actions.filter(isRemoval),
-    }), [beginRename, definition.about, editInputs, props.actions]);
+    }), [beginRename, definition.about, definition.addTo, editInputs, props.actions]);
     const view = React.useMemo<SessionCompanionInstanceView>(() => ({
         titleEditor: renaming.field,
         ...(inputs.onRepairInputs ? { onRepairInputs: inputs.onRepairInputs } : {}),

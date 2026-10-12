@@ -1,4 +1,9 @@
 import * as React from 'react';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBinding, useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useAtmosphereBandBoundary } from '@/components/atmosphere/atmosphereBandBoundary';
+import { useAtmosphereSendSignal } from '@/components/atmosphere/atmosphereStage';
+import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { resolveRequestedSessionModeId } from '@happier-dev/protocol/actions/sessionModeIds';
 import { Platform, ScrollView, View, useWindowDimensions, type View as RNView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -34,7 +39,7 @@ import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getRes
 import { InstallableDepInstaller, type InstallableDepInstallerProps } from '@/components/machines/InstallableDepInstaller';
 import { Text } from '@/components/ui/text/Text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { machineMetadataPlatformToTarget } from '@/utils/path/machinePlatform';
 import {
     resolveDirectoryFavoriteComparisonKey,
@@ -288,6 +293,13 @@ function countVisibleWizardSavedPathRows(params: Readonly<{
 }
 
 export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewSessionWizardProps) {
+    const atmosphereBoundary = useAtmosphereBandBoundary();
+    useAtmosphereSendSignal(Boolean(atmosphereBoundary) && props.footer.isCreating);
+    const onComposerFocusChange = React.useCallback((focused: boolean) => {
+        props.footer.composerDocument?.onComposerFocusChange?.(focused);
+        atmosphereBoundary?.onFocusChange(focused);
+    }, [atmosphereBoundary, props.footer.composerDocument]);
+    const materialColor = useHappierMaterialColorResolver('content');
     const {
         theme,
         styles,
@@ -483,10 +495,14 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         favoriteDirectories,
         setFavoriteDirectories,
     } = props.machine;
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const { binding } = useServerCredentialAccountScopeBinding(serverId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
+    const scopesByServerId = useServerCredentialAccountScopeBindings((machineGroups ?? [{ serverId }]).map(group => group.serverId));
     const selectedMachineIsOffline = React.useMemo(() => {
         if (!selectedMachine) return false;
-        return !isMachineOnline(selectedMachine);
-    }, [selectedMachine]);
+        return !isMachineReachable(scope, selectedMachine);
+    }, [reachabilityRevision, selectedMachine, scope]);
     const selectedMachineHomeDir = selectedMachine?.metadata?.homeDir || '/home';
     const favoriteDirectoryKeys = React.useMemo(() => new Set(
         favoriteDirectories.map((path) =>
@@ -550,6 +566,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
     // single-Home list they render, so adaptive presentation never counts a different set.
     const destinationRowCount = React.useMemo(() => buildMachineDestinationModel({
         purpose: 'session',
+        scopesByServerId,
         groups: machineGroups ?? [{
             serverId: serverId ?? '',
             machines,
@@ -568,6 +585,8 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         recentMachines,
         serverId,
         temporaryComputerProjection,
+        reachabilityRevision,
+        scopesByServerId,
     ]);
     const machinePresentation = resolveWizardAdaptivePresentation(
         sectionPresentation.machines,
@@ -598,12 +617,13 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
     const defaultBorderColor = theme.colors.border?.default ?? theme.colors.divider;
     const canvasBackgroundColor = theme.colors.background?.canvas
         ?? theme.colors.groupped?.background
-        ?? theme.colors.input?.background;
+        ?? theme.colors.input?.background
+        ?? theme.colors.surface.base;
 
     const shellStyle = [
         styles.container,
         {
-            backgroundColor: canvasBackgroundColor,
+            backgroundColor: materialColor(canvasBackgroundColor, 'transparent'),
             justifyContent: shouldBottomAnchor ? 'flex-end' : 'center',
             ...(shouldBottomAnchor ? { paddingTop: 0 } : {}),
         },
@@ -670,7 +690,8 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                     }}
                                 />
                             ) : null}
-                            <View style={{ paddingHorizontal: newSessionSidePadding, width: '100%', alignSelf: 'stretch' }}>
+                            <View ref={atmosphereBoundary?.ref} onLayout={atmosphereBoundary?.onLayout}
+                                style={{ paddingHorizontal: newSessionSidePadding, width: '100%', alignSelf: 'stretch' }}>
                                 <View style={{ maxWidth: layout.maxWidth, width: '100%', alignSelf: 'center' }}>
                                     <NewSessionProviderLaunchError
                                         error={props.footer.providerLaunchError}
@@ -698,7 +719,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         onChangeText={setSessionPrompt}
                                         structuredInputMentions={props.footer.composerDocument?.structuredInputMentions}
                                         onStructuredInputMentionsChange={props.footer.composerDocument?.onStructuredInputMentionsChange}
-                                        onComposerFocusChange={props.footer.composerDocument?.onComposerFocusChange}
+                                        onComposerFocusChange={onComposerFocusChange}
                                         onComposerFocusRequestChange={props.footer.composerDocument?.onComposerFocusRequestChange}
                                         onPromptPickerOpenRequestChange={props.footer.composerDocument?.onPromptPickerOpenRequestChange}
                                         composerRef={props.footer.composerDocument?.ref}

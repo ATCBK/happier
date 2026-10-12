@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 
 import type { ServerScopedMachinePoolGroup } from '@/components/sessions/new/components/machineSelection/useMachineSelectionListModel';
 import { useMachinePoolProjections } from '@/sync/engine/machines/useMachinePoolProjections';
@@ -23,7 +25,7 @@ export function useMachinePoolGroups(
     return React.useMemo(() => projections.map((projection, index) => ({
         serverId: projection.serverId,
         accountId: projection.accountId,
-        serverName: machineGroups[index]?.serverName ?? projection.serverId,
+        serverName: machineGroups[index]?.serverName ?? resolveHomeDisplayLabel(getServerProfileById(projection.serverId), projection.serverId),
         pools: projection.pools,
         featureStatus: projection.featureStatus,
         // Feature discovery is part of this same Home projection's currentness. Retained rows stay

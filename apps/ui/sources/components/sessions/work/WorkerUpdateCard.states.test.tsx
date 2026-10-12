@@ -1,21 +1,24 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkerUpdateV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import {
     createSessionFixture, createSessionMessagesFixture, createTestSessionTranscriptSource,
-    renderWithSessionTranscriptSource, type RenderScreenResult,
+    renderWithSessionTranscriptSource, renderScreen, type RenderScreenResult,
 } from '@/dev/testkit';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 import { t } from '@/text';
 
 import { WorkerUpdateCard } from './WorkerUpdateCard';
+import type { Message } from '@happier-dev/session-core/messages';
+import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
 
 // External enriched-markdown animation SDK: these cards use plain, still text.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
@@ -39,22 +42,112 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', a
 
 const initialState = storage.getState();
 let screen: RenderScreenResult | null = null;
+let home: Awaited<ReturnType<typeof serveSessionActionHome>>;
+beforeEach(async () => { home = await serveSessionActionHome(); });
 afterEach(async () => {
     await screen?.unmount();
     screen = null;
+    home.dispose();
     act(() => storage.setState(initialState));
     sessionRpcTransport.mockClear();
 });
 
 async function renderCard(update: WorkerUpdateV1, serverId: string, navigate: (href: string) => void = () => {}) {
-    const source = createTestSessionTranscriptSource({ sessionId: 'lead', serverId, navigate });
-    screen = await renderWithSessionTranscriptSource(<WorkerUpdateCard update={update} serverId={serverId} at={Date.now() - 3 * 60_000} />, source);
+    const source = createTestSessionTranscriptSource({ sessionId: 'lead', serverId, navigate, messages: [workerMessage('update', update)] });
+    screen = await renderWithSessionTranscriptSource(<WorkerUpdateCard update={update} messageId="update" serverId={serverId} at={Date.now() - 3 * 60_000} />, source);
     return screen;
 }
 
+type WorkerMessage = Extract<Message, { kind: 'agent-event' }>;
+function workerMessage(id: string, update: WorkerUpdateV1): WorkerMessage {
+    return { kind: 'agent-event', id, localId: id, createdAt: 1, event: { type: 'worker-update', update } };
+}
+
 describe('WorkerUpdateCard states (lab cards-T1/T2)', () => {
+    it('keeps historical results while only the latest update for each worker answers its current request', async () => {
+        const serverId = getActiveServerSnapshot().serverId;
+        const lead = createSessionFixture({ id: 'lead', serverId, active: true });
+        let worker = createSessionFixture({ id: 'worker', serverId, active: true,
+            metadata: { path: '/project', host: 'tester.local', homeDir: '/Users/tester', machineId: 'machine-1', flavor: 'claude' },
+            pendingPermissionRequestCount: 1, pendingRequestObservedAt: Date.now(),
+            agentState: { requests: { first: { tool: 'Bash', arguments: { command: 'first command' }, createdAt: 1 } } },
+        });
+        const other = createSessionFixture({ id: 'other', serverId, active: true,
+            metadata: { path: '/project', host: 'tester.local', homeDir: '/Users/tester', machineId: 'machine-1', flavor: 'claude' },
+            pendingPermissionRequestCount: 1, pendingRequestObservedAt: Date.now(),
+            agentState: { requests: { other: { tool: 'Bash', arguments: { command: 'other worker command' }, createdAt: 1 } } },
+        });
+        const update = (result: string, workerId = worker.id): WorkerUpdateV1 => ({
+            v: 1, workerKind: 'session', workerId, ownerState: 'needs_input', wake: 'needs_you',
+            headline: 'Worker question', result, canInspect: true, transcriptPointer: { kind: 'session', sessionId: workerId },
+        });
+        const first = workerMessage('first-update', update('First result'));
+        const second = workerMessage('second-update', update('Later result'));
+        const otherMessage = workerMessage('other-update', update('Other result', other.id));
+        const publish = (messages: readonly WorkerMessage[]) => act(() => {
+            storage.getState().applySessions([lead, worker, other]);
+            storage.setState({ sessionMessages: { ...storage.getState().sessionMessages,
+                [lead.id]: createSessionMessagesFixture({ isLoaded: true, messageIdsOldestFirst: messages.map(message => message.id),
+                    messagesById: Object.fromEntries(messages.map(message => [message.id, message])), messagesVersion: messages.length }),
+                [worker.id]: createSessionMessagesFixture({ isLoaded: true }),
+                [other.id]: createSessionMessagesFixture({ isLoaded: true }),
+            } });
+        });
+        const rows = (messages: readonly WorkerMessage[]) => <AppSessionTranscriptSourceProvider sessionId={lead.id} serverId={serverId}>
+            {messages.map(message => <TranscriptEventRow key={message.id} messageId={message.id} event={message.event} sessionId={lead.id}
+                serverId={serverId} localId={message.localId} createdAt={message.createdAt} />)}
+        </AppSessionTranscriptSourceProvider>;
+        publish([first]);
+        screen = await renderScreen(rows([first]));
+        expect(screen.findByTestId('worker-update-answers'), screen.getTextContent()).not.toBeNull();
+        expect(screen.findByTestId('permission-footer.allow'), screen.getTextContent()).not.toBeNull();
+        await screen.pressByTestIdAsync('permission-footer.allow');
+        await vi.waitFor(() => expect(sessionRpcTransport).toHaveBeenLastCalledWith(expect.objectContaining({
+            sessionId: worker.id, method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
+            payload: { id: 'first', approved: true },
+        })));
+        worker = { ...worker, agentStateVersion: worker.agentStateVersion + 1, pendingPermissionRequestCount: 0,
+            agentState: { requests: {} } };
+        publish([first]);
+        expect(screen.findByTestId('worker-update-answers')).toBeNull();
+        worker = { ...worker, agentStateVersion: worker.agentStateVersion + 1, pendingPermissionRequestCount: 1,
+            agentState: { requests: { second: { tool: 'Bash', arguments: { command: 'different command' }, createdAt: 2 } } } };
+        publish([first, second, otherMessage]);
+        await screen.update(rows([first, second, otherMessage]));
+        const cards = screen.findAll(node => node.type === WorkerUpdateCard);
+        expect(cards).toHaveLength(3);
+        const answersIn = (card: typeof cards[number]) => card.findAll(node => node.props.testID === 'worker-update-answers' && typeof node.type === 'string');
+        expect(answersIn(cards[0])).toHaveLength(0);
+        expect(answersIn(cards[1])).toHaveLength(1);
+        expect(answersIn(cards[2])).toHaveLength(1);
+        expect(screen.getTextContent()).toContain('First result');
+        expect(screen.getTextContent()).toContain('Later result');
+        expect(screen.getTextContent()).toContain('different command');
+    });
+
+    it('does not borrow current answer eligibility from another Home or a historical window with newer rows missing', async () => {
+        const serverId = getActiveServerSnapshot().serverId;
+        const worker = createSessionFixture({ id: 'worker-window', serverId, active: true,
+            pendingPermissionRequestCount: 1, pendingRequestObservedAt: Date.now(),
+            agentState: { requests: { current: { tool: 'Bash', arguments: { command: 'current command' }, createdAt: 1 } } },
+        });
+        storage.getState().applySessions([worker]);
+        const update: WorkerUpdateV1 = { v: 1, workerKind: 'session', workerId: worker.id,
+            ownerState: 'needs_input', wake: 'needs_you', headline: 'Historical question', result: 'Retained result', canInspect: true };
+        for (const source of [
+            createTestSessionTranscriptSource({ sessionId: 'lead', serverId: 'another-home', messages: [workerMessage('old', update)] }),
+            createTestSessionTranscriptSource({ sessionId: 'lead', serverId, messages: [workerMessage('old', update)],
+                history: { useState: () => ({ isLoaded: true, hasOlder: true, isLoadingOlder: false, hasNewer: true }) } }),
+        ]) {
+            screen = await renderWithSessionTranscriptSource(<WorkerUpdateCard update={update} messageId="old" serverId={serverId} />, source);
+            expect(screen.findByTestId('worker-update-answers')).toBeNull();
+            expect(screen.getTextContent()).toContain('Retained result');
+            await screen.unmount();
+            screen = null;
+        }
+    });
+
     it('answers a waiting worker on its needs-you card, through that worker session\'s own approval custody', async () => {
-        await loadSyncSingletonForTests();
         const serverId = getActiveServerSnapshot().serverId;
         const worker = createSessionFixture({
             id: 'worker-needs-you', serverId, active: true,
@@ -83,7 +176,6 @@ describe('WorkerUpdateCard states (lab cards-T1/T2)', () => {
     });
 
     it('shows no answer controls on a healthy card or once nothing is waiting, and keeps one quiet way in', async () => {
-        await loadSyncSingletonForTests();
         const serverId = getActiveServerSnapshot().serverId;
         const worker = createSessionFixture({ id: 'worker-settled', serverId, active: true, agentState: { requests: {} } });
         storage.getState().applySessions([worker]);

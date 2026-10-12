@@ -5,6 +5,8 @@ import type { ConfiguredWidgetTargetResolution } from '@/sync/domains/widgets/wi
 import { UnavailableInstalledWidget } from '@/components/widgets/InstalledWidgetSurface';
 import { ProjectBuiltinWidgetBody } from '@/components/projects/widgets/ProjectBuiltinWidgetBody';
 import { UsageWidgetBody, isUsageBuiltinWidgetId } from '@/components/settings/usage/widgets/UsageWidgetBody';
+import { YourHomeWidgetBody } from '@/components/hub/yourHome/YourHomeWidgetBody';
+import { MachineWidgetBody, isMachineBuiltinWidgetId } from '@/components/machines/widgets/MachineWidgetBody';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { createAppSessionTranscriptActions } from '@/components/sessions/transcript/source/appSessionTranscriptActions';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
@@ -28,6 +30,11 @@ export function BuiltinWidgetBody(props: Readonly<{ id: BuiltinWidgetIdV1;
     // App reads: Usage definitions resolve no Session/Workspace target; their admitted input is the query.
     if (props.target.kind === 'app' && isUsageBuiltinWidgetId(props.id)) return <UsageWidgetBody id={props.id}
         input={props.input} serverId={props.serverId} testID={props.testID} />;
+    // Machine widgets: App reads whose admitted input names the machine (or, Activity, all machines).
+    if (props.target.kind === 'app' && isMachineBuiltinWidgetId(props.id)) return <MachineWidgetBody id={props.id}
+        input={props.input} serverId={props.serverId} testID={props.testID} />;
+    // The active Home's machines and sessions: an App read with no inputs.
+    if (props.target.kind === 'app' && props.id === 'your_home') return <YourHomeWidgetBody testID={props.testID} />;
     if (props.target.kind === 'workspace') return <ProjectBuiltinWidgetBody id={props.id}
         workspace={props.target.workspace} checkout={props.target.checkout} testID={props.testID} />;
     if (props.target.kind !== 'session' || !props.target.session) return <UnavailableInstalledWidget

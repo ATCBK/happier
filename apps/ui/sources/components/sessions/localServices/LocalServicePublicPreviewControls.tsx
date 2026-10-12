@@ -37,6 +37,7 @@ import {
     resolveLocalServicePublicPreviewCreateDisabledSubtitle,
 } from '@/sync/domains/local/services/publicPreview/presentation';
 import { t } from '@/text';
+import { isActionApprovalRequiredForHome } from '@/sync/domains/settings/actionsSettings';
 
 import { useLocalServiceActionRunner, type LocalServiceActionRunner } from './localServiceActionOutcome';
 import type { LocalServiceCapabilityDisabledReasons } from './useLocalServicePublicPreviewFeature';
@@ -305,12 +306,22 @@ async function requestPublicLink(input: Readonly<{
     actions: LocalServicePublicPreviewActions;
     run: LocalServiceActionRunner['run'];
 }>): Promise<void> {
-    const decision = await showLocalServiceExposureSheet({
+    let confirmationRequired: boolean;
+    try {
+        confirmationRequired = await isActionApprovalRequiredForHome('localServices.publicPreview.create', { surface: 'ui' }, input.actions.serverId);
+    } catch (error) {
+        await input.run({ id: `create:${input.target.previewId}`, failureTitle: t('localServices.actions.failureTitle.expose'),
+            action: async () => { throw error; } });
+        return;
+    }
+    const decision = confirmationRequired ? await showLocalServiceExposureSheet({
         serviceTitle: input.target.title,
         modeChoices: input.modeChoices,
         ttlChoices: input.ttlChoices,
         testIDPrefix: `local-service-exposure-sheet:${input.target.previewId}`,
-    });
+    }) : input.modeChoices[0] && input.ttlChoices[0]
+        ? { mode: input.modeChoices[0].mode, ttlMs: input.ttlChoices[0].ttlMs }
+        : null;
     if (!decision) return;
     await input.run({
         id: `create:${input.target.previewId}`,
@@ -510,7 +521,15 @@ function ExposureRow(props: Readonly<{
 
     const onRevoke = React.useCallback(() => {
         void (async () => {
-            const confirmed = await Modal.confirm(
+            let confirmationRequired: boolean;
+            try {
+                confirmationRequired = await isActionApprovalRequiredForHome('localServices.publicPreview.revoke', { surface: 'ui' }, props.actions.serverId);
+            } catch (error) {
+                await props.runAction({ id: `exposure:${exposure.exposureId}`, failureTitle: t('localServices.actions.failureTitle.revokeExposure'),
+                    action: async () => { throw error; } });
+                return;
+            }
+            const confirmed = !confirmationRequired || await Modal.confirm(
                 t('localServices.publicPreview.revokeConfirmTitle'),
                 t('localServices.publicPreview.revokeConfirmMessage', { url: maskPublicUrl(exposure.publicUrl) }),
                 { confirmText: t('localServices.publicPreview.revokeConfirmCta'), destructive: true },

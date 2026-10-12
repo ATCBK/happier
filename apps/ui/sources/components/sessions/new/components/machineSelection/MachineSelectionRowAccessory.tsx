@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { MachineSummaryStrip } from '@/components/machines/summary/MachineSummaryStrip';
+import { useMachineResourceSummary } from '@/sync/domains/machines/resources/useMachineResourceSummary';
 import { Platform, Pressable, View, type GestureResponderEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -7,10 +9,14 @@ import { MachineCliGlyphs } from '@/components/sessions/new/components/MachineCl
 import { t } from '@/text';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
 import { resolveMachinePickerPresence } from '../resolveMachinePickerPresence';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { SelectionListOptionStateContext } from '@/components/ui/selectionList/SelectionListOptionStateContext';
 import { Icon } from '@/components/ui/icons/Icon';
+import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { useManagedProvisionerPresentation } from '@/components/settings/machines/managed/useManagedProvisionerPresentation';
+import { useThisComputerMachineId } from '@/components/machines/add/useMachineAddPaths';
 
 type AccessoryPressEvent = Partial<GestureResponderEvent> & {
     nativeEvent?: GestureResponderEvent['nativeEvent'] & {
@@ -24,10 +30,13 @@ type AccessoryPressEvent = Partial<GestureResponderEvent> & {
  */
 export function MachinePresenceDot(props: Readonly<{
     machine: MachineDisplayRenderable;
+    serverId?: string | null;
     readinessTestID?: string;
-}>): React.ReactElement {
+}>): React.ReactElement | null {
     const { theme } = useUnistyles();
-    const presence = resolveMachinePickerPresence(props.machine);
+    const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+    if (props.machine.presence === null) return null;
+    const presence = resolveMachinePickerPresence(props.machine, undefined, binding?.isCurrent() ? binding.scope : null);
     const readinessState = presence.selectable ? 'ready' : presence.status;
     return (
         <View
@@ -41,6 +50,38 @@ export function MachinePresenceDot(props: Readonly<{
                 color={presence.selectable ? theme.colors.status.connected : theme.colors.status.disconnected}
             />
         </View>
+    );
+}
+
+/** The provider's own mark for a machine Happier created, read like its page header reads it. */
+function ManagedMachineRowMark(props: Readonly<{ machine: ManagedMachineV1; serverId: string; size: number }>): React.ReactElement {
+    const presentation = useManagedProvisionerPresentation({ serverId: props.serverId, controller: props.machine.controller,
+        provider: props.machine.launch.provider, schemaVersion: props.machine.launch.schemaVersion });
+    return <>{presentation.markAt(props.size)}</>;
+}
+
+/**
+ * A machine row's leading mark (lab m-pick): the provider's mark for a machine Happier created, a
+ * laptop for this computer, and the device glyph for every other machine.
+ */
+export function MachineRowMark(props: Readonly<{
+    machineId: string;
+    serverId: string;
+    managedMachine?: ManagedMachineV1;
+    size: number;
+    color?: string;
+}>): React.ReactElement {
+    const { theme } = useUnistyles();
+    const thisComputerMachineId = useThisComputerMachineId();
+    if (props.managedMachine) {
+        return <ManagedMachineRowMark machine={props.managedMachine} serverId={props.serverId} size={props.size} />;
+    }
+    return (
+        <Icon
+            name={props.machineId === thisComputerMachineId ? 'laptop' : 'desktop'}
+            size={props.size}
+            color={props.color ?? theme.colors.text.secondary}
+        />
     );
 }
 
@@ -68,6 +109,15 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
+/** The held summary's memory fact for one machine; renders nothing until a summary is held. */
+const MachineMemoryFact = React.memo(function MachineMemoryFact(props: Readonly<{ machineId: string; serverId: string | null }>) {
+    const availability = useMachineResourceSummary({ machineId: props.machineId, serverId: props.serverId });
+    return <MachineSummaryStrip availability={availability} style="numbers" metrics={MEMORY_ONLY} layout="fact"
+        testID={`machine-selection-memory:${props.machineId}`} />;
+});
+
+const MEMORY_ONLY = ['memory'] as const;
+
 export function MachineSelectionRowAccessory<TMachine extends MachineDisplayRenderable = Machine>(
     props: MachineSelectionRowAccessoryProps<TMachine>,
 ): React.ReactElement | null {
@@ -81,16 +131,23 @@ export function MachineSelectionRowAccessory<TMachine extends MachineDisplayRend
         props.onToggleFavorite?.(props.machine);
     }, [props]);
 
-    const showFavoriteToggle = props.showFavoriteToggle && props.onToggleFavorite !== undefined;
-    if (!props.showCliGlyphs && !showFavoriteToggle) return null;
+    // On web the star stays out of the way until the person reaches the row (lab m-pick: no per-row star
+    // noise); a favorite keeps its filled star. Touch has no pointer to reach a row with, so it keeps the star.
+    const rowState = React.useContext(SelectionListOptionStateContext);
+    const reached = Platform.OS !== 'web' || props.isFavorite || rowState === null || rowState.hovered || rowState.focused;
+    const showFavoriteToggle = props.showFavoriteToggle && props.onToggleFavorite !== undefined && reached;
+    const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+    const online = resolveMachinePickerPresence(props.machine, undefined, binding?.isCurrent() ? binding.scope : null).selectable;
 
     return (
         <View style={styles.container}>
+            {/* MPG-35: the memory a reporting machine has free (or its pressure word in tone), from the held summary. */}
+            {online ? <MachineMemoryFact machineId={props.machine.id} serverId={props.serverId ?? null} /> : null}
             {props.showCliGlyphs ? (
                 <MachineCliGlyphs
                     machineId={props.machine.id}
                     serverId={props.serverId}
-                    isOnline={isMachineOnline(props.machine)}
+                    isOnline={online}
                     autoDetect={props.autoDetectCliGlyphs}
                 />
             ) : null}

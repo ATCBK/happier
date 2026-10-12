@@ -1,8 +1,11 @@
 import { DEFAULT_HAPPIER_CLOUD_SERVER_URL } from '@happier-dev/cli-common/happierCloud';
+import { resolveHomeDisplayLabel, type HomeDisplayProfile } from '@/components/settings/server/homeDisplayName';
 
 import { resolveHomeTargetSummary } from '@/components/navigation/connectionStatus/resolveHomeConnectionSummary';
 import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { computeMachinesSummary, type MachinesSummary } from './computeMachinesSummary';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 export { computeMachinesSummary, type MachinesSummary } from './computeMachinesSummary';
 
@@ -40,21 +43,16 @@ export function computeSessionGettingStartedDecision(params: Readonly<{
 export type SessionGettingStartedViewModelInput = Readonly<{
     sessionsReady: boolean;
     sessionCount: number;
-    activeMachines: ReadonlyArray<Readonly<{ active: boolean; revokedAt?: number | null }>>;
+    accountScopesByServerId?: ReadonlyMap<string, MachineReachabilityScope>;
+    activeMachines: ReadonlyArray<Parameters<typeof isMachineSelectableForFleet>[1]>;
     selection: Readonly<{
         activeTarget: Readonly<{ kind: 'server' | 'group'; id: string; groupId?: string }>;
         activeServerId: string;
         allowedServerIds: ReadonlyArray<string>;
     }>;
     serverSelectionGroups: ReadonlyArray<Readonly<{ id: string; name: string }>> | null | undefined;
-    activeServerProfile: Readonly<{
-        id: string;
-        name: string;
-        serverUrl: string;
-        serverIdentityId?: string | null;
-        legacyServerIds?: readonly string[];
-    }>;
-    machineListByServerId: Readonly<Record<string, ReadonlyArray<Readonly<{ active: boolean; revokedAt?: number | null }>> | null | undefined>>;
+    activeServerProfile: SessionGettingStartedServerProfile;
+    machineListByServerId: Readonly<Record<string, SessionGettingStartedViewModelInput['activeMachines'] | null | undefined>>;
     /** Each Home's machine-list status: the per-Home reachability fact the Homes status also reads. */
     machineListStatusByServerId?: Readonly<Record<string, MachineListStatus | undefined>>;
 }>;
@@ -70,15 +68,12 @@ export type SessionGettingStartedViewModel = Readonly<{
     showServerSetup: boolean;
 }>;
 
-type SessionGettingStartedServerProfile = Readonly<{
-    id: string;
-    name: string;
-    serverUrl: string;
-    serverIdentityId?: string | null;
+type SessionGettingStartedServerProfile = Readonly<HomeDisplayProfile & {
     legacyServerIds?: readonly string[];
 }>;
 
 export type SessionGettingStartedMachinesInput = Readonly<{
+    accountScopesByServerId?: ReadonlyMap<string, MachineReachabilityScope>;
     activeMachines: SessionGettingStartedViewModelInput['activeMachines'];
     selection: SessionGettingStartedViewModelInput['selection'];
     activeServerProfile?: SessionGettingStartedViewModelInput['activeServerProfile'] | null;
@@ -130,14 +125,12 @@ export function resolveActiveServerProfile(
     const match = directMatch ?? aliasMatch ?? serverProfiles[0] ?? null;
     if (match) {
         return {
-            id: match.id,
-            name: match.name,
-            serverUrl: match.serverUrl,
+            ...match,
             serverIdentityId: match.serverIdentityId ?? null,
             legacyServerIds: match.legacyServerIds ?? [],
         };
     }
-    return { id: activeServerId, name: activeServerId || 'server', serverUrl: '' };
+    return { id: activeServerId, name: resolveHomeDisplayLabel(null, activeServerId), serverUrl: '' };
 }
 
 function resolveTargetLabel(input: SessionGettingStartedViewModelInput, activeServerName: string): string {
@@ -189,14 +182,14 @@ export function resolveSessionGettingStartedMachinesSummary(input: SessionGettin
         if (!machines) {
             return { machineCount: null, onlineCount: null };
         }
-        const online = machines.filter((m) => m.active === true).length;
+        const online = machines.filter((machine) => isMachineSelectableForFleet(input.accountScopesByServerId?.get(serverId), machine)).length;
         return { machineCount: machines.length, onlineCount: online };
     });
     const selectedMachines = computeMachinesSummary(perServer);
     const activeServerSummary = activeServerMachines
         ? {
             machineCount: activeServerMachines.length,
-            onlineCount: activeServerMachines.filter((machine) => machine.active === true).length,
+            onlineCount: activeServerMachines.filter((machine) => isMachineSelectableForFleet(input.accountScopesByServerId?.get(input.selection.activeServerId), machine)).length,
         }
         : null;
     if (selectedServerIds.length === 0 && unavailableServerIds.length > 0) {
@@ -222,7 +215,8 @@ export function resolveSessionGettingStartedMachinesSummary(input: SessionGettin
 
 export function buildSessionGettingStartedViewModel(input: SessionGettingStartedViewModelInput): SessionGettingStartedViewModel {
     const activeProfile = input.activeServerProfile;
-    const targetLabel = resolveTargetLabel(input, activeProfile.name);
+    const serverName = resolveHomeDisplayLabel(activeProfile, activeProfile.id);
+    const targetLabel = resolveTargetLabel(input, serverName);
     const machines = resolveSessionGettingStartedMachinesSummary(input);
 
     const kind = computeSessionGettingStartedDecision({
@@ -238,7 +232,7 @@ export function buildSessionGettingStartedViewModel(input: SessionGettingStarted
         unavailableServerIds: machines.unavailableServerIds,
         targetLabel,
         serverId: activeProfile.id,
-        serverName: activeProfile.name,
+        serverName,
         serverUrl: activeProfile.serverUrl,
         showServerSetup,
     };

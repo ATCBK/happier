@@ -159,6 +159,7 @@ function controller(items: readonly SessionCompanionItemRefV1[]): SessionCompani
         moveItem,
         setItemFrameStyle: () => null,
         setInstanceInputs: () => null,
+        setInstanceNetwork: () => null,
         renameInstance: () => null,
         openFullSurface: () => {},
         applyLocalInverse,

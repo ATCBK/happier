@@ -11,7 +11,8 @@ import {
   createProviderSettingsAccountHarness,
 } from '@/dev/testkit/harness/providerSettingsHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { SelectionList } from '@/components/ui/selectionList/SelectionList';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { t } from '@/text';
 import { sessionModelSelectionKey } from './sessionModelSelectionKey';
 
 const { describeProviderModels, projectionRequests } = vi.hoisted(() => ({
@@ -36,6 +37,8 @@ vi.mock(
 
 const AGENT = 'agent:happier.agent.codex/codex';
 const account = createProviderSettingsAccountHarness();
+const { SelectionList } = await import('@/components/ui/selectionList/SelectionList');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 let serverId = '';
 
 function gatewayRow(modelId: string, name: string) {
@@ -65,6 +68,7 @@ function gatewayRow(modelId: string, name: string) {
 
 const { SessionModelPicker } = await import('./SessionModelPicker');
 const { SessionModelSourceBrowseHandoffContext } = await import('./SessionModelSourceBrowseHandoff');
+const { NewSessionConnectedServicesSelectionContent } = await import('@/components/sessions/new/components/NewSessionConnectedServicesSelectionContent');
 await loadSyncSingletonForTests();
 
 afterEach(async () => {
@@ -80,6 +84,78 @@ beforeEach(async () => {
 });
 
 describe('SessionModelPicker source browsing', () => {
+  it('hands off the composer native row once for its exact Agent without changing service bindings', async () => {
+    const browse = vi.fn();
+    const setBindingForService = vi.fn();
+    const nativeAgentTargetKey = 'agent:acme.agent/reviewer';
+    const token = account.home.findByServerUrl('https://provider-settings-account.test')?.token;
+    if (!token) throw new Error('Expected the admitted synthetic Account credentials');
+    const screen = await renderScreen(
+      <InjectedAuthProvider credentials={{ token }}>
+      <SessionModelSourceBrowseHandoffContext.Provider value={{ request: null, browse }}>
+        <NewSessionConnectedServicesSelectionContent
+          nativeAgentTargetKey={nativeAgentTargetKey}
+          appliedRoute={{ kind: 'native', sourceLabel: 'Own sign-in', authSource: 'native', connectedCount: 0, modelId: null }}
+          supportedServiceIds={['acme.service/subscription', 'acme.service/api-key']}
+          profileOptionsByServiceId={{}}
+          groupOptionsByServiceId={{}}
+          bindingsByServiceId={{}}
+          setBindingForService={setBindingForService}
+          onOpenSettings={() => {}}
+          maxHeight={420}
+        />
+      </SessionModelSourceBrowseHandoffContext.Provider>
+      </InjectedAuthProvider>,
+    );
+    const list = screen.findByType(SelectionList);
+    const options = list.props.rootStep.sections.flatMap((section: { options: { id: string; onSelect?: () => void }[] }) => section.options);
+    const nativeRows = options.filter((option: { id: string }) => option.id.startsWith('route-source:native:'));
+    expect(nativeRows).toHaveLength(1);
+    expect(list.props.selectedOptionId).toBe(nativeRows[0].id);
+    await act(async () => { nativeRows[0].onSelect(); });
+    expect(browse).toHaveBeenCalledWith(nativeAgentTargetKey, {
+      connectionId: null, label: t('connectedServices.authModal.nativeAuthTitle'),
+    });
+    expect(setBindingForService).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('browses the exact Agent native models without a Provider request or committing until a model is picked (Provider browsing %s)', async (providerBrowsing) => {
+    const onSelect = vi.fn();
+    const nativeRef = { agentTargetKey: AGENT, providerConnectionId: null, modelId: 'gpt-6.1-sol' };
+    const screen = await renderScreen(
+      <SessionModelSourceBrowseHandoffContext.Provider value={{
+        request: { agentTargetKey: AGENT, scope: { connectionId: null, label: 'Codex' }, key: 1 },
+        browse: () => {},
+      }}>
+        <SessionModelPicker
+          agentTargetKey={AGENT}
+          nativeModels={[{ value: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' }]}
+          providerGroups={[createProviderModelProjectionGroupFixture({
+            connectionId: 'pc_gateway', rows: [gatewayRow('fable-5.1', 'Fable 5.1')],
+          })]}
+          providerProjectionAuthoritative
+          selected={{ agentTargetKey: AGENT, providerConnectionId: 'pc_gateway', modelId: 'fable-5.1' }}
+          effectiveLabel="Fable 5.1"
+          sourceBrowse={providerBrowsing ? { machineId: 'machine-a', serverId } : undefined}
+          favoriteEntries={[{ ref: { agentTargetKey: AGENT, providerConnectionId: 'pc_gateway', modelId: 'fable-5.1' }, label: 'Fable 5.1' }]}
+          onSelect={onSelect}
+        />
+      </SessionModelSourceBrowseHandoffContext.Provider>,
+    );
+    await flushHookEffects();
+    expect(projectionRequests).toHaveLength(0);
+    expect(screen.findByTestId('model-picker-source-scope')).not.toBeNull();
+    const list = screen.findByType(SelectionList);
+    const options = list.props.rootStep.sections.flatMap((section: { options: { id: string; label: string }[] }) => section.options);
+    expect(options.map((option: { label: string }) => option.label)).toEqual(['GPT-6.1 Sol']);
+    expect(onSelect).not.toHaveBeenCalled();
+    await act(async () => { list.props.onSelect(options[0].id); });
+    expect(onSelect).toHaveBeenCalledWith(nativeRef);
+    await act(async () => { screen.findByTestId('model-picker-source-scope-back')!.props.onPress(); });
+    expect(screen.findByTestId('model-picker-source-scope')).toBeNull();
+    expect(screen.getTextContent()).toContain('Fable 5.1');
+  });
+
   it('reaches a source hidden from the picker, browses it in place, and commits only a picked model', async () => {
     describeProviderModels.mockResolvedValue(
       createProviderModelProjectionFixture({
@@ -143,7 +219,7 @@ describe('SessionModelPicker source browsing', () => {
       currentSelection: selected,
     });
     expect(screen.findByTestId('model-picker-source-scope')).not.toBeNull();
-    expect(screen.getTextContent()).toContain('agentInput.model.hiddenFromMainPicker');
+    expect(screen.getTextContent()).toContain(t('agentInput.model.hiddenFromMainPicker'));
     const optionLabels = () =>
       (
         screen.findByType(SelectionList).props.rootStep
@@ -153,14 +229,19 @@ describe('SessionModelPicker source browsing', () => {
       ).flatMap((section) => section.options.map((option) => option.label));
     // Only the browsed source; the native selection elsewhere is not reported as missing.
     expect(optionLabels()).toEqual(['Fable 5.1', 'Fable 5.2']);
+    // The scope bar already names the one source; its group heading would say it twice.
+    expect((screen.findByType(SelectionList).props.rootStep.sections as ReadonlyArray<{ title?: string }>)
+      .map((section) => section.title)).toEqual([undefined]);
     expect(onSelect).not.toHaveBeenCalled();
-    const favorite = screen.findByTestId(`model-picker-overlay-option-favorite:${sessionModelSelectionKey(favoriteRef)}`);
+    const favoriteTestID = `model-picker-overlay-option-favorite:${sessionModelSelectionKey(favoriteRef)}`;
+    await waitForHomeGovernance(() => expect(screen.findByTestId(favoriteTestID)).not.toBeNull());
+    const favorite = screen.findByTestId(favoriteTestID);
     expect(favorite).not.toBeNull();
-    expect(favorite!.props.accessibilityLabel).toContain('profiles.actions.removeFromFavorites');
+    expect(favorite!.props.accessibilityLabel).toContain(t('profiles.actions.removeFromFavorites'));
     const otherRef = { ...favoriteRef, modelId: 'fable-5.2' };
     const otherFavorite = screen.findByTestId(`model-picker-overlay-option-favorite:${sessionModelSelectionKey(otherRef)}`);
     expect(otherFavorite).not.toBeNull();
-    expect(otherFavorite!.props.accessibilityLabel).toContain('profiles.actions.addToFavorites');
+    expect(otherFavorite!.props.accessibilityLabel).toContain(t('profiles.actions.addToFavorites'));
     await act(async () => { favorite!.props.onPress(); });
     expect(onToggleFavorite).toHaveBeenCalledWith(favoriteRef);
     expect(onSelect).not.toHaveBeenCalled();
@@ -225,6 +306,22 @@ describe('SessionModelPicker source browsing', () => {
     expect(screen.findByTestId('model-picker-hidden-sources')).toBeNull();
   });
 
+  it('drops an old native scope when the Agent changes in the mounted picker', async () => {
+    const picker = (agentTargetKey: string) => <SessionModelSourceBrowseHandoffContext.Provider value={{
+      request: { agentTargetKey: AGENT, scope: { connectionId: null, label: 'Codex' }, key: 1 },
+      browse: () => {},
+    }}>
+      <SessionModelPicker agentTargetKey={agentTargetKey}
+        nativeModels={[{ value: 'native-model', label: 'Native model' }]}
+        providerGroups={[]} providerProjectionAuthoritative selected={null}
+        effectiveLabel="Native model" onSelect={() => {}} />
+    </SessionModelSourceBrowseHandoffContext.Provider>;
+    const screen = await renderScreen(picker(AGENT));
+    expect(screen.findByTestId('model-picker-source-scope')).not.toBeNull();
+    await screen.update(picker('agent:acme.agent/reviewer'));
+    expect(screen.findByTestId('model-picker-source-scope')).toBeNull();
+  });
+
   it('opens on the source "Runs through" asked for, only for the Agent it was asked for, and commits nothing', async () => {
     describeProviderModels.mockResolvedValue(
       createProviderModelProjectionFixture({
@@ -263,7 +360,7 @@ describe('SessionModelPicker source browsing', () => {
     const screen = await renderScreen(picker(AGENT));
     await flushHookEffects();
     expect(screen.findByTestId('model-picker-source-scope')).not.toBeNull();
-    expect(screen.getTextContent()).not.toContain('agentInput.model.hiddenFromMainPicker');
+    expect(screen.getTextContent()).not.toContain(t('agentInput.model.hiddenFromMainPicker'));
     expect(projectionRequests.at(-1)?.payload).toMatchObject({ sourceConnectionId: 'pc_gateway' });
     expect(onSelect).not.toHaveBeenCalled();
     await screen.unmount();

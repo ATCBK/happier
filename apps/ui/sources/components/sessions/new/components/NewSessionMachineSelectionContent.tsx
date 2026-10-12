@@ -1,5 +1,10 @@
 import * as React from 'react';
 import { retryableLazy } from '@/components/ui/performance/retryableLazy';
+import { useMachineResourceLiveDemand } from '@/sync/domains/machines/resources/useMachineResourceLiveDemand';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 import { SelectionList, resolvePopoverSelectionListHeightBehavior } from '@/components/ui/selectionList';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -45,6 +50,10 @@ export type NewSessionMachineSelectionContentProps<TMachine extends MachineDispl
     onSelectManagedMachine?: (draft: ManagedMachineSelectionDraft) => void;
     /** Opens the Machines presets from the managed group's header. */
     onOpenManagedPresets?: () => void;
+    /** Opens the Add a machine flow from the list's last row ("Connect a computer…"). */
+    onConnectMachine?: () => void;
+    /** Called as a preset's or a one-off's configurator opens; a popover host closes itself here. */
+    onConfigureManagedMachine?: () => void;
     onManagedMachineProjection?: (serverId: string, projection: ManagedMachineDestinationProjection) => void;
     poolSelectionStatus?: MachinePoolSelectionStatus;
     onRefreshMachines?: () => void;
@@ -68,6 +77,8 @@ export type NewSessionMachineSelectionContentProps<TMachine extends MachineDispl
 export function NewSessionMachineSelectionContent<TMachine extends MachineDisplayRenderable = Machine>(
     props: NewSessionMachineSelectionContentProps<TMachine>,
 ) {
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const bindings = useServerCredentialAccountScopeBindings(props.groups.map(group => group.serverId));
     const [loadedOffers, setLoadedOffers] = React.useState<Readonly<{
         serverId: string; offers: readonly ManagedMachineSelectionOffer[];
     }> | null>(null);
@@ -78,6 +89,11 @@ export function NewSessionMachineSelectionContent<TMachine extends MachineDispla
         projectionHandler.current?.(serverId, projection);
     }, []);
     const managedMachines = props.managedMachines ?? (loadedOffers?.serverId === props.selectedServerId ? loadedOffers.offers : undefined);
+    // The open picker is a surface that shows each machine's memory fact: one batched live demand while it is open (MPG-35).
+    const demandKeys = React.useMemo(() => props.groups.flatMap(group => group.machines
+        .filter(machine => isMachineReachable(bindings.get(resolveServerProfileScopeIdForIdentifier(group.serverId))?.isCurrent() ? bindings.get(resolveServerProfileScopeIdForIdentifier(group.serverId))?.scope : null, machine))
+        .map(machine => ({ serverId: group.serverId, machineId: machine.id }))), [props.groups, reachabilityRevision, bindings]);
+    useMachineResourceLiveDemand(demandKeys, { detail: 'summary' });
     const listModel = useMachineSelectionListModel<TMachine>({
         purpose: 'session',
         groups: props.groups,
@@ -96,6 +112,7 @@ export function NewSessionMachineSelectionContent<TMachine extends MachineDispla
         selectedManagedMachine: props.selectedManagedMachine,
         onSelectManagedMachine: props.onSelectManagedMachine,
         onOpenManagedPresets: props.onOpenManagedPresets,
+        onConnectMachine: props.onConnectMachine,
         poolSelectionStatus: props.poolSelectionStatus,
         onRefreshMachines: props.onRefreshMachines,
         onRefreshPools: props.onRefreshPools,
@@ -116,7 +133,8 @@ export function NewSessionMachineSelectionContent<TMachine extends MachineDispla
         <>
         {props.managedMachines === undefined && props.selectedServerId && props.onSelectManagedMachine ?
             <React.Suspense fallback={null}><ManagedMachineSelectionOffers key={props.selectedServerId} serverId={props.selectedServerId}
-                onOffers={receiveOffers} onUse={props.onSelectManagedMachine} /></React.Suspense> : null}
+                onOffers={receiveOffers} onUse={props.onSelectManagedMachine}
+                onConfigure={props.onConfigureManagedMachine} /></React.Suspense> : null}
         <SelectionList
             testID={props.testID ?? 'new-session-machine-list'}
             rootStep={listModel.rootStep}
@@ -124,6 +142,9 @@ export function NewSessionMachineSelectionContent<TMachine extends MachineDispla
             onSelect={() => {}}
             onRequestClose={() => {}}
             autoFocusInputOnWeb
+            // In a popover the picker is a transient menu: the shared menu rows (inset, rounded,
+            // menu height), as the composer's other pickers draw theirs. The picker page keeps list rows.
+            optionPresentation={props.maxHeight === undefined ? undefined : 'menu'}
             maxHeight={props.maxHeight}
             heightBehavior={
                 props.maxHeight === undefined

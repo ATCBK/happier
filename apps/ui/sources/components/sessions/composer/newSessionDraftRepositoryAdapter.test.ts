@@ -4,7 +4,9 @@ import { seedNewSessionDraftV1 } from '@/components/sessions/new/newSessionDraft
 import { buildNewSessionDraftLocalState } from '@/sync/ops/sessionDrafts/newSessionDraftLocalState';
 import type { ManagedConfigurationFactsV1 } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
 
-import { SessionInitialTriggerV1Schema, type ComposerAttachmentDraftV1 } from '@happier-dev/protocol';
+import { canonicalSessionDraftAddressV2, SessionInitialTriggerV1Schema, type ComposerAttachmentDraftV1, type SessionDraftDocumentV2 } from '@happier-dev/protocol';
+import { serverAccountScopedStorageKey } from '@/sync/domains/scope/serverAccountScope';
+import { getSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
 import type {
     NewSessionComposerAttachmentSeedV1,
     NewSessionDraft,
@@ -75,6 +77,60 @@ function cataloguedNewSessionAuthoring(
 }
 
 describe('newSessionDraftRepositoryAdapter', () => {
+    it('reopens editor-authored credentials, folder, profile and model through the real authoring adapter', async () => {
+        const draftId = 'editor-credential-round-trip';
+        const targetKey = 'agent:happier.agent.claude/claude';
+        const connectedServices = { v: 2 as const, bindingsByServiceId: {
+            'happier.agent.claude/claude-subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
+        } };
+        const draft = authoringDraft({ agentType: 'claude',
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+            selectedPath: '/repo/authored', selectedProfileId: 'launch-profile',
+            modelSelection: { v: 1, updatedAt: 1, ref: { agentTargetKey: targetKey, providerConnectionId: null, modelId: 'haiku' } },
+            backendNewSessionOptionStateByTargetKey: { [targetKey]: {
+                connectedServicesBindingsByServiceId: connectedServices.bindingsByServiceId,
+            } },
+        });
+        writeNewSessionDraftToRepository({ scope, draftId, draft });
+        await flushSessionDraft({ scope, address: { kind: 'newSession', draftId } });
+        resetSessionDraftRepositoryForTests();
+        const retained = readNewSessionDraftFromRepository({ scope, draftId });
+        if (!retained) throw new Error('Expected retained authoring');
+        expect(buildNewSessionAuthoringDraftFromPersistedDraft(retained)).toMatchObject({
+            connectedServices, directory: draft.selectedPath, profileId: draft.selectedProfileId, modelSelection: draft.modelSelection,
+        });
+        // A configuration handoff consumes the same recovered authoring, rather
+        // than silently producing a native credential seed.
+        const seed = buildNewSessionTempDataFromAuthoringDraft({
+            draft: buildNewSessionAuthoringDraftFromPersistedDraft(retained), machineId: draft.selectedMachineId ?? null,
+        });
+        expect(buildNewSessionAuthoringDraftFromTempData(seed).connectedServices).toEqual(connectedServices);
+    });
+    it('restores retained authoring fields and attachments with unknown nested metadata', () => {
+        const draftId = 'retained-fields';
+        writeNewSessionDraftToRepository({ scope, draftId, draft: authoringDraft({
+            executionTarget: { kind: 'machine', target: { serverId: scope.serverId, machineId: 'machine-b' } },
+            composerAttachments: [attachment],
+        }) });
+        const storage = getSessionDraftPersistenceStorage();
+        const key = serverAccountScopedStorageKey('session-drafts-repository-v1', scope);
+        const persisted = JSON.parse(storage.getString(key)!) as { replicas: Record<string, { localRawDocument: SessionDraftDocumentV2 }> };
+        const document = persisted.replicas[canonicalSessionDraftAddressV2({ kind: 'newSession', draftId })]!.localRawDocument;
+        if (document.target.kind !== 'newSession') throw new Error('Expected retained draft');
+        const fields = document.target.authoring;
+        const execution = Reflect.get(fields, 'executionTarget') as { value: Record<string, unknown> };
+        execution.value.retired = true;
+        const retainedAttachments = document.composer.attachments.value as Array<Record<string, unknown>>;
+        retainedAttachments[0]!.retired = true;
+        // An invalid optional sibling keeps raw custody; the adapter must still salvage the valid selections.
+        Reflect.set(Reflect.get(fields, 'directory'), 'value', '');
+        storage.set(key, JSON.stringify(persisted));
+        resetSessionDraftRepositoryForTests();
+        expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
+            executionTarget: { kind: 'machine', target: { serverId: scope.serverId, machineId: 'machine-b' } },
+            composerAttachments: [attachment],
+        });
+    });
     it('persists flushes and reopens two distinct definitions of the same Custom ACP Agent', async () => {
         for (const definitionId of ['review-a', 'review-b']) {
             const target = { kind: 'agent' as const,

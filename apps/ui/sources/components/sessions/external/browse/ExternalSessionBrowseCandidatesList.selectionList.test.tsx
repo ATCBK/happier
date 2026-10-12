@@ -247,6 +247,26 @@ describe('ExternalSessionBrowseCandidatesList SelectionList shell', () => {
         expect(screen.findByTestId('direct-session-candidates-content-partial')).not.toBeNull();
     });
 
+    it('offers Stop only for a conversation search the user started; a typed phrase still offers Search', async () => {
+        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
+        const onSearchSubmit = vi.fn();
+        const onCancelPreparation = vi.fn();
+        const base = { ...defaultProps(), candidates: [], searchQuery: 'flaky e2e', searchTarget: 'content' as const,
+            contentSearchSupported: true, loading: true, onSearchSubmit, onCancelPreparation };
+        // The quiet indexed lookup behind a typed phrase is not a search the user asked for.
+        const typed = await renderScreen(<ExternalSessionBrowseCandidatesList {...base} />);
+        expect(typed.findByTestId('direct-session-candidates:content-unsearched')).not.toBeNull();
+        const label = (screen: Awaited<ReturnType<typeof renderScreen>>) => (screen.findByTestId('direct-session-candidates-content-submit')
+            ?.findAll((node) => typeof node.children?.[0] === 'string').map((node) => node.children[0]) ?? []).join('');
+        expect(label(typed)).toContain('externalSessions.browseContentSubmit');
+        await typed.pressByTestIdAsync('direct-session-candidates-content-submit');
+        expect(onSearchSubmit).toHaveBeenCalledWith('flaky e2e');
+        expect(onCancelPreparation).not.toHaveBeenCalled();
+
+        const searching = await renderScreen(<ExternalSessionBrowseCandidatesList {...base} contentSearchSubmitted />);
+        expect(label(searching)).toContain('externalSessions.browseIndexingStop');
+    });
+
     it('never declares no matches while content coverage is unsupported or unsearched', async () => {
         const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
         const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
@@ -751,6 +771,22 @@ describe('ExternalSessionBrowseCandidatesList SelectionList shell', () => {
             `Existing session, Codex · MacBook Pro · ~/projects/happier, ${formatShortRelativeTime(candidate.updatedAtMs)}, status.ready, externalSessions.browseLinked, externalSessions.browseImported`,
         );
         expect(option?.props.accessibilityLabel).not.toContain('/Users/alice');
+    });
+
+    it('shows only what tells rows apart: the Agent and machine chosen in the band are not repeated on every row', async () => {
+        const { ExternalSessionBrowseCandidatesList } = await import('./ExternalSessionBrowseCandidatesList');
+        const screen = await renderScreen(<ExternalSessionBrowseCandidatesList
+            {...defaultProps()}
+            candidates={[{ ...candidate, details: { path: '/Users/alice/projects/happier' } }]}
+            agentLabel="Codex"
+            machineLabel="MacBook Pro"
+            machineHomeDir="/Users/alice"
+        />);
+        const option = screen.findByTestId('direct-session-candidate:session-1');
+        // Spoken alone, the row still says whose and where.
+        expect(option?.props.accessibilityLabel).toContain('Codex · MacBook Pro');
+        expect(screen.getTextContent()).toContain('~/projects/happier');
+        expect(screen.getTextContent()).not.toContain('MacBook Pro');
     });
 
     it('renders mounted cold-index progress instead of an empty result', async () => {

@@ -14,14 +14,22 @@ import type { NewSessionCheckoutCreationDraft } from '@/sync/domains/state/newSe
 import type { ManagedMachineSelectionDraft, ManagedMachineAcquisitionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 import type { ManagedMachineCreationProgress } from '@/components/settings/machines/managed/managedMachineCreation';
 import type { ComposerTextStore } from '@/components/sessions/agentInput/composerTextStore';
-import type { SessionInstructionsAuthoringDraft, SessionInstructionsAuthoringResult } from '@/sync/ops/promptLibrary/sessionInstructions';
+import type { SessionInstructionsAuthoringResult } from '@/sync/ops/promptLibrary/sessionInstructions';
+import type { SessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
+import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import type { ManagedMachineArchiveChoiceAvailability } from '@/components/sessions/new/components/machineSelection/managedMachineSelection';
 
 export type NewSessionInstructionsCreationModel = Readonly<{
     titleStore: ComposerTextStore;
     markdownStore: ComposerTextStore;
     getDraft: () => SessionInstructionsAuthoringDraft | null;
+    /** The draft's reserved `session.instructions` stack entry, when it attaches a Prompt Library document. */
+    getEntry: () => PromptStackEntryV1 | null;
+    /** Reads presentation from the shared mounted Action approval continuation. */
+    getApprovalPending: () => boolean;
+    /** Notifies after the draft's Instructions (authored body or attached entry) change. */
+    subscribe: (listener: () => void) => () => void;
     onDraftChange: (draft: SessionInstructionsAuthoringDraft) => void;
     selectReference: (ref: PromptDocArtifactRefV1 | null) => void;
     saveDraft: () => Promise<SessionInstructionsAuthoringResult | null>;

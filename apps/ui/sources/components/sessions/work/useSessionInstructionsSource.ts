@@ -11,9 +11,7 @@ import {
 } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import {
-  applyActionSettingsTargetControlState,
   resolveActionSettingsTargetControlState,
-  type ActionSettingsApprovalControlValue,
   type ActionSettingsTargetControlState,
 } from '@/components/settings/actions/actionSettingsTargets';
 
@@ -344,7 +342,6 @@ export type SessionInstructionsPolicy = Readonly<{
   targetId: SessionInstructionsPolicyTarget;
   scope: 'account_action_surface';
   controlState: ActionSettingsTargetControlState;
-  setValue: (value: ActionSettingsApprovalControlValue) => void;
 }>;
 
 /**
@@ -355,7 +352,6 @@ export function resolveSessionInstructionsPolicy(
   params: Readonly<{
     settings: ActionsSettingsV1;
     targetId: SessionInstructionsPolicyTarget;
-    onChange: (settings: ActionsSettingsV1) => void;
   }>,
 ): SessionInstructionsPolicy {
   return {
@@ -367,14 +363,5 @@ export function resolveSessionInstructionsPolicy(
       actionId: 'prompt_doc.update',
       targetId: params.targetId,
     }),
-    setValue: (value) =>
-      params.onChange(
-        applyActionSettingsTargetControlState({
-          settings: params.settings,
-          actionId: 'prompt_doc.update',
-          targetId: params.targetId,
-          value,
-        }),
-      ),
   };
 }

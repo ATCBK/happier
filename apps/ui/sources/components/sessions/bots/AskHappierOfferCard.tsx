@@ -79,20 +79,6 @@ export const AskHappierOfferCard = React.memo(function AskHappierOfferCard(
   );
 });
 
-/** The one contextual link a status row carries (lab `b-ask E`): words ending the status sentence, not a button. */
-export const AskHappierStatusLink = React.memo(function AskHappierStatusLink(
-  props: Readonly<{ onPress: () => void }>,
-) {
-  return (
-    <TextLinkButton
-      testID="ask-happier-status-link"
-      tone="strong"
-      label={t('bots.guide.offer')}
-      onPress={props.onPress}
-    />
-  );
-});
-
 /**
  * Where Ask Happier is offered at the end of a story (lab `b-ask SH`): the planet and two sentences
  * saying what pressing the action beside it starts. It is a note, never a control.

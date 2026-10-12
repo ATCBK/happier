@@ -353,10 +353,13 @@ export function applySessionPresentationIntent(
 
         case 'companion.instance.inputs.set':
         case 'companion.instance.inputs.reset':
+        case 'companion.instance.network.set':
         case 'companion.instance.rename': {
             if (!exactPorts.companion.preference.items.some((item) => item.kind === 'instance' && item.instance.id === intent.instanceId)) return INVALID_TARGET;
             return fromCompanionOutcome(exactPorts, intent.kind, t('common.done'), () => intent.kind === 'companion.instance.rename'
                 ? exactPorts.companion.renameInstance(intent.instanceId, intent.displayName)
+                : intent.kind === 'companion.instance.network.set'
+                ? exactPorts.companion.setInstanceNetwork(intent.instanceId, intent.network)
                 : exactPorts.companion.setInstanceInputs(intent.instanceId, intent.kind === 'companion.instance.inputs.set' ? intent.bindings : {}));
         }
 

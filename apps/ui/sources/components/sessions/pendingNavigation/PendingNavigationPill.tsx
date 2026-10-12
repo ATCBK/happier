@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Animated, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { ChatHeaderCompactContext } from '@/components/sessions/transcript/chatHeaderCompact';
 
 import { useMountedActivityOverviewSummary } from '@/activity/source/useActivityOverview';
 import { buildPendingNavigationFromSource, type PendingNavigationCandidate } from '@/activity/source/buildPendingNavigationFromSource';
@@ -18,10 +19,13 @@ import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import type { ComposerTextStore } from '@/components/sessions/agentInput/composerTextStore';
 
 export type PendingNavigationPillProps = Readonly<{
     address: SessionAddress | null;
     presentation: 'header' | 'composer' | 'phone';
+    /** The composer the Next capsule stands on: typing there means you stayed, so the offer leaves. */
+    composerText?: ComposerTextStore;
 }>;
 
 /** The Next pill rises off the composer edge it stands on (the docked-capsule motion). */
@@ -60,6 +64,9 @@ export const PendingNavigationPill = React.memo(function PendingNavigationPill(p
     const answerToken = useSessionPendingAnswerToken(props.address);
     const landing = usePendingNavigationLanding(props.address);
     const shortcut = useKeyboardShortcutLabel('session.pending.next');
+    const phoneDevice = useDeviceType() === 'phone';
+    // A tight session header keeps the title readable: the pill says only its count there.
+    const compactHeader = React.useContext(ChatHeaderCompactContext) && props.presentation === 'header';
     const onPress = React.useCallback(() => {
         if (!serverId || !sessionId) return;
         return invokeNextPendingRequest({ excluding: { serverId, sessionId } });
@@ -77,17 +84,23 @@ export const PendingNavigationPill = React.memo(function PendingNavigationPill(p
                 target={target}
                 shortcut={shortcut}
                 onGo={onPress}
+                composerText={props.composerText}
             />
         );
     }
-    if (count === 0) return null;
-    return <PendingAttentionPill count={count} phone={props.presentation === 'phone'} shortcut={shortcut} onPress={onPress} />;
+    // One count on a phone: the session nav capsule says it, so the header does not repeat it.
+    if (count === 0 || (props.presentation === 'header' && phoneDevice)) return null;
+    return <PendingAttentionPill count={count} phone={props.presentation === 'phone'} compact={compactHeader}
+        shortcut={shortcut} onPress={onPress} />;
 });
 
 /** "● 2 need you ⌘⇧J" in the header; "● 2" in the phone session nav. */
-export function PendingAttentionPill(props: Readonly<{ count: number; phone: boolean; shortcut: string | undefined; onPress: () => unknown }>) {
+export function PendingAttentionPill(props: Readonly<{ count: number; phone: boolean; compact?: boolean; shortcut: string | undefined; onPress: () => unknown }>) {
     const { theme } = useUnistyles();
-    const { count, phone, shortcut } = props;
+    const { count, phone } = props;
+    // Compact (a tight header) draws the phone capsule's count, keeping the header's identity and full label for assistive tech.
+    const countOnly = phone || props.compact === true;
+    const shortcut = countOnly ? undefined : props.shortcut;
     const ink = theme.colors.state.attention.foreground;
     const testID = `pending-navigation-${phone ? 'phone' : 'header'}`;
     const label = t('pendingNavigation.nextWithCount', { count });
@@ -99,15 +112,15 @@ export function PendingAttentionPill(props: Readonly<{ count: number; phone: boo
             onPress={props.onPress}
             style={({ hovered, pressed }) => [
                 styles.attention,
-                phone ? styles.attentionPhone : shortcut ? styles.attentionWithKeys : null,
+                countOnly ? styles.attentionPhone : shortcut ? styles.attentionWithKeys : null,
                 { backgroundColor: theme.colors.state.attention.background, opacity: pressed ? 0.8 : hovered ? 0.92 : 1 },
             ]}
         >
-            <StatusDot color={ink} size={phone ? 6 : 7} />
+            <StatusDot color={ink} size={countOnly ? 6 : 7} />
             <Text testID={`${testID}-count`} style={[styles.attentionLabel, { color: ink }]} numberOfLines={1}>
-                {phone ? String(count) : label}
+                {countOnly ? String(count) : label}
             </Text>
-            {!phone && shortcut ? (
+            {!countOnly && shortcut ? (
                 <View style={styles.keys}>
                     {splitKeybindingLabel(shortcut).map((key, index) => (
                         <KeyHint key={`${key}-${index}`} label={key} tone="attention" />
@@ -124,11 +137,22 @@ export function NextComposerPill(props: Readonly<{
     target: NextTarget | null;
     shortcut: string | undefined;
     onGo: () => unknown;
+    composerText?: ComposerTextStore;
 }>) {
     const { theme } = useUnistyles();
     const phone = useDeviceType() === 'phone';
     const [dismissed, setDismissed] = React.useState(false);
     const visible = props.target !== null && !dismissed;
+    // Typing here means you stayed: the offer leaves by itself (Find lab `fnext` N1a). The subscription lives
+    // only while the capsule is offered and renders nothing per keystroke; it dismisses once.
+    const composerText = props.composerText;
+    React.useEffect(() => {
+        if (!visible || !composerText) return undefined;
+        const offeredWith = composerText.getPrompt();
+        return composerText.subscribe(() => {
+            if (composerText.getPrompt() !== offeredWith) setDismissed(true);
+        });
+    }, [composerText, visible]);
     const elementRef = React.useRef<React.ComponentRef<typeof View>>(null);
     const motion = useOverlayMotionAnimation({ visible, preset: RISE_MOTION, elementRef });
     const { present } = useOverlayPresence(visible, motion.exitMs);

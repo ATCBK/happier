@@ -8,11 +8,12 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SessionGettingStartedSummary } from '@/components/sessions/guidance/SessionGettingStartedSummary';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { useAllMachines } from '@/sync/domains/state/storage';
+import { useAllMachines, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { buildMachineAddHref } from '@/components/settings/machines/collection/machineCollectionModel';
 import { resolveMachineActionCandidates } from '@/utils/sessions/resolveMachineActionCandidates';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 
 import type { SessionGettingStartedDecisionKind } from '@/components/sessions/guidance/gettingStartedModel';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -36,7 +37,9 @@ export function SessionsListEmptyState(props: SessionsListEmptyStateProps) {
     const router = useRouter();
     const activeServer = useActiveServerSnapshot();
     const allMachines = useAllMachines();
-    const machines = resolveMachineActionCandidates(allMachines);
+    useMachineReachabilityRevision();
+    const accountScope = useActiveServerAccountScope(activeServer.serverId);
+    const machines = resolveMachineActionCandidates(accountScope, allMachines);
     const machineNames = resolveMachineDisplayNames(allMachines);
 
     const handleStartSession = React.useCallback((machineId: string) => {

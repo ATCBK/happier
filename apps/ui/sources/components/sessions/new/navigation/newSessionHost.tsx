@@ -26,6 +26,8 @@ export type NewSessionHostDraftEntry = Readonly<{ draftId: string; draftOrigin: 
 
 export type NewSessionEmbeddedHost = Readonly<{
     params: NewSessionHostParams;
+    /** A contextual embed's Home, independent of the Account's globally selected Home. */
+    targetServerId?: string;
     /** Merges into the host's params; `undefined` clears a key, as `router.setParams` does. */
     setParams: (patch: Readonly<Record<string, unknown>>) => void;
     /** Opens another draft in place of the current one (start another, delete). */

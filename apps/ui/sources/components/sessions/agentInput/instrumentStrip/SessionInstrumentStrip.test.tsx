@@ -149,6 +149,42 @@ describe('SessionInstrumentStrip', () => {
         expect(tree!.root.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'agent-input-connection-status-text')).toHaveLength(1);
     });
 
+    it('ends the guard warning line with its countdown and offers Keep running in the same row', () => {
+        const keepRunning = vi.fn();
+        const warning = { text: 'Stopping in', color: '#b60', dotColor: '#b60', countdownTo: Date.now() + 292_000,
+            action: { label: 'Keep running', onPress: keepRunning } };
+        act(() => { tree = create(<SessionInstrumentStrip connectionStatus={warning} />); });
+        const line = tree!.root.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'agent-input-connection-status-text')[0]!;
+        const text = (node: typeof line): string => node.children.map(child => typeof child === 'string' ? child : text(child)).join('');
+        expect(text(line)).toMatch(/^Stopping in 4:5\d$/u);
+        act(() => { tree!.root.findAll((n) => n.props?.testID === 'agent-input-connection-recovery')[0]!.props.onPress(); });
+        expect(keepRunning).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a long explanation off the line: the short state stays, the detail is its tooltip and is read with it', () => {
+        const restart = vi.fn();
+        const status = { text: 'Provider settings changed', color: '#b60', dotColor: '#b60',
+            detail: 'This session is still using the Gateway · Work configuration it started with.',
+            action: { label: 'Restart session', onPress: restart } };
+        act(() => { tree = create(<SessionInstrumentStrip connectionStatus={status} />); });
+        const host = tree!.root.findAll((n) => n.props?.testID === 'agent-input-connection-detail'
+            && n.props?.accessibilityLabel !== undefined)[0]!;
+        expect(host.props.accessibilityLabel).toBe(
+            'Provider settings changed. This session is still using the Gateway · Work configuration it started with.');
+        expect(host.findAll((n) => typeof n.type === 'string' && n.props?.testID === 'agent-input-connection-status-text')).toHaveLength(1);
+        act(() => { tree!.root.findAll((n) => n.props?.testID === 'agent-input-connection-recovery')[0]!.props.onPress(); });
+        expect(restart).toHaveBeenCalledTimes(1);
+    });
+
+    it('cross-fades the line when the guard moment changes, and simply shows the first line', () => {
+        const line = () => tree!.root.findAll((n) => n.props?.style === undefined ? false : n.props?.testID === undefined
+            && n.findAll((c) => c.props?.testID === 'agent-input-connection-status-text').length > 0 && 'entering' in n.props)[0]!;
+        act(() => { tree = create(<SessionInstrumentStrip connectionStatus={{ text: 'Stopping in', color: '#b60', dotColor: '#b60', transitionKey: 'warning' }} />); });
+        expect(line().props.entering).toBeUndefined();
+        act(() => { tree!.update(<SessionInstrumentStrip connectionStatus={{ text: 'Stopped to free memory', color: '#999', dotColor: '#999', transitionKey: 'stopped' }} />); });
+        expect(line().props.entering).toBeDefined();
+    });
+
     it('re-renders on usage ticks via its OWN store subscription (no parent props involved)', () => {
         // The real F-UI-11 ship-gate proof (usage tick does NOT re-render the REAL
         // AgentInput) lives in AgentInput.instrumentStripPerf.test.tsx. This case

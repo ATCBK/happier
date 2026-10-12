@@ -26,12 +26,15 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { PendingResetStartBindingV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema, type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import sodium from 'libsodium-wrappers';
 import { ManagedMachineV1Schema, type ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { AgentInputStatusBadge } from '@/components/sessions/agentInput/agentInputContracts';
+import type { SessionViewPresentation } from './embedded/embeddedSessionPresentation';
 
 // The shell statically imports Sync before the pane harness can bind its Socket.
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -223,6 +226,10 @@ let enqueueResponse: (write: HttpWrite) => Promise<Response>;
 let resumeResponse: (call: RpcCall) => Promise<ResumeSessionResult>;
 let sessionOpenDisabled = false;
 let sessionOpenAskFirst = false;
+let resetStartAskFirst = false;
+let pendingProtocolVersion = 3;
+let resetQuotaSnapshot: ProviderAccountUsageSnapshotV1 | null = null;
+let heldResetQuotaRead: Readonly<{ entered(): void; release: Promise<void> }> | null = null;
 let managedInspectAskFirst = false;
 let managedWakeMachine: ManagedMachineV1 | null = null;
 let approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
@@ -289,19 +296,36 @@ const runtime = installSessionPaneRuntimeTestHarness({
     features: () => {
         const response = createRootLayoutFeaturesResponse();
         return { ...response, capabilities: { ...response.capabilities, session: {
-            ...response.capabilities.session, pendingInput: { protocolVersion: 3 },
+            ...response.capabilities.session, pendingInput: { protocolVersion: pendingProtocolVersion },
         } } };
     },
     request: async (input, init) => {
         const url = new URL(String(input));
         const method = init?.method ?? 'GET';
+        if (resetQuotaSnapshot && url.pathname.startsWith('/v4/connect/qualified/provider-account-usage/')) {
+            if (url.pathname.endsWith('/sources/resolve') && heldResetQuotaRead) {
+                heldResetQuotaRead.entered();
+                // A cancelled request may still receive a late response from the transport.
+                await heldResetQuotaRead.release;
+            }
+            const record = { content: { t: 'plain', v: resetQuotaSnapshot },
+                metadata: { fetchedAt: resetQuotaSnapshot.fetchedAtMs, staleAfterMs: resetQuotaSnapshot.staleAfterMs, status: 'ok' },
+                sources: [resetQuotaSource] };
+            if (url.pathname.endsWith('/sources/resolve')) return Response.json({ source: resetQuotaSource,
+                recordId: resetQuotaSnapshot.recordId, providerAccountId: resetQuotaSnapshot.recordKey.accountSubjectId,
+                fetchedAt: resetQuotaSnapshot.fetchedAtMs, staleAfterMs: resetQuotaSnapshot.staleAfterMs });
+            if (url.pathname.endsWith('/history')) return Response.json({ entries: [{ id: 'history-1',
+                observedAtMs: resetQuotaSnapshot.fetchedAtMs, record }], nextCursor: null });
+            if (url.pathname.endsWith('/record')) return Response.json(record);
+        }
         if (url.pathname === '/v1/machines/managed/actions/get' && managedWakeMachine) return Response.json(managedWakeMachine);
-        if (url.pathname === '/v2/account/settings' && (sessionOpenDisabled || sessionOpenAskFirst || managedInspectAskFirst)) return Response.json({
+        if (url.pathname === '/v2/account/settings' && (sessionOpenDisabled || sessionOpenAskFirst || managedInspectAskFirst || resetStartAskFirst)) return Response.json({
             version: 1, content: { t: 'plain', v: {
                 actionsSettingsV1: { v: 1, actions: {
                     ...(sessionOpenDisabled || sessionOpenAskFirst ? { 'session.open': sessionOpenDisabled
                         ? { disabledSurfaces: ['ui'] } : { approvalRequiredSurfaces: ['ui'] } } : {}),
                     ...(managedInspectAskFirst ? { 'machines.managed.inspect': { approvalRequiredSurfaces: ['ui'] } } : {}),
+                    ...(resetStartAskFirst ? { 'session.pending.resetStart.set': { approvalRequiredSurfaces: ['ui'] } } : {}),
                 } },
             } },
         });
@@ -385,8 +409,8 @@ function setMachineOnline(online: boolean) {
 function pendingWrites() { return httpWrites.filter(write => write.url.pathname === '/v2/sessions/s1/pending' && write.method === 'POST'); }
 function actionWrites() { return httpWrites.filter(write => write.url.pathname.startsWith('/v2/sessions/s1/pending/') && write.method === 'PATCH'); }
 function resumeCalls() { return rpcCalls.filter(call => call.method === RPC_METHODS.SPAWN_HAPPY_SESSION || call.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE); }
-function acceptedEnqueue(write: HttpWrite) {
-    return Response.json({ requestedAction: write.body.requestedAction, pending: { localId: write.body.localId } });
+function acceptedEnqueue(write: HttpWrite, didWrite = true) {
+    return Response.json({ didWrite, requestedAction: write.body.requestedAction, pending: { localId: write.body.localId } });
 }
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -403,6 +427,27 @@ const composerAttachments = [{
     v: 1 as const, instanceId: 'issue-42', attachment: { pluginId: 'acme.issues', localId: 'issue' },
     key: '42', value: { issueId: 42 }, presentation: { label: 'Issue #42', typeLabel: 'Issue' },
 }];
+const resetQuotaSource = { bindingKind: 'account' as const,
+    ref: { service: { pluginId: 'acme.quota', localId: 'oauth' }, accountId: 'work' } };
+function configureResetQuota(stale = false) {
+    const now = Date.now();
+    const observedAtMs = stale ? now - 10_000 : now;
+    const recordKey = { providerId: 'anthropic', accountSubjectId: 'work', subjectKind: 'account' as const, quotaScope: 'account' as const };
+    resetQuotaSnapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1,
+        recordId: buildProviderAccountUsageRecordId(recordKey), recordKey, providerId: 'anthropic',
+        accountSubject: { kind: 'providerSubject', id: 'work' }, observedAtMs, fetchedAtMs: observedAtMs,
+        staleAfterMs: stale ? 1 : 60_000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data',
+        meters: [{ meterId: 'requests', label: 'Requests', used: 50, limit: 100, utilizationPct: 50, unit: 'requests',
+            resetsAt: now + 60_000, windowDurationMs: 3_600_000, status: 'ok', details: {} }],
+    });
+    return PendingResetStartBindingV1Schema.parse({ source: resetQuotaSource, recordId: resetQuotaSnapshot.recordId,
+        meterId: 'requests', witness: { observedAtMs, id: 'history-1' } });
+}
+async function enableResetStartProtocol() {
+    pendingProtocolVersion = 4;
+    const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+    resetServerFeaturesClientForTests();
+}
 async function setComposerAttachmentProjection(entriesById: Readonly<Record<string, PluginProjectedComposerAttachmentEntryV1>>, generation = 1) {
     if (!storage.getState().machines['m-target']) setMachineOnline(true);
     projection = PluginProjectionV2Schema.parse({ v: 2, generation, familiesById: {
@@ -427,7 +472,7 @@ async function publishDurablePendingState(row: PendingMessage, authorization: Se
 }
 
 describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
-    async function renderSessionView(props: { routeServerId?: string } = {}) {
+    async function renderSessionView(props: { routeServerId?: string; presentation?: SessionViewPresentation } = {}) {
         if (!storage.getState().machines['m-target']) setMachineOnline(true);
         const screen = await renderScreen(
             <DestinationInstanceHost tabId="queue-session" ref={{ kind: 'session', params: {
@@ -435,7 +480,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             } }} pathname="/session/s1" focused visible navigation={{
                 push: routerPushSpy, pushRetainingCurrent: routerPushSpy, replace: vi.fn(), back: vi.fn(),
             }}>
-                <SessionView id="s1" routeServerId={props.routeServerId} />
+                <SessionView id="s1" routeServerId={props.routeServerId} presentation={props.presentation} />
             </DestinationInstanceHost>,
             { wrapper: runtime.Wrapper },
         );
@@ -445,6 +490,17 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
     function findAgentInput(screen: Awaited<ReturnType<typeof renderSessionView>>) {
         const inputs = screen.tree.findAllByType('AgentInput' as any);
         return inputs[inputs.length - 1] ?? findTestInstanceByTypeWithProps(screen.tree, 'AgentInput' as any, {});
+    }
+    // Queued input waiting on the Session speaks on the composer's one status line, with its one action.
+    function queueLine(screen: Awaited<ReturnType<typeof renderSessionView>>) {
+        return findAgentInput(screen).props.connectionStatus as
+            | { text: string; detail?: string; action?: { label: string; onPress: () => unknown } }
+            | undefined;
+    }
+    async function pressQueueLineAction(screen: Awaited<ReturnType<typeof renderSessionView>>, label: string) {
+        const status = queueLine(screen);
+        expect(status?.action?.label).toBe(label);
+        await act(async () => { await status!.action!.onPress(); });
     }
     async function changeText(screen: Awaited<ReturnType<typeof renderSessionView>>, text: string) {
         await act(async () => { findAgentInput(screen).props.onChangeText(text); });
@@ -464,6 +520,10 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         rpcCalls.length = 0;
         sessionOpenDisabled = false;
         sessionOpenAskFirst = false;
+        resetStartAskFirst = false;
+        pendingProtocolVersion = 3;
+        resetQuotaSnapshot = null;
+        heldResetQuotaRead = null;
         managedInspectAskFirst = false;
         managedWakeMachine = null;
         approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
@@ -472,6 +532,7 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         enqueueResponse = async write => acceptedEnqueue(write);
         resumeResponse = async () => ({ type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE', errorMessage: 'Daemon RPC is not available' });
         storage.setState({ settings: { ...storage.getState().settings,
+            actionsSettingsV1: { v: 1, actions: {} },
             experiments: true, featureToggles: {}, sessionMessageSendMode: 'server_pending',
             sessionBusySteerSendPolicy: 'steer_immediately', sessionInactiveResumePolicy: 'when_available',
         }, localSettings: { ...storage.getState().localSettings, uiMultiPanePanelsEnabled: false } });
@@ -491,6 +552,8 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
     afterEach(async () => {
         sessionOpenDisabled = false;
         sessionOpenAskFirst = false;
+        resetStartAskFirst = false;
+        pendingProtocolVersion = 3;
         for (const row of await loadPendingOutboxForSession('s1', scope())) await removePendingOutboxMessage('s1', row.localId, scope());
         clearSessionDraftValuesForSession(scope(), 's1', { reason: 'composerClear' });
         clearAgentInputLocalUiState(scope(), draftOwner);
@@ -619,6 +682,114 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
+    it('holds reset-start composer input behind Action approval without enqueueing, resuming, or clearing its draft', async () => {
+        resetStartAskFirst = true;
+        await enableResetStartProtocol();
+        storage.setState({ settings: { ...storage.getState().settings,
+            actionsSettingsV1: { v: 1, actions: { 'session.pending.resetStart.set': { approvalRequiredSurfaces: ['ui'] } } },
+        } });
+        const screen = await renderSessionView();
+        await changeText(screen, 'Wait for capacity');
+        const reset = configureResetQuota();
+        try {
+            await send(screen, { resetStart: reset });
+            await vi.waitFor(() => expect(approvalArtifacts.list().length + pendingWrites().length).toBeGreaterThan(0));
+            expect(pendingWrites()).toHaveLength(0);
+            expect(resumeCalls()).toHaveLength(0);
+            expect(approvalArtifacts.list()).toHaveLength(1);
+            const body = approvalArtifacts.readPlainBody(approvalArtifacts.list()[0]!.id);
+            if (body === null) throw new Error('Missing durable reset approval');
+            expect(StoredApprovalRequestSchema.parse(JSON.parse(body))).toMatchObject({
+                status: 'open', actionId: 'session.pending.resetStart.set',
+                actionArgs: { sessionId: 's1', reset, localId: expect.any(String),
+                    initialInput: { content: { t: 'plain', v: { content: { text: 'Wait for capacity' } } } } },
+            });
+            await waitForSubmittedDraft(screen);
+            expect(findAgentInput(screen).props.value).toBe('Wait for capacity');
+        } finally { await screen.unmount(); }
+    });
+
+    it.each([true, false])('admits reset-start content and composer attachments as one held Pending action without waking the Session (didWrite: %s)', async didWrite => {
+        await enableResetStartProtocol();
+        enqueueResponse = async write => acceptedEnqueue(write, didWrite);
+        await setComposerAttachmentProjection({ [issueAttachmentCatalogEntry.id]: issueAttachmentCatalogEntry });
+        writeSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments', composerAttachments);
+        const allowedModel = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'restricted-model' };
+        storage.getState().applySessions([{ ...storage.getState().sessions['s1']!, permissionMode: 'yolo' }]);
+        const screen = await renderSessionView({ presentation: { kind: 'embedded', composer: 'auto',
+            allowedModels: [allowedModel], permissionModePicker: ['default'] } });
+        await changeText(screen, 'Wait with this issue');
+        const reset = configureResetQuota();
+        try {
+            await send(screen, { resetStart: reset });
+            await vi.waitFor(() => expect(pendingWrites()).toHaveLength(1));
+            expect(pendingWrites()[0]?.body).toMatchObject({
+                requestedAction: { v: 1, kind: 'reset_start', reset },
+                content: { t: 'plain', v: { content: { text: 'Wait with this issue' },
+                    meta: { happierStructuredInputV1: { v: 1, composerAttachments },
+                        permissionMode: 'default', model: 'restricted-model', modelSelectionV1: { ref: allowedModel } } } },
+            });
+            await waitForSubmittedDraft(screen);
+            expect(findAgentInput(screen).props.value).toBe('');
+            expect(readSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments') ?? []).toEqual([]);
+            expect(resumeCalls()).toHaveLength(0);
+            expect(actionWrites()).toHaveLength(0);
+            expect(approvalArtifacts.list()).toHaveLength(0);
+        } finally { await screen.unmount(); }
+    });
+
+    it('returns the canonical stale quota reason through the reset Action and keeps the composer draft', async () => {
+        await enableResetStartProtocol();
+        const reset = configureResetQuota(true);
+        const screen = await renderSessionView();
+        await changeText(screen, 'Keep this stale draft');
+        const [{ sync }, { createFrontDoorActionExecute }] = await Promise.all([
+            import('@/sync/sync'), import('@/sync/ops/actions/frontDoorRuntimeActionExecutor'),
+        ]);
+        try {
+            const prepared = await sync.preparePendingResetStartInput('s1', 'Keep this stale draft', undefined, undefined, { serverId: runtime.serverId });
+            const result = await createFrontDoorActionExecute()('session.pending.resetStart.set', {
+                sessionId: 's1', ...prepared, reset, serverId: runtime.serverId,
+            }, { surface: 'ui', defaultSessionId: 's1', serverId: runtime.serverId, expectedAccountId: 'account-a' });
+            expect(result).toMatchObject({ ok: false, errorCode: 'reset_start_unavailable', details: { reason: 'quota_stale' } });
+            await send(screen, { resetStart: reset });
+            await vi.waitFor(() => expect(modalMockState.current?.spies.alert).toHaveBeenCalled());
+            expect(modalMockState.current?.spies.alert).toHaveBeenCalledWith('common.error', 'usage.board.plans.resetStartStale');
+            await waitForSubmittedDraft(screen);
+            expect(findAgentInput(screen).props.value).toBe('Keep this stale draft');
+            expect(pendingWrites()).toHaveLength(0);
+            expect(actionWrites()).toHaveLength(0);
+            expect(resumeCalls()).toHaveLength(0);
+        } finally { await screen.unmount(); }
+    });
+
+    it('does not admit cancelled reset-start input when a captured quota read completes late', async () => {
+        await enableResetStartProtocol();
+        const reset = configureResetQuota();
+        const release = deferred<void>();
+        let reading = false;
+        heldResetQuotaRead = { entered: () => { reading = true; }, release: release.promise };
+        const screen = await renderSessionView();
+        const [{ sync }, { createFrontDoorActionExecute }] = await Promise.all([
+            import('@/sync/sync'), import('@/sync/ops/actions/frontDoorRuntimeActionExecutor'),
+        ]);
+        const cancellation = new AbortController();
+        try {
+            const prepared = await sync.preparePendingResetStartInput('s1', 'Cancelled input', undefined, undefined, { serverId: runtime.serverId });
+            const pendingResult = createFrontDoorActionExecute()('session.pending.resetStart.set', {
+                sessionId: 's1', ...prepared, reset, serverId: runtime.serverId,
+            }, { surface: 'ui', defaultSessionId: 's1', serverId: runtime.serverId,
+                expectedAccountId: 'account-a', signal: cancellation.signal });
+            await vi.waitFor(() => expect(reading).toBe(true));
+            cancellation.abort();
+            release.resolve();
+            expect((await pendingResult).ok).toBe(false);
+            expect(pendingWrites()).toHaveLength(0);
+            expect(actionWrites()).toHaveLength(0);
+            expect(resumeCalls()).toHaveLength(0);
+        } finally { release.resolve(); await screen.unmount(); }
+    });
+
     it('submits an attachment-only contentless composer draft through the structured-input envelope', async () => {
         await setComposerAttachmentProjection({ [issueAttachmentCatalogEntry.id]: issueAttachmentCatalogEntry });
         writeSessionDraftValue(scope(), 's1', 'structuredInput.composerAttachments', composerAttachments);
@@ -692,11 +863,13 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
             requestId: 'pending-1', status: 'failed', failureCode: 'runtime_start_failed',
         });
         expect(currentSession().pendingActivationAuthorization!.requestedAt).toBeGreaterThan(currentSession().activeAt);
-        expect(screen.findByTestId('session-pendingActivation')).toBeTruthy();
-        expect(screen.getTextContent()).toContain('session.pendingActivation.failed.title');
-        expect(screen.findByTestId('session-pendingActivation-retry')).toBeTruthy();
+        expect(queueLine(screen)).toMatchObject({
+            text: 'session.pendingActivation.failed.title',
+            detail: 'session.pendingActivation.failed.body',
+        });
+        expect(screen.findAllByTestId('session-pendingActivation')).toHaveLength(0);
         resumeResponse = async () => ({ type: 'success', sessionId: 's1' });
-        await screen.pressByTestIdAsync('session-pendingActivation-retry');
+        await pressQueueLineAction(screen, 'session.pendingActivation.actions.retry');
         await vi.waitFor(() => expect(resumeCalls()).toHaveLength(2));
         expect(actionWrites()).toHaveLength(0);
         expect(findAgentInput(screen).props.connectionStatus?.text).toBe('session.resuming');
@@ -920,15 +1093,13 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         }
     });
 
-    it('shows an offline queued banner and authorizes the exact durable row for processing when online', async () => {
+    it('states an offline queued message on the status line and authorizes the exact durable row for processing when online', async () => {
         setMachineOnline(false);
         const screen = await renderSessionView();
         await publishDurablePendingState(durablePendingRow('queued-row', 'enqueue'));
-        expect(screen.findByTestId('session-pendingActivation')).toBeTruthy();
-        expect(screen.getTextContent()).toContain('session.pendingActivation.queued_offline.title');
-        expect(screen.findByTestId('session-pendingActivation-process_when_online')).toBeTruthy();
-        expect(screen.findByTestId('session-pendingActivation-settings')).toBeTruthy();
-        await screen.pressByTestIdAsync('session-pendingActivation-process_when_online');
+        expect(screen.findAllByTestId('session-pendingActivation')).toHaveLength(0);
+        expect(queueLine(screen)?.text).toBe('session.pendingActivation.queued_offline.title');
+        await pressQueueLineAction(screen, 'session.pendingActivation.actions.process_when_online');
         await vi.waitFor(() => expect(actionWrites()).toHaveLength(1));
         expect(actionWrites()[0]?.url.pathname).toContain('queued-row');
         expect(actionWrites()[0]?.body).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' }, resumeWhenAvailable: true });
@@ -936,12 +1107,12 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         await screen.unmount();
     });
 
-    it('resumes through the canonical session action from the online queued banner', async () => {
+    it('resumes through the canonical session action from the online queued status line', async () => {
         resumeResponse = async () => ({ type: 'success', sessionId: 's1' });
         const screen = await renderSessionView();
         await publishDurablePendingState(durablePendingRow('queued-row', 'enqueue'));
-        expect(screen.findByTestId('session-pendingActivation-resume')).toBeTruthy();
-        await screen.pressByTestIdAsync('session-pendingActivation-resume');
+        expect(queueLine(screen)?.text).toBe('session.pendingActivation.queued.title');
+        await pressQueueLineAction(screen, 'session.pendingActivation.actions.resume');
         await vi.waitFor(() => expect(resumeCalls()).toHaveLength(1));
         expect(actionWrites()).toHaveLength(0);
         expect(findAgentInput(screen).props.connectionStatus?.text).toBe('session.resuming');
@@ -956,10 +1127,8 @@ describe('SessionView (sendMessage resumeInactive pendingQueue)', () => {
         expect(storage.getState().profileScope).toEqual(scope());
         expect(currentSession().pendingActivationAuthorization).toMatchObject({ requestId: 'waiting-row', status: 'waiting' });
         expect(currentSession().pendingActivationAuthorization!.requestedAt).toBeGreaterThan(currentSession().activeAt);
-        expect(screen.findByTestId('session-pendingActivation')).toBeTruthy();
-        expect(screen.getTextContent()).toContain('session.pendingActivation.waiting_offline.title');
-        expect(screen.findByTestId('session-pendingActivation-keepQueued')).toBeTruthy();
-        await screen.pressByTestIdAsync('session-pendingActivation-keepQueued');
+        expect(queueLine(screen)?.text).toBe('session.pendingActivation.waiting_offline.title');
+        await pressQueueLineAction(screen, 'session.pendingActivation.actions.keepQueued');
         await vi.waitFor(() => expect(actionWrites()).toHaveLength(1));
         expect(actionWrites()[0]?.url.pathname).toContain('waiting-row');
         expect(actionWrites()[0]?.body).toMatchObject({ requestedAction: { v: 1, kind: 'enqueue' }, resumeWhenAvailable: false });

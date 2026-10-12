@@ -27,6 +27,7 @@ import { resolveTerminalHost } from '@/sync/domains/settings/terminalSettings';
 import { resolveWindowsTerminalAvailable } from '@/capabilities/windowsTerminalAvailability';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type {
@@ -71,6 +72,8 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     allProfiles: ReadonlyArray<AIBackendProfile>;
 }>) {
     const reachabilityRevision = useMachineReachabilityRevision();
+    const { binding } = useServerCredentialAccountScopeBinding(params.capabilityServerId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const staticAgentId = params.staticAgentId ?? params.agentType ?? null;
     const behaviorAgentId = resolveNewSessionBehaviorAgentId({
         runtimeCarrierAgentId: params.runtimeCarrierAgentId,
@@ -199,7 +202,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         if (!params.selectedMachineId) return false;
         const machine = params.selectedMachine;
         if (!machine) return false;
-        return isMachineReachable(params.capabilityServerId, machine);
+        return isMachineReachable(scope, machine);
     }, [
         params.selectedMachineId,
         params.selectedMachine?.active,
@@ -207,6 +210,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         params.selectedMachine?.revokedAt,
         params.capabilityServerId,
         reachabilityRevision,
+        scope,
     ]);
 
     const selectedMachineSpawnReadiness = React.useMemo(() => {
@@ -230,6 +234,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         return resolveMachineSpawnReadiness({
             selectedMachineId: params.selectedMachineId,
             machine: params.selectedMachine,
+            scope,
             rpcAvailable,
             keyAvailable,
             machineReachable: selectedMachineOnline,
@@ -240,6 +245,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         params.selectedMachineId,
         selectedMachineCapabilities.status,
         selectedMachineOnline,
+        scope,
     ]);
 
     const initialRefreshKey = React.useMemo(() => {

@@ -511,12 +511,12 @@ describe('useNewSessionAgentAuthoringOptionsState', () => {
             modelId: null,
             acpSessionModeId: null,
             sessionConfigOptionOverrides: null,
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['server-codex'],
                 forceExcludeServerIds: ['server-claude'],
-            },
+            } },
         } as const;
         type Props = Parameters<typeof useNewSessionAgentAuthoringOptionsState>[0];
         const buildProps = (
@@ -536,15 +536,10 @@ describe('useNewSessionAgentAuthoringOptionsState', () => {
             { initialProps: buildProps('claude', claudeTarget) },
         );
 
-        expect(hook.getCurrent().mcpSelection).toEqual({
-            v: 1,
-            managedServersEnabled: true,
-            forceIncludeServerIds: [],
-            forceExcludeServerIds: [],
-        });
+        expect(hook.getCurrent().capabilitySelection).toEqual({});
 
         await hook.rerender(buildProps('codex', codexTarget));
 
-        expect(hook.getCurrent().mcpSelection).toEqual(codexDraft.mcpSelection);
+        expect(hook.getCurrent().capabilitySelection).toEqual(codexDraft.capabilitySelection);
     });
 });

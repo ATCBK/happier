@@ -11,6 +11,7 @@ import type {
 } from '@happier-dev/protocol/teams';
 
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
+import type { ProviderPendingApproval } from '@/providers/actions/useProviderActionClient';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
 import {
     OptionPickerOverlay,
@@ -37,7 +38,11 @@ import {
     type SessionModelBrowseScope,
     type SessionModelHiddenSource,
 } from './SessionModelSourceScope';
-import { SessionModelNativeSourceLabelContext, SessionModelSourceBrowseHandoffContext } from './SessionModelSourceBrowseHandoff';
+import {
+    SessionModelApplyTimingContext,
+    SessionModelNativeSourceLabelContext,
+    SessionModelSourceBrowseHandoffContext,
+} from './SessionModelSourceBrowseHandoff';
 import {
     isTeamCredentialProviderModelPickerValue,
     sessionModelSelectionKey,
@@ -68,6 +73,7 @@ export type SessionModelPickerExperimentalConfirmationController = Readonly<{
         commitSelection: () => void,
     ) => Promise<boolean>;
     pending: boolean;
+    pendingApproval?: ProviderPendingApproval | null;
     error: ProviderErrorV1 | null;
     retry: (() => Promise<boolean>) | null;
     clear: () => void;
@@ -193,17 +199,33 @@ export type SessionModelPickerProps = Readonly<{
 export function SessionModelPicker(props: SessionModelPickerProps) {
     // "Runs through" can ask the pane to open on one source; the request names the Agent it was made for.
     const handoff = React.useContext(SessionModelSourceBrowseHandoffContext);
-    const requested = props.sourceBrowse && handoff?.request?.agentTargetKey === props.agentTargetKey ? handoff.request : null;
+    const requested = handoff?.request?.agentTargetKey === props.agentTargetKey
+        && (props.sourceBrowse || handoff.request.scope.connectionId === null) ? handoff.request : null;
     const requestedScopeRef = React.useRef(requested?.scope ?? null);
     requestedScopeRef.current = requested?.scope ?? null;
     const [browseScope, setBrowseScope] = React.useState<SessionModelBrowseScope | null>(requestedScopeRef.current);
     const requestKey = requested?.key ?? null;
     React.useEffect(() => {
-        if (requestedScopeRef.current) setBrowseScope(requestedScopeRef.current);
-    }, [requestKey]);
+        setBrowseScope(requestedScopeRef.current);
+    }, [requestKey, props.agentTargetKey]);
     const exitBrowse = React.useCallback(() => setBrowseScope(null), []);
-    if (browseScope && props.sourceBrowse) {
-        return <SessionModelSourceBrowse picker={props} sourceBrowse={props.sourceBrowse} scope={browseScope} onExit={exitBrowse} />;
+    const scope = React.useMemo(() => browseScope ? { scope: browseScope, onExit: exitBrowse } : undefined, [browseScope, exitBrowse]);
+    if (browseScope) {
+        if (browseScope.connectionId === null) {
+            return <SessionModelPickerPane
+                {...props}
+                providerGroups={EMPTY_PROJECTION_GROUPS}
+                projectionError={null}
+                projectionFailures={undefined}
+                currentSelectionRecovery={null}
+                teamCredentialResources={undefined}
+                selectedTeamCredentialModel={undefined}
+                favoriteEntries={props.favoriteEntries?.filter(entry => entry.ref.providerConnectionId === null)}
+                scope={scope}
+            />;
+        }
+        if (props.sourceBrowse) return <SessionModelSourceBrowse picker={props} sourceBrowse={props.sourceBrowse}
+            scope={browseScope} onExit={exitBrowse} />;
     }
     return <SessionModelPickerPane {...props} onBrowseSource={props.sourceBrowse ? setBrowseScope : undefined} />;
 }
@@ -212,7 +234,7 @@ export function SessionModelPicker(props: SessionModelPickerProps) {
 function SessionModelSourceBrowse(props: Readonly<{
     picker: SessionModelPickerProps;
     sourceBrowse: NonNullable<SessionModelPickerProps['sourceBrowse']>;
-    scope: SessionModelBrowseScope;
+    scope: SessionModelBrowseScope & Readonly<{ connectionId: string }>;
     onExit: () => void;
 }>) {
     const { picker } = props;
@@ -240,6 +262,9 @@ function SessionModelSourceBrowse(props: Readonly<{
             selected={picker.selected}
             effectiveLabel={picker.effectiveLabel}
             reportedModel={picker.reportedModel}
+            favoriteKeys={picker.favoriteKeys}
+            onToggleFavorite={picker.onToggleFavorite}
+            favoriteActionVisibility={picker.favoriteActionVisibility}
             notes={notes}
             probe={projection.loading
                 ? { phase: 'loading' }
@@ -265,6 +290,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
 }>) {
     const canConfirmExperimental = Boolean(props.experimentalConfirmation);
     const hostNativeSourceLabel = React.useContext(SessionModelNativeSourceLabelContext);
+    const hostApplyTiming = React.useContext(SessionModelApplyTimingContext);
     const nativeSourceLabel = props.nativeSourceLabel ?? hostNativeSourceLabel;
     const baseSections = React.useMemo(() => buildSessionModelPickerSections({
         agentTargetKey: props.agentTargetKey,
@@ -372,14 +398,16 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
         ];
     }, [props.favoriteEntries, reportedModelPresentation.sections]);
     // "Built-in" only tells the agent's own models apart from provider and team groups; over the
-    // only group it is noise (0.2 had none). A lone Favorites group keeps its label: it still says
-    // what the list is.
+    // only group it is noise (0.2 had none). Browsing one source, the scope bar already names it, so
+    // its lone group goes unheaded too. A lone Favorites group keeps its label: it still says what
+    // the list is.
+    const browsing = props.scope !== undefined;
     const labeledSections = React.useMemo((): ReadonlyArray<SessionModelPickerSection> => {
         const suffixed = withSessionModelSourceSuffixes(sections, 'favorites');
-        return suffixed.length === 1 && suffixed[0]!.id === 'native'
+        return suffixed.length === 1 && (suffixed[0]!.id === 'native' || browsing)
             ? [{ ...suffixed[0]!, title: undefined }]
             : suffixed;
-    }, [sections]);
+    }, [browsing, sections]);
     const hiddenSources = props.hiddenSources ?? [];
     const footerContent = !props.scope && props.onBrowseSource && hiddenSources.length > 0 ? (
         <SessionModelHiddenSourcesLine sources={hiddenSources} onBrowse={props.onBrowseSource} />
@@ -412,7 +440,9 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
             };
         }
         if (props.canEnterCustomNativeValue) {
-            return { kind: 'native' as const, label: t('settingsProviders.models.builtIn') };
+            // The Agent's own source names where the id goes; without one, say what the entry does.
+            // "Built-in" is only a heading that tells native models apart from provider groups.
+            return { kind: 'native' as const, label: nativeSourceLabel || t('agentInput.model.customDescription') };
         }
         const eligibleConnections = props.providerGroups.filter((group) => (
             group.authorization.authorized
@@ -427,19 +457,22 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
             connectionId: onlyEligibleConnection.connectionId,
             label: sessionModelConnectionTitle(onlyEligibleConnection),
         } : null;
-    }, [props.canEnterCustomNativeValue, props.canEnterCustomValue, props.providerGroups, props.selected]);
+    }, [nativeSourceLabel, props.canEnterCustomNativeValue, props.canEnterCustomValue, props.providerGroups, props.selected]);
     // A discovery failure already has its own line (what failed + retry). The generic "discovery
     // is unavailable" note would say the same thing a second time, so it yields to the error line.
     const hasDiscoveryErrorLine = Boolean(props.projectionError) || (props.projectionFailures?.length ?? 0) > 0;
     const unavailableNote = t('agentInput.model.unavailable');
-    const notes = React.useMemo(() => buildSessionModelPickerNotes({
-        notes: hasDiscoveryErrorLine
-            ? (props.notes ?? []).filter((note) => note !== unavailableNote)
-            : props.notes ?? [],
-        groups: props.providerGroups,
-        selected: props.selected,
-        suppressionNote: t('settingsProviders.models.connectedServiceSuppressed'),
-    }), [hasDiscoveryErrorLine, props.notes, props.providerGroups, props.selected, unavailableNote]);
+    const notes = React.useMemo(() => {
+        const ownNotes = [...(props.notes ?? []), ...(hostApplyTiming?.notes ?? [])];
+        return buildSessionModelPickerNotes({
+            notes: hasDiscoveryErrorLine
+                ? ownNotes.filter((note) => note !== unavailableNote)
+                : ownNotes,
+            groups: props.providerGroups,
+            selected: props.selected,
+            suppressionNote: t('settingsProviders.models.connectedServiceSuppressed'),
+        });
+    }, [hasDiscoveryErrorLine, hostApplyTiming?.notes, props.notes, props.providerGroups, props.selected, unavailableNote]);
     const commitSelection = React.useCallback((ref: SessionModelPickerOptionValue) => {
         props.experimentalConfirmation?.clear();
         if (isTeamCredentialProviderModelPickerValue(ref)) {
@@ -448,6 +481,10 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
         }
         props.onSelect(ref);
     }, [props.experimentalConfirmation, props.onSelect, props.onSelectTeamCredentialModel]);
+    // The header refresh re-runs this same projection; the error line then only says what failed.
+    const projectionLineRetry = props.retryProjection && !props.probe?.onRefresh
+        ? async () => { await props.retryProjection?.(); }
+        : undefined;
     const currentSelectionRecovery = props.currentSelectionRecovery
         && sessionModelSelectionKey(props.currentSelectionRecovery.ref) === sessionModelSelectionKey(props.selected)
         ? props.currentSelectionRecovery
@@ -515,6 +552,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                         <ReportedModelSummary
                             status={props.reportedModel.status}
                             modelLabel={reportedModelPresentation.label}
+                            applyTiming={hostApplyTiming?.timing}
                         />
                     ) : null}
                     {currentSelectionRecovery ? (
@@ -524,9 +562,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                         <ProviderErrorItems
                             presentation="line"
                             error={props.projectionError}
-                            retry={props.retryProjection
-                                ? async () => { await props.retryProjection?.(); }
-                                : undefined}
+                            retry={projectionLineRetry}
                         />
                     ) : null}
                     {props.projectionFailures?.map((failure) => (
@@ -534,9 +570,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                             presentation="line"
                             key={failure.connectionId}
                             error={failure.error}
-                            retry={props.retryProjection
-                                ? async () => { await props.retryProjection?.(); }
-                                : undefined}
+                            retry={projectionLineRetry}
                         />
                     ))}
                     {props.experimentalConfirmation?.error ? (

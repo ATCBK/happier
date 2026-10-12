@@ -2,19 +2,21 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { flattenTestStyle, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createSessionItemRowViewModel } from './sessionItemRowViewModelTestFixture';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 import { StyleSheet } from 'react-native';
-import Color from 'color';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 const confirmDeleteDraft = vi.hoisted(() => vi.fn(async () => true));
 
 // The shared press owner's motion tokens build their easing curves at import.
-vi.mock('react-native-reanimated', () => ({ Easing: { bezier: () => (value: number) => value, linear: (value: number) => value } }));
+vi.mock('react-native-reanimated', async () => {
+    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+    return createReanimatedModuleMock();
+});
 vi.mock('react-native-gesture-handler', () => ({
     Swipeable: (props: Record<string, unknown>) => React.createElement('Swipeable', props),
     GestureDetector: (props: React.PropsWithChildren) => React.createElement('GestureDetector', props, props.children),
@@ -76,15 +78,15 @@ describe('SessionItem existing-session draft presentation', () => {
         confirmDeleteDraft.mockClear();
     });
 
-    it('keeps the session sheet transparent within the sidebar material', async () => {
+    it('gives the joined session sheet one Elements backdrop only when its backing is visible', async () => {
         const { AppShellMaterialFrame } = await import('@/components/navigation/shell/AppShellMaterialFrame');
         const { GlassMaterialSettingsProvider } = await import('@/components/ui/glass/useGlassMaterialSettings');
         const { GlassRuntimeEnvironmentProvider } = await import('@/components/ui/glass/glassRuntimeEnvironment');
         const { glassPresetMaterials } = await import('@/components/ui/glass/glassMaterial');
         const session = createSessionFixture({ id: 'session-glass-row', active: false });
         const rowViewModel = createSessionItemRowViewModel({ session });
-        const screen = await renderScreen(
-            <GlassRuntimeEnvironmentProvider value={{ desktopWindow: true, nativeWindowMaterialLive: true }}>
+        const scene = (atmosphereBehind: 'wallpaper' | 'none') => (
+            <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind }}>
             <GlassMaterialSettingsProvider value={{ glassBlurEnabled: true, glassSurfaceMaterials: glassPresetMaterials('everywhere') }}>
             <AppShellMaterialFrame showChrome={false} dragEnabled={false} leftOffsetPx={0} sidebarWidth={320}
                 titleStrip={null} rail={null} peek={null}
@@ -92,12 +94,18 @@ describe('SessionItem existing-session draft presentation', () => {
                 {null}
             </AppShellMaterialFrame>
             </GlassMaterialSettingsProvider>
-            </GlassRuntimeEnvironmentProvider>,
+            </GlassRuntimeEnvironmentProvider>
         );
+        const screen = await renderScreen(scene('wallpaper'));
+        const backdrops = () => screen.findAll(node => typeof node.type === 'string'
+            && typeof flattenTestStyle(node.props.style).backdropFilter === 'string'
+            && flattenTestStyle(node.props.style).backdropFilter !== 'none'
+            && String(flattenTestStyle(node.props.style).backgroundColor).includes('--happier-glass-card-background-color'));
+        expect(backdrops()).toHaveLength(1);
         const container = screen.root.findAll(node => typeof node.props.onPointerEnter === 'function')[0]!;
-        const paint = StyleSheet.flatten(container.props.style);
-        expect(Color(paint.backgroundColor).alpha()).toBe(0);
-        expect(paint.opacity).toBeUndefined();
+        expect(StyleSheet.flatten(container.props.style).opacity).toBeUndefined();
+        await screen.update(scene('none'));
+        expect(backdrops()).toHaveLength(0);
     });
 
     it('presents and deletes the repository draft without deleting the session row', async () => {
@@ -145,6 +153,27 @@ describe('SessionItem existing-session draft presentation', () => {
         expect(screen.findAllHostsByTestId('session-list-item-session-draft-row')).toHaveLength(1);
         expect(screen.findByTestId('session-list-item-session-draft-row')?.props.accessibilityActions)
             .toContainEqual({ name: 'deleteDraft', label: 'Delete draft' });
+    });
+
+    it('keeps an embedded roster row in its containing floating plane', async () => {
+        const { GlassSurface } = await import('@/components/ui/glass/GlassSurface');
+        const { GlassMaterialSettingsProvider } = await import('@/components/ui/glass/useGlassMaterialSettings');
+        const { GlassRuntimeEnvironmentProvider } = await import('@/components/ui/glass/glassRuntimeEnvironment');
+        const { glassPresetMaterials } = await import('@/components/ui/glass/glassMaterial');
+        const session = createSessionFixture({ id: 'embedded-roster-row', active: false });
+        const screen = await renderScreen(
+            <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'wallpaper' }}>
+                <GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('clear') }}>
+                    <GlassSurface surfaceGroup="floating" finishRole={null}>
+                        <SessionItem session={session} rowViewModel={createSessionItemRowViewModel({ session })} embedded />
+                    </GlassSurface>
+                </GlassMaterialSettingsProvider>
+            </GlassRuntimeEnvironmentProvider>,
+        );
+        expect(screen.findAll(node => typeof node.type === 'string'
+            && typeof flattenTestStyle(node.props.style).backdropFilter === 'string'
+            && flattenTestStyle(node.props.style).backdropFilter !== 'none')).toHaveLength(1);
+        expect(screen.findAllHostsByTestId('session-list-item-embedded-roster-row')).toHaveLength(1);
     });
 
     it('shows the reminder clock in a minimal session row', async () => {

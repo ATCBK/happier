@@ -291,7 +291,6 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
         const current = currentRef.current;
         if (
             !current.authorized
-            || !current.readEligible
             || !current.key
             || !current.machineId
             || !current.presentation
@@ -305,6 +304,10 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
             presentation: current.presentation,
             serverId: current.serverId,
         });
+        if (outcome === 'ready') {
+            // This explicit read already serves the recovery edge its successful reply creates.
+            readEpisodeRef.current = { key: current.key, readEligible: true };
+        }
         return outcome === 'ready';
     }, [loadCurrent]);
 
@@ -324,12 +327,12 @@ export function useExternalSessionOperationOwnerHydration(params: Readonly<{
         : null;
     const status: ExternalSessionOperationOwnerHydrationStatus = !authorized || !presentation
         ? 'not_owner'
-        : !readEligible
-            ? 'offline'
-            : progress !== null
-                ? 'ready'
-                : currentRead?.outcome === 'unavailable'
-                    ? 'unavailable'
+        : currentRead?.outcome === 'unavailable'
+            ? 'unavailable'
+            : !readEligible
+                ? 'offline'
+                : progress !== null
+                    ? 'ready'
                     : 'loading';
 
     return React.useMemo(() => ({

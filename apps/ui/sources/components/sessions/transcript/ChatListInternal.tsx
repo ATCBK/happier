@@ -220,6 +220,8 @@ import { useTranscriptFirstPaintState, useTranscriptItemsPipeline, useTranscript
 import { useSessionActionFieldOptionsForRowHeight } from '@/components/sessions/actions/useSessionActionFieldOptions';
 import { useTranscriptItemRenderer, useTranscriptItemsEdgeSlots } from '@/components/sessions/transcript/rowHost/useTranscriptRowHost';
 import { useTranscriptExpansionState } from '@/components/sessions/transcript/rowHost/useTranscriptExpansionState';
+import { TranscriptPendingNavigationLanding } from '@/components/sessions/pendingNavigation/useTranscriptPendingNavigationLanding';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { TranscriptFindSurface } from '@/components/sessions/transcript/find/TranscriptFindSurface';
 import { useTranscriptFind, type TranscriptFindCorpus } from '@/components/sessions/transcript/find/useTranscriptFind';
 import { revealTranscriptFindMatch } from '@/components/sessions/transcript/find/revealTranscriptFindMatch';
@@ -434,7 +436,7 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
     const lastExplicitWebScrollIntentAtMsRef = React.useRef(Number.NEGATIVE_INFINITY);
     const nativeTranscriptTouchStartYRef = React.useRef<number | null>(null);
     const resolveJumpToSeqIndexForCommandRef = React.useRef<(
-        seq: number,
+        seq: number | null,
         routeMessageId?: string | null,
         transcriptBlockIndex?: number | null,
         role?: TranscriptJumpTargetRole | null,
@@ -1866,6 +1868,8 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         const layout = index === undefined ? undefined : listRef.current?.getLayout?.(index);
         return layout ? { y: layout.y, height: layout.height } : null;
     }, []);
+    const findClearanceRef = React.useRef(0);
+    const handleFindClearanceChange = React.useCallback((clearancePx: number) => { findClearanceRef.current = clearancePx; }, []);
     const transcriptFind = useTranscriptFind({
         readCorpus: () => findCorpusRef.current,
         loadPage: transcriptSource.history.loadFindPage
@@ -1876,6 +1880,7 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         reveal: (match, context) => revealTranscriptFindMatch(match, {
             items: props.items, setToolCallsGroupExpanded, setThinkingExpanded,
             waitForVisualUpdate: waitForNextTranscriptVisualUpdate, jumpToTarget: jumpToTranscriptTarget,
+            readClearancePx: () => findClearanceRef.current,
         }, context),
     });
     useCommittedTranscriptRef(
@@ -2110,6 +2115,18 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
     return (
         <SessionTranscriptAgentAttributionProvider value={agentAttributionIndex}>
         <TranscriptMotionProvider sessionKey={props.sessionSurfaceKey} config={motionConfig}>
+            <TranscriptPendingNavigationLanding
+                address={normalizeSessionAddress(props.sessionServerId ?? transcriptSource.serverId, props.sessionId)}
+                isLoaded={props.isLoaded}
+                focused={sessionScreenFocused}
+                hasOlder={hasMoreOlderRef.current !== false}
+                loadOlder={transcriptSource.history.loadOlder}
+                messagesById={props.messagesById}
+                items={props.items}
+                setToolCallsGroupExpanded={setToolCallsGroupExpanded}
+                waitForVisualUpdate={waitForNextTranscriptVisualUpdate}
+                jumpToTarget={jumpToTranscriptTarget}
+            />
             <InitialPresentationReadinessProvider value={initialRichContentPresentationController.boundary}>
               <View
                 ref={transcriptViewportFocusRef}
@@ -2118,7 +2135,8 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
                 <TranscriptFindSurface model={transcriptFind} source={transcriptSource} sessionId={props.sessionId}
                     serverId={props.sessionServerId ?? transcriptSource.serverId} focused={sessionScreenFocused}
                     viewportRef={transcriptViewportFocusRef} loadedMessages={findLoadedMessages} publishCorpus={publishFindCorpus}
-                    measureMessage={measureFindMessage} contentHeight={listContentHeight}>
+                    measureMessage={measureFindMessage} contentHeight={listContentHeight}
+                    onClearanceChange={handleFindClearanceChange}>
                 <TranscriptContentDemandProvider enabled={sessionScreenFocused}>
                 <TranscriptListShell<ChatTranscriptListItem>
                     ref={commitListRef}

@@ -8,6 +8,12 @@ import { createProviderBindingSecurityFingerprintV1 } from '@happier-dev/protoco
 import { resolveContextWarningWindowTokens, resolveContextWindowTokens } from './resolveContextWarningWindowTokens';
 
 describe('resolveContextWarningWindowTokens', () => {
+    it('keeps an unresolved Agent context window unknown while retaining observed usage', () => {
+        const params = { agentId: 'custom-acp', metadata: null, sessionActive: false };
+        expect(resolveContextWarningWindowTokens(params)).toBeNull();
+        expect(resolveContextWarningWindowTokens({ ...params, usageData: { contextWindowTokens: 100000 } })).toBe(95000);
+    });
+
     it('prefers the canonical snapshot window over legacy live telemetry', () => {
         expect(resolveContextWindowTokens({
             agentId: 'codex',

@@ -49,6 +49,7 @@ function controllerStub(overrides: Partial<SessionCompanionController> = {}): Se
         setDensity: () => null,
         setItemFrameStyle: (item, style) => outcome(setSessionCompanionItemFrameStyle(preference, item, style)),
         setInstanceInputs: (instanceId, bindings) => outcome(setSessionCompanionInstanceInputs(preference, instanceId, bindings)),
+        setInstanceNetwork: () => null,
         renameInstance: (instanceId, displayName) => outcome(renameSessionCompanionInstance(preference, instanceId, displayName)),
         addItem: (item, index) => outcome(addSessionCompanionItem(preference, item, index)),
         removeItem: (item, guard) => outcome(removeSessionCompanionItem(preference, item, guard)),

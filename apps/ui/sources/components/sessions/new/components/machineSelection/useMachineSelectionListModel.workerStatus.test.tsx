@@ -1,6 +1,7 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { Machine } from '@/sync/domains/state/storageTypes';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -35,6 +36,7 @@ installDisconnectedServerSocketBoundary();
 const { useMachineSelectionListModel } = await import('./useMachineSelectionListModel');
 const { useMachineDestinationWorkerStatus } = await import('@/components/sessions/new/hooks/machines/useMachineDestinationWorkerStatus');
 const { getActionOperation } = await import('@/sync/ops/actionOperations');
+const { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } = await import('@/sync/domains/machines/reachability/machineReachability');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
 const { getServerProfileById, setServerProfileIdentityForUrl, resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
@@ -124,6 +126,46 @@ describe('worker destination list demand', () => {
         expect(option?.subtitle).toContain('managedPower.asleep');
         expect(option?.disabled).toBe(true);
         await hook.unmount();
+    });
+    describe('offline-only classification', () => {
+        const paramsFor = (machines: Machine[]) => ({
+            purpose: 'finite' as const, workerPlacement: { workspace: { serverId, refId: 'checkout' } },
+            groups: [{ serverId, serverName: 'Worker picker', loading: false, signedOut: false,
+                machines: machines.map(machine => ({ ...machine, serverId, serverName: 'Worker picker' })) }],
+            selectedMachine: null, selectedServerId: serverId, recentMachines: [], favoriteMachines: [],
+            onSelectMachine: () => {}, onSelectScopedMachine: () => {},
+            showFavorites: false, showRecent: false, showSearch: false, showCliGlyphs: false, autoDetectCliGlyphs: false,
+        });
+        const optionFor = (hook: { getCurrent(): { rootStep: { sections: ReadonlyArray<{ kind: string; options?: ReadonlyArray<{ id: string; subtitle?: string; disabled?: boolean }> }> } } }, id: string) =>
+            hook.getCurrent().rootStep.sections.flatMap(section => section.options ?? []).find(option => option.id.endsWith(id));
+
+        it('marks a machine as offline-only when presence is its only blocker, and never one refused for access or content', async () => {
+            const plain = createMachineFixture({ id: 'studio', active: false, activeAt: 0 });
+            const locked = createMachineFixture({ id: 'locked', active: false, activeAt: 0, availability: { kind: 'locked', reason: 'recipient_key_pending' } });
+            const pending = createMachineFixture({ id: 'pending', active: false, activeAt: 0, isShared: true,
+                access: { custodian: { accountId: 'ben', displayName: 'Ben' }, role: 'use', resourceMode: 'plain', accessState: 'key_pending' } } as Partial<Machine>);
+            const hook = await renderHook(() => useMachineSelectionListModel(paramsFor([plain, locked, pending])));
+            try {
+                await flushHookEffects({ cycles: 20 });
+                expect(hook.getCurrent().offlineOnlyMachineIdsByServerId[serverId]).toEqual(['studio']);
+                expect(optionFor(hook, 'locked')?.disabled).toBe(true);
+                expect(optionFor(hook, 'pending')?.disabled).toBe(true);
+                expect(optionFor(hook, 'studio')?.subtitle).not.toContain('projectWorkers.loading');
+            } finally { await hook.unmount(); }
+        });
+
+        it('re-classifies when a request-reachability failure arrives without any Machine row change', async () => {
+            const machine = createMachineFixture({ id: 'worker', active: true, activeAt: Date.now() });
+            rpc.machine.mockResolvedValue({ eligible: true, candidate: { serverId, machineId: machine.id },
+                load: { kind: 'known', running: 0, queued: 0, accepting: true, runAtMost: null }, explanation: 'eligible' });
+            const hook = await renderHook(() => useMachineSelectionListModel(paramsFor([machine])));
+            try {
+                await waitForHomeGovernance(() => expect(optionFor(hook, 'worker')?.disabled).toBe(false));
+                expect(hook.getCurrent().offlineOnlyMachineIdsByServerId[serverId]).toEqual([]);
+                await act(async () => recordMachineRequestFailed({ serverId, machineId: machine.id }));
+                expect(hook.getCurrent().offlineOnlyMachineIdsByServerId[serverId]).toEqual(['worker']);
+            } finally { clearMachineRequestReachabilityForTest(); await hook.unmount(); }
+        });
     });
     it.each(['finite', 'service-start'] as const)('demands exact %s status and keeps a full queue selectable', async (purpose) => {
         const machine = createMachineFixture({ id: 'worker', active: true, activeAt: Date.now() });

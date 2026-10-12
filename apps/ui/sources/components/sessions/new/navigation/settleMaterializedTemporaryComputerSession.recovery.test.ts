@@ -135,7 +135,7 @@ describe('materialized Runner attachment recovery integration', () => {
                 transcriptStorage: 'persisted',
                 profileId: null,
                 environmentVariables: null,
-                mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+                capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
                 connectedServices: null,
                 checkoutCreationDraft: null,
                 resumeSessionId: null,

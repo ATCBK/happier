@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { describe, expect, it, vi, onTestFinished } from 'vitest';
 import { SessionSystemRecordStoredSchema } from '@happier-dev/protocol';
+import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { makeToolCall, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSessionSystemRecordHttpFixture, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -22,8 +23,13 @@ async function prepare(itemId = 'visual') {
         content: { t: 'plain', v: item }, revision,
         createdAt: '2026-10-10T00:00:00.000Z', updatedAt: '2026-10-10T00:00:00.000Z',
     });
-    const fixture = createSessionSystemRecordHttpFixture({ sessionId: 'session-1', records: [record] });
-    const connection = await restoreServerAccountForTest({ serverUrl: 'https://inline-session-content.test', request: fixture.request });
+    const fixture = createSessionSystemRecordHttpFixture({ sessionId: 'session-1', records: [record],
+        effectiveAccess: { v: 1, level: 'view', sources: [{ kind: 'direct', shareId: 'reader-grant' }],
+            capabilities: projectSessionAccessCapabilitiesV1({ owner: false, grants: [{ accessLevel: 'view', canApprovePermissions: false }] }) },
+    });
+    // This recipient can read the Session, while every Artifact endpoint is denied.
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://inline-session-content.test',
+        accountId: 'shared-reader', request: fixture.request });
     onTestFinished(async () => { standardCleanup(); await connection.dispose(); });
     const tool = makeToolCall({ name: 'session_board_item_upsert', state: 'completed',
         input: { itemId: 'visual', expectedItemRevision: null, destination: 'transcript', item },
@@ -40,6 +46,10 @@ describe('Session-owned inline content', () => {
         const screen = await renderScreen(<SessionBoardActionResultReference tool={tool} serverId={serverId} sessionId="session-1" />);
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('Child-owned result'));
         expect(fixture.recordReads).toEqual(['visual']);
+        expect(screen.findByTestId('transcript-board-item-visual-open')).toBeNull();
+        await screen.update(<SessionBoardActionResultReference tool={tool} serverId={serverId} sessionId="session-1" contentDemand={false} />);
+        expect(screen.getTextContent()).not.toContain('Child-owned result');
+        expect(screen.findByTestId('transcript-board-item-visual')).not.toBeNull();
     });
 
     it('does not request hidden-row content until the existing row visibility owner demands it', async () => {
@@ -54,10 +64,11 @@ describe('Session-owned inline content', () => {
 
     it('resolves an inherited reference only to its independently readable child copy', async () => {
         const { fixture, tool, serverId } = await prepare('child-visual');
-        const original = { serverId, sessionId: 'session-1' };
-        const screen = await renderScreen(<SessionBoardActionResultReference tool={tool} serverId={serverId} sessionId="parent"
+        const original = { serverId, sessionId: 'parent' };
+        const inheritedTool = { ...tool, result: { ...tool.result, sessionId: 'parent' } };
+        const screen = await renderScreen(<SessionBoardActionResultReference tool={inheritedTool} serverId={serverId} sessionId="session-1"
             visualContext={{ sessionId: 'session-1', originAddress: original, copies: [{ originServerId: serverId,
-                originSessionId: 'session-1', originItemId: 'visual', status: 'copied', itemId: 'child-visual' }] }} />);
+                originSessionId: 'parent', originItemId: 'visual', status: 'copied', itemId: 'child-visual' }] }} />);
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('Child-owned result'));
         expect(fixture.recordReads).toEqual(['child-visual']);
     });
@@ -68,6 +79,14 @@ describe('Session-owned inline content', () => {
             visualContext={{ sessionId: 'child', copies: [{ originServerId: serverId,
                 originSessionId: 'session-1', originItemId: 'visual', status: 'not_copied' }] }} />);
         expect(screen.findByTestId('transcript-board-item-visual-not-copied')).not.toBeNull();
+        expect(fixture.recordReads).toEqual([]);
+    });
+
+    it('never infers the current Home from inherited provenance', async () => {
+        const { fixture, tool, serverId } = await prepare();
+        const screen = await renderScreen(<SessionBoardActionResultReference tool={tool} sessionId="child"
+            visualContext={{ sessionId: 'child', originAddress: { serverId, sessionId: 'session-1' }, copies: [] }} />);
+        expect(screen.getTextContent()).toBe('');
         expect(fixture.recordReads).toEqual([]);
     });
 });

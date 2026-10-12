@@ -97,12 +97,12 @@ const persistedDraft = vi.hoisted(() => ({
     selectedPath: '/repo/custom',
     selectedProfileId: null,
     selectedSecretId: null,
-    mcpSelection: {
+    capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['server-portable'],
         forceExcludeServerIds: ['server-disabled'],
-    },
+    } },
     selectedWorkspaceId: 'ws_payments',
     selectedWorkspaceLocationId: 'loc_local',
     selectedWorkspaceCheckoutId: 'checkout_feature_auth',
@@ -136,7 +136,7 @@ const persistedDraft = vi.hoisted(() => ({
     selectedPath: string;
     selectedProfileId: null;
     selectedSecretId: null;
-    mcpSelection: {
+    capabilitySelection: {
         v: number;
         managedServersEnabled: boolean;
         forceIncludeServerIds: string[];
@@ -2509,8 +2509,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
                     id: 'review-bot',
                     name: 'review-bot',
                     title: 'Review Bot',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     transportProfile: 'generic',
                     capabilities: {
@@ -2562,8 +2561,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
                     id: 'review-bot',
                     name: 'review-bot',
                     title: 'Review Bot',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     transportProfile: 'generic',
                     capabilities: {
@@ -2685,7 +2683,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         }));
     });
 
-    it('hydrates mcpSelection into the MCP chip flow and persists it with the draft', async () => {
+    it('hydrates capabilitySelection into the MCP chip flow and persists it with the draft', async () => {
         featureFlags.mcpServersEnabled = true;
         saveNewSessionDraftMock.mockClear();
         machineMcpServersPreviewMock.mockClear();
@@ -2724,12 +2722,12 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
 
         expect(saveNewSessionDraftMock).toHaveBeenCalledWith(expect.objectContaining({
             backendTarget: expect.objectContaining({ kind: 'backend', backendId: 'claude' }),
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['server-portable'],
                 forceExcludeServerIds: ['server-disabled'],
-            },
+            } },
         }));
 
         featureFlags.mcpServersEnabled = false;
@@ -2810,8 +2808,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
                     id: 'review-bot',
                     name: 'review-bot',
                     title: 'Review Bot',
-                    command: 'custom-acp',
-                    args: ['serve'],
+                    launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
                     transportProfile: 'generic',
                     capabilities: {

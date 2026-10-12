@@ -6,7 +6,7 @@ import {
     ExecutionRunCancelTurnRequestSchema, ExecutionRunEnsureRequestSchema, ExecutionRunGetRequestSchema,
     ExecutionRunGetResponseSchema, ExecutionRunPublicStateSchema,
     ExecutionRunStopRequestSchema, FeaturesResponseSchema,
-    SessionAgentActivityHeadlineV1Schema, SessionStoredMessageContentSchema, V2SessionByIdResponseSchema,
+    SessionStoredMessageContentSchema, V2SessionByIdResponseSchema,
     type ExecutionRunPublicState,
 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -20,7 +20,7 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getStorage } from '@/sync/domains/state/storageStore';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { disconnectActiveServerConnection, restoreConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
 import { notifyExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
@@ -34,6 +34,10 @@ import { SessionBrowserContextRuntimeProvider, useSessionBrowserContextRuntime,
     type SessionBrowserContextRuntime } from '@/components/sessions/browser/sessionBrowserContextRuntime';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Modal } from '@/modal';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import type { SessionTranscriptSource } from '@/components/sessions/transcript/source/types';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -67,13 +71,15 @@ vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
 
 const boundary = vi.hoisted(() => {
     const requests: Array<Readonly<{ serverUrl: string; targetId: string; method: string; payload: unknown }>> = [];
-    return { call: vi.fn<(method: string, input: unknown) => Promise<unknown>>(), requests };
+    const messages: Array<Readonly<{ serverUrl: string; payload: unknown }>> = [];
+    return { call: vi.fn<(method: string, input: unknown) => Promise<unknown>>(), requests, messages };
 });
 vi.mock('socket.io-client', async () => {
     const { createSocketIoBoundaryStub } = await import('@/dev/testkit/mocks/socketIo');
     return { io: (serverUrl: string) => {
         const { socket } = createSocketIoBoundaryStub();
         socket.emitWithAck.mockImplementation(async (event, raw) => {
+            if (event === 'message') boundary.messages.push({ serverUrl, payload: raw });
             if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: ['s1'] };
             if (!raw || typeof raw !== 'object' || !('method' in raw) || typeof raw.method !== 'string' || !('params' in raw)) {
                 throw new Error('Malformed Socket RPC boundary request');
@@ -173,8 +179,24 @@ function publishMarker(status: ExecutionRunPublicState['status'] = 'running') {
     getStorage().getState().applyMessagesLoaded('s1');
 }
 let restorePopoverWebGlobals: (() => void) | undefined;
-beforeEach(async () => {
-    restorePopoverWebGlobals = withPopoverWebGlobals();
+const animationFrames = new Set<ReturnType<typeof setTimeout>>();
+beforeEach(async ({ task }) => {
+    const commandSuite = task.suite?.name === 'Teammate command Action admission';
+    const portableIdentity = commandSuite || task.suite?.name === 'Neighboring user Run Stop admission'
+        ? 'srv_run_details_' + (sequence + 1) : undefined;
+    const stopPolicy = portableIdentity && task.name.startsWith('refuses ')
+        ? { actionsSettingsV1: { v: 1 as const, actions: {
+            [commandSuite ? 'session.message.send' : 'execution.run.stop']: {
+                enabled: false, enabledPlacements: [], disabledSurfaces: [], disabledPlacements: [],
+            },
+        } } } : {};
+    // A composed real transcript needs browser frames to be asynchronous: the
+    // popover-only harness's immediate default recursively re-enters held intent.
+    restorePopoverWebGlobals = withPopoverWebGlobals({ frameScheduler: callback => {
+        const timer = setTimeout(() => { animationFrames.delete(timer); callback(performance.now()); }, 0);
+        animationFrames.add(timer);
+        return Number(timer);
+    } });
     resetSessionDraftRepositoryForTests();
     browserRuntime = null;
     latestToolResult = undefined;
@@ -188,6 +210,7 @@ beforeEach(async () => {
     resumeReply = async () => ({ ok: true });
     boundary.call.mockReset();
     boundary.requests.length = 0;
+    boundary.messages.length = 0;
     boundary.call.mockImplementation(async (method, input) => {
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) { ExecutionRunGetRequestSchema.parse(input); return getReply(); }
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) { ExecutionRunStopRequestSchema.parse(input); return stopReply(); }
@@ -199,15 +222,17 @@ beforeEach(async () => {
                 backends: { codex: { available: true, intents: ['review', 'delegate'] } } } },
         } };
         if (method === RPC_METHODS.STOP_SESSION) return { ok: true };
+        if (method === RPC_METHODS.KILL_SESSION) return { status: 'requested' };
         return { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' };
     });
     httpReads.length = 0;
     home = await serveActionHomes({
-        homes: [{ key: 'home', serverUrl: 'https://run-details-' + (++sequence) + '.test', accountId: 'account-1' }],
+        homes: [{ key: 'home', serverUrl: 'https://run-details-' + (++sequence) + '.test', accountId: 'account-1', settings: stopPolicy }],
         route(request) {
             if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
                 features: { execution: { runs: { enabled: true } }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
                 capabilities: { session: { pendingInput: { protocolVersion: 3 } },
+                    ...(portableIdentity ? { serverIdentity: { serverIdentityId: portableIdentity } } : {}),
                     accountStoredContentCompatibility: { v: 1, currentProtocolVersion: 3, minimumProtocolVersion: 3, declarationTransport: 'http-header-and-socket-auth-v1' } },
             }));
             if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
@@ -216,7 +241,14 @@ beforeEach(async () => {
                 id: 's1', encryptionMode: 'plain', metadata: JSON.stringify(getStorage().getState().sessions.s1?.metadata ?? {}),
                 metadataVersion: 1, agentState: null, agentStateVersion: 1, dataEncryptionKey: null, active: true,
                 activeAt: 1, createdAt: 1, updatedAt: 1, seq: 1,
+                effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+                    capabilities: getStorage().getState().sessions.s1!.access!.capabilities },
+                ...(commandSuite ? { pendingVersion: 1, pendingCount: 0 } : {}),
             } }));
+            if (request.method === 'POST' && request.path === '/v2/sessions/s1/pending') {
+                const body = request.body as Readonly<{ localId: string; requestedAction: unknown }>;
+                return Response.json({ requestedAction: body.requestedAction, pending: { localId: body.localId }, didWrite: true });
+            }
             if (request.path.includes('/messages') || request.path.includes('/pending')) {
                 httpReads.push(request);
                 return Response.json(request.path.endsWith('/pending')
@@ -228,28 +260,67 @@ beforeEach(async () => {
             return undefined;
         },
     });
-    serverId = home.homes.home!.id;
+    const { resolveServerProfileScopeIdForIdentifier, setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+    if (portableIdentity) await setServerProfileIdentityForUrl(home.homes.home!.serverUrl, portableIdentity);
+    serverId = resolveServerProfileScopeIdForIdentifier(home.homes.home!.id);
     await restoreConnectionToActiveServer((await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl))!);
     const machine = createMachineFixture({ id: 'm1', activeAt: Date.now(), storageMode: 'plain' });
     getStorage().setState({
         sessions: { s1: createSessionFixture({ id: 's1', serverId, active: true,
+            ...(commandSuite ? { pendingVersion: 1, pendingCount: 0 } : {}),
             metadata: { path: '/repo', host: 'tester.local', machineId: 'm1', flavor: 'codex' } }) },
         machines: { m1: machine }, machineListByServerId: { [serverId]: [machine] },
         sessionMessages: { s1: createSessionMessagesFixture({ isLoaded: true }) },
         sessionPending: { s1: { messages: [], discarded: [], isLoaded: true } },
-        settings: { ...settingsDefaults, backendEnabledByTargetKey: {} },
+        settings: settingsParse({ ...settingsDefaults, backendEnabledByTargetKey: {}, ...stopPolicy }),
         settingsScope: { serverId, accountId: 'account-1' }, profileScope: { serverId, accountId: 'account-1' },
     });
+    // Scoped interaction and Action admission read the canonical Session list
+    // projection, materialized by the same store writer as a hydrated Session.
+    getStorage().getState().applySessions([getStorage().getState().sessions.s1!]);
     await ensureSessionDraftRepositoryHydrated({ serverId, accountId: 'account-1' });
 });
 afterEach(async () => {
     standardCleanup();
+    for (const timer of animationFrames) clearTimeout(timer);
+    animationFrames.clear();
     restorePopoverWebGlobals?.();
     await disconnectActiveServerConnection();
     home?.dispose();
 });
 
 describe('SessionExecutionRunDetailsView — real Home, transcript and interaction owners', () => {
+    async function mountHistorySource() {
+        const source: { current: SessionTranscriptSource | null } = { current: null };
+        function Probe() { source.current = useSessionTranscriptSource(); return null; }
+        screen = await renderScreen(<AppSessionTranscriptSourceProvider sessionId="s1" serverId={serverId}>
+            <Probe />
+        </AppSessionTranscriptSourceProvider>);
+        if (!source.current?.history.loadOlder) throw new Error('App history must be readable');
+        return source.current.history.loadOlder;
+    }
+    it('hydrates initial app history on the exact Home, then does not refetch loaded exhausted history', async () => {
+        getStorage().setState({ sessionMessages: { s1: createSessionMessagesFixture({ isLoaded: false }) } });
+        const loadOlder = await mountHistorySource();
+        await act(async () => expect(await loadOlder()).toMatchObject({ status: 'no_more', hasMore: false }));
+        const initialReads = httpReads.filter(request => request.path.includes('/messages'));
+        expect(initialReads.length).toBeGreaterThan(0);
+        expect(initialReads.every(request => request.accountId === 'account-1' && request.home === 'home'
+            && request.url.origin === home.homes.home!.serverUrl)).toBe(true);
+        const reads = home.requests.length;
+        await act(async () => expect(await loadOlder()).toMatchObject({ status: 'no_more', hasMore: false }));
+        expect(home.requests).toHaveLength(reads);
+    });
+    it('fails closed on refused initial app hydration instead of paging a previously exhausted cursor', async () => {
+        getStorage().setState({ sessionMessages: { s1: createSessionMessagesFixture({ isLoaded: false }) } });
+        const loadOlder = await mountHistorySource();
+        await act(async () => expect(await loadOlder()).toMatchObject({ status: 'no_more' }));
+        getStorage().setState({ sessionMessages: { s1: createSessionMessagesFixture({ isLoaded: false }) } });
+        httpSessionAvailable = false;
+        httpReads.length = 0;
+        await act(async () => expect(await loadOlder()).toMatchObject({ status: 'not_ready', hasMore: true }));
+        expect(httpReads.filter(request => request.path.includes('/messages'))).toEqual([]);
+    });
     it('reads the Run waiting on a person from the real roster, rather than Run status alone', async () => {
         const question = createToolCallMessageFixture({ id: 'question', tool: {
             id: 'question-tool', name: 'AskUserQuestion', state: 'running', input: {}, createdAt: 1,
@@ -311,6 +382,8 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         expect(screen.findByTestId('session-run-details-pre-marker-state')).not.toBeNull();
         expect(screen.getTextContent()).toContain('status.awaitingUpdates');
         expect(composer()).toHaveLength(0);
+        await act(async () => publishMarker());
+        expect(screen.findByTestId('session-run-details-pre-marker-state')).toBeNull();
     });
     it('renders committed direct-start sidechain rows and the exact Run pending queue with one mounted composer', async () => {
         runState = liveRun();
@@ -432,9 +505,9 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
     });
     it('refuses Resume through Action policy before issuing its transport', async () => {
         runState = liveRun({ status: 'succeeded', interaction: undefined, lifecycle: { v: 1, state: 'recoverable' } });
-        getStorage().setState(state => ({ settings: { ...state.settings, actionsSettingsV1: {
+        getStorage().setState(state => ({ settings: settingsParse({ ...state.settings, actionsSettingsV1: {
             v: 1, actions: { 'execution.run.ensure': { disabledSurfaces: ['ui'] } },
-        } } }));
+        } }) }));
         await mount(); await loaded();
         await screen.pressByTestIdAsync('session-run-details-resume');
         await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('action_disabled'));
@@ -447,9 +520,9 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         runState = liveRun({ inputTurns: { occurrenceId: 'occurrence-1', current: {
             turnId: 'turn-1', inputIds: ['input-1'], state: 'active',
         } } });
-        getStorage().setState(state => ({ settings: { ...state.settings, actionsSettingsV1: {
+        getStorage().setState(state => ({ settings: settingsParse({ ...state.settings, actionsSettingsV1: {
             v: 1, actions: { [actionId]: { disabledSurfaces: ['ui'] } },
-        } } }));
+        } }) }));
         await mount(); await loaded(); await menu();
         await screen.pressByTestIdAsync(testId);
         await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('action_disabled'));
@@ -481,7 +554,9 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
                 payload: { runId: 'run_1' } },
         ]);
         expect(info().stopAction).toBeNull();
-        expect(home.requests.every(request => request.accountId === 'account-1')).toBe(true);
+        const accountReads = home.requests.filter(request => request.path !== '/v1/features');
+        expect(accountReads.length).toBeGreaterThan(0);
+        expect(accountReads.every(request => request.accountId === 'account-1')).toBe(true);
     });
     it('keeps whole-Run Stop busy until its actual transport request settles', async () => {
         runState = liveRun();
@@ -540,20 +615,32 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         structuredMeta = { kind: 'review_findings.v2', payload: {
             runRef: { runId: 'run_1', callId: 'toolu_1', backendId: 'codex' },
             summary: 'Two findings, one high.', overviewMarkdown: 'The retry banner can double-charge.',
-            findings: [], generatedAtMs: 2,
+            findings: [
+                { id: 'retry', title: 'Retry charges twice', severity: 'high', category: 'correctness', summary: 'Retry repeats the purchase.' },
+                { id: 'pending', title: 'Pending state is unclear', severity: 'low', category: 'correctness', summary: 'The banner hides progress.' },
+            ], generatedAtMs: 2,
         } };
         await mount(); await loaded();
-        expect(screen.getTextContent()).toContain('Two findings, one high.');
+        expect(screen.getTextContent()).toContain('The retry banner can double-charge.');
+        expect(screen.getTextContent()).toContain('Retry charges twice');
+        expect(screen.getTextContent()).toContain('Pending state is unclear');
+        expect(screen.findByTestId('session-run-details-pre-marker-state')).toBeNull();
         expect(composer()).toHaveLength(0);
     });
     it('states the other live agents affected before an unconfirmed Run stop falls back to Session stop', async () => {
         runState = liveRun();
-        const headline = SessionAgentActivityHeadlineV1Schema.parse({ v: 1, backendId: 'codex', updatedAt: 1,
-            activeEntries: Array.from({ length: 4 }, (_, index) => ({ entryId: 'execution_run:run_' + (index + 1),
-                kind: 'execution_run', title: 'Run ' + (index + 1), status: 'running', updatedAt: 1 })) });
-        getStorage().setState(state => ({ sessions: { s1: { ...state.sessions.s1!, metadata: {
-            ...state.sessions.s1!.metadata!, sessionAgentActivityHeadlineV1: headline,
-        } } } }));
+        // Execution Runs are locally projected from transcript/registry evidence,
+        // not published in the provider workflow-only activity headline.
+        const markers = Array.from({ length: 4 }, (_, index) => createToolCallMessageFixture({
+            id: 'tool-msg-' + (index + 1), tool: {
+                id: 'toolu_' + (index + 1), name: 'SubAgentRun', state: 'running',
+                input: { ...runState, runId: 'run_' + (index + 1), label: 'Run ' + (index + 1) },
+                createdAt: 1, startedAt: 1, completedAt: null, description: null,
+            },
+        }));
+        getStorage().setState({ sessionMessages: { s1: createSessionMessagesFixture({ isLoaded: true,
+            messageIdsOldestFirst: markers.map(marker => marker.id),
+            messagesById: Object.fromEntries(markers.map(marker => [marker.id, marker])) }) } });
         stopReply = async () => ({ ok: false, error: 'Not confirmed', errorCode: 'rpc_timeout' });
         vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
         await mount(); await loaded(); await menu(); await screen.pressByTestIdAsync('session-run-details-stop');
@@ -565,10 +652,11 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
 });
 
 describe('Neighboring user Run Stop admission', () => {
+    beforeEach(() => {
+        vi.mocked(Modal.alert).mockClear();
+        vi.mocked(Modal.confirm).mockReset();
+    });
     async function mountStopSurface(surface: 'runs' | 'machine' | 'subagent') {
-        const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
-        const profile = await setServerProfileIdentityForUrl(home.homes.home!.serverUrl, serverId);
-        expect(profile?.serverIdentityId).toBe(serverId);
         const original = boundary.call.getMockImplementation()!;
         boundary.call.mockImplementation(async (method, input) => method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST
             ? { runs: [{ ...runState,
@@ -576,20 +664,21 @@ describe('Neighboring user Run Stop admission', () => {
             : original(method, input));
         getStorage().setState({ machineListStatusByServerId: { [serverId]: 'idle' } });
         if (surface === 'subagent') {
-            const { useSessionSubagentActions } = await import('@/components/sessions/agents/actions/useSessionSubagentActions');
-            let select: ((id: string) => void) | undefined;
-            function SubagentStop() {
-                select = useSessionSubagentActions({ sessionId: 's1', serverId, onOpenFull: null, onOpenAdvanced: null,
-                    subagent: { id: 'execution_run:run_1', kind: 'execution_run', status: 'running',
+            const { SessionSubagentRow } = await import('@/components/sessions/agents/list/SessionSubagentRow');
+            const row: React.ComponentProps<typeof SessionSubagentRow>['row'] = {
+                subagent: { id: 'execution_run:run_1', kind: 'execution_run', status: 'running',
                         display: { title: 'Reviewer' }, transcript: { sidechainId: 'toolu_1' },
                         runRef: { runId: 'run_1', backendId: 'codex', intent: 'review' },
                         recipient: { kind: 'execution_run', runId: 'run_1' }, timestamps: {},
                         capabilities: { canOpen: true, canSend: true, canStop: true, canLaunchChild: false,
-                            canDelete: false, canOpenAdvancedRun: true } } }).select;
-                return null;
-            }
-            screen = await renderScreen(<SubagentStop />);
-            return async () => { await act(async () => select?.('stop')); };
+                            canDelete: false, canOpenAdvancedRun: true } },
+                entry: { id: 'execution_run:run_1', kind: 'execution_run', status: 'running', title: 'Reviewer',
+                    metaDetail: null, startedAtMs: null, endedAtMs: null, provenance: 'local', detailState: 'loaded',
+                    parentId: null, runId: 'run_1', sidechainId: 'toolu_1', subagentId: 'execution_run:run_1', attentionKinds: [] },
+            };
+            screen = await renderScreen(<SessionSubagentRow sessionId="s1" serverId={serverId} row={row}
+                onPress={() => {}} onOpenFull={null} onOpenAdvanced={null} />);
+            return async () => { await act(async () => screen.findByTestId('session-subagent-actions:execution_run:run_1')!.props.onSelect('stop')); };
         }
         const { router } = await import('expo-router');
         router.setParams(surface === 'machine' ? { id: 'm1', serverId } : {});
@@ -597,7 +686,7 @@ describe('Neighboring user Run Stop admission', () => {
         const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
         const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl);
         const Screen = surface === 'runs' ? (await import('@/app/(app)/runs')).default
-            : (await import('@/app/(app)/machine/[id]')).default;
+            : (await import('@/app/(app)/machines/[id]')).WorkspaceRouteBody;
         screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><AppPaneProvider><Screen /></AppPaneProvider></InjectedAuthProvider>);
         await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length,
             screen.getTextContent()).toBeGreaterThan(0));
@@ -607,15 +696,13 @@ describe('Neighboring user Run Stop admission', () => {
     }
 
     it.each(['runs', 'machine', 'subagent'] as const)('refuses %s Stop through Action policy before transport or Session fallback', async surface => {
-        getStorage().setState(state => ({ settings: { ...state.settings, actionsSettingsV1: { v: 1, actions: {
-            'execution.run.stop': { enabled: false, enabledPlacements: [], disabledSurfaces: [], disabledPlacements: [] },
-        } } } }));
         const stop = await mountStopSurface(surface);
         const listsBeforeStop = calls(RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST).length;
         await stop();
         expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toEqual([]);
-        await vi.waitFor(() => expect(vi.mocked(Modal.alert)).toHaveBeenCalled());
+        await vi.waitFor(() => expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', 'action_disabled'));
         expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
+        expect(calls(RPC_METHODS.KILL_SESSION)).toEqual([]);
         expect(vi.mocked(Modal.confirm)).not.toHaveBeenCalled();
         expect(calls(RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST)).toHaveLength(listsBeforeStop);
     });
@@ -629,6 +716,7 @@ describe('Neighboring user Run Stop admission', () => {
                 payload: { runId: 'run_1' } },
         ]);
         expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
+        expect(calls(RPC_METHODS.KILL_SESSION)).toEqual([]);
     });
 
     it.each(['runs', 'machine'] as const)('preserves %s explicit Session fallback after an issued Run Stop fails', async surface => {
@@ -636,8 +724,88 @@ describe('Neighboring user Run Stop admission', () => {
         vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
         const stop = await mountStopSurface(surface);
         await stop();
-        await vi.waitFor(() => expect(calls(RPC_METHODS.STOP_SESSION)).toHaveLength(1));
         expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1);
         expect(vi.mocked(Modal.confirm)).toHaveBeenCalledOnce();
+        // The canonical Machine page enters the public Session-stop strategy;
+        // this fixture reaches its runner fallback. The Runs page retains its daemon
+        // fallback, so assert each real strategy's exact Home and target.
+        const method = surface === 'machine' ? RPC_METHODS.KILL_SESSION : RPC_METHODS.STOP_SESSION;
+        await vi.waitFor(() => expect(calls(method)).toHaveLength(1));
+        expect(boundary.requests.filter(request => request.method === method)).toEqual([
+            { serverUrl: home.homes.home!.serverUrl, targetId: surface === 'machine' ? 's1' : 'm1', method,
+                payload: surface === 'machine' ? {} : { sessionId: 's1' } },
+        ]);
+    });
+});
+
+describe('Teammate command Action admission', () => {
+    beforeEach(() => vi.mocked(Modal.alert).mockClear());
+    function sentInputs() {
+        return home.requests.filter(request => request.method === 'POST'
+            && (request.path === '/v2/sessions/s1/pending' || request.path === '/v2/sessions/s1/messages'));
+    }
+    it('delivers an Action-authored shutdown through the real scoped input sender', async () => {
+        const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+        const execute = createFrontDoorActionExecute();
+        const result = await execute('session.message.send', { sessionId: 's1', kind: 'sessionSubagentCommand',
+            command: { kind: 'agent_team_member_delete', teamId: 'qa-team', memberId: 'alpha@qa-team', memberLabel: 'alpha' },
+            localId: 'shutdown-action-1' }, { serverId, expectedAccountId: 'account-1', surface: 'ui',
+            authority: 'present_user', actionCaller: { kind: 'host' } });
+        expect(result).toMatchObject({ ok: true, result: { status: 'accepted', localId: 'shutdown-action-1' } });
+        expect(sentInputs()).toHaveLength(1);
+        expect(sentInputs()[0]!.body).toMatchObject({ localId: 'shutdown-action-1', requestedAction: { v: 1, kind: 'send_now' },
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Shutdown teammate alpha · qa-team' },
+                meta: { displayText: 'Shutdown teammate alpha · qa-team', happier: { kind: 'subagent_command.v1',
+                    payload: { kind: 'agent_team_member_delete', teamId: 'qa-team', memberId: 'alpha@qa-team', memberLabel: 'alpha' } } },
+            } } });
+    });
+    async function mountCommandSurface(surface: 'member' | 'team') {
+        const { SessionSubagentRow } = await import('@/components/sessions/agents/list/SessionSubagentRow');
+        const { SessionSubagentGroup } = await import('@/components/sessions/agents/list/SessionSubagentGroup');
+        const row: React.ComponentProps<typeof SessionSubagentRow>['row'] = {
+            subagent: { id: 'agent_team_member:qa-team:alpha', kind: 'agent_team_member', status: 'running',
+                display: { title: 'alpha', groupKey: 'qa-team', groupLabel: 'qa-team' },
+                transcript: { toolMessageRouteId: 'message_2', sidechainId: 'toolu_2', toolId: 'toolu_2' },
+                recipient: { kind: 'agent_team_member', teamId: 'qa-team', memberId: 'alpha@qa-team', memberLabel: 'alpha' },
+                capabilities: { canOpen: true, canSend: true, canStop: false, canLaunchChild: false,
+                    canDelete: true, canOpenAdvancedRun: false }, timestamps: {} },
+            entry: { id: 'agent_team_member:qa-team:alpha', kind: 'agent_team_member', status: 'running', title: 'alpha',
+                metaDetail: null, startedAtMs: null, endedAtMs: null, provenance: 'local', detailState: 'loaded',
+                parentId: null, runId: null, sidechainId: 'toolu_2', subagentId: 'agent_team_member:qa-team:alpha', attentionKinds: [] },
+        };
+        screen = await renderScreen(surface === 'member'
+            ? <SessionSubagentRow sessionId="s1" serverId={serverId} row={row} onPress={() => {}}
+                onOpenFull={null} onOpenAdvanced={null} />
+            : <SessionSubagentGroup sessionId="s1" serverId={serverId} label="qa-team" rows={[row]}
+                activityPreviewById={new Map()} onOpenPreview={() => {}} onOpenFull={() => {}} onOpenAdvanced={() => {}} />);
+        return async () => { await act(async () => {
+            const menu = surface === 'member'
+                ? screen.findByTestId('session-subagent-actions:agent_team_member:qa-team:alpha')!
+                : screen.findByType(DropdownMenu);
+            menu.props.onSelect(surface === 'member' ? 'delete' : 'delete-team');
+        }); };
+    }
+    it.each(['member', 'team'] as const)('refuses %s shutdown through Action policy before input delivery', async surface => {
+        const send = await mountCommandSurface(surface);
+        await send();
+        await vi.waitFor(() => expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', 'action_disabled'));
+        expect(sentInputs()).toEqual([]);
+        expect(boundary.messages).toEqual([]);
+    });
+    it.each(['member', 'team'] as const)('delivers admitted %s shutdown with its exact text and structured envelope', async surface => {
+        const send = await mountCommandSurface(surface);
+        await send();
+        await vi.waitFor(() => expect(sentInputs(), JSON.stringify(vi.mocked(Modal.alert).mock.calls)).toHaveLength(1));
+        const input = sentInputs()[0]!;
+        expect(input.home).toBe('home');
+        expect(input.accountId).toBe('account-1');
+        expect(input.body).toMatchObject({ requestedAction: { v: 1, kind: 'send_now' }, content: { t: 'plain', v: {
+            role: 'user', content: { type: 'text', text: surface === 'member' ? 'Shutdown teammate alpha · qa-team' : 'Delete team qa-team' },
+            meta: { happier: { kind: 'subagent_command.v1', payload: surface === 'member'
+                ? { kind: 'agent_team_member_delete', teamId: 'qa-team', memberId: 'alpha@qa-team', memberLabel: 'alpha' }
+                : { kind: 'agent_team_delete', teamId: 'qa-team' } },
+            },
+        } } });
+        expect(vi.mocked(Modal.alert)).not.toHaveBeenCalled();
     });
 });

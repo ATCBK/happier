@@ -3,7 +3,6 @@ import * as React from 'react';
 import {
     SessionSurfaceItemV1Schema,
     type SessionBoardActionRecoveryEvidenceV1,
-    type SessionBoardItemUpsertInputV1,
     type SessionSurfaceItemV1,
 } from '@happier-dev/protocol/sessions/board';
 
@@ -11,6 +10,7 @@ import type {
     SessionBoardActionUnavailableReason,
     SessionBoardActionsPort,
     SessionBoardItemPlacementInput,
+    SessionBoardItemUpsertInput,
     SessionBoardMutationResult,
 } from '@/sync/domains/session/board';
 import { readSessionBoardUpsertItemRevision } from '@/sync/domains/session/board';
@@ -49,7 +49,7 @@ export type SessionBoardItemEditorStatus<TInvalid extends string> =
     | Readonly<{
         kind: 'outcomeUnknown';
         /** Exact semantic intent; approval terminals do not carry sealed transport evidence. */
-        intent: SessionBoardItemUpsertInputV1;
+        intent: SessionBoardItemUpsertInput;
         recovery: SessionBoardActionRecoveryEvidenceV1 | null;
     }>
     | Readonly<{ kind: 'approvalPending'; artifactId: string; actionId: string }>
@@ -322,7 +322,7 @@ export function useSessionBoardItemEditor<TInvalid extends string>(
     }, [conflictProjectionAtRequestRef, conflictRefreshObservedRef, conflictRefreshRequestedRef, conflictRefreshRequestOwnerRef, draft, inputRef]);
 
     const rememberUnknownOutcome = React.useCallback((
-        intent: SessionBoardItemUpsertInputV1,
+        intent: SessionBoardItemUpsertInput,
         recovery: SessionBoardActionRecoveryEvidenceV1 | null,
     ) => {
         const requestRecoveryRefresh = inputRef.current.requestRecoveryRefresh;

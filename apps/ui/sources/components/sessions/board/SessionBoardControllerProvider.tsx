@@ -77,6 +77,18 @@ export type MountedSessionBoardController = Readonly<{
     resolvePrimaryHost: SessionBoardPlacementPrimaryMountResolver;
     /** Measured body eligibility from each generic surface; the shell still chooses the host. */
     onBodyEligibilityChange: SessionBoardBodyEligibilityReporter;
+    /**
+     * A transcript reply drawing an executable item reports while the transcript list's own
+     * visibility owner demands its content; the returned function withdraws it. This is a physical
+     * fact like body eligibility, never a host decision: the shell resolver still ranks the
+     * transcript after every Board host.
+     */
+    reportInlineTranscriptDemand: (itemId: string, occurrence: string) => () => void;
+    /**
+     * Which demanded reply runs the item when the transcript is its host: the reply that has been
+     * on screen longest, so a body never jumps between replies while the person reads.
+     */
+    resolveInlineTranscriptOccurrence: (itemId: string) => string | null;
     /** Registers the real workspace tab hosts consumed by Board removal dialogs. */
     onViewFocusTargetChange: (viewId: string, target: FocusReturnTarget) => void;
     /** Registers the workspace's surviving Board-view action control fallback. */
@@ -87,6 +99,7 @@ export type MountedSessionBoardController = Readonly<{
 
 const NO_PRIMARY_MOUNT: SessionBoardPrimaryMountResolver = () => null;
 const NO_INSTALLED_WIDGET_CANDIDATES: readonly WidgetCandidate[] = Object.freeze([]);
+const NO_INLINE_TRANSCRIPT_DEMAND: ReadonlyMap<string, readonly string[]> = new Map();
 
 const SessionBoardControllerContext = React.createContext<MountedSessionBoardController | null>(null);
 
@@ -451,6 +464,29 @@ export function SessionBoardControllerOwner(props: React.PropsWithChildren<Reado
             return next;
         });
     }, []);
+    // Transcript replies that draw an executable item while the transcript list demands them,
+    // in the order they arrived on screen. One owner for the whole Session shell, not one per row.
+    const [inlineTranscriptDemand, setInlineTranscriptDemand] = React.useState(NO_INLINE_TRANSCRIPT_DEMAND);
+    const reportInlineTranscriptDemand = React.useCallback((itemId: string, occurrence: string) => {
+        setInlineTranscriptDemand((current) => {
+            const occurrences = current.get(itemId) ?? [];
+            if (occurrences.includes(occurrence)) return current;
+            return new Map(current).set(itemId, [...occurrences, occurrence]);
+        });
+        return () => setInlineTranscriptDemand((current) => {
+            const occurrences = current.get(itemId);
+            if (!occurrences?.includes(occurrence)) return current;
+            const next = new Map(current);
+            const remaining = occurrences.filter((candidate) => candidate !== occurrence);
+            if (remaining.length > 0) next.set(itemId, remaining);
+            else next.delete(itemId);
+            return next;
+        });
+    }, []);
+    const resolveInlineTranscriptOccurrence = React.useCallback(
+        (itemId: string) => inlineTranscriptDemand.get(itemId)?.[0] ?? null,
+        [inlineTranscriptDemand],
+    );
     const resolvePrimaryHost = React.useCallback<SessionBoardPlacementPrimaryMountResolver>(
         (itemId, destination, boardView) => shellResolvePrimaryHost(
             itemId,
@@ -461,9 +497,10 @@ export function SessionBoardControllerOwner(props: React.PropsWithChildren<Reado
                     bodyEligibility[host]?.viewId === controller.activeViewId
                     && bodyEligibility[host]?.itemIds.has(itemId)
                 )),
+                inlineTranscriptDemanded: inlineTranscriptDemand.has(itemId),
             },
         ),
-        [bodyEligibility, controller.activeViewId, selectedViewItemIds, shellResolvePrimaryHost],
+        [bodyEligibility, controller.activeViewId, inlineTranscriptDemand, selectedViewItemIds, shellResolvePrimaryHost],
     );
     const value = React.useMemo<MountedSessionBoardController>(() => ({
         address: props.address,
@@ -480,10 +517,12 @@ export function SessionBoardControllerOwner(props: React.PropsWithChildren<Reado
         ...(props.acquireContent ? { acquireContent: props.acquireContent } : {}),
         resolvePrimaryHost,
         onBodyEligibilityChange,
+        reportInlineTranscriptDemand,
+        resolveInlineTranscriptOccurrence,
         onViewFocusTargetChange: props.onViewFocusTargetChange ?? (() => {}),
         onViewActionsFocusTargetChange: props.onViewActionsFocusTargetChange ?? (() => {}),
         viewActionsFocusTargetRef: props.viewActionsFocusTargetRef,
-    }), [props.acquireContent, props.actions, props.address, props.approvalPending, props.binding, props.callerHostedHtmlRuntime, installedWidgetCandidates, props.onViewActionsFocusTargetChange, props.onViewFocusTargetChange, props.pluginRuntime, props.requestApprovalContinuation, props.viewActionsFocusTargetRef, controller, resolvePrimaryHost, onBodyEligibilityChange]);
+    }), [props.acquireContent, props.actions, props.address, props.approvalPending, props.binding, props.callerHostedHtmlRuntime, installedWidgetCandidates, props.onViewActionsFocusTargetChange, props.onViewFocusTargetChange, props.pluginRuntime, props.requestApprovalContinuation, props.viewActionsFocusTargetRef, controller, resolvePrimaryHost, onBodyEligibilityChange, reportInlineTranscriptDemand, resolveInlineTranscriptOccurrence]);
     return (
         <SessionBoardControllerContext.Provider value={value}>
             {props.children}

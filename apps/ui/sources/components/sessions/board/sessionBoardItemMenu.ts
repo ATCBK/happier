@@ -13,6 +13,7 @@ import { t } from '@/text';
 import type { SessionWidgetDensity } from './SessionWidgetHost';
 import { resolveFitContentHeight } from './sessionBoardItemHeight';
 import { isSessionBoardItemEditableInPlace } from './sessionBoardItemPresentation';
+import { canPromoteSessionWidgetDefinitionSourceV1 } from '@happier-dev/protocol/widgets/widgetDefinitionPromotionV1';
 
 /**
  * The widget card's reachable operations, in one place.
@@ -42,7 +43,8 @@ export type SessionBoardItemMenuInput = Readonly<{
     /** A configured widget's Edit inputs… (lab dbind E): this copy only; the line repeats its binding. */
     editInputs?: Readonly<{ onPress: () => void; binding: string | null }> | undefined;
     /** The widget definition flows this card offers (About, Save as your widget, Post a snapshot). */
-    definition?: Readonly<{ onAbout?: (() => void) | undefined; onSaveAsYours?: (() => void) | undefined; onPostSnapshot?: (() => void) | undefined }>;
+    definition?: Readonly<{ onAbout?: (() => void) | undefined; onAddTo?: (() => void) | undefined; onSaveAsYours?: (() => void) | undefined; onPostSnapshot?: (() => void) | undefined }>;
+    visualCopy?: Readonly<{ onSaveArtifact?: (() => void) | undefined; onShare?: (() => void) | undefined }>;
     onMove?: ((direction: 'before' | 'after') => void) | undefined;
     canMoveBefore?: boolean | undefined;
     canMoveAfter?: boolean | undefined;
@@ -57,6 +59,8 @@ export type SessionBoardItemMenuInput = Readonly<{
     onAddToCompanion?: (() => void) | undefined;
     /** Viewer-local inverse of `onAddToCompanion`; deliberately non-destructive. */
     onRemoveFromCompanion?: (() => void) | undefined;
+    /** Adds a Board placement for an item shown outside the Board (a reply): the same item, never a copy. */
+    onPinToBoard?: (() => void) | undefined;
     /** Drops this view's placement. The shared record survives. */
     onUnpin?: (() => void) | undefined;
     /** Deletes the shared record and every placement, through the shared Action. */
@@ -115,9 +119,27 @@ export function buildSessionBoardItemActions(input: SessionBoardItemMenuInput): 
         });
     }
 
+    // Pin is a placement of this same item through the Board's layout owner, so it sits with the
+    // other places the item can be shown, before the copies that cross to the Account.
+    if (input.onPinToBoard) {
+        actions.push({
+            id: 'pin-to-board',
+            title: t('sessionBoard.item.actions.pinToBoard'),
+            icon: 'push-pin',
+            group: contentGroup,
+            onPress: input.onPinToBoard,
+        });
+    }
+
     // About and Save as your widget only read the item; Post a snapshot is offered only to an editor
     // by its producer. All three reach readers of this Session alike.
-    actions.push(...buildWidgetDefinitionActions({ ...(input.definition ?? {}), group: contentGroup }));
+    const promotable = canPromoteSessionWidgetDefinitionSourceV1(item.source);
+    actions.push(...buildWidgetDefinitionActions({ ...input.definition,
+        ...(!promotable ? { onAddTo: undefined, onSaveAsYours: undefined } : {}), group: contentGroup }));
+    if (input.visualCopy?.onSaveArtifact) actions.push({ id: 'saveArtifact', title: t('widgetDefinition.visualSaveMenu'),
+        icon: 'floppy-disk', group: contentGroup, onPress: input.visualCopy.onSaveArtifact });
+    if (promotable && input.visualCopy?.onShare) actions.push({ id: 'shareVisual', title: t('widgetDefinition.visualShareMenu'),
+        icon: 'link', group: contentGroup, onPress: input.visualCopy.onShare });
 
     if (input.density !== 'full' || !input.canEdit) {
         // A compact Companion/sidebar placement still needs a way to remove the

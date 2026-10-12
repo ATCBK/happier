@@ -44,10 +44,14 @@ export function resolveExternalSessionBrowseThrownErrorMessage(
     const transportCode = error && typeof error === 'object'
         ? (error as { code?: unknown }).code
         : null;
+    if (transportCode === 'MACHINE_RPC_TIMEOUT') {
+        return resolveExternalSessionBrowseRpcErrorMessage('agent_timeout', operation);
+    }
     if (
         rpcErrorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
         || rpcErrorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND
-        || transportCode === 'MACHINE_RPC_TIMEOUT'
+        || transportCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
+        || transportCode === RPC_ERROR_CODES.METHOD_NOT_FOUND
     ) {
         return t('newSession.daemonRpcUnavailableBody');
     }

@@ -22,7 +22,51 @@ function effectiveField(
     };
 }
 
+
+/** The compact choice field names its reading and opens its rows in place; open it, then find a row by label. */
+async function openChoices(screen: Awaited<ReturnType<typeof renderScreen>>, title: string) {
+    const trigger = screen.findAllByType('Pressable').find(node => String(node.props.accessibilityLabel ?? '').startsWith(`${title}:`));
+    expect(trigger).toBeDefined();
+    await pressTestInstanceAsync(trigger);
+}
+const choiceRow = (screen: Awaited<ReturnType<typeof renderScreen>>, label: string) => screen.findAllByType('Pressable')
+    .find(node => (node.props.accessibilityRole === 'checkbox' || node.props.accessibilityRole === 'radio')
+        && String(node.props.accessibilityLabel ?? '').startsWith(label));
+
 describe('ActionInputFields', () => {
+    it('retains one array-valued group choice and writes its replacement as one choice', async () => {
+        const { ActionInputFields } = await import('./ActionInputFields');
+        const onPatch = vi.fn();
+        const screen = await renderScreen(<ActionInputFields
+            fields={[effectiveField({ path: 'breakdown', title: 'Group by', widget: 'select', optionsSourceId: 'usage.query.breakdown' })]}
+            input={{ breakdown: ['source', 'machine'] }}
+            editable
+            resolveFieldOptions={() => [
+                { value: ['source', 'machine'], label: 'Saved group' },
+                { value: ['model'], label: 'Model' },
+            ]}
+            getChipAccessibilityLabel={({ option, selected }) => `${option.label}: ${selected ? 'selected' : 'unselected'}`}
+            onPatch={onPatch}
+        />);
+        const saved = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'Saved group');
+        expect(saved?.props.accessibilityLabel).toBe('Saved group: selected');
+        expect(saved?.props.accessibilityState?.checked).toBe(true);
+        await pressTestInstanceAsync(findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'Model'));
+        expect(onPatch).toHaveBeenCalledWith({ breakdown: ['model'] });
+    });
+
+    it('presents a declared setup question without replacing its noun or changing the submitted value', async () => {
+        const { ActionInputFields } = await import('./ActionInputFields');
+        const field = effectiveField({ path: 'project', title: 'Project', prompt: 'Which project?', widget: 'text' });
+        const onPatch = vi.fn();
+        const screen = await renderScreen(<ActionInputFields fields={[field]} input={{ project: 'chosen' }}
+            editable resolveFieldOptions={() => []} resolveFieldTestID={() => 'setup-project'} onPatch={onPatch} />);
+        const input = screen.findAllByType('TextInput').find(node => node.props.accessibilityLabel === 'Which project?');
+        expect(input).toBeDefined();
+        expect(field.title).toBe('Project');
+        screen.changeTextByTestId('setup-project', 'next');
+        expect(onPatch).toHaveBeenCalledWith({ project: 'next' });
+    });
     it('does not clear the last selected value for required multiselect fields', async () => {
         const { ActionInputFields } = await import('./ActionInputFields');
         const onPatch = vi.fn();
@@ -76,8 +120,9 @@ describe('ActionInputFields', () => {
             onPatch={onPatch}
         />);
 
-        const claudeChip = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'Claude');
-        const codexChip = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'Codex');
+        await openChoices(screen, 'Review engines');
+        const claudeChip = choiceRow(screen, 'Claude');
+        const codexChip = choiceRow(screen, 'Codex');
         expect(claudeChip?.props.disabled).toBe(true);
         expect(codexChip?.props.disabled).not.toBe(true);
 
@@ -158,8 +203,8 @@ describe('ActionInputFields', () => {
             onPatch={onPatch}
         />);
 
-        const workAccount = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'Work account');
-        await pressTestInstanceAsync(workAccount);
+        await openChoices(screen, 'Accounts');
+        await pressTestInstanceAsync(choiceRow(screen, 'Work account'));
 
         expect(onPatch).toHaveBeenCalledWith({ credentialRefs: [] });
     });
@@ -188,11 +233,8 @@ describe('ActionInputFields', () => {
             onPatch={onPatch}
         />);
 
-        const workAccount = findTestInstanceByTypeContainingText(
-            screen.tree,
-            'Pressable',
-            ['Work account', 'Connected through Acme'],
-        );
+        await openChoices(screen, 'Account');
+        const workAccount = choiceRow(screen, 'Work account: Connected through Acme');
         expect(workAccount).toBeDefined();
 
         await pressTestInstanceAsync(workAccount);

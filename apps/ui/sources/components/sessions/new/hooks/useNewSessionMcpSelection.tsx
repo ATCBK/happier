@@ -1,258 +1,59 @@
 import React from 'react';
-
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import { createMcpActionChip } from '@/components/sessions/agentInput/definitions/createMcpActionChip';
 import { NewSessionMcpSelectionContent } from '@/components/sessions/new/components/NewSessionMcpSelectionContent';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { machineMcpServersPreview } from '@/sync/ops/machineMcpServers';
-import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@/sync/runtime/rpcErrors';
+import { useNewSessionCapabilities } from '@/sync/domains/capabilities/session/useNewSessionCapabilities';
 import { t } from '@/text';
-import type { DaemonMcpServersPreviewResponse, SessionMcpSelectionV1 } from '@happier-dev/protocol';
+import type { DaemonMcpServersPreviewResponse } from '@happier-dev/protocol';
+import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 type PreviewSuccess = Extract<DaemonMcpServersPreviewResponse, { ok: true }>;
-
 export type UseNewSessionMcpSelectionResult = Readonly<{
-    mcpChip: AgentInputExtraActionChip | null;
-    mcpPreview: PreviewSuccess | null;
-    mcpPreviewLoading: boolean;
+    mcpChip: AgentInputExtraActionChip | null; mcpPreview: PreviewSuccess | null; mcpPreviewLoading: boolean;
 }>;
 
+/** Appearance adapter for the incumbent MCP chip; selection and preview belong to the generic hook. */
 export function useNewSessionMcpSelection(params: Readonly<{
-    selectedMachineId: string | null;
-    selectedPath: string;
-    selectedMachineName?: string | null;
-    portableOnly?: boolean;
-    agentType: string;
-    targetServerId?: string | null;
-    mcpSelection: SessionMcpSelectionV1;
-    setMcpSelection: React.Dispatch<React.SetStateAction<SessionMcpSelectionV1>>;
+    selectedMachineId: string | null; selectedPath: string; selectedMachineName?: string | null;
+    portableOnly?: boolean; agentType: string; targetServerId?: string | null;
+    agentAcceptsUserMcp?: boolean;
+    capabilitySelection: SessionCapabilitySelectionV1;
+    setCapabilitySelection: React.Dispatch<React.SetStateAction<SessionCapabilitySelectionV1>>;
     onOpenSettings: () => void;
 }>): UseNewSessionMcpSelectionResult {
-    const mcpServersEnabled = useFeatureEnabled('mcp.servers');
-    const [mcpPreview, setMcpPreview] = React.useState<PreviewSuccess | null>(null);
-    const [mcpPreviewLoading, setMcpPreviewLoading] = React.useState(false);
-    const [mcpPreviewError, setMcpPreviewError] = React.useState<string | null>(null);
-    const [mcpPreviewUnsupported, setMcpPreviewUnsupported] = React.useState(false);
-    const [previewDemanded, setPreviewDemanded] = React.useState(false);
-    const demandPreview = React.useCallback(() => setPreviewDemanded(true), []);
-
-    React.useEffect(() => {
-        setMcpPreviewUnsupported(false);
-    }, [params.agentType, params.selectedMachineId, params.selectedPath, params.targetServerId]);
-
-    const isUnsupportedPreviewErrorMessage = React.useCallback((message: string) => {
-        return message === 'RPC method not available' || message === 'Method not found';
-    }, []);
-
-    const refreshPreview = React.useCallback(async () => {
-        if (!mcpServersEnabled || !params.selectedMachineId || params.selectedPath.trim().length === 0) {
-            setMcpPreview(null);
-            setMcpPreviewError(null);
-            setMcpPreviewUnsupported(false);
-            setMcpPreviewLoading(false);
-            return;
-        }
-
-        setMcpPreviewLoading(true);
-        setMcpPreviewUnsupported(false);
-        try {
-            const response = await machineMcpServersPreview(
-                params.selectedMachineId,
-                {
-                    agentId: params.agentType,
-                    directory: params.selectedPath.trim(),
-                    selection: params.mcpSelection,
-                },
-                { serverId: params.targetServerId ?? undefined },
-            );
-            if (response.ok) {
-                setMcpPreview(response);
-                setMcpPreviewError(null);
-            } else {
-                if (isUnsupportedPreviewErrorMessage(response.error)) {
-                    setMcpPreview(null);
-                    setMcpPreviewError(null);
-                    setMcpPreviewUnsupported(true);
-                } else {
-                    setMcpPreview(null);
-                    setMcpPreviewError(response.error);
-                }
-            }
-        } catch (error) {
-            if (
-                isRpcMethodNotAvailableError(error)
-                || isRpcMethodNotFoundError(error)
-                || (error instanceof Error && (error.message === 'RPC method not available' || error.message === 'Method not found'))
-            ) {
-                setMcpPreview(null);
-                setMcpPreviewError(null);
-                setMcpPreviewUnsupported(true);
-                return;
-            }
-            setMcpPreview(null);
-            setMcpPreviewError(error instanceof Error ? error.message : String(error ?? 'unknown error'));
-        } finally {
-            setMcpPreviewLoading(false);
-        }
-    }, [
-        mcpServersEnabled,
-        params.agentType,
-        params.mcpSelection,
-        params.selectedMachineId,
-        params.selectedPath,
-        params.targetServerId,
-        isUnsupportedPreviewErrorMessage,
-    ]);
-
-    React.useEffect(() => {
-        let cancelled = false;
-        if (!previewDemanded) return;
-        if (!mcpServersEnabled || !params.selectedMachineId || params.selectedPath.trim().length === 0) {
-            setMcpPreview(null);
-            setMcpPreviewError(null);
-            setMcpPreviewUnsupported(false);
-            setMcpPreviewLoading(false);
-            return;
-        }
-
-        if (mcpPreviewUnsupported) {
-            return;
-        }
-
-        setMcpPreviewLoading(true);
-        machineMcpServersPreview(
-            params.selectedMachineId,
-            {
-                agentId: params.agentType,
-                directory: params.selectedPath.trim(),
-                selection: params.mcpSelection,
-            },
-            { serverId: params.targetServerId ?? undefined },
-        )
-            .then((response) => {
-                if (cancelled) return;
-                if (response.ok) {
-                    setMcpPreview(response);
-                    setMcpPreviewError(null);
-                } else {
-                    if (isUnsupportedPreviewErrorMessage(response.error)) {
-                        setMcpPreview(null);
-                        setMcpPreviewError(null);
-                        setMcpPreviewUnsupported(true);
-                    } else {
-                        setMcpPreview(null);
-                        setMcpPreviewError(response.error);
-                    }
-                }
-            })
-            .catch((error) => {
-                if (cancelled) return;
-                if (
-                    isRpcMethodNotAvailableError(error)
-                    || isRpcMethodNotFoundError(error)
-                    || (error instanceof Error && (error.message === 'RPC method not available' || error.message === 'Method not found'))
-                ) {
-                    setMcpPreview(null);
-                    setMcpPreviewError(null);
-                    setMcpPreviewUnsupported(true);
-                    return;
-                }
-                setMcpPreview(null);
-                setMcpPreviewError(error instanceof Error ? error.message : String(error ?? 'unknown error'));
-            })
-            .finally(() => {
-                if (cancelled) return;
-                setMcpPreviewLoading(false);
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [
-        mcpServersEnabled,
-        previewDemanded,
-        params.agentType,
-        params.mcpSelection,
-        params.selectedMachineId,
-        params.selectedPath,
-        params.targetServerId,
-        mcpPreviewUnsupported,
-        isUnsupportedPreviewErrorMessage,
-    ]);
-
+    const enabled = useFeatureEnabled('mcp.servers');
+    const capabilities = useNewSessionCapabilities({
+        machineId: params.selectedMachineId, directory: params.selectedPath, agentId: params.agentType,
+        targetServerId: params.targetServerId, portableOnly: params.portableOnly, enabled,
+        agentAcceptsUserMcp: params.agentAcceptsUserMcp,
+        selection: params.capabilitySelection, setSelection: params.setCapabilitySelection,
+    });
+    const mcpPreview = capabilities.preview;
+    const mcpPreviewLoading = capabilities.previewStatus === 'loading';
     const contentProps = React.useMemo(() => ({
-        machineId: params.selectedMachineId,
-        targetServerId: params.targetServerId,
-        machineName: params.selectedMachineName,
-        directory: params.selectedPath.trim(),
+        machineId: params.selectedMachineId, targetServerId: params.targetServerId,
+        machineName: params.selectedMachineName, directory: params.selectedPath.trim(),
         ...(params.portableOnly !== undefined ? { portableOnly: params.portableOnly } : {}),
         agentType: params.agentType,
         hasContext: params.portableOnly === true || Boolean(params.selectedMachineId && params.selectedPath.trim().length > 0),
-        preview: mcpPreview,
-        selection: params.mcpSelection,
-        loading: mcpPreviewLoading,
-        error: mcpPreviewError,
-        previewUnsupported: mcpPreviewUnsupported,
-        onSelectionChange: (selection: SessionMcpSelectionV1) => {
-            params.setMcpSelection(selection);
-        },
-        onRefresh: refreshPreview,
+        preview: mcpPreview, selection: params.capabilitySelection, loading: mcpPreviewLoading,
+        error: capabilities.unsupported ? null : capabilities.error, previewUnsupported: capabilities.unsupported,
+        onSelectionChange: params.setCapabilitySelection, onRefresh: capabilities.refresh,
         onOpenSettings: params.onOpenSettings,
-    }), [
-        mcpPreview,
-        mcpPreviewError,
-        mcpPreviewLoading,
-        mcpPreviewUnsupported,
-        params,
-        refreshPreview,
-    ]);
-
-    const selectedCount = React.useMemo(() => {
-        if (!mcpServersEnabled) return 0;
-        // Chip badge should reflect detected/provider servers only, not managed/Happier settings.
-        return mcpPreview?.detected.filter((entry) => entry.selected).length ?? 0;
-    }, [mcpPreview, mcpServersEnabled]);
-    const chipLabel = t('newSession.mcpChipLabel');
-    const chipStabilityKey = React.useMemo(() => JSON.stringify({
-        machineId: params.selectedMachineId,
-        directory: params.selectedPath.trim(),
-        agentType: params.agentType,
-        targetServerId: params.targetServerId ?? null,
-        selection: params.mcpSelection,
-        preview: mcpPreview,
-        loading: mcpPreviewLoading,
-        error: mcpPreviewError,
-        previewUnsupported: mcpPreviewUnsupported,
-    }), [
-        mcpPreview,
-        mcpPreviewError,
-        mcpPreviewLoading,
-        mcpPreviewUnsupported,
-        params.agentType,
-        params.mcpSelection,
-        params.selectedMachineId,
-        params.selectedPath,
-        params.targetServerId,
-    ]);
-
-    const mcpChip = React.useMemo<AgentInputExtraActionChip | null>(() => {
-        if (!mcpServersEnabled) return null;
-
-        return createMcpActionChip({
-            label: chipLabel,
-            selectedCount,
-            stabilityKey: chipStabilityKey,
-            onIntent: demandPreview,
-            popoverContent: ({ maxHeight }) => (
-                <NewSessionMcpSelectionContent
-                    {...contentProps}
-                    maxHeight={Math.min(760, maxHeight)}
-                />
-            ),
-            maxHeightCap: 760,
-            maxWidthCap: 620,
-        });
-    }, [chipLabel, chipStabilityKey, contentProps, demandPreview, mcpServersEnabled, selectedCount]);
-
+    }), [params, mcpPreview, mcpPreviewLoading, capabilities.error, capabilities.unsupported, capabilities.refresh]);
+    const selectedCount = enabled ? mcpPreview?.detected.filter(entry => entry.selected).length ?? 0 : 0;
+    const label = t('newSession.mcpChipLabel');
+    const stabilityKey = React.useMemo(() => JSON.stringify({
+        machineId: params.selectedMachineId, directory: params.selectedPath.trim(), agentType: params.agentType,
+        targetServerId: params.targetServerId ?? null, selection: params.capabilitySelection,
+        preview: mcpPreview, loading: mcpPreviewLoading, error: capabilities.error, previewUnsupported: capabilities.unsupported,
+    }), [params.selectedMachineId, params.selectedPath, params.agentType, params.targetServerId,
+        params.capabilitySelection, mcpPreview, mcpPreviewLoading, capabilities.error, capabilities.unsupported]);
+    const mcpChip = React.useMemo<AgentInputExtraActionChip | null>(() => enabled ? createMcpActionChip({
+        label, selectedCount, stabilityKey, onIntent: capabilities.demandPreview,
+        popoverContent: ({ maxHeight }) => <NewSessionMcpSelectionContent {...contentProps} maxHeight={Math.min(760, maxHeight)} />,
+        maxHeightCap: 760, maxWidthCap: 620,
+    }) : null, [enabled, label, selectedCount, stabilityKey, capabilities.demandPreview, contentProps]);
     return { mcpChip, mcpPreview, mcpPreviewLoading };
 }

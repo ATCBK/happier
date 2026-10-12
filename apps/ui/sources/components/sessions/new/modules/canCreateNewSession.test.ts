@@ -24,6 +24,7 @@ describe('canCreateNewSession', () => {
     });
     it('admits the matching grant-bound managed machine without an Account machine projection', () => {
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'bound-machine',
             selectedMachine: null,
             selectedPath: '',
@@ -31,6 +32,7 @@ describe('canCreateNewSession', () => {
             hostBoundMachineId: 'bound-machine',
         })).toBe(true);
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'other-machine',
             selectedMachine: null,
             selectedPath: '',
@@ -40,6 +42,7 @@ describe('canCreateNewSession', () => {
     });
     it('allows an interactive temporary-computer target without inventing a selected machine', () => {
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: null,
             selectedMachine: null,
             selectedPath: '',
@@ -53,6 +56,7 @@ describe('canCreateNewSession', () => {
     });
     it('fails closed when machine is missing', () => {
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm1',
             selectedMachine: null,
             selectedPath: '/repo',
@@ -63,12 +67,14 @@ describe('canCreateNewSession', () => {
         const machine: any = { id: 'm1', active: true, activeAt: Date.now() };
 
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: null,
             selectedMachine: machine,
             selectedPath: '/repo',
         })).toBe(false);
 
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm1',
             selectedMachine: machine,
             selectedPath: '   ',
@@ -78,6 +84,7 @@ describe('canCreateNewSession', () => {
     it('returns false when selected machine is offline', () => {
         const offlineMachine: any = { id: 'm1', active: false, activeAt: 0 };
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm1',
             selectedMachine: offlineMachine,
             selectedPath: '/repo',
@@ -96,6 +103,7 @@ describe('canCreateNewSession', () => {
         };
 
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm-old',
             selectedMachine: replacedMachine,
             selectedPath: '/repo',
@@ -105,6 +113,7 @@ describe('canCreateNewSession', () => {
     it('returns true when selected machine has exact spawn readiness', () => {
         const onlineMachine: any = { id: 'm1', active: true, activeAt: Date.now() };
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm1',
             selectedMachine: onlineMachine,
             selectedPath: '/repo',
@@ -115,6 +124,7 @@ describe('canCreateNewSession', () => {
     it('allows an online machine to attempt launch before exact spawn readiness resolves', () => {
         const onlineMachine: any = { id: 'm1', active: true, activeAt: Date.now() };
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm1',
             selectedMachine: onlineMachine,
             selectedPath: '/repo',
@@ -124,6 +134,7 @@ describe('canCreateNewSession', () => {
     it('allows an online machine to attempt launch while exact spawn readiness is probing', () => {
         const onlineMachine: any = { id: 'm1', active: true, activeAt: Date.now() };
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm1',
             selectedMachine: onlineMachine,
             selectedPath: '/repo',
@@ -134,6 +145,7 @@ describe('canCreateNewSession', () => {
     it('blocks launch when exact spawn readiness has a confirmed unavailable status', () => {
         const onlineMachine: any = { id: 'm1', active: true, activeAt: Date.now() };
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm1',
             selectedMachine: onlineMachine,
             selectedPath: '/repo',
@@ -144,12 +156,14 @@ describe('canCreateNewSession', () => {
     it('needs no folder for a no-folder session, and still needs a ready machine', () => {
         const machine: any = { id: 'm1', active: true, activeAt: Date.now() };
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm1',
             selectedMachine: machine,
             selectedPath: '',
             directoryKind: 'managed',
         })).toBe(true);
         expect(canCreateNewSession({
+            scope: { serverId: 'creation-home', accountId: 'creation-account' },
             selectedMachineId: 'm1',
             selectedMachine: null,
             selectedPath: '',

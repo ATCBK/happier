@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
@@ -8,7 +9,7 @@ import {
     type ServerProfile,
 } from '@/sync/domains/server/serverProfiles';
 import { useMachineListByServerId, useMachineListStatusByServerId } from '@/sync/domains/state/storage';
-import { resolveServerScopedMachineInventoryKeys, resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { resolveServerScopedMachineInventory, resolveServerScopedMachineInventoryKeys } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 
 export type ServerScopedMachinePresentation = MachineDisplayRenderable & Readonly<{
@@ -102,7 +103,7 @@ function buildServerProfilesSignature(profilesById: ReadonlyMap<string, ServerPr
     return Array.from(profilesById.values())
         .map((profile) => [
             profile.id,
-            profile.name,
+            resolveHomeDisplayLabel(profile, profile.id),
             profile.serverIdentityId ?? '',
             ...(profile.legacyServerIds ?? []),
         ].join('|'))
@@ -156,22 +157,19 @@ export function useServerScopedMachineOptions(params: UseServerScopedMachineOpti
         const activeServerId = String(params.activeServerId ?? '').trim();
         return allowedServerIds.map((serverId) => {
             const profile = serverProfiles.get(serverId);
-            const serverName = profile?.name ?? serverId;
-            const status = machineListStatusByServerId[serverId] ?? 'idle';
-            const hasCachedRemote = Object.prototype.hasOwnProperty.call(machineListByServerId, serverId);
+            const serverName = resolveHomeDisplayLabel(profile, serverId);
             const isActive = Boolean(activeServerId) && areServerProfileIdentifiersEquivalent(serverId, activeServerId);
-            const signedOut = status === 'signedOut';
-            const error = status === 'error';
-            const loading = !isActive && !signedOut && (status === 'loading' || !hasCachedRemote);
-
-            const baseMachines = resolveServerScopedMachines({
+            const inventory = resolveServerScopedMachineInventory({
                 serverId,
                 activeServerId,
                 activeMachines: params.activeMachines,
                 machineListByServerId,
                 machineListStatusByServerId,
-            }) ?? [];
-            const machines = (baseMachines ?? [])
+            });
+            const signedOut = inventory.status === 'signedOut';
+            const error = inventory.status === 'error';
+            const loading = !isActive && !signedOut && !error && inventory.machines === null;
+            const machines = (inventory.machines ?? [])
                 .filter(isMachineVisibleForLaunchSelection)
                 .map((machine) => buildServerScopedMachine(machine, { serverId, serverName }));
             return {

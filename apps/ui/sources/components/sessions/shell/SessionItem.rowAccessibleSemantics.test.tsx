@@ -191,6 +191,24 @@ describe('SessionItem outer row accessible semantics', () => {
         standardCleanup();
     });
 
+    it('keeps reports disclosure independent of Session navigation', async () => {
+        const session = createRowSession({ reports: { total: 4, working: 0, needsYou: 2, stalled: 0 } }, 'lead');
+        const onSetReportsCollapsed = vi.fn();
+        const screen = await renderScreen(<SessionItem session={session}
+            rowViewModel={createSessionItemRowViewModel({ session })}
+            reportsDisclosure="expanded" onSetReportsCollapsed={onSetReportsCollapsed} />);
+        const disclosure = screen.findByTestId('session-row-reports-disclosure:lead');
+        expect(disclosure).not.toBeNull();
+        const ancestors: string[] = [];
+        for (let node = disclosure!.parent; node; node = node.parent) {
+            if (typeof node.props.testID === 'string') ancestors.push(node.props.testID);
+        }
+        expect(ancestors).not.toContain('session-list-item-lead');
+        screen.pressByTestId('session-row-reports-disclosure:lead');
+        expect(onSetReportsCollapsed).toHaveBeenCalledWith(expect.any(String), true);
+        expect(screen.findByTestId('session-list-item-lead')?.props.onPress).toBeTypeOf('function');
+    });
+
     for (const density of ['default', 'minimal'] as const) {
         it(`speaks the Session identity and every presented state on the single ${density} row element`, async () => {
             const spokenNames: string[] = [];

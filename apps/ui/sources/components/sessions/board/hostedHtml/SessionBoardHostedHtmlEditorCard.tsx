@@ -116,7 +116,7 @@ export function SessionBoardHostedHtmlEditorCard(props: SessionBoardHostedHtmlEd
             case 'outcomeUnknown':
                 return resolveSessionBoardFailurePresentation('outcome_unknown').message;
             case 'approvalPending':
-                return t('approvals.status.open');
+                return resolveSessionBoardFailurePresentation('approval_required').message;
             case 'unavailable':
                 return resolveSessionBoardFailurePresentation(editor.status.reason).message;
             case 'editing':

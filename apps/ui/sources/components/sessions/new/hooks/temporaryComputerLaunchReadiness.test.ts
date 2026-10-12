@@ -48,7 +48,7 @@ describe('Temporary computer launch readiness', () => {
         // package has been assembled and handed to someone else.
         ['connectedServices', {
             profileId: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: { v: 2, bindingsByServiceId: {
                 'happier.service.github/github': { source: 'connected', selection: 'profile', profileId: 'work' },
                 'happier.service.linear/linear': { source: 'team_resource', resourceId: 'resource-acme' },
@@ -65,12 +65,12 @@ describe('Temporary computer launch readiness', () => {
             gaps: [],
             authoring: {
                 profileId: null,
-                mcpSelection: {
+                capabilitySelection: { mcp: {
                     v: 1,
                     managedServersEnabled: false,
                     forceIncludeServerIds: ['server-a'],
                     forceExcludeServerIds: [],
-                },
+                } },
                 connectedServices: {
                     v: 2,
                     bindingsByServiceId: {

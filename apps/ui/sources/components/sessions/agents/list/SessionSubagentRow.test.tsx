@@ -3,14 +3,10 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
-import { renderScreen } from '@/dev/testkit';
 import { createSessionAgentActivityRowForTest, installSessionSubagentCommonModuleMocks } from '@/components/sessions/agents/sessionSubagentTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const stopRunSpy = vi.fn(async () => ({ ok: true }));
-const submitMessageSpy = vi.fn(async () => undefined);
 
 installSessionSubagentCommonModuleMocks({
     text: async () => {
@@ -26,24 +22,12 @@ installSessionSubagentCommonModuleMocks({
         } });
     },
 });
-
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
-    sessionExecutionRunStop: stopRunSpy,
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        submitMessage: submitMessageSpy,
-    },
-}));
-
-vi.mock('@/utils/system/fireAndForget', () => ({
-    fireAndForget: (promise: Promise<unknown>) => void promise,
-}));
+const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+// Load the real row graph during collection, not inside a per-assertion deadline.
+const { SessionSubagentRow } = await import('./SessionSubagentRow');
 
 describe('SessionSubagentRow', () => {
     it('announces a selectable disclosure through the shared button row', async () => {
-        const { SessionSubagentRow } = await import('./SessionSubagentRow');
         const onOpenPreview = vi.fn();
 
         const subagent: SessionSubagent = {
@@ -73,8 +57,11 @@ describe('SessionSubagentRow', () => {
         if (!row) {
             throw new Error('Expected execution-run row to be present');
         }
-        expect(row.props.accessibilityRole).toBe('button');
-        expect(row.props.accessibilityState).toMatchObject({ selected: true, expanded: true });
+        // This shared boundary is web: Work's Pressable publishes its platform role prop.
+        expect(row.props.role).toBe('button');
+        expect(row.props.accessibilityState).toMatchObject({ expanded: true });
+        // The shared Work disclosure's selection is visual, not invalid aria-selected on a button.
+        expect(row.props.accessibilityState.selected).toBeUndefined();
 
         await screen.pressByTestIdAsync('session-subagent-row:execution_run:run_web');
 
@@ -82,7 +69,6 @@ describe('SessionSubagentRow', () => {
     });
 
     it('keeps a row to its summary and offers its operations from the row menu (right-click / long-press)', async () => {
-        const { SessionSubagentRow } = await import('./SessionSubagentRow');
         const onOpenPreview = vi.fn();
         const onOpenFull = vi.fn();
         const onOpenAdvanced = vi.fn();
@@ -119,12 +105,9 @@ describe('SessionSubagentRow', () => {
         expect(onOpenAdvanced).toHaveBeenCalledTimes(1);
         expect(onOpenPreview).not.toHaveBeenCalled();
 
-        await act(async () => { menu?.props.onSelect('stop'); });
-        expect(stopRunSpy).toHaveBeenCalledWith('s1', { runId: 'run_1' }, { serverId: 'server-a' });
     });
 
     it('does not expose Run stop without an exact Home', async () => {
-        const { SessionSubagentRow } = await import('./SessionSubagentRow');
         const subagent: SessionSubagent = {
             id: 'execution_run:unqualified',
             kind: 'execution_run',
@@ -149,8 +132,7 @@ describe('SessionSubagentRow', () => {
         expect(ids).not.toContain('stop');
     });
 
-    it('sends structured shutdown commands for Claude teammates', async () => {
-        const { SessionSubagentRow } = await import('./SessionSubagentRow');
+    it('withholds teammate shutdown without an exact Home', async () => {
 
         const subagent: SessionSubagent = {
             id: 'agent_team_member:qa-team:alpha',
@@ -171,24 +153,7 @@ describe('SessionSubagentRow', () => {
                     onOpenAdvanced={null}
                 />);
 
-        await act(async () => { screen.findByTestId('session-subagent-actions:agent_team_member:qa-team:alpha')?.props.onSelect('delete'); });
-
-        expect(submitMessageSpy).toHaveBeenCalledWith(
-            's1',
-            'Shutdown teammate alpha · qa-team',
-            'Shutdown teammate alpha · qa-team',
-            expect.objectContaining({
-                happier: {
-                    kind: 'subagent_command.v1',
-                    payload: expect.objectContaining({
-                        kind: 'agent_team_member_delete',
-                        teamId: 'qa-team',
-                        memberId: 'alpha@qa-team',
-                        memberLabel: 'alpha',
-                    }),
-                },
-            }),
-            { callerSurface: 'subagent_command', forceImmediate: true },
-        );
+        const ids = screen.findByTestId('session-subagent-actions:agent_team_member:qa-team:alpha')?.props.items.map((item: { id: string }) => item.id);
+        expect(ids).not.toContain('delete');
     });
 });

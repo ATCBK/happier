@@ -68,8 +68,8 @@ describe('Board repository binding', () => {
             await flushHookEffects({ cycles: 50 });
             if (latest?.status !== 'ready') throw new Error('Board not ready');
             expect(latest.snapshot.layoutState.kind).toBe('ready');
-            expect(latest.snapshot.itemsById.get('widget')?.state).toEqual({ kind: 'ready', item: widget });
-            expect(latest.snapshot.itemsById.get('snapshot')?.state).toEqual({ kind: 'ready', item: snapshot });
+            expect(latest.snapshot.itemsById.get('widget')?.state).toEqual({ kind: 'ready', item: { ...widget, destination: 'board' } });
+            expect(latest.snapshot.itemsById.get('snapshot')?.state).toEqual({ kind: 'ready', item: { ...snapshot, destination: 'board' } });
             expect(latest.snapshot.itemsById.get('invalid')?.state.kind).toBe('unopenable');
             expect(latest.snapshot.itemsById.get('unknown')?.state.kind).toBe('unopenable');
         } finally { stop(); }

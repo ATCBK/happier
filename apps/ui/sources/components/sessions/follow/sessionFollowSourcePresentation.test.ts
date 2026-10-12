@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 import {
     listEligibleSessionFollowSourceCandidates,
@@ -7,32 +8,52 @@ import {
     sessionFollowSourceRuntimeStateLabel,
 } from './sessionFollowSourcePresentation';
 
+const followScope = { serverId: 'home-a', accountId: 'follow-account' };
+
 describe('resolveSessionFollowSourceRuntimeState', () => {
+    it('shows a destination request failure only for its exact Account and Home', () => {
+        const scope = { serverId: 'follow-home', accountId: 'follow-account' };
+        const machine = { id: 'runner', active: true, activeAt: Date.now(),
+            operationProtocolCapabilities: { sessionFollow: { contextV1: true } } };
+        recordMachineRequestFailed({ ...scope, machineId: machine.id });
+        try {
+            expect(resolveSessionFollowSourceRuntimeState({ deliveryState: 'eligible', machine, accountScope: scope }))
+                .toBe('waiting_for_runtime');
+            expect(resolveSessionFollowSourceRuntimeState({ deliveryState: 'eligible', machine,
+                accountScope: { ...scope, accountId: 'other-account' } })).toBe('eligible');
+        } finally { clearMachineRequestReachabilityForTest(); }
+    });
     it('derives archived, offline, unsupported, and eligible states without persisting runtime facts', () => {
         expect(resolveSessionFollowSourceRuntimeState({ deliveryState: 'paused_archived', machine: null })).toBe('paused_archived');
         expect(resolveSessionFollowSourceRuntimeState({ deliveryState: 'eligible', machine: null })).toBe('waiting_for_runtime');
         expect(resolveSessionFollowSourceRuntimeState({
             deliveryState: 'eligible',
-            machine: { active: true, operationProtocolCapabilities: {} },
+            accountScope: followScope,
+            machine: { id: 'runner-a', active: true, operationProtocolCapabilities: {} },
         })).toBe('runtime_unsupported');
         expect(resolveSessionFollowSourceRuntimeState({
             deliveryState: 'eligible',
-            machine: { active: true, operationProtocolCapabilities: { sessionFollow: { contextV1: true } } },
+            accountScope: followScope,
+            machine: { id: 'runner-a', active: true, operationProtocolCapabilities: { sessionFollow: { contextV1: true } } },
         })).toBe('eligible');
         expect(resolveSessionFollowSourceRuntimeState({
             deliveryState: 'eligible',
+            accountScope: followScope,
             hasPendingUpdates: true,
-            machine: { active: true, operationProtocolCapabilities: { sessionFollow: { contextV1: true } } },
+            machine: { id: 'runner-a', active: true, operationProtocolCapabilities: { sessionFollow: { contextV1: true } } },
         })).toBe('catch_up_pending');
         expect(resolveSessionFollowSourceRuntimeState({
             deliveryState: 'eligible',
+            accountScope: followScope,
             hasPendingUpdates: true,
             machine: null,
         })).toBe('waiting_for_runtime');
         expect(resolveSessionFollowSourceRuntimeState({
             deliveryState: 'eligible',
+            accountScope: followScope,
             sourceEncryptionMode: 'e2ee',
             machine: {
+                id: 'runner-a',
                 active: true,
                 kind: 'ephemeral_session_runner',
                 operationProtocolCapabilities: { sessionFollow: { contextV1: true } },
@@ -40,9 +61,11 @@ describe('resolveSessionFollowSourceRuntimeState', () => {
         })).toBe('waiting_for_source_key');
         expect(resolveSessionFollowSourceRuntimeState({
             deliveryState: 'eligible',
+            accountScope: followScope,
             sourceEncryptionMode: 'e2ee',
             preparedInUiLifetime: true,
             machine: {
+                id: 'runner-a',
                 active: true,
                 kind: 'ephemeral_session_runner',
                 operationProtocolCapabilities: { sessionFollow: { contextV1: true } },

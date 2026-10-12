@@ -96,4 +96,225 @@ describe('resolveSessionViewConnectionStatus', () => {
             },
         })?.text).toBe('restarting connected service');
     });
+
+    describe('one line, highest-priority cause wins', () => {
+        const providerBinding = {
+            text: 'Provider settings changed',
+            detail: 'This session is still using the Gateway · Work configuration it started with.',
+            action: 'restart',
+            color: 'attention-color',
+        } as const;
+        const restarting = {
+            status: 'restarting',
+            attemptId: 'manual-auth-switch:1',
+            reason: 'manual_auth_switch',
+            startedAtMs: 1_000,
+        } as const;
+
+        it('states a Provider binding change over the ordinary and inactive status, with its detail and action', () => {
+            expect(resolveSessionViewConnectionStatus({
+                ...baseInput,
+                inactiveStatusText: 'inactive',
+                providerBinding,
+            })).toEqual({
+                text: 'Provider settings changed',
+                detail: 'This session is still using the Gateway · Work configuration it started with.',
+                color: 'attention-color',
+                dotColor: 'attention-color',
+                isPulsing: false,
+                providerBindingAction: 'restart',
+            });
+        });
+
+        it('speaks for a Provider binding before the runtime has been observed', () => {
+            expect(resolveSessionViewConnectionStatus({
+                ...baseInput,
+                sessionStatusState: 'unknown',
+                sessionStatusText: 'unknown',
+                providerBinding,
+            })?.text).toBe('Provider settings changed');
+        });
+
+        it('keeps the line without an action when the binding offers none the viewer can take', () => {
+            const status = resolveSessionViewConnectionStatus({
+                ...baseInput,
+                providerBinding: { ...providerBinding, action: null },
+            });
+            expect(status?.text).toBe('Provider settings changed');
+            expect(status?.providerBindingAction).toBeUndefined();
+        });
+
+        it('yields to a session the machine or runtime cannot serve: that cause comes first', () => {
+            expect(resolveSessionViewConnectionStatus({
+                ...baseInput,
+                sessionStatusState: 'disconnected',
+                sessionStatusText: 'machine offline',
+                sessionUnservable: true,
+                providerBinding,
+            })).toEqual({
+                text: 'machine offline',
+                color: 'status-color',
+                dotColor: 'dot-color',
+                isPulsing: false,
+            });
+        });
+
+        it.each(['permission_required', 'action_required'] as const)(
+            'yields to a request that needs the person now (%s)',
+            (state) => {
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    sessionStatusState: state,
+                    sessionStatusText: 'Permission required',
+                    providerBinding,
+                })?.text).toBe('Permission required');
+            },
+        );
+
+        it('yields to resuming, a restart in progress and a failed switch', () => {
+            expect(resolveSessionViewConnectionStatus({
+                ...baseInput,
+                sessionStatusResuming: true,
+                sessionStatusText: 'resuming',
+                providerBinding,
+            })?.text).toBe('resuming');
+            expect(resolveSessionViewConnectionStatus({
+                ...baseInput,
+                connectedServicesRestartState: restarting,
+                providerBinding,
+            })?.text).toBe('restarting connected service');
+            expect(resolveSessionViewConnectionStatus({
+                ...baseInput,
+                connectedServicesRestartState: { ...restarting, status: 'failed' },
+                providerBinding,
+            })?.text).toBe('switch failed');
+        });
+
+        describe('the pending queue', () => {
+            const queuedLine = {
+                text: 'Message queued',
+                detail: 'This inactive session has queued input. Resume it when you are ready.',
+                action: 'resume',
+                color: 'quiet-color',
+            } as const;
+
+            it('states a queued message waiting on an inactive session as the line, with its one action', () => {
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    inactiveStatusText: 'Inactive (resumable)',
+                    pendingQueue: { line: queuedLine, countText: '1 queued' },
+                })).toEqual({
+                    text: 'Message queued',
+                    detail: 'This inactive session has queued input. Resume it when you are ready.',
+                    color: 'quiet-color',
+                    dotColor: 'quiet-color',
+                    isPulsing: false,
+                    pendingQueueAction: 'resume',
+                });
+            });
+
+            it('outranks a machine that cannot serve the session, because the queued line already names it', () => {
+                const status = resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    sessionStatusState: 'disconnected',
+                    sessionStatusText: 'machine offline',
+                    sessionUnservable: true,
+                    providerBinding,
+                    pendingQueue: { line: { ...queuedLine, text: 'Machine offline · message queued', action: 'process_when_online' }, countText: null },
+                });
+                expect(status?.text).toBe('Machine offline · message queued');
+                expect(status?.pendingQueueAction).toBe('process_when_online');
+                expect(status?.providerBindingAction).toBeUndefined();
+            });
+
+            it('yields to resuming, a restart and the guard', () => {
+                const pendingQueue = { line: queuedLine, countText: null };
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput, sessionStatusResuming: true, sessionStatusText: 'resuming', pendingQueue,
+                })?.text).toBe('resuming');
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput, connectedServicesRestartState: restarting, pendingQueue,
+                })?.text).toBe('restarting connected service');
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    pendingQueue,
+                    guard: {
+                        state: { kind: 'stopped', text: 'Stopped by the machine guard', placeholder: 'Send to wake it' },
+                        attentionColor: 'attention-color',
+                        quietColor: 'quiet-color',
+                    },
+                })?.text).toBe('Stopped by the machine guard');
+            });
+
+            it('adds the queue size to an ordinary status instead of a separate header', () => {
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    sessionStatusState: 'thinking',
+                    sessionStatusText: 'Thinking',
+                    sessionStatusPulsing: true,
+                    pendingQueue: { line: null, countText: '2 queued' },
+                })).toEqual({
+                    text: 'Thinking · 2 queued',
+                    color: 'status-color',
+                    dotColor: 'dot-color',
+                    isPulsing: true,
+                });
+            });
+
+            it('carries the inactive cause\'s explanation as the line\'s detail instead of a card', () => {
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    sessionStatusState: 'disconnected',
+                    sessionStatusText: 'machine offline',
+                    inactiveStatusText: 'Inactive (machine offline)',
+                    inactiveDetail: '“Studio” is offline, so Happier can’t resume this session yet.',
+                    sessionUnservable: true,
+                })).toEqual({
+                    text: 'Inactive (machine offline)',
+                    detail: '“Studio” is offline, so Happier can’t resume this session yet.',
+                    color: 'status-color',
+                    dotColor: 'dot-color',
+                    isPulsing: false,
+                });
+            });
+
+            it('lets resuming speak alone: the resume is what delivers the queue', () => {
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    sessionStatusResuming: true,
+                    sessionStatusText: 'resuming',
+                    pendingQueue: { line: null, countText: '1 queued' },
+                })?.text).toBe('resuming');
+            });
+
+            it('never appends the size to a cause that already owns the line', () => {
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    providerBinding,
+                    pendingQueue: { line: null, countText: '2 queued' },
+                })?.text).toBe('Provider settings changed');
+            });
+
+            it('states the queue alone while the runtime has not been observed yet', () => {
+                expect(resolveSessionViewConnectionStatus({
+                    ...baseInput,
+                    sessionStatusState: 'unknown',
+                    sessionStatusText: 'unknown',
+                    pendingQueue: { line: null, countText: '1 queued' },
+                })?.text).toBe('1 queued');
+            });
+        });
+
+        it('yields to the machine guard', () => {
+            expect(resolveSessionViewConnectionStatus({
+                ...baseInput,
+                providerBinding,
+                guard: {
+                    state: { kind: 'stopped', text: 'Stopped by the machine guard', placeholder: 'Send to wake it' },
+                    attentionColor: 'attention-color',
+                    quietColor: 'quiet-color',
+                },
+            })?.text).toBe('Stopped by the machine guard');
+        });
+    });
 });

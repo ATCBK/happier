@@ -335,6 +335,19 @@ function AppSessionTranscriptSourceRoot(props: AppSourceProviderProps) {
                     try {
                         const state = storage.getState();
                         const forked = getForkedTranscriptSnapshotCached(state, sessionId) !== null;
+                        // Older-page cursors only exist after initial hydration.
+                        // Every app transcript consumer uses this one history owner,
+                        // including a Run route opened before its Session transcript.
+                        // Fork ancestry and supplied sidechain histories retain their
+                        // own initial-load owner rather than hydrating the parent tail.
+                        if (!loadOlderOverride && !forked && state.sessionMessages[sessionId]?.isLoaded !== true) {
+                            const hydration = await sync.ensureSessionVisibleForMessageRoute(sessionId, {
+                                serverId: serverId ?? undefined,
+                                forceRefresh: true,
+                                awaitMessageHydration: true,
+                            });
+                            if (hydration.kind !== 'available') return { loaded: 0, hasMore: true, status: 'not_ready' };
+                        }
                         const result = loadOlderOverride ? await loadOlderOverride(options) : forked ? await sync.loadOlderMessagesForkAware(sessionId, options) : await sync.loadOlderMessages(sessionId, options);
                         if (result.status === 'loaded' || result.status === 'no_more') hasOlder = result.hasMore;
                         return result;

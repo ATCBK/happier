@@ -17,6 +17,7 @@ import {
     resolveAgentContinuationSubmitPresentation,
     resolveArmedComposerContinuation,
     resolveArmedSubmitContinuation,
+    resolveArmedSubmitPresentation,
 } from './agentContinuationSubmitPresentation';
 
 const pickerIconScale = vi.hoisted(() => vi.fn((_agentId: string) => 1));
@@ -205,5 +206,44 @@ describe('the armed target the chip and the submit control share', () => {
                 expect(button === null || button === chip).toBe(true);
             }
         }
+    });
+});
+
+describe('an armed route or model change on the send control (D15)', () => {
+    const route = { sourceLabel: 'Main gateway' } as const;
+
+    it('names the armed route in words, since the Agent does not change', () => {
+        const armed = resolveArmedSubmitPresentation({
+            armedContinuationTarget: null,
+            armedRouteContinuation: route,
+            otherActionHoldsSubmit: false,
+            hasIdentityMark: false,
+        });
+        expect(armed?.kind).toBe('route');
+        expect(armed?.presentation.accessibilityLabel)
+            .toBe(t('session.agentContinuation.routeSendLabel', { source: 'Main gateway' }));
+        expect(armed?.presentation.label).toBe(armed?.presentation.accessibilityLabel);
+        expect(armed?.presentation.markAgentId).toBeNull();
+    });
+
+    it('lets an armed Agent switch win, because it carries its own model', () => {
+        const armed = resolveArmedSubmitPresentation({
+            armedContinuationTarget: { agentId: 'codex', label: 'Codex' },
+            armedRouteContinuation: route,
+            otherActionHoldsSubmit: false,
+            hasIdentityMark: false,
+        });
+        expect(armed?.kind).toBe('agent');
+        expect(armed?.presentation.accessibilityLabel)
+            .toBe(t('session.agentContinuation.sendLabel', { agent: 'Codex' }));
+    });
+
+    it('stays silent while another action owns the button', () => {
+        expect(resolveArmedSubmitPresentation({
+            armedContinuationTarget: null,
+            armedRouteContinuation: route,
+            otherActionHoldsSubmit: true,
+            hasIdentityMark: false,
+        })).toBeNull();
     });
 });

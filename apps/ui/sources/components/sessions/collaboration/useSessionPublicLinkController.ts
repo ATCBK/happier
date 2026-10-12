@@ -22,6 +22,8 @@ import {
     resolveValidatedShareableServerUrl,
 } from '@/sync/domains/server/url/shareableServerUrl';
 import { buildStoredContentPublicShareUrlV1 } from '@happier-dev/protocol/sharing/storedContentPublicShareV1';
+import type { SessionPublicVisualNetworkConsequence } from '@/sync/api/session/sessionPublicVisualNetworkConsequence';
+import { describePublicLinkNetworkConsequence, hasSamePublicLinkNetworkConsequence } from '@/components/sharing/PublicLinkNetworkConfirmation';
 
 type PublicLinkState = Readonly<{
     epoch: number;
@@ -68,6 +70,7 @@ export function useSessionPublicLinkController(input: SessionPublicLinkControlle
     authorityCurrentRef.current = authorityCurrent;
     const requestRevision = useRef(0);
     const [state, setState] = useState<PublicLinkState>({ epoch, publication: null, loaded: false, loading: false, error: false });
+    const [visuals, setVisuals] = useState<Readonly<{ epoch: number; loading: boolean; result: SessionPublicVisualNetworkConsequence | null }>>({ epoch, loading: false, result: null });
     const isCurrent = useCallback(() => lifecycle.current.mounted && lifecycle.current.epoch === epoch, [epoch]);
     const assertCurrent = useCallback(() => {
         if (!isCurrent() || !authorityCurrentRef.current || !allowed || !currentSession.current) throw new HappyError(t('errors.permissionDenied'), false);
@@ -90,6 +93,16 @@ export function useSessionPublicLinkController(input: SessionPublicLinkControlle
         isCurrent,
         ...(options?.onLinkIssued ? { onPublicLinkIssued: options.onLinkIssued } : {}),
     }), [isCurrent, scope.accountId, scope.serverId, sessionId]);
+    // Full transcript/body reads belong to explicit Share preparation, never a
+    // Session-open effect or the ordinary publication-status read above.
+    const prepareNetworkConsequence = useCallback(async (): Promise<SessionPublicVisualNetworkConsequence> => {
+        assertCurrent();
+        setVisuals({ epoch, loading: true, result: null });
+        const result = await client().readPublicVisualNetworkConsequence();
+        assertCurrent();
+        setVisuals({ epoch, loading: false, result });
+        return result;
+    }, [assertCurrent, client, epoch]);
     const applyAuthoritativePublication = useCallback((publication: SessionPublicLinkPublication | null) => {
         ++requestRevision.current;
         token.current = publication?.token ?? null;
@@ -190,6 +203,16 @@ export function useSessionPublicLinkController(input: SessionPublicLinkControlle
             }
             assertCurrent();
         }
+        if (!options.networkOff) {
+            const reviewed = visuals.epoch === epoch && !visuals.loading && visuals.result?.status === 'ready'
+                ? visuals.result : null;
+            const current = await prepareNetworkConsequence();
+            assertCurrent();
+            if (current.status !== 'ready') throw new HappyError(t('session.collaboration.pane.linkNetworkUnknown'), true);
+            if (!reviewed || !hasSamePublicLinkNetworkConsequence(reviewed, current)) {
+                throw new HappyError(t('approvals.staleFailure'), true, { code: 'approval_stale' });
+            }
+        }
         const input = {
             ...(desired.expiresAt === null ? {} : { expiresAt: desired.expiresAt }),
             ...(desired.maxUses === null ? {} : { maxUses: desired.maxUses }),
@@ -201,9 +224,9 @@ export function useSessionPublicLinkController(input: SessionPublicLinkControlle
         try {
             const settings = await client({ onLinkIssued: (material) => { issued.material = material; } }).createPublicLink(input);
             assertCurrent();
-            if (!issued.material || !settings.isolatedOrigin || settings.keyDerivation !== 'fragment_v1') throw new SessionAccessApiError('outcome_unknown');
+            if (!issued.material || !settings.viewerOrigin || settings.keyDerivation !== 'fragment_v1') throw new SessionAccessApiError('outcome_unknown');
             created = { ...settings, token: issued.material.lookupId,
-                publicUrl: buildStoredContentPublicShareUrlV1({ origin: settings.isolatedOrigin, ...issued.material }),
+                publicUrl: buildStoredContentPublicShareUrlV1({ origin: settings.viewerOrigin, ...issued.material }),
             };
         } catch (error) {
             if (!created) {
@@ -221,7 +244,7 @@ export function useSessionPublicLinkController(input: SessionPublicLinkControlle
         assertCurrent();
         applyAuthoritativePublication(created);
         return created;
-    }, [applyAuthoritativePublication, assertCurrent, client, holdForApproval, isCurrent, presentFailure, reload, scope.accountId, scope.serverId, sessionId]);
+    }, [applyAuthoritativePublication, assertCurrent, client, epoch, holdForApproval, isCurrent, prepareNetworkConsequence, presentFailure, reload, scope.accountId, scope.serverId, sessionId, visuals]);
 
     const remove = useCallback(async (): Promise<void> => {
         assertCurrent();
@@ -280,7 +303,14 @@ export function useSessionPublicLinkController(input: SessionPublicLinkControlle
         });
     }, [scope.serverId]);
     const currentPendingApproval = allowed ? approval.pendingApproval : null;
+    const networkConsequenceStatus = visuals.epoch === epoch && !visuals.loading && visuals.result?.status === 'ready'
+        ? 'ready' as const : visuals.epoch === epoch && !visuals.loading && visuals.result?.status === 'unavailable'
+            ? 'unavailable' as const : 'loading' as const;
+    const networkPolicyLabel = networkConsequenceStatus === 'ready' && visuals.result?.status === 'ready'
+        ? describePublicLinkNetworkConsequence(visuals.result)
+        : networkConsequenceStatus === 'unavailable' ? t('session.collaboration.pane.linkNetworkUnknown') : t('common.loading');
     return {
+        scopeKey,
         publicShare: publication, canManage,
         hasLoaded: allowed && state.epoch === epoch && state.loaded,
         loading: allowed && (state.epoch !== epoch || !state.loaded || state.loading) && !state.error,
@@ -291,6 +321,7 @@ export function useSessionPublicLinkController(input: SessionPublicLinkControlle
         pendingApproval: currentPendingApproval,
         openPendingApproval: approval.openPendingApproval,
         shareableServerUrl,
+        networkPolicyLabel, networkConsequenceStatus, prepareNetworkConsequence,
         reload, create, remove,
     };
 }

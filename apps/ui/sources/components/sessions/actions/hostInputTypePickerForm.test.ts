@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { InputTypePickerHostV1 } from '@happier-dev/protocol/inputs/runtime';
 import { USAGE_QUERY_INPUT_FIELDS } from '@happier-dev/protocol/inputs/usageQuery';
-import { createHostInputTypePickerForm } from './hostInputTypePickerForm';
+import { createHostInputTypePickerForm, describeHostInputTypePickerValue } from './hostInputTypePickerForm';
 
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 
@@ -12,7 +12,7 @@ function request(field: 'period' | 'session', value: Parameters<NonNullable<Inpu
 }
 
 describe('host input type picker forms', () => {
-    it('offers concrete period choices in the query calendar and retains a saved custom range unchanged until selection', async () => {
+    it('offers relative period choices and retains a saved absolute range unchanged until selection', async () => {
         const saved = { startMs: 100, endMs: 200 };
         const picker = createHostInputTypePickerForm({ request: request('period', saved), serverId: 'home',
             draftInput: { timeZoneOffsetMinutes: 120, metric: 'cost' }, nowMs });
@@ -20,10 +20,15 @@ describe('host input type picker forms', () => {
         const field = picker.form.getFields()[0]!;
         expect(field.widget).toBe('select');
         const today = field.options!.find(option => option.label === 'usage.today')!;
-        expect(today.value).toEqual({ startMs: Date.parse('2026-10-08T22:00:00Z'), endMs: nowMs });
+        expect(today.value).toEqual({ relative: 'today' });
         picker.form.replaceInput({ value: today.value });
         expect(await picker.form.submit()).toMatchObject({ kind: 'settled', outcome: { ok: true } });
         expect(await picker.result).toEqual({ kind: 'completed', input: today.value });
+    });
+
+    it('labels a relative pin by its canonical period name without guessing an absolute range identity', () => {
+        expect(describeHostInputTypePickerValue(request('period', undefined).reference, { relative: '7days' })).toBe('usage.last7Days');
+        expect(describeHostInputTypePickerValue(request('period', undefined).reference, { startMs: 100, endMs: 200 })).not.toBe('usage.last7Days');
     });
 
     it('uses the incumbent qualified Session inventory and projects only ids from the captured Home', async () => {

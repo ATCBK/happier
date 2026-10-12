@@ -8,34 +8,44 @@ import {
     type NewSessionHostParams,
 } from './newSessionHost';
 import { useResolveNewSessionOrdinaryEntryRoute } from './newSessionOrdinaryEntryRoute';
+import { resolveNewSessionDraftRouteIdentity } from './newSessionDraftRouteIdentity';
 
 function paramsForDraft(entry: NewSessionHostDraftEntry): NewSessionHostParams {
     return entry.draftOrigin ? { draftId: entry.draftId, draftOrigin: entry.draftOrigin } : { draftId: entry.draftId };
 }
 
 /**
- * The state an embedding page (Home) keeps for its New Session surface: the params the route
- * would otherwise hold, starting on the ordinary-entry draft — the same draft "+" opens — and
+ * The state an embedding page keeps for its New Session surface: the params the route
+ * would otherwise hold, starting on a contextual draft or Home's ordinary-entry draft, and
  * the intent signal that lets closed chips stay RPC-free until the person reaches for them.
  *
  * After the surface hands its draft to a created session, the next time the page is focused it
- * starts a fresh ordinary draft, so returning Home never shows the draft that already launched.
+ * starts a fresh draft with the same context, so returning never shows the draft already launched.
  */
-export function useNewSessionEmbeddedHostState(): Readonly<{
+export function useNewSessionEmbeddedHostState(initialParams?: NewSessionHostParams): Readonly<{
     host: NewSessionEmbeddedHost;
     markDemanded: () => void;
 }> {
     const resolveOrdinaryEntry = useResolveNewSessionOrdinaryEntryRoute();
-    const [params, setParamsState] = React.useState<NewSessionHostParams>(() => paramsForDraft(resolveOrdinaryEntry()));
+    // Contextual embeds start a separate draft; ordinary Home keeps its remembered entry.
+    // These are local navigation params, not a persisted draft write or machine demand.
+    const freshParams = React.useCallback((): NewSessionHostParams => initialParams
+        ? { ...initialParams, draftId: resolveNewSessionDraftRouteIdentity({ routeDraftId: undefined }).draftId }
+        : paramsForDraft(resolveOrdinaryEntry({ forceFresh: true })), [initialParams, resolveOrdinaryEntry]);
+    const [params, setParamsState] = React.useState<NewSessionHostParams>(() => initialParams
+        ? freshParams() : paramsForDraft(resolveOrdinaryEntry()));
     const [demanded, setDemanded] = React.useState(false);
     const handedOffRef = React.useRef(false);
+    const targetServerId = typeof initialParams?.spawnServerId === 'string' ? initialParams.spawnServerId : undefined;
 
     const setParams = React.useCallback((patch: Readonly<Record<string, unknown>>) => {
         setParamsState((current) => mergeNewSessionHostParams(current, patch));
     }, []);
     const openDraft = React.useCallback((entry: NewSessionHostDraftEntry) => {
-        setParamsState(paramsForDraft(entry));
-    }, []);
+        setParamsState(initialParams
+            ? { ...initialParams, draftId: entry.draftId }
+            : paramsForDraft(entry));
+    }, [initialParams]);
     const onHandedOff = React.useCallback(() => {
         handedOffRef.current = true;
     }, []);
@@ -46,16 +56,17 @@ export function useNewSessionEmbeddedHostState(): Readonly<{
     useFocusEffect(React.useCallback(() => {
         if (!handedOffRef.current) return;
         handedOffRef.current = false;
-        setParamsState(paramsForDraft(resolveOrdinaryEntry({ forceFresh: true })));
-    }, [resolveOrdinaryEntry]));
+        setParamsState(freshParams());
+    }, [freshParams]));
 
     const host = React.useMemo<NewSessionEmbeddedHost>(() => ({
         params,
+        targetServerId,
         setParams,
         openDraft,
         onHandedOff,
         demanded,
-    }), [demanded, onHandedOff, openDraft, params, setParams]);
+    }), [demanded, onHandedOff, openDraft, params, setParams, targetServerId]);
 
     return { host, markDemanded };
 }

@@ -8,7 +8,7 @@ import {
     useSetting,
 } from '@/sync/domains/state/storage';
 import { buildSessionMetadataStabilitySignatureValue, buildStableJsonSignature } from '@/sync/domains/session/metadata/sessionMetadataStability';
-import { useActiveServerAccountScope, useMachine } from '@/sync/store/hooks';
+import { useActiveServerAccountScope, useServerScopedMachine } from '@/sync/store/hooks';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { useSessionTranscriptSource } from './source/SessionTranscriptSourceContext';
 import {
@@ -38,7 +38,7 @@ import { useExternalSessionOperationTranscriptDismissal } from '@/components/ses
 import { useExternalSessionOperationOwnerHydration } from '@/components/sessions/transcript/items/useExternalSessionOperationOwnerHydration';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
@@ -163,10 +163,12 @@ export function useChatListRootState(props: ChatListProps) {
             isExactOwner,
             machineId: operationMachineId,
         });
-    const operationMachine = useMachine(
+    const operationMachine = useServerScopedMachine(
+        sessionServerId,
         operationMachineSubscriptionTarget ?? '',
-        operationMachineSubscriptionTarget !== null,
     );
+    const operationPresence = useMachinePresenceSummary(sessionServerId, operationMachineSubscriptionTarget);
+    const operationMachineReachable = operationPresence.reachability === 'reachable';
     // Only this store-owned server-backed deletion fact means the target is
     // permanently gone. Session cache eviction and archiving intentionally do
     // not retire its contextual Resource LKG.
@@ -200,12 +202,13 @@ export function useChatListRootState(props: ChatListProps) {
             : {
                 machineId: operationMachineSubscriptionTarget,
                 machineOnline:
-                    operationMachine !== null && isMachineOnline(operationMachine),
+                    operationMachine !== null && operationMachineReachable,
                 machineStatusKnown: operationMachine !== null,
                 serverId: sessionServerId,
             }
     ), [
         operationMachine,
+        operationMachineReachable,
         operationMachineSubscriptionTarget,
         sessionServerId,
     ]);
@@ -214,7 +217,7 @@ export function useChatListRootState(props: ChatListProps) {
             isExactOwner,
             machineId: operationMachineId,
             machineOnline:
-                operationMachine !== null && isMachineOnline(operationMachine),
+                operationMachine !== null && operationMachineReachable,
             ownerScopeKey: activeServerAccountScope
                 ? serverAccountScopeKeySuffix(activeServerAccountScope)
                 : null,

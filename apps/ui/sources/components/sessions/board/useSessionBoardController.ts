@@ -366,7 +366,7 @@ function outcomeNotice(outcome: SessionBoardCommandOutcome): Readonly<{
         case 'cancelled':
             return null;
         case 'approvalPending':
-            return { message: t('approvals.status.open'), severity: 'info' };
+            return { message: resolveSessionBoardFailurePresentation('approval_required').message, severity: 'info' };
         case 'conflict':
             return resolveSessionBoardFailurePresentation('session_board_revision_conflict');
         case 'outcomeUnknown':
@@ -1299,27 +1299,19 @@ export function useSessionBoardController(input: SessionBoardControllerInput): S
                 }
                 // Removing the last Board view with the unpin disposition leaves
                 // a real layout with no views and every item in Recovered items.
-                // `item.place` refuses a view it cannot name — it never invents
-                // user-facing Board copy — so pinning onto the synthetic Overview
-                // uses the same atomic item+placement contract the first Note
-                // does, which creates that view from its supplied title.
+                // Supply the synthetic view title explicitly. Pin changes only
+                // layout; the item and its authoritative revision stay intact.
                 const projected = live.itemsById.get(command.itemId);
                 if (!projected || projected.revision === null || projected.state.kind !== 'ready') {
                     present({ kind: 'failed', error: 'session_board_item_unreadable' }, command);
                     return;
                 }
-                // Captured before the request closure: the narrowing above does
-                // not reach into it, and a cast there would only hide that.
-                const pinnedItem = projected.state.item;
-                const pinnedRevision = projected.revision;
-                await submit(command, (p) => p.upsertItem({
+                await submit(command, (p) => p.updateLayout({
                     sessionId: current.sessionId,
-                    itemId: command.itemId,
-                    expectedItemRevision: pinnedRevision,
-                    // The stored content is resubmitted unchanged: a pin is a
-                    // placement, never an edit of the person's item.
-                    item: pinnedItem,
-                    placement: {
+                    expectedLayoutRevision: live.layoutRevision,
+                    operation: {
+                        op: 'item.place',
+                        itemId: command.itemId,
                         tabId: SESSION_BOARD_OVERVIEW_VIEW_ID,
                         tabTitle: viewTitle(view),
                         width: SESSION_BOARD_DEFAULT_ITEM_WIDTH_V1,

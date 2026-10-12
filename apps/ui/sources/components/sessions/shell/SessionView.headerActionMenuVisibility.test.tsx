@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
-import type { ReactTestInstance } from 'react-test-renderer';
+import { act, type ReactTestInstance } from 'react-test-renderer';
 import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
 import type { TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol/teams';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
@@ -366,7 +366,8 @@ vi.mock('@/agents/hooks/useResumeCapabilityOptions', () => ({
 vi.mock('@/agents/runtime/resumeCapabilities', () => ({
   canResumeSessionWithOptions: () => true,
 }));
-vi.mock('@/agents/catalog/agentUniverse', () => ({
+vi.mock('@/agents/catalog/agentUniverse', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/agents/catalog/agentUniverse')>(),
   buildAgentUniverseBackendTargetKey: (providerId: string) => `provider:${providerId}`,
   listAgentUniverseIds: () => ['codex'],
 }));
@@ -681,6 +682,32 @@ function projectionWith(...placements: readonly PluginUiSurfacePlacementProjecti
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 
 describe('SessionView header action menu visibility', () => {
+  it('updates the mounted header when history hydration supplies the first prompt without changing the full Session', async () => {
+    sessionState.session = createSessionFixture({
+      id: 's1', serverId: 'server-1', seq: 100,
+      metadata: { path: '/tmp', host: 'tester.local', flavor: 'codex', bot: { kind: 'bot' } },
+    });
+    await renderSessionView();
+    await act(async () => {
+      // Settle the reducer's initial projections before observing transcript-only hydration.
+      canonicalStorage.getState().applyMessages('s1', []);
+      await flushHookEffects();
+    });
+    const fullSession = canonicalStorage.getState().sessions.s1;
+    expect(chatHeaderSpy.mock.calls.at(-1)?.[0]?.title).toBe('tmp');
+    await act(async () => {
+      canonicalStorage.getState().applyMessages('s1', [{
+        id: 'first-prompt', seq: 1, localId: null, createdAt: 1, isSidechain: false,
+        role: 'user', content: { type: 'text', text: 'Plan the release' },
+      }]);
+      await flushHookEffects();
+    });
+    expect(canonicalStorage.getState().sessions.s1).toBe(fullSession);
+    expect(canonicalStorage.getState().sessionListRowsByServerId[account.home.id]?.s1.metadata?.summaryText)
+      .toBe('Plan the release');
+    expect(chatHeaderSpy.mock.calls.at(-1)?.[0]?.title).toBe('Plan the release');
+  });
+
   beforeEach(async () => {
     const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
     await prepareSessionDraftPersistenceStorage();

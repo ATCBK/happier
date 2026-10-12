@@ -1,4 +1,5 @@
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { resolveEffectiveApiTokenPermissionModeV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { createScmDiffSummaryResultOperations } from '@/sync/ops/scmDiffSummary/results';
 import { applySavedScmDiffSummaryResult, getScmDiffSummaryState } from '@/sync/ops/scmDiffSummary/generate';
@@ -70,6 +71,11 @@ import {
 } from '@/components/plugins/actions/pluginContributedActionController';
 import { useSessionConnectedServicesAuthSwitch } from '@/components/sessions/agentInput/hooks/useSessionConnectedServicesAuthSwitch';
 import { useExistingSessionMcpSelection } from '@/components/sessions/agentInput/hooks/useExistingSessionMcpSelection';
+import type { SessionMcpSelectionV1 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import {
+    type SessionConnectedServiceAuthSwitchResult,
+    setSessionConnectedServiceAuthBinding,
+} from '@/sync/ops/connectedServices/sessionAuthSwitch';
 import { resolveResumeFailurePresentation } from '@/sync/domains/session/resume/resolveResumeFailurePresentation';
 import {
     deriveSessionIntentionalRestartSignals,
@@ -155,6 +161,7 @@ import { applyTranscriptJumpHighlightForJumpResult } from '@/components/sessions
 import type { PendingMessageEditRequest } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
 import { TranscriptMessageSelectionProvider } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 import { TranscriptSelectionToolbarController } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbarController';
+import { FindComposerSlotHost, FindComposerSlotProvider } from '@/components/ui/find/FindComposerSlot';
 import type { TranscriptSelectionToolbarMessage } from '@/components/sessions/transcript/messageSelection/TranscriptSelectionToolbar';
 import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
 import { openTranscriptSendToSessionModal } from '@/components/sessions/transcript/messageSelection/openTranscriptSendToSessionModal';
@@ -163,6 +170,7 @@ import { useTranscriptSelectionEligibleMessageIds } from '@/components/sessions/
 import { EmptyMessages } from '@/components/ui/empty/EmptyMessages';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { useDraft } from '@/hooks/session/useDraft';
+import { SessionDraftHydrationBoundary } from '@/components/sessions/drafts/SessionDraftHydrationBoundary';
 import {
     SessionDraftConflictResolution,
     useSessionDraftConflictComposerBanner,
@@ -195,7 +203,8 @@ import { resourceHasAvailableTeamCredentialProviderModel } from '@/components/se
 import { useScmSessionAutoRefresh } from '@/scm/refresh/useScmSessionAutoRefresh';
 import {
 } from '@/sync/ops';
-import { useWorkspaceRefs, storage, useEnabledAutomationsCountForSession, useEndpointConnectivity, useIsDataReady, useIsMachineListSettled, useLocalSetting, useOpenApprovalArtifactsForSession, useProfile, useMachine, useServerScopedMachine, useSessionPendingMessages, useSessionTranscriptIds, useSessionVisibleReadSeq, useSetting, useSocketStatus, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
+import { TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS } from '@/components/tools/shell/approvals/transcriptSettledApprovalPresentations';
+import { useWorkspaceRefs, storage, useEnabledAutomationsCountForSession, useEndpointConnectivity, useIsDataReady, useIsMachineListSettled, useLocalSetting, useOpenApprovalArtifactsForSession, useTranscriptApprovalArtifactsForSession, useProfile, useMachine, useServerScopedMachine, useSessionPendingMessages, useSessionTranscriptIds, useSessionVisibleReadSeq, useSetting, useSocketStatus, useSettingMutable, useSettings, useSyncError, useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import {
     serverAccountScopeKeySuffix,
     type ServerAccountScopeLifetime,
@@ -236,8 +245,7 @@ import {
     resolvePermissionIntentFromSessionMetadata,
 } from '@happier-dev/agents';
 import { useInSessionAgentPickerControls } from '@/components/sessions/agentPicker/useInSessionAgentPickerControls';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
-import { AskHappierStatusLink } from '@/components/sessions/bots/AskHappierOfferCard';
+import { isMachineReachable as readMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { isAskHappierStatusOfferState } from '@/components/sessions/bots/askHappierEntry';
 import { useAskHappierOpener } from '@/components/sessions/bots/useAskHappierOffer';
 import { useResumeCapabilityOptions } from '@/agents/hooks/useResumeCapabilityOptions';
@@ -276,6 +284,7 @@ import {
     flushSessionDraft,
     getSessionDraftSnapshot,
     readSessionDiscussionSelectionSourceFromDraft,
+    readSessionNextPromptPermissionModeFromDraft,
     subscribeSessionDraft,
     writeExistingSessionDraft,
     type SessionDraftCurrentness,
@@ -342,7 +351,10 @@ import {
     type SessionComposerSendDestination,
     type SessionComposerSendRoute,
 } from '@/sync/domains/session/input/resolveSessionComposerSendDestination';
-import { submitSessionUserMessage } from '@/sync/domains/session/input/submitSessionUserMessage';
+import { submitAppSessionComposerMessage } from '@/components/sessions/transcript/source/appSessionTranscriptActions';
+import { requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { HappyError } from '@/utils/errors/errors';
+import { getErrorMessage } from '@/utils/errors/getErrorMessage';
 import { resolveNonSteerableSendPlan, type NonSteerableSendPlan } from '@/components/sessions/agentInput/nonSteerableSendPreflight';
 import { createSyncBackedSubmitPort } from '@/sync/domains/session/input/syncBackedSubmitPort';
 import {
@@ -370,6 +382,7 @@ import {
     useDestinationInstanceKey,
 } from '@/components/appShell/workspace/DestinationInstanceHost';
 import * as React from 'react';
+import { AtmosphereSurfaceFrame } from '@/components/atmosphere/AtmosphereSurfaceFrame';
 import { useSessionFilePaneNavigation } from '@/components/sessions/panes/useSessionFileDetailsOpener';
 import { Keyboard, Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import { layout } from '@/components/ui/layout/layout';
@@ -393,6 +406,10 @@ import {
     readExactActiveParentTurn,
 } from '@/components/automations/sessionLifecycle/exactTurnAutomationPrefill';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { PendingResetStartSetResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { usageResetStartFailureMessage } from '@/components/settings/usage/widgets/plans/usageResetStartFailure';
 import { executeSessionComposerResolution } from '@/sync/domains/input/slashCommands/executeSessionComposerResolution';
 import {
     SESSION_WORK_STATE_STATUS_BADGE_KEY,
@@ -435,6 +452,10 @@ import {
     readSessionWorkStateFromMetadata,
 } from '@/sync/domains/session/workState/readSessionWorkState';
 import { SessionWorkStatePopover } from '@/components/sessions/workState/SessionWorkStatePopover';
+import type {
+    SessionWorkStateGoalSetRequest,
+    SessionWorkStateOperationResult,
+} from '@/components/sessions/workState/SessionWorkStateContent';
 import { isSessionGoalEditingAvailable } from '@/components/sessions/workState/sessionGoalEditingAvailability';
 import { createGoalActionChip } from '@/components/sessions/agentInput/definitions/createGoalActionChip';
 import {
@@ -477,7 +498,6 @@ import {
 } from '@/components/sessions/attachments/sessionAttachmentDraftStore';
 import { buildAttachmentMessageMeta, formatAttachmentsBlock, uploadAttachmentDraftsToSession } from '@/components/sessions/attachments/uploadAttachmentDraftsToSession';
 import { Text } from '@/components/ui/text/Text';
-import { sessionGoalClear, sessionGoalSet } from '@/sync/ops/sessionGoals';
 import { SessionRightSidebarProvider } from '@/components/sessions/panes/SessionRightPanel';
 import { createSessionPaneSurfaceScope } from '@/components/sessions/plugins/useSessionPluginRuntime';
 import { AppPaneScopeHost } from '@/components/appShell/panes/AppPaneScopeHost';
@@ -524,7 +544,7 @@ import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDispla
 import { machineCollectionHref } from '@/components/settings/machines/collection/machineCollectionModel';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
-import { createActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+import { createActionApprovalContinuation, resumeActionExecutionResult } from '@/components/approvals/actionApprovalContinuation';
 import type { ComposerStructuredInputMention } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
 import type { StorageState } from '@/sync/store/types';
 import { readSessionWorkStatePrimaryItemV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStatePrimary';
@@ -606,6 +626,7 @@ import { useWorkspaceSyncRelationshipSummaries } from '@/sync/domains/sessionHan
 import { resolveWorkspaceSyncSetAttention } from '@/sync/domains/sessionHandoff/workspaceSyncRelationshipModel';
 import { createWorkspaceSyncConflictDetailsTab } from '@/components/workspaces/sync/workspaceSyncConflictDetailsTab';
 import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
+import { BotMarkerFeedback } from '@/components/sessions/bots/botMarkerFeedback';
 import {
     readExternalAgentObservationPresentationInput,
     resolveExternalSessionRuntimePresentation,
@@ -638,7 +659,11 @@ import {
     readExternalSessionOperationPresentationFromMetadata,
 } from '../transcript/items/externalSessionOperationMetadata';
 import { resolveSessionViewRuntimeDisplayState } from './view/resolveSessionViewRuntimeDisplayState';
-import { resolveSessionViewConnectionStatus } from './view/resolveSessionViewConnectionStatus';
+import { resolveSessionViewConnectionStatus, type SessionViewPendingQueueAction, type SessionViewPendingQueueLine, type SessionViewProviderBindingLine } from './view/resolveSessionViewConnectionStatus';
+import { isPendingMessageForRecipient } from '@/sync/domains/pending/pendingMessageRecipient';
+import { resolveSessionGuardComposerState } from './view/resolveSessionGuardComposerState';
+import { readSessionListGuardState } from '@/sync/domains/session/listing/sessionListRenderable';
+import { keepMachineGuardWorkRunningViaAction } from '@/sync/domains/machines/guard/machineGuardRpc';
 import { isSessionRootRoutePathActive, isSessionRoutePathActive } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { useSurfaceAnchorPathname } from './surface/sessionSurfaceAnchorPathname';
 import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
@@ -1686,7 +1711,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
     // loading, ready and blocked re-publishes its parts into the same slots.
     return props.presentation?.kind === 'embedded'
         ? <PluginSurfaceNestingBoundary><EmbeddedSessionPartClaimsScope>{surface}</EmbeddedSessionPartClaimsScope></PluginSurfaceNestingBoundary>
-        : surface;
+        : <AtmosphereSurfaceFrame surface="home" session focused={isFocused} visible={isSurfaceVisible}>{surface}</AtmosphereSurfaceFrame>;
 });
 
 const EMBEDDED_PANE_DRIVER_OPTIONS = Object.freeze({ registerDriver: false });
@@ -1878,6 +1903,8 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
         sessionId,
     );
     const approvalRequests = useOpenApprovalArtifactsForSession(approvalSessionAddress);
+    // The transcript also keeps decided approvals whose body has a settled presentation (AGW-8).
+    const transcriptApprovalRequests = useTranscriptApprovalArtifactsForSession(approvalSessionAddress, TRANSCRIPT_SETTLED_APPROVAL_PRESENTATIONS);
     const safeArea = useChromeSafeAreaInsets();
     const safeAreaTopInset = props.safeAreaTopMode === 'external' ? 0 : safeArea.top;
     const headerSafeAreaTopMode = props.headerSafeAreaTopMode ?? props.safeAreaTopMode ?? 'internal';
@@ -2501,13 +2528,16 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
                 {...headerProps}
                 rightElement={headerRightElement}
                 agentIdentity={headerProps.agentId ? (
-                    <SessionAgentCatalogIdentityIcon
-                        agentId={headerProps.agentId}
-                        machineId={headerMachineTarget?.machineId ?? null}
-                        serverId={currentSessionRouteServerId}
-                        color={theme.colors.chrome.header.foreground}
-                        size={26}
-                    />
+                    // An accepted Make this a bot / regular session acknowledges itself on the mark (lab `b-promote`).
+                    <BotMarkerFeedback kind="mark" session={{ serverId: currentSessionRouteServerId, sessionId }}>
+                        <SessionAgentCatalogIdentityIcon
+                            agentId={headerProps.agentId}
+                            machineId={headerMachineTarget?.machineId ?? null}
+                            serverId={currentSessionRouteServerId}
+                            color={theme.colors.chrome.header.foreground}
+                            size={26}
+                        />
+                    </BotMarkerFeedback>
                 ) : null}
                 lineage={isTablet ? <SessionLineageBreadcrumb sessionId={sessionId} serverId={currentSessionRouteServerId || null} /> : null}
                 onBackPress={handleBackPress}
@@ -2716,6 +2746,7 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
                            jumpToSeq={props.jumpToSeq ?? null}
                            participantTargets={participantTargets}
                            approvalRequests={approvalRequests}
+                           transcriptApprovalRequests={transcriptApprovalRequests}
                            paneUrlState={props.paneUrlState ?? null}
                            initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
                            browserContextStateForComposer={browserContextStateForComposer}
@@ -2763,7 +2794,9 @@ function SessionViewLoaded(props: Parameters<typeof SessionViewLoadedContent>[0]
         [props.session.access, props.session.active, props.session.presence, props.embedded],
     );
     return <AppSessionTranscriptSourceProvider sessionId={props.sessionId} serverId={props.routeServerId ?? props.session.serverId} interaction={interaction} navigation={props.embedded?.navigation}>
-        <SessionViewLoadedContent {...props} />
+        <SessionDraftHydrationBoundary lifetime={props.accountBinding} addresses={[{ kind: 'session', sessionId: props.sessionId }]}>
+            <SessionViewLoadedContent {...props} />
+        </SessionDraftHydrationBoundary>
     </AppSessionTranscriptSourceProvider>;
 }
 
@@ -2787,6 +2820,7 @@ function SessionViewLoadedContent({
     jumpToSeq,
     participantTargets,
     approvalRequests,
+    transcriptApprovalRequests,
     paneUrlState,
     initialAttachmentDrafts,
     browserContextStateForComposer,
@@ -2836,6 +2870,8 @@ function SessionViewLoadedContent({
     jumpToSeq: number | null;
     participantTargets: readonly SessionParticipantTarget[];
     approvalRequests: ReadonlyArray<OpenApprovalArtifactForSession>;
+    /** Open approvals plus decided ones whose body keeps a settled presentation (the transcript's list). */
+    transcriptApprovalRequests: ReadonlyArray<OpenApprovalArtifactForSession>;
     paneUrlState: SessionPaneUrlState | null;
     initialAttachmentDrafts: readonly AttachmentDraft[] | null;
     browserContextStateForComposer: BrowserContextState | null;
@@ -2874,6 +2910,14 @@ function SessionViewLoadedContent({
         ? accountBinding
         : null;
     const sessionAccountScope = sessionAccountLifetime?.scope ?? null;
+    const presentSessionActionOutcome = React.useCallback((error: unknown, lifetime: typeof sessionAccountLifetime) => {
+        if (!lifetime?.isCurrent()) return;
+        const pendingApproval = error instanceof HappyError
+            && error.code === 'approval_request_created'
+            && ActionApprovalRequestCreatedResultSchema.safeParse(error.details).success;
+        Modal.alert(pendingApproval ? t('approvals.title') : t('common.error'),
+            getErrorMessage(error) || t('errors.failedToSendMessage'));
+    }, []);
     const sessionAccountScopeKey = sessionAccountScope
         ? serverAccountScopeKeySuffix(sessionAccountScope)
         : 'local';
@@ -2891,6 +2935,7 @@ function SessionViewLoadedContent({
     const activeComposerRefRef = React.useRef<ComposerRefV1>(activeComposerRef);
     activeComposerRefRef.current = activeComposerRef;
     const composerPresentationMountedRef = React.useRef(true);
+    const sessionPresentationApplierRef = React.useRef<SessionPresentationIntentApplier | null>(null);
     const composerInputFocusedRef = React.useRef(false);
     const composerActionBarLayoutRef = React.useRef<ComposerSnapshotV1['layout']>('wrap');
     const composerFocusRequestRef = React.useRef<(() => void) | null>(null);
@@ -3114,10 +3159,6 @@ function SessionViewLoadedContent({
     const lifecycleAgentId = resolveAgentIdFromSessionMetadata(ownerMetadata)
         ?? (agentId && isBundledAgentId(agentId) ? agentId : null);
     const agentCore = agentId ? getAgentCore(agentId) : null;
-    const permissionMode = embedded?.permissionModePicker
-        ? resolveEffectiveApiTokenPermissionModeV1({ permissionModes: [...embedded.permissionModePicker] }, liveComposerState.permissionMode)
-            ?? liveComposerState.permissionMode
-        : liveComposerState.permissionMode;
     const sessionModeOptionIds = agentId
         ? resolveSessionViewModeOptionIds(
             agentId,
@@ -3279,7 +3320,7 @@ function SessionViewLoadedContent({
      * as a failed selection.
      */
     const [modelTransitionActionRequired, setModelTransitionActionRequired] = React.useState<Readonly<{
-        status: 'restart_required' | 'reconciliation_required';
+        status: 'armed' | 'restart_required' | 'reconciliation_required';
         requestedSelection: NonNullable<SessionModelPickerOptionValue>;
         intentBaselineUpdatedAt: number;
     }> | null>(null);
@@ -3437,6 +3478,47 @@ function SessionViewLoadedContent({
         daemonMergedProjection.phase,
         lifecycleAgentId,
     ]);
+    const actionExecutor = createDefaultActionExecutor({
+        currentAgentCapabilities: currentLifecycleAgentCapabilities,
+        ...(sessionAccountScope ? { currentSessionPresentationApply: {
+            ...sessionAccountScope,
+            sessionId,
+            isCurrent: () => composerPresentationMountedRef.current
+                && 'sessionId' in activeComposerRefRef.current
+                && activeComposerRefRef.current.sessionId === sessionId
+                && boardPresentationUndoCurrentRef.current
+                && sessionAccountLifetime?.isCurrent() === true
+                && sessionPresentationApplierRef.current !== null,
+            apply: async ({ input, signal }) => {
+                signal?.throwIfAborted();
+                const composerRef = activeComposerRefRef.current;
+                if (!composerPresentationMountedRef.current
+                    || !('sessionId' in composerRef) || composerRef.sessionId !== sessionId
+                    || !boardPresentationUndoCurrentRef.current
+                    || !sessionAccountLifetime?.isCurrent()) {
+                    return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+                }
+                const outcome = sessionPresentationApplierRef.current?.(input.intent);
+                if (outcome?.status === 'applied' || outcome?.status === 'unchanged') {
+                    return { status: outcome.status, revision: String(readActiveComposerPresentationRevision()) };
+                }
+                const errorCode = outcome?.status === 'invalidTarget' ? 'current_session_presentation_invalid_target'
+                    : outcome?.status === 'notCurrent' ? 'current_session_presentation_not_current'
+                    : 'target_unavailable';
+                return { ok: false, errorCode, error: errorCode };
+            },
+        } } : {}),
+        resolveServerIdForSessionId: resolveServerIdForSessionIdFromLocalCache,
+        openSession: (sid, options) => {
+            router.push(buildScopedSessionRouteHref({
+                sessionId: sid,
+                serverId: options?.serverId
+                    ?? (sid === sessionId ? sessionRouteServerId : resolveServerIdForSessionIdFromLocalCache(sid))
+                    ?? sessionRouteServerId,
+                query: options?.query,
+            }) as any);
+        },
+    });
     // Reference search has no Account data, but it is still daemon work scoped to
     // the active Account. Borrow the incumbent lifetime as a currentness fence.
     const composerReferenceAccountLifetime = sessionAccountLifetime;
@@ -3615,8 +3697,6 @@ function SessionViewLoadedContent({
     const staleSessionRunnerBanner = useComposerBannerCollapse('staleSessionRunner');
     const mcpSelectionRestartRequiredBanner = useComposerBannerCollapse('mcpSelectionRestartRequired');
     const authRecoveryBanner = useComposerBannerCollapse('authRecovery');
-    const pendingQueueResumeFailedBanner = useComposerBannerCollapse('pendingQueueResumeFailed');
-    const providerBindingBannerCollapse = useComposerBannerCollapse('providerBinding');
     const externalTranscriptSnapshotBanner = useComposerBannerCollapse('externalTranscriptSnapshot');
     const agentTransitionOutcomeBanner = useComposerBannerCollapse('agentTransitionOutcome');
     // The last armed-switch outcome that still has something to say.
@@ -3730,7 +3810,7 @@ function SessionViewLoadedContent({
         storageKind: getSessionStorageKind(session),
         canEditSession: hasWriteAccess,
         machinePresence: sessionMachineRecord
-            ? (isMachineOnline(sessionMachineRecord) ? 'online' as const : 'offline' as const)
+            ? (readMachineReachable(sessionAccountScope, sessionMachineRecord) ? 'online' as const : 'offline' as const)
             : 'unknown' as const,
         // The Session's transcript sequence, which only a written transcript
         // record advances. Zero is therefore the one state in which a switch
@@ -3738,7 +3818,7 @@ function SessionViewLoadedContent({
         // screen already holds rather than from a transcript page that may not
         // be loaded.
         hasConversationToCarry: session.seq > 0,
-    }), [hasWriteAccess, providerAgentTargetKey, session, sessionMachineRecord]);
+    }), [hasWriteAccess, isMachineReachable, providerAgentTargetKey, session, sessionAccountScope, sessionMachineRecord]);
     // `session.continuation.inspect` is answered by the machine hosting the
     // Session, so an answer only holds for as long as BOTH runtimes behind it do:
     // this realtime connection, and the daemon that answered. A daemon that
@@ -3926,30 +4006,42 @@ function SessionViewLoadedContent({
         agentLabel: sessionGoalAgentLabel,
     }), [goalControlMachineId, sessionGoalAgentLabel, sessionId, sessionNativeGoalOwner]);
     const setSessionGoalForView = React.useCallback(
-        (request: Parameters<typeof sessionGoalSet>[1]) => {
+        async (request: SessionWorkStateGoalSetRequest): Promise<SessionWorkStateOperationResult> => {
             if (!sessionAccountScope || !sessionAccountLifetime?.isCurrent()) {
-                return Promise.resolve({
+                return {
                     ok: false as const,
                     error: 'Session Account authority is unavailable',
-                    errorCode: 'session_account_scope_retired',
-                });
+                };
             }
-            return sessionGoalSet(sessionId, request, { serverId: sessionAccountScope.serverId });
+            const result = await actionExecutor.execute('session.goal.set', { sessionId, ...request }, {
+                surface: 'ui',
+                defaultSessionId: sessionId,
+                serverId: sessionAccountScope.serverId,
+            });
+            return result.ok
+                ? { ok: true }
+                : { ok: false, error: result.error };
         },
-        [sessionAccountLifetime, sessionAccountScope, sessionId],
+        [actionExecutor, sessionAccountLifetime, sessionAccountScope, sessionId],
     );
     const clearSessionGoalForView = React.useCallback(
-        () => {
+        async (): Promise<SessionWorkStateOperationResult> => {
             if (!sessionAccountScope || !sessionAccountLifetime?.isCurrent()) {
-                return Promise.resolve({
+                return {
                     ok: false as const,
                     error: 'Session Account authority is unavailable',
-                    errorCode: 'session_account_scope_retired',
-                });
+                };
             }
-            return sessionGoalClear(sessionId, { serverId: sessionAccountScope.serverId });
+            const result = await actionExecutor.execute('session.goal.clear', { sessionId }, {
+                surface: 'ui',
+                defaultSessionId: sessionId,
+                serverId: sessionAccountScope.serverId,
+            });
+            return result.ok
+                ? { ok: true }
+                : { ok: false, error: result.error };
         },
-        [sessionAccountLifetime, sessionAccountScope, sessionId],
+        [actionExecutor, sessionAccountLifetime, sessionAccountScope, sessionId],
     );
     // UIW1 live workflow activity and the managed Workflow Runs whose provenance is this Session
     // (`originSessionId` is the canonical Run-list filter; the Session does not own these Runs and they
@@ -4484,6 +4576,7 @@ function SessionViewLoadedContent({
                 : undefined;
             return computeConnectedServiceQuotaGaugeViewModel({
                 snapshot: providerUsageConnectedServiceQuotaSnapshot,
+                activeModelId: providerModelSelection?.ref.modelId ?? modelMode,
                 additionalMeterIds,
                 quotaLimitSelection: connectedServiceQuotaLimitSelection,
                 windowMode: sessionProviderUsageGaugeWindowMode,
@@ -4494,6 +4587,7 @@ function SessionViewLoadedContent({
         }
         const connectedServiceGauge = computeConnectedServiceQuotaGaugeViewModel({
             snapshot: providerUsageConnectedServiceQuotaSnapshot,
+            activeModelId: providerModelSelection?.ref.modelId ?? modelMode,
             quotaLimitSelection: connectedServiceQuotaLimitSelection,
             windowMode: sessionProviderUsageGaugeWindowMode,
             windowModes: sessionProviderUsageGaugeWindowModes,
@@ -4503,6 +4597,7 @@ function SessionViewLoadedContent({
         if (connectedServiceGauge) return connectedServiceGauge;
         return computeProviderAccountUsageGaugeViewModel({
             snapshot: providerAccountUsageSnapshot,
+            activeModelId: providerModelSelection?.ref.modelId ?? modelMode,
             // The snapshots hook already resolved this record's state, including the
             // failed-refresh case its retained snapshot cannot express on its own.
             state: providerAccountUsageSnapshot
@@ -4515,6 +4610,8 @@ function SessionViewLoadedContent({
             formatter: connectedServiceQuotaGaugeFormatter,
         });
     }, [
+        modelMode,
+        providerModelSelection?.ref.modelId,
         connectedServiceQuotaProfileIdentity,
         connectedServiceQuotaProfileRef,
         connectedServiceQuotasEnabled,
@@ -5175,18 +5272,6 @@ function SessionViewLoadedContent({
         return buildSessionHref(sessionId, suffix);
     }, [buildSessionHref, sessionId]);
 
-    const actionExecutor = createDefaultActionExecutor({
-        currentAgentCapabilities: currentLifecycleAgentCapabilities,
-        resolveServerIdForSessionId: resolveServerIdForSessionIdFromLocalCache,
-        openSession: (sid, options) => {
-            router.push(buildScopedSessionRouteHref({
-                sessionId: sid,
-                serverId: options?.serverId ?? resolveNavigationServerIdForSessionId(sid),
-                query: options?.query,
-            }) as any);
-        },
-    });
-
     // Inactive session resume state
     // Use `session.active` as the source of truth for whether the provider process is running.
     // `presence` is derived from server snapshots and can drift if a partial update lands.
@@ -5421,6 +5506,17 @@ function SessionViewLoadedContent({
         readCurrentSessionDraftStatus,
         readCurrentSessionDraftStatus,
     );
+    const readNextPromptPermissionMode = React.useCallback(() => readSessionNextPromptPermissionModeFromDraft(
+        getCurrentSessionDraftSnapshot()?.document,
+    ), [getCurrentSessionDraftSnapshot]);
+    const nextPromptPermissionMode = React.useSyncExternalStore(
+        subscribeCurrentSessionDraft, readNextPromptPermissionMode, readNextPromptPermissionMode,
+    );
+    const selectedPermissionMode = nextPromptPermissionMode ?? liveComposerState.permissionMode;
+    const permissionMode = embedded?.permissionModePicker
+        ? resolveEffectiveApiTokenPermissionModeV1({ permissionModes: [...embedded.permissionModePicker] }, selectedPermissionMode)
+            ?? selectedPermissionMode
+        : selectedPermissionMode;
     const draftConflictBanner = useSessionDraftConflictComposerBanner(currentSessionDraftConflict);
     const draftSyncStatusBadge = React.useMemo(
         () => buildSessionDraftSyncStatusBadge(currentSessionDraftStatus),
@@ -5590,10 +5686,10 @@ function SessionViewLoadedContent({
                 const recipientValue = routing.recipient.value;
                 const recipient = recipientValue && typeof recipientValue === 'object' && !Array.isArray(recipientValue)
                     && 'mode' in recipientValue && recipientValue.mode === 'manual'
-                    ? SESSION_DRAFT_VALUE_SCHEMAS['routing.recipient'].safeParse(recipientValue.recipient)
+                    ? createStoredReadSchema(SESSION_DRAFT_VALUE_SCHEMAS['routing.recipient']).safeParse(recipientValue.recipient)
                     : null;
                 if (recipient?.success) snapshot['routing.recipient'] = recipient.data;
-                const continuation = SESSION_DRAFT_VALUE_SCHEMAS['routing.agentContinuation']
+                const continuation = createStoredReadSchema(SESSION_DRAFT_VALUE_SCHEMAS['routing.agentContinuation'])
                     .safeParse(routing.agentContinuation.value);
                 if (continuation.success) snapshot['routing.agentContinuation'] = continuation.data;
                 snapshot['routing.executionRunRequestedAction'] = readExecutionRunRequestedAction(
@@ -5631,6 +5727,7 @@ function SessionViewLoadedContent({
                     'target.routing.agentContinuation',
                     'target.routing.executionRunDelivery',
                     'extensions.happier.sessionDiscussionSelectionSourceV1',
+                    'extensions.happier.nextPromptPermissionModeV1',
                 ],
             })
             : false;
@@ -5788,11 +5885,6 @@ function SessionViewLoadedContent({
         submission: SessionArmedAgentContinuationSubmission,
     ): boolean => {
         if (!sessionAccountLifetime?.isCurrent()) return false;
-        fireAndForget(sync.publishNextPromptPermissionModeAfterAdmission({
-            sessionId,
-            admittedPermissionMode: submission.input.meta.permissionMode,
-            accountLifetime: sessionAccountLifetime,
-        }), { tag: 'SessionView.publishAdmittedPermissionIntent' });
         const currentness = submission.currentness;
         let clearedComposerAttachments = false;
         const didClearComposer = clearComposerAfterOutboundHandoff({
@@ -5841,6 +5933,22 @@ function SessionViewLoadedContent({
                 : {}),
         });
 
+        const modeMutationId = currentness?.nextPromptPermissionModeMutationId;
+        const didClearNextPromptPermissionMode = modeMutationId !== undefined && sessionAccountScope !== null
+            ? clearSessionDraftCurrentnessLocal({
+                scope: sessionAccountScope,
+                address: { kind: 'session', sessionId },
+                currentness: {
+                    address: { kind: 'session', sessionId },
+                    mutationIds: { 'extensions.happier.nextPromptPermissionModeV1': modeMutationId },
+                },
+                fieldIds: ['extensions.happier.nextPromptPermissionModeV1'],
+            })
+            : false;
+        if (didClearNextPromptPermissionMode && sessionAccountScope) {
+            void flushSessionDraft({ scope: sessionAccountScope, address: { kind: 'session', sessionId } });
+        }
+
         let didClearAttachmentDrafts = false;
         if (currentness && currentness.attachmentDraftIds.length > 0) {
             const submittedAttachmentDraftIds = new Set(currentness.attachmentDraftIds);
@@ -5875,7 +5983,7 @@ function SessionViewLoadedContent({
             }
         }
 
-        return didClearComposer || didClearAttachmentDrafts || didClearReviewComments;
+        return didClearComposer || didClearNextPromptPermissionMode || didClearAttachmentDrafts || didClearReviewComments;
     }, [
         sessionAccountLifetime,
         sessionAccountScope,
@@ -6296,9 +6404,10 @@ function SessionViewLoadedContent({
             serverId: sessionRouteServerId,
             mode,
             applyTiming: settings.sessionPermissionModeApplyTiming === 'next_prompt' ? 'next_prompt' : 'immediate',
+            draftScope: sessionAccountLifetime?.isCurrent() ? sessionAccountScope : null,
             executeAction: actionExecutor.execute,
-        }), { tag: 'SessionView.updatePermissionMode' });
-    }, [actionExecutor, sessionId, sessionRouteServerId, settings.sessionPermissionModeApplyTiming]);
+        }).catch((error: unknown) => presentSessionActionOutcome(error, sessionAccountLifetime)), { tag: 'SessionView.updatePermissionMode' });
+    }, [actionExecutor, presentSessionActionOutcome, sessionAccountLifetime, sessionAccountScope, sessionId, sessionRouteServerId, settings.sessionPermissionModeApplyTiming]);
 
     const updateAcpSessionModeOverride = React.useCallback((modeId: string) => {
         const normalized = typeof modeId === 'string' ? modeId.trim() : '';
@@ -6306,21 +6415,31 @@ function SessionViewLoadedContent({
             normalized === 'default' && !sessionModeOptionIds.includes('default')
                 ? ''
                 : normalized;
-        fireAndForget(sync.publishSessionAcpSessionModeOverrideToMetadata({
+        fireAndForget(actionExecutor.execute('session.mode.set', {
             sessionId,
             modeId: publishModeId,
-            updatedAt: nowServerMs(),
-        }), { tag: 'SessionView.updateAcpSessionModeOverride' });
-    }, [sessionId, sessionModeOptionIds]);
+        }, {
+            surface: 'ui',
+            defaultSessionId: sessionId,
+            serverId: sessionRouteServerId,
+        }).then((result) => {
+            if (!result.ok) throw result;
+        }).catch((error: unknown) => presentSessionActionOutcome(error, sessionAccountLifetime)), { tag: 'SessionView.updateAcpSessionModeOverride' });
+    }, [actionExecutor, presentSessionActionOutcome, sessionAccountLifetime, sessionId, sessionModeOptionIds, sessionRouteServerId]);
 
     const updateAcpConfigOptionOverride = React.useCallback((configId: string, valueId: string) => {
-        fireAndForget(sync.publishSessionAcpConfigOptionOverrideToMetadata({
+        fireAndForget(actionExecutor.execute('session.config_option.set', {
             sessionId,
             configId,
-            value: valueId,
-            updatedAt: nowServerMs(),
-        }), { tag: 'SessionView.updateAcpConfigOptionOverride' });
-    }, [sessionId]);
+            valueId,
+        }, {
+            surface: 'ui',
+            defaultSessionId: sessionId,
+            serverId: sessionRouteServerId,
+        }).then((result) => {
+            if (!result.ok) throw result;
+        }).catch((error: unknown) => presentSessionActionOutcome(error, sessionAccountLifetime)), { tag: 'SessionView.updateAcpConfigOptionOverride' });
+    }, [actionExecutor, presentSessionActionOutcome, sessionAccountLifetime, sessionId, sessionRouteServerId]);
 
     const publishModelSelection = React.useCallback(async (ref: ProviderBoundModelRef | null, modelOptionsContext?: SessionModelOptionsContext) => {
         if (!agentId || !canSelectModel) return;
@@ -6334,12 +6453,24 @@ function SessionViewLoadedContent({
                 sessionId,
                 modelId: mode,
                 providerConnectionId: ref?.providerConnectionId ?? null,
+                applyTiming: session.active === true ? 'next_prompt' : 'immediate',
             }, {
                 surface: 'ui',
                 defaultSessionId: sessionId,
                 serverId: sessionRouteServerId,
             });
             if (result.ok) {
+                const value = result.result && typeof result.result === 'object' && !Array.isArray(result.result)
+                    ? result.result : null;
+                const transition = SessionModelTransitionResultV1Schema.safeParse(value && 'status' in value && value.status === 'armed'
+                    ? { ok: true, status: value.status,
+                        activeSelection: 'activeSelection' in value ? value.activeSelection : null,
+                        requestedSelection: 'requestedSelection' in value ? value.requestedSelection : null }
+                    : null);
+                if (transition.success && transition.data.status === 'armed') {
+                    setModelTransitionActionRequired({ status: 'armed', requestedSelection: transition.data.requestedSelection, intentBaselineUpdatedAt });
+                    return;
+                }
                 setModelTransitionActionRequired(null);
                 return;
             }
@@ -6375,6 +6506,7 @@ function SessionViewLoadedContent({
         hasWriteAccess,
         providerModelSelectionIntent?.updatedAt,
         sessionId,
+        session.active,
         ownerMetadata,
         sessionRouteServerId,
         composerOptionsInput,
@@ -6936,7 +7068,6 @@ function SessionViewLoadedContent({
     );
     // PEP owns the current-UI command transport; Lane 08 only publishes this
     // mounted Session's local Board/Companion port through the incumbent target.
-    const sessionPresentationApplierRef = React.useRef<SessionPresentationIntentApplier | null>(null);
     const applySessionPresentationIntentFromCommand = React.useCallback(
         (intent: Parameters<SessionPresentationIntentApplier>[0], onCompanionMutation?: Parameters<SessionPresentationIntentApplier>[1]) => (
             sessionPresentationApplierRef.current?.(intent, onCompanionMutation) ?? { status: 'unavailable' as const }
@@ -7435,14 +7566,16 @@ function SessionViewLoadedContent({
                   isForkedSessionV1={isForkedSessionV1}
                   isLocallyAttached={isLocallyAttached}
                   pendingMessagesCount={pendingMessages.length}
-                  bottomNotice={bottomNotice}
+                  // With a composer on screen its status line states this cause once; the notice
+                  // speaks only where no composer does (a Session that cannot take input).
+                  bottomNotice={shouldShowInput ? null : bottomNotice}
                   controlledByUserOverride={isLocallyAttached}
                   controlSwitchTo={controlSwitchTo}
                   onRequestSwitchToRemote={isHiddenSystemSessionSession || !canReleaseLocalControl ? undefined : handleRequestSwitchToRemote}
                   externalControlFooter={externalControlFooter}
                   jumpToSeq={jumpToSeq}
                   followBottomIntentKey={followBottomIntentSeq}
-                  approvalRequests={approvalRequests}
+                  approvalRequests={transcriptApprovalRequests}
                   onViewportChange={handleTranscriptViewportChange}
                   onEditPendingMessage={handleEditPendingMessage}
                   routeHydrationPending={routeHydrationPending}
@@ -7607,6 +7740,18 @@ function SessionViewLoadedContent({
             });
         }, [composerPluginActionController, composerPluginActionScopeSignal, openSessionComposerContributedAction]);
         const composerPluginActionChips = composerPluginPresentation.extraActionChips;
+        const applySessionMcpSelection = React.useCallback(async (selection: SessionMcpSelectionV1) => {
+            const result = await actionExecutor.execute('session.mcp_selection.set', {
+                sessionId,
+                selection,
+                sessionActive: session.active === true,
+            }, {
+                surface: 'ui',
+                defaultSessionId: sessionId,
+                serverId: sessionRouteServerId,
+            });
+            if (!result.ok) throw new Error(result.error);
+        }, [actionExecutor, session.active, sessionId, sessionRouteServerId]);
         const sessionMcpChip = useExistingSessionMcpSelection({
             sessionId,
             sessionMetadata: ownerMetadata,
@@ -7616,6 +7761,7 @@ function SessionViewLoadedContent({
             serverId: sessionRouteServerId,
             isReadOnly,
             sessionActive: session.active === true,
+            applySelection: applySessionMcpSelection,
         });
         const routingControls = useSessionAgentInputRoutingControls({
             isReadOnly,
@@ -7660,27 +7806,39 @@ function SessionViewLoadedContent({
             shownSources: providerModelProjection.data?.groups ?? EMPTY_SESSION_MODEL_PROJECTION_GROUPS,
             hiddenSources: providerModelProjection.data?.hiddenSources ?? EMPTY_SESSION_ROUTE_HIDDEN_SOURCES,
         } : undefined, [embedded?.allowedModels, existingSessionSourceBrowse, providerAgentTargetKey, providerModelProjection.data, providersFeatureEnabled]);
-        // The popover's Restart is the provider-binding banner's own action, bound below once it exists.
-        const pendingRouteRestartRef = React.useRef<(() => void | Promise<void>) | null>(null);
-        const pendingRouteRestartAvailable = Boolean(effectiveModelTransitionActionRequired?.requestedSelection);
-        const pendingRouteRestartDisabled = !hasWriteAccess || isRuntimeFreshActiveTurn;
-        const pendingRouteRestart = React.useMemo(() => modelSelectionDisposition.selectionTransitionPending ? {
-            agentName: sessionGoalAgentLabel,
-            ...(pendingRouteRestartAvailable ? { restart: () => pendingRouteRestartRef.current?.() } : {}),
-            disabled: pendingRouteRestartDisabled,
-        } : null, [modelSelectionDisposition.selectionTransitionPending, pendingRouteRestartAvailable, pendingRouteRestartDisabled, sessionGoalAgentLabel]);
+        const applySessionConnectedServicesAuthBinding = React.useCallback(async (
+            input: Parameters<typeof setSessionConnectedServiceAuthBinding>[0],
+        ): Promise<SessionConnectedServiceAuthSwitchResult> => {
+            const initial = await actionExecutor.execute('session.connected_services_auth.set', input, {
+                surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+                defaultSessionId: sessionId, serverId: sessionRouteServerId,
+            });
+            if (!sessionAccountScope || !sessionAccountLifetime?.isCurrent()) {
+                throw new Error('action_account_scope_changed');
+            }
+            const settled = await resumeActionExecutionResult({
+                result: initial,
+                actionId: 'session.connected_services_auth.set',
+                actionInput: input,
+                scope: sessionAccountScope,
+                onApprovalPending: pendingRecoveryApproval.requestApproval,
+            });
+            if (!settled.ok) throw new Error(settled.error);
+            return settled.result as SessionConnectedServiceAuthSwitchResult;
+        }, [actionExecutor, pendingRecoveryApproval.requestApproval, sessionAccountLifetime, sessionAccountScope, sessionId, sessionRouteServerId]);
         const sessionConnectedServicesAuthSwitch = useSessionConnectedServicesAuthSwitch({
+            sessionConfiguration: session,
             routeSources: sessionRouteSources,
-            pendingRouteRestart,
+            nativeAgentTargetKey: providerAgentTargetKey,
             route: {
-                phase: session.active === true || (!modelSelectionDisposition.proposedSelectionV2 && !modelSelectionDisposition.contextSelection)
+                phase: session.active === true || (!modelSelectionDisposition?.proposedSelectionV2 && !modelSelectionDisposition?.contextSelection)
                     ? 'running' : 'draft',
-                selection: modelSelectionDisposition.proposedSelectionV2?.ref ?? modelSelectionDisposition.contextSelection,
-                appliedSelection: modelSelectionDisposition.activeSelection,
+                selection: modelSelectionDisposition?.proposedSelectionV2?.ref ?? modelSelectionDisposition?.contextSelection ?? null,
+                appliedSelection: modelSelectionDisposition?.activeSelection ?? null,
                 appliedProviderSource: providerLaunchBinding ? {
                     connectionId: providerLaunchBinding.connectionId, ...providerLaunchBinding.displaySnapshot,
                 } : null,
-                transitionPending: modelSelectionDisposition.selectionTransitionPending,
+                transitionPending: modelSelectionDisposition?.selectionTransitionPending ?? false,
                 sources: providerModelProjection.data?.groups,
                 teamSources: teamCredentialCatalog.resources.map(resource => ({
                     teamId: resource.teamId, resourceId: resource.id, displayName: resource.displayName,
@@ -7713,41 +7871,10 @@ function SessionViewLoadedContent({
             sessionActive: session.active === true,
             intentionalRestartSignals,
             passiveProviderRecoveryServiceId,
+            applyBinding: applySessionConnectedServicesAuthBinding,
         });
         const connectedServicesRestartState = sessionConnectedServicesAuthSwitch.restartState;
         const sessionStatusResuming = sessionStatus.state === 'resuming';
-        const connectionStatus = React.useMemo(() => resolveSessionViewConnectionStatus({
-            connectedServicesRestartState,
-            restartingText: t('connectedServices.authSwitch.status.restarting'),
-            switchFailedText: t('connectedServices.authSwitch.switchFailed'),
-            inactiveStatusText,
-            sessionStatusResuming,
-            sessionStatusState: sessionStatus.state,
-            sessionStatusText: sessionStatus.statusText,
-            sessionStatusColor: sessionStatus.statusColor,
-            sessionStatusDotColor: sessionStatus.statusDotColor,
-            sessionStatusPulsing: sessionStatus.isPulsing === true,
-        }), [
-            connectedServicesRestartState,
-            inactiveStatusText,
-            sessionStatus.isPulsing,
-            sessionStatus.statusColor,
-            sessionStatus.statusDotColor,
-            sessionStatusResuming,
-            sessionStatus.state,
-            sessionStatus.statusText,
-        ]);
-        // A Session in trouble offers one contextual Ask Happier beside its status (D33); the
-        // visible screen travels as safe context, and nothing starts before Send.
-        const openAskHappier = useAskHappierOpener();
-        const askHappierStatusAction = React.useMemo(() => (
-            !embedded && isAskHappierStatusOfferState(sessionStatus.state)
-                ? <AskHappierStatusLink onPress={() => openAskHappier()} />
-                : null
-        ), [embedded, openAskHappier, sessionStatus.state]);
-        const openSessionModelPicker = React.useCallback(() => {
-            setSessionModelPickerRequestKey((current) => String((Number.parseInt(current ?? '0', 10) || 0) + 1));
-        }, []);
         const providerBindingBanner = React.useMemo(() => {
             const requestedTransitionSelection = effectiveModelTransitionActionRequired?.requestedSelection ?? null;
             // A Team resource is named by the Team's own resource, never by the
@@ -7862,19 +7989,154 @@ function SessionViewLoadedContent({
             sessionRuntimeStatusSource.meaningfulActivityAt,
             teamCredentialCatalog.resources,
         ]);
-        const handleProviderBindingAction = React.useCallback(async () => {
-            if (!providerBindingBanner) return;
-            if (providerBindingBanner.action === 'retry') {
-                await providerBindingStatus.refresh();
-                return;
+        // The binding family speaks on the composer's one status line, never as a card: its short state,
+        // its one recovery when the viewer can take it, and its body as the line's detail.
+        const providerBindingLine = React.useMemo<SessionViewProviderBindingLine | null>(() => providerBindingBanner
+            ? {
+                text: providerBindingBanner.title,
+                ...(providerBindingBanner.body ? { detail: providerBindingBanner.body } : {}),
+                action: providerBindingBanner.action === 'restart' && (!hasWriteAccess || isRuntimeFreshActiveTurn)
+                    ? null
+                    : providerBindingBanner.action,
+                color: theme.colors.state.attention.textForeground,
             }
-            if (providerBindingBanner.action === 'choose-model') {
-                openSessionModelPicker();
-                return;
+            : null, [hasWriteAccess, isRuntimeFreshActiveTurn, providerBindingBanner, theme.colors.state.attention.textForeground]);
+        // Queued input waiting on this Session to start speaks on the same line, never as a card: the
+        // producer (`resolvePendingActivationBanner`) keeps the fact; the line states it with one recovery.
+        // A managed wake keeps its own badge and popover, which own its observed stages.
+        const pendingQueueLine = React.useMemo<SessionViewPendingQueueLine | null>(() => {
+            const presentation = pendingActivationPresentation;
+            if (!presentation || presentation.managedWakeProjection) return null;
+            const action: SessionViewPendingQueueAction | null = presentation.primaryAction && presentation.row
+                ? presentation.primaryAction
+                : presentation.secondaryAction && presentation.row?.localId ? 'keep_queued' : null;
+            return {
+                text: t(`session.pendingActivation.${presentation.kind}.title`),
+                detail: t(`session.pendingActivation.${presentation.kind}.body`),
+                action,
+                color: presentation.kind === 'failed' ? theme.colors.state.attention.textForeground : sessionStatus.statusColor,
+            };
+        }, [pendingActivationPresentation, sessionStatus.statusColor, theme.colors.state.attention.textForeground]);
+        // The main transcript's queue size, said once on the line instead of a header over the queue.
+        const mainPendingCount = React.useMemo(
+            () => pendingMessages.filter((message) => isPendingMessageForRecipient(message, undefined)).length,
+            [pendingMessages],
+        );
+        const handlePendingQueueAction = React.useCallback(async (action: SessionViewPendingQueueAction) => {
+            const row = pendingActivationPresentation?.row;
+            if (!row?.localId || pendingActivationActionBusy) return;
+            setPendingActivationActionBusy(true);
+            try {
+                if (action === 'resume' || action === 'retry') {
+                    await handleResumeSession();
+                    return;
+                }
+                const requestedAction = row.pendingRequestedAction;
+                await sync.updatePendingRequestedAction(
+                    sessionId,
+                    row.localId,
+                    action === 'keep_queued' && requestedAction?.kind === 'send_now'
+                        ? { v: 1, kind: 'enqueue' }
+                        : requestedAction ?? { v: 1, kind: 'enqueue' },
+                    { resumeWhenAvailable: action === 'process_when_online' },
+                );
+            } catch (error) {
+                Modal.alert(t('common.error'), error instanceof Error
+                    ? error.message
+                    : t(action === 'keep_queued' ? 'session.pendingMessages.errors.updateFailed' : 'session.pendingMessages.errors.sendFailed'));
+            } finally {
+                setPendingActivationActionBusy(false);
             }
-            if (!hasWriteAccess) {
-                Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
-                return;
+        }, [handleResumeSession, pendingActivationActionBusy, pendingActivationPresentation?.row, sessionId]);
+        // The machine's guard is about to stop this Session, stopped it, or the next message is waking it.
+        const guardPresentationKey = JSON.stringify(ownerMetadata?.sessionGuardStateV1 ?? null);
+        const guardComposerState = React.useMemo(() => resolveSessionGuardComposerState({
+            guard: readSessionListGuardState(JSON.parse(guardPresentationKey)),
+            sessionActive: session.active === true,
+            resuming: sessionStatusResuming,
+            nowMs: Date.now(),
+        }), [guardPresentationKey, session.active, sessionStatusResuming]);
+        const guardMachineId = controlMachineTarget?.machineId ?? null;
+        const keepGuardedSessionRunning = React.useCallback(() => {
+            if (!guardMachineId) return;
+            fireAndForget((async () => {
+                const kept = await keepMachineGuardWorkRunningViaAction({ machineId: guardMachineId, serverId: sessionRouteServerId || null,
+                    expectedAccountId: null, sessionId });
+                if (!kept.ok) Modal.alert(t('machineGuard.session.keepRunning'), t('machineGuard.session.keepRunningFailed'));
+            })(), { tag: 'SessionView.guardKeepRunning' });
+        }, [guardMachineId, sessionId, sessionRouteServerId]);
+        const connectionStatus = React.useMemo(() => resolveSessionViewConnectionStatus({
+            connectedServicesRestartState,
+            restartingText: t('connectedServices.authSwitch.status.restarting'),
+            switchFailedText: t('connectedServices.authSwitch.switchFailed'),
+            inactiveStatusText,
+            // The inactive cause's explanation rides the line while the composer shows it.
+            inactiveDetail: shouldShowInput ? bottomNotice?.body ?? null : null,
+            sessionStatusResuming,
+            sessionStatusState: sessionStatus.state,
+            sessionStatusText: sessionStatus.statusText,
+            sessionStatusColor: sessionStatus.statusColor,
+            sessionStatusDotColor: sessionStatus.statusDotColor,
+            sessionStatusPulsing: sessionStatus.isPulsing === true,
+            guard: { state: guardComposerState, attentionColor: theme.colors.state.attention.textForeground, quietColor: theme.colors.text.tertiary },
+            sessionUnservable: isAskHappierStatusOfferState(sessionStatus.state),
+            providerBinding: providerBindingLine,
+            pendingQueue: {
+                line: pendingQueueLine,
+                countText: mainPendingCount > 0 ? t('session.pendingMessages.indicator', { count: mainPendingCount }) : null,
+            },
+        }), [
+            providerBindingLine,
+            pendingQueueLine,
+            mainPendingCount,
+            guardComposerState,
+            theme.colors.state.attention.textForeground,
+            theme.colors.text.tertiary,
+            connectedServicesRestartState,
+            inactiveStatusText,
+            shouldShowInput,
+            bottomNotice?.body,
+            sessionStatus.isPulsing,
+            sessionStatus.statusColor,
+            sessionStatus.statusDotColor,
+            sessionStatusResuming,
+            sessionStatus.state,
+            sessionStatus.statusText,
+        ]);
+        // A Session in trouble offers one contextual Ask Happier beside its status (D33); the
+        // visible screen travels as safe context, and nothing starts before Send.
+        const openAskHappier = useAskHappierOpener();
+        // It is the status line's own recovery, so it ends that sentence (lab `b-ask E`).
+        const askHappierStatusAction = React.useMemo(() => (
+            !embedded && isAskHappierStatusOfferState(sessionStatus.state)
+                ? { label: t('bots.guide.offer'), onPress: () => { openAskHappier(); } }
+                : null
+        ), [embedded, openAskHappier, sessionStatus.state]);
+        const askHappierConnectionStatus = React.useMemo(() => (
+            connectionStatus && askHappierStatusAction ? { ...connectionStatus, action: askHappierStatusAction } : null
+        ), [askHappierStatusAction, connectionStatus]);
+        const openSessionModelPicker = React.useCallback(() => {
+            setSessionModelPickerRequestKey((current) => String((Number.parseInt(current ?? '0', 10) || 0) + 1));
+        }, []);
+        // Applies through the transition owner, restarting only when required:
+        // the binding banner's Restart and the next-Send armed route (D15).
+        // True only once the requested selection is ready; failures are presented.
+        const restartSessionRunnerOnRequestedRoute = React.useCallback(async (): Promise<boolean> => {
+            // Ask the same transition owner to apply at Send. Live model changes
+            // settle here; only its actual restart refusal enters runner restart.
+            const requested = effectiveModelTransitionActionRequired?.requestedSelection;
+            if (requested && !isTeamCredentialProviderModelPickerValue(requested)) {
+                const result = await actionExecutor.execute('session.model.set', {
+                    sessionId, modelId: requested.modelId, providerConnectionId: requested.providerConnectionId,
+                    applyTiming: 'immediate',
+                }, { surface: 'ui', defaultSessionId: sessionId, serverId: sessionRouteServerId });
+                if (result.ok) { setModelTransitionActionRequired(null); return true; }
+                const transition = SessionModelTransitionResultV1Schema.safeParse({ ok: false,
+                    ...(result.details && typeof result.details === 'object' ? result.details : {}) });
+                if (!transition.success || transition.data.status !== 'restart_required') {
+                    Modal.alert(t('common.error'), t('settingsProviders.models.connectionUnavailable'));
+                    return false;
+                }
             }
             const restartMachineId = typeof staleSessionRunnerMachineId === 'string'
                 ? staleSessionRunnerMachineId.trim()
@@ -7901,7 +8163,7 @@ function SessionViewLoadedContent({
                 } else {
                     openSessionModelPicker();
                 }
-                return;
+                return false;
             }
             const exactBindingChange = providerBindingStatus.status?.status === 'changed'
                 ? providerBindingStatus.status
@@ -7917,23 +8179,54 @@ function SessionViewLoadedContent({
             });
             if (result.status === 'restarted') {
                 setModelTransitionActionRequired(null);
-            } else {
-                Modal.alert(t('common.error'), t('settingsProviders.models.connectionUnavailable'));
+                return true;
             }
+            Modal.alert(t('common.error'), t('settingsProviders.models.connectionUnavailable'));
+            return false;
         }, [
-            hasWriteAccess,
+            actionExecutor,
             effectiveModelTransitionActionRequired,
             openSessionModelPicker,
-            providerBindingBanner,
             providerBindingStatus.status,
-            providerBindingStatus.refresh,
             providerLaunchBinding,
             sessionRouteServerId,
             sessionRunnerRuntimeStatus,
             sessionId,
             staleSessionRunnerMachineId,
         ]);
-        pendingRouteRestartRef.current = providerBindingBanner?.action === 'restart' ? handleProviderBindingAction : null;
+        const handleProviderBindingAction = React.useCallback(async () => {
+            if (!providerBindingBanner) return;
+            if (providerBindingBanner.action === 'retry') {
+                await providerBindingStatus.refresh();
+                return;
+            }
+            if (providerBindingBanner.action === 'choose-model') {
+                openSessionModelPicker();
+                return;
+            }
+            if (!hasWriteAccess) {
+                Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
+                return;
+            }
+            await restartSessionRunnerOnRequestedRoute();
+        }, [
+            hasWriteAccess,
+            openSessionModelPicker,
+            providerBindingBanner,
+            providerBindingStatus.refresh,
+            restartSessionRunnerOnRequestedRoute,
+        ]);
+        // D15: a route or model picked while the session runs is armed for the next message, exactly
+        // like an Agent switch — the send control names it and the send applies it before dispatch.
+        // The arm IS the session's pending model selection, so un-arming is picking the current one again.
+        const armedRouteSourceLabel = effectiveModelTransitionActionRequired && session.active === true
+            ? sessionConnectedServicesAuthSwitch.armedRouteSourceLabel
+                ?? (providerBindingBanner?.kind === 'changed' ? providerBindingBanner.providerName : null)
+            : null;
+        const armedRouteContinuation = React.useMemo(
+            () => armedRouteSourceLabel ? { sourceLabel: armedRouteSourceLabel } : null,
+            [armedRouteSourceLabel],
+        );
         // The picker is built before this hook resolves the Agent's own account, so its heading reads it here.
         const sessionNativeSourceLabel = sessionConnectedServicesAuthSwitch.nativeSourceLabel;
         const existingSessionModelPickerWithNativeSource = React.useMemo(() => existingSessionModelPicker ? (
@@ -7946,31 +8239,19 @@ function SessionViewLoadedContent({
             ...sessionConnectedServicesAuthSwitch.statusBadges,
             ...(draftSyncStatusBadge ? [draftSyncStatusBadge] : []),
             ...(draftConflictBanner.statusBadge ? [draftConflictBanner.statusBadge] : []),
-            // Healthy, the "Runs through" chip already names this Provider; the badge stays only to
-            // carry a diagnostic, or where the Agent has no route chip to name it.
+            // The "Runs through" chip already names this Provider; the badge names it only where the Agent
+            // has no route chip. A binding problem is the status line's cause, never said again here.
             ...(providerLaunchBinding && providerBindingPresentation
-                && (providerBindingPresentation.banner || !sessionConnectedServicesAuthSwitch.connectedServicesAuthChip)
+                && !sessionConnectedServicesAuthSwitch.connectedServicesAuthChip
                 ? [{
                     key: 'provider-binding',
                     label: providerBindingLaunchLabel ?? providerBindingPresentation.launchLabel,
                     accessibilityLabel: providerBindingLaunchLabel ?? providerBindingPresentation.launchLabel,
                     testID: 'session.providerBinding.badge',
-                    tone: providerBindingPresentation.banner ? 'warning' as const : 'neutral' as const,
-                    emphasis: providerBindingPresentation.banner ? 'prominent' as const : 'quiet' as const,
+                    tone: 'neutral' as const,
+                    emphasis: 'quiet' as const,
                     icon: (tint: string) => <Icon name="cube" size={14} color={tint} />,
-                    // With a banner present the badge is that banner's show/hide affordance; with no
-                    // banner there is nothing to collapse, so the chip keeps its model-picker action.
-                    ...(providerBindingPresentation.banner
-                        ? {
-                            ...buildComposerBannerBadgeAccessibility({
-                                statusLabel: providerBindingLaunchLabel ?? providerBindingPresentation.launchLabel,
-                                collapsed: providerBindingBannerCollapse.collapsed,
-                                expandHint: t('session.composerBanners.showBannerAction'),
-                                collapseHint: t('session.composerBanners.hideBannerAction'),
-                            }),
-                            onPress: providerBindingBannerCollapse.toggle,
-                        }
-                        : { onPress: openSessionModelPicker }),
+                    onPress: openSessionModelPicker,
                 } satisfies AgentInputStatusBadge]
                 : []),
             ...(authSurfaceState
@@ -8001,7 +8282,7 @@ function SessionViewLoadedContent({
                     renderPopover: ({ open, anchorRef, onRequestClose }) => <ManagedWakePopover open={open} anchorRef={anchorRef}
                         onRequestClose={onRequestClose} projection={pendingActivationPresentation.managedWakeProjection!}
                         {...managedWakeNames} busy={pendingActivationActionBusy || pendingRecoveryApproval.approvalPending}
-                        controllerPresence={managedWakeController ? describeMachinePresenceLine(managedWakeController).label : t('status.unknown')}
+                        controllerPresence={managedWakeController ? describeMachinePresenceLine(managedWakeController, undefined, undefined, sessionAccountScope).label : t('status.unknown')}
                         onOpenMachine={() => { const target = managedWakeAuthorization?.managedWakeTargetV1;
                             if (target && sessionAccountScope) router.push(machineCollectionHref({ serverId: sessionAccountScope.serverId,
                                 machineId: target.enrolledMachineId })); }}
@@ -8016,22 +8297,6 @@ function SessionViewLoadedContent({
                         {...(pendingActivationPresentation.managedWakeProjection.canWithdraw && pendingActivationPresentation.row
                             ? { onWithdraw: () => fireAndForget(handleManagedWakeRecovery('withdraw'), { tag: 'SessionView.managedWake.withdraw' }) } : {})}
                     />,
-                } satisfies AgentInputStatusBadge]
-                : []),
-            ...(pendingActivationPresentation && !pendingActivationPresentation.managedWakeProjection
-                ? [{
-                    key: 'session-pendingActivation',
-                    testID: 'session.pendingActivation.badge',
-                    label: t(`session.pendingActivation.${pendingActivationPresentation.kind}.title`),
-                    tone: pendingActivationPresentation.kind === 'failed' ? 'warning' : 'neutral',
-                    ...buildComposerBannerBadgeAccessibility({
-                        statusLabel: t(`session.pendingActivation.${pendingActivationPresentation.kind}.title`),
-                        collapsed: pendingQueueResumeFailedBanner.collapsed,
-                        expandHint: t('session.composerBanners.showBannerAction'),
-                        collapseHint: t('session.composerBanners.hideBannerAction'),
-                    }),
-                    icon: (tint: string) => <Icon name="warning-circle" size={14} color={tint} />,
-                    onPress: pendingQueueResumeFailedBanner.toggle,
                 } satisfies AgentInputStatusBadge]
                 : []),
             ...(armedContinuationNotice
@@ -8111,11 +8376,7 @@ function SessionViewLoadedContent({
             sessionAccountScope,
             handleManagedWakeRecovery,
             router,
-            pendingQueueResumeFailedBanner.collapsed,
-            pendingQueueResumeFailedBanner.toggle,
             openSessionModelPicker,
-            providerBindingBannerCollapse.collapsed,
-            providerBindingBannerCollapse.toggle,
             providerBindingPresentation,
             providerBindingLaunchLabel,
             providerLaunchBinding,
@@ -8228,10 +8489,14 @@ function SessionViewLoadedContent({
         [],
     );
     const handleAgentInputAbort = useEventCallback(async () => {
-        const result = await actionExecutor.execute('session.turn.cancel', { sessionId }, {
-            surface: 'ui', defaultSessionId: sessionId, serverId: sessionRouteServerId,
-        });
-        if (!result.ok) Modal.alert(t('common.error'), result.error);
+        const lifetime = sessionAccountLifetime;
+        try {
+            requireActionSuccess(await actionExecutor.execute('session.turn.cancel', { sessionId }, {
+                surface: 'ui', defaultSessionId: sessionId, serverId: sessionRouteServerId,
+            }));
+        } catch (error) {
+            presentSessionActionOutcome(error, lifetime);
+        }
     });
 
     const input = shouldShowInput ? (
@@ -8279,88 +8544,6 @@ function SessionViewLoadedContent({
                     />
                 </ComposerAuxiliaryFrame>
             ) : null}
-            {pendingActivationPresentation && !pendingActivationPresentation.managedWakeProjection && !pendingQueueResumeFailedBanner.collapsed ? (
-                <ComposerAuxiliaryFrame>
-                    <WarningActionBanner
-                        testID="session-pendingActivation"
-                        tone={pendingActivationPresentation.kind === 'failed' ? 'warning' : 'neutral'}
-                        title={t(`session.pendingActivation.${pendingActivationPresentation.kind}.title`)}
-                        body={t(`session.pendingActivation.${pendingActivationPresentation.kind}.body`)}
-                        {...(pendingActivationPresentation.primaryAction && pendingActivationPresentation.row
-                            ? {
-                                actionTestID: `session-pendingActivation-${pendingActivationPresentation.primaryAction}`,
-                                actionLabel: t(`session.pendingActivation.actions.${pendingActivationPresentation.primaryAction}`),
-                                actionAccessibilityLabel: t(`session.pendingActivation.actions.${pendingActivationPresentation.primaryAction}`),
-                                actionBusy: pendingActivationActionBusy,
-                                disabled: pendingActivationActionBusy,
-                                onActionPress: async () => {
-                                    const row = pendingActivationPresentation.row;
-                                    if (!row?.localId) return;
-                                    setPendingActivationActionBusy(true);
-                                    try {
-                                        if (
-                                            pendingActivationPresentation.primaryAction === 'resume'
-                                            || pendingActivationPresentation.primaryAction === 'retry'
-                                        ) {
-                                            await handleResumeSession();
-                                            return;
-                                        }
-                                        await sync.updatePendingRequestedAction(
-                                            sessionId,
-                                            row.localId,
-                                            row.pendingRequestedAction ?? { v: 1, kind: 'enqueue' },
-                                            { resumeWhenAvailable: true },
-                                        );
-                                    } catch (error) {
-                                        Modal.alert(t('common.error'), error instanceof Error ? error.message : t('session.pendingMessages.errors.sendFailed'));
-                                    } finally {
-                                        setPendingActivationActionBusy(false);
-                                    }
-                                },
-                            }
-                            : {})}
-                        secondaryActions={[
-                            ...(pendingActivationPresentation.secondaryAction && pendingActivationPresentation.row?.localId
-                                ? [{
-                                    key: 'keep-queued',
-                                    testID: 'session-pendingActivation-keepQueued',
-                                    label: t('session.pendingActivation.actions.keepQueued'),
-                                    accessibilityLabel: t('session.pendingActivation.actions.keepQueued'),
-                                    disabled: pendingActivationActionBusy,
-                                    onPress: async () => {
-                                        const localId = pendingActivationPresentation.row?.localId;
-                                        if (!localId) return;
-                                        setPendingActivationActionBusy(true);
-                                        try {
-                                            const requestedAction = pendingActivationPresentation.row?.pendingRequestedAction;
-                                            await sync.updatePendingRequestedAction(
-                                                sessionId,
-                                                localId,
-                                                requestedAction?.kind === 'send_now'
-                                                    ? { v: 1, kind: 'enqueue' }
-                                                    : requestedAction ?? { v: 1, kind: 'enqueue' },
-                                                { resumeWhenAvailable: false },
-                                            );
-                                        } catch (error) {
-                                            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('session.pendingMessages.errors.updateFailed'));
-                                        } finally {
-                                            setPendingActivationActionBusy(false);
-                                        }
-                                    },
-                                }]
-                                : []),
-                            {
-                                key: 'settings',
-                                testID: 'session-pendingActivation-settings',
-                                label: t('session.pendingActivation.actions.autoResumeOptions'),
-                                accessibilityLabel: t('session.pendingActivation.actions.autoResumeOptions'),
-                                onPress: () => router.push('/settings/session/composer'),
-                                variant: 'quiet' as const,
-                            },
-                        ]}
-                    />
-                </ComposerAuxiliaryFrame>
-            ) : null}
             {armedContinuationNotice && !agentTransitionOutcomeBanner.collapsed ? (
                 <ComposerAuxiliaryFrame>
                     <WarningActionBanner
@@ -8379,20 +8562,6 @@ function SessionViewLoadedContent({
                                 onActionPress: handleArmedContinuationResume,
                             }
                             : {})}
-                    />
-                </ComposerAuxiliaryFrame>
-            ) : null}
-            {providerBindingBanner && !providerBindingBannerCollapse.collapsed ? (
-                <ComposerAuxiliaryFrame>
-                    <WarningActionBanner
-                        testID="session.providerBinding.banner"
-                        actionTestID="session.providerBinding.action"
-                        title={providerBindingBanner.title}
-                        body={providerBindingBanner.body}
-                        actionLabel={providerBindingBanner.actionLabel}
-                        actionAccessibilityLabel={providerBindingBanner.actionLabel}
-                        disabled={providerBindingBanner.action === 'restart' && (!hasWriteAccess || isRuntimeFreshActiveTurn)}
-                        onActionPress={handleProviderBindingAction}
                     />
                 </ComposerAuxiliaryFrame>
             ) : null}
@@ -8523,7 +8692,7 @@ function SessionViewLoadedContent({
                 </ComposerAuxiliaryFrame>
             ) : null}
             <PendingNavigationSettledNotice address={companionAddress} />
-            <PendingNavigationPill address={companionAddress} presentation="composer" />
+            <PendingNavigationPill address={companionAddress} presentation="composer" composerText={composerTextStore} />
             <SessionComposerAgentInput
                 composerRef={activeComposerRef}
                 composerReferenceHost={composerDropReferenceHost}
@@ -8532,6 +8701,8 @@ function SessionViewLoadedContent({
                 pendingText={pendingComposerDocument?.text ?? null}
                 placeholder={isReadOnly
                     ? t('session.sharing.viewOnlyMode')
+                    : guardComposerState?.kind === 'stopped'
+                        ? guardComposerState.placeholder
                     : externalSessionOperationShell.composerPlaceholderKey
                         ? t(externalSessionOperationShell.composerPlaceholderKey)
                         : t('session.inputPlaceholder')}
@@ -8544,6 +8715,9 @@ function SessionViewLoadedContent({
                 composerInputLock={composerInputEffects.composerInputLock}
                 sessionId={sessionId}
                 sessionAddress={companionAddress}
+                resetStartEnabled={hasWriteAccess && !pendingComposerDocument
+                    && !recipientState.recipient && !recipientState.scmDiffSummaryDiscussion
+                    && resolveVoiceSessionComposerRouting({ conversationSessionId: sessionId, sessionMetadata: ownerMetadata })?.kind !== 'adapter_text'}
                 surfacePresented={surfacePresented}
                 sessionTypingPresence={{
                     serverId: sessionRouteServerId,
@@ -8562,6 +8736,7 @@ function SessionViewLoadedContent({
                     current: daemonMergedProjection.phase === 'ready',
                 } : undefined}
                 armedContinuationTarget={armedContinuationTarget}
+                armedRouteContinuation={armedRouteContinuation}
                 composeAgentPickerOptions={embedded ? undefined : composeAgentPickerOptionsWithRoles}
                 inputPresentation={embeddedComposerControlsOnly ? 'controlsOnly' : undefined}
                 {...(embeddedComposerControls ? {
@@ -8608,8 +8783,18 @@ function SessionViewLoadedContent({
                         `${t('profiles.sessionUses', { profile: profileInfo })}\n\n${t('profiles.profilesFixedPerSession')}`,
                     );
                 } : undefined}
-                connectionStatus={connectionStatus ?? undefined}
-                statusTrailingActions={askHappierStatusAction}
+                connectionStatus={connectionStatus
+                    ? connectionStatus.guardAction === 'keep_running' && guardMachineId
+                        ? { ...connectionStatus, action: { label: t('machineGuard.session.keepRunning'), onPress: keepGuardedSessionRunning } }
+                        : connectionStatus.providerBindingAction && providerBindingBanner
+                            ? { ...connectionStatus, action: { label: providerBindingBanner.actionLabel, onPress: handleProviderBindingAction } }
+                            : connectionStatus.pendingQueueAction
+                                ? { ...connectionStatus, action: {
+                                    label: t(`session.pendingActivation.actions.${connectionStatus.pendingQueueAction === 'keep_queued' ? 'keepQueued' : connectionStatus.pendingQueueAction}`),
+                                    onPress: () => fireAndForget(handlePendingQueueAction(connectionStatus.pendingQueueAction!), { tag: 'SessionView.pendingQueueAction' }),
+                                } }
+                                : askHappierConnectionStatus ?? connectionStatus
+                    : undefined}
                 // Stable wrapper (handleAgentInputSend) so AgentInput's memo holds;
                 // the assignment refreshes the latest-send ref with this render's
                 // closure, then the expression evaluates to the stable wrapper (R1).
@@ -8625,6 +8810,7 @@ function SessionViewLoadedContent({
 
                     fireAndForget(runWithSessionComposerAdmissionReservation(async () => {
                     const activePendingEdit = pendingMessageEditRef.current;
+                    if (sendOptions?.resetStart && activePendingEdit) return;
                     const composerMessage = activePendingEdit?.document.text
                         ?? sendOptions?.inputTextOverride
                         ?? readLatestDraftValue();
@@ -8840,11 +9026,19 @@ function SessionViewLoadedContent({
                         composerTextBeforeSend: string,
                         sendIntent?: AgentInputSendOptions,
                     ) => {
+                        const resetStart = sendIntent?.resetStart;
+                        if (resetStart && (recipientState.recipient || recipientState.scmDiffSummaryDiscussion)) {
+                            Modal.alert(t('common.error'), t('usage.board.plans.resetStartFailed'));
+                            return;
+                        }
                         const configuredMode = storage.getState().settings.sessionMessageSendMode;
                         const busySteerSendPolicy = storage.getState().settings.sessionBusySteerSendPolicy;
                         const sessionInactiveResumePolicy = storage.getState().settings.sessionInactiveResumePolicy;
                         const nonSteerableSendPrompt = storage.getState().settings.sessionNonSteerableSendPrompt;
-                        const permissionModeApplyTiming = storage.getState().settings.sessionPermissionModeApplyTiming === 'next_prompt'
+                        const submittedPermissionMode = readSessionNextPromptPermissionModeFromDraft(
+                            getCurrentSessionDraftSnapshot()?.document,
+                        );
+                        const permissionModeApplyTiming = submittedPermissionMode !== null || storage.getState().settings.sessionPermissionModeApplyTiming === 'next_prompt'
                             ? 'next_prompt' as const
                             : 'current_turn' as const;
                         const forceImmediateSend = sendIntent?.forceImmediate === true;
@@ -8973,12 +9167,15 @@ function SessionViewLoadedContent({
                                 })
                                 : null;
 
-                        const armedContinuationTargetLabel = armedContinuationTarget?.label ?? '';
+                        const armedContinuationTargetLabel = armedContinuationTarget?.label
+                            ?? armedRouteContinuation?.sourceLabel
+                            ?? '';
                         const resolveSendDestination = (
                             route: SessionComposerSendRoute,
                         ): SessionComposerSendDestination => resolveSessionComposerSendDestination({
                             route,
                             armedContinuation: inSessionAgentPicker.armedContinuation,
+                            armedRoute: armedRouteContinuation ? { turnActive: isRuntimeFreshActiveTurn } : null,
                             armedContinuationLocalId: inSessionAgentPicker.armedContinuationLocalId,
                             machineId: typeof machineId === 'string' ? machineId : null,
                             pendingTransitionOutcome,
@@ -8987,11 +9184,17 @@ function SessionViewLoadedContent({
                             executionRunRecipient ? 'executionRun'
                                 : voiceComposerRouting?.kind === 'adapter_text' ? 'voiceAdapter' : 'sessionAgent',
                         );
+                        if (resetStart && (outboundDestination.kind !== 'sessionAgent'
+                            || voiceComposerRouting?.kind === 'adapter_text')) {
+                            Modal.alert(t('common.error'), t('usage.board.plans.resetStartFailed'));
+                            return;
+                        }
 
                         // G4 busy-send honesty: when the payload can't steer the active turn, ask the
                         // user (apply & steer / steer without applying / queue / interrupt) before any
                         // composer state is touched. Explicit intents and the 'off' setting skip this.
-                        const nonSteerablePlan: NonSteerableSendPlan = outboundDestination.kind === 'armedAgentContinuation'
+                        const nonSteerablePlan: NonSteerableSendPlan = resetStart || outboundDestination.kind === 'armedAgentContinuation'
+                            || outboundDestination.kind === 'armedRouteContinuation'
                             ? { kind: 'proceed' as const }
                             : await resolveNonSteerableSendPlan({
                                 session,
@@ -9036,7 +9239,7 @@ function SessionViewLoadedContent({
                         // A run target does not consume the parent Session's Agent, so parent
                         // liveness is not a precondition for it. Only a main-Session attachment
                         // send still needs a resumable or active Session.
-                        if (hasAttachments && !executionRunRecipient && !isSessionActive && !isResumable) {
+                        if (!resetStart && hasAttachments && !executionRunRecipient && !isSessionActive && !isResumable) {
                             Modal.alert(t('common.error'), t('session.inactiveNotResumableNoticeTitle'));
                             return;
                         }
@@ -9055,7 +9258,9 @@ function SessionViewLoadedContent({
                         ): Record<string, unknown> | undefined | null => {
                             const result = mergeBrowserContextMessageMetaOverrides({
                                 state: browserContextStateForComposer,
-                                metaOverrides,
+                                metaOverrides: submittedPermissionMode
+                                    ? { ...metaOverrides, permissionMode: submittedPermissionMode }
+                                    : metaOverrides,
                             });
                             if (result.ok) {
                                 return result.metaOverrides;
@@ -9105,6 +9310,57 @@ function SessionViewLoadedContent({
                             }
                             didClearAtOutboundHandoff = didClearAtOutboundHandoff || didClear;
                             return didClear;
+                        };
+                        const admitResetStart = async (
+                            outbound: Readonly<{ text: string; displayText?: string; metaOverrides?: Record<string, unknown> }>,
+                            onAccepted: () => void,
+                        ): Promise<ComposerSubmissionAdmissionOutcome> => {
+                            if (!resetStart || !outboundAccountLifetime.isCurrent() || composerPluginActionScopeSignal.aborted) {
+                                return { status: 'rejected' };
+                            }
+                            const cancellation = new AbortController();
+                            const retirement = outboundAccountLifetime.onRetire(() => cancellation.abort());
+                            const abort = () => cancellation.abort();
+                            composerPluginActionScopeSignal.addEventListener('abort', abort, { once: true });
+                            try {
+                                const prepared = await sync.preparePendingResetStartInput(sessionId, outbound.text,
+                                    outbound.displayText, outbound.metaOverrides, {
+                                        serverId: sessionRouteServerId, accountLifetime: outboundAccountLifetime,
+                                        allowedModels: embedded?.allowedModels ?? null,
+                                        allowedPermissionModes: embedded?.permissionModePicker ?? null,
+                                    });
+                                if (!outboundAccountLifetime.isCurrent() || cancellation.signal.aborted) return { status: 'rejected' };
+                                const result = await createFrontDoorActionExecute(actionExecutor)('session.pending.resetStart.set', {
+                                    sessionId, localId: prepared.localId, reset: resetStart,
+                                    initialInput: prepared.initialInput, serverId: sessionRouteServerId,
+                                }, {
+                                    surface: 'ui', defaultSessionId: sessionId, serverId: sessionRouteServerId,
+                                    expectedAccountId: outboundAccountLifetime.scope.accountId, signal: cancellation.signal,
+                                });
+                                if (!outboundAccountLifetime.isCurrent() || cancellation.signal.aborted) return { status: 'rejected' };
+                                if (result.ok && ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) {
+                                    Modal.alert(t('usage.board.plans.resetStartTitle'), t('usage.board.plans.waitingApproval'));
+                                    return { status: 'rejected' };
+                                }
+                                const applied = result.ok ? PendingResetStartSetResultV1Schema.safeParse(result.result) : null;
+                                if (!applied?.success || applied.data.requestedAction.kind !== 'reset_start'
+                                    || !sameStrictJsonValue(applied.data.requestedAction.reset, resetStart)) {
+                                    Modal.alert(t('common.error'), result.ok ? t('usage.board.plans.resetStartFailed') : usageResetStartFailureMessage(result));
+                                    return { status: 'rejected' };
+                                }
+                                outboundHandoffLocalId = prepared.localId;
+                                onAccepted();
+                                recordOutboundAccepted();
+                                return { status: 'accepted' };
+                            } catch (error) {
+                                if (outboundAccountLifetime.isCurrent() && !cancellation.signal.aborted) {
+                                    Modal.alert(t('common.error'), error instanceof Error ? error.message : t('usage.board.plans.resetStartFailed'));
+                                }
+                                return { status: 'rejected' };
+                            } finally {
+                                retirement.dispose();
+                                composerPluginActionScopeSignal.removeEventListener('abort', abort);
+                            }
                         };
                         const startSessionComposerAdmission = (
                             admit: (
@@ -9238,9 +9494,14 @@ function SessionViewLoadedContent({
                                         ? t('session.agentContinuation.transition.conflictingDestination', {
                                             agent: armedContinuationTargetLabel,
                                         })
-                                        : t('session.agentContinuation.transition.rejected.targetUnavailable', {
-                                            agent: armedContinuationTargetLabel,
-                                        }),
+                                        : refused.reason === 'sourceNotIdle'
+                                            // Applying an armed route restarts the running Agent.
+                                            ? t('session.agentContinuation.transition.rejected.sourceNotIdle', {
+                                                agent: currentAgentLabel,
+                                            })
+                                            : t('session.agentContinuation.transition.rejected.targetUnavailable', {
+                                                agent: armedContinuationTargetLabel,
+                                            }),
                                 });
                             }
                             // `unreconciledTransitionOutcome` is the banner already on
@@ -9286,7 +9547,7 @@ function SessionViewLoadedContent({
                                         : {}),
                                     meta: {
                                         ...outboundForTransition.metaOverrides,
-                                        permissionMode: parsePermissionIntentAlias(permissionMode) ?? 'default',
+                                        permissionMode: parsePermissionIntentAlias(submittedPermissionMode ?? permissionMode) ?? 'default',
                                     },
                                 },
                                 sourceAgentLabel: currentAgentLabel,
@@ -9327,6 +9588,8 @@ function SessionViewLoadedContent({
                                         attachmentDraftIds: hasAttachments
                                             ? submittedAttachmentDrafts.map((draft) => draft.id)
                                             : [],
+                                        nextPromptPermissionModeMutationId: semanticDraftSnapshot.repositoryCurrentness
+                                            .mutationIds['extensions.happier.nextPromptPermissionModeV1'],
                                     },
                                 }),
                             });
@@ -9388,7 +9651,7 @@ function SessionViewLoadedContent({
                                 };
                                 let attachmentDraftsForRestore = readSubmittedAttachmentDraftsFromCurrent();
                                 try {
-                                    const readyForSend = await externalSessionTakeover.ensureReadyForSend();
+                                    const readyForSend = resetStart ? true : await externalSessionTakeover.ensureReadyForSend();
                                     if (!readyForSend || !outboundAccountLifetime.isCurrent()) {
                                         return { status: 'rejected' };
                                     }
@@ -9410,7 +9673,12 @@ function SessionViewLoadedContent({
                                     if (attachmentSendDestination.kind === 'refused') {
                                         return presentRefusedArmedSend(attachmentSendDestination);
                                     }
-                                    if (attachmentSendDestination.kind === 'sessionAgent'
+                                    // D15: apply the armed selection (restart only if required), then dispatch.
+                                    if (attachmentSendDestination.kind === 'armedRouteContinuation'
+                                        && (!(await restartSessionRunnerOnRequestedRoute()) || !outboundAccountLifetime.isCurrent())) {
+                                        return { status: 'rejected' };
+                                    }
+                                    if (!resetStart && attachmentSendDestination.kind === 'sessionAgent'
                                         && !isSessionActive && isResumable) {
                                         const resumed = await handleResumeSession();
                                         if (!resumed || !outboundAccountLifetime.isCurrent()) {
@@ -9514,7 +9782,13 @@ function SessionViewLoadedContent({
                                             },
                                         );
                                     }
-                                    const result = await submitSessionUserMessage(sessionSubmitPort, {
+                                    if (resetStart) {
+                                        return await admitResetStart({ ...outbound, metaOverrides: outboundMetaOverridesWithBrowserContext }, () => {
+                                            clearAttachmentsAfterProjectionHandoff();
+                                            if (shouldSendReviewComments) clearSentReviewCommentDrafts();
+                                        });
+                                    }
+                                    const result = await submitAppSessionComposerMessage(sessionSubmitPort, {
                                         sessionId,
                                         session: sessionForSubmit,
                                         // Omitting the recipient keeps the main Session's exact fast
@@ -9597,7 +9871,7 @@ function SessionViewLoadedContent({
                                     if (canRestoreFailedAttachmentHandoffSnapshot()) {
                                         restoreAfterFailedOutboundHandoff(attachmentDraftsForRestore);
                                     }
-                                    Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
+                                    presentSessionActionOutcome(e, outboundAccountLifetime);
                                     return { status: 'rejected' };
                                 } finally {
                                     setIsUploadingAttachments(false);
@@ -9638,7 +9912,7 @@ function SessionViewLoadedContent({
 
                                 if (!outbound) return { status: 'rejected' };
 
-                                const readyForSend = await externalSessionTakeover.ensureReadyForSend();
+                                const readyForSend = resetStart ? true : await externalSessionTakeover.ensureReadyForSend();
                                 if (!readyForSend || !outboundAccountLifetime.isCurrent()) {
                                     return { status: 'rejected' };
                                 }
@@ -9733,6 +10007,11 @@ function SessionViewLoadedContent({
                                 if (sendDestination?.kind === 'refused') {
                                     return presentRefusedArmedSend(sendDestination);
                                 }
+                                // D15: apply the armed selection, then send through the ordinary path below.
+                                if (sendDestination?.kind === 'armedRouteContinuation'
+                                    && (!(await restartSessionRunnerOnRequestedRoute()) || !outboundAccountLifetime.isCurrent())) {
+                                    return { status: 'rejected' };
+                                }
                                 if (sendDestination?.kind === 'armedAgentContinuation') {
                                     return await dispatchArmedContinuation(
                                         sendDestination,
@@ -9754,8 +10033,13 @@ function SessionViewLoadedContent({
                                 }
 
                                 const sessionForSubmit = readLatestSessionForSubmit();
-
-                                const result = await submitSessionUserMessage(sessionSubmitPort, {
+                                if (resetStart) {
+                                    return await admitResetStart(outbound, () => {
+                                        admissionHandoff.accept();
+                                        if (shouldSendReviewComments) clearSentReviewCommentDrafts();
+                                    });
+                                }
+                                const result = await submitAppSessionComposerMessage(sessionSubmitPort, {
                                     sessionId,
                                     session: sessionForSubmit,
                                     // Omitting the recipient keeps the main Session's exact fast
@@ -9842,6 +10126,10 @@ function SessionViewLoadedContent({
                         presentBlockedSessionComposerSubmission(sessionAdmissionResult);
                     };
 
+                    if (sendOptions?.resetStart) {
+                        await sendComposerText(composerMessage, composerMessage, sendOptions);
+                        return;
+                    }
                     if (recipientState.scmDiffSummaryDiscussion) {
                         await sendComposerText(composerMessage, composerMessage, sendOptions);
                         return;
@@ -9878,7 +10166,7 @@ function SessionViewLoadedContent({
 
                                 await sendComposerText(expanded, composerTextBeforeSend, sendOptions);
                         } catch (e) {
-                            Modal.alert(t('common.error'), e instanceof Error ? e.message : t('errors.failedToSendMessage'));
+                            presentSessionActionOutcome(e, outboundAccountLifetime);
                         }
                         return;
                     }
@@ -9936,7 +10224,7 @@ function SessionViewLoadedContent({
 
                     if (resolved.kind !== 'send') return;
                     await sendComposerText(resolved.text, composerMessage, sendOptions);
-                    }), { tag: 'SessionView.composer.dispatch' });
+                    }).catch((error: unknown) => presentSessionActionOutcome(error, outboundAccountLifetime)), { tag: 'SessionView.composer.dispatch' });
                 }, handleAgentInputSend)}
                 isSendDisabled={
                     !shouldShowInput
@@ -10006,10 +10294,11 @@ function SessionViewLoadedContent({
             onSendToSession={handleSendSelectedTranscriptMessages}
         />
     ) : null;
+    // On a phone, an open Find seats its bar in this slot in place of the composer (Find lab F1p).
     const inputWithTranscriptSelection = transcriptSelectionToolbar || input ? (
         <View style={{ gap: 8 }}>
             {transcriptSelectionToolbar}
-            {input}
+            <FindComposerSlotHost composer={input} />
         </View>
     ) : null;
 
@@ -10099,11 +10388,16 @@ function SessionViewLoadedContent({
         [applyCompanionBoardTabForPresentation],
     );
     const revealCompanionBoardItemThroughPresentation = React.useCallback((widgetId: string) => {
-        // Use the same exact-Session dispatcher as an admitted Agent command.
-        // Its stable unavailable result also means a retained inline reference
-        // can never silently borrow or no-op against an unmounted bridge.
-        applySessionPresentationIntentFromCommand({ kind: 'board.item.reveal', widgetId });
-    }, [applySessionPresentationIntentFromCommand]);
+        const lifetime = sessionAccountLifetime;
+        if (!lifetime?.isCurrent()) return;
+        void actionExecutor.execute('session.presentation.apply', {
+            intent: { kind: 'board.item.reveal', widgetId },
+        }, {
+            surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            serverId: lifetime.scope.serverId, expectedAccountId: lifetime.scope.accountId,
+            defaultSessionId: sessionId,
+        }).then(requireActionSuccess).catch(error => presentSessionActionOutcome(error, lifetime));
+    }, [actionExecutor, presentSessionActionOutcome, sessionAccountLifetime, sessionId]);
     const returnToCompanionChat = React.useCallback(() => {
         // Returning to Chat only exits focus mode. Existing Details/right-pane
         // state belongs to the person and remains exactly as it was.
@@ -10193,6 +10487,7 @@ function SessionViewLoadedContent({
                 eligibleMessageIdsInOrder={transcriptSelectionEligibleMessageIds}
                 enabled={transcriptMessageSelectionEnabled === true && !isEncryptedSessionLocked}
             >
+                <FindComposerSlotProvider>
                 {embedded ? (
                     <SessionEmbeddedPartsPublisher
                         sessionId={sessionId}
@@ -10225,6 +10520,7 @@ function SessionViewLoadedContent({
                     companion={companion}
                     companionEdge={companionEdge}
                 />}
+                </FindComposerSlotProvider>
             </TranscriptMessageSelectionProvider>
             {/* The Session's floating viewer floats over this same positioning context (63s1/70s3). */}
             {embedded ? null : <SessionViewerHost sessionId={sessionId} serverId={sessionRouteServerId} pluginProjection={sessionPluginRuntime} />}

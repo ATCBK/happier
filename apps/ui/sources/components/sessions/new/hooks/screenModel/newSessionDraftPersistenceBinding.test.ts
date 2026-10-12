@@ -47,7 +47,7 @@ describe('newSessionDraftPersistenceBinding', () => {
             selectedProfileId: 'profile-latest',
             modelSelection: { kind: 'custom', modelId: 'model-latest' },
             permissionMode: 'safe-yolo',
-            mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['mcp-latest'], forceExcludeServerIds: [] },
+            capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['mcp-latest'], forceExcludeServerIds: [] } },
             executionTarget: { kind: 'temporary_computer', serverId: 'home-a', artifactTarget: 'linux-x64' },
         } as const;
 
@@ -77,7 +77,7 @@ describe('newSessionDraftPersistenceBinding', () => {
             selectedProfileId: 'profile-b',
             modelSelection: { kind: 'custom', modelId: 'model-b' },
             permissionMode: 'read-only',
-            mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['mcp-b'], forceExcludeServerIds: [] },
+            capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['mcp-b'], forceExcludeServerIds: [] } },
             executionTarget: { kind: 'temporary_computer', serverId: 'home-b', artifactTarget: 'darwin-arm64' },
         } as const;
         const key = (scope: typeof homeA | typeof homeB) => `${scope.serverId}:${scope.accountId}`;

@@ -12,9 +12,11 @@ import {
     type MachineSelectionFavoriteGroupPlacement,
 } from './buildMachineSelectionBuckets';
 import { resolveMachinePickerPresence } from '../resolveMachinePickerPresence';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
 import { describeMachineLockedReason } from '@/utils/sessions/machineDisplayNames';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import type { ManagedMachineDestinationProjection } from './managedMachineSelection';
 
@@ -33,6 +35,7 @@ export function resolveMachineDestinationPurposeEligibility(
     purpose: MachineDestinationPurposeV1,
     facts?: MachineDestinationPlacementFacts,
     machine?: MachineDisplayRenderable,
+    scope?: MachineReachabilityScope | null,
 ): Readonly<{ eligible: true; managedWake?: 'asleep' | 'starting'; worker?: Extract<ProjectWorkerStatusResultV1, { eligible: true }> }>
     | Readonly<{ eligible: false; reason: 'shared_unsupported' | 'access_unavailable' | 'content_unavailable' | 'machine_unavailable' | 'worker_status_unavailable' | 'worker_refused'; worker?: ProjectWorkerStatusResultV1; statusFailed?: true }> {
     const shared = machine?.isShared === true || facts?.ownership === 'shared';
@@ -49,7 +52,7 @@ export function resolveMachineDestinationPurposeEligibility(
     if (shared && machine?.metadata === null) return { eligible: false, reason: 'content_unavailable' };
     if (purpose === 'finite' && facts?.managedWake && !machine?.revokedAt && !machine?.replacedByMachineId)
         return { eligible: true, managedWake: facts.managedWake };
-    if (shared && machine && !resolveMachinePickerPresence(machine).selectable) return { eligible: false, reason: 'machine_unavailable' };
+    if (shared && machine && !resolveMachinePickerPresence(machine, undefined, scope).selectable) return { eligible: false, reason: 'machine_unavailable' };
     if (purpose === 'finite' || purpose === 'service-start') {
         if (!facts?.worker) return { eligible: false, reason: 'worker_status_unavailable', ...(facts?.workerStatusFailed ? { statusFailed: true as const } : {}) };
         if (!facts.worker.eligible) return { eligible: false, reason: 'worker_refused', worker: facts.worker };
@@ -111,8 +114,8 @@ export function describeMachineDestinationWorkerFacts(
         case 'memory_unavailable': return t('projectWorkers.memoryUnavailable');
         case 'memory_insufficient':
             return subject?.scriptName && subject.memoryDemandBytes !== undefined
-                ? t('projectWorkers.tooSmall', { script: subject.scriptName, need: formatByteSize(subject.memoryDemandBytes),
-                    ...(worker.observedMemory ? { available: formatByteSize(worker.observedMemory.totalBytes) } : {}) })
+                ? t('projectWorkers.tooSmall', { script: subject.scriptName, need: formatHappierDataBytes(subject.memoryDemandBytes, { kind: 'memory' }),
+                    ...(worker.observedMemory ? { available: formatHappierDataBytes(worker.observedMemory.totalBytes, { kind: 'memory' }) } : {}) })
                 : t('projectWorkers.tooSmallGeneric');
         case 'unavailable': return t('projectWorkers.statusUnavailable');
     }
@@ -217,6 +220,7 @@ export type MachineDestinationModel = Readonly<{
 
 export type BuildMachineDestinationModelParams = Readonly<{
     purpose?: MachineDestinationPurposeV1;
+    scopesByServerId?: ReadonlyMap<string, MachineReachabilityScope>;
     /** Optional current worker facts; ownership also comes from the admitted Machine projection. */
     resolveMachinePlacementFacts?: (machine: Machine, serverId: string) => MachineDestinationPlacementFacts;
     groups: ReadonlyArray<DestinationHomeGroup>;
@@ -278,6 +282,7 @@ export function buildMachineDestinationModel(
 
         const machineRows: ReadonlyArray<Machine> = useBuckets
             ? buildMachineSelectionBuckets({
+                scope: (params.scopesByServerId?.get(group.serverId) ?? params.scopesByServerId?.get(resolveServerProfileScopeIdForIdentifier(group.serverId))),
                 machines: group.machines,
                 recentMachines: params.recentMachines,
                 favoriteMachines: params.favoriteMachines,
@@ -290,8 +295,8 @@ export function buildMachineDestinationModel(
 
         machineRowCount += machineRows.length;
         for (const row of machineRows) {
-            if (!resolveMachineDestinationPurposeEligibility(purpose, params.resolveMachinePlacementFacts?.(row, group.serverId), row).eligible) continue;
-            if (!resolveMachinePickerPresence(row).selectable) continue;
+            if (!resolveMachineDestinationPurposeEligibility(purpose, params.resolveMachinePlacementFacts?.(row, group.serverId), row, (params.scopesByServerId?.get(group.serverId) ?? params.scopesByServerId?.get(resolveServerProfileScopeIdForIdentifier(group.serverId)))).eligible) continue;
+            if (!resolveMachinePickerPresence(row, undefined, (params.scopesByServerId?.get(group.serverId) ?? params.scopesByServerId?.get(resolveServerProfileScopeIdForIdentifier(group.serverId)))).selectable) continue;
             selectableMachineCount += 1;
             // Recent/favorite rows can be plain Machine records, so the Home-qualified candidate is
             // resolved from this group's own list instead of trusting the rendered row's shape.

@@ -1,4 +1,5 @@
 import { useAiLaunchProfilesForLegacyUi } from '@/sync/store/useAiLaunchProfiles';
+import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 import { normalizeSessionAddress, sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
@@ -263,6 +264,8 @@ import {
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 
+const LazyResetStartPicker = retryableLazy(() => import('./components/AgentInputResetStartPicker'));
+
 /**
  * The action bar's row rhythm on native, where wrapped rows state it as a
  * margin rather than a `gap`. Exported so the trailing cluster's own rhythm can
@@ -379,6 +382,8 @@ interface AgentInputProps {
      * focus, message history or the submit lock on the way.
      */
     onSend?: (options?: AgentInputSendOptions) => void;
+    /** The Session submit owner admits reset-bound text for its current recipient. */
+    resetStartEnabled?: boolean;
     submitAccessibilityLabel?: string;
     sendIcon?: React.ReactNode;
     permissionMode?: PermissionMode;
@@ -470,6 +475,14 @@ interface AgentInputProps {
         isPulsing?: boolean;
         /** An unavailable launch target is repaired through the existing machine picker. */
         recovery?: 'machine';
+        /** The one trailing action the line offers (the guard's Keep running). */
+        action?: Readonly<{ label: string; onPress: () => void }>;
+        /** The longer explanation behind the short line (a Provider binding's body), shown as its tooltip. */
+        detail?: string;
+        /** A coming stop: the line ends with a countdown to it, ticking in its own leaf. */
+        countdownTo?: number;
+        /** Which guard moment the line shows; a change cross-fades the line. */
+        transitionKey?: string;
     };
     /**
      * The person's collapsed action-bar setting only: the controls this composer keeps on the
@@ -574,6 +587,11 @@ interface AgentInputProps {
          */
         modelLabel?: string | null;
     }> | null;
+    /**
+     * A route or model change for the running Agent, armed for the next message
+     * (D15). The send control names it; the session's send owner applies it.
+     */
+    armedRouteContinuation?: Readonly<{ sourceLabel: string }> | null;
     isSending?: boolean;
     disabled?: boolean;
     /** Ephemeral target-owned feedback; it never changes the input document. */
@@ -752,7 +770,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     // Default (non-glass) composer surface — the original styling: standard input
     // background + hairline surface border, no drop shadow.
     unifiedPanel: resolveAgentInputPanelLayoutStyle(theme),
-    // The composer style changes its rim/shadow; the content material owns its fill.
+    // The composer style changes its rim/shadow; the Elements material owns its fill.
     // Fully redefines the border so the
     // standard hairline + highlight don't leak through. The cast shadow lives on the
     // `panelShadow` wrapper (glass mode only).
@@ -1214,9 +1232,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const chipTint = theme.colors.composer.chipTint;
     const composerSurfaceStyleSetting = useSetting('composerSurfaceStyle');
     const isGlassComposer = !documentPanel && isGlassComposerSurface({ setting: composerSurfaceStyleSetting });
-    const surfaceGroup = props.surfaceGroup ?? 'content';
+    const surfaceGroup = props.surfaceGroup ?? 'card';
     const composerSurfaceColor = isGlassComposer ? theme.colors.glass.composerSurface : theme.colors.input.background;
-    const panelMaterialProps = { surfaceGroup, nested: surfaceGroup === 'content', solidColor: composerSurfaceColor, finishRole: 'composer' as const };
+    const panelMaterialProps = { surfaceGroup, nested: surfaceGroup === 'card', solidColor: composerSurfaceColor, finishRole: 'composer' as const };
     const keyboardShortcutsV2Enabled = useSetting('keyboardShortcutsV2Enabled') === true;
     const keyboardSingleKeyShortcutsEnabled = useSetting('keyboardSingleKeyShortcutsEnabled') === true;
     const keyboardShortcutOverridesV1 = useSetting('keyboardShortcutOverridesV1') ?? {};
@@ -1587,10 +1605,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const hasStructuredInputMeta = Object.keys(structuredInputMetaOverrides).length > 0;
         const shouldCarryLiveInputText = !props.sessionId || liveInputText !== props.value;
         onSendProp(
-            options?.forceImmediate === true || options?.deliveryIntent != null || hasStructuredInputMeta
+            options?.forceImmediate === true || options?.deliveryIntent != null || options?.resetStart != null || hasStructuredInputMeta
                 ? {
                     ...(options?.forceImmediate === true ? { forceImmediate: true } : {}),
                     ...(options?.deliveryIntent != null ? { deliveryIntent: options.deliveryIntent } : {}),
+                    ...(options?.resetStart != null ? { resetStart: options.resetStart } : {}),
                     ...(hasStructuredInputMeta ? { structuredInputMetaOverrides } : {}),
                     ...(shouldCarryLiveInputText ? { inputTextOverride: liveInputText } : {}),
                 }
@@ -1869,6 +1888,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 disabled={!dictationEditable}
                 status={dictationStatus}
                 onPress={handleDictationPress}
+                onFocus={() => { void dictation.onFocus(); }}
             />
             : null);
     const showPromptLibraryButton = composerPromptLibraryButtonEnabled !== false
@@ -1881,7 +1901,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const trailingAccessory = props.trailingAccessory
         ?? (mountsVoiceComposerPlanet ? voiceComposerPlanet
             : accessoriesInActionRow ? (
-                <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker}
+                <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
                     accessory={fieldAccessory} belowToggle={false} placement="actionRow" />
             ) : null);
     const fieldInputPaddingRight = Math.max(
@@ -2006,6 +2026,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [props.value, updateStructuredInputMentions]);
 
     const handleComposerFocus = React.useCallback(() => {
+        void dictation.onFocus();
         composerKeyboardLayoutForFocus?.setComposerInputFocused?.(true);
         setIsInputFocused(true);
         const focusedActiveWord = findActiveWord(
@@ -2021,7 +2042,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         }
         messageHistory.warmup();
         props.onComposerFocusChange?.(true);
-    }, [composerKeyboardLayoutForFocus, messageHistory, props.autocompleteKinds, props.onComposerFocusChange]);
+    }, [composerKeyboardLayoutForFocus, dictation.onFocus, messageHistory, props.autocompleteKinds, props.onComposerFocusChange]);
 
     const handleComposerBlur = React.useCallback(() => {
         inputRef.current?.flushPendingTextChange?.();
@@ -2365,6 +2386,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 ? `${appliedModelPresentation.summary} · ${modelApplyTiming}`
                 : modelApplyTiming}
             modelNotes={modelNotes}
+            modelApplyTiming={modelApplyTiming}
             modelEmptyText={t('agentInput.model.configureInCli')}
             canEnterCustomModel={canEnterCustomModel}
             // Keep a single refresh affordance in the model section, but wire it to refresh all
@@ -2527,6 +2549,34 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const onSelectionOverlayDismiss = React.useCallback((id: AgentInputSelectionOverlayId) => {
         if (id === 'machine') props.machinePopover?.onRequestClose?.();
     }, [props.machinePopover]);
+    const resetStartAvailable = props.resetStartEnabled === true && submitEnabled
+        && props.sessionId !== undefined && props.sessionAddress !== undefined
+        && !props.armedContinuationTarget;
+    const extraActionChips = React.useMemo<readonly AgentInputExtraActionChip[]>(() => {
+        if (!resetStartAvailable || !props.sessionId || !props.sessionAddress) return props.extraActionChips ?? [];
+        const key = 'resetStart';
+        const disabled = sendActionDisabled;
+        return [...(props.extraActionChips ?? []), {
+            key, controlId: 'delivery',
+            render: context => <Pressable ref={context.chipAnchorRef} testID="agent-input-reset-start"
+                accessibilityRole="button" accessibilityLabel={t('usage.board.plans.sendAtReset')}
+                accessibilityState={{ disabled }} disabled={disabled} style={({ pressed }) => context.chipStyle(pressed)}
+                onPress={() => context.toggleCollapsedPopover?.(key)}>
+                <Icon name="clock" size={16} color={context.iconColor} />
+                {context.showLabel ? <Text style={context.textStyle}>{t('usage.board.plans.sendAtReset')}</Text> : null}
+            </Pressable>,
+            collapsedContentPopover: {
+                title: t('usage.board.plans.sendAtReset'), disabled,
+                icon: tint => <Icon name="clock" size={16} color={tint} />,
+                renderContent: ({ requestClose }) => <React.Suspense fallback={
+                    <ActivitySpinner size="small" accessibilityLabel={t('usage.board.page.loading')} />
+                }>
+                    <LazyResetStartPicker sessionId={props.sessionId!} serverId={props.sessionAddress!.serverId}
+                        onSelect={reset => { requestClose(); handleSend({ resetStart: reset }); }} />
+                </React.Suspense>,
+            },
+        }];
+    }, [resetStartAvailable, props.extraActionChips, props.sessionId, props.sessionAddress, sendActionDisabled, handleSend]);
     const {
         activeSelectionOverlay,
         activeExtraCollapsedPopoverChip,
@@ -2535,7 +2585,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         closeSelectionOverlay,
         resetSelectionOverlays,
     } = useAgentInputSelectionOverlayController({
-        extraActionChips: props.extraActionChips,
+        extraActionChips,
         shouldRenderSessionModeChip,
         canChangePermission: Boolean(props.onPermissionModeChange),
         hasMachinePopover: Boolean(props.machinePopover),
@@ -2741,12 +2791,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             : undefined;
     }, [agentPickerOptions, armedComposerTarget, effectiveAgentPickerSelectedOptionId]);
     const hasRecipient = React.useMemo(() => {
-        return (props.extraActionChips ?? []).some((chip) => chip.controlId === 'recipient');
-    }, [props.extraActionChips]);
+        return extraActionChips.some((chip) => chip.controlId === 'recipient');
+    }, [extraActionChips]);
     const hasDelivery = React.useMemo(() => {
-        return (props.extraActionChips ?? []).some((chip) => chip.controlId === 'delivery');
-    }, [props.extraActionChips]);
-    const hasExtraActionChips = (props.extraActionChips?.length ?? 0) > 0;
+        return extraActionChips.some((chip) => chip.controlId === 'delivery');
+    }, [extraActionChips]);
+    const hasExtraActionChips = extraActionChips.length > 0;
     const attachmentRowItems = React.useMemo<readonly AgentInputAttachmentsRowItem[]>(() => (
         projectAgentInputAttachmentRowItems({ items: props.attachmentRowItems })
     ), [props.attachmentRowItems]);
@@ -3001,7 +3051,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         onRemoveFolder: props.onRemoveFolder,
         resumeSessionId: props.resumeSessionId,
         sessionId: props.sessionId,
-        extraActionChips: props.extraActionChips,
+        extraActionChips,
         openCollapsedOptionsPopover: (chipKey) => {
             if (!chipKey) {
                 closeSelectionOverlay('collapsedExtra');
@@ -3037,7 +3087,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         layout: effectiveActionBarLayout,
         singleRow: isConversation,
         ...(props.barControlIds ? { barControlIds: props.barControlIds } : {}),
-        chips: props.extraActionChips,
+        chips: extraActionChips,
         overlayAnchorRef,
         onToggleExtraChipCollapsedPopover: (chipKey) => {
             toggleSelectionOverlay('collapsedExtra', 'chip', chipKey);
@@ -3551,7 +3601,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             onToggle={props.inputExpansion.onToggle}
                                         />
                                     ) : null}
-                                    {accessoriesInActionRow ? null : <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker}
+                                    {accessoriesInActionRow ? null : <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
                                         accessory={fieldAccessory} belowToggle={shouldShowInputExpansionToggle} />}
                                 </View>
                             </ScrollView>
@@ -3688,6 +3738,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             dictationPressHandler={dictationPressHandler}
                                             dictationStatus={dictationStatus}
                                             armedContinuationTarget={props.armedContinuationTarget ?? null}
+                                            armedRouteContinuation={props.armedRouteContinuation ?? null}
                                             armedContinuationIdentityMark={armedContinuationIdentityMark}
                                             onSend={handleSend}
                                             onStop={handleAbortPress}
@@ -3753,7 +3804,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             onToggle={props.inputExpansion.onToggle}
                                         />
                                     ) : null}
-                                    {accessoriesInActionRow ? null : <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker}
+                                    {accessoriesInActionRow ? null : <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
                                         accessory={fieldAccessory} belowToggle={shouldShowInputExpansionToggle} />}
                                 </View>
                             </View>
@@ -3890,6 +3941,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                 dictationPressHandler={dictationPressHandler}
                                                 dictationStatus={dictationStatus}
                                                 armedContinuationTarget={props.armedContinuationTarget ?? null}
+                                                armedRouteContinuation={props.armedRouteContinuation ?? null}
                                                 armedContinuationIdentityMark={armedContinuationIdentityMark}
                                                 onSend={handleSend}
                                                 onStop={handleAbortPress}

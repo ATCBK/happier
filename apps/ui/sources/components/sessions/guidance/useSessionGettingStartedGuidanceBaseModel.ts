@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 
 import { useVisibleSessionListSummaryState } from '@/hooks/session/useVisibleSessionListSummaryState';
 import { useAllMachines, useMachineListByServerId, useMachineListStatusByServerId } from '@/sync/domains/state/storage';
@@ -24,10 +26,13 @@ export function useSessionGettingStartedGuidanceBaseModel(): SessionGettingStart
         summarySelection.allowedServerIds,
     ]);
     const activeServerProfile = useSessionGettingStartedActiveServerProfile(summarySelection.activeServerId);
+    const bindings = useServerCredentialAccountScopeBindings([...summarySelection.allowedServerIds, summarySelection.activeServerId]);
+    const reachabilityRevision = useMachineReachabilityRevision();
 
     return React.useMemo(() => {
         return buildSessionGettingStartedViewModel({
             sessionsReady: sessionSummary.sessionsReady,
+            accountScopesByServerId: bindings,
             sessionCount: sessionSummary.sessionCount,
             activeMachines,
             selection: selectionSnapshot,
@@ -45,5 +50,7 @@ export function useSessionGettingStartedGuidanceBaseModel(): SessionGettingStart
         serverSelectionGroups,
         sessionSummary.sessionCount,
         sessionSummary.sessionsReady,
+        bindings,
+        reachabilityRevision,
     ]);
 }

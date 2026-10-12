@@ -2,6 +2,7 @@ import { canCreateSessionWithInitialAccess, useSessionCollaborationAvailability 
 import * as React from 'react';
 
 import { t } from '@/text';
+import { getErrorMessage } from '@/utils/errors/getErrorMessage';
 import { Modal } from '@/modal';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCatalogProjection';
@@ -54,6 +55,8 @@ import {
 } from '@happier-dev/protocol';
 import type { AcpConfigOptionOverridesV1, ComposerSnapshotV1, RawIngressStructuredInputV1 } from '@happier-dev/protocol';
 import type { SessionSpawnNewInitialInputV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import type { SessionSpawnNewInitialInputDispositionV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { getSessionInputFailureLabelKey } from '@/components/sessions/pending/pendingMessageVisualState';
 import type { SessionManagedCreationV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
@@ -85,7 +88,7 @@ import {
     CreatedNewSessionCompletionError,
     createCreatedNewSessionCompletion,
 } from '@/components/sessions/new/navigation/completeCreatedNewSession';
-import type { SessionMcpSelectionV1 } from '@happier-dev/protocol';
+import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol';
 import type { SessionSpawnSourceContextV1 } from '@happier-dev/protocol';
 import type { NewSessionCheckoutCreationDraft } from '@/sync/domains/state/newSessionCheckoutDraft';
 import { resolveNewSessionOperationalBackendTarget } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
@@ -125,6 +128,7 @@ import {
     executeManualSessionSpawnNewAction,
     resolveSessionSpawnNewActionFailureMessage,
     resolveSessionSpawnNewResultFailureMessage,
+    resolveSessionSpawnNewInitialInputFailureMessage,
     type ManualSessionSpawnNewActionCustody,
 } from '@/sync/ops/actions/sessionSpawnNewAction';
 import {
@@ -147,11 +151,13 @@ import { bindNewManagedMachineCreationScope } from '@/sync/ops/actions/managedCr
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { captureLazyActionAccountContext, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import { sessionInstructionsActions, type SessionInstructionsAuthoringDraft } from '@/sync/ops/promptLibrary/sessionInstructions';
+import { sessionInstructionsActions } from '@/sync/ops/promptLibrary/sessionInstructions';
+import type { SessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 import { NewSessionInstructionsPreparationError } from '@/components/sessions/new/modules/newSessionInstructionsPreparation';
 import { SessionPromptStackV1Schema, writeSessionContextIntentV1ToMetadata, type SessionPromptStackV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { buildSessionInstructionsContextIntentV1 } from '@happier-dev/protocol/actions/sessionStateFieldActions';
 import { readNewSessionDraftFromRepository, writeNewSessionInstructionsToRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
+import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
 type MutableSettingsDelta = {
     -readonly [TKey in keyof Settings]?: Settings[TKey];
@@ -368,6 +374,8 @@ export function useCreateNewSession(params: Readonly<{
     getInstructionsPromptStack?: () => SessionPromptStackV1 | undefined;
     /** Flushes the mounted input into its canonical draft before an asynchronous handoff. */
     flushComposerInput?: () => void;
+    /** Commits the submitted selections before capturing revision-safe launch custody. */
+    flushAuthoringDraft?: () => void;
     setSessionPrompt?: (prompt: string) => void;
     resumeSessionId: string;
     agentNewSessionOptions?: Record<string, unknown> | null;
@@ -375,7 +383,7 @@ export function useCreateNewSession(params: Readonly<{
     authoringCommitPending?: boolean;
     /** Fresh admission of inherited Connected Account purpose defaults; explicit choices bypass in their owner. */
     requireConnectedAccountDefaultsReady?: () => void;
-    mcpSelection?: SessionMcpSelectionV1 | null;
+    capabilitySelection?: SessionCapabilitySelectionV1 | null;
     windowsRemoteSessionLaunchModeOverride?: WindowsRemoteSessionLaunchMode | null;
 
     machineEnvPresence: UseMachineEnvPresenceResult;
@@ -993,12 +1001,7 @@ export function useCreateNewSession(params: Readonly<{
         let disposeOrdinaryDraftLifetime: (() => void) | undefined;
         let capturedOrdinarySourceAccount: LazyActionAccountContext | undefined;
         let capturedOrdinaryTargetAccount: LazyActionAccountContext | undefined;
-        const submittedDraftCurrentness = current.draftScope && current.draftId
-            ? captureNewSessionDraftWorkflowCurrentness({
-                scope: current.draftScope,
-                draftId: current.draftId,
-            })
-            : null;
+        let submittedDraftCurrentness: ReturnType<typeof captureNewSessionDraftWorkflowCurrentness> | null = null;
         const clearCompletedDraft = async (launchUserAttemptId?: string): Promise<void> => {
             if (!current.draftScope || !current.draftId) return;
             await clearCapturedNewSessionDraftAfterLaunch({
@@ -1010,6 +1013,17 @@ export function useCreateNewSession(params: Readonly<{
         };
 
         try {
+            // Autosave may still hold a debounced selection snapshot. Commit
+            // exactly what Send admitted before any asynchronous handoff or
+            // capture, so reopening and clearing refer to that same authoring.
+            current.flushComposerInput?.();
+            current.flushAuthoringDraft?.();
+            submittedDraftCurrentness = current.draftScope && current.draftId
+                ? captureNewSessionDraftWorkflowCurrentness({
+                    scope: current.draftScope,
+                    draftId: current.draftId,
+                })
+                : null;
             const resolvedTargetServerId = resolveNewSessionLaunchTargetServerId(current);
             if (!resolvedTargetServerId) {
                 Modal.alert(t('common.error'), t('newSession.failedToStart'));
@@ -1240,7 +1254,7 @@ export function useCreateNewSession(params: Readonly<{
                     { confirmText: t(blockingIssue.confirmTextKey) }
                 );
                 if (openMachine && blockingIssue.action === 'openMachine') {
-                    current.router.push(`/machine/${selectedMachineId}` as any);
+                    current.router.push(machinePageHref({ door: 'rail', target: { machineId: selectedMachineId } }) as never);
                 }
                 current.setIsCreating(false);
                 return;
@@ -1368,7 +1382,7 @@ export function useCreateNewSession(params: Readonly<{
                 permissionMode: spawnPermissionMode,
                 permissionModeUpdatedAt: spawnPermissionModeUpdatedAt,
                 modelSelection: spawnModelSelection,
-                mcpSelection: current.mcpSelection ?? null,
+                capabilitySelection: current.capabilitySelection ?? null,
                 connectedServices: connectedServices ?? null,
                 terminal: terminal ?? null,
                 windowsRemoteSessionLaunchMode: windowsRemoteSessionLaunchMode ?? null,
@@ -1450,6 +1464,7 @@ export function useCreateNewSession(params: Readonly<{
             let initialInputLocalId: string | null = null;
             let initialMessageText = '';
             let initialInputWasNotAccepted = false;
+            let initialInputFailure: Extract<SessionSpawnNewInitialInputDispositionV1, { status: 'rejected' | 'outcomeUnknown' }> | null = null;
 
             const adoptCanonicalActionOperationSettlement = (): boolean => {
                 const executionAccountId = executionAccountScope.accountId.trim();
@@ -1703,6 +1718,10 @@ export function useCreateNewSession(params: Readonly<{
                     ? actionResult.result.initialInput.localId
                     : null;
                 initialInputWasNotAccepted = Boolean(spawnInput.initialInput) && initialInputLocalId === null;
+                initialInputFailure = actionResult.result.initialInput.status === 'rejected'
+                    || actionResult.result.initialInput.status === 'outcomeUnknown'
+                    ? actionResult.result.initialInput
+                    : null;
                 if (launchAttempt.createdSessionId !== createdSessionId) {
                     launchAttempt = markNewSessionLaunchAttemptCreated(launchAttempt, { createdSessionId });
                     publishLaunchAttempt(launchAttempt);
@@ -1714,6 +1733,25 @@ export function useCreateNewSession(params: Readonly<{
                     publishLaunchAttempt(null);
                     current.setIsCreating(false);
                     return;
+                }
+                if (initialInputWasNotAccepted) {
+                    // Preserve the draft and distinguish a proven rejection from
+                    // uncertain admission before navigation unmounts the launcher.
+                    preserveCreatedSessionDraftAfterUnacceptedFirstTurn({
+                        sessionId: createdSessionId,
+                        draftText: initialMessageText || sessionPrompt,
+                        scope: executionAccountScope,
+                    });
+                    const rejectionLabel = getSessionInputFailureLabelKey({
+                        code: initialInputFailure?.status === 'rejected' ? initialInputFailure.code : null,
+                    });
+                    const message = t(rejectionLabel ?? 'newSession.initialInputNotConfirmed');
+                    // The Session exists and the draft is kept, so the title names what happened to the
+                    // first message, never a bare "Error" (DESIGN.md error copy; lab `convo-ST`).
+                    Modal.alert(
+                        t(rejectionLabel ? 'newSession.initialInputRejectedTitle' : 'newSession.initialInputNotConfirmedTitle'),
+                        initialInputFailure ? resolveSessionSpawnNewInitialInputFailureMessage(initialInputFailure, message) : message,
+                    );
                 }
                 if (profilesActive) {
                     fireAndForget(applyAuthoringMemory({ lastUsedProfile: current.selectedProfileId }), { tag: 'useCreateNewSession.lastUsedProfile' });
@@ -1986,13 +2024,6 @@ export function useCreateNewSession(params: Readonly<{
                             postSpawnFollowUpError instanceof Error ? postSpawnFollowUpError.message : t('common.error'),
                         );
                     }
-                    if (initialInputWasNotAccepted) {
-                        preserveCreatedSessionDraftAfterUnacceptedFirstTurn({
-                            sessionId: createdSessionId,
-                            draftText: initialMessageText || sessionPrompt,
-                            scope: executionAccountScope,
-                        });
-                    }
                     if (mountedRef.current) {
                         current.setIsCreating(false);
                     }
@@ -2013,14 +2044,6 @@ export function useCreateNewSession(params: Readonly<{
                             ? { status: 'rejected' }
                             : { status: 'accepted', sessionId: createdSessionId });
                     }
-                }
-
-                if (initialInputWasNotAccepted) {
-                    preserveCreatedSessionDraftAfterUnacceptedFirstTurn({
-                        sessionId: createdSessionId,
-                        draftText: initialMessageText || sessionPrompt,
-                        scope: executionAccountScope,
-                    });
                 }
 
                 if (!createdSessionRouteOpened && isLaunchScopeStillActive()) {
@@ -2061,7 +2084,7 @@ export function useCreateNewSession(params: Readonly<{
             let errorMessage = error instanceof NewSessionInstructionsPreparationError
                 ? t('bots.create.documentFailed')
                 : error instanceof Error
-                    ? error.message
+                    ? getErrorMessage(error)
                     : t('newSession.failedToStart');
             if (error instanceof Error) {
                 if (error.message.includes('timeout')) {

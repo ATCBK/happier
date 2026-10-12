@@ -11,6 +11,12 @@ import { PendingNavigationPill } from './PendingNavigationPill';
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+// The device class is a platform adapter boundary; phone cases set it, every other case keeps the real one.
+const device = vi.hoisted(() => ({ value: null as 'phone' | null }));
+vi.mock('@/utils/platform/responsive', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/utils/platform/responsive')>();
+    return { ...actual, useDeviceType: () => device.value ?? actual.useDeviceType() };
+});
 
 const address = { serverId: 'home-a', sessionId: 'same' };
 const initialState = storage.getState();
@@ -40,6 +46,7 @@ function seedWaitingSessions() {
 describe('PendingNavigationPill', () => {
     beforeEach(seedWaitingSessions);
     afterEach(() => {
+        device.value = null;
         standardCleanup();
         unregister?.();
         unregister = undefined;
@@ -56,6 +63,27 @@ describe('PendingNavigationPill', () => {
         expect(screen.findByTestId('pending-navigation-header-count')?.props.children).toBe('1 needs you');
         await screen.pressByTestIdAsync('pending-navigation-header');
         expect(navigate).toHaveBeenCalledWith({ excluding: address });
+    });
+
+    it('yields to the session title in a tight header: the count alone, still the same Next', async () => {
+        const navigate = vi.fn(async () => ({ status: 'opened' as const }));
+        unregister = registerPendingNavigationRuntime(navigate);
+        const { ChatHeaderCompactContext } = await import('@/components/sessions/transcript/chatHeaderCompact');
+        const screen = await renderScreen(<ChatHeaderCompactContext.Provider value={true}>
+            <PendingNavigationPill address={address} presentation="header" />
+        </ChatHeaderCompactContext.Provider>);
+        expect(screen.findByTestId('pending-navigation-header-count')?.props.children).toBe('1');
+        expect(screen.findByTestId('pending-navigation-header')?.props.accessibilityLabel).toContain('1 needs you');
+        await screen.pressByTestIdAsync('pending-navigation-header');
+        expect(navigate).toHaveBeenCalledWith({ excluding: address });
+    });
+
+    it('shows one count on a phone: the session nav capsule, not a second header pill', async () => {
+        device.value = 'phone';
+        const header = await renderScreen(<PendingNavigationPill address={address} presentation="header" />);
+        expect(header.findByTestId('pending-navigation-header')).toBeNull();
+        const phone = await renderScreen(<PendingNavigationPill address={address} presentation="phone" />);
+        expect(phone.findByTestId('pending-navigation-phone')).not.toBeNull();
     });
 
     it('does not rerender the header for unrelated messages or composer settings', async () => {
@@ -94,6 +122,18 @@ describe('PendingNavigationPill', () => {
         expect(screen.findByTestId('pending-navigation-composer')).not.toBeNull();
         expect(screen.findAll((node) => node.props?.children === 'is waiting for your answer').length).toBeGreaterThan(0);
         await screen.pressByTestIdAsync('pending-navigation-composer-dismiss');
+        expect(screen.findByTestId('pending-navigation-composer')).toBeNull();
+        await act(async () => { markSessionPendingAnswer(address, 'question-2'); });
+        expect(screen.findByTestId('pending-navigation-composer')).not.toBeNull();
+    });
+
+    it('leaves by itself once you type in this composer (lab fnext N1a), and returns with the next answer', async () => {
+        const { createComposerTextStore } = await import('@/components/sessions/agentInput/composerTextStore');
+        const composerText = createComposerTextStore('');
+        const screen = await renderScreen(<PendingNavigationPill address={address} presentation="composer" composerText={composerText} />);
+        await act(async () => { markSessionPendingAnswer(address, 'question'); });
+        expect(screen.findByTestId('pending-navigation-composer')).not.toBeNull();
+        await act(async () => { composerText.setPrompt('Also check the footer'); });
         expect(screen.findByTestId('pending-navigation-composer')).toBeNull();
         await act(async () => { markSessionPendingAnswer(address, 'question-2'); });
         expect(screen.findByTestId('pending-navigation-composer')).not.toBeNull();

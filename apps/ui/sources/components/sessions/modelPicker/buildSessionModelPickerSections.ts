@@ -237,7 +237,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
                         group.modelLoadPreflightPolicy === 'required'
                         && row.loadState === 'unloaded'
                     ),
-                accessibilityLabel: `${group.providerName}, ${group.connectionName}, ${presentation.label}`,
+                accessibilityLabel: `${source.label}, ${presentation.label}`,
             }];
         });
         return options.length > 0

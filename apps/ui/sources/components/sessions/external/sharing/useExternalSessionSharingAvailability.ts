@@ -3,7 +3,8 @@ import type { SharingAuthoritySession } from '@/sync/domains/social/sessionShari
 import { useMachineListByServerId, useMachineListStatusByServerId, useServerScopedMachine } from '@/sync/domains/state/storage';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
-import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceSummaries } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { readExternalSessionOperationPresentationFromMetadata } from '@/components/sessions/transcript/items/externalSessionOperationMetadata';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 import { useExternalSessionOperationOwnerHydration } from '@/components/sessions/transcript/items/useExternalSessionOperationOwnerHydration';
@@ -50,9 +51,6 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
         machineScopeServerId,
         externalSessionLink?.machineId ?? '',
     );
-    const sourceMachineReachability = !machineScopeSettled || machine === null
-        ? null
-        : isMachineOnline(machine);
     const operationPresentation = React.useMemo(
         () => readExternalSessionOperationPresentationFromMetadata(session?.metadata),
         [session?.metadata],
@@ -65,13 +63,20 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
         machineScopeServerId,
         operationMachineId ?? '',
     );
+    const [sourcePresence, operationPresence] = useMachinePresenceSummaries(machineScopeServerId, [
+        externalSessionLink?.machineId ?? '', operationMachineId ?? '',
+    ]);
+    const sourceMachineReachability = !machineScopeSettled || machine === null
+        ? null
+        : sourcePresence?.reachability === 'reachable';
+    const operationMachineReachable = operationPresence?.reachability === 'reachable';
     const isExactOwner = session?.access?.role === 'owner';
     const operationOwnerHydration = useExternalSessionOperationOwnerHydration({
         isExactOwner,
         machineId: operationMachineId,
         machineOnline: machineScopeSettled
             && operationMachine !== null
-            && isMachineOnline(operationMachine),
+            && operationMachineReachable,
         ownerScopeKey: accountScopeKey,
         presentation: operationPresentation,
         serverId: machineScopeServerId,
@@ -146,11 +151,11 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
                 observationContext: 'hydrated',
                 originAvailability: resolveExternalSessionOperationOriginAvailability({
                     machineStatusKnown: operationMachine !== null,
-                    machineOnline: operationMachine !== null && isMachineOnline(operationMachine),
+                    machineOnline: operationMachine !== null && operationMachineReachable,
                 }),
             })
             : null
-    ), [operationMachine, operationOwnerHydration.progress]);
+    ), [operationMachine, operationMachineReachable, operationOwnerHydration.progress]);
     const canResumePartialImport = sharingPresentation.action === 'resume_awaiting_action_owner'
         && operationPresentation !== null
         && operationOwnerHydration.progress !== null

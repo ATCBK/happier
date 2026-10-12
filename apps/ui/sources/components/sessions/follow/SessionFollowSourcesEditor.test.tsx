@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
+import { standardCleanup } from '@/dev/testkit';
 
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -46,6 +48,8 @@ vi.mock('@/sync/domains/state/storage', async () => {
 });
 
 import { SessionFollowSourcesEditor } from './SessionFollowSourcesEditor';
+let accountFixture: Awaited<ReturnType<typeof activateStorageAccountScope>> | undefined;
+afterEach(() => { standardCleanup(); accountFixture?.dispose(); accountFixture = undefined; });
 
 function findSourceRow(
     screen: Awaited<ReturnType<typeof renderSettingsView>>,
@@ -69,7 +73,8 @@ function readControlDisabled(
 }
 
 describe('SessionFollowSourcesEditor', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        accountFixture = await activateStorageAccountScope({ serverId: 'home-a', accountId: 'follow-account' });
         api.list.mockReset();
         api.remove.mockReset();
         api.set.mockReset();

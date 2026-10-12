@@ -10,6 +10,8 @@ import { HIDDEN_SESSION_COMPANION_PREFERENCE_V1 } from '../companion/state/sessi
 import type { SessionCompanionController } from '../companion/state/useSessionCompanionController';
 import type { CallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
 import { SessionBoardSurface } from './SessionBoardSurface';
+import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
+import type { BrowserFrameEngineConfig } from '@/components/browser/frame/types';
 import {
     createSessionBoardActionsPort,
     projectSessionBoard,
@@ -34,7 +36,8 @@ const ADDRESS: SessionAddress = { serverId: 'home-1', sessionId: 'session-1' };
 // Companion, widget host, admission and hosted-frame lifecycle remain real.
 const frames = vi.hoisted(() => ({ active: 0, maximum: 0 }));
 vi.mock('@/components/browser/frame/BrowserViewFrame.web', () => ({
-    BrowserViewFrame: () => {
+    BrowserViewFrame: (props: Readonly<{ engine: BrowserFrameEngineConfig }>) => {
+        expect(props.engine).toMatchObject({ kind: 'webIframe', html: expect.any(String) });
         React.useEffect(() => {
             frames.active += 1;
             frames.maximum = Math.max(frames.maximum, frames.active);
@@ -50,6 +53,7 @@ const pluginRuntime = {
     phase: 'unavailable' as const,
     interactionEnabled: false,
     machineId: null,
+    accountLifetime: null,
     serverId: ADDRESS.serverId,
     platform: 'web' as const,
 };
@@ -143,8 +147,8 @@ afterEach(() => { standardCleanup(); });
 const session = createSessionFixture({ id: ADDRESS.sessionId, serverId: ADDRESS.serverId });
 const available = () => ({ kind: 'available' as const });
 const callerRuntime: CallerHostedHtmlRuntime = {
-    serverIdentityId: 'home-1', accountId: 'alice', hostOrigin: 'https://app.example.test',
-    admittedHostMethods: [], isApproved: () => true, approve: () => {}, revoke: () => {},
+    serverIdentityId: 'home-1', accountId: 'alice', accountEncryptionMode: 'plain', hostOrigin: 'https://app.example.test',
+    admittedHostMethods: [],
     createRequestController: () => ({ handleRequest: async () => null, dispose: () => {} }),
     lifetime: { isCurrent: () => true, onRetire: () => ({ dispose: () => {} }) },
 };
@@ -154,6 +158,7 @@ const companion: SessionCompanionController = {
     show: () => null, hide: () => null, setCollapsed: () => null, setEdge: () => null, setDensity: () => null,
     addItem: () => null, removeItem: () => null, moveItem: () => null, setItemFrameStyle: () => null, applyLocalInverse: () => false,
     setInstanceInputs: () => { throw new Error('Instance input mutation is outside this mount fixture'); },
+    setInstanceNetwork: () => { throw new Error('Instance network mutation is outside this mount fixture'); },
     renameInstance: () => { throw new Error('Instance rename is outside this mount fixture'); },
     openFullSurface: () => {},
 };
@@ -219,7 +224,14 @@ describe('mounted Session Board primary placement', () => {
         frames.maximum = 0;
         const probe: Probe = { mounted: null, continuity: null };
         const screen = await renderScreen(<ViewportHarness probe={probe} recovered={recovered} />);
+        // Preparation now loads the real SDK asynchronously before publishing a frame.
+        await act(async () => { await loadPluginUiHostSupport(); });
         const node = (testID: string) => screen.tree.root.findAll((candidate) => candidate.props.testID === testID).at(-1)!;
+        const expectFrameIn = async (testID: string) => await vi.waitFor(async () => {
+            await act(async () => { await Promise.resolve(); });
+            expect(node(testID).findAll((candidate) => String(candidate.type) === 'BrowserViewFrame')).toHaveLength(1);
+            expect(frames.active).toBe(1);
+        });
         await act(async () => {
             node('session-board-scroll').props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 800, height: 600 } } });
             node(recovered ? 'session-board-recovered-row-item-b' : 'session-board-placement-item-b').props.onLayout({
@@ -227,9 +239,7 @@ describe('mounted Session Board primary placement', () => {
             });
         });
         expect(probe.mounted!.resolvePrimaryHost('item-b')).toBe('companion');
-        expect(frames.active).toBe(1);
-        const expectFrameIn = (testID: string) => expect(node(testID).findAll((candidate) => String(candidate.type) === 'BrowserViewFrame')).toHaveLength(1);
-        expectFrameIn('session-companion-widget-item-b');
+        await expectFrameIn('session-companion-widget-item-b');
         const scroll = async (y: number) => await act(async () => {
             node('session-board-scroll').props.onScroll({ nativeEvent: {
                 contentOffset: { y }, contentSize: { width: 800, height: 6000 },
@@ -238,29 +248,29 @@ describe('mounted Session Board primary placement', () => {
         });
         await scroll(4800);
         expect(probe.mounted!.resolvePrimaryHost('item-b')).toBe('details');
-        expect(frames.active).toBe(1);
-        expectFrameIn(recovered ? 'session-board-recovered-row-item-b' : 'session-board-placement-item-b');
+        await expectFrameIn(recovered ? 'session-board-recovered-row-item-b' : 'session-board-placement-item-b');
         await scroll(0);
         expect(probe.mounted!.resolvePrimaryHost('item-b')).toBe('companion');
-        expect(frames.active).toBe(1);
-        expectFrameIn('session-companion-widget-item-b');
+        await expectFrameIn('session-companion-widget-item-b');
         await screen.update(<ViewportHarness probe={probe} recovered={recovered} expanded />);
         expect(probe.mounted!.resolvePrimaryHost('item-b')).toBe('details');
-        expect(frames.active).toBe(1);
-        expectFrameIn('expanded-focused');
+        await expectFrameIn('expanded-focused');
         await screen.update(<ViewportHarness probe={probe} recovered={recovered} />);
         await scroll(4800);
         expect(probe.mounted!.resolvePrimaryHost('item-b')).toBe('details');
+        await expectFrameIn(recovered ? 'session-board-recovered-row-item-b' : 'session-board-placement-item-b');
         await screen.update(<ViewportHarness probe={probe} recovered={recovered} retained />);
         expect(probe.mounted!.resolvePrimaryHost('item-b')).toBe('companion');
-        expectFrameIn('session-companion-widget-item-b');
+        await expectFrameIn('session-companion-widget-item-b');
         await screen.update(<ViewportHarness probe={probe} recovered={recovered} />);
         expect(probe.mounted!.resolvePrimaryHost('item-b')).toBe('details');
+        await expectFrameIn(recovered ? 'session-board-recovered-row-item-b' : 'session-board-placement-item-b');
         await screen.update(<ViewportHarness probe={probe} recovered={recovered} boardVisible={false} />);
         expect(probe.mounted!.resolvePrimaryHost('item-b')).toBe('companion');
-        expectFrameIn('session-companion-widget-item-b');
+        await expectFrameIn('session-companion-widget-item-b');
         await screen.update(<ViewportHarness probe={probe} recovered={recovered} />);
         expect(probe.mounted!.resolvePrimaryHost('item-b')).toBe('details');
+        await expectFrameIn(recovered ? 'session-board-recovered-row-item-b' : 'session-board-placement-item-b');
         expect(frames.active).toBe(1);
         expect(frames.maximum).toBe(1);
     });

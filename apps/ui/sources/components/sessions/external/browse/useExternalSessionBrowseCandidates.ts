@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import type {
     ExternalSessionActivityV1,
     ExternalSessionCandidateThreadV1,
@@ -10,7 +11,7 @@ import type {
 
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { machineExternalSessionsCandidatesList } from '@/sync/ops/machineExternalSessions';
+import { createFrontDoorActionExecute, requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { t } from '@/text';
 import {
     resolveExternalSessionBrowseRpcErrorMessage,
@@ -201,6 +202,7 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
 }>) {
     const { accountLifetime, machineId, providerId, searchTerm, source, serverId } = params;
     const accountScope = accountLifetime?.scope;
+    const execute = React.useMemo(() => createFrontDoorActionExecute(), []);
     const includeThreads = params.includeThreads === true;
     const normalizedSearchTerm = typeof searchTerm === 'string' ? searchTerm.trim() : '';
     const effectiveSearchTerm = normalizedSearchTerm;
@@ -465,14 +467,17 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
                 // Absent means top-level only, which is also all a daemon predating the field lists.
                 ...(includeThreads ? { includeThreads: true } : {}),
             };
-            return machineExternalSessionsCandidatesList(request, {
+            const result = await execute('sessions.external.candidates.list', request, {
+                surface: 'ui',
                 ...(serverId ? { serverId } : {}),
-                ...(accountLifetime ? { accountId: accountLifetime.scope.accountId } : {}),
+                ...(accountScope ? { expectedAccountId: accountScope.accountId } : {}),
                 signal: abortController.signal,
             });
+            requireActionSuccess(result);
+            return ExternalSessionsCandidatesListResponseSchema.parse(result.ok ? result.result : undefined);
         };
         const applyResult = (
-            result: Awaited<ReturnType<typeof machineExternalSessionsCandidatesList>>,
+            result: ExternalSessionsCandidatesListResponse,
             mode: CandidateApplyMode,
             searchMode?: CandidateSearchMode,
         ): boolean => {
@@ -591,14 +596,14 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
             searchMode?: CandidateSearchMode,
             cursor: string | null = requestedCursor,
         ): Promise<Readonly<{
-            result: Awaited<ReturnType<typeof machineExternalSessionsCandidatesList>>;
+            result: ExternalSessionsCandidatesListResponse;
             prepared: boolean;
         }> | null> => {
             let prepared = false;
             let preparationRequestCount = 0;
             let lastPreparationScanned: number | null = null;
             let lastServedPreparationResult:
-                Awaited<ReturnType<typeof machineExternalSessionsCandidatesList>> | null = null;
+                ExternalSessionsCandidatesListResponse | null = null;
             while (preparationRequestCount < MAX_CANDIDATE_INDEX_PREPARATION_REQUESTS) {
                 const result = await requestCandidates(searchMode, cursor);
                 if (
@@ -792,7 +797,7 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
                 }
             }
         }
-    }, [accountLifetime, currentListingKey, currentScopeKey, effectiveSearchTerm, enabled, includeThreads, machineId, normalizedSearchTerm, providerId, scopedSource, serverId]);
+    }, [accountLifetime, accountScope, currentListingKey, currentScopeKey, effectiveSearchTerm, enabled, execute, includeThreads, machineId, normalizedSearchTerm, providerId, scopedSource, serverId]);
 
     React.useEffect(() => {
         void loadCandidates();

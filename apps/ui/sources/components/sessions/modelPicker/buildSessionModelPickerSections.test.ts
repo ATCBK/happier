@@ -57,6 +57,16 @@ function providerGroup(input: Readonly<{
 }
 
 describe('buildSessionModelPickerSections', () => {
+    it('announces an equal-name source once using the same identity as its heading', () => {
+        const sections = buildSessionModelPickerSections({
+            agentTargetKey: 'agent:happier.agent.codex/codex', hiddenNativeModelKeys: new Set(), nativeModels: [],
+            providerProjectionAuthoritative: true,
+            providerGroups: [providerGroup({ connectionId: 'pc_work', modelId: 'same',
+                providerName: 'QA custom live', connectionName: ' qa custom live ' })],
+        });
+        expect(sections[0]?.title).toBe('QA custom live');
+        expect(sections[0]?.options[0]?.accessibilityLabel).toBe('QA custom live, Provider same');
+    });
     it('keeps same-name source labels after Favorites move out of their original sections', () => {
         const sections = buildSessionModelPickerSections({
             agentTargetKey: 'agent:happier.agent.codex/codex', hiddenNativeModelKeys: new Set(),
@@ -412,8 +422,8 @@ describe('buildSessionModelPickerSections', () => {
         });
 
         expect(sections.flatMap((section) => section.options.map((option) => option.accessibilityLabel))).toEqual([
-            'Gateway A, Work, Provider shared',
-            'Gateway B, Work, Provider shared',
+            'Gateway A · Work, Provider shared',
+            'Gateway B · Work, Provider shared',
         ]);
     });
 

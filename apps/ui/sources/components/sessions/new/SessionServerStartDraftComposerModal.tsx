@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useAcpCatalogForServer } from '@/sync/store/useAcpCatalog';
 import { ScrollView, View } from 'react-native';
 
@@ -86,14 +88,18 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
     const selectedPlacementCandidate = selectedCandidateIndex < 0
         ? undefined
         : props.seed.candidates?.[selectedCandidateIndex];
+    const { binding } = useServerCredentialAccountScopeBinding(selectedPlacementCandidate?.serverId ?? props.target.serverId);
+    const accountScope = binding?.isCurrent() ? binding.scope : null;
+    const reachabilityRevision = useMachineReachabilityRevision();
     const selectedPlacement = React.useMemo(() => resolveSessionServerStartCandidateSelection({
+        accountScope,
         mountedTarget: props.target,
         selectedCandidate: selectedPlacementCandidate,
         activeServerId: String(activeServer.serverId ?? ''),
         activeMachines: machines,
         machineListByServerId,
         machineListStatusByServerId,
-    }), [activeServer.serverId, machineListByServerId, machineListStatusByServerId, machines, props.target, selectedPlacementCandidate]);
+    }), [activeServer.serverId, machineListByServerId, machineListStatusByServerId, machines, props.target, selectedPlacementCandidate, accountScope, reachabilityRevision]);
     const selectedTarget = selectedPlacement.target;
     const { snapshot: acpCatalog } = useAcpCatalogForServer(selectedTarget.serverId);
     const daemonMergedProjection = useDaemonMergedProjectionInputs({
@@ -190,7 +196,7 @@ export function SessionServerStartDraftComposerModal(props: Props): React.ReactE
                 permissionMode,
                 permissionModeUpdatedAt: now,
                 modelSelection: null,
-                mcpSelection: null,
+                capabilitySelection: null,
                 connectedServices: null,
                 terminal: null,
                 windowsRemoteSessionLaunchMode: null,

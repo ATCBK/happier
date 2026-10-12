@@ -18,6 +18,11 @@ function firstStaticSection(model: NewSessionConnectedServicesSelectionListModel
     return section;
 }
 
+/** A service's current choice is a fact of its row (the list draws its check), never a leading radio. */
+function isSelectedRow(row: { selected?: boolean }): boolean {
+    return row.selected === true;
+}
+
 function buildModel(overrides: Partial<Parameters<typeof buildNewSessionConnectedServicesSelectionListModel>[0]> = {}) {
     return buildNewSessionConnectedServicesSelectionListModel({
         supportedServiceIds: ['anthropic'],
@@ -34,7 +39,8 @@ function buildModel(overrides: Partial<Parameters<typeof buildNewSessionConnecte
                 ? `Active ${params.profileId}`
                 : key) as Parameters<typeof buildNewSessionConnectedServicesSelectionListModel>[0]['translate'],
         resolveServiceTitle: (serviceId) => `service:${serviceId}`,
-        renderSelectionIcon: ({ selected }) => selected ? 'selected-icon' : 'unselected-icon',
+        renderRowIcon: ({ kind }) => `icon:${kind}`,
+        renderBrowseMark: () => 'browse-mark',
         renderSettingsIcon: () => 'settings-icon',
         renderQuotaBadges: (badges) => `badges:${badges.map((badge) => badge.text).join(',')}`,
         renderNeedsReauthPill: () => 'needs-reauth',
@@ -43,12 +49,82 @@ function buildModel(overrides: Partial<Parameters<typeof buildNewSessionConnecte
 }
 
 describe('buildNewSessionConnectedServicesSelectionListModel', () => {
+    it('leads each row with what it is and marks the current choice with a trailing check (RT1)', () => {
+        const model = buildModel({
+            profileOptionsByServiceId: {
+                anthropic: [
+                    { profileId: 'work', status: 'connected', providerEmail: 'work@example.com' },
+                    { profileId: 'bot', status: 'connected', providerEmail: 'bot@example.com' },
+                ],
+            },
+            groupOptionsByServiceId: {
+                anthropic: [{ groupId: 'pool', label: 'Work pool', status: 'ready', activeProfileId: 'work' }],
+            },
+            bindingsByServiceId: { anthropic: { source: 'connected', selection: 'group', groupId: 'pool' } },
+            quotaBadgesByKey: { 'anthropic/work': [{ meterId: 'weekly', text: 'Weekly 18%' }] },
+        });
+        const rows = firstStaticSection(model).options;
+        const byId = new Map(rows.map(row => [row.id, row]));
+        const pool = byId.get(createConnectedServiceGroupOptionId('anthropic', 'pool'));
+        const work = byId.get(createConnectedServiceOptionId('anthropic', 'work'));
+        const native = byId.get(createNativeServiceOptionId('anthropic'));
+        // Identity stays on the left whatever is chosen; the choice never replaces the mark.
+        expect(pool?.icon).toBe('icon:group');
+        expect(work?.icon).toBe('icon:account');
+        expect(native?.icon).toBe('icon:native');
+        // Exactly the chosen row is current; an account keeps its own quota accessory.
+        expect(rows.filter(isSelectedRow).map(row => row.id)).toEqual([pool?.id]);
+        expect(work?.rightAccessory).toBe('badges:Weekly 18%');
+    });
+
+    it('projects one Agent-native browse row across services without authoring credentials', () => {
+        const onBrowse = vi.fn();
+        const setBindingForService = vi.fn();
+        const model = buildModel({
+            supportedServiceIds: ['anthropic', 'anthropic-api-key'],
+            bindingsByServiceId: { anthropic: { source: 'native' }, 'anthropic-api-key': { source: 'native' } },
+            nativeRoute: { agentTargetKey: 'agent:happier.agent.claude/claude', active: true, onBrowse },
+            setBindingForService,
+        });
+        const rows = model.rootStep.sections.flatMap(section => section.kind === 'static' ? section.options : []);
+        const nativeRows = rows.filter(row => row.label === 'connectedServices.authModal.nativeAuthTitle');
+        expect(nativeRows).toHaveLength(1);
+        expect(rows.filter(isSelectedRow)).toEqual(nativeRows);
+        expect(model.selectedOptionId).toBe(nativeRows[0]?.id);
+        nativeRows[0]?.onSelect?.();
+        expect(onBrowse).toHaveBeenCalledOnce();
+        expect(setBindingForService).not.toHaveBeenCalled();
+    });
+
+    it('does not check dormant native credentials while a Provider route is applied', () => {
+        const model = buildModel({
+            supportedServiceIds: ['anthropic', 'anthropic-api-key'],
+            bindingsByServiceId: { anthropic: { source: 'connected', profileId: 'work' }, 'anthropic-api-key': { source: 'native' } },
+            nativeRoute: { agentTargetKey: 'agent:happier.agent.claude/claude', active: false, onBrowse: vi.fn() },
+        });
+        const rows = model.rootStep.sections.flatMap(section => section.kind === 'static' ? section.options : []);
+        expect(rows.filter(isSelectedRow)).toEqual([]);
+        expect(model.selectedOptionId).toBeNull();
+    });
+
+    it('checks the connected native account without checking an unused service fallback', () => {
+        const model = buildModel({
+            supportedServiceIds: ['anthropic', 'anthropic-api-key'],
+            bindingsByServiceId: { anthropic: { source: 'connected', profileId: 'work' }, 'anthropic-api-key': { source: 'native' } },
+            nativeRoute: { agentTargetKey: 'agent:happier.agent.claude/claude', active: true, onBrowse: vi.fn() },
+        });
+        const rows = model.rootStep.sections.flatMap(section => section.kind === 'static' ? section.options : []);
+        expect(rows.filter(isSelectedRow).map(row => row.id)).toEqual([
+            createConnectedServiceOptionId('anthropic', 'work'),
+        ]);
+    });
+
     it('does not check Native for unread inherited bindings while retaining explicit Native recovery', () => {
         const setBindingForService = vi.fn();
         const model = buildModel({ bindingsByServiceId: {}, bindingsKnown: false, setBindingForService });
         expect(model.selectedOptionId).toBeNull();
         const native = firstStaticSection(model).options.find(option => option.id === createNativeServiceOptionId('anthropic'));
-        expect(native?.icon).toBe('unselected-icon');
+        expect(native && isSelectedRow(native)).toBe(false);
         native?.onSelect?.();
         expect(setBindingForService).toHaveBeenCalledWith('anthropic', { source: 'native' });
     });
@@ -114,6 +190,15 @@ describe('buildNewSessionConnectedServicesSelectionListModel', () => {
             resourceId: 'pool-resource',
             deliveryMode: 'brokered',
         });
+        const providerRoute = buildModel({
+            supportedServiceIds: ['service.plugin/mail'], profileOptionsByServiceId: {},
+            bindingsByServiceId: { 'service.plugin/mail': resources[1]!.connectedServiceSelections[0] },
+            teamCredentialResources: resources,
+            nativeRoute: { agentTargetKey: 'agent:acme.agent/reviewer', active: false, onBrowse: vi.fn() },
+        });
+        const providerRouteRows = providerRoute.rootStep.sections.flatMap(section => section.kind === 'static' ? section.options : []);
+        expect(providerRouteRows.filter(option => option.label === 'Brokered pool')).toHaveLength(1);
+        expect(providerRouteRows.filter(isSelectedRow)).toEqual([]);
     });
 
     it('writes the exact recipient-safe Team resource witness selected in New Session', () => {
@@ -461,8 +546,8 @@ describe('buildNewSessionConnectedServicesSelectionListModel', () => {
         );
 
         expect(model.selectedOptionId).toBe(createNativeServiceOptionId('anthropic'));
-        expect(accountOption?.icon).toBe('unselected-icon');
-        expect(nativeOption?.icon).toBe('selected-icon');
+        expect(accountOption && isSelectedRow(accountOption)).toBe(false);
+        expect(nativeOption && isSelectedRow(nativeOption)).toBe(true);
     });
 
     it('keeps local CLI auth as the fallback row for each supported service', () => {
@@ -592,6 +677,7 @@ describe('buildNewSessionConnectedServicesSelectionListModel', () => {
         const accountOption = firstStaticSection(model).options[0];
 
         expect(model.selectedOptionId).toBe(createConnectedServiceOptionId('anthropic', 'work'));
+        expect(accountOption && isSelectedRow(accountOption)).toBe(true);
         expect(accountOption?.rightAccessory).toBe('badges:Weekly 18%');
     });
 

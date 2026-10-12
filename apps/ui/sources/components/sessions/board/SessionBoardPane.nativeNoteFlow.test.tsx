@@ -7,7 +7,6 @@ import {
     readSessionSurfaceNoteTextV1,
     SessionBoardMutationV1Schema,
     SessionSurfaceItemV1Schema,
-    type SessionBoardItemUpsertInputV1,
     type SessionSurfaceItemV1,
 } from '@happier-dev/protocol/sessions/board';
 
@@ -17,6 +16,7 @@ import type { CallerHostedHtmlRuntime } from '@/components/ui/surfaces/hostedHtm
 import {
     projectSessionBoard,
     type SessionBoardSnapshot,
+    type SessionBoardItemUpsertInput,
 } from '@/sync/domains/session/board';
 
 import { SessionBoardContinuityProvider } from './SessionBoardContinuity';
@@ -70,6 +70,7 @@ const EMPTY_SNAPSHOT = projectSessionBoard({
 });
 
 const PLUGIN_RUNTIME = Object.freeze({
+    accountLifetime: null,
     pluginUiProjection: null,
     pluginBrowserProjection: null,
     phase: 'unavailable' as const,
@@ -79,7 +80,7 @@ const PLUGIN_RUNTIME = Object.freeze({
     platform: 'web' as const,
 });
 
-function populatedSnapshot(input: SessionBoardItemUpsertInputV1): SessionBoardSnapshot {
+function populatedSnapshot(input: SessionBoardItemUpsertInput): SessionBoardSnapshot {
     return projectSessionBoard({
         layout: {
             revision: 'layout-revision-1',
@@ -145,11 +146,9 @@ function hostedHtmlRuntime(): CallerHostedHtmlRuntime {
     return {
         serverIdentityId: 'server-identity-1',
         accountId: 'account-1',
+        accountEncryptionMode: 'plain',
         hostOrigin: 'https://app.example.com',
         admittedHostMethods: [],
-        isApproved: () => true,
-        approve: () => undefined,
-        revoke: () => undefined,
         createRequestController: () => ({
             handleRequest: async () => null,
             dispose: () => undefined,
@@ -244,7 +243,7 @@ describe('SessionBoardPane native Note flow', () => {
         expect(mutation.placement?.layoutContent).toMatchObject({ t: 'plain', v: { tabs: [{
             id: 'overview', title: 'Overview', items: [{ itemId: mutation.itemId, width: 'medium' }],
         }] } });
-        const submitted: SessionBoardItemUpsertInputV1 = {
+        const submitted: SessionBoardItemUpsertInput = {
             sessionId: 'session-1', itemId: mutation.itemId, expectedItemRevision: null,
             item: SessionSurfaceItemV1Schema.parse(mutation.itemContent.v),
             placement: { tabId: 'overview', tabTitle: 'Overview', width: 'medium' },

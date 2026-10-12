@@ -1,12 +1,13 @@
 import { ComposerAttachmentDraftV1Schema } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { nullable } from 'zod/mini';
 import type { StrictJsonValue } from '@happier-dev/protocol/drafts/sessionDrafts';
 import { isPermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import {
     projectPredecessorSessionDraftAuthoringFields,
     projectNewSessionDraftSyncedAuthoringFields,
-    projectSyncedSessionAuthoringFields,
+    readSyncedSessionAuthoringFields,
 } from '@/sync/domains/input/drafts/sessionAuthoringDraftProjection';
 import { resolveNewSessionCompatAgentType } from '@/components/sessions/new/modules/resolveNewSessionCompatAgentType';
 import { resolveDraftBackendTarget } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
@@ -30,7 +31,7 @@ import { ZenTaskSourceSchema } from '@/sync/domains/todos/todoStoredContent';
 import { StoredPluginUiNewSessionSeedOriginV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { SessionIdentityAdditionsV1StoredSchema } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { SessionPromptStackV1StoredSchema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
-import { readSessionInstructionsAuthoringDraft } from '@/sync/ops/promptLibrary/sessionInstructions';
+import { readSessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 import { ManagedMachineAcquisitionDraftReadSchema, ManagedMachineSelectionDraftReadSchema } from '@/sync/domains/state/newSessionManagedMachineDraft';
 
 function strictJson(value: unknown): StrictJsonValue {
@@ -71,11 +72,11 @@ export function readNewSessionDraftProjectionFromRepository(input: Readonly<{
     const fields = Object.fromEntries(Object.entries(snapshot.document.target.authoring).map(([fieldId, field]) => (
         [fieldId, field.value]
     )));
-    const authoring = projectSyncedSessionAuthoringFields(fields);
+    const authoring = readSyncedSessionAuthoringFields(fields);
     const predecessorAuthoring = projectPredecessorSessionDraftAuthoringFields(fields, snapshot.updatedAt);
     const attachments = Array.isArray(snapshot.document.composer.attachments.value)
         ? snapshot.document.composer.attachments.value.flatMap((value) => {
-            const parsed = ComposerAttachmentDraftV1Schema.safeParse(value);
+            const parsed = createStoredReadSchema(ComposerAttachmentDraftV1Schema).safeParse(value);
             return parsed.success ? [parsed.data] : [];
         })
         : [];
@@ -98,7 +99,7 @@ export function readNewSessionDraftProjectionFromRepository(input: Readonly<{
     const initialSessionFacts = SessionIdentityAdditionsV1StoredSchema.safeParse(localState?.initialSessionFacts);
     const promptStack = SessionPromptStackV1StoredSchema.safeParse(localState?.promptStack);
     const instructionsDraft = readSessionInstructionsAuthoringDraft(localState?.instructionsDraft);
-    const zenTaskSource = ZenTaskSourceSchema.safeParse(localState?.zenTaskSource);
+    const zenTaskSource = createStoredReadSchema(ZenTaskSourceSchema).safeParse(localState?.zenTaskSource);
     const authoringOrigin = StoredPluginUiNewSessionSeedOriginV1Schema.safeParse(localState?.authoringOrigin);
     const managedMachineSelection = nullable(ManagedMachineSelectionDraftReadSchema).safeParse(localState?.managedMachineSelection);
     const managedMachineAcquisition = nullable(ManagedMachineAcquisitionDraftReadSchema).safeParse(localState?.managedMachineAcquisition);
@@ -172,7 +173,7 @@ export function readNewSessionDraftProjectionFromRepository(input: Readonly<{
             : {}),
         permissionMode: isPermissionMode(authoring.permissionMode) ? authoring.permissionMode : 'default',
         ...(modelSelection !== undefined ? { modelSelection } : {}),
-        ...(authoring.mcpSelection !== undefined ? { mcpSelection: authoring.mcpSelection } : {}),
+        ...(authoring.capabilitySelection !== undefined ? { capabilitySelection: authoring.capabilitySelection } : {}),
         ...(authoring.runtimeDescriptorV1 !== undefined
             ? { runtimeDescriptorV1: authoring.runtimeDescriptorV1 }
             : {}),

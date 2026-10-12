@@ -17,6 +17,7 @@ function build(params: Readonly<{
         automationDraft: params.draft,
         automationFeatureEnabled: params.supported ?? true,
         selectedMachineId: 'machine-1',
+        scope: { serverId: 'authoring-home', accountId: 'authoring-account' },
         selectedMachine: {
             id: 'machine-1',
             active: params.machineActive ?? true,

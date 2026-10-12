@@ -7,6 +7,10 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import type {
     ServerScopedMachine,
     ServerScopedMachineGroup,
@@ -50,13 +54,14 @@ const emptyTextStyle = {
     paddingVertical: 8,
 };
 
-function resolveGroupedMachineAvailability(machine: ServerScopedMachinePresentation): Readonly<{
+function resolveGroupedMachineAvailability(machine: ServerScopedMachinePresentation, scope: MachineReachabilityScope | null | undefined): Readonly<{
     detail: string;
     selectable: boolean;
 }> {
     const readiness = resolveMachineSpawnReadiness({
         machine,
         selectedMachineId: machine.id,
+        scope,
     });
 
     if (readiness.status === 'ready') {
@@ -80,6 +85,8 @@ export function ServerScopedMachineSelector<
     TMachine extends ServerScopedMachinePresentation = ServerScopedMachine,
 >(props: ServerScopedMachineSelectorProps<TMachine>) {
     const { theme } = useUnistyles();
+    useMachineReachabilityRevision();
+    const bindings = useServerCredentialAccountScopeBindings(props.groups.map(group => group.serverId));
     const optionTestIdPrefix = props.testIdPrefix ? `${props.testIdPrefix}-option` : undefined;
     const readinessTestIdPrefix = props.testIdPrefix ? `${props.testIdPrefix}-readiness` : undefined;
 
@@ -118,13 +125,14 @@ export function ServerScopedMachineSelector<
                                     ?? (props.selectedMachineId === machine.id
                                         && props.selectedServerId === group.serverId);
                                 const availability = props.resolveMachineAvailability?.(machine)
-                                    ?? resolveGroupedMachineAvailability(machine);
+                                    ?? resolveGroupedMachineAvailability(machine, bindings.get(resolveServerProfileScopeIdForIdentifier(group.serverId))?.isCurrent() ? bindings.get(resolveServerProfileScopeIdForIdentifier(group.serverId))?.scope : null);
                                 const presentation = props.resolveMachinePresentation?.(machine);
                                 return (
                                     <Item
                                         key={`${group.serverId}::${machineKey}`}
                                         testID={optionTestIdPrefix ? `${optionTestIdPrefix}:${machineKey}` : undefined}
                                         title={presentation?.title ?? machineNames.get(machine.id) ?? getMachineDisplayName(machine)}
+                                        titleEllipsizeMode="middle"
                                         subtitle={presentation?.subtitle ?? machine.metadata?.host ?? undefined}
                                         icon={<Icon name="desktop" size={20} color={theme.colors.text.secondary} />}
                                         selected={isSelected}

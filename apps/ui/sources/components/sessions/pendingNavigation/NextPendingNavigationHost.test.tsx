@@ -114,4 +114,34 @@ describe('mounted app-shell Next navigation', () => {
         await expect(invokeNextPendingRequest()).resolves.toEqual({ status: 'none' });
         expect(navigation.routes).toHaveLength(0);
     });
+
+    it('says once, quietly, that nothing waits when the key finds no request (lab fnext ST), and stays silent for Actions', async () => {
+        const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
+        const { t } = await import('@/text');
+        retirePresentationNotice();
+        const serverId = await homes.addHome({ name: 'Quiet Home', serverUrl: 'https://quiet-next-home.test', accountId: 'next-owner' });
+        getStorage().setState({
+            isDataReady: true,
+            profileScope: { serverId, accountId: 'next-owner' },
+            sessions: {}, sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {},
+        });
+        let invokeCommand: ReturnType<typeof useKeyboardCommand> = () => false;
+        function KeyboardProbe() {
+            invokeCommand = useKeyboardCommand();
+            return null;
+        }
+        await renderScreen(<KeyboardShortcutProvider handlers={{}}><NextPendingNavigationHost /><KeyboardProbe /></KeyboardShortcutProvider>);
+        // An Agent or MCP caller gets the typed `none`; the person's screen is not interrupted.
+        await expect(invokeNextPendingRequest()).resolves.toEqual({ status: 'none' });
+        expect(readPresentationNotice()).toBeNull();
+        await act(async () => {
+            expect(invokeCommand('session.pending.next')).toBe(true);
+            await waitForHomeGovernance(() => expect(readPresentationNotice()).toEqual(expect.objectContaining({
+                severity: 'info',
+                message: t('pendingNavigation.nothingWaiting'),
+            })));
+        });
+        expect(navigation.routes).toHaveLength(0);
+        retirePresentationNotice();
+    });
 });

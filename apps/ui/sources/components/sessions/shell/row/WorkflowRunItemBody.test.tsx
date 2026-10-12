@@ -6,6 +6,7 @@ import type { WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workf
 
 import { createDeferred, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { storage } from '@/sync/domains/state/storage';
 import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -51,6 +52,60 @@ async function initializeRun() {
 }
 
 describe('opened habit History result', () => {
+    it('uses offline Stop presentation until the exact Machine reconnects', async () => {
+        const { home } = await initializeRun();
+        const machine = createMachineFixture({ id: 'machine-1', active: false, activeAt: Date.now() - 120_000,
+            metadata: { ...createMachineFixture().metadata!, displayName: 'Build box' } });
+        storage.setState({ machines: { [machine.id]: machine } });
+        const stopping = createWorkflowRunSummaryFixture({ id: 'habit-run', revision: 4,
+            state: 'cancelled', workflowCustodyState: 'pending', attentionRequired: true });
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(stopping)]);
+        const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id} presentation="work" />);
+        expect(screen.getTextContent()).toContain('workflows.run.stopWhenMachineReconnects');
+        expect(screen.getTextContent()).not.toContain('workflows.run.stopping');
+        await act(async () => storage.setState({ machines: { [machine.id]: { ...machine, active: true, activeAt: Date.now() } } }));
+        expect(screen.getTextContent()).toContain('workflows.run.stopping');
+        expect(screen.getTextContent()).not.toContain('workflows.run.stopWhenMachineReconnects');
+    });
+    it('shows pending physical Stop custody and then the settled outcome despite retained attention membership', async () => {
+        const { home } = await initializeRun();
+        const stopping = createWorkflowRunSummaryFixture({ id: 'habit-run', revision: 4,
+            state: 'cancelled', workflowCustodyState: 'pending', attentionRequired: true });
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(stopping)]);
+        const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id} presentation="work" />);
+        expect(screen.getTextContent()).toContain('workflows.run.stopping');
+        expect(screen.getTextContent()).not.toContain('workflows.runState.cancelled');
+        await act(async () => storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary({ ...stopping,
+            revision: 5, workflowCustodyState: 'settled' })]));
+        expect(screen.getTextContent()).toContain('workflows.runState.cancelled');
+        expect(screen.getTextContent()).not.toContain('workflows.run.stopping');
+    });
+    it('leads a Writes-here Run with its destination step, then aggregate progress, and never repeats the Run\'s word', async () => {
+        // Orchestrator ruling 2026-10-11 (DESIGN-SESSION #16): step first, aggregate kept, no start time;
+        // a step observation is said only when it adds to the Run's own trailing status word.
+        const { home } = await initializeRun();
+        const { describeWorkflowRunDestinationProgress } = await import('@/components/workflows/presentation/workflowRunProgress');
+        const { describeWorkflowInvocationLifecycle } = await import('@/components/workflows/presentation/workflowLifecyclePresentation');
+        const progress = { completed: 1, total: 3, destinations: [
+            { sourceKey: '$root', blockId: 'notes', sessionIds: ['writes-here'], ordinal: 2, name: 'Draft the notes',
+                observation: { recordId: 'notes-record', sequence: '1', attempt: '0', contentRevision: '1', lifecycle: 'running' as const } },
+        ] };
+        const running = describeWorkflowInvocationLifecycle('running').label;
+        expect(describeWorkflowRunDestinationProgress(progress, 'writes-here', { saidStatus: running }))
+            .toEqual(['sessionWork.scheduled.step(ordinal=2,title=Draft the notes)']);
+        expect(describeWorkflowRunDestinationProgress(progress, 'writes-here', { saidStatus: 'another word' })[0])
+            .toContain('workflows.list.observedProgress');
+        const summary: WorkflowRunSummaryV1 = { ...createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'running', revision: 4 }),
+            stepProgress: progress };
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(summary, null)]);
+        const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id}
+            presentation="work" destinationSessionId="writes-here" />);
+        const text = screen.getTextContent();
+        expect(text.indexOf('sessionWork.scheduled.step')).toBeGreaterThan(-1);
+        expect(text.indexOf('sessionWork.scheduled.step')).toBeLessThan(text.indexOf('workflows.list.stepsProgress'));
+        // The fixture Run started on Sep 8; a Writes-here row says what writes here, not when the Run began.
+        expect(text).not.toMatch(/Sep(?:tember)? 8/);
+    });
     it('keeps each destination writer and its observed progress beside aggregate Run progress', async () => {
         const { home } = await initializeRun();
         const summary: WorkflowRunSummaryV1 = { ...createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'running', revision: 4 }),
@@ -93,7 +148,7 @@ describe('opened habit History result', () => {
         expect(second.getTextContent()).toContain('workflows.list.observedProgress');
         for (const screen of [first, second]) {
             expect(screen.getTextContent()).toContain('workflows.list.stepsProgress');
-            expect(screen.findHostByTestId('workflow-run-row:habit-run').props.accessibilityLabel)
+            expect(screen.findHostByTestId('workflow-run-row:habit-run')?.props.accessibilityLabel)
                 .toContain('sessionWork.scheduled.step');
         }
         expect(execute.mock.calls.map(call => call[0])).toEqual(['workflow.run.list', 'workflow.run.list']);
@@ -101,13 +156,13 @@ describe('opened habit History result', () => {
     it('keeps the stopped lifecycle word in visual and spoken attention rows', async () => {
         const { home } = await initializeRun();
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(createWorkflowRunSummaryFixture({
-            id: 'habit-run', state: 'cancelled', revision: 4, attentionRequired: true, workflowCustodyState: 'pending',
+            id: 'habit-run', state: 'cancelled', revision: 4, attentionRequired: true, workflowCustodyState: 'settled',
         }), null)]);
         for (const presentation of ['list', 'work'] as const) {
             const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run"
                 serverId={home.id} presentation={presentation} />);
             expect(screen.getTextContent()).toContain('workflows.runState.cancelled');
-            expect(screen.findHostByTestId('workflow-run-row:habit-run').props.accessibilityLabel)
+            expect(screen.findHostByTestId('workflow-run-row:habit-run')?.props.accessibilityLabel)
                 .toContain('workflows.runState.cancelled');
             expect(screen.getTextContent()).not.toContain('workStatus.buckets.needs_you');
         }

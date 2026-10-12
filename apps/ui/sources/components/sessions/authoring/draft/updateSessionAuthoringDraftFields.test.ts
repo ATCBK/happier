@@ -24,7 +24,7 @@ const BASE_DRAFT: SessionAuthoringDraft = {
     permissionModeUpdatedAt: 123,
     modelId: null,
     modelUpdatedAt: null,
-    mcpSelection: null,
+    capabilitySelection: null,
     connectedServices: null,
     terminal: { mode: 'integrated' },
     windowsRemoteSessionLaunchMode: null,

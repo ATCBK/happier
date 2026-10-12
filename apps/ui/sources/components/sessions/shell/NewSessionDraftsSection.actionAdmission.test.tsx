@@ -16,6 +16,7 @@ import { NewSessionDraftsSection, NewSessionDraftsSectionView } from './NewSessi
 import 'fake-indexeddb/auto';
 import { getSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { Modal } from '@/modal';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -81,16 +82,20 @@ it('retains the draft without issuing a tombstone when the canonical delete Acti
     } finally { standardCleanup(); await account.dispose(); }
 });
 
-it('discards the saved draft after confirmation when its delete Action is enabled', async () => {
-    const account = await createSecretSettingsTestHarness({ settings: settingsParse({}) });
-    const draftId = '00000000-0000-4000-8000-000000000093';
+it('discards through the waived delete Action without a separate local confirmation', async () => {
+    const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+        actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'session.draft.delete': ['ui'] } }),
+    }) });
+    const draftId = '00000000-0000-4000-8000-000000000094';
     const address = { kind: 'newSession' as const, draftId };
-    writeNewSessionDraft({ scope: account.scope, draftId, materializationIntent: 'userEdit', patch: { text: 'Discard this draft' } });
+    writeNewSessionDraft({ scope: account.scope, draftId, materializationIntent: 'userEdit', patch: { text: 'Discard waived draft' } });
+    const confirm = vi.spyOn(Modal, 'confirm');
     try {
         const screen = await renderScreen(<FocusReturnProvider><NewSessionDraftsSection /></FocusReturnProvider>);
         let deleted = false;
         await act(async () => { deleted = await screen.findByType(NewSessionDraftsSectionView).props.onDelete(draftId, account.scope); });
         expect(deleted).toBe(true);
         expect(getSessionDraftSnapshot(account.scope, address)).toBeNull();
-    } finally { standardCleanup(); await account.dispose(); }
+        expect(confirm).not.toHaveBeenCalled();
+    } finally { confirm.mockRestore(); standardCleanup(); await account.dispose(); }
 });

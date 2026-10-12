@@ -14,7 +14,9 @@ import { useConnectedServiceQuotaSummaries } from '@/hooks/server/connectedServi
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
 import { presentConnectedAccountNames } from '@/sync/domains/connectedServices/qualifiedConnectedAccountTargetPresentation';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { SESSION_PROVIDER_LIMITS_SETTINGS } from '@/components/settings/session/sessionProviderLimitsSettings';
 import { t } from '@/text';
 import {
   buildSessionModelRoutingHint,
@@ -41,9 +43,10 @@ export function SessionModelRoutingHint(
     testID?: string;
   }>,
 ) {
-  const [enabled, setEnabled] = useSettingMutable('usageRoutingHintsEnabled');
+  const enabled = useSetting('usageRoutingHintsEnabled');
+  const { setSetting } = useSettingActionFeedback();
   if (enabled === false) return null;
-  return <RoutingHintBody {...props} onHide={() => setEnabled(false)} />;
+  return <RoutingHintBody {...props} onHide={() => { void setSetting(SESSION_PROVIDER_LIMITS_SETTINGS.settings.routingHints, false); }} />;
 }
 
 function RoutingHintBody(

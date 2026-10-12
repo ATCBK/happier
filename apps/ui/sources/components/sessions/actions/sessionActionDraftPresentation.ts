@@ -7,6 +7,7 @@ import type { SessionActionDraft } from '@/sync/domains/sessionActions/sessionAc
 import { resolveActionFieldPresentationForInput } from './ActionInputFields';
 import type { ResolveSessionActionFieldOptions } from './sessionActionFieldOptions';
 import { t } from '@/text';
+import { localizeBuiltinInputHints } from '@/text/builtinInputPrompts';
 
 /** A painted text box: exactly the string it displays, and how many lines it can paint. */
 export type SessionActionDraftTextBoxPaint = Readonly<{
@@ -215,7 +216,8 @@ function resolveVisibleForm(
     // throw would take the whole transcript down, so an unresolvable spec degrades to "no form".
     try {
         const spec = getActionSpec(actionId as never) as ActionSpec;
-        return { spec, fields: resolveEffectiveActionInputFields(spec as never, { sessionId, ...input }) };
+        const inputHints = spec.inputHints === undefined ? undefined : localizeBuiltinInputHints(spec.inputHints);
+        return { spec, fields: resolveEffectiveActionInputFields({ inputHints }, { sessionId, ...input }) };
     } catch {
         return null;
     }

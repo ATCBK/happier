@@ -968,6 +968,8 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                 setSearchTarget(target);
             }}
             compact
+            // Each choice hugs its word: an even split clipped "Conversations" inside its segment.
+            segmentSizing="content"
             targetSize="platform"
         />
     );

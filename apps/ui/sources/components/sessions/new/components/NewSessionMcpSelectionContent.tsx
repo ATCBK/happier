@@ -5,9 +5,8 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type {
     DaemonMcpServersPreviewResponse,
     McpServerCatalogEntryV1,
-    SessionMcpSelectionV1,
 } from '@happier-dev/protocol';
-import { resolveManagedSessionMcpSelectionV1 } from '@happier-dev/protocol/mcp/servers/resolveManagedSessionMcpSelectionV1';
+import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 import { isBundledAgentId } from '@/agents/catalog/catalog';
 import { resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
@@ -21,7 +20,7 @@ import {
 import {
     setManagedSessionMcpServersEnabled,
     toggleManagedSessionMcpSelection,
-} from '@/components/sessions/new/modules/sessionMcpSelectionState';
+} from '@/sync/domains/capabilities/session/sessionCapabilitySelectionState';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -49,11 +48,11 @@ export type NewSessionMcpSelectionContentProps = Readonly<{
     agentType: string;
     hasContext: boolean;
     preview: PreviewSuccess | null;
-    selection: SessionMcpSelectionV1;
+    selection: SessionCapabilitySelectionV1;
     loading: boolean;
     error: string | null;
     previewUnsupported?: boolean;
-    onSelectionChange: (selection: SessionMcpSelectionV1) => void;
+    onSelectionChange: (selection: SessionCapabilitySelectionV1) => void;
     onRefresh: () => void;
     onOpenSettings: () => void;
     maxHeight: number;
@@ -206,22 +205,8 @@ export function NewSessionMcpSelectionContent(props: NewSessionMcpSelectionConte
         props.onSelectionChange(setManagedSessionMcpServersEnabled(props.selection, value));
     }, [props.onSelectionChange, props.selection]);
 
-    const managedResolution = React.useMemo(() => {
-        if (catalogSnapshot.status !== 'ready' || catalogSnapshot.authority !== 'active' || catalogSnapshot.stale) return null;
-        if (!props.portableOnly && (!props.machineId || !props.directory.trim())) return null;
-        try {
-            return resolveManagedSessionMcpSelectionV1(mcpServersSettings, {
-                machineId: props.portableOnly ? 'ephemeral-runner-unmaterialized' : props.machineId!,
-                directory: props.portableOnly ? '/' : props.directory.trim(),
-                selection: props.selection,
-            });
-        } catch {
-            return null;
-        }
-    }, [catalogSnapshot.status, catalogSnapshot.authority, catalogSnapshot.stale, mcpServersSettings, props.directory, props.machineId, props.portableOnly, props.selection]);
-
     const renderManagedServerRow = React.useCallback((server: McpServerCatalogEntryV1) => {
-        const item = managedResolution?.itemsByName[server.name] ?? null;
+        const item = preview?.managed.find(entry => entry.serverId === server.id) ?? null;
 
         if (!item) {
             return (
@@ -235,14 +220,8 @@ export function NewSessionMcpSelectionContent(props: NewSessionMcpSelectionConte
             );
         }
 
-        const scopeKind = item.bindingTargetKind === 'allMachines'
-            ? 'allMachines'
-            : item.bindingTargetKind === 'workspace'
-                ? 'workspace'
-                : 'machine';
-
         const subtitle = [
-            resolvePreviewScopeLabel(scopeKind),
+            resolvePreviewScopeLabel(item.scopeKind),
             resolveManagedServerAuthMode(server),
             describeManagedReason(item.reasonCode),
         ].filter(Boolean).join(' · ');
@@ -283,7 +262,7 @@ export function NewSessionMcpSelectionContent(props: NewSessionMcpSelectionConte
                 )}
             />
         );
-    }, [managedResolution?.itemsByName, props.onSelectionChange, props.selection]);
+    }, [preview?.itemsByName, props.onSelectionChange, props.selection]);
 
     return (
         <View style={[styles.container, resolvePopoverHeightStyle(props.maxHeight)]}>
@@ -331,14 +310,14 @@ export function NewSessionMcpSelectionContent(props: NewSessionMcpSelectionConte
                                     <Item
                                         testID="new-session.mcp.managed-enabled"
                                         title={t('newSession.mcpManagedToggleTitle')}
-                                        subtitle={props.selection.managedServersEnabled
+                                        subtitle={(props.selection.mcp?.managedServersEnabled ?? true)
                                             ? t('settings.mcpServersStatusActive')
                                             : t('settings.mcpServersStatusUnavailable')}
                                         showChevron={false}
-                                        onPress={() => handleToggleManagedEnabled(!props.selection.managedServersEnabled)}
+                                        onPress={() => handleToggleManagedEnabled(!(props.selection.mcp?.managedServersEnabled ?? true))}
                                         rightElement={(
                                             <Switch
-                                                value={props.selection.managedServersEnabled}
+                                                value={(props.selection.mcp?.managedServersEnabled ?? true)}
                                                 onValueChange={handleToggleManagedEnabled}
                                             />
                                         )}

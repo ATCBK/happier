@@ -3,7 +3,9 @@ import type { RenderHookOptions } from '@/dev/testkit/hooks/renderHook';
 import { storage } from '@/sync/domains/state/storageStore';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import {
     CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS,
@@ -99,6 +101,7 @@ const authSwitchConnectedAccountProjection = {
             modes: [{
                 id: 'oauth',
                 kind: 'oauthAuthorizationCode',
+                callbackUrl: 'http://127.0.0.1:4000/auth/callback',
                 scopes: ['openid', 'profile', 'email', 'offline_access'],
                 pkce: 'required',
                 outcomeReconciliation: 'none',
@@ -416,11 +419,67 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         );
     });
 
+    it('opens a fresh editable session under the selected account without retrying the unavailable resume', async () => {
+        const connection = await restoreServerAccountForTest({ serverUrl: 'http://auth-switch-fresh.example.test', accountId: 'account-a' });
+        seedCodexProfile();
+        storage.setState({ profileScope: { serverId: connection.home.id, accountId: 'account-a' },
+            profile: AccountProfileSchema.parse({ ...profileDefaults, id: 'account-a', ...profileState.current }) });
+        const session = createSessionFixture({ id: 'fresh-source', metadata: {
+            path: '/workspace/checkout-service', host: 'test', machineId: 'machine-1',
+            flavor: 'codex',
+            backendTarget: { kind: 'backend', backendId: 'codex' },
+            connectedServices: { v: 2, bindingsByServiceId: { [CODEX_SERVICE_KEY]: { source: 'native' } } },
+        } });
+        setSessionConnectedServiceAuthBindingMock.mockResolvedValue({ ok: false,
+            errorCode: 'provider_session_state_unavailable_for_resume', serviceId: CODEX_SERVICE_KEY,
+            diagnostics: { uxDiagnostic: { code: CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.providerSessionStateUnavailableForResume,
+                failurePhase: 'continuity', source: 'manual_auth_switch', serviceId: CODEX_SERVICE_KEY,
+                agentId: 'codex', retryable: false,
+                suggestedActions: [CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.startFreshUnderSelectedAccount],
+            } },
+        });
+        try {
+            const { useSessionConnectedServicesAuthSwitch } = await import('./useSessionConnectedServicesAuthSwitch');
+            const hook = await renderBaseHook(() => useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
+                sessionId: session.id, sessionConfiguration: session, agentId: 'codex', machineId: 'machine-1',
+                serverId: connection.home.id, connectedAccounts: CODEX_CONNECTED_ACCOUNTS,
+                sessionMetadata: session.metadata, settings: { connectedServicesDefaultProfileByServiceId: {} },
+                switchingDisabledReason: null,
+            }));
+            await act(async () => { await Promise.resolve(); });
+            await act(async () => {
+                renderChipPopover(hook).setBindingForService(CODEX_SERVICE_KEY, { source: 'connected', selection: 'profile', profileId: 'happier' });
+                await Promise.resolve();
+            });
+            const buttons = modalAlertMock.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+            await act(async () => {
+                buttons.find(button => button.text === 'newSession.connectedServiceSwitchUnavailable.startFreshAction')?.onPress?.();
+                await Promise.resolve();
+            });
+            expect(setSessionConnectedServiceAuthBindingMock).toHaveBeenCalledTimes(1);
+            expect(modalConfirmMock).not.toHaveBeenCalled();
+            const route = routerPushMock.mock.calls.at(-1)?.[0];
+            expect(route).toMatchObject({ pathname: '/new', params: { draftId: expect.any(String), spawnServerId: connection.home.id } });
+            const draft = readNewSessionDraftFromRepository({ scope: { serverId: connection.home.id, accountId: 'account-a' }, draftId: route.params.draftId });
+            expect(draft).toMatchObject({ selectedMachineId: 'machine-1', selectedPath: '/workspace/checkout-service',
+                backendNewSessionOptionStateByTargetKey: { 'agent:happier.agent.codex/codex': { connectedServices: {
+                    v: 2, bindingsByServiceId: { [CODEX_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'happier' } },
+                } } },
+            });
+            expect(draft?.resumeSessionId).toBeFalsy();
+            expect(session.metadata?.connectedServices).toEqual({ v: 2, bindingsByServiceId: { [CODEX_SERVICE_KEY]: { source: 'native' } } });
+            expect(hook.getCurrent().actionableState).toBeNull();
+            await hook.unmount();
+        } finally { await connection.dispose(); }
+    });
+
     it.each(['work', 'missing-profile', null])('previews the armed qualified Agent purpose default without offering source auth changes (%s)', async (profileId) => {
         const { useSessionConnectedServicesAuthSwitch } = await import('./useSessionConnectedServicesAuthSwitch');
         const consumer = { pluginId: 'happier.agent.claude', localId: 'claude' };
         const service = { pluginId: 'happier.agent.claude', localId: 'anthropic' };
         const hook = await renderHook(() => useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-1', agentId: 'happier.agent.codex/codex', machineId: 'machine-1',
             connectedAccounts: CODEX_CONNECTED_ACCOUNTS,
             sessionMetadata: { connectedServices: { v: 2, bindingsByServiceId: {
@@ -443,7 +502,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         }, true); });
         const chip = hook.getCurrent().connectedServicesAuthChip;
         expect(chip?.collapsedContentPopover?.label).toBe(profileId === null
-            ? 'Native' : `Anthropic API key: ${profileId === 'work' ? 'Work' : profileId}`);
+            ? 'Native' : `Anthropic API key · ${profileId === 'work' ? 'Work' : profileId}`);
         const renderContent = chip?.collapsedContentPopover?.renderContent;
         if (typeof renderContent !== 'function') throw new Error('Expected target auth content renderer');
         const content = renderContent({ requestClose: vi.fn(), maxHeight: 320 }) as {
@@ -467,6 +526,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         };
         const { useSessionConnectedServicesAuthSwitch } = await import('./useSessionConnectedServicesAuthSwitch');
         const hook = await renderHook(() => useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-1', agentId: 'codex', machineId: 'machine-1', connectedAccounts: CODEX_CONNECTED_ACCOUNTS,
             armedContinuationAgent: { agentId: 'claude', agentIdentity: consumer, connectedAccounts: [{ purpose: 'primary', service }] },
             teamCredentialResources: availability === 'missing' ? [] : [resource],
@@ -499,6 +559,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'claude',
                 machineId: null,
@@ -547,6 +608,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'gemini',
                 machineId: 'machine-1',
@@ -606,6 +668,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         seedNovelProfile();
 
         const hook = await renderHook(() => useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-novel',
             agentId: 'acme.review/reviewer',
             machineId: 'machine-1',
@@ -650,7 +713,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         // Public presentation: the applied machine descriptor title, not a
         // borrowed Codex/Claude brand name, and not a raw service id.
         expect(hook.getCurrent().connectedServicesAuthChip?.collapsedContentPopover?.label)
-            .toBe('Acme Reviewer Auth: Reviewer');
+            .toBe('Acme Reviewer Auth · Reviewer');
 
         // The canonical switch RPC receives the exact qualified key.
         const rpcParams = setSessionConnectedServiceAuthBindingMock.mock.calls[0]?.[0];
@@ -697,6 +760,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(
             (props: { sessionActive: boolean; sessionMetadata: unknown }) => useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-novel',
                 agentId: 'acme.review/reviewer',
                 machineId: 'machine-1',
@@ -731,7 +795,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         await hook.rerender({ sessionActive: true, sessionMetadata: connectedMetadata });
         expect(hook.getCurrent().statusBadges).toEqual([]);
         expect(hook.getCurrent().connectedServicesAuthChip?.collapsedContentPopover?.label)
-            .toBe('Acme Reviewer Auth: Reviewer');
+            .toBe('Acme Reviewer Auth · Reviewer');
     });
 
     it('displays bundled legacy persisted bindings through the compatibility adapter while new writes stay qualified', async () => {
@@ -740,6 +804,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-legacy',
                 agentId: 'claude',
                 machineId: 'machine-1',
@@ -766,7 +831,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         // Display: the legacy binding is shown through the compatibility adapter
         // under the canonical qualified identity.
         expect(hook.getCurrent().connectedServicesAuthChip?.collapsedContentPopover?.label)
-            .toBe('Anthropic API key: Work');
+            .toBe('Anthropic API key · Work');
 
         // New writes are qualified: switching away emits ONLY canonical keys.
         const props = renderChipPopover(hook);
@@ -811,6 +876,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         };
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -871,6 +937,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -927,6 +994,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-novel',
                 agentId: 'acme.review/reviewer',
                 machineId: 'machine-1',
@@ -973,6 +1041,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1042,6 +1111,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1103,6 +1173,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1163,6 +1234,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1243,6 +1315,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1317,6 +1390,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1374,6 +1448,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1459,6 +1534,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1566,6 +1642,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1623,6 +1700,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1679,6 +1757,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         seedCodexProfile();
 
         const hook = await renderHook(() => useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-passive-provider',
             agentId: 'codex',
             machineId: 'machine-1',
@@ -1732,14 +1811,13 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             text: string;
             onPress?: () => void;
         }>;
+        expect(alertButtons.some(button => button.text === 'newSession.connectedServiceSwitchUnavailable.startFreshAction')).toBe(false);
         await act(async () => {
             alertButtons.find((button) => button.text === 'newSession.connectedServiceSwitchUnavailable.startFreshAction')?.onPress?.();
             await Promise.resolve();
         });
-        expect(setSessionConnectedServiceAuthBindingMock).toHaveBeenCalledWith(expect.objectContaining({
-            sessionId: 'session-passive-provider',
-            rematerializeServiceId: CODEX_SERVICE_KEY,
-        }));
+        expect(setSessionConnectedServiceAuthBindingMock).not.toHaveBeenCalled();
+        expect(modalConfirmMock).not.toHaveBeenCalled();
     });
 
     it('surfaces provider session-state resume gaps with executable diagnostic actions', async () => {
@@ -1775,7 +1853,9 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
+                sessionConfiguration: createSessionFixture({ metadataLayoutVersion: 1, metadata: null, ownerMetadataView: null }),
                 agentId: 'codex',
                 machineId: 'machine-1',
                 serverId: 'server-1',
@@ -1835,10 +1915,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         }>;
         expect(alertButtons).toEqual([
             expect.objectContaining({
-                text: 'newSession.connectedServiceSwitchUnavailable.startFreshAction',
-                onPress: expect.any(Function),
-            }),
-            expect.objectContaining({
                 text: 'common.continue',
                 onPress: expect.any(Function),
             }),
@@ -1892,10 +1968,8 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             alertButtons.find((button) => button.text === 'newSession.connectedServiceSwitchUnavailable.startFreshAction')?.onPress?.();
             await Promise.resolve();
         });
-        expect(setSessionConnectedServiceAuthBindingMock).toHaveBeenCalledTimes(2);
-        expect(setSessionConnectedServiceAuthBindingMock.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
-            rematerializeServiceId: CODEX_SERVICE_KEY,
-        }));
+        expect(setSessionConnectedServiceAuthBindingMock).toHaveBeenCalledTimes(1);
+        expect(modalConfirmMock).not.toHaveBeenCalled();
     });
 
     it('surfaces switch verification diagnostics through the shared presentation instead of generic failure copy', async () => {
@@ -1929,6 +2003,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -1967,7 +2042,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         }>;
         expect(alertButtons).toEqual([
             expect.objectContaining({ text: 'common.retry', onPress: expect.any(Function) }),
-            expect.objectContaining({ text: 'newSession.connectedServiceSwitchUnavailable.startFreshAction', onPress: expect.any(Function) }),
             expect.objectContaining({ text: 'common.continue', onPress: expect.any(Function) }),
             expect.objectContaining({ text: 'connectedServices.title', onPress: expect.any(Function) }),
             expect.objectContaining({ text: 'connectedServices.detail.actions.reconnect', onPress: expect.any(Function) }),
@@ -1991,10 +2065,8 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             alertButtons.find((button) => button.text === 'newSession.connectedServiceSwitchUnavailable.startFreshAction')?.onPress?.();
             await Promise.resolve();
         });
-        expect(setSessionConnectedServiceAuthBindingMock).toHaveBeenCalledTimes(2);
-        expect(setSessionConnectedServiceAuthBindingMock.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
-            rematerializeServiceId: CODEX_SERVICE_KEY,
-        }));
+        expect(setSessionConnectedServiceAuthBindingMock).toHaveBeenCalledTimes(1);
+        expect(modalConfirmMock).not.toHaveBeenCalled();
         expect(modalAlertMock).not.toHaveBeenCalledWith(
             'common.error',
             'connectedServices.authSwitch.switchFailed',
@@ -2026,6 +2098,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -2072,6 +2145,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'codex',
                 machineId: 'machine-1',
@@ -2109,7 +2183,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         );
 
         expect(hook.getCurrent().connectedServicesAuthChip?.collapsedContentPopover?.label)
-            .toBe('Codex: Happier');
+            .toBe('Codex · Happier');
     });
 
     it('labels native session auth with the compact native label', async () => {
@@ -2117,6 +2191,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'claude',
                 machineId: 'machine-1',
@@ -2144,6 +2219,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'claude',
                 machineId: 'machine-1',
@@ -2183,6 +2259,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'claude',
                 machineId: 'machine-1',
@@ -2262,6 +2339,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         };
         const { useSessionConnectedServicesAuthSwitch } = await import('./useSessionConnectedServicesAuthSwitch');
         const hook = await renderHook(() => useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-1',
             agentId: 'claude',
             // A bundled Agent keeps its unqualified released routing id, so its
@@ -2346,10 +2424,6 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
     it('closes the auth popover before starting an existing-session auth switch', async () => {
         const switchOrder: string[] = [];
-        modalConfirmMock.mockImplementationOnce(async () => {
-            switchOrder.push('confirm');
-            return true;
-        });
         setSessionConnectedServiceAuthBindingMock.mockImplementationOnce(() => {
             switchOrder.push('rpc');
             return Promise.resolve({ ok: true, action: 'restart_requested' });
@@ -2358,6 +2432,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'claude',
                 machineId: 'machine-1',
@@ -2394,14 +2469,14 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
         });
 
         expect(requestClose).toHaveBeenCalledOnce();
-        expect(switchOrder.slice(0, 3)).toEqual(['close', 'confirm', 'rpc']);
+        expect(switchOrder.slice(0, 2)).toEqual(['close', 'rpc']);
     });
 
-    it('does not mutate or call the switch RPC when an active-session switch is cancelled', async () => {
-        modalConfirmMock.mockResolvedValueOnce(false);
+    it('delegates active-session consent and mutation to the Action callback', async () => {
         const { useSessionConnectedServicesAuthSwitch } = await import('./useSessionConnectedServicesAuthSwitch');
 
         const hook = await renderHook(() => useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-1',
             agentId: 'claude',
             machineId: 'machine-1',
@@ -2431,8 +2506,8 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             await Promise.resolve();
         });
 
-        expect(modalConfirmMock).toHaveBeenCalledOnce();
-        expect(setSessionConnectedServiceAuthBindingMock).not.toHaveBeenCalled();
+        expect(modalConfirmMock).not.toHaveBeenCalled();
+        expect(setSessionConnectedServiceAuthBindingMock).toHaveBeenCalledOnce();
     });
 
     it('shows a restarting status badge until the switched session is active with the requested binding', async () => {
@@ -2457,6 +2532,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             },
         };
         const buildHookProps = (props: HookProps) => ({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-1',
             agentId: 'claude',
             machineId: 'machine-1',
@@ -2583,6 +2659,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             },
         };
         const buildHookProps = (props: HookProps) => ({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-1',
             agentId: 'claude',
             machineId: 'machine-1',
@@ -2652,6 +2729,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'claude',
                 machineId: 'machine-1',
@@ -2701,6 +2779,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
         const hook = await renderHook(() =>
             useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'claude',
                 machineId: 'machine-1',
@@ -2759,6 +2838,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
             },
         };
         const buildHookProps = (props: HookProps) => ({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
             sessionId: 'session-1',
             agentId: 'claude',
             machineId: 'machine-1',
@@ -2827,6 +2907,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
 
             const hook = await renderHook(() =>
                 useSessionConnectedServicesAuthSwitch({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                     sessionId: 'session-1',
                     agentId: 'claude',
                     machineId: 'machine-1',
@@ -2910,6 +2991,7 @@ describe('useSessionConnectedServicesAuthSwitch', () => {
                 },
             };
             const buildHookProps = (props: HookProps) => ({
+                applyBinding: setSessionConnectedServiceAuthBindingMock,
                 sessionId: 'session-1',
                 agentId: 'claude',
                 machineId: 'machine-1',

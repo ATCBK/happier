@@ -112,6 +112,7 @@ export function useNewSessionConnectedServicesAgentOptions(params: Readonly<{
         modelSelection: params.modelSelection,
         providerSources: params.providerSources,
         routeSources: params.routeSources,
+        nativeAgentTargetKey: params.selectedBackendTargetKey,
         providerSettings: params.providerSettings,
         providerProjection: params.providerProjection,
         modelRouteTeamSources: params.modelRouteTeamSources,

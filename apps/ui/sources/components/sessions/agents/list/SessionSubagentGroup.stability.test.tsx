@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
 import { createSessionAgentActivityRowForTest, installSessionSubagentCommonModuleMocks } from '@/components/sessions/agents/sessionSubagentTestHelpers';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 
@@ -13,6 +12,8 @@ installSessionSubagentCommonModuleMocks({ reactNative: async () => {
         return React.createElement('View', props, children);
     } });
 } });
+// The real public Work summary imports React Native; install its boundary before loading it.
+const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
 const { SessionSubagentGroup } = await import('./SessionSubagentGroup');
 
 describe('real subagent group stability', () => {

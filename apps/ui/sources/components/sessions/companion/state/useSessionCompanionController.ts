@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { SessionCompanionPresentationItemRefV1Schema } from '@happier-dev/protocol/sessions';
 import type { WidgetInputBindingsV1 } from '@happier-dev/protocol/widgets';
+import type { UiSurfaceNetworkRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
 
 import { useMutateSessionCompanionPreference } from '@/sync/domains/state/storage';
 
@@ -21,6 +22,7 @@ import {
     setSessionCompanionEdge,
     setSessionCompanionItemFrameStyle,
     setSessionCompanionInstanceInputs,
+    setSessionCompanionInstanceNetwork,
     renameSessionCompanionInstance,
     showSessionCompanion,
     type SessionCompanionDensity,
@@ -198,6 +200,7 @@ export type SessionCompanionController = Readonly<{
     moveItem: (item: SessionCompanionItemRefV1, toIndex: number) => SessionCompanionMutationOutcome | null;
     setItemFrameStyle: (item: SessionCompanionItemRefV1, style: SessionCompanionFrameStyle | null) => SessionCompanionMutationOutcome | null;
     setInstanceInputs: (instanceId: string, bindings: WidgetInputBindingsV1) => SessionCompanionMutationOutcome | null;
+    setInstanceNetwork: (instanceId: string, network: UiSurfaceNetworkRequestV1) => SessionCompanionMutationOutcome | null;
     renameInstance: (instanceId: string, displayName: string | null) => SessionCompanionMutationOutcome | null;
     openFullSurface: () => void;
     /**
@@ -315,6 +318,7 @@ export function useSessionCompanionController(input: Readonly<{
             { kind: 'frameStyle', item },
         ),
         setInstanceInputs: (instanceId: string, bindings: WidgetInputBindingsV1) => applyMutation((current) => setSessionCompanionInstanceInputs(current, instanceId, bindings)),
+        setInstanceNetwork: (instanceId: string, network: UiSurfaceNetworkRequestV1) => applyMutation((current) => setSessionCompanionInstanceNetwork(current, instanceId, network)),
         renameInstance: (instanceId: string, displayName: string | null) => applyMutation((current) => renameSessionCompanionInstance(current, instanceId, displayName)),
         openFullSurface,
         applyLocalInverse,

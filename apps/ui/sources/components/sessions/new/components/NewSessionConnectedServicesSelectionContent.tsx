@@ -22,9 +22,17 @@ import type {
     ConnectedServicesProfileOptionsByServiceId,
 } from '@/components/sessions/new/modules/connectedServicesNewSessionBindings';
 import { isConnectedServiceProfileOptionSelectable } from '@/components/sessions/new/modules/connectedServicesNewSessionBindings';
-import { buildNewSessionConnectedServicesSelectionListModel } from './buildNewSessionConnectedServicesSelectionListModel';
-import { useSessionRouteSourceSections, type SessionRouteSources } from './useSessionRouteSourceSections';
+import {
+    buildNewSessionConnectedServicesSelectionListModel,
+    type ConnectedServicesSelectionIconVariant,
+    type ConnectedServicesSelectionRowKind,
+} from './buildNewSessionConnectedServicesSelectionListModel';
+import { RouteSourceChevron, useSessionRouteSourceSections, type SessionRouteSources } from './useSessionRouteSourceSections';
 import { Icon } from '@/components/ui/icons/Icon';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { SessionModelSourceBrowseHandoffContext } from '@/components/sessions/modelPicker/SessionModelSourceBrowseHandoff';
+import type { SessionRoute } from '@/providers/session/resolveSessionRoutePresentation';
 
 export type NewSessionConnectedServicesSelectionContentProps = Readonly<{
     supportedServiceIds: ReadonlyArray<ConnectedAccountServiceKey>;
@@ -50,24 +58,37 @@ export type NewSessionConnectedServicesSelectionContentProps = Readonly<{
     // serviceId, and modal hosts (default-auth picker) route per service.
     // Existing `() => void` callers stay assignable.
     onOpenSettings: (serviceId: string) => void;
-    /** Leads the list (the running session's pending route change); the list keeps the height left over. */
-    topContent?: React.ReactNode;
+    /**
+     * Leads the list while a route or model change is armed for the running session's next message
+     * (D15); the list keeps the height left over.
+     */
+    armedNote?: string | null;
     /** The "Runs through" popover also names the Agent's Gateways and Providers; other hosts omit it. */
     routeSources?: SessionRouteSources;
+    /** Exact selected Agent, also available when Provider browsing is disabled. */
+    nativeAgentTargetKey?: string;
+    /** Applied route from the canonical presentation owner, separate from pending intent. */
+    appliedRoute?: SessionRoute;
     /** Close the hosting surface (popover/modal) — e.g. Escape inside the list. */
     requestClose?: () => void;
     maxHeight: number;
 }>;
 
-function SelectionStateIcon(props: Readonly<{ selected: boolean; variant?: 'default' | 'warning' }>) {
-    const { theme } = useUnistyles();
-    const color = props.selected ? theme.colors.text.primary : theme.colors.text.secondary;
+const ROW_KIND_ICON = {
+    native: 'terminal',
+    group: 'stack',
+    account: 'user-circle',
+    team: 'users',
+} as const satisfies Record<ConnectedServicesSelectionRowKind, string>;
 
+/** Names what the row is; the list draws the current choice's check, so this never changes with it. */
+function RowKindIcon(props: Readonly<{ kind: ConnectedServicesSelectionRowKind; variant?: ConnectedServicesSelectionIconVariant }>) {
+    const { theme } = useUnistyles();
     return normalizeNodeForView(
         <Icon
-            name={props.selected ? 'check-circle' : 'circle'}
+            name={ROW_KIND_ICON[props.kind]}
             size={20}
-            color={color}
+            color={props.variant === 'warning' ? theme.colors.text.tertiary : theme.colors.text.secondary}
         />,
     );
 }
@@ -82,6 +103,16 @@ function SettingsActionIcon() {
 export function NewSessionConnectedServicesSelectionContent(props: NewSessionConnectedServicesSelectionContentProps) {
     const styles = stylesheet;
     const connectedServicesRegistry = useProjectedConnectedServicesRegistry();
+    const sourceBrowse = React.useContext(SessionModelSourceBrowseHandoffContext)?.browse;
+    const nativeAgentTargetKey = props.nativeAgentTargetKey ?? props.routeSources?.agentTargetKey;
+    const nativeRoute = React.useMemo(() => nativeAgentTargetKey ? {
+        agentTargetKey: nativeAgentTargetKey,
+        active: props.appliedRoute?.kind === 'native',
+        onBrowse: sourceBrowse ? () => sourceBrowse(nativeAgentTargetKey, {
+            connectionId: null,
+            label: t('connectedServices.authModal.nativeAuthTitle'),
+        }) : undefined,
+    } : undefined, [nativeAgentTargetKey, props.appliedRoute?.kind, sourceBrowse]);
 
     /** Public applied-descriptor title; neutral fallback for an unknown service. */
     const resolveServiceTitle = React.useCallback((serviceId: string) => {
@@ -169,13 +200,15 @@ export function NewSessionConnectedServicesSelectionContent(props: NewSessionCon
             onRecoverTeamCredentialResource: recoverTeamCredentialResource,
             defaultProfileIdByServiceId: props.defaultProfileIdByServiceId,
             includeNativeAuthOption: props.includeNativeAuthOption,
+            nativeRoute,
             allowDefaultProfileFallback: props.allowDefaultProfileFallback,
             quotaBadgesByKey,
             setBindingForService,
             onOpenSettings: openSettings,
             translate: t,
             resolveServiceTitle,
-            renderSelectionIcon: ({ selected, variant }) => <SelectionStateIcon selected={selected} variant={variant} />,
+            renderRowIcon: ({ kind, variant }) => <RowKindIcon kind={kind} variant={variant} />,
+            renderBrowseMark: () => <RouteSourceChevron />,
             renderSettingsIcon: () => <SettingsActionIcon />,
             renderQuotaBadges: (badges) => <ConnectedServiceQuotaBadgesView badges={badges} />,
             renderNeedsReauthPill: () => (
@@ -191,6 +224,7 @@ export function NewSessionConnectedServicesSelectionContent(props: NewSessionCon
     }, [
         props.bindingsByServiceId,
         props.bindingsKnown,
+        nativeRoute,
         openSettings,
         props.allowDefaultProfileFallback,
         props.defaultProfileIdByServiceId,
@@ -213,14 +247,14 @@ export function NewSessionConnectedServicesSelectionContent(props: NewSessionCon
         setBindingForService,
     ]);
 
-    const routeSourceSections = useSessionRouteSourceSections(props.routeSources);
+    const routeSourceSections = useSessionRouteSourceSections(props.routeSources, props.appliedRoute);
     const rootStep = React.useMemo(() => routeSourceSections.length === 0 ? listModel.rootStep : {
         ...listModel.rootStep,
         sections: [...listModel.rootStep.sections, ...routeSourceSections],
     }, [listModel.rootStep, routeSourceSections]);
 
     const [topContentHeight, setTopContentHeight] = React.useState(0);
-    const hasTopContent = Boolean(props.topContent);
+    const hasTopContent = Boolean(props.armedNote);
     const listMaxHeight = hasTopContent ? Math.max(0, props.maxHeight - topContentHeight) : props.maxHeight;
 
     return (
@@ -233,16 +267,14 @@ export function NewSessionConnectedServicesSelectionContent(props: NewSessionCon
                         setTopContentHeight((current) => current === height ? current : height);
                     }}
                 >
-                    {props.topContent}
+                    <Text testID="session-route-armed-note" style={styles.armedNote}>{props.armedNote}</Text>
                 </View>
             ) : null}
             <SelectionList
                 testID="new-session.connected-services.selection-list"
                 rootStep={rootStep}
                 selectedOptionId={listModel.selectedOptionId}
-                // One radio choice per service, drawn by each row's leading mark; the list-level
-                // check would mark only the first service's choice.
-                selectionMark="none"
+                optionPresentation="menu"
                 maxHeight={listMaxHeight}
                 heightBehavior={resolvePopoverSelectionListHeightBehavior()}
                 keyboardHintsEnabled={false}
@@ -261,7 +293,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     topContent: {
         flexShrink: 0,
-        paddingHorizontal: theme.margins.sm,
+        paddingHorizontal: theme.margins.md,
         paddingTop: theme.margins.sm,
+    },
+    armedNote: {
+        ...Typography.rowMeta(),
+        color: theme.colors.text.secondary,
     },
 }));

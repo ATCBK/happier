@@ -3,10 +3,14 @@ import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPublicLinkCard } from '@happier-dev/plugin-ui/presentation';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { homeAdministrationReachPath } from '@/components/settings/home/governance/homeAdministrationRoutes';
+import { resolveHomeGovernanceViewState } from '@/components/settings/home/governance/homeGovernanceViewState';
 
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
+import { describePublicLinkNetworkChoice, PublicLinkNetworkSwitch } from '@/components/sharing/PublicLinkNetworkConfirmation';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -18,12 +22,13 @@ import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Typography } from '@/constants/Typography';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { useHomeGovernanceSnapshot } from '@/hooks/home/useHomeGovernanceSnapshot';
 import { Modal } from '@/modal';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { SessionPublicLinkPublication } from '@/sync/domains/social/sessionPublicLinkPublication';
 import type { SharingAuthoritySession } from '@/sync/domains/social/sessionSharingMutationAuthority';
 import { t } from '@/text';
-import { HappyError } from '@/utils/errors/errors';
+import { presentSessionAccessFailure } from '@/components/sessions/access/presentSessionAccessFailure';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 import type { ExternalSessionSharingAvailability } from '@/components/sessions/external/sharing/useExternalSessionSharingAvailability';
@@ -53,13 +58,6 @@ function readOptions(expiry: Expiry, uses: Uses, isConsentRequired: boolean, net
     };
 }
 
-function presentFailure(error: unknown): void {
-    const message = error instanceof HappyError ? error.message
-        : error instanceof Error ? error.message
-            : t('errors.unknownError');
-    Modal.alert(t('common.error'), message);
-}
-
 /** What the link grants, in plain words, then its limits: "Expires Oct 6 · 3 of 10 uses · asks for consent". */
 export type PublicLinkCardPublication = Pick<SessionPublicLinkPublication, 'id' | 'expiresAt' | 'maxUses' | 'useCount' | 'isConsentRequired'>
     & Readonly<{ token?: string | null; publicUrl?: string | null; networkOff?: boolean }>;
@@ -80,6 +78,7 @@ export function describeSessionPublicLink(publicShare: PublicLinkCardPublication
 export type SessionCollaborationPublicLink = ReturnType<typeof useSessionPublicLinkController> & Readonly<{
     /** The exact Home's `sharing.public` decision. */
     enabled: boolean;
+    configurationScope: ServerAccountScope;
 }>;
 
 /**
@@ -110,7 +109,7 @@ export function useSessionCollaborationPublicLink(input: Readonly<{
         authorityCurrent: input.authorityCurrent ?? true,
         publicLinkEnabled: enabled,
     });
-    return { ...controller, enabled };
+    return { ...controller, enabled, configurationScope: input.scope };
 }
 
 /**
@@ -153,8 +152,10 @@ export function SessionPublicLinkSection(props: Readonly<{
     if (!props.shareable) return null;
     return (
         <SessionPublicLinkCard
+            key={link.scopeKey}
             presentation={props.presentation}
             testID={props.testID ?? 'session-public-link-card'}
+            configurationScope={link.configurationScope}
             publicShare={link.publicShare}
             serverUrl={link.shareableServerUrl}
             loading={link.loading}
@@ -164,6 +165,9 @@ export function SessionPublicLinkSection(props: Readonly<{
             pendingApproval={link.pendingApproval !== null}
             onRetry={link.reload}
             onOpenPendingApproval={link.openPendingApproval}
+            networkPolicyLabel={link.networkPolicyLabel}
+            networkConsequenceStatus={link.networkConsequenceStatus}
+            onPrepareNetworkConsequence={link.prepareNetworkConsequence}
             onCreate={link.create}
             onDelete={link.remove}
         />
@@ -178,11 +182,15 @@ export function SessionPublicLinkSection(props: Readonly<{
 export function SessionPublicLinkCard(props: Readonly<{
     testID: string;
     presentation?: 'card' | 'inline';
+    configurationScope?: ServerAccountScope;
     publicShare: PublicLinkCardPublication | null;
     /** Local bearer URL supplied by the creating client, never a transport projection. */
     shareUrl?: string | null;
     description?: string;
     grantsLabel?: string;
+    networkPolicyLabel?: string;
+    networkConsequenceStatus?: 'loading' | 'ready' | 'unavailable';
+    onPrepareNetworkConsequence?: () => Promise<unknown>;
     serverUrl: string | null;
     loading: boolean;
     /** The publication has been read at least once, so "off" is a fact. */
@@ -206,13 +214,14 @@ export function SessionPublicLinkCard(props: Readonly<{
     const [networkOff, setNetworkOff] = React.useState(false);
     const [creating, setCreating] = React.useState(false);
     const [revoking, setRevoking] = React.useState(false);
+    const [mutationFailure, setMutationFailure] = React.useState<ReturnType<typeof presentSessionAccessFailure> | null>(null);
     const copyFeedback = useTemporaryCopyFeedback();
     // One outward request at a time: a second create would mint a second link and orphan the
     // first, and a second DELETE would surface its 404 after the first succeeded. The refs refuse
     // a same-tick second activation before React has committed the busy state.
     const inFlight = React.useRef(false);
     const mounted = React.useRef(true);
-    React.useEffect(() => () => { mounted.current = false; }, []);
+    React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const shareUrl = React.useMemo(() => props.shareUrl ?? publicShare?.publicUrl ?? (publicShare?.token
         ? buildPublicShareApplicationUrl({
             applicationBaseUrl: resolvePublicShareApplicationBaseUrl(),
@@ -222,16 +231,24 @@ export function SessionPublicLinkCard(props: Readonly<{
         : null), [props.shareUrl, props.serverUrl, publicShare?.publicUrl, publicShare?.token]);
     const busy = creating || revoking;
     const mutationsDisabled = props.readOnly || props.pendingApproval || busy;
+    const creationDisabled = mutationsDisabled || (!networkOff && props.networkConsequenceStatus !== undefined
+        && props.networkConsequenceStatus !== 'ready');
+    const configure = () => {
+        setNetworkOff(publicShare?.networkOff ?? false);
+        setConfiguring(true);
+        void props.onPrepareNetworkConsequence?.().catch(() => {});
+    };
 
     const create = async () => {
-        if (mutationsDisabled || inFlight.current) return;
+        if (creationDisabled || inFlight.current) return;
         inFlight.current = true;
+        setMutationFailure(null);
         setCreating(true);
         try {
             await props.onCreate(readOptions(expiry, uses, consent, networkOff));
             if (mounted.current) setConfiguring(false);
         } catch (error) {
-            if (mounted.current) presentFailure(error);
+            if (mounted.current) setMutationFailure(presentSessionAccessFailure(error));
         } finally {
             inFlight.current = false;
             if (mounted.current) setCreating(false);
@@ -247,11 +264,12 @@ export function SessionPublicLinkCard(props: Readonly<{
                 { confirmText: t('session.collaboration.pane.turnOff'), cancelText: t('common.cancel'), destructive: true },
             );
             if (!confirmed || !mounted.current) return;
+            setMutationFailure(null);
             setRevoking(true);
             await props.onDelete();
             if (mounted.current) { setShowQr(false); setConfiguring(false); }
         } catch (error) {
-            if (mounted.current) presentFailure(error);
+            if (mounted.current) setMutationFailure(presentSessionAccessFailure(error));
         } finally {
             inFlight.current = false;
             if (mounted.current) setRevoking(false);
@@ -268,6 +286,7 @@ export function SessionPublicLinkCard(props: Readonly<{
     };
 
     const on = publicShare !== null;
+    const networkChoice = describePublicLinkNetworkChoice(props.networkPolicyLabel);
     return (
         <HappierPublicLinkCard
             presentation={props.presentation}
@@ -296,20 +315,16 @@ export function SessionPublicLinkCard(props: Readonly<{
             Text={Text}
             linkMark={<Icon name="link" size={15} color={theme.colors.text.secondary} />}
             statusMark={<StatusDot color={theme.colors.state.success.foreground} size={6} />}
-            notices={<>{configuring ? <Item
-                title={t('session.collaboration.pane.linkNetworkOff')}
-                subtitle={t('session.collaboration.pane.linkNetworkConsequence')}
-                accessoryLayout="adaptive"
-                rightElement={<Switch testID="session-public-link-network-off"
-                    accessibilityLabel={t('session.collaboration.pane.linkNetworkOff')}
-                    value={networkOff} onValueChange={setNetworkOff} disabled={busy} />}
+            notices={<>{mutationFailure ? <PublicLinkFailureNotice
+                scope={mutationFailure.code === 'public_share_isolation_unavailable' ? props.configurationScope : undefined}
+                failure={mutationFailure}
             /> : null}{props.failed ? (
                 <SurfaceStateCard
                     testID="session-public-link-retry"
                     size="line"
                     kind="error"
                     title={t('session.collaboration.pane.linkLoadFailed')}
-                    action={{ label: t('common.retry'), onPress: () => { void props.onRetry(); } }}
+                    action={{ label: t('common.retry'), onPress: () => { setMutationFailure(null); void props.onRetry(); } }}
                 />
             ) : props.loading && !on && !props.loaded ? (
                 <SurfaceStateCard testID="session-public-link-loading" size="line" kind="loading" title={t('common.loading')} />
@@ -349,7 +364,7 @@ export function SessionPublicLinkCard(props: Readonly<{
                 label={t('session.collaboration.pane.newLink')}
                 icon={<Icon name="arrow-clockwise" size={14} color={theme.colors.text.secondary} />}
                 disabled={mutationsDisabled}
-                onPress={() => { setNetworkOff(publicShare?.networkOff ?? false); setConfiguring(true); }}
+                onPress={configure}
             />}
             turnOffControl={<ToolbarButton
                 testID="session-public-link-turn-off"
@@ -364,7 +379,7 @@ export function SessionPublicLinkCard(props: Readonly<{
                 label={t('session.sharing.createPublicLink')}
                 tone={props.presentation === 'inline' ? 'default' : 'primary'}
                 disabled={mutationsDisabled}
-                onPress={() => { setNetworkOff(publicShare?.networkOff ?? false); setConfiguring(true); }}
+                onPress={configure}
             />}
             expiryControl={<SegmentedTabBar<Expiry>
                 role="radiogroup"
@@ -392,6 +407,11 @@ export function SessionPublicLinkCard(props: Readonly<{
                 accessibilityLabel={t('session.sharing.maxUsesLabel')}
                 disabled={busy}
             />}
+            networkTitle={networkChoice.title}
+            networkDescription={networkChoice.description}
+            // A link whose content has no network consequence offers no switch for it.
+            networkControl={props.networkConsequenceStatus === undefined ? undefined
+                : <PublicLinkNetworkSwitch networkOff={networkOff} onNetworkOffChange={setNetworkOff} disabled={busy} />}
             consentControl={<Switch
                 testID="session-public-link-consent"
                 accessibilityLabel={t('session.sharing.requireConsent')}
@@ -409,10 +429,33 @@ export function SessionPublicLinkCard(props: Readonly<{
                 testID="session-public-link-options-create"
                 label={on ? t('session.sharing.regeneratePublicLink') : t('session.sharing.createPublicLink')}
                 tone={props.presentation === 'inline' ? 'default' : 'primary'}
-                disabled={mutationsDisabled}
+                disabled={creationDisabled}
                 busy={creating}
                 onPress={() => { void create(); }}
             />}
         />
     );
+}
+
+/** Only an unavailable link observes Home administration; other failures keep the same notice. */
+function PublicLinkFailureNotice(props: Readonly<{
+    scope?: ServerAccountScope;
+    failure: ReturnType<typeof presentSessionAccessFailure>;
+}>): React.ReactElement {
+    const router = useRouter();
+    const { scope } = props;
+    const state = resolveHomeGovernanceViewState(useHomeGovernanceSnapshot(scope));
+    const canConfigure = state.kind === 'ready' && state.mutationsAvailable && state.projection.capabilities.manageHomeSettings;
+    return <SurfaceStateCard
+        testID="session-public-link-mutation-error"
+        size="line"
+        kind="error"
+        title={props.failure.message}
+        diagnosticCode={props.failure.code}
+        action={canConfigure && scope ? {
+            testID: 'session-public-link-configure',
+            label: t('session.collaboration.pane.configurePublicLinks'),
+            onPress: () => router.push(homeAdministrationReachPath(scope.serverId)),
+        } : undefined}
+    />;
 }

@@ -1,5 +1,5 @@
 import { isBundledAgentId } from '@/agents/catalog/catalog';
-import { buildAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
+import { readAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
 import { resolveAgentUiBehavior, type AgentUiBehavior } from '@/agents/registry/registryUiBehavior';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 import { resolveSessionModelSelectionDisposition } from '@/sync/domains/models/resolveSessionModelSelectionDisposition';
@@ -113,7 +113,8 @@ function resolveAssumedContextWindowTokens(params: Readonly<{
     if (typeof params.sessionActive !== 'boolean') {
         return null;
     }
-    const agentTargetKey = params.agentTargetKey ?? buildAgentUniverseBackendTargetKey(params.agentId);
+    const agentTargetKey = params.agentTargetKey ?? readAgentUniverseBackendTargetKey(params.agentId);
+    if (agentTargetKey === null) return null;
     const disposition = resolveSessionModelSelectionDisposition({
         agentId: params.agentId,
         agentTargetKey,

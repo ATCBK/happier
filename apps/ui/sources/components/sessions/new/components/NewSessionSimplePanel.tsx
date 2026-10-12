@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useAtmosphereBandBoundary } from '@/components/atmosphere/atmosphereBandBoundary';
 import type { ViewStyle } from 'react-native';
 import { Keyboard, Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import { useNavigation, useRouter } from 'expo-router';
@@ -226,6 +227,7 @@ const NewSessionFloatingComposerCapsuleRow = React.memo(
 );
 
 export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.ReactElement {
+    const atmosphereBoundary = useAtmosphereBandBoundary();
     const { width: windowWidth } = useWindowDimensions();
     const shouldBottomAnchor =
         props.shouldBottomAnchor ?? (Platform.OS !== 'web' || isMobileLayoutWidth(windowWidth));
@@ -436,7 +438,7 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                           * slot measured its ramp from the top of the close capsule, which put the
                           * band a capsule-plus-gap higher than the edge it is supposed to seat.
                           */}
-                        <View>
+                        <View ref={atmosphereBoundary?.ref} onLayout={atmosphereBoundary?.onLayout}>
                         {isFloatingComposer ? (
                             <OverlayScrim
                                 progress={enterProgress}
@@ -447,7 +449,6 @@ export function NewSessionSimplePanel(props: NewSessionSimplePanelProps): React.
                         <NewSessionComposerCard
                             panelProps={props}
                             layout="screen"
-                            surfaceGroup={isFloatingComposer ? 'floating' : 'content'}
                             reservedHeight={composerReservedHeight}
                         />
                         </View>

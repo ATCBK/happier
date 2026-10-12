@@ -10,6 +10,7 @@ import {
     type SessionListRenderableSession,
 } from '@/sync/domains/session/listing/sessionListRenderable';
 import { resolveSessionListRenderableMeaningfulActivityAt } from '@/sync/domains/session/listing/sessionListRenderableSorting';
+import type { SessionListGuardState } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
     readSessionRuntimePresentationFreshnessExpirations,
 } from '@/sync/domains/session/attention/runtimePresentation';
@@ -133,6 +134,8 @@ export type SessionListRowViewModel = Readonly<{
     /** Whether the Keep / Remove action means anything at all (attention band on). */
     attentionStandingEnabled: boolean;
     draft: ExistingSessionDraftProjection | null;
+    /** A guard stop is coming ("Stops in 4:52") or the guard stopped this session (plan 50 G3-2). */
+    guardState: SessionListGuardState | null;
 }>;
 
 export type SessionListRowViewModelAdjacency = Readonly<{
@@ -305,6 +308,8 @@ export function buildSessionListRowViewModel(input: BuildSessionListRowViewModel
         attentionStandingEnabled: input.attentionStandingEnabled === true && sessionKey != null,
         draft: input.existingDraft
             ?? (sessionKey ? input.existingDraftBySessionKey?.get(sessionKey) ?? null : null),
+        // A stopped session that is working again (it woke on a message) shows its working state instead.
+        guardState: session?.guardState?.kind === 'stopped' && session.active ? null : session?.guardState ?? null,
     };
     const signature = buildRowViewModelSignature(rowViewModel);
     const cacheKey = sessionKey ?? `session:${sessionId}`;
@@ -457,6 +462,8 @@ function buildRowViewModelSignature(viewModel: SessionListRowViewModel): string 
         viewModel.draft?.updatedAt ?? '',
         viewModel.draft?.preview ?? '',
         viewModel.draft?.status ?? '',
+        viewModel.guardState?.kind ?? '',
+        viewModel.guardState?.kind === 'stopping' ? viewModel.guardState.stopAt : '',
     ]);
 }
 

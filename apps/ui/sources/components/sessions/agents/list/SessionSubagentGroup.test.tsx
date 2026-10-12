@@ -8,8 +8,6 @@ import { renderScreen } from '@/dev/testkit';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const submitMessageSpy = vi.fn(async () => undefined);
-
 installSessionSubagentCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -33,20 +31,9 @@ vi.mock('@/components/sessions/agents/list/SessionSubagentRow', () => ({
     SessionSubagentRow: (props: { row: { subagent: SessionSubagent } }) => React.createElement('SessionSubagentRow', { testID: `row:${props.row.subagent.id}` }),
 }));
 
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        submitMessage: submitMessageSpy,
-    },
-}));
-
-vi.mock('@/utils/system/fireAndForget', () => ({
-    fireAndForget: (promise: Promise<unknown>) => void promise,
-}));
-
 describe('SessionSubagentGroup', () => {
-    it('sends a structured team-delete message for Claude team groups', async () => {
+    it('withholds team shutdown without an exact Home', async () => {
         const { SessionSubagentGroup } = await import('./SessionSubagentGroup');
-        submitMessageSpy.mockClear();
 
         const subagents: readonly SessionSubagent[] = [{
             id: 'agent_team_member:qa-team:alpha',
@@ -81,28 +68,7 @@ describe('SessionSubagentGroup', () => {
                 />)).tree;
 
         // Team operations live in the team's quiet menu, not as buttons on its label (lab AG1).
-        const [menu] = tree!.findAllByProps({ testID: 'session-subagent-team-actions:qa-team' });
-        expect(menu.props.items.map((item: { id: string }) => item.id)).toEqual(['delete-team']);
-
-        await act(async () => {
-            menu.props.onSelect('delete-team');
-        });
-
-        expect(submitMessageSpy).toHaveBeenCalledWith(
-            's1',
-            'Delete team qa-team',
-            'Delete team qa-team',
-            expect.objectContaining({
-                happier: {
-                    kind: 'subagent_command.v1',
-                    payload: expect.objectContaining({
-                        kind: 'agent_team_delete',
-                        teamId: 'qa-team',
-                    }),
-                },
-            }),
-            { callerSurface: 'subagent_command', forceImmediate: true },
-        );
+        expect(tree!.findAllByProps({ testID: 'session-subagent-team-actions:qa-team' })).toEqual([]);
     });
 
     it('renders a group count alongside the group label', async () => {
@@ -189,7 +155,7 @@ describe('SessionSubagentGroup', () => {
                 />)).tree;
 
         const [menu] = tree!.findAllByProps({ testID: 'session-subagent-team-actions:qa-team' });
-        expect(menu.props.items.map((item: { id: string }) => item.id)).toEqual(['add-teammate', 'delete-team']);
+        expect(menu.props.items.map((item: { id: string }) => item.id)).toEqual(['add-teammate']);
 
         await act(async () => {
             menu.props.onSelect('add-teammate');

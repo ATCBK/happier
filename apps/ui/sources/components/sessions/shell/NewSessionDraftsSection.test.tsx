@@ -108,7 +108,7 @@ await loadSyncSingletonForTests();
 const draftPresentation = await import('@/components/sessions/drafts/newSessionDraftPresentation');
 const {
     NewSessionDraftsSectionView, buildNewSessionDraftContinueRoute, buildNewSessionDraftRowPresentation,
-    deleteNewSessionDraftAfterConfirmation, isNewSessionDraftDeletionBlocked,
+    isNewSessionDraftDeletionBlocked,
     resolveNewSessionDraftSectionTitle, resolveNewSessionDraftWaitingSectionTitle, resolveNewSessionDraftMachineUnavailable,
 } = await import('./NewSessionDraftsSection');
 
@@ -495,42 +495,6 @@ describe('NewSessionDraftsSection', () => {
         })).toBe(false);
     });
 
-    it('does not delete or restore focus when launch custody begins while confirmation is open', async () => {
-        let confirmDeletion!: (confirmed: boolean) => void;
-        let deletionDisposition: 'deletable' | 'launch-custody' = 'deletable';
-        const deleteDraft = vi.fn(async () => true);
-        const attempt = deleteNewSessionDraftAfterConfirmation({
-            confirm: () => new Promise<boolean>((resolve) => {
-                confirmDeletion = resolve;
-            }),
-            readCurrentDraftDeletionDisposition: () => deletionDisposition,
-            deleteDraft,
-        });
-
-        deletionDisposition = 'launch-custody';
-        confirmDeletion(true);
-
-        await expect(attempt).resolves.toBe(false);
-        expect(deleteDraft).not.toHaveBeenCalled();
-        expect(focusState.calls).toEqual([]);
-    });
-
-    it('does not report deletion when the authoritative tombstone is unavailable', async () => {
-        const offline = new Error('offline');
-        await expect(deleteNewSessionDraftAfterConfirmation({
-            confirm: async () => true,
-            readCurrentDraftDeletionDisposition: () => 'deletable',
-            deleteDraft: async () => { throw offline; },
-        })).rejects.toBe(offline);
-    });
-
-    it('does not report deletion when the canonical draft owner rejects the tombstone', async () => {
-        await expect(deleteNewSessionDraftAfterConfirmation({
-            confirm: async () => true,
-            readCurrentDraftDeletionDisposition: () => 'deletable',
-            deleteDraft: async () => false,
-        })).resolves.toBe(false);
-    });
 
     it('allows a Runner waiting draft to use the canonical canceling tombstone while preserving ordinary launch custody', () => {
         const ordinary = draft();

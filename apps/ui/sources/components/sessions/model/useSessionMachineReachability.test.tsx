@@ -3,21 +3,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { createMachineFixture, createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
-import { getStorage } from '@/sync/domains/state/storage';
-import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
-import { useSessionMachineReachability, useSessionReachableMachineTarget } from './useSessionMachineReachability';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { useSessionMachineReachability, useSessionReachableMachineTarget } = await import('./useSessionMachineReachability');
 
 const initialStorage = getStorage().getState();
-let serverId: string;
+const serverId = 'srv_session_reach';
 beforeEach(async () => {
-    const home = await upsertServerProfile({ name: 'reachability', serverUrl: 'https://reachability.example.test' });
-    serverId = home.id;
-    await setActiveServerId(serverId, { scope: 'device' });
+    await home.reset();
+    await home.addHome({ name: 'Reachability Home', serverUrl: 'https://reachability.example.test',
+        serverIdentityId: serverId, accountId: 'account' });
     const machine = createMachineFixture({ id: 'm1', activeAt: Date.now() });
     const session = createSessionFixture({ id: 's1', serverId, active: true, metadata: { machineId: 'm1', path: '/repo', host: 'host-1' } });
     getStorage().setState({ sessions: { s1: session }, machines: { m1: machine }, machineListByServerId: { [serverId]: [machine] } });
 });
-afterEach(() => { standardCleanup(); vi.useRealTimers(); getStorage().setState(initialStorage, true); });
+afterEach(async () => { standardCleanup(); vi.useRealTimers(); getStorage().setState(initialStorage, true); await home.reset(); });
 
 describe('useSessionMachineReachability', () => {
     it('normalizes session ids before resolving the reachable machine target', async () => {
@@ -46,26 +49,30 @@ describe('useSessionMachineReachability', () => {
 
     it('does not update visible reachability when an unrelated background session changes', async () => {
         const seen: Array<ReturnType<typeof useSessionMachineReachability>> = [];
-        await renderHook(() => {
+        const hook = await renderHook(() => {
             const value = useSessionMachineReachability('s1', serverId);
             React.useEffect(() => { seen.push(value); }, [value]);
             return value;
         });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().machineOnline).toBe(true));
+        const settledUpdates = seen.length;
         await act(async () => getStorage().setState({ sessions: { ...getStorage().getState().sessions,
             background: createSessionFixture({ id: 'background', serverId, active: true, metadata: { machineId: 'm1', path: '/other-repo', host: 'host-1' } }) } }));
-        expect(seen).toHaveLength(1);
+        expect(seen).toHaveLength(settledUpdates);
     });
 
     it('does not update visible reachability when only the machine heartbeat changes', async () => {
         const seen: Array<ReturnType<typeof useSessionMachineReachability>> = [];
-        await renderHook(() => {
+        const hook = await renderHook(() => {
             const value = useSessionMachineReachability('s1', serverId);
             React.useEffect(() => { seen.push(value); }, [value]);
             return value;
         });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().machineOnline).toBe(true));
+        const settledUpdates = seen.length;
         const machine = getStorage().getState().machines.m1!;
         const heartbeat = { ...machine, activeAt: machine.activeAt + 1 };
         await act(async () => getStorage().setState({ machines: { m1: heartbeat }, machineListByServerId: { [serverId]: [heartbeat] } }));
-        expect(seen).toHaveLength(1);
+        expect(seen).toHaveLength(settledUpdates);
     });
 });

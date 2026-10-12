@@ -2,9 +2,11 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { serveExternalSessionBrowseHome } from '@/dev/testkit/harness/externalSessionBrowseHome';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const candidatesListSpy = vi.hoisted(() => vi.fn());
-const appliedRuntime = vi.hoisted(() => ({ serverId: '' }));
 const credentials = vi.hoisted(() => ({
     accountByServerId: new Map<string, string>(),
     listeners: new Set<(event: import('@/auth/storage/tokenStorage').HomeCredentialMutationEvent) => void>(),
@@ -28,14 +30,11 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
     });
 });
 
-// Applied runtime identity is a connection boundary; Account fencing remains real.
-vi.mock('@/sync/runtime/orchestration/appliedActiveServerRuntime', () => ({
-    getAppliedActiveServerSnapshot: () => appliedRuntime,
-    isAppliedActiveServerRuntimeAvailable: () => true,
-}));
-
-vi.mock('@/sync/ops/machineExternalSessions', () => ({
-    machineExternalSessionsCandidatesList: (...args: unknown[]) => candidatesListSpy(...args),
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: (call: { method: string; payload: unknown; signal?: AbortSignal; serverId?: string }) => {
+        if (call.method !== RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) throw new Error(`Unexpected Browse RPC ${call.method}`);
+        return candidatesListSpy(call.payload, { signal: call.signal, serverId: call.serverId });
+    },
 }));
 
 vi.mock('@/text', async () => {
@@ -43,11 +42,8 @@ vi.mock('@/text', async () => {
     return createTextModuleMock();
 });
 
-import { registerStorageStateReader } from '@/sync/domains/state/storageStateReaderBridge';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
-import { upsertAndActivateServer, upsertServerProfileOnly } from '@/sync/domains/server/serverRuntime';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import type { StorageState } from '@/sync/store/types';
 
 const params = {
     machineId: 'machine-1',
@@ -56,37 +52,41 @@ const params = {
 };
 
 /**
- * The canonical Account scope owner reads the registered storage state. Driving the
+ * The canonical Account scope owner reads the real storage state. Driving the
  * real owner (rather than mocking it) is what makes this an Account-switch test and
  * not a restatement of the hook's own branches.
  */
 let profileScope: ServerAccountScope | null = null;
 
 describe('useExternalSessionBrowseCandidates Account lifetime', () => {
+    let home: Awaited<ReturnType<typeof serveExternalSessionBrowseHome>>;
     beforeEach(async () => {
         candidatesListSpy.mockReset();
         credentials.accountByServerId.clear();
-        const profile = await upsertAndActivateServer({ serverUrl: 'https://account-lifetime.test' });
-        appliedRuntime.serverId = profile.id;
+        home = await serveExternalSessionBrowseHome({ homes: [
+            { key: 'foreign', serverUrl: 'https://foreign-lifetime.test', accountId: 'foreign-account' },
+            { key: 'foreground', serverUrl: 'https://account-lifetime.test', accountId: 'account-a' },
+        ], route: () => undefined });
+        const profile = home.homes.foreground!;
         profileScope = { serverId: profile.id, accountId: 'account-a' };
-        registerStorageStateReader(() => ({ profileScope } as unknown as StorageState));
+        getStorage().setState({ profileScope });
     });
 
     afterEach(() => {
         profileScope = null;
-        registerStorageStateReader(() => (null as unknown as StorageState));
         standardCleanup();
+        home.dispose();
         credentials.accountByServerId.clear();
     });
 
     it('keeps an exact foreign Home request current when the foreground Account switches', async () => {
-        const foreignHome = await upsertServerProfileOnly({ serverUrl: 'https://foreign-lifetime.test' });
+        const foreignHome = home.homes.foreign!;
         credentials.accountByServerId.set(foreignHome.id, 'foreign-account');
         const { useServerCredentialAccountScopes } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
         const scopes = await renderHook(() => useServerCredentialAccountScopes([foreignHome.id]));
         await vi.waitFor(() => expect(scopes.getCurrent().get(foreignHome.id)?.accountId).toBe('foreign-account'));
         // The credential reader loads real storage; register this boundary after that initialization.
-        registerStorageStateReader(() => ({ profileScope } as unknown as StorageState));
+        getStorage().setState({ profileScope });
         expect(getActiveServerAccountScope()).toEqual(profileScope);
         const accountLifetime = scopes.getCurrent().get(foreignHome.id)!;
         const inFlight = createDeferred<{ ok: true; candidates: readonly { remoteSessionId: string; updatedAtMs: number }[]; nextCursor: null }>();
@@ -96,6 +96,7 @@ describe('useExternalSessionBrowseCandidates Account lifetime', () => {
         const hook = await renderHook(() => useExternalSessionBrowseCandidates(exactParams));
 
         profileScope = { serverId: profileScope!.serverId, accountId: 'unrelated-foreground-account' };
+        getStorage().setState({ profileScope });
         await act(async () => {
             inFlight.resolve({ ok: true, candidates: [{ remoteSessionId: 'foreign-row', updatedAtMs: 1 }], nextCursor: null });
             await flushHookEffects();
@@ -106,12 +107,12 @@ describe('useExternalSessionBrowseCandidates Account lifetime', () => {
     });
 
     it('aborts a retired exact credential request and restarts for its replacement lifetime', async () => {
-        const foreignHome = await upsertServerProfileOnly({ serverUrl: 'https://foreign-lifetime.test' });
+        const foreignHome = home.homes.foreign!;
         credentials.accountByServerId.set(foreignHome.id, 'foreign-account');
         const { useServerCredentialAccountScopes } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
         const scopes = await renderHook(() => useServerCredentialAccountScopes([foreignHome.id]));
         await vi.waitFor(() => expect(scopes.getCurrent().get(foreignHome.id)?.accountId).toBe('foreign-account'));
-        registerStorageStateReader(() => ({ profileScope } as unknown as StorageState));
+        getStorage().setState({ profileScope });
         expect(getActiveServerAccountScope()).toEqual(profileScope);
         let accountLifetime = scopes.getCurrent().get(foreignHome.id)!;
         const oldLifetime = accountLifetime;
@@ -159,6 +160,7 @@ describe('useExternalSessionBrowseCandidates Account lifetime', () => {
         // The user switches Account while the listing request is in flight. The
         // canonical owner's scope moves; the request still carries Account A's machine.
         profileScope = { serverId: profileScope!.serverId, accountId: 'account-b' };
+        getStorage().setState({ profileScope });
 
         await act(async () => {
             inFlight.resolve({

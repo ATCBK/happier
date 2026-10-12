@@ -1,19 +1,10 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { createSessionFixture, renderScreen as renderBareScreen, standardCleanup } from '@/dev/testkit';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
 import type { UserTextMessage } from "@happier-dev/session-core/messages";
 import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
-import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
-import { storage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionMessageProvenance } from '@happier-dev/protocol';
-import { createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
-import { createWorkflowInvocationRoute } from '@/sync/domains/workflows/workflowRunRoute';
-import { createReadOnlySessionTranscriptSource } from './source/readOnlySessionTranscriptSource';
-import { SessionTranscriptSourceProvider } from './source/SessionTranscriptSourceContext';
 
 const attributionBoundaries = vi.hoisted(() => ({ push: vi.fn(), transcriptCommits: vi.fn() }));
 installMessageViewCommonModuleMocks({
@@ -22,6 +13,17 @@ installMessageViewCommonModuleMocks({
         return createExpoRouterMock({ router: { push: attributionBoundaries.push } }).module;
     },
 });
+// Install boundary options before evaluating app modules: the testkit/store graph
+// can reach the destination router and otherwise capture the default router mock.
+const { createSessionFixture, renderScreen: renderBareScreen, standardCleanup } = await import('@/dev/testkit');
+const { settingsDefaults } = await import('@/sync/domains/settings/settings');
+const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+const { storage } = await import('@/sync/domains/state/storage');
+const { createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } = await import('@/dev/testkit/fixtures/workflowRunFixtures');
+const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { createWorkflowInvocationRoute } = await import('@/sync/domains/workflows/workflowRunRoute');
+const { createReadOnlySessionTranscriptSource } = await import('./source/readOnlySessionTranscriptSource');
+const { SessionTranscriptSourceProvider } = await import('./source/SessionTranscriptSourceContext');
 const { MessageView, MessageViewWithSessionCommon } = await import('./MessageView');
 const { AppSessionTranscriptSourceProvider } = await import('./source/appSessionTranscriptSource');
 
@@ -42,6 +44,36 @@ afterEach(() => {
 });
 
 describe('MessageView Account attribution', () => {
+    it('keeps the LIVE-11B app turn distinct from an adjacent workflow-injected turn', async () => {
+        const run = createWorkflowRunSummaryFixture({ id: 'daily-digest' });
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run, { kind: 'available', value: { title: 'Daily digest' } })]);
+        const messages: UserTextMessage[] = [
+            {
+                kind: 'user-text', id: 'cmv3woe8e010jm24a1ua7n6ed', seq: 58, localId: null, createdAt: 1,
+                text: 'List the starter templates using an empty input.',
+                // Canonical seq 58 metadata from live11b-actions.jsonl; app ownership is independent of source/sentFrom.
+                meta: { source: 'ui', sentFrom: 'web', happierProvenanceV1: { v: 1, kind: 'happierApp', actor: { kind: 'owner' } } },
+            },
+            {
+                kind: 'user-text', id: 'daily-digest-input', seq: 59, localId: null, createdAt: 2,
+                text: 'Summarize today.',
+                meta: { happierProvenanceV1: { v: 2, kind: 'workflow_invocation', runId: run.id, invocationRecordId: 'digest-step' } },
+            },
+        ];
+        const screen = await renderBareScreen(<AppSessionTranscriptSourceProvider sessionId="session-b">
+            {messages.map((message) => <MessageViewWithSessionCommon key={message.id}
+                sessionId="session-b" metadata={null} message={message}
+                forkCommon={{ ...settingsDefaults, executionRunsEnabled: false, agentSwitchingEnabled: false, sessionForkSupportSource: null }}
+                messageDisplayCommon={{ ...settingsDefaults, workspacePath: null, debugInformationEnabled: false }}
+                toolChromeCommon={settingsDefaults} toolRouteCommon={{ messagesById: {}, reducerState: null }} />)}
+        </AppSessionTranscriptSourceProvider>);
+        expect(screen.findHostByTestId('transcript-provenance-attribution:cmv3woe8e010jm24a1ua7n6ed')).toBeNull();
+        expect(screen.findHostByTestId('transcript-provenance-attribution:daily-digest-input')?.props.accessibilityLabel)
+            .toBe('message.provenanceFrom(source=Daily digest)');
+        await screen.pressByTestIdAsync('transcript-provenance-attribution:daily-digest-input');
+        expect(attributionBoundaries.push).toHaveBeenCalledWith(createWorkflowInvocationRoute(run.id, 'digest-step'));
+    });
+
     it('opens the producing workflow step and scopes live attribution to that exact run and invocation', async () => {
         const run = createWorkflowRunSummaryFixture({ id: 'run-a' });
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run, { kind: 'available', value: { title: 'Daily digest' } })]);
@@ -189,6 +221,27 @@ describe('MessageView Account attribution', () => {
         expect(screen.findHostByTestId('transcript-account-attribution:producer-message')).toBeNull();
     });
 
+    it.each([
+        [{ v: 1, kind: 'happierApp', actor: { kind: 'owner' } }],
+        [{ v: 1, kind: 'cli' }],
+        [{ v: 1, kind: 'voice' }],
+        [{ v: 1, kind: 'host', producer: 'happierApp' }],
+    ] satisfies [SessionMessageProvenance][])('labels no origin on a message the person typed (%j)', async (provenance) => {
+        const message: UserTextMessage = {
+            kind: 'user-text', id: 'typed-message', localId: null, createdAt: 1, text: 'Fix the settings modal',
+            meta: { happierProvenanceV1: provenance },
+        };
+        const screen = await renderScreen(
+            <MessageViewWithSessionCommon
+                sessionId="session-b" metadata={null} message={message}
+                forkCommon={{ ...settingsDefaults, executionRunsEnabled: false, agentSwitchingEnabled: false, sessionForkSupportSource: null }}
+                messageDisplayCommon={{ ...settingsDefaults, workspacePath: null, debugInformationEnabled: false }}
+                toolChromeCommon={settingsDefaults} toolRouteCommon={{ messagesById: {}, reducerState: null }}
+            />,
+        );
+        expect(screen.findHostByTestId('transcript-provenance-attribution:typed-message')).toBeNull();
+    });
+
     it('names the sending Session only from the transcript Home', async () => {
         const homeA = await upsertServerProfile({ serverUrl: 'https://producer-home-a.example.test' });
         const homeB = await upsertServerProfile({ serverUrl: 'https://producer-home-b.example.test' });
@@ -223,7 +276,7 @@ describe('MessageView Account attribution', () => {
             kind: 'user-text', id: 'actor-message', localId: null, createdAt: 1, text: 'Review the migration',
             accountActor: {
                 v: 1, serverId: 'home-a', accountId: 'private-account-id',
-                profile: { firstName: 'Alice', lastName: 'Chen', username: null, avatarUrl: null },
+                profile: { name: 'Alice Chen', firstName: 'Alice', lastName: 'Chen', username: null, avatarUrl: null },
             },
             transcriptObservationProvenance: { kind: 'non_dependent', source: 'history' },
             meta: {
@@ -282,7 +335,7 @@ describe('MessageView Account attribution', () => {
                 kind: 'user-text', id: messageId, localId: null, createdAt: 1, text: 'Checking the migration path',
                 accountActor: {
                     v: 1, serverId: homeId, accountId: actor.accountId,
-                    profile: { firstName: actor.firstName, lastName: null, username: null, avatarUrl: null },
+                    profile: { name: actor.firstName, firstName: actor.firstName, lastName: null, username: null, avatarUrl: null },
                 },
             };
         }

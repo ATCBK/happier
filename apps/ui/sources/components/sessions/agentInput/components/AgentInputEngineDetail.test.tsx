@@ -43,4 +43,26 @@ describe('AgentInputEngineDetail', () => {
 
     expect(tree?.root.findByType('OptionPickerOverlay')).toBeTruthy();
   });
+
+  it('hands the composer apply timing and notes to a model surface that replaces the default one', async () => {
+    const { AgentInputEngineDetail } = await import('./AgentInputEngineDetail');
+    const { SessionModelApplyTimingContext } = await import('@/components/sessions/modelPicker/SessionModelSourceBrowseHandoff');
+    let received: unknown = 'unset';
+    function Override() {
+      received = React.useContext(SessionModelApplyTimingContext);
+      return null;
+    }
+
+    await act(async () => {
+      renderer.create(
+        <AgentInputEngineDetail
+          modelContentOverride={<Override />}
+          modelApplyTiming="Applies from your next message"
+          modelNotes={['Kept for resume']}
+        />,
+      );
+    });
+
+    expect(received).toEqual({ timing: 'Applies from your next message', notes: ['Kept for resume'] });
+  });
 });

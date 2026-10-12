@@ -57,6 +57,31 @@ export function resolveSessionBoardItemHeight(input: Readonly<{
     });
 }
 
+/** A transcript reply has no grid cell or pane to fit; its range is the item's own policy. */
+const REPLY_BOUNDS: SessionBoardHeightBounds = Object.freeze({ min: 0, max: Number.POSITIVE_INFINITY });
+
+/**
+ * Resolve a transcript reply's height from the item's declared policy alone.
+ *
+ * `fixed` keeps its semantic size; Open in panel shows the rest. `auto` follows the renderer's
+ * report exactly, so the body never scrolls inside the transcript's own scroll; a frame that
+ * reports its own height keeps the semantic fallback only as the stable box until it does.
+ * Content the host lays out natively sizes itself (`null`).
+ */
+export function resolveSessionBoardReplyHeight(input: Readonly<{
+    height: SessionSurfaceItemV1['height'];
+    reportedHeight?: number | null;
+    measuresIntrinsicHeight: boolean;
+}>): SessionBoardResolvedHeight | null {
+    const resolved = resolveSessionBoardItemHeight({
+        height: input.height,
+        reportedHeight: input.reportedHeight,
+        bounds: REPLY_BOUNDS,
+    });
+    if (input.height.mode === 'auto' && resolved.source === 'semantic' && !input.measuresIntrinsicHeight) return null;
+    return resolved;
+}
+
 /**
  * "Fit content" keeps automatic height and remembers the size closest to what the
  * renderer currently reports as the fallback, so an unmeasured host still lands

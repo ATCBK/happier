@@ -1,12 +1,12 @@
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import * as React from "react";
 import { useShallow } from 'zustand/react/shallow';
-import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin-ui/presentation';
+import { HappierProvenanceChip } from '@happier-dev/plugin-ui/presentation';
 import { View, Pressable, Platform } from 'react-native';
 import { Modal } from '@/modal';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
-import { useTranscriptFindActive, useTranscriptFindRow } from '@/components/sessions/transcript/find/TranscriptFindContext';
+import { TranscriptFindMessageProvider, useTranscriptFindActive, useTranscriptFindRow } from '@/components/sessions/transcript/find/TranscriptFindContext';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
 import { t } from '@/text';
 import { Message, UserTextMessage, AgentTextMessage, ToolCallMessage } from "@happier-dev/session-core/messages";
@@ -52,7 +52,7 @@ import { resolveSessionMediaInlineRenderableImageMimeType } from '@/components/s
 import { readSessionMessageProvenance } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { TranscriptRollbackAction } from '@/sync/domains/sessionRollback/rollbackUiSupport';
 import { CommittedMessageActions } from '@/components/sessions/transcript/messageActions/CommittedMessageActions';
-import { RowActionRevealSlot } from '@/components/sessions/transcript/messageActions/RowActionRevealSlot';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { readCoarsePrimaryPointer, useRowActionHoverHost } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
 import { resolveMessagePinAvailability } from '@/components/sessions/transcript/messageActions/resolveMessagePinAvailability';
 import type { PersistedSessionMessagePinV1 } from "@happier-dev/session-core/pins";
@@ -75,7 +75,6 @@ import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInt
 import { getStorage, useSessionDisplayNameSource } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { createWorkflowInvocationRoute } from '@/sync/domains/workflows/workflowRunRoute';
-import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { TranscriptJumpAttention } from '@/components/sessions/transcript/navigation/TranscriptJumpHighlightOverlay';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
@@ -118,7 +117,7 @@ function shouldHideVoiceAgentTurnMessage(message: Message): boolean {
     return prepared.isVoiceAgentTurn && (prepared.text == null || prepared.text.trim().length === 0);
 }
 
-function formatTranscriptMessageTimestamp(createdAt: number): string | null {
+export function formatTranscriptMessageTimestamp(createdAt: number): string | null {
   if (!Number.isFinite(createdAt) || createdAt < 0) return null;
   const date = new Date(createdAt);
   if (!Number.isFinite(date.getTime())) return null;
@@ -217,11 +216,11 @@ type WorkflowMessageProvenanceProps = Readonly<{
   /** The step's visible number, stamped on the provenance by the host that ran it. */
   stepOrdinal?: string;
   serverId?: string | null;
+  inline?: boolean;
 }>;
 
 function AppWorkflowMessageProvenanceAttribution(props: WorkflowMessageProvenanceProps) {
   const transcriptSource = useSessionTranscriptSource();
-  const { theme } = useUnistyles();
   const serverId = props.serverId ?? transcriptSource.serverId;
   // The transcript owner batches missing facts. Each chip reads only its exact title and authored
   // ordinal; unrelated Runs/invocations never repaint the message. A host-stamped number wins.
@@ -244,30 +243,37 @@ function AppWorkflowMessageProvenanceAttribution(props: WorkflowMessageProvenanc
   if (!display.inScope || transcriptSource.navigate === null) {
     return <MessageProvenanceAttributionLabel testID={testID} label={label} />;
   }
+  return <WorkflowMessageProvenanceChip {...props} label={label}
+    onPress={() => transcriptSource.navigate?.(createWorkflowInvocationRoute(props.runId, props.invocationRecordId))} />;
+}
+
+function WorkflowMessageProvenanceChip(props: WorkflowMessageProvenanceProps & Readonly<{ label: string; onPress?: () => void }>) {
+  const { theme } = useUnistyles();
   return (
-    <View style={styles.workflowProvenanceRow}>
-      <HappierPressable
-        testID={testID}
-        accessibilityRole="link"
-        accessibilityLabel={label}
-        onPress={() => transcriptSource.navigate?.(createWorkflowInvocationRoute(props.runId, props.invocationRecordId))}
-        style={({ pressed, focused }) => [
-          styles.workflowProvenanceChip,
-          pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null,
-          focusRingStyle({ focused, color: theme.colors.border.focus }),
-        ]}
-      >
-        <Text numberOfLines={1} ellipsizeMode="tail" style={styles.workflowProvenanceText}>{label}</Text>
-      </HappierPressable>
+    <View style={props.inline ? styles.workflowProvenanceInline : styles.workflowProvenanceRow}>
+      <HappierProvenanceChip
+        testID={`transcript-provenance-attribution:${props.messageId}`}
+        label={props.label}
+        accessibilityLabel={props.label}
+        onPress={props.onPress}
+        // The chip owner draws the capsule ring; the transcript only supplies ink. It hangs from the
+        // message's trailing edge (lab lane12-final `b-habit Q`): a quiet ring on the page, no fill.
+        colors={{ foreground: theme.colors.text.secondary, background: 'transparent',
+          border: theme.colors.border.default, focus: theme.colors.border.focus }}
+        labelContent={<Text numberOfLines={1} ellipsizeMode="tail" style={styles.workflowProvenanceText}>{props.label}</Text>}
+      />
     </View>
   );
 }
 
-function WorkflowMessageProvenanceAttribution(props: WorkflowMessageProvenanceProps) {
+export function WorkflowMessageProvenanceAttribution(props: WorkflowMessageProvenanceProps) {
   const source = useSessionTranscriptSource();
   // Static/public transcripts never subscribe to private Account Run content.
   return source.kind === 'app'
     ? <AppWorkflowMessageProvenanceAttribution {...props} />
+    : props.inline ? <WorkflowMessageProvenanceChip {...props} label={props.stepOrdinal === undefined
+      ? t('message.provenanceFrom', { source: t('message.provenanceWorkflow') })
+      : t('sessionWork.scheduled.provenanceWorkflowStep', { source: t('message.provenanceWorkflow'), step: props.stepOrdinal })} />
     : <MessageProvenanceAttributionLabel
       testID={`transcript-provenance-attribution:${props.messageId}`}
       label={t('message.provenanceFrom', { source: t('message.provenanceWorkflow') })}
@@ -276,11 +282,14 @@ function WorkflowMessageProvenanceAttribution(props: WorkflowMessageProvenancePr
 
 function MessageProvenanceAttribution(props: Readonly<{ message: Message; serverId?: string | null }>) {
   const provenance = React.useMemo(() => props.message.kind === 'user-text'
-    ? readSessionMessageProvenance(props.message.meta)
+    ? readSessionMessageProvenance(props.message.meta, 'stored')
     : null, [props.message]);
   // Authenticated Account actors and descriptive producer provenance are
   // independent: producer metadata never invents or suppresses a human actor.
-  if (!provenance || provenance.kind === 'host') return null;
+  // Input the person typed (in the app, the CLI or by voice) or a host relayed carries no origin label;
+  // only a producer that is not the person (a Workflow, an Automation, a Session, a plugin) is named.
+  if (!provenance || provenance.kind === 'host' || provenance.kind === 'happierApp'
+    || provenance.kind === 'cli' || provenance.kind === 'voice') return null;
   if (provenance.kind === 'workflow_invocation') {
     return <WorkflowMessageProvenanceAttribution
       messageId={props.message.id}
@@ -301,9 +310,7 @@ function MessageProvenanceAttribution(props: Readonly<{ message: Message; server
   }
   const label = provenance.kind === 'pluginSession'
     ? readPluginMessageAttributionLabel(provenance)
-    : t('message.provenanceFrom', {
-      source: provenance.kind === 'automation' ? t('message.provenanceAutomation') : t('message.provenanceWorkflow'),
-    });
+    : t('message.provenanceFrom', { source: t('message.provenanceAutomation') });
   return (
     <MessageProvenanceAttributionLabel
       testID={provenance.kind === 'pluginSession'
@@ -394,6 +401,8 @@ type MessageViewProps = {
   sessionId: string;
   serverId?: string | null;
   layoutContext?: 'transcript' | 'tool_calls_group';
+  /** A containing turn header already renders the exact same attribution. */
+  hideProvenanceAttribution?: boolean;
   forcePermissionPromptsInTranscript?: boolean;
   approvalRequests?: readonly OpenApprovalArtifactForSession[];
   activeThinkingMessageId?: string | null;
@@ -477,10 +486,10 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
             hasOtherNamedCollaborator={props.messageDisplayCommon.hasOtherNamedCollaborator === true}
           />
         )}
-        <MessageProvenanceAttribution
+        {!props.hideProvenanceAttribution && <MessageProvenanceAttribution
           message={props.message}
           serverId={resolveTranscriptMessageServerId(props.sessionId, props.serverId, props.forkCommon.sessionForkSupportSource?.serverId)}
-        />
+        />}
         <RenderBlock
           message={props.message}
           metadata={props.metadata}
@@ -625,6 +634,7 @@ function RenderBlock(props: {
         >
           <TranscriptEventRow
             event={props.message.event}
+            messageId={props.message.id}
             localId={props.message.localId}
             sessionId={props.sessionId}
             serverId={props.serverId}
@@ -1520,7 +1530,7 @@ function ToolCallBlock(props: {
       : styles.toolContainerCards,
   ];
   const containerContent = (
-    <>
+    <TranscriptFindMessageProvider messageId={props.message.id} routeMessageId={toolRouteMessageId}>
       {structuredNode}
       {turnChanges ? (
         <TranscriptTurnChangesCard
@@ -1587,7 +1597,7 @@ function ToolCallBlock(props: {
           mediaPreviewEnabled={props.interaction.canPreviewMedia === true}
         />
       ) : null}
-    </>
+    </TranscriptFindMessageProvider>
   );
   // The tool chrome (ToolView / ToolTimelineRow) owns the jump-landing attention
   // when it renders. A suppressed-chrome structured row has no chrome to own it,
@@ -1645,16 +1655,9 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 16,
     marginBottom: 4,
   },
-  workflowProvenanceChip: {
-    maxWidth: '100%',
+  workflowProvenanceInline: {
     minWidth: 0,
-    justifyContent: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: theme.colors.border.default,
-    borderRadius: theme.borderRadius.md,
-    backgroundColor: theme.colors.surface.inset,
+    flexShrink: 1,
   },
   workflowProvenanceText: {
     ...Typography.rowMeta(),

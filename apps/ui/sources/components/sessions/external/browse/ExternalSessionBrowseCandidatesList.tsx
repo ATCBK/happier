@@ -30,7 +30,8 @@ import {
     type SelectionListVirtualizedOptionSource,
     type SelectionListVirtualizedOptionSourceItem,
 } from '@/components/ui/selectionList';
-import { SelectionListSkeletonRow } from '@/components/ui/selectionList/SelectionListSkeletonRow';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
+import { SELECTION_LIST_SKELETON_ROW_SHAPE } from '@/components/ui/selectionList/_constants';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import {
@@ -145,6 +146,19 @@ function resolveBrowseCandidateIdentity(
     });
 }
 
+/**
+ * What a row shows: the band's chips already name the Agent and the machine for every row, so the
+ * visible line keeps only what tells rows apart (thread, project, id hint). Spoken alone, a row still
+ * says whose and where (`resolveBrowseCandidateAccessibilityLabel`).
+ */
+function resolveBrowseCandidateRowIdentity(
+    context: BrowseCandidatePresentationContext,
+    candidate: ExternalSessionBrowseCandidate,
+    candidatePath: string | null,
+) {
+    return resolveBrowseCandidateIdentity({ ...context, agentLabel: null, machineLabel: null }, candidate, candidatePath);
+}
+
 /** The candidate's name without row context (search matching, the delete confirmation): the same owner. */
 function resolveBrowseCandidateMatchingLabel(candidate: ExternalSessionBrowseCandidate): string {
     return resolveExternalSessionBrowseCandidateIdentityPresentation({
@@ -182,7 +196,7 @@ function renderBrowseCandidateSubtitle(
     candidate: ExternalSessionBrowseCandidate,
     candidatePath: string | null,
 ): React.ReactElement {
-    const identity = resolveBrowseCandidateIdentity(context, candidate, candidatePath);
+    const identity = resolveBrowseCandidateRowIdentity(context, candidate, candidatePath);
     const updatedAtMs = candidate.updatedAtMs;
     const relativeTime = updatedAtMs > 0 ? formatShortRelativeTime(updatedAtMs) : '';
     const subtitleMetrics = ITEM_SUBTITLE_TEXT_METRICS[context.density];
@@ -504,7 +518,7 @@ function buildCandidateVirtualizedSource(params: Readonly<{
                 subtitle: candidatePath ?? '',
                 subtitleContent: () => interaction.searchTarget === 'content'
                     ? <ConversationHitSummary snippet={candidate.match?.snippet ?? t('externalSessions.browseContentNotSearchable')} query={interaction.searchQuery}
-                        where={resolveBrowseCandidateIdentity(presentationContext, candidate, candidatePath).secondaryLabel}
+                        where={resolveBrowseCandidateRowIdentity(presentationContext, candidate, candidatePath).secondaryLabel}
                         atMs={candidate.updatedAtMs} testID={`external-session-candidate-match:${candidate.remoteSessionId}`} />
                     : renderBrowseCandidateSubtitle(presentationContext, candidate, candidatePath),
                 rightAccessory: () => renderBrowseCandidateRightAccessory(
@@ -606,13 +620,9 @@ function BrowseLoadingState(props: Readonly<{
             scanned: preparation!.scanned,
             total,
         });
-    const skeleton = isBanner ? null : Array.from({ length: 7 }, (_, index) => (
-        <SelectionListSkeletonRow
-            key={index}
-            index={index}
-            testID={`direct-session-candidates:loading:row-${index}`}
-        />
-    ));
+    const skeleton = isBanner ? null : (
+        <SkeletonRows rows={7} {...SELECTION_LIST_SKELETON_ROW_SHAPE} rowTestID={(index) => `direct-session-candidates:loading:row-${index}`} />
+    );
     if (!preparation) {
         return (
             <View style={styles.loading}>
@@ -976,12 +986,15 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
         <EmptyState
             layout="line"
             testID="direct-session-candidates:content-unsearched"
-            title={t('externalSessions.browseContentSearchPrompt')}
+            // With a phrase in the field the next step is running it, not typing one.
+            title={trimmedQuery
+                ? t('externalSessions.browseContentSearchReady', { query: trimmedQuery })
+                : t('externalSessions.browseContentSearchPrompt')}
         />
     ) : props.loading || props.loadingMore || props.preparation !== null ? (
         <BrowseLoadingState
             preparation={props.preparation}
-            onCancelPreparation={props.onCancelPreparation}
+            onCancelPreparation={isContentSearch ? undefined : props.onCancelPreparation}
         />
     ) : props.cancelled ? (
         <SurfaceStateCard
@@ -1046,6 +1059,8 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
      * The listing's status lines (index progress, incomplete search or statuses) sit under the search
      * band, above the rows, so the band stays the top of the card as in Search / ⌘K.
      */
+    // Stop belongs to a search the user started; the quiet lookup behind a typed phrase still offers Search.
+    const contentSearchRunning = props.contentSearchSubmitted === true && (props.loading || props.loadingMore === true);
     const hasStatusRows = indexingBannerVisible
         || showContentCoverage
         || (!isContentSearch && props.candidates.length > 0 && props.searchIncomplete === true)
@@ -1065,7 +1080,7 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
                 <BrowseLoadingState
                     placement="banner"
                     preparation={props.preparation}
-                    onCancelPreparation={props.onCancelPreparation}
+                    onCancelPreparation={isContentSearch ? undefined : props.onCancelPreparation}
                 />
             ) : null}
             {!isContentSearch && props.searchIncomplete && props.candidates.length > 0 ? (
@@ -1112,15 +1127,18 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
                 inputAccessoryRow={statusRows}
                 inputSuffix={isContentSearch || props.searchAugmenting || props.bandTrailing ? (
                     <View style={styles.searchSuffix}>
+                        {/* In Conversations the field's Search becomes Stop in place; the progress band does not repeat it. */}
                         {isContentSearch && (props.contentScanAvailable !== false || props.loading || props.loadingMore) ? (
                             <RoundButton
                                 testID="direct-session-candidates-content-submit"
                                 size="small"
-                                title={t(props.loading || props.loadingMore ? 'externalSessions.browseIndexingStop' : 'externalSessions.browseContentSubmit')}
+                                // A quiet control beside the field: Return runs the search too.
+                                display="secondary"
+                                title={t(contentSearchRunning ? 'externalSessions.browseIndexingStop' : 'externalSessions.browseContentSubmit')}
                                 disabled={props.contentSearchSupported !== true
-                                    || (props.loading || props.loadingMore ? !props.onCancelPreparation : !props.onSearchSubmit || !props.searchQuery.trim())}
+                                    || (contentSearchRunning ? !props.onCancelPreparation : !props.onSearchSubmit || !props.searchQuery.trim())}
                                 onPress={() => {
-                                    if (props.loading || props.loadingMore) props.onCancelPreparation?.();
+                                    if (contentSearchRunning) props.onCancelPreparation?.();
                                     else props.onSearchSubmit?.(props.searchQuery);
                                 }}
                             />

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { useAtmosphereBandBoundary } from '@/components/atmosphere/atmosphereBandBoundary';
+import { useAtmosphereSendSignal } from '@/components/atmosphere/atmosphereStage';
 import { resolveRequestedSessionModeId } from '@happier-dev/protocol/actions/sessionModeIds';
 import { View, useWindowDimensions } from 'react-native';
 
@@ -38,6 +40,12 @@ export function NewSessionComposerCard(input: Readonly<{
 }>): React.ReactElement {
     const props = input.panelProps;
     const embedded = input.layout === 'embedded';
+    const atmosphereBoundary = useAtmosphereBandBoundary();
+    useAtmosphereSendSignal(!embedded && props.isCreating);
+    const onComposerFocusChange = React.useCallback((focused: boolean) => {
+        props.composerDocument?.onComposerFocusChange?.(focused);
+        atmosphereBoundary?.onFocusChange(focused);
+    }, [atmosphereBoundary, props.composerDocument]);
     const reservedHeight = input.reservedHeight ?? 0;
     const {
         attachmentsUploadsEnabled,
@@ -136,7 +144,7 @@ export function NewSessionComposerCard(input: Readonly<{
                         onChangeText={props.setSessionPrompt}
                         structuredInputMentions={props.composerDocument?.structuredInputMentions}
                         onStructuredInputMentionsChange={props.composerDocument?.onStructuredInputMentionsChange}
-                        onComposerFocusChange={props.composerDocument?.onComposerFocusChange}
+                        onComposerFocusChange={onComposerFocusChange}
                         onComposerFocusRequestChange={props.composerDocument?.onComposerFocusRequestChange}
                         onPromptPickerOpenRequestChange={props.composerDocument?.onPromptPickerOpenRequestChange}
                         composerRef={props.composerDocument?.ref}

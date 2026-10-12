@@ -14,14 +14,20 @@ import {
 } from '@/components/sessions/companion/presentation/SessionCompanionRevealPort';
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { resolveSessionBoardItemTitle } from '@/components/sessions/board/sessionBoardItemPresentation';
+import { SESSION_BOARD_SEMANTIC_HEIGHTS } from '@/components/sessions/board/sessionBoardItemHeight';
 import { SessionWidgetHost } from '@/components/sessions/board/SessionWidgetHost';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { IconButton } from '@/components/ui/buttons/IconButton';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import type { ToolCall } from "@happier-dev/session-core/messages";
-import { resolveSessionBoardExecutableCurrentness } from '@/sync/domains/session/board';
+import {
+    resolveSessionBoardExecutableCurrentness,
+    sessionBoardSourceRequiresExclusiveMount,
+    type SessionBoardMountHost,
+} from '@/sync/domains/session/board';
 import { useSessionSurfaceItem } from '@/sync/domains/session/board/useSessionSurfaceItem';
 import { resolveSessionForkVisualReferenceTargetV1, type SessionForkVisualContextV1 } from '@happier-dev/protocol/sessions/board/forkVisualCopies';
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
 
 import {
@@ -35,11 +41,8 @@ import {
  * shell may supply presentation/execution policy, but never admits this read.
  */
 
-const INLINE_HEIGHT_BOUNDS = Object.freeze({ min: 72, max: 320 });
-
 const stylesheet = StyleSheet.create(() => ({
-    root: { gap: 8, paddingTop: 8 },
-    actions: { flexDirection: 'row', flexWrap: 'wrap' },
+    root: { paddingTop: 8 },
 }));
 
 export const SessionBoardActionResultReference = React.memo(function SessionBoardActionResultReference(
@@ -68,10 +71,10 @@ export const SessionBoardActionResultReference = React.memo(function SessionBoar
     if (!reference || !address) return null;
     const childAddress = props.visualContext && address
         ? { serverId: address.serverId, sessionId: props.visualContext.sessionId } : null;
-    const inherited = childAddress && (reference.address.serverId !== childAddress.serverId
+    const inherited = childAddress && (!areServerProfileIdentifiersEquivalent(reference.address.serverId, childAddress.serverId)
         || reference.address.sessionId !== childAddress.sessionId);
     const target = inherited && props.visualContext ? resolveSessionForkVisualReferenceTargetV1({
-        reference, childAddress, copies: props.visualContext.copies,
+        reference, childAddress, copies: props.visualContext.copies, resolveServerScopeId: resolveServerProfileScopeIdForIdentifier,
     }) : null;
     if (target?.status === 'not_copied') return (
         <View style={stylesheet.root} testID={`transcript-board-item-${reference.itemId}`}>
@@ -82,7 +85,7 @@ export const SessionBoardActionResultReference = React.memo(function SessionBoar
     );
     if (!inherited && reference.itemDestination === 'board') return null;
     const resolved = target?.status === 'copied' ? { ...reference, address: target.address, itemId: target.itemId } : reference;
-    return <MountedSessionBoardReference key={`${resolved.address.serverId}:${resolved.address.sessionId}:${resolved.itemId}`}
+    return <MountedSessionBoardReference key={JSON.stringify([resolved.address.serverId, resolved.address.sessionId, resolved.itemId])}
         reference={resolved} contentDemand={props.contentDemand !== false} />;
 });
 
@@ -97,7 +100,8 @@ function MountedSessionBoardReference(props: Readonly<{
     const mounted = useMountedSessionBoardController(address);
     const companionReveal = useSessionCompanionRevealPort(address);
     const binding = useSessionSurfaceItem({ ...address, itemId, enabled: props.contentDemand });
-    const [retainedHeight, setRetainedHeight] = React.useState(INLINE_HEIGHT_BOUNDS.min);
+    // Before this reply was ever measured its footprint is the smallest declared size.
+    const [retainedHeight, setRetainedHeight] = React.useState<number>(SESSION_BOARD_SEMANTIC_HEIGHTS.compact);
     const onLayout = React.useCallback((event: Readonly<{ nativeEvent: { layout: { height: number } } }>) => {
         const height = event.nativeEvent.layout.height;
         if (height > 0) setRetainedHeight(previous => previous === height ? previous : height);
@@ -106,6 +110,22 @@ function MountedSessionBoardReference(props: Readonly<{
     const pluginRuntime = mounted?.pluginRuntime;
     const callerHostedHtmlRuntime = mounted?.callerHostedHtmlRuntime ?? null;
     const resolveSourceAvailability = mounted?.controller.resolveSourceAvailability;
+    // While the transcript list demands this reply, it is a candidate to run the item. Only an
+    // executable source needs the one live body; declarative content renders everywhere.
+    const occurrence = React.useId();
+    const readyItem = binding.status !== 'unavailable' && binding.item.state.kind === 'ready'
+        ? binding.item.state.item : null;
+    const candidate = props.contentDemand && readyItem !== null && readyItem.destination !== 'board'
+        && sessionBoardSourceRequiresExclusiveMount(readyItem.source.kind);
+    const reportInlineTranscriptDemand = mounted?.reportInlineTranscriptDemand;
+    React.useEffect(() => (
+        candidate && reportInlineTranscriptDemand ? reportInlineTranscriptDemand(itemId, occurrence) : undefined
+    ), [candidate, itemId, occurrence, reportInlineTranscriptDemand]);
+    const shellHost = mounted?.resolvePrimaryHost(itemId) ?? null;
+    // The transcript runs the item only in the reply that has been on screen longest.
+    const primaryHost: SessionBoardMountHost | null = shellHost === 'inlineTranscript'
+        ? mounted?.resolveInlineTranscriptOccurrence(itemId) === occurrence ? 'inlineTranscript' : null
+        : shellHost;
     // Dispose the body and observation while retaining its last measured slot.
     // The incumbent row visibility owner decides demand; this is not a viewport.
     if (!props.contentDemand) return <View style={[styles.root, { height: retainedHeight }]}
@@ -141,6 +161,44 @@ function MountedSessionBoardReference(props: Readonly<{
         itemsById: new Map([[itemId, item]]),
     }, item, pluginRuntime);
 
+    // The panel is the item's own expanded destination, opened through the Session presentation
+    // owner: the full body has room there and may scroll; the reply never does.
+    const openInPanel = companionReveal ? (
+        <IconButton
+            testID={`transcript-board-item-${itemId}-open`}
+            iconName="arrows-out"
+            variant="plain"
+            accessibilityLabel={t('sessionBoard.inline.openPanelA11y', { title })}
+            tooltip={t('sessionBoard.inline.openPanel')}
+            onPress={() => companionReveal.revealBoardItem(itemId)}
+        />
+    ) : null;
+    // Pin is the Board layout owner's existing `item.pin` command on this same item. It is offered
+    // only while no Board view places the item; Unpin stays on the Board card that shows it.
+    const boardController = mounted?.controller;
+    const placedOnBoard = boardController?.snapshot?.views
+        .some(view => view.placements.some(placement => placement.itemId === itemId)) ?? false;
+    const pinToBoard = boardController && !placedOnBoard && boardController.supports('item.pin')
+        ? () => { void boardController.run({ kind: 'item.pin', itemId }); }
+        : undefined;
+    const widgetProps: React.ComponentProps<typeof SessionWidgetHost> = {
+        sessionId: address.sessionId,
+        serverId: address.serverId,
+        item,
+        host: 'inlineTranscript',
+        primaryHost,
+        density: 'compact',
+        frame: 'reply',
+        canEdit: false,
+        executableCurrentness: currentness,
+        resolveSourceAvailability,
+        ...(openInPanel ? { headerAccessory: openInPanel } : {}),
+        ...(pinToBoard ? { onPinToBoard: pinToBoard } : {}),
+        ...(pluginRuntime ? { pluginRuntime } : {}),
+        ...(callerHostedHtmlRuntime ? { callerHostedHtmlRuntime } : {}),
+        testID: `transcript-board-widget-${itemId}`,
+    };
+
     return (
         <View style={styles.root} onLayout={onLayout} testID={`transcript-board-item-${itemId}`}>
             {companionReveal ? (
@@ -149,51 +207,11 @@ function MountedSessionBoardReference(props: Readonly<{
                     itemId={itemId}
                     revealPort={companionReveal}
                     addAvailable={binding.reachability === 'reachable'}
-                    widgetProps={{
-                        sessionId: address.sessionId,
-                        serverId: address.serverId,
-                        item,
-                        host: 'inlineTranscript',
-                        primaryHost: mounted?.resolvePrimaryHost(itemId) ?? null,
-                        density: 'compact',
-                        canEdit: false,
-                        executableCurrentness: currentness,
-                        heightBounds: INLINE_HEIGHT_BOUNDS,
-                        resolveSourceAvailability,
-                        ...(pluginRuntime ? { pluginRuntime } : {}),
-                        ...(callerHostedHtmlRuntime ? { callerHostedHtmlRuntime } : {}),
-                        testID: `transcript-board-widget-${itemId}`,
-                    }}
+                    widgetProps={widgetProps}
                 />
             ) : (
-                <SessionWidgetHost
-                    sessionId={address.sessionId}
-                    serverId={address.serverId}
-                    item={item}
-                    host="inlineTranscript"
-                    primaryHost={mounted?.resolvePrimaryHost(itemId) ?? null}
-                    density="compact"
-                    canEdit={false}
-                    executableCurrentness={currentness}
-                    heightBounds={INLINE_HEIGHT_BOUNDS}
-                    resolveSourceAvailability={resolveSourceAvailability}
-                    {...(pluginRuntime ? { pluginRuntime } : {})}
-                    {...(callerHostedHtmlRuntime ? { callerHostedHtmlRuntime } : {})}
-                    testID={`transcript-board-widget-${itemId}`}
-                />
+                <SessionWidgetHost {...widgetProps} />
             )}
-            {companionReveal ? (
-                <View style={styles.actions}>
-                    <RoundButton
-                        size="small"
-                        display="inverted"
-                        testID={`transcript-board-item-${itemId}-open`}
-                        title={t('sessionBoard.inline.openBoard')}
-                        accessibilityLabel={t('sessionBoard.inline.openBoardA11y', { title })}
-                        onPress={() => companionReveal.revealBoardItem(itemId)}
-                    />
-                </View>
-            ) : null}
         </View>
     );
 }

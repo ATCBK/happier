@@ -1,8 +1,11 @@
 import type * as React from 'react';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderHook } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { buildMachineDestinationModel as buildScopedMachineDestinationModel, resolveMachineDestinationPurposeEligibility } from './buildMachineDestinationModel';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { ServerScopedMachine, ServerScopedMachineGroup } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 
@@ -39,9 +42,19 @@ vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
     MachineCliGlyphs: () => null,
 }));
 
+const network = await installSessionOpsNetworkBoundary();
+const fixtureScope = { serverId: 'server-a', accountId: 'account-a' };
+const fixtureScopes = new Map([['server-a', fixtureScope], ['server-b', { serverId: 'server-b', accountId: 'account-b' }]]);
+function buildMachineDestinationModel(input: Parameters<typeof buildScopedMachineDestinationModel>[0]) {
+    return buildScopedMachineDestinationModel({ ...input, scopesByServerId: fixtureScopes });
+}
 let useMachineSelectionListModel: typeof UseMachineSelectionListModel;
+afterEach(() => { clearMachineRequestReachabilityForTest(); network.resetRequests(); });
+afterAll(() => network.dispose());
 
 beforeAll(async () => {
+    await network.addHome('https://server-a', 'account-a');
+    await network.addHome('https://server-b', 'account-b');
     ({ useMachineSelectionListModel } = await import('./useMachineSelectionListModel'));
 }, 240_000);
 
@@ -168,6 +181,46 @@ function firstStaticOption(model: ReturnType<typeof UseMachineSelectionListModel
 }
 
 describe('useMachineSelectionListModel', () => {
+    it.each(['all', 'recent', 'favorites', 'shared'] as const)('agrees on %s row admission, pinned buckets and the automatic shortcut after request failure/recovery', async placement => {
+        const machine: Machine = { ...createMachine('reachable-machine'), ...(placement === 'shared' ? {
+            isShared: true, access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use' as const,
+                resourceMode: 'plain' as const, accessState: 'ready' as const },
+        } : {}) };
+        const fixture: Fixture = { machines: [machine], groups: [{ serverId: 'server-a', serverName: 'Server A', loading: false,
+            signedOut: false, machines: [createScopedMachine(machine)] }],
+            recent: placement === 'recent' ? [machine] : [], favorites: placement === 'favorites' ? [machine] : [] };
+        const handlers = makeHandlers();
+        const rendered = await renderModel(fixture, handlers);
+        const destinations = () => buildMachineDestinationModel({ groups: fixture.groups, recentMachines: fixture.recent,
+            favoriteMachines: fixture.favorites, managedMachineProjection: { state: 'unavailable', rowCount: 0 } });
+        const option = () => {
+            const row = rendered.getCurrent().rootStep.sections.flatMap(section => section.kind === 'static' ? section.options : [])
+                .find(row => row.id === machine.id);
+            if (!row) throw new Error('expected retained Machine row');
+            return row;
+        };
+        try {
+            await act(async () => recordMachineRequestFailed({ serverId: 'other-home', accountId: 'account-a', machineId: machine.id, observedAtMs: 1 }));
+            expect(option().disabled).not.toBe(true);
+            expect(destinations().soleSelectableDestination?.machine.id).toBe(machine.id);
+            await act(async () => recordMachineRequestFailed({ ...fixtureScope, machineId: machine.id, observedAtMs: 2 }));
+            expect(option().disabled).toBe(true);
+            expect(destinations().soleSelectableDestination).toBeNull();
+            act(() => option().onSelect?.());
+            expect(handlers.selectSpy).not.toHaveBeenCalled();
+            expect(rendered.getCurrent().rootStep.sections.filter(section => section.id === 'recent' || section.id === 'favorites')).toEqual([]);
+            if (placement === 'shared') {
+                expect(resolveMachineDestinationPurposeEligibility('finite', { ownership: 'shared', worker: {
+                    eligible: true, candidate: { serverId: 'server-a', machineId: machine.id }, load: { kind: 'unknown' }, explanation: 'load_unknown',
+                } }, machine, fixtureScope)).toEqual({ eligible: false, reason: 'machine_unavailable' });
+            }
+            await act(async () => recordMachineRequestSucceeded({ ...fixtureScope, machineId: machine.id, observedAtMs: 3 }));
+            expect(option().disabled).not.toBe(true);
+            expect(destinations().soleSelectableDestination?.machine.id).toBe(machine.id);
+            act(() => option().onSelect?.());
+            expect(handlers.selectSpy).toHaveBeenCalledWith(machine.id);
+        } finally { await rendered.unmount(); }
+    });
     it.each(['asleep', 'starting'] as const)('allows an exact finite %s row without inventing a guest worker status', async managedWake => {
         const machine = { ...createMachine('sleeping'), active: false, activeAt: 1 };
         const handlers = makeHandlers();
@@ -232,7 +285,8 @@ describe('useMachineSelectionListModel', () => {
         managed.action?.onPress();
         expect(onOpenManagedPresets).toHaveBeenCalledOnce();
         expect((managed.options[0]?.icon as React.ReactElement<{ name: string }>).props.name).toBe('stack');
-        expect((managed.options[1]?.icon as React.ReactElement<{ name: string }>).props.name).toBe('plus');
+        // The one-off entry reads as making a new one (circled plus); Connect a computer keeps the bare plus (lab m-pick).
+        expect((managed.options[1]?.icon as React.ReactElement<{ name: string }>).props.name).toBe('plus-circle');
         expect(model.selectedOptionId).toBe('managed-machine:server-a:preset:recipe:3');
         expect(managed.options[0]?.rightAccessory).toBeUndefined();
         expect(managed.options[0]?.subtitle).not.toContain('1.25');
@@ -337,6 +391,44 @@ describe('useMachineSelectionListModel', () => {
         expect(section?.title).toBe(`${singleHome ? '' : 'Server A · '}machines.destinations.sharedWithoutOwner`);
         await model.unmount();
     });
+    it('names a single Home\'s own machines "Your machines" (lab m-pick)', async () => {
+        const fixture = createFixture();
+        const rendered = await renderModel({ ...fixture, recent: [], favorites: [] }, makeHandlers());
+        const titles = rendered.getCurrent().rootStep.sections.map((section) => section.kind === 'static' ? section.title : undefined);
+        expect(titles).toContain('machines.destinations.yours');
+        expect(titles).not.toContain('newSession.machinePicker.allTitle');
+    });
+
+    it('shows a machine\'s favorite star on web only when it is a favorite or its row is under the pointer or keyboard', async () => {
+        const { Platform } = await import('react-native');
+        const { renderScreen } = await import('@/dev/testkit');
+        const { SelectionListOptionStateContext } = await import('@/components/ui/selectionList/SelectionListOptionStateContext');
+        const { MachineSelectionRowAccessory } = await import('./MachineSelectionRowAccessory');
+        const previousOS = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { value: 'web', configurable: true, writable: true });
+        try {
+            const machine = { ...createMachine('quiet'), active: false, activeAt: 0 };
+            const stars = async (state: Readonly<{ hovered: boolean; focused: boolean }>, isFavorite: boolean) => {
+                const screen = await renderScreen(
+                    <SelectionListOptionStateContext.Provider value={state}>
+                        <MachineSelectionRowAccessory machine={machine} showCliGlyphs={false} autoDetectCliGlyphs={false}
+                            showFavoriteToggle isFavorite={isFavorite} onToggleFavorite={() => {}} />
+                    </SelectionListOptionStateContext.Provider>,
+                );
+                const count = screen.tree.findAll((node) => node.props.accessibilityRole === 'button'
+                    && typeof node.props.onPress === 'function').length;
+                await screen.unmount();
+                return count;
+            };
+            expect(await stars({ hovered: false, focused: false }, false)).toBe(0);
+            expect(await stars({ hovered: true, focused: false }, false)).toBeGreaterThan(0);
+            expect(await stars({ hovered: false, focused: true }, false)).toBeGreaterThan(0);
+            expect(await stars({ hovered: false, focused: false }, true)).toBeGreaterThan(0);
+        } finally {
+            Object.defineProperty(Platform, 'OS', { value: previousOS, configurable: true, writable: true });
+        }
+    });
+
     it('keeps the selected unavailable machine visible without allowing activation', async () => {
         const machine = { ...createMachine('retired'), revokedAt: Date.now() };
         const onSelectMachine = vi.fn();
@@ -731,11 +823,10 @@ describe('useMachineSelectionListModel', () => {
             subtitle: 'newSession.temporaryComputer.status.failed',
         });
         expect(section.options[0]?.openStep).toBeUndefined();
-        expect(section.options[1]).toMatchObject({
-            id: 'temporary-computer-retry:server-a',
-            label: 'common.retry',
-        });
-        section.options[1]?.onSelect?.();
+        // One failure, one row (DRA D13): the retry is the section's action, not a second option row.
+        expect(section.options).toHaveLength(1);
+        expect(section.action).toMatchObject({ label: 'common.retry' });
+        section.action?.onPress();
         expect(retry).toHaveBeenCalledOnce();
         expect(rendered.getCurrent().selectedOptionId).toBe('temporary-computer:server-a:linux-x64');
         await rendered.unmount();
@@ -1129,8 +1220,9 @@ describe('useMachineSelectionListModel', () => {
         expect(canonicalRows.get('m-1')?.disabled).toBe(false);
         expect(canonicalRows.get('m-2')?.disabled).toBe(true);
         // K1 anatomy: the second line is the machine's status line, presence first, with the
-        // presence dot leading it (online / offline) instead of a trailing "● Online" label.
-        expect(canonicalRows.get('m-1')?.subtitle).toBe('settingsOverview.machineOnline');
+        // presence dot leading it (online / offline) instead of a trailing "● Online" label. An online
+        // machine then says what it is (lab m-pick "Online · Linux"); an offline one keeps last-seen only.
+        expect(canonicalRows.get('m-1')?.subtitle).toBe('settingsOverview.machineOnline · macOS');
         expect(canonicalRows.get('m-2')?.subtitle).toBe('settingsOverview.machineOffline');
         expect(canonicalRows.get('m-1')?.subtitleLeading).toBeTruthy();
         expect(canonicalRows.get('m-2')?.subtitleLeading).toBeTruthy();
@@ -1141,7 +1233,7 @@ describe('useMachineSelectionListModel', () => {
         expect(rows.get('m-2')?.disabled).toBe(false);
         expect(rows.get('m-2')?.subtitle).toBe('settingsOverview.machineOffline · offline but eligible');
         expect(rows.get('m-1')?.disabled).toBe(true);
-        expect(rows.get('m-1')?.subtitle).toBe('settingsOverview.machineOnline · update required');
+        expect(rows.get('m-1')?.subtitle).toBe('settingsOverview.machineOnline · macOS · update required');
 
         rows.get('m-1')?.onSelect?.();
         expect(handlers.selectSpy).not.toHaveBeenCalled();
@@ -1204,6 +1296,63 @@ describe('useMachineSelectionListModel', () => {
         expect(nextHandlers.selectSpy).toHaveBeenCalledTimes(1);
         expect(initialHandlers.selectSpy).not.toHaveBeenCalled();
 
+        await rendered.unmount();
+    });
+});
+
+describe('useMachineSelectionListModel · Run on order (lab m-pick)', () => {
+    it('lists existing machines first, then machines that do not exist yet, then Connect a computer', async () => {
+        const fixture = createFixture();
+        const handlers = makeHandlers();
+        const onConnectMachine = vi.fn();
+        const rendered = await renderHook(() => useMachineSelectionListModel({
+            ...buildParams(fixture, handlers),
+            temporaryComputers: [{ serverId: 'server-a', artifactTarget: 'linux-x64', selected: false,
+                workspace: null, onSelect: vi.fn() }],
+            managedMachines: [{ id: 'managed-machine:server-a:one-off', homeId: 'server-a', kind: 'one-off',
+                title: 'One-off', onSelect: vi.fn() }],
+            onConnectMachine,
+        }));
+        const ids = rendered.getCurrent().rootStep.sections.map((section) => section.id);
+        const firstNew = ids.indexOf('managed-machines');
+        expect(firstNew).toBeGreaterThan(0);
+        // Every machine section (recent, favorites, yours, shared) precedes the not-yet-machines.
+        expect(ids.slice(firstNew)).toEqual(['managed-machines', 'temporary-computer']);
+
+        // "Connect a computer…" closes the New machine group, after the presets and the one-off.
+        const newMachine = rendered.getCurrent().rootStep.sections[firstNew];
+        if (newMachine?.kind !== 'static') throw new Error('expected the New machine section');
+        expect(newMachine.options.map((option) => option.id)).toEqual(['managed-machine:server-a:one-off', 'connect-machine']);
+        const connect = newMachine.options.at(-1);
+        expect(connect).toMatchObject({
+            label: 'managedMachines.picker.connectComputer',
+            subtitle: 'managedMachines.picker.connectComputerHelp',
+        });
+        connect?.onSelect?.();
+        expect(onConnectMachine).toHaveBeenCalledTimes(1);
+        await rendered.unmount();
+    });
+
+    it('marks every machine row with that machine\'s own mark, including recent ones', async () => {
+        const { MachineRowMark } = await import('./MachineSelectionRowAccessory');
+        const rendered = await renderHook(() => useMachineSelectionListModel(buildParams(createFixture(), makeHandlers())));
+        const marks = rendered.getCurrent().rootStep.sections.flatMap((section) => section.kind === 'static'
+            && section.id !== 'managed-machines' && section.id !== 'temporary-computer'
+            ? section.options.map((option) => ({ id: option.id, icon: option.icon as React.ReactElement<{ machineId?: string }> }))
+            : []);
+        expect(marks.length).toBeGreaterThan(1);
+        for (const mark of marks) {
+            expect(mark.icon.type).toBe(MachineRowMark);
+            expect(mark.id.endsWith(mark.icon.props.machineId ?? '<none>')).toBe(true);
+        }
+        await rendered.unmount();
+    });
+
+    it('offers no Connect row where the host cannot open the Add flow', async () => {
+        const fixture = createFixture();
+        const rendered = await renderHook(() => useMachineSelectionListModel(buildParams(fixture, makeHandlers())));
+        expect(rendered.getCurrent().rootStep.sections.some((section) => section.kind === 'static'
+            && section.options.some((option) => option.id === 'connect-machine'))).toBe(false);
         await rendered.unmount();
     });
 });

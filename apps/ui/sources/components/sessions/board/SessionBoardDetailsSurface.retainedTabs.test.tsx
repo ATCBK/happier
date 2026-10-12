@@ -151,6 +151,7 @@ const PLUGIN_RUNTIME = {
 const HOSTED_HTML_RUNTIME = {
     serverIdentityId: 'identity-1',
     accountId: 'account-1',
+    accountEncryptionMode: 'plain',
     hostOrigin: 'https://example.invalid',
     admittedHostMethods: [],
     isApproved: () => true,

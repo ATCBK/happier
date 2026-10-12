@@ -555,6 +555,12 @@ describe('SessionActionDraftCard', () => {
     // `HappierSelect` emits every option row through `HappierPressable` with a `checked` state; the
     // card's own Cancel / Start buttons are plain `Pressable`s with no `accessibilityState` at all,
     // which is what separates option rows from the rest of the pressables.
+    // A long or multiple choice is one compact field until it is opened; open each, then read its rows.
+    const { act } = await import('react-test-renderer');
+    for (const trigger of screen.tree.findAllByType('Pressable').filter((node: any) => (node.props?.accessibilityRole ?? node.props?.role) === 'button'
+      && /^[^:]+: /.test(String(node.props?.accessibilityLabel ?? '')))) {
+      await act(async () => { trigger.props.onPress?.(); });
+    }
     const paintedOptionLabels = screen.tree
       .findAllByType('Pressable')
       .filter((node: any) => node.props?.accessibilityState?.checked !== undefined)

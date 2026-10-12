@@ -26,6 +26,14 @@ function createDeps(overrides: Partial<Parameters<typeof prepareSessionFollowSou
 }
 
 describe('prepareSessionFollowSourceKey', () => {
+    it('issues an explicit preparation retry even when the destination presence is offline', async () => {
+        const deps = createDeps({ resolveDestination: vi.fn(() => ({ machineId: 'runner-a', machine: {
+            kind: 'ephemeral_session_runner' as const, active: false,
+            operationProtocolCapabilities: { sessionFollow: { contextV1: true } },
+        } })) });
+        await expect(prepareSessionFollowSourceKey({ serverId: 'home-a', sourceSessionId: 'source-a',
+            destinationSessionId: 'destination-a' }, deps)).resolves.toEqual({ kind: 'prepared' });
+    });
     it('opens the source DEK and sends it only to the current exact destination Runner after the edge exists', async () => {
         const deps = createDeps();
         const result = await prepareSessionFollowSourceKey({

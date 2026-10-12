@@ -241,11 +241,11 @@ describe('SessionCollaborationSurface', () => {
                 writes.push('create');
                 publicShare = { id: 'publication', expiresAt: null, maxUses: null, useCount: 0,
                     isConsentRequired: true, updatedAt: 1, keyDerivation: 'fragment_v1' };
-                return new Response(JSON.stringify({ publicShare, isolatedOrigin: 'https://public-viewer.example.test' }));
+                return new Response(JSON.stringify({ publicShare, viewerOrigin: 'https://public-viewer.example.test' }));
             }
             if (request.path.endsWith('/public-share')) {
                 if (request.method === 'DELETE') writes.push('delete');
-                return new Response(JSON.stringify({ publicShare, isolatedOrigin: 'https://public-viewer.example.test' }));
+                return new Response(JSON.stringify({ publicShare, viewerOrigin: 'https://public-viewer.example.test' }));
             }
             return undefined;
         };

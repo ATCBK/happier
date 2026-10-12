@@ -12,6 +12,7 @@ import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionCompanionInstanceView } from '../SessionCompanionItemFrame';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
+import { readSessionWidgetProvidedContext } from '@/components/widgets/surface/sessionWidgetContext';
 
 /** The Companion retains its one frame; the universal body binds the exact configured target. */
 export function PluginGlance(props: Readonly<{
@@ -42,7 +43,7 @@ export function PluginGlance(props: Readonly<{
         body={{ kind: 'content', children: props.measurementOnly ? null : viewerScope && viewerScope.serverId === props.serverId
             ? <WidgetSurface testID={props.testID + '.surface'}
                 scope={{ ...viewerScope, owner: { kind: 'companion', sessionId: props.sessionId } }}
-                providedContext={{ session: [{ serverId: viewerScope.serverId, sessionId: props.sessionId }] }}
+                providedContext={readSessionWidgetProvidedContext({ serverId: viewerScope.serverId, sessionId: props.sessionId, session: props.session })}
                 instance={props.instance} descriptor={descriptor} appRuntime={runtime} presentation="content"
                 recordRevision={stableJsonStringify(props.instance)}
                 {...(props.instanceView?.onRepairInputs ? { onRepairInputs: props.instanceView.onRepairInputs } : {})} />

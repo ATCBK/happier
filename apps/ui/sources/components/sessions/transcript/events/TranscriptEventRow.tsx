@@ -3,11 +3,13 @@ import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { readSessionAgentTransitionDividerV1 } from '@happier-dev/protocol/sessions/agentTransitionDivider';
+import { isConnectedServiceRuntimeAuthRecoveryCancellation } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { SESSION_FOLLOW_WAKE_EVENT_MESSAGE } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { AgentTransitionDividerRow } from '@/components/sessions/transcript/agentTransition/AgentTransitionDividerRow';
 import { Text } from '@/components/ui/text/Text';
+import { TranscriptSeparatorRow } from '@/components/sessions/transcript/separators/TranscriptSeparatorRow';
 import { resolveConnectedServiceUxDiagnosticPresentation } from '@/components/sessions/connectedServices/diagnostics/connectedServiceUxDiagnostics';
 import {
     isTerminalComposerDraftBlockedEvent,
@@ -22,6 +24,14 @@ import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFo
 import type { TranscriptEventEmphasis } from './transcriptEventEmphasis';
 
 import { buildConnectedServiceAccountSwitchMessage } from './connectedServiceAccountSwitchMessage';
+import { describeSessionStopMarker } from './sessionStopMarker';
+import { readSessionStopTranscriptRecordV1 } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
+import { useSessionStopRecord } from './useSessionStopRecord';
+import Animated, { FadeInUp } from 'react-native-reanimated';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+
+const STOP_MARKER_FRESH_MS = 30_000;
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { WorkerUpdateCard } from '@/components/sessions/work/WorkerUpdateCard';
 
@@ -30,6 +40,23 @@ const EVENT_ICON_SIZE = 18;
 // amount of ink. It was 20 against an 18pt glyph, i.e. larger than the checkmark it settles into.
 const EVENT_SPINNER_SIZE = iconMatchedSpinnerSize(EVENT_ICON_SIZE);
 const EVENT_ICON_CONTAINER_SIZE = 20;
+
+function SessionStopMarkerRow(props: Readonly<{ event: AgentEvent; sessionId?: string | null; serverId?: string | null; at: number; deemphasized: boolean }>) {
+    const current = useSessionStopRecord({ serverId: props.serverId ?? null, sessionId: props.sessionId ?? null, at: props.at });
+    const marker = describeSessionStopMarker(props.event, formatQuotaResetTime, current);
+    const reducedMotion = useReducedMotionPreference();
+    const [rises] = React.useState(() => !reducedMotion && Date.now() - props.at < STOP_MARKER_FRESH_MS);
+    if (!marker) return null;
+    const iconName = marker.status === 'stopped' ? 'moon' : marker.status === 'failed' ? 'warning'
+        : marker.status === 'cancelled' ? 'x-circle' : 'clock';
+    const content = <TranscriptSeparatorRow padding="none" chipChrome="minimal" iconName={iconName} title={marker.text}
+        titleContent={<Text style={styles.stopMarkerText}>{marker.text}</Text>} />;
+    const style = [styles.container, props.deemphasized ? styles.deemphasizedContainer : null];
+    return rises ? <Animated.View style={style} testID="transcript-event-session-stop"
+        entering={FadeInUp.duration(motionTokens.guardMoment.markerRiseMs)
+            .withInitialValues({ opacity: 0, transform: [{ translateY: motionTokens.guardMoment.markerRisePx }] })}>{content}</Animated.View>
+        : <View style={style} testID="transcript-event-session-stop">{content}</View>;
+}
 
 function readEventRecord(event: AgentEvent): Record<string, unknown> {
     return event as unknown as Record<string, unknown>;
@@ -163,7 +190,9 @@ function formatRuntimeAuthRecoveryText(event: Extract<AgentEvent, { type: 'conne
         case 'recovered':
             return t('message.connectedServiceRuntimeAuthRecoveryRecovered');
         case 'cancelled':
-            return t('message.connectedServiceRuntimeAuthRecoveryCancelled');
+            return isConnectedServiceRuntimeAuthRecoveryCancellation(event.reason)
+                ? t('message.connectedServiceRuntimeAuthRecoveryCancelled')
+                : t('message.connectedServiceRuntimeAuthRecoveryStopped');
     }
 }
 
@@ -278,6 +307,7 @@ function formatRuntimeConfigOutcomeSessionModeChange(changes: RuntimeConfigOutco
 }
 
 export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: {
+    messageId?: string;
     event: AgentEvent;
     /**
      * The row's local id. The Agent-transition divider is only a divider when the
@@ -304,9 +334,12 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     let text = t('message.unknownEvent');
     let detailText: string | undefined;
     let testID: string | undefined;
+    const stopRecord = readSessionStopTranscriptRecordV1(props.event);
     const terminalComposerDraftBlocked = isTerminalComposerDraftBlockedEvent(props.event);
     const terminalComposerClearSessionId = typeof props.sessionId === 'string' ? props.sessionId.trim() : '';
     const showTerminalComposerClearAction = terminalComposerDraftBlocked && terminalComposerClearSessionId.length > 0;
+    if (stopRecord) return <SessionStopMarkerRow event={props.event} sessionId={props.sessionId} serverId={props.serverId}
+        at={stopRecord.at} deemphasized={deemphasized} />;
 
     // The Agent-transition divider rides the generic `type:'message'` arm so old
     // readers still render its prose. This reader understands the sidecar, and a
@@ -337,7 +370,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
                         </Text>
                     </View>
                 ) : null}
-                <WorkerUpdateCard update={props.event.update} serverId={props.serverId} navigationEnabled={props.navigationEnabled} at={props.createdAt} />
+                <WorkerUpdateCard update={props.event.update} messageId={props.messageId} serverId={props.serverId} navigationEnabled={props.navigationEnabled} at={props.createdAt} />
             </View>
         );
     }
@@ -476,6 +509,8 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
         text = t('message.agentStateSharingDegraded');
     }
 
+    // The guard's stop marker is a boundary in the conversation, so it is drawn by the transcript's one
+    // separator (rule · glyph · words · rule), quiet, rather than as an ordinary event line.
     const content = (
         <>
             <View style={styles.row}>
@@ -543,6 +578,13 @@ const styles = StyleSheet.create((theme) => ({
         lineHeight: 20,
         fontWeight: '500',
         flexShrink: 1,
+    },
+    stopMarkerText: {
+        color: theme.colors.text.tertiary,
+        fontSize: 12,
+        lineHeight: 16,
+        fontVariant: ['tabular-nums'],
+        textAlign: 'center',
     },
     hostWake: {
         alignItems: 'center',

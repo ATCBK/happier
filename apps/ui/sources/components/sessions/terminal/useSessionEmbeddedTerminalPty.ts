@@ -1,7 +1,6 @@
 import * as React from 'react';
 import type { SessionTerminalTargetV1 } from '@happier-dev/protocol';
-import { useMachine, useServerScopedMachine } from '@/sync/domains/state/storage';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { resolveSessionMachineReachability } from '@/components/sessions/model/resolveSessionMachineReachability';
 
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
@@ -25,9 +24,7 @@ export function useSessionEmbeddedTerminalPty(params: Readonly<{
     const { machineReachable, machineRpcTargetAvailable } = useSessionMachineReachability(params.sessionId, params.serverId);
     const target = params.terminalTarget;
     const explicitMachineId = target?.kind === 'machine_shell' || target?.kind === 'terminal_view' ? target.machineId : null;
-    const legacyMachine = useMachine(params.serverId ? '' : explicitMachineId ?? '');
-    const scopedMachine = useServerScopedMachine(params.serverId, params.serverId ? explicitMachineId ?? '' : '');
-    const explicitMachine = params.serverId ? scopedMachine : legacyMachine;
+    const explicitMachinePresence = useMachinePresenceSummary(params.serverId, explicitMachineId);
     const kind = target?.kind ?? params.terminalMode;
     const launch = React.useMemo(
         () => kind === 'session_attach'
@@ -45,7 +42,7 @@ export function useSessionEmbeddedTerminalPty(params: Readonly<{
         attachedTerminalId: target?.kind === 'terminal_view' ? target.terminalId : undefined,
         readOnly: target?.kind === 'terminal_view',
         sessionId: params.sessionId,
-        machineReachable: explicitMachineId ? resolveSessionMachineReachability({ machineIsKnown: Boolean(explicitMachine), machineIsOnline: explicitMachine ? isMachineOnline(explicitMachine) : false }) : machineReachable,
+        machineReachable: explicitMachineId ? resolveSessionMachineReachability({ machineIsKnown: explicitMachinePresence.reachability !== 'unknown', machineIsOnline: explicitMachinePresence.reachability === 'reachable' }) : machineReachable,
         machineRpcTargetAvailable: explicitMachineId ? true : machineRpcTargetAvailable,
         terminalKey: params.terminalKey,
         scopeId: params.scopeId,

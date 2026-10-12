@@ -18,7 +18,7 @@ import type { SessionTranscriptSource } from './types';
 import { useChatListRootState } from '../useChatListRootState';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { nowServerMs } from '@/sync/runtime/time';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { SessionCompanionContent } from '@/components/sessions/companion/SessionCompanionContent';
 import { SessionCompanionScreen } from '@/components/sessions/companion/SessionCompanionScreen';
 import { useSessionCompanionController } from '@/components/sessions/companion/state/useSessionCompanionController';
@@ -40,10 +40,12 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', a
 });
 
 afterEach(standardCleanup);
+let home: Awaited<ReturnType<typeof serveSessionActionHome>>;
+afterEach(() => { home.dispose(); });
 beforeEach(async () => {
     sessionRpcTransport.mockReset(); sessionRpcTransport.mockResolvedValue(undefined);
     routerPush.mockClear(); routerSetParams.mockClear();
-    await loadSyncSingletonForTests();
+    home = await serveSessionActionHome();
 });
 
 describe('app transcript source', () => {
@@ -316,7 +318,7 @@ describe('app transcript source', () => {
         try {
             storage.setState({ sessions: { [session.id]: session } });
             const hook = await renderHook(() => useSessionTranscriptSource(), {
-                wrapper: (props) => <AppSessionTranscriptSourceProvider sessionId={session.id}>{props.children}</AppSessionTranscriptSourceProvider>,
+                wrapper: (props) => <AppSessionTranscriptSourceProvider sessionId={session.id} serverId={home.serverId}>{props.children}</AppSessionTranscriptSourceProvider>,
             });
             const actions = hook.getCurrent().actions;
             if (!actions) throw new Error('live app source must expose actions');
@@ -383,7 +385,7 @@ describe('app transcript source', () => {
         try {
             storage.setState({ sessions: { [session.id]: session } });
             const hook = await renderHook(() => useSessionTranscriptSource(), {
-                wrapper: (props) => <AppSessionTranscriptSourceProvider sessionId={session.id}>{props.children}</AppSessionTranscriptSourceProvider>,
+                wrapper: (props) => <AppSessionTranscriptSourceProvider sessionId={session.id} serverId={home.serverId}>{props.children}</AppSessionTranscriptSourceProvider>,
             });
             const actions = hook.getCurrent().actions;
             if (!actions) throw new Error('live app source must expose actions');

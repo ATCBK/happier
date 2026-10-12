@@ -86,6 +86,32 @@ function intervalAutomationDraft(params: Readonly<{
 }
 
 describe('sessionAuthoringDraftAdapters', () => {
+    it('preserves MCP and skill session overrides through persisted drafts and temporary handoffs', () => {
+        const capabilitySelection = {
+            mcp: { v: 1 as const, managedServersEnabled: true, forceIncludeServerIds: ['server-a'], forceExcludeServerIds: [] },
+            skills: { v: 1 as const, forceIncludeSkillIds: ['skill-a'], forceExcludeSkillIds: ['skill-b'], excludeNativeSkillNames: ['native-a'] },
+        };
+        const seed = {
+            prompt: 'Review this project',
+            machineId: 'machine-1',
+            directory: '/workspace',
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+            capabilitySelection,
+        };
+        const draft = buildNewSessionAuthoringDraftFromTempData(seed);
+        expect(draft).toMatchObject({ capabilitySelection });
+        const persisted = buildPersistedNewSessionDraftFromAuthoringDraft({
+            draft, machineId: 'machine-1', selectedSecretId: null,
+            selectedSecretIdByProfileIdByEnvVarName: null,
+            sessionOnlySecretValueEncByProfileIdByEnvVarName: null,
+            backendNewSessionOptionStateByTargetKey: null,
+            updatedAt: 1,
+        });
+        expect(persisted).toMatchObject({ capabilitySelection });
+        expect(buildNewSessionAuthoringDraftFromPersistedDraft(persisted)).toMatchObject({ capabilitySelection });
+        expect(buildNewSessionTempDataFromAuthoringDraft({ draft, machineId: 'machine-1' })).toMatchObject({ capabilitySelection });
+    });
+
     it('projects the same authored Session into pre-acquire admission without inventing an execution target', () => {
         const draft = buildNewSessionAuthoringDraftFromResolvedInputs({
             directory: '/workspace/project', prompt: 'Submitted work', sessionName: 'Submitted Session',
@@ -156,7 +182,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'default',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -237,12 +263,12 @@ describe('sessionAuthoringDraftAdapters', () => {
                     'happier.service.github/github': { source: 'connected', selection: 'profile', profileId: 'github-1' },
                 },
             },
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['review'],
                 forceExcludeServerIds: ['legacy'],
-            },
+            } },
             transcriptStorage: 'direct',
             terminal: {
                 mode: 'tmux',
@@ -296,12 +322,12 @@ describe('sessionAuthoringDraftAdapters', () => {
                         'happier.service.github/github': { source: 'connected', selection: 'profile', profileId: 'github-1' },
                     },
                 },
-                mcpSelection: {
+                capabilitySelection: { mcp: {
                     v: 1,
                     managedServersEnabled: false,
                     forceIncludeServerIds: ['review'],
                     forceExcludeServerIds: ['legacy'],
-                },
+                } },
                 transcriptStorage: 'direct',
                 terminal: {
                     mode: 'tmux',
@@ -445,7 +471,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'default',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: null,
@@ -499,7 +525,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'default',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:com.acme.mercury/mercury', 'mercury-pro', 789),
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -571,7 +597,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             transcriptStorage: 'persisted', profileId: null, environmentVariables: null, resumeSessionId: null,
             permissionMode: 'default', permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: null, connectedServices: null, terminal: null, windowsRemoteSessionLaunchMode: null,
+            capabilitySelection: null, connectedServices: null, terminal: null, windowsRemoteSessionLaunchMode: null,
             windowsRemoteSessionConsole: null, windowsTerminalWindowName: null, runtimeDescriptorV1: null,
             acpSessionModeId: null, sessionConfigOptionOverrides: null, automation: null,
             teamCredentialBindings: [{
@@ -602,7 +628,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'default',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: 'windows_terminal',
@@ -701,12 +727,12 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'acceptEdits',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable'],
                 forceExcludeServerIds: ['disabled'],
-            },
+            } },
             connectedServices: { github: { installationId: '123' } },
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: 'console',
@@ -745,12 +771,12 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'acceptEdits',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable'],
                 forceExcludeServerIds: ['disabled'],
-            },
+            } },
             connectedServices: { github: { installationId: '123' } },
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: 'console',
@@ -795,7 +821,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'acceptEdits',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: { github: { installationId: '123' } },
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: 'console',
@@ -876,7 +902,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: null,
             permissionModeUpdatedAt: null,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -919,12 +945,12 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'acceptEdits',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable'],
                 forceExcludeServerIds: ['disabled'],
-            },
+            } },
             connectedServices: { github: { installationId: '123' } },
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: 'console',
@@ -995,12 +1021,12 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'readOnly',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable'],
                 forceExcludeServerIds: [],
-            },
+            } },
             connectedServices: { github: { installationId: '123' } },
             terminal: { mode: 'integrated' },
             windowsRemoteSessionLaunchMode: null,
@@ -1040,7 +1066,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: null,
             permissionModeUpdatedAt: null,
             modelSelection: explicitDefault,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -1208,7 +1234,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'acceptEdits',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -1288,7 +1314,7 @@ describe('sessionAuthoringDraftAdapters', () => {
                 permissionMode: 'acceptEdits',
                 permissionModeUpdatedAt: 123,
                 modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-                mcpSelection: null,
+                capabilitySelection: null,
                 connectedServices: null,
                 terminal: null,
                 windowsRemoteSessionLaunchMode: null,
@@ -1337,12 +1363,12 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'safe-yolo',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable'],
                 forceExcludeServerIds: ['disabled'],
-            },
+            } },
             connectedServices: { v: 1, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected' } } },
             terminal: { mode: 'tmux', tmux: { sessionName: 'nightly' } },
             windowsRemoteSessionLaunchMode: null,
@@ -1392,12 +1418,12 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'safe-yolo',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable'],
                 forceExcludeServerIds: ['disabled'],
-            },
+            } },
             connectedServices: { v: 1, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected' } } },
             terminal: { mode: 'tmux', tmux: { sessionName: 'nightly' } },
             runtimeDescriptorV1: {
@@ -1440,12 +1466,12 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'safe-yolo',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable'],
                 forceExcludeServerIds: ['disabled'],
-            },
+            } },
             connectedServices: { v: 1, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected' } } },
             terminal: { mode: 'tmux', tmux: { sessionName: 'nightly' } },
             windowsRemoteSessionLaunchMode: null,
@@ -1539,12 +1565,12 @@ describe('sessionAuthoringDraftAdapters', () => {
                 agentId: 'codex',
                 agent: { backendMode: 'appServer' },
             },
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable'],
                 forceExcludeServerIds: ['disabled'],
-            },
+            } },
             resumeSessionId: 'resume-1',
             backendNewSessionOptionStateByTargetKey: {
                 'agent:happier.agent.codex/codex': {
@@ -1576,7 +1602,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionModeUpdatedAt: null,
             modelId: null,
             modelUpdatedAt: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: 'console',
@@ -1627,7 +1653,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionModeUpdatedAt: null,
             modelId: null,
             modelUpdatedAt: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -1681,8 +1707,8 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'safe-yolo',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: null,
-            connectedServices: { v: 1, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected' } } },
+            capabilitySelection: null,
+            connectedServices: { v: 2, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected', profileId: 'github-profile' } } },
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
             windowsRemoteSessionConsole: null,
@@ -1739,7 +1765,7 @@ describe('sessionAuthoringDraftAdapters', () => {
                     speed: { updatedAt: 789, value: 'fast' },
                 },
             },
-            connectedServices: { v: 1, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected' } } },
+            connectedServices: { v: 2, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected', profileId: 'github-profile' } } },
             automation: intervalAutomationDraft({
                 name: 'Nightly summary',
                 description: 'Summarize the nightly state',
@@ -1767,8 +1793,8 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionMode: 'safe-yolo',
             permissionModeUpdatedAt: 123,
             modelSelection: modelSelection('agent:happier.agent.codex/codex'),
-            mcpSelection: null,
-            connectedServices: { v: 1, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected' } } },
+            capabilitySelection: null,
+            connectedServices: { v: 2, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected', profileId: 'github-profile' } } },
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
             windowsRemoteSessionConsole: null,
@@ -1802,7 +1828,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             sessionOnlySecretValueEncByProfileIdByEnvVarName: null,
             backendNewSessionOptionStateByTargetKey: {
                 ['agent:happier.agent.codex/codex']: {
-                    connectedServices: { v: 1, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected' } } },
+                    connectedServices: { v: 2, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected', profileId: 'github-profile' } } },
                 },
             },
             updatedAt: 987,
@@ -1832,7 +1858,7 @@ describe('sessionAuthoringDraftAdapters', () => {
                     speed: { updatedAt: 789, value: 'fast' },
                 },
             },
-            connectedServices: { v: 1, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected' } } },
+            connectedServices: { v: 2, bindingsByServiceId: { 'happier.service.github/github': { source: 'connected', profileId: 'github-profile' } } },
             automation: intervalAutomationDraft({
                 name: 'Nightly summary',
                 description: 'Summarize the nightly state',
@@ -1857,7 +1883,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionModeUpdatedAt: 123,
             modelId: null,
             modelUpdatedAt: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -1910,7 +1936,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionModeUpdatedAt: 123,
             modelId: null,
             modelUpdatedAt: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -1958,7 +1984,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionModeUpdatedAt: 123,
             modelId: null,
             modelUpdatedAt: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -2000,7 +2026,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionModeUpdatedAt: 123,
             modelId: null,
             modelUpdatedAt: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -2049,7 +2075,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionModeUpdatedAt: 123,
             modelId: null,
             modelUpdatedAt: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -2098,7 +2124,7 @@ describe('sessionAuthoringDraftAdapters', () => {
             permissionModeUpdatedAt: 123,
             modelId: null,
             modelUpdatedAt: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -2190,7 +2216,7 @@ describe('opaque Agent resume id preservation', () => {
             permissionMode: 'default',
             permissionModeUpdatedAt: 123,
             modelSelection: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,

@@ -1,18 +1,12 @@
 import * as React from 'react';
 
-import {
-    SessionBoardActionFailureV1Schema,
-    SessionSurfaceItemV1Schema,
-    SessionSurfaceItemV1StoredSchema,
-} from '@happier-dev/protocol/sessions/board';
+import { SessionBoardActionFailureV1Schema } from '@happier-dev/protocol/sessions/board/actions';
 import type {
     SessionBoardActionFailureV1,
     SessionBoardActionInputV1ById,
     SessionBoardActionIdV1,
     SessionBoardApprovalRequestCreatedResultV1,
     SessionBoardMutationActionResultV1,
-    SessionBoardItemUpsertInputV1,
-    SessionSurfaceItemV1,
 } from '@happier-dev/protocol/sessions/board';
 
 import { createActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
@@ -20,6 +14,8 @@ import { useActionApprovalContinuation } from '@/components/approvals/useActionA
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+
+export { isSessionBoardUpsertIntentCommitted } from './sessionBoardUpsertRecovery';
 
 export type SessionBoardMutationActionId = Exclude<SessionBoardActionIdV1, 'session.board.get'>;
 
@@ -58,27 +54,6 @@ export function classifySessionBoardMutationApprovalFailure(code: string): Sessi
         || code === 'session_board_source_conflict') return 'conflict';
     if (code === 'approval_execution_outcome_unknown' || code === 'outcome_unknown') return 'outcomeUnknown';
     return 'failed';
-}
-
-/**
- * An equal-looking pre-request row is not proof that an acknowledgement-lost
- * upsert committed. Every Board upsert advances the item revision, so the
- * canonical refreshed row proves the exact intent only when both its strict
- * semantic content and its revision differ from the submitted CAS operand.
- */
-export function isSessionBoardUpsertIntentCommitted(input: Readonly<{
-    intent: SessionBoardItemUpsertInputV1;
-    revision: string | null;
-    item: SessionSurfaceItemV1 | null;
-}>): boolean {
-    if (input.revision === null || input.revision === input.intent.expectedItemRevision || input.item === null) {
-        return false;
-    }
-    const observed = SessionSurfaceItemV1StoredSchema.safeParse(input.item);
-    const submitted = SessionSurfaceItemV1Schema.safeParse(input.intent.item);
-    return observed.success
-        && submitted.success
-        && JSON.stringify(observed.data) === JSON.stringify(submitted.data);
 }
 
 /**

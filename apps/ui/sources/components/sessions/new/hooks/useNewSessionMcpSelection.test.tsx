@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DaemonMcpServersPreviewResponse } from '@happier-dev/protocol';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol';
+import { SessionCapabilitySelectionV1Schema } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { renderScreen } from '@/dev/testkit';
@@ -135,13 +135,12 @@ vi.mock('@/sync/ops/machineMcpServers', () => ({
     machineMcpServersPreview: (...args: [string, unknown, unknown?]) => previewSpy(...args),
 }));
 
-vi.mock('@/components/sessions/new/components/NewSessionMcpSelectionContent', () => ({
-    NewSessionMcpSelectionContent: (props: Record<string, unknown>) => React.createElement('NewSessionMcpSelectionContent', props),
-}));
 
 vi.mock('@/components/ui/text/Text', () => ({
     Text: 'Text',
 }));
+
+const { useNewSessionMcpSelection } = await import('./useNewSessionMcpSelection');
 
 describe('useNewSessionMcpSelection', () => {
     beforeEach(() => {
@@ -149,18 +148,17 @@ describe('useNewSessionMcpSelection', () => {
     });
 
     it('offers portable managed MCP selection before a temporary endpoint Machine exists', async () => {
-        const { useNewSessionMcpSelection } = await import('./useNewSessionMcpSelection');
         let chip: any = null;
 
         function Probe() {
-            const [selection, setSelection] = React.useState(() => SessionMcpSelectionV1Schema.parse({}));
+            const [selection, setSelection] = React.useState(() => SessionCapabilitySelectionV1Schema.parse({}));
             chip = useNewSessionMcpSelection({
                 selectedMachineId: null,
                 selectedPath: '',
                 portableOnly: true,
                 agentType: 'codex',
-                mcpSelection: selection,
-                setMcpSelection: setSelection,
+                capabilitySelection: selection,
+                setCapabilitySelection: setSelection,
                 onOpenSettings: vi.fn(),
             }).mcpChip;
             return null;
@@ -175,21 +173,20 @@ describe('useNewSessionMcpSelection', () => {
     });
 
     it('renders an MCP chip with the effective selected count and routes visible-chip presses through the shared collapsed popover path', async () => {
-        const { useNewSessionMcpSelection } = await import('./useNewSessionMcpSelection');
 
         let chip: any = null;
         const toggleCollapsedPopover = vi.fn();
 
         function Probe() {
-            const [selection, setSelection] = React.useState(() => SessionMcpSelectionV1Schema.parse({}));
+            const [selection, setSelection] = React.useState(() => SessionCapabilitySelectionV1Schema.parse({}));
             const result = useNewSessionMcpSelection({
                 selectedMachineId: 'machine-1',
                 selectedPath: '/workspace',
                 selectedMachineName: 'Machine One',
                 agentType: 'codex',
                 targetServerId: 'server-a',
-                mcpSelection: selection,
-                setMcpSelection: setSelection,
+                capabilitySelection: selection,
+                setCapabilitySelection: setSelection,
                 onOpenSettings: vi.fn(),
             });
             chip = result.mcpChip;
@@ -231,7 +228,7 @@ describe('useNewSessionMcpSelection', () => {
             expect.objectContaining({
                 agentId: 'codex',
                 directory: '/workspace',
-                selection: expect.objectContaining({ managedServersEnabled: true }),
+                capabilitySelection: {},
             }),
             { serverId: 'server-a' },
         );
@@ -295,12 +292,12 @@ describe('useNewSessionMcpSelection', () => {
         expect((compactContent as React.ReactElement<{ maxHeight?: number }>).props.maxHeight).toBe(300);
 
         await act(async () => {
-            contentNode.props.onSelectionChange({
+            contentNode.props.onSelectionChange({ mcp: {
                 v: 1,
                 managedServersEnabled: true,
                 forceIncludeServerIds: [],
                 forceExcludeServerIds: ['server-playwright'],
-            });
+            } });
             await flushHookEffects({ cycles: 1, turns: 2 });
         });
 
@@ -318,27 +315,26 @@ describe('useNewSessionMcpSelection', () => {
             managed: expect.any(Array),
             detected: expect.any(Array),
         }));
-        expect(updatedContentNode.props.selection).toEqual(expect.objectContaining({
+        expect(updatedContentNode.props.selection).toEqual(expect.objectContaining({ mcp: expect.objectContaining({
             forceExcludeServerIds: ['server-playwright'],
-        }));
+        }) }));
     });
 
     it('treats RPC method-not-available preview errors as unsupported instead of surfacing them as a blocking error', async () => {
         previewSpy.mockRejectedValueOnce(new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE));
 
-        const { useNewSessionMcpSelection } = await import('./useNewSessionMcpSelection');
 
         let chip: any = null;
 
         function Probe() {
-            const [selection, setSelection] = React.useState(() => SessionMcpSelectionV1Schema.parse({}));
+            const [selection, setSelection] = React.useState(() => SessionCapabilitySelectionV1Schema.parse({}));
             const result = useNewSessionMcpSelection({
                 selectedMachineId: 'machine-1',
                 selectedPath: '/workspace',
                 selectedMachineName: 'Machine One',
                 agentType: 'codex',
-                mcpSelection: selection,
-                setMcpSelection: setSelection,
+                capabilitySelection: selection,
+                setCapabilitySelection: setSelection,
                 onOpenSettings: vi.fn(),
             });
             chip = result.mcpChip;
@@ -375,19 +371,18 @@ describe('useNewSessionMcpSelection', () => {
     it('treats ok:false RPC method-not-available preview responses as unsupported instead of surfacing them as a blocking error', async () => {
         previewSpy.mockResolvedValueOnce({ ok: false as const, errorCode: 'internal_error', error: 'RPC method not available' });
 
-        const { useNewSessionMcpSelection } = await import('./useNewSessionMcpSelection');
 
         let chip: any = null;
 
         function Probe() {
-            const [selection, setSelection] = React.useState(() => SessionMcpSelectionV1Schema.parse({}));
+            const [selection, setSelection] = React.useState(() => SessionCapabilitySelectionV1Schema.parse({}));
             const result = useNewSessionMcpSelection({
                 selectedMachineId: 'machine-1',
                 selectedPath: '/workspace',
                 selectedMachineName: 'Machine One',
                 agentType: 'codex',
-                mcpSelection: selection,
-                setMcpSelection: setSelection,
+                capabilitySelection: selection,
+                setCapabilitySelection: setSelection,
                 onOpenSettings: vi.fn(),
             });
             chip = result.mcpChip;

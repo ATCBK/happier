@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { WorkspaceDestinationRow } from '@/components/appShell/workspace/WorkspaceDestinationRow';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { useWorkRelativeTime } from '@/components/sessions/agents/presentation/agentActivityClock';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { describeWorkflowRunState, isTerminalWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { normalizeResultPreview } from '@/components/workflows/presentation/resultPreview';
@@ -13,7 +14,11 @@ import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/c
 import { describeWorkflowRunDestinationProgress, describeWorkflowRunProgress } from '@/components/workflows/presentation/workflowRunProgress';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 import { workStatusGlyphColor, workStatusWordStyle } from '@/components/work/status/workStatusTreatment';
-import { getStorage, useWorkflowRun } from '@/sync/domains/state/storage';
+import { getStorage, useWorkflowRun, useServerScopedMachine } from '@/sync/domains/state/storage';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
@@ -22,11 +27,16 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { publishOpenedWorkflowRunDetail } from '@/sync/engine/workflows/refreshWorkflowRun';
 import type { WorkflowRunRow } from '@/sync/store/domains/workflowRuns';
 import { t } from '@/text';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { Item } from '@/components/ui/lists/Item';
+import { WORKER_KIND_GLYPHS } from '@/components/sessions/work/workerKindGlyphs';
+import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 
-import type { SessionListRowDensity } from '../resolveSessionListDensityViewState';
+import { SESSION_LIST_ROW_CORNER_RADIUS, type SessionListRowDensity } from '../resolveSessionListDensityViewState';
 import { SESSION_LIST_SHEET_INSET_PX } from '../sessionListStyles';
-import { SessionListRowPresentation, SessionListRowSubtitle, SessionListRowTitle } from './SessionListRowPresentation';
+import {
+    SessionListRowPresentation, SessionListRowSubtitle, SessionListRowTitle, useReadableNativePhoneMinimalRow,
+} from './SessionListRowPresentation';
 
 export type WorkflowRunItemProps = Readonly<{
     kind: 'workflow_run';
@@ -55,6 +65,16 @@ const styles = StyleSheet.create((theme) => ({
     status: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     guide: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: theme.colors.border.default },
 }));
+
+/** Only the age leaf observes the existing shared clock; hidden rows keep a frozen snapshot. */
+function WorkflowRunRowAge(props: Readonly<{
+    runId: string; timestamp: number; dataActive: boolean; density: SessionListRowDensity; readablePhone: boolean; textScale: number;
+}>) {
+    const frozenNow = React.useRef(Date.now());
+    const age = useWorkRelativeTime(props.timestamp, props.dataActive ? undefined : frozenNow.current);
+    return <SessionListRowSubtitle testID={`workflow-run-row:${props.runId}:age`}
+        density={props.density} readableNativePhoneMinimal={props.readablePhone} textScale={props.textScale}>{age}</SessionListRowSubtitle>;
+}
 
 /** Read status is local; the selected result and its producer remain in the Account's sole Run body. */
 function useOpenedWorkflowRunResult(input: Readonly<{
@@ -110,31 +130,48 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
     // A hidden surface retains its body, never another Account's body.
     const row = inScope && retained.current.scopeKey === scopeKey ? retained.current.row : null;
     const summary = row?.summary;
+    const machine = useServerScopedMachine(dataActive ? props.serverId : '', dataActive ? summary?.machineId ?? '' : '');
+    const observedMachines = React.useMemo(() => machine ? [machine] : [], [machine]);
+    const presenceNowMs = useMachinePresenceNowMs(observedMachines);
+    useMachineReachabilityRevision(dataActive && machine !== null);
+    const machineReachable = machine ? isMachineReachable(inScope ? scope : null, machine, presenceNowMs) : undefined;
+    const machineName = getMachineDisplayName(machine);
     const resultEnabled = props.includeResult === true && dataActive && summary != null
         && isTerminalWorkflowRunState(summary.state);
     const result = useOpenedWorkflowRunResult({ runId: props.runId, scopeKey, enabled: resultEnabled, row });
+    const readablePhone = useReadableNativePhoneMinimalRow(props.density === 'minimal');
     if (!summary) return null;
     const density = props.density ?? 'default';
     const name = formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(row.metadata));
-    const lifecycle = describeWorkflowRunState(summary.state);
+    const lifecycle = describeWorkflowRunState(summary.state, {
+        inAttentionWindow: summary.attentionRequired === true, workflowCustodyState: summary.workflowCustodyState,
+        machineReachable, machineName,
+    });
     const status = resolveWorkStatusTone({ kind: 'workflow_run', facts: {
         state: summary.state, word: lifecycle.label, inAttentionWindow: summary.attentionRequired === true,
+        workflowCustodyState: summary.workflowCustodyState,
+        machineReachable, machineName,
     } });
-    const word = summary.attentionRequired === true && status.tone === 'attention'
-        ? t('workStatus.buckets.needs_you') : status.word;
+    const word = status.word;
     const destinationProgress = props.destinationSessionId
-        ? describeWorkflowRunDestinationProgress(summary.stepProgress, props.destinationSessionId) : [];
-    const context = [describeWorkflowRunProgress(summary.stepProgress), ...destinationProgress].filter(Boolean).join(' · ') || null;
+        ? describeWorkflowRunDestinationProgress(summary.stepProgress, props.destinationSessionId, { saidStatus: word }) : [];
+    const starterLabel = summary.startedBy === 'trigger' ? t('workflows.list.startedByTrigger')
+        : summary.startedBy === 'agent' ? t('workflows.list.startedByAgent') : null;
+    // A Writes-here row leads with the step that writes into this Session, then the Run's aggregate
+    // progress; when the Run began is not what this row is for. Without a known destination step the
+    // work row keeps its start time, so it never reads bare.
+    const context = [...destinationProgress,
+        props.presentation === 'work' && destinationProgress.length === 0 ? formatAsOfTime(Date.parse(summary.createdAt)) : null,
+        describeWorkflowRunProgress(summary.stepProgress),
+        props.presentation !== 'work' ? starterLabel : null].filter(Boolean).join(' · ');
     const resultLine = !resultEnabled ? null : result.text
         ?? t(result.status === 'failed' ? 'workflows.contentUnavailable'
             : result.status === 'pending' ? 'common.loading' : 'workflows.finalOutput.none');
-    const starterLabel = summary.startedBy === 'trigger' ? t('workflows.list.startedByTrigger')
-        : summary.startedBy === 'agent' ? t('workflows.list.startedByAgent') : null;
     const depth = (props.folderDepth ?? 0) + (props.reportsDepth ?? 0);
     if (props.presentation === 'work') return (
         <Item testID={`workflow-run-row:${props.runId}`}
             title={name} subtitle={[resultLine ?? context, starterLabel].filter(Boolean).join(' · ')}
-            icon={<Icon name="tree-structure" />}
+            icon={<Icon name={WORKER_KIND_GLYPHS.workflow_run} />}
             rightElement={<View style={styles.status}>
                 {lifecycle.marker.kind === 'activity'
                     ? <ActivitySpinner size={ICON_SIZE.xs} animationEnabled={dataActive} color={workStatusGlyphColor(theme.colors, status.tone)} />
@@ -145,21 +182,33 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
             accessibilityLabel={[name, word, context, starterLabel].filter(Boolean).join('. ')}
             onPress={() => router.push(createWorkflowRunRoute(props.runId) as never)} />
     );
-    return <View style={[styles.sheet, props.isLast || props.isSingle ? styles.tail : null,
+    return <GlassSurface testID={`workflow-run-sheet:${props.runId}`} surfaceGroup="card" nested finishRole={null}
+        solidColor={theme.colors.surface.base} style={[styles.sheet, {
+        overflow: 'hidden',
+        borderTopLeftRadius: props.isFirst || props.isSingle ? SESSION_LIST_ROW_CORNER_RADIUS : 0,
+        borderTopRightRadius: props.isFirst || props.isSingle ? SESSION_LIST_ROW_CORNER_RADIUS : 0,
+        borderBottomLeftRadius: props.isLast || props.isSingle ? SESSION_LIST_ROW_CORNER_RADIUS : 0,
+        borderBottomRightRadius: props.isLast || props.isSingle ? SESSION_LIST_ROW_CORNER_RADIUS : 0,
+    }, props.isLast || props.isSingle ? styles.tail : null,
         depth > 0 ? { paddingLeft: depth * 12 } : null]}>
         <View style={depth > 0 ? styles.guide : null}>
-            <SessionListRowPresentation density={density} textScale={fontScale} first={props.isFirst || props.isSingle}
-                last={props.isLast || props.isSingle} selected={props.selected} separator={!props.isLast && !props.isSingle}
-                statusTone={status.tone}
-                identity={<Icon name="tree-structure" size={ICON_SIZE.md} color={theme.colors.text.secondary} />}
-                title={<SessionListRowTitle density={density} textScale={fontScale} emphasized={props.selected}>{name}</SessionListRowTitle>}
-                trailing={<View style={styles.status}>
+            <SessionListRowPresentation density={density} readableNativePhoneMinimal={readablePhone} textScale={fontScale} first={props.isFirst || props.isSingle}
+                last={props.isLast || props.isSingle} selected={props.selected}
+                identity={<Icon name={WORKER_KIND_GLYPHS.workflow_run} size={ICON_SIZE.md} color={theme.colors.text.secondary} />}
+                // A Run is named work, so its title reads in primary ink, as a live Session's does.
+                title={<SessionListRowTitle density={density} readableNativePhoneMinimal={readablePhone} textScale={fontScale}
+                    emphasized={props.selected} color={theme.colors.text.primary}>{name}</SessionListRowTitle>}
+                trailingProps={{ testID: `workflow-run-row:${props.runId}:status` }}
+                trailing={summary.state === 'succeeded' && status.tone === 'neutral' ? <WorkflowRunRowAge
+                    runId={props.runId} timestamp={Date.parse(summary.finishedAt ?? summary.updatedAt)}
+                    dataActive={dataActive} density={density} readablePhone={readablePhone} textScale={fontScale} /> : <View style={styles.status}>
                     {lifecycle.marker.kind === 'activity'
                         ? <ActivitySpinner size={ICON_SIZE.xs} animationEnabled={dataActive} color={workStatusGlyphColor(theme.colors, status.tone)} />
                         : <Icon name={lifecycle.marker.icon} size={ICON_SIZE.xs} color={workStatusGlyphColor(theme.colors, status.tone)} />}
-                    <SessionListRowSubtitle density={density} textScale={fontScale} style={workStatusWordStyle(status.tone)}>{word}</SessionListRowSubtitle>
+                    {lifecycle.marker.kind !== 'activity' || status.tone !== 'neutral'
+                        ? <SessionListRowSubtitle density={density} readableNativePhoneMinimal={readablePhone} textScale={fontScale} style={workStatusWordStyle(status.tone)}>{word}</SessionListRowSubtitle> : null}
                 </View>}
-                renderContainer={(content, style) => <WorkspaceDestinationRow href={createWorkflowRunRoute(props.runId)}>
+                renderContainer={(content, style) => <WorkspaceDestinationRow href={createWorkflowRunRoute(props.runId)} style={style}>
                     <Pressable style={style} testID={`workflow-run-row:${props.runId}`}
                     accessibilityRole="button" accessibilityState={{ selected: props.selected === true }}
                     accessibilityLabel={[name, word, context, starterLabel].filter(Boolean).join('. ')}
@@ -169,7 +218,7 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
                     {summary.startedBy === 'trigger' || summary.startedBy === 'agent'
                         ? <Icon name={summary.startedBy === 'trigger' ? 'lightning' : 'robot'} size={ICON_SIZE.xs}
                             color={theme.colors.text.tertiary} /> : null}
-                    {resultLine !== null || context ? <SessionListRowSubtitle density={density} textScale={fontScale}>
+                    {resultLine !== null || context ? <SessionListRowSubtitle density={density} readableNativePhoneMinimal={readablePhone} textScale={fontScale}>
                         {resultLine ?? context}</SessionListRowSubtitle> : null}
                     {resultEnabled && result.status === 'failed' ? <ToolbarButton
                         testID={`workflow-run-result:${props.runId}:retry`} label={t('workflows.retry')}
@@ -177,5 +226,5 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
                 </View> : null}
             </SessionListRowPresentation>
         </View>
-    </View>;
+    </GlassSurface>;
 }

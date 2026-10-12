@@ -12,8 +12,11 @@ import { type LayoutChangeEvent, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { ActionSettingsTargetModeControl } from '@/components/settings/actions/ActionSettingsTargetModeControl';
+import { ACTIONS_PROMPT_DOCUMENT_SETTINGS } from '@/components/settings/actions/actionsSettings';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 import { normalizeActionsSettings } from '@/components/settings/actions/normalizeActionsSettings';
 import { promptCollectionItemHref } from '@/components/settings/prompts/collection/promptCollectionModel';
 import { WorkSection, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
@@ -33,7 +36,7 @@ import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSession
 import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import {
   useActiveServerAccountScope,
-  useSettingMutable,
+  useSetting,
 } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import {
@@ -56,6 +59,22 @@ import {
 const COLLAPSED_LINES = 4;
 
 type SaveState = 'idle' | 'pending';
+/**
+ * Why a change didn't apply: the reviewed Session revision moved (the metadata CAS refused a stale
+ * basis), this Account may not change it, or it didn't land for another reason.
+ */
+type Refusal = 'conflict' | 'refused' | 'failed';
+const PERMISSION_REFUSALS: ReadonlySet<string> = new Set([
+  'forbidden',
+  'action_disabled',
+  'permission_denied',
+  'session_access_denied',
+]);
+const REFUSAL_COPY = {
+  conflict: 'sessionInstructions.setConflict',
+  refused: 'sessionInstructions.refused',
+  failed: 'sessionInstructions.setFailed',
+} as const satisfies Record<Refusal, string>;
 
 /** Who may read this Session's Instructions here: the owner, or nobody (shared viewers never see them). */
 export function resolveSessionInstructionsAccess(
@@ -67,11 +86,14 @@ export function resolveSessionInstructionsAccess(
   return readSessionOwnerMetadataView(session) ? 'readable' : 'unavailable';
 }
 
-/** An Action outcome as the section reports it: applied, waiting for approval, or refused. */
+/** An Action outcome as the section reports it: applied, waiting for approval, or why it didn't apply. */
 function readOutcome(
   result: ActionExecuteResult,
-): 'applied' | 'pending' | 'refused' {
-  if (!result.ok) return 'refused';
+): 'applied' | 'pending' | Refusal {
+  if (!result.ok) {
+    if (result.errorCode === 'conflict') return 'conflict';
+    return PERMISSION_REFUSALS.has(result.errorCode) ? 'refused' : 'failed';
+  }
   return ActionApprovalRequestCreatedResultSchema.safeParse(result.result)
     .success
     ? 'pending'
@@ -126,10 +148,11 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
   const styles = stylesheet;
   const { session, serverId, source } = props;
   const router = useRouter();
+  const execution = useMountedActionExecution(serverId);
   const homeName = resolveHomeDisplayLabel(getServerProfileById(serverId), serverId);
   const [saveState, setSaveState] = React.useState<SaveState>('idle');
-  // A refused change says so in the section, where the change was asked for, until the next attempt.
-  const [refused, setRefused] = React.useState(false);
+  // A change that didn't apply says why in the section, where it was asked for, until the next attempt.
+  const [refusal, setRefusal] = React.useState<Refusal | null>(null);
   const target = React.useMemo<SessionInstructionsTarget>(
     () => ({
       sessionId: session.id,
@@ -153,16 +176,16 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
   const settle = React.useCallback(
     async (run: () => Promise<ActionExecuteResult>): Promise<boolean> => {
       setSaveState('pending');
-      setRefused(false);
+      setRefusal(null);
       try {
         const outcome = readOutcome(await run());
-        if (outcome === 'refused') setRefused(true);
+        if (outcome !== 'applied' && outcome !== 'pending') setRefusal(outcome);
         // An approval request leaves the line saying it is waiting; the accepted write re-renders the section.
         if (outcome !== 'pending') setSaveState('idle');
         return outcome === 'applied';
       } catch {
         setSaveState('idle');
-        setRefused(true);
+        setRefusal('failed');
         return false;
       }
     },
@@ -172,11 +195,11 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
   const attach = React.useCallback(
     (next: PromptDocArtifactRefV1) => {
       fireAndForget(
-        settle(() => sessionInstructionsActions.set(target, next)),
+        settle(() => sessionInstructionsActions.set(target, next, undefined, execution.execute)),
         { tag: 'SessionInstructions.attach' },
       );
     },
-    [settle, target],
+    [execution.execute, settle, target],
   );
   const create = React.useCallback(() => {
     fireAndForget(
@@ -189,12 +212,14 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
               title: getSessionName(session, serverId),
               markdown: '',
             },
+            undefined,
+            execution.execute,
           );
           created.ref = authored.createdRef;
           return authored.result;
         });
         const opened = created.ref;
-        if (applied && opened)
+        if (applied && opened && execution.isCurrent())
           router.push(
             promptCollectionItemHref('doc', opened.artifactId, {
               serverId,
@@ -203,7 +228,7 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
       })(),
       { tag: 'SessionInstructions.create' },
     );
-  }, [router, serverId, session, settle, target]);
+  }, [execution.execute, execution.isCurrent, router, serverId, session, settle, target]);
   const detach = React.useCallback(() => {
     fireAndForget(
       (async () => {
@@ -215,11 +240,11 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
           },
         );
         if (confirmed)
-          await settle(() => sessionInstructionsActions.set(target, null));
+          await settle(() => sessionInstructionsActions.set(target, null, undefined, execution.execute));
       })(),
       { tag: 'SessionInstructions.detach' },
     );
-  }, [settle, target]);
+  }, [execution.execute, settle, target]);
 
   const status = source.status;
   const repairable =
@@ -252,11 +277,11 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
           busy
           reason={t('sessionInstructions.savePending')}
         />
-      ) : refused ? (
+      ) : refusal ? (
         <SurfaceFreshnessLine
-          testID="session-work-instructions.refused"
+          testID={`session-work-instructions.${refusal}`}
           tone="warning"
-          reason={t('sessionInstructions.refused')}
+          reason={t(REFUSAL_COPY[refusal])}
         />
       ) : status === 'refreshing' ? (
         <SurfaceFreshnessLine
@@ -392,7 +417,13 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
           }}
         />
       ) : null}
-      {document ? <SessionInstructionsAgentEdits serverId={serverId} /> : null}
+      {document ? (
+        <SessionInstructionsAgentEdits
+          serverId={serverId}
+          disabled={saveState === 'pending'}
+          settle={settle}
+        />
+      ) : null}
     </WorkSection>
   );
 });
@@ -456,10 +487,15 @@ function ClampedInstructions(
  * Agent edits: the real Ask first / Allowed control over the Account's `prompt_doc.update` setting for
  * the Agent surface, scoped in words to every Session on it. Only where this device holds that Account.
  */
-function SessionInstructionsAgentEdits(props: Readonly<{ serverId: string }>) {
+function SessionInstructionsAgentEdits(props: Readonly<{
+  serverId: string;
+  disabled: boolean;
+  settle: (run: () => Promise<ActionExecuteResult>) => Promise<boolean>;
+}>) {
   const accountScope = useActiveServerAccountScope();
   const deviceType = useDeviceType();
-  const [rawSettings, setRawSettings] = useSettingMutable('actionsSettingsV1');
+  const rawSettings = useSetting('actionsSettingsV1');
+  const writeSetting = useSettingActionWriter({ serverId: props.serverId });
   const settings = React.useMemo(
     () => normalizeActionsSettings(rawSettings),
     [rawSettings],
@@ -469,9 +505,8 @@ function SessionInstructionsAgentEdits(props: Readonly<{ serverId: string }>) {
       resolveSessionInstructionsPolicy({
         settings,
         targetId: 'agent',
-        onChange: (next) => setRawSettings(normalizeActionsSettings(next)),
       }),
-    [setRawSettings, settings],
+    [settings],
   );
   if (
     !accountScope ||
@@ -495,8 +530,14 @@ function SessionInstructionsAgentEdits(props: Readonly<{ serverId: string }>) {
           accessibilityLabel={t('sessionInstructions.agentEdits')}
           testIDPrefix="session-work-instructions.agentEdits"
           layout={stacked ? 'stacked' : 'inline'}
+          disabled={props.disabled}
           onChange={(value) => {
-            if (value !== 'on') policy.setValue(value);
+            if (value !== 'on') {
+              fireAndForget(
+                props.settle(() => writeSetting(ACTIONS_PROMPT_DOCUMENT_SETTINGS.settings.promptDocAgentEdits, value)),
+                { tag: 'SessionInstructions.agentEdits' },
+              );
+            }
           }}
         />
       }
@@ -508,10 +549,11 @@ function SessionInstructionsAgentEdits(props: Readonly<{ serverId: string }>) {
  * Attach existing: the account's Prompt Library documents in the shared searchable menu. The document
  * list mounts only while the menu is open, so a closed Work section subscribes to no library rows.
  */
-function AttachExistingInstructions(
+export function AttachExistingInstructions(
   props: Readonly<{
     serverId: string;
     title: string;
+    testID?: string;
     /** Beside a primary way to start (Create instructions): the quiet second choice, not a second button. */
     quiet?: boolean;
     onAttach: (ref: PromptDocArtifactRefV1) => void;
@@ -532,7 +574,7 @@ function AttachExistingInstructions(
   return (
     <View ref={anchorRef} collapsable={false}>
       <RoundButton
-        testID="session-work-instructions.attach"
+        testID={props.testID ?? 'session-work-instructions.attach'}
         size="small"
         display={props.quiet ? 'inverted' : 'secondary'}
         title={props.title}
@@ -577,7 +619,7 @@ export function AttachExistingMenu(
       searchPlaceholder={
         props.searchPlaceholder ?? t('sessionInstructions.attachTitle')
       }
-      onPick={(ref) => { if (ref.kind === 'doc') props.onAttach(ref); }}
+      onPick={(ref) => { if (ref.kind === 'doc') props.onAttach({ ...ref, kind: ref.kind }); }}
     />
   );
 }

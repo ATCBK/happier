@@ -550,9 +550,15 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', async (importOriginal) => {
         ...executor,
         // Provider demand exercises the real action admission and RPC path.
         // Unrelated legacy shell scenarios retain their existing action fixture.
-        execute: (...input: Parameters<typeof executor.execute>) => input[0].startsWith('providers.')
-          ? executor.execute(...input)
-          : actionExecuteSpy(...input),
+        execute: (...input: Parameters<typeof executor.execute>) => {
+          if (input[0] === 'session.mode.set' || input[0] === 'session.config_option.set') {
+            actionExecuteSpy(...input);
+            return executor.execute(...input);
+          }
+          return (input[0].startsWith('providers.') || input[0] === 'session.permission_mode.set' || input[0] === 'session.message.send' || input[0] === 'session.turn.cancel')
+            ? executor.execute(...input)
+            : actionExecuteSpy(...input);
+        },
       };
     },
   };
@@ -760,6 +766,7 @@ let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> |
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { SessionView } = await import('./SessionView');
 const draftValues = await import('@/dev/testkit/sessionDraftRepositoryTestkit');
+vi.mock('expo-file-system', async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);
 
 describe('SessionView (direct sessions)', () => {
   const canonicalDraftScope: ServerAccountScope = {
@@ -877,7 +884,9 @@ describe('SessionView (direct sessions)', () => {
       await selectAgent(second, 'codex');
     });
 
-    it('retains unknown submission identity through remount and consumes delayed custody while preserving newer text', async () => {
+    it.each([
+      ['primary', false], ['primary', true], ['embedded', false], ['embedded', true],
+    ] as const)('retains unknown submission identity through remount and consumes delayed custody while preserving newer text (%s, newer mode: %s)', async (kind, chooseNewerMode) => {
       agentTransitionResult = 'outcome_unknown';
       settingsState.current = { ...settingsState.current, sessionPermissionModeApplyTiming: 'next_prompt' };
       storageState.sessions.s1 = {
@@ -885,7 +894,19 @@ describe('SessionView (direct sessions)', () => {
         permissionMode: 'read-only', permissionModeUpdatedAt: 20,
         metadata: { ...storageState.sessions.s1.metadata, permissionMode: 'default', permissionModeUpdatedAt: 1 },
       };
+      const presentation: SessionViewPresentation = kind === 'embedded'
+        ? { kind: 'embedded', composer: 'auto', permissionModePicker: ['default', 'read-only'] }
+        : { kind: 'primary' };
+      // Agent switching is authored in the primary view; embedded views recover the same retained draft.
+      homes.answer(canonicalDraftScope.serverId, '/v1/account/entity-rows/connected-accounts/purposes', { body: {
+        status: 'present', revision: 1, content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } },
+      } });
       const first = await renderSessionViewAndSettle();
+      await act(async () => { findAgentInput(first).props.onPermissionModeChange('read-only'); });
+      await settleDirectSessionView();
+      const capturedModeRevision = getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })
+        ?.document.extensions.happier?.nextPromptPermissionModeV1?.mutationId;
+      expect(capturedModeRevision).toEqual(expect.any(String));
       const localId = await submitSwitch(first);
       expect(readArm()?.submission).toMatchObject({
         localId, currentness: { text: 'switch and send this', mentions: [], composerAttachments: [], attachmentDraftIds: [] },
@@ -893,24 +914,37 @@ describe('SessionView (direct sessions)', () => {
       storageState.sessions.s1.metadata = { ...storageState.sessions.s1.metadata, flavor: 'claude' };
       await first.unmount();
 
-      const second = await renderSessionViewAndSettle();
+      const second = await renderSessionViewAndSettle({ presentation });
       expect(readArm()?.submission?.localId).toBe(localId);
       expect(findAgentInput(second).props.value).toBe('switch and send this');
-      expect(readOptions(second).map((row) => row.id)).not.toContain(targetKey('codex'));
+      if (kind === 'primary') expect(readOptions(second).map((row) => row.id)).not.toContain(targetKey('codex'));
       await act(async () => {
         findAgentInput(second).props.onChangeText('a newer draft');
         storage.getState().updateSessionPermissionMode('s1', 'yolo');
       });
+      if (chooseNewerMode) {
+        // Choosing the same value after another choice must still protect its newer revision.
+        await act(async () => { findAgentInput(second).props.onPermissionModeChange('default'); });
+        await act(async () => { findAgentInput(second).props.onPermissionModeChange('read-only'); });
+        expect(getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })
+          ?.document.extensions.happier?.nextPromptPermissionModeV1?.mutationId).not.toBe(capturedModeRevision);
+      }
       expect(readArm()?.submission?.input.meta.permissionMode).toBe('read-only');
       await publishCustody(localId);
       expect(storage.getState().sessions.s1.permissionMode).toBe('yolo');
       expect(homes.requests.filter(({ input }) => SessionMetadataTuplePatchV1Schema.safeParse(input).success)).toEqual([]);
 
       expect(readArm()).toBeNull();
+      const retainedMode = getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })
+        ?.document.extensions.happier?.nextPromptPermissionModeV1;
+      if (chooseNewerMode) expect(retainedMode?.value).toBe('read-only');
+      else expect(retainedMode).toBeUndefined();
       expect(findAgentInput(second).props.value).toBe('a newer draft');
-      await openPicker(second);
-      expect(readOptions(second).map((row) => row.id)).toContain(targetKey('codex'));
-      await selectAgent(second, 'codex');
+      if (kind === 'primary') {
+        await openPicker(second);
+        expect(readOptions(second).map((row) => row.id)).toContain(targetKey('codex'));
+        await selectAgent(second, 'codex');
+      }
     });
 
     it('preserves a newer armed Agent and composer when an older submission reaches custody', async () => {
@@ -1386,6 +1420,22 @@ describe('SessionView (direct sessions)', () => {
 
   function findAgentInput(screen: Awaited<ReturnType<typeof renderSessionView>>) {
     return screen.findByTestId('session-agent-input') as any;
+  }
+
+  // The Provider binding family speaks on the composer's status line (title, detail, one recovery).
+  const PROVIDER_BINDING_LINE_TEXTS = new Set([
+    'session.providerBinding.changedTitle',
+    'session.providerBinding.unavailableTitle',
+    'session.providerBinding.disabledTitle',
+    'session.providerBinding.incompatibleTitle',
+    'settingsProviders.errors.unreachableTitle',
+    'teams.credentials.sessionDeniedTitle',
+  ]);
+  function findProviderBindingLine(screen: Awaited<ReturnType<typeof renderSessionView>>) {
+    const status = findAgentInput(screen).props.connectionStatus as
+      | { text: string; detail?: string; action?: { label: string; onPress: () => unknown } }
+      | undefined;
+    return status && PROVIDER_BINDING_LINE_TEXTS.has(status.text) ? status : null;
   }
 
   async function mountSessionModelPicker(screen: Awaited<ReturnType<typeof renderSessionView>>) {
@@ -1896,6 +1946,18 @@ describe('SessionView (direct sessions)', () => {
     await homes.reset();
   });
 
+  it('renders a stopped session while its Agent identity is unavailable', async () => {
+    storageState.sessions.s1 = createSessionFixture({
+      ...storageState.sessions.s1,
+      active: false,
+      metadata: { machineId: 'machine-1', host: 'happy-host', path: '/tmp' },
+    });
+
+    const screen = await renderSessionViewAndSettle();
+
+    expect(screen.findByTestId('session-agent-input')).not.toBeNull();
+  });
+
   it('surfaces generic usage-limit recovery actions and status for provider runtime issues', async () => {
     featureEnabledState['sessions.usageLimitRecovery'] = true;
     settingByKeyState.current.usageLimitRecoverySettingsV1 = { v: 1, mode: 'ask', resumePromptMode: 'off' };
@@ -2004,7 +2066,7 @@ describe('SessionView (direct sessions)', () => {
     expect(restartAction).toBeTruthy();
     expect(restartAction?.props.disabled).toBe(true);
     expect(restartAction?.props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
-    expect(restartAction?.props.onPress).toBeUndefined();
+    await pressTestInstanceAsync(restartAction);
     expect(findStaleRunnerStatusBadge(screen)).toEqual(expect.objectContaining({
       testID: 'session-staleRunner-status-badge',
       tone: 'warning',
@@ -2228,11 +2290,10 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
 
     expect(screen.findByTestId('session-staleRunner-version')).toBeTruthy();
-    // A disabled banner action carries no press handler at all, so a view-only participant has no
-    // reachable path to the restart operation.
+    // The shared interaction owner refuses a disabled press before the restart effect.
     const restartAction = screen.findByTestId('session-staleRunner-restart');
     expect(restartAction?.props.disabled).toBe(true);
-    expect(restartAction?.props.onPress).toBeUndefined();
+    await pressTestInstanceAsync(restartAction);
 
     expect(restartStaleSessionRunnerSpy).not.toHaveBeenCalled();
     expect(screen.findByTestId('session-staleRunner-version')).toBeTruthy();
@@ -4069,6 +4130,17 @@ describe('SessionView (direct sessions)', () => {
       agentInput.props.onAcpConfigOptionChange('thinking', 'high');
     });
 
+    expect(actionExecuteSpy).toHaveBeenCalledWith(
+      'session.mode.set',
+      { sessionId: 's1', modeId: 'plan' },
+      expect.objectContaining({ surface: 'ui', defaultSessionId: 's1' }),
+    );
+    expect(actionExecuteSpy).toHaveBeenCalledWith(
+      'session.config_option.set',
+      { sessionId: 's1', configId: 'thinking', valueId: 'high' },
+      expect.objectContaining({ surface: 'ui', defaultSessionId: 's1' }),
+    );
+
     await waitForHomeGovernance(() => {
       const metadata = readSessionOwnerMetadataView(storage.getState().sessions.s1);
       expect(metadata?.acpSessionModeOverrideV1).toEqual(expect.objectContaining({ modeId: 'plan' }));
@@ -4294,7 +4366,7 @@ describe('SessionView (direct sessions)', () => {
     // The Home accepted this selection; only the process already running has
     // not adopted it. Restarting stays the person's explicit choice, and the
     // committed selection is never reported as an unavailable connection.
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
     expect(restartConfigurationSessionRunnerSpy).not.toHaveBeenCalled();
     expect(modalAlertSpy).not.toHaveBeenCalled();
   });
@@ -4331,7 +4403,7 @@ describe('SessionView (direct sessions)', () => {
     await settleDirectSessionView();
 
     // Nothing was saved, so there is nothing to restart into.
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeNull();
+    expect(findProviderBindingLine(screen)).toBeNull();
     expect(modalAlertSpy).toHaveBeenCalledWith(
       'common.error',
       'teams.credentials.selection.activeTransitionUnsupported',
@@ -4403,11 +4475,11 @@ describe('SessionView (direct sessions)', () => {
     };
 
     const firstScreen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
-    expect(firstScreen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(firstScreen)).toBeTruthy();
     await firstScreen.unmount();
 
     const remountedScreen = await renderSessionViewAndSettle({ routeServerId: 'server-route-1' });
-    expect(remountedScreen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(remountedScreen)).toBeTruthy();
     expect(
       (await mountSessionModelPicker(remountedScreen)).props.selectedTeamCredentialModel,
     ).toEqual({
@@ -4509,8 +4581,8 @@ describe('SessionView (direct sessions)', () => {
     });
     await settleDirectSessionView();
 
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
-    await pressTestInstanceAsync(screen.findByTestId('session.providerBinding.action'));
+    expect(findProviderBindingLine(screen)).toBeTruthy();
+    await act(async () => { await findProviderBindingLine(screen)?.action?.onPress(); });
     expect(restartProviderBindingSessionRunnerSpy).toHaveBeenCalledWith({
       runtimeState: expect.objectContaining({
         sessionId: 's1',
@@ -4611,7 +4683,7 @@ describe('SessionView (direct sessions)', () => {
       await Promise.resolve();
     });
     await settleDirectSessionView();
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
 
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
@@ -4630,9 +4702,9 @@ describe('SessionView (direct sessions)', () => {
       serverId: 'server-route-1',
     });
 
-    const restartAction = screen.findByTestId('session.providerBinding.action');
+    const restartAction = findProviderBindingLine(screen)?.action;
     if (!restartAction) throw new Error('expected provider binding restart action');
-    const restartPromise = restartAction.props.onPress() as Promise<void>;
+    const restartPromise = restartAction.onPress() as Promise<void>;
     await Promise.resolve();
     expect(restartProviderBindingSessionRunnerSpy).not.toHaveBeenCalled();
 
@@ -4694,7 +4766,7 @@ describe('SessionView (direct sessions)', () => {
     });
     await settleDirectSessionView();
 
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
   });
 
   it('restores restart-to-apply UX after remount from durable native intent versus active runtime facts', async () => {
@@ -4749,7 +4821,7 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
   });
 
   it('projects a matching exact runner witness as running active model truth after remount', async () => {
@@ -4808,7 +4880,7 @@ describe('SessionView (direct sessions)', () => {
       ref: activeSelection,
       status: 'running',
     });
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeNull();
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
   it('keeps V1 presentation but retracts a stale V2 runner witness when a remount refresh is unavailable', async () => {
@@ -4872,7 +4944,7 @@ describe('SessionView (direct sessions)', () => {
       ref: activeSelection,
       status: 'last_reported',
     });
-    expect(secondScreen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(secondScreen)).toBeTruthy();
   });
 
   it('keeps restart-to-apply visible after same-version PID reuse invalidates active proof', async () => {
@@ -4932,7 +5004,7 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
     expect((await mountSessionModelPicker(screen)).props.reportedModel).toEqual({
       ref: {
         agentTargetKey: 'agent:happier.agent.codex/codex',
@@ -4982,7 +5054,7 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
   });
 
   it('does not label a fallback current-model projection as running without exact active proof', async () => {
@@ -5043,7 +5115,7 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
   });
 
   it('keeps restart-to-apply UX for supported older Provider bindings without an embedded model', async () => {
@@ -5091,7 +5163,7 @@ describe('SessionView (direct sessions)', () => {
 
     const screen = await renderSessionViewAndSettle();
 
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
   });
 
   it('does not clear local restart presentation from fallback current-model metadata', async () => {
@@ -5122,7 +5194,7 @@ describe('SessionView (direct sessions)', () => {
       await Promise.resolve();
     });
     await settleDirectSessionView();
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
 
     storageState.sessions.s1 = {
       ...storageState.sessions.s1,
@@ -5146,7 +5218,7 @@ describe('SessionView (direct sessions)', () => {
     };
     await updateSessionViewAndSettle(screen, { jumpToSeq: 1 });
 
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
   });
 
   it('suppresses local Provider restart presentation when the Providers feature turns off', async () => {
@@ -5177,12 +5249,12 @@ describe('SessionView (direct sessions)', () => {
       await Promise.resolve();
     });
     await settleDirectSessionView();
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeTruthy();
+    expect(findProviderBindingLine(screen)).toBeTruthy();
 
     featureEnabledState.providers = false;
     await updateSessionViewAndSettle(screen, { jumpToSeq: 1 });
 
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeNull();
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
   it('does not derive Provider switch presentation from retained projection data after Providers are disabled', async () => {
@@ -5263,7 +5335,7 @@ describe('SessionView (direct sessions)', () => {
     const modelContentOverride = detail.root.findByType(SessionModelPicker);
     expect(modelContentOverride.props.providerGroups).toEqual([]);
     expect(modelContentOverride.props.selected).toEqual(exactSelection);
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeNull();
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
   it('preserves the persisted launch binding label when Providers are feature-disabled', async () => {
@@ -5300,7 +5372,7 @@ describe('SessionView (direct sessions)', () => {
         }),
       }),
     ]));
-    expect(screen.findByTestId('session.providerBinding.banner')).toBeNull();
+    expect(findProviderBindingLine(screen)).toBeNull();
   });
 
   it('requests Provider models only while the session engine picker is open', async () => {
@@ -5770,6 +5842,10 @@ describe('SessionView (direct sessions)', () => {
       await agentInput.props.onSend();
     });
     await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'Exact Session delivery acknowledgement is unavailable'));
+    // Action settlement can precede React's subscribed draft projection commit.
+    expect(getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })
+      ?.document.composer.text.value ?? '').toBe('');
+    await settleDirectSessionView();
 
     agentInput = findAgentInput(screen);
     const pending = storage.getState().sessionPending.s1;
@@ -5916,6 +5992,141 @@ describe('SessionView (direct sessions)', () => {
       expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
     } finally {
       releaseSubmit.resolve();
+      await clearCanonicalSessionDraft();
+    }
+  });
+
+  it.each(['primary', 'embedded'] as const)('keeps next-prompt mode with the shared draft until Send in the %s composer', async (kind) => {
+    installRunnerActiveDirectSubmitStatus();
+    useCanonicalDraftScope();
+    settingsState.current = { ...settingsState.current, sessionPermissionModeApplyTiming: 'next_prompt' };
+    const { storage } = await import('@/sync/domains/state/storage');
+    const drafts = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+    const committed = storage.getState().sessions.s1.permissionMode;
+    const screen = await renderSessionViewAndSettle({ presentation: kind === 'embedded'
+      ? { kind: 'embedded', composer: 'auto', permissionModePicker: ['default', 'read-only'] }
+      : { kind: 'primary' } });
+    await act(async () => { findAgentInput(screen).props.onPermissionModeChange('read-only'); });
+    await settleDirectSessionView();
+    expect(storage.getState().sessions.s1.permissionMode).toBe(committed);
+    expect(drafts.getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })
+      ?.document.extensions.happier?.nextPromptPermissionModeV1?.value).toBe('read-only');
+    expect(findAgentInput(screen).props.permissionMode).toBe('read-only');
+    await act(async () => { findAgentInput(screen).props.onChangeText('use the selected mode'); });
+    const permittedSettings = storage.getState().settings;
+    storage.setState({ settings: { ...permittedSettings, actionsSettingsV1: {
+      v: 1, actions: { 'session.message.send': { disabledSurfaces: ['ui'] } },
+    } } });
+    await act(async () => { await findAgentInput(screen).props.onSend(); });
+    expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
+    expect(findAgentInput(screen).props.value).toBe('use the selected mode');
+    await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'common.disabled'));
+    storage.setState({ settings: permittedSettings });
+    syncSubmitMessageSpy.mockImplementationOnce(async () => { throw new Error('Injected Send refusal'); });
+    await act(async () => { await findAgentInput(screen).props.onSend(); });
+    expect(findAgentInput(screen).props.value).toBe('use the selected mode');
+    expect(drafts.getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })
+      ?.document.extensions.happier?.nextPromptPermissionModeV1?.value).toBe('read-only');
+    syncSubmitMessageSpy.mockClear();
+    await act(async () => { await findAgentInput(screen).props.onSend(); });
+    expect(syncSubmitMessageSpy).toHaveBeenCalledWith(expect.objectContaining({ message: {
+      t: 'plain', v: expect.objectContaining({ meta: expect.objectContaining({ permissionMode: 'read-only' }) }),
+    } }));
+    expect(drafts.getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })
+      ?.document.extensions.happier?.nextPromptPermissionModeV1).toBeUndefined();
+    await clearCanonicalSessionDraft();
+  });
+
+  it('shows pending Send approval and retains its canonical artifact and composer draft', async () => {
+    installRunnerActiveDirectSubmitStatus();
+    useCanonicalDraftScope();
+    renderRealAgentInputPermissionSurfaceState.current = true;
+    const screen = await renderSessionViewAndSettle();
+    await homes.requireUiApproval(canonicalDraftScope.serverId, 'session.message.send');
+    await act(async () => { findAgentInput(screen).props.onChangeText('wait for my approval'); });
+    await act(async () => { findAgentInput(screen).props.onSend(); });
+    await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalledWith('approvals.title', 'approvals.status.open'));
+    await settleDirectSessionView();
+    const artifacts = homes.artifacts(canonicalDraftScope.serverId).list();
+    expect(artifacts).toHaveLength(1);
+    const artifact = artifacts[0];
+    expect(StoredApprovalRequestSchema.parse(JSON.parse(homes.artifacts(canonicalDraftScope.serverId).readPlainBody(artifact.id)!)))
+      .toMatchObject({ status: 'open', actionId: 'session.message.send', actionArgs: { message: 'wait for my approval' } });
+    expect(findAgentInput(screen).props.approvalRequests).toEqual([
+      expect.objectContaining({ artifact: expect.objectContaining({ id: artifact.id }), approval: expect.objectContaining({ status: 'open' }) }),
+    ]);
+    expect(screen.findByTestId('approval-prompt-card')).not.toBeNull();
+    expect(findAgentInput(screen).props.value).toBe('wait for my approval');
+    expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
+    expect(modalAlertSpy.mock.calls.some(([title]) => title === 'common.error')).toBe(false);
+    await clearCanonicalSessionDraft();
+  });
+
+  it('shows permission-mode policy refusal without changing the current mode', async () => {
+    installRunnerActiveDirectSubmitStatus();
+    const screen = await renderSessionViewAndSettle();
+    const committed = storage.getState().sessions.s1.permissionMode;
+    const permittedSettings = storage.getState().settings;
+    storage.setState({ settings: { ...permittedSettings, actionsSettingsV1: {
+      v: 1, actions: { 'session.permission_mode.set': { disabledSurfaces: ['ui'] } },
+    } } });
+    await act(async () => { findAgentInput(screen).props.onPermissionModeChange('read-only'); });
+    await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'common.disabled'));
+    expect(storage.getState().sessions.s1.permissionMode).toBe(committed);
+  });
+
+  it('shows pending stop-turn approval without treating it as a completed cancellation', async () => {
+    installRunnerActiveDirectSubmitStatus();
+    const screen = await renderSessionViewAndSettle();
+    await homes.requireUiApproval(canonicalDraftScope.serverId, 'session.turn.cancel');
+    await act(async () => { await findAgentInput(screen).props.onAbort(); });
+    await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalledWith('approvals.title', 'approvals.status.open'));
+    expect(homes.artifacts(canonicalDraftScope.serverId).list()).toHaveLength(1);
+    expect(externalRpcRequests.filter((request) => request.method === 'abort')).toHaveLength(0);
+    expect(modalAlertSpy.mock.calls.some(([title]) => title === 'common.error')).toBe(false);
+  });
+
+  it('shows definitive API-token Send refusal in the standalone embedded composer and retains the draft', async () => {
+    installRunnerActiveDirectSubmitStatus();
+    useCanonicalDraftScope();
+    // Standalone HTTP embeds address persisted Sessions, not a Machine-only
+    // direct Session requiring a separate takeover before Send admission.
+    delete storageState.sessions.s1.metadata.directSessionV1;
+    const { getCurrentAuth, setCurrentAuth } = await import('@/auth/context/currentAuth');
+    const previousAuth = getCurrentAuth();
+    if (!accountConnection) throw new Error('Missing connected Home fixture');
+    const refuseCredentialMutation = async (): Promise<never> => { throw new Error('Unexpected credential mutation'); };
+    homes.answer(canonicalDraftScope.serverId, '/v1/actions/session.message.send', { status: 403, body: {
+      v: 1, actionId: 'session.message.send', execution: { ok: false, errorCode: 'session_input_unauthorized', error: 'This token cannot send to this session' },
+    } });
+    try {
+      // Frame HTTP authority stays real. The native host harness renders its
+      // Session through the saved-Home projection after endpoint hydration.
+      storage.setState({ sessions: {} });
+      await sync.create(accountConnection.credentials, null, undefined, { scope: { kind: 'embedSession', sessionId: 's1' },
+        accountId: canonicalDraftScope.accountId, endpointUrl: 'https://server-route-1', accountMode: 'plain', isCurrent: () => true });
+      const screen = await renderSessionViewAndSettle({ presentation: { kind: 'embedded', composer: 'auto' } });
+      setCurrentAuth({ isAuthenticated: true, credentials: accountConnection.credentials, credentialAuthorityKind: 'api_token',
+        login: refuseCredentialMutation, loginWithCredentials: refuseCredentialMutation, logout: refuseCredentialMutation,
+        refreshFromActiveServer: async () => {} });
+      expect(sync.getEmbedSessionRequestContext()?.isCurrent()).toBe(true);
+      expect(getCurrentAuth()?.credentialAuthorityKind).toBe('api_token');
+      await act(async () => { findAgentInput(screen).props.onChangeText('keep this refused message'); });
+      await settleDirectSessionView();
+      expect(findAgentInput(screen).props.value).toBe('keep this refused message');
+      await act(async () => { findAgentInput(screen).props.onSend(); });
+      await settleDirectSessionView();
+      await waitForHomeGovernance(() => expect(homes.requestsFor('/v1/actions/session.message.send')).toHaveLength(1));
+      await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'This token cannot send to this session'));
+      await settleDirectSessionView();
+      expect(homes.requestsFor('/v1/actions/session.message.send')).toHaveLength(1);
+      expect(findAgentInput(screen).props.value).toBe('keep this refused message');
+      expect(getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })?.document.composer.text.value)
+        .toBe('keep this refused message');
+      expect(syncSubmitMessageSpy).not.toHaveBeenCalled();
+    } finally {
+      sync.disposeEmbedSession();
+      setCurrentAuth(previousAuth);
       await clearCanonicalSessionDraft();
     }
   });

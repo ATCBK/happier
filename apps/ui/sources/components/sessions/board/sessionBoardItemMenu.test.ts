@@ -19,6 +19,16 @@ const item = {
 };
 
 describe('buildSessionBoardItemActions', () => {
+    it('offers native builtin reading, pinning and supported Session-to-Account copies', () => {
+        const actions = buildSessionBoardItemActions({ density: 'compact', canEdit: false,
+            item: { ...item, source: { kind: 'widget', instance: { v: 1, id: 'usage',
+                definition: { kind: 'builtin', id: 'usage_daily' }, bindings: {} } } },
+            definition: { onAbout: vi.fn(), onAddTo: vi.fn(), onSaveAsYours: vi.fn() },
+            visualCopy: { onShare: vi.fn() }, onPinToBoard: vi.fn(),
+        });
+        expect(actions.map(action => action.id)).toEqual(expect.arrayContaining(['pin-to-board', 'about', 'addTo', 'saveAsYours', 'shareVisual']));
+    });
+
     it('groups the complete item operation set by content, movement, geometry, and destruction', () => {
         const actions = buildSessionBoardItemActions({
             density: 'full',

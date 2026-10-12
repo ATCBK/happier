@@ -2,11 +2,16 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { serveExternalSessionBrowseHome } from '@/dev/testkit/harness/externalSessionBrowseHome';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const candidatesListSpy = vi.hoisted(() => vi.fn());
 
-vi.mock('@/sync/ops/machineExternalSessions', () => ({
-    machineExternalSessionsCandidatesList: (...args: unknown[]) => candidatesListSpy(...args),
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: (call: { method: string; payload: unknown; signal?: AbortSignal; serverId?: string }) => {
+        if (call.method !== RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) throw new Error(`Unexpected Browse RPC ${call.method}`);
+        return candidatesListSpy(call.payload, { signal: call.signal, serverId: call.serverId });
+    },
 }));
 
 vi.mock('@/text', () => ({
@@ -60,7 +65,8 @@ function preparationPage(
 function policyScope(sourcePolicyId: `es-source-policy:v1:${string}`) {
     return {
         qualifiedIdentity: {
-            agent: { pluginId: 'plugin-a', localId: 'codex' },
+            v: 1 as const,
+            agent: { pluginId: 'acme.review', localId: 'codex' },
             source: { kind: 'codexHome', contractVersion: 1 as const },
         },
         sourcePolicyId,
@@ -68,12 +74,18 @@ function policyScope(sourcePolicyId: `es-source-policy:v1:${string}`) {
 }
 
 describe('useExternalSessionBrowseCandidates pagination', () => {
-    beforeEach(() => {
+    let home: Awaited<ReturnType<typeof serveExternalSessionBrowseHome>>;
+    beforeEach(async () => {
         candidatesListSpy.mockReset();
+        home = await serveExternalSessionBrowseHome({
+            homes: [{ key: 'browse', serverUrl: 'https://browse-pagination.test', accountId: 'browse-account' }],
+            route: () => undefined,
+        });
     });
 
     afterEach(() => {
         standardCleanup();
+        home.dispose();
     });
 
     it('admits only one same-tick request for each scope and cursor', async () => {

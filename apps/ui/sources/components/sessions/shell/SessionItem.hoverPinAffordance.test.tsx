@@ -235,6 +235,28 @@ describe('SessionItem pin hover affordance (web)', () => {
         await screen.unmount();
     });
 
+    it('shows a carried row as a quiet ghost: no hover actions while it is being dragged (lab E1)', async () => {
+        const screen = await renderSessionItem({
+            session: createSession('sess_1'),
+            serverId: 'server_a',
+            pinned: false,
+            onTogglePinned: vi.fn(),
+            selected: false,
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            variant: 'default',
+            compact: false,
+            dragEnabled: true,
+            isBeingDragged: true,
+        });
+
+        const row = findSessionRow(screen, 'sess_1');
+        expect(findPinActions(row)).toHaveLength(0);
+
+        await screen.unmount();
+    });
+
     it('keeps the actions visible when moving the cursor from the row to the actions area', async () => {
         const screen = await renderSessionItem({
             session: createSession('sess_3'),

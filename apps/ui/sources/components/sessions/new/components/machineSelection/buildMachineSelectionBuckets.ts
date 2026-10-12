@@ -4,6 +4,7 @@ import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/iden
 import { buildMachineOwnershipGroups } from '@/sync/domains/machines/machineOwnershipGroups';
 
 import { resolveMachinePickerPresence } from '../resolveMachinePickerPresence';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 export type MachineSelectionBucketId = 'recent' | 'favorites' | 'all' | 'shared';
 export type MachineSelectionFavoriteGroupPlacement = 'beforeRecent' | 'afterRecent';
@@ -25,6 +26,7 @@ export type MachineSelectionBuckets<TMachine extends MachineDisplayRenderable = 
 }>;
 
 export type BuildMachineSelectionBucketsParams<TMachine extends MachineDisplayRenderable = Machine> = Readonly<{
+    scope?: MachineReachabilityScope | null;
     machines: ReadonlyArray<TMachine>;
     recentMachines?: ReadonlyArray<TMachine>;
     favoriteMachines?: ReadonlyArray<TMachine>;
@@ -35,13 +37,13 @@ export type BuildMachineSelectionBucketsParams<TMachine extends MachineDisplayRe
     includeSelectedUnavailableMachineId?: string | null;
 }>;
 
-function isMachineSelectableForLaunch(machine: MachineDisplayRenderable): boolean {
-    return resolveMachinePickerPresence(machine).selectable;
+function isMachineSelectableForLaunch(machine: MachineDisplayRenderable, scope: MachineReachabilityScope | null | undefined): boolean {
+    return resolveMachinePickerPresence(machine, undefined, scope).selectable;
 }
 
-function prioritizeSelectableMachines<T extends MachineDisplayRenderable>(machines: ReadonlyArray<T>): T[] {
+function prioritizeSelectableMachines<T extends MachineDisplayRenderable>(machines: ReadonlyArray<T>, scope: MachineReachabilityScope | null | undefined): T[] {
     return machines
-        .map((machine, index) => ({ machine, index, selectable: isMachineSelectableForLaunch(machine) }))
+        .map((machine, index) => ({ machine, index, selectable: isMachineSelectableForLaunch(machine, scope) }))
         .sort((left, right) => {
             if (left.selectable !== right.selectable) return left.selectable ? -1 : 1;
             return left.index - right.index;
@@ -64,10 +66,10 @@ export function buildMachineSelectionBuckets<TMachine extends MachineDisplayRend
     const visibleFavoriteMachines = (params.favoriteMachines ?? []).filter(isVisible);
 
     const launchPinnedRecentMachines = disableOfflineMachines
-        ? visibleRecentMachines.filter(isMachineSelectableForLaunch)
+        ? visibleRecentMachines.filter(machine => isMachineSelectableForLaunch(machine, params.scope))
         : visibleRecentMachines;
     const launchPinnedFavoriteMachines = disableOfflineMachines
-        ? visibleFavoriteMachines.filter(isMachineSelectableForLaunch)
+        ? visibleFavoriteMachines.filter(machine => isMachineSelectableForLaunch(machine, params.scope))
         : visibleFavoriteMachines;
 
     const favoriteMachineIdSet = showFavorites
@@ -90,7 +92,7 @@ export function buildMachineSelectionBuckets<TMachine extends MachineDisplayRend
         ? visibleMachines
         : visibleMachines.filter((machine) => !pinnedIds.has(machine.id));
     const allMachines = disableOfflineMachines
-        ? prioritizeSelectableMachines(unpinnedMachines)
+        ? prioritizeSelectableMachines(unpinnedMachines, params.scope)
         : unpinnedMachines;
 
     const recentBucket: MachineSelectionBucket<TMachine> = {

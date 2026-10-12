@@ -3,7 +3,8 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
-import { createProviderModelProjectionGroupFixture, renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
+import { createProviderModelProjectionGroupFixture } from '@/dev/testkit/harness/providerSettingsHarness';
+import { renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
 import {
     buildSessionModelPickerNotes,
     resolveSessionModelPickerSelection,
@@ -11,6 +12,7 @@ import {
     type SessionModelPickerExperimentalConfirmationController,
 } from './SessionModelPicker';
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
+import { SessionModelApplyTimingContext } from './SessionModelSourceBrowseHandoff';
 import { SelectionList } from '@/components/ui/selectionList/SelectionList';
 import { t } from '@/text';
 
@@ -32,12 +34,12 @@ function submitCustomModelValue(screen: Readonly<{
 
 describe('SessionModelPicker', () => {
     it('does not turn declaration-only experimental compatibility into runtime confirmation', () => {
-        const ref = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_a', modelId: 'manual-model' };
+        const ref = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'manual-model' };
         const group = createProviderModelProjectionGroupFixture({ modelLoadAction: 'machine_required', rows: [{
             ref, descriptor: { id: ref.modelId, name: 'Manual model' },
             confidence: 'account_unverified', loadState: 'unknown', visibility: 'visible',
             sources: { manual: true, static: false, probe: false }, endpointHealth: 'not_checked', catalog: { stale: false },
-            compatibility: { compatibilityFingerprint: 'declaration-fingerprint', confirmed: false,
+            compatibility: { compatibilityFingerprint: 'compatibility:v1:declaration', confirmed: false,
                 result: { status: 'experimental' as const, selectedProtocol: 'openai-responses' as const,
                     reasons: ['compatibility_evidence_missing' as const],
                     confirmationScope: { kind: 'model' as const, modelId: ref.modelId } } },
@@ -316,6 +318,33 @@ describe('SessionModelPicker', () => {
         };
     };
 
+    it('describes the native custom entry by its source or purpose, never the "Built-in" fallback heading', async () => {
+        const render = (nativeSourceLabel?: string) => renderScreen(
+            <SessionModelPicker
+                agentTargetKey="agent:happier.agent.codex/codex"
+                nativeModels={[{ value: 'default', label: 'Automatic' }]}
+                providerGroups={[]}
+                providerProjectionAuthoritative
+                selected={null}
+                effectiveLabel="Automatic"
+                canEnterCustomNativeValue
+                nativeSourceLabel={nativeSourceLabel}
+                onSelect={() => {}}
+            />,
+        );
+        const customText = (screen: Awaited<ReturnType<typeof render>>) => {
+            const node = screen.findByTestId('model-picker-overlay-custom');
+            if (!node) return '';
+            return node.findAll((child) => typeof child.props?.children === 'string')
+                .map((child) => String(child.props.children)).join(' ');
+        };
+        const bare = await render();
+        expect(customText(bare)).not.toContain(t('settingsProviders.models.builtIn'));
+        expect(customText(bare)).toContain(t('agentInput.model.customDescription'));
+        const sourced = await render('Codex · Work pool');
+        expect(customText(sourced)).toContain('Codex · Work pool');
+    });
+
     it('binds freeform entry to the exact selected Provider connection', async () => {
         const { connectionId, selected, group } = freeformProviderGroup({
             manualModelPolicy: 'allowed', supportsFreeformModelIds: true,
@@ -478,6 +507,29 @@ describe('SessionModelPicker', () => {
         expect(retryProjection).toHaveBeenCalledOnce();
     });
 
+    it('leaves retry to the header refresh when the picker already has one', async () => {
+        const headerRefresh = vi.fn();
+        const screen = await renderScreen(
+            <SessionModelPicker
+                agentTargetKey="agent:happier.agent.codex/codex"
+                nativeModels={[{ value: 'default', label: 'Automatic' }]}
+                providerGroups={[]}
+                providerProjectionAuthoritative={false}
+                projectionError={createProviderErrorV1('agent_timeout', { machineId: 'machine-a' })}
+                retryProjection={vi.fn(async () => {})}
+                probe={{ phase: 'idle', onRefresh: headerRefresh }}
+                selected={null}
+                effectiveLabel="Automatic"
+                onSelect={() => {}}
+            />,
+        );
+
+        // The header refresh re-runs the same projection; a second refresh on the error line
+        // would put two identical controls a few pixels apart.
+        const errorItems = screen.findByType(ProviderErrorItems.type);
+        expect(errorItems.props.retry).toBeUndefined();
+    });
+
     it('projects exact favorites as the first canonical section and keeps unavailable favorites removable', async () => {
         const available = {
             agentTargetKey: 'agent:happier.agent.codex/codex',
@@ -567,5 +619,32 @@ describe('SessionModelPicker', () => {
 
             expect(screen.findByType(SelectionList).props.rootStep).toBe(rootStepBefore);
         });
+    });
+
+    it('says when a change applies on the running line the host supplies', async () => {
+        const reported = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-5.6-sol' } as const;
+        const screen = await renderScreen(
+            <SessionModelApplyTimingContext.Provider
+                value={{ timing: 'Applies from your next message', notes: ['Kept for resume'] }}
+            >
+                <SessionModelPicker
+                    multiColumn
+                    agentTargetKey="agent:happier.agent.codex/codex"
+                    nativeModels={[{ value: 'gpt-5.6-sol', label: '5.6 Sol' }, { value: 'gpt-5.6-terra', label: '5.6 Terra' }]}
+                    providerGroups={[]}
+                    providerProjectionAuthoritative
+                    selected={reported}
+                    effectiveLabel="5.6 Sol"
+                    reportedModel={{ ref: reported, status: 'running' }}
+                    onSelect={() => {}}
+                />
+            </SessionModelApplyTimingContext.Provider>,
+        );
+
+        // One line says what runs and when a change takes effect (the composer's own engine
+        // pane says the same through AgentInput); the host's resume note stays a note.
+        const text = screen.getTextContent();
+        expect(text).toContain(`${t('agentInput.model.running', { model: '5.6 Sol' })} · Applies from your next message`);
+        expect(text).toContain('Kept for resume');
     });
 });

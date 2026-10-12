@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { AppHeaderCloseButton } from '@/components/navigation/AppHeaderCloseButton';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 
@@ -44,7 +45,7 @@ import { resolveAgentExecutionTargetForBackendTarget } from '@/agents/backendCat
 import { useHomeTeamCredentialModelCatalog } from '@/hooks/teams/useHomeTeamCredentialModelCatalog';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
-import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useServerCredentialAccountScopeResolution, useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { ManagedMachineDestinationProjection, ManagedMachineSelectionDraft } from '@/components/sessions/new/components/machineSelection/managedMachineSelection';
 
 function useMachinePickerScreenOptions(params: Readonly<{
@@ -88,6 +89,7 @@ function useMachinePickerScreenOptions(params: Readonly<{
 }
 
 export function useMachinePickerScreenModel() {
+    const reachabilityRevision = useMachineReachabilityRevision();
     const { theme } = useUnistyles();
     const router = useRouter();
     const navigation = useNavigation();
@@ -258,7 +260,9 @@ export function useMachinePickerScreenModel() {
     const temporaryComputerRowCount = temporaryComputerAvailability.status === 'available'
         ? temporaryComputerAvailability.artifacts.length
         : 0;
+    const scopesByServerId = useServerCredentialAccountScopeBindings(serverScopedMachineGroups.map(group => group.serverId));
     const machineDestinationModel = React.useMemo(() => buildMachineDestinationModel({
+        scopesByServerId,
         purpose: 'session',
         groups: serverScopedMachineGroups,
         poolGroups: machinePoolGroups,
@@ -267,7 +271,7 @@ export function useMachinePickerScreenModel() {
             rowCount: temporaryComputerRowCount,
         },
         managedMachineProjection: managedProjection?.serverId === selectedServerId ? managedProjection.projection : undefined,
-    }), [machinePoolGroups, serverScopedMachineGroups, temporaryComputerProjectionState, temporaryComputerRowCount, managedProjection, selectedServerId]);
+    }), [machinePoolGroups, serverScopedMachineGroups, temporaryComputerProjectionState, temporaryComputerRowCount, managedProjection, selectedServerId, reachabilityRevision, scopesByServerId]);
     const machinesForSelectedServer = React.useMemo(() => {
         return serverScopedMachineGroups.find((group) => group.serverId === selectedServerId)?.machines ?? [];
     }, [selectedServerId, serverScopedMachineGroups]);

@@ -1,12 +1,11 @@
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
-import { HAPPIER_META_COLUMN_STYLE, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_META_COLUMN_STYLE, HappierMaterialRoleProvider, useContainingHappierMaterialRole, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import React from 'react';
 import {
     Animated,
     Platform,
     Pressable,
-    useWindowDimensions,
     View,
     type GestureResponderEvent,
     type LayoutChangeEvent,
@@ -69,14 +68,13 @@ import {
 import { SessionRowAttentionIndicator } from './row/SessionRowAttentionIndicator';
 import { SessionRowReportsChip, SessionRowReportsDisclosure, hasSessionRowReportsChip } from './row/SessionRowReportsChip';
 import { buildSessionListIndexNodeId } from '@/sync/domains/sessionList/sessionListIndex';
-import { SessionListRowPresentation, SessionListRowSubtitle, SessionListRowTitle } from './row/SessionListRowPresentation';
+import { SessionListRowPresentation, SessionListRowSubtitle, SessionListRowTitle, useReadableNativePhoneMinimalRow as useReadableNativePhoneMinimalRowFor } from './row/SessionListRowPresentation';
 import { WorkflowRunItemBody, type WorkflowRunItemProps } from './row/WorkflowRunItemBody';
 import {
     SESSION_LIST_ROW_CORNER_RADIUS,
     resolveSessionListRowIdentityMetrics,
     SESSION_LIST_ROW_IDENTITY_METRICS,
     SESSION_LIST_ROW_STATUS_TEXT_METRICS,
-    shouldUseReadablePhoneMinimalSessionRow,
 } from './resolveSessionListDensityViewState';
 import { resolveSessionRowInteractionPolicy } from './row/resolveSessionRowInteractionPolicy';
 import { SESSION_LIST_SHEET_INSET_PX } from './sessionListStyles';
@@ -85,11 +83,17 @@ import { planSessionTagDisplay } from './sessionTagPlacement';
 import { useSessionSplitCanvasRowActionsForScope } from '@/components/sessions/canvas/useSessionSplitCanvasRowActions';
 import { EntityDragGrip } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
 import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
+import { GlassSurface, useContainingGlassSurfaceGroup } from '@/components/ui/glass/GlassSurface';
+import { useGlassMaterialColorResolver } from '@/components/ui/glass/useGlassSurfaceColor';
 import { useSessionListOrganizeMode } from './organize/SessionListOrganizeMode';
 import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
 import { resolveSessionSplitCanvasScope } from '@/sync/domains/session/sessionSplitCanvasScope';
-import { useIsTablet } from '@/utils/platform/responsive';
 import type { SessionListRowViewModel } from './sessionListRowViewModels';
+import type { SessionListGuardState } from '@/sync/domains/session/listing/sessionListRenderable';
+import { GuardCountdown } from '@/components/machines/guard/GuardCountdown';
+import Reanimated, { FadeIn } from 'react-native-reanimated';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
 import { useAccountSessionFollowEditorHost } from '@/components/sessions/follow/useAccountSessionFollowEditorHost';
 import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
@@ -263,6 +267,8 @@ type SessionItemContentProps = Omit<SessionItemBaseProps, 'subtitleOverride'> & 
     sessionSubtitle: string;
     isSessionIdentityLoading: boolean;
     activityTimeLabel: string;
+    /** The guard's word replaces the activity time: "Stops in 4:52" (amber, a decision is open) or a quiet "Stopped". */
+    guardState?: SessionListGuardState | null;
     hasUnreadMessages: boolean;
     workingIndicatorMode: SessionItemWorkingIndicatorMode;
     /**
@@ -716,6 +722,7 @@ const SessionItemContent = React.memo(
         sessionSubtitle,
         isSessionIdentityLoading,
         activityTimeLabel,
+        guardState,
         hasUnreadMessages,
         workingIndicatorMode,
         attentionStanding,
@@ -731,13 +738,14 @@ const SessionItemContent = React.memo(
         const router = useDestinationRouter();
         const { theme } = useUnistyles();
         const materialColor = useHappierMaterialColorResolver();
+        const containingGroup = useContainingGlassSurfaceGroup();
         const mutedPaint = { backgroundColor: materialColor(theme.colors.surface.elevated) };
         const insetPaint = { backgroundColor: materialColor(theme.colors.surface.inset) };
         const chipPaint = { backgroundColor: materialColor(theme.colors.background.canvas) };
         // Keep Unistyles' original layout objects; only the containing material changes paint.
         const styles = {
             ...stylesheet,
-            sessionItemContainer: [stylesheet.sessionItemContainer, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }],
+            sessionItemContainer: stylesheet.sessionItemContainer,
             avatarLoading: [stylesheet.avatarLoading, mutedPaint],
             avatarLoadingCompact: [stylesheet.avatarLoadingCompact, mutedPaint],
             avatarLoadingMinimal: [stylesheet.avatarLoadingMinimal, mutedPaint],
@@ -865,12 +873,9 @@ const SessionItemContent = React.memo(
         const [rowWidth, setRowWidth] = React.useState<number | null>(null);
         const isWeb = Platform.OS === 'web';
         const isNativeMobile = Platform.OS === 'ios' || Platform.OS === 'android';
-        const isTablet = useIsTablet();
-        const { width: windowWidth } = useWindowDimensions();
-        const useReadableNativePhoneMinimalRow = isMinimal && shouldUseReadablePhoneMinimalSessionRow({
-            isTablet, platform: Platform.OS, windowWidth,
-        });
-        const showRowActions = isWeb && (isRowHovered || isActionsHovered || tagMenuOpen || moreMenuOpen || isBeingDragged === true);
+        const useReadableNativePhoneMinimalRow = useReadableNativePhoneMinimalRowFor(isMinimal);
+        // A carried row is a quiet ghost of its place (lab E1 `.dd-src`): its actions can't be used mid-carry.
+        const showRowActions = isWeb && isBeingDragged !== true && (isRowHovered || isActionsHovered || tagMenuOpen || moreMenuOpen);
         const rowActionIconColor = theme.colors.text.secondary;
         const resolveSessionDebugInformation = React.useCallback(() => {
             const fullSession = readHydratedSessionForRow(resolvedSession.id, serverId);
@@ -1499,8 +1504,9 @@ const SessionItemContent = React.memo(
         const trailingAttentionIndicator = isMinimal ? statusAttentionIndicator : 'none';
         const showTrailingAttentionIndicator = trailingAttentionIndicator !== 'none';
         const trailingAttentionReplacesTime = trailingAttentionIndicator === 'working';
-        const showTrailingActivityTime = Boolean(activityTimeLabel) && !trailingAttentionReplacesTime;
-        const hasTrailingMeta = showTrailingAttentionIndicator || showTrailingActivityTime;
+        const showTrailingGuardWord = Boolean(guardState) && !trailingAttentionReplacesTime;
+        const showTrailingActivityTime = Boolean(activityTimeLabel) && !trailingAttentionReplacesTime && !showTrailingGuardWord;
+        const hasTrailingMeta = showTrailingAttentionIndicator || showTrailingActivityTime || showTrailingGuardWord;
         const resolvedSessionListIdentityDisplay =
             sessionListIdentityDisplay === 'agentLogo' || sessionListIdentityDisplay === 'none'
                 ? sessionListIdentityDisplay
@@ -1590,6 +1596,19 @@ const SessionItemContent = React.memo(
                 selected={Boolean(selected || rowSelection.isSelected)}
                 separator={Boolean(embedded && !embeddedIsLast)}
                 onLayout={sourceTagChips.length > 0 ? handleRowLayout : undefined}
+                leading={<>
+                    {normalizedReportsDepth > 0 ? (
+                        <View
+                            testID={`session-list-item-reports-gutter-${resolvedSession.id}`}
+                            accessibilityElementsHidden
+                            importantForAccessibility="no-hide-descendants"
+                            style={[styles.reportsGutter, { width: normalizedReportsDepth * SESSION_REPORTS_ROW_INDENT_STEP }]}
+                        >
+                            <View style={styles.reportsConnector} />
+                        </View>
+                    ) : null}
+                    {reportsDisclosureControl}
+                </>}
                 renderContainer={(content, rowStyle) => (
                     // When the list carries this row itself, that is its one drag (it reaches panes too). The
                     // wrapper takes the press target's flex slot, so a long title truncates and the meta stays in view.
@@ -1627,17 +1646,6 @@ const SessionItemContent = React.memo(
                         onPressOut={enableLongPressContextMenu ? clearContextMenuPressInTimer : undefined}
                         onLongPress={enableLongPressContextMenu ? openContextMenuFromLongPress : undefined}
                     >
-                        {normalizedReportsDepth > 0 ? (
-                            <View
-                                testID={`session-list-item-reports-gutter-${resolvedSession.id}`}
-                                accessibilityElementsHidden
-                                importantForAccessibility="no-hide-descendants"
-                                style={[styles.reportsGutter, { width: normalizedReportsDepth * SESSION_REPORTS_ROW_INDENT_STEP }]}
-                            >
-                                <View style={styles.reportsConnector} />
-                            </View>
-                        ) : null}
-                        {reportsDisclosureControl}
                         {content}
                     </Pressable>
                     </WorkspaceDestinationRow>
@@ -1958,7 +1966,7 @@ const SessionItemContent = React.memo(
                                 />
                             ) : null}
                         </View>
-                    ) : reportsChip || showTrailingAttentionIndicator || showTrailingActivityTime ? (
+                    ) : reportsChip || showTrailingAttentionIndicator || showTrailingActivityTime || showTrailingGuardWord ? (
                         <View style={styles.trailingMetaRow}>
                             {reportsChip}
                             {showTrailingAttentionIndicator ? (
@@ -1970,13 +1978,19 @@ const SessionItemContent = React.memo(
                                     animationEnabled={attentionIndicatorAnimationEnabled}
                                 />
                             ) : null}
-                            {showTrailingActivityTime ? (
-                                <Text
-                                    style={[styles.activityTime, isMinimal ? styles.activityTimeMinimal : null]}
-                                    numberOfLines={1}
-                                >
-                                    {activityTimeLabel}
-                                </Text>
+                            {showTrailingActivityTime || showTrailingGuardWord ? (
+                                <SessionRowTrailingWordFade wordKey={showTrailingGuardWord && guardState ? guardState.kind : 'time'}>
+                                    {showTrailingGuardWord && guardState ? (
+                                        <SessionRowGuardWord guardState={guardState} minimal={isMinimal} />
+                                    ) : (
+                                        <Text
+                                            style={[styles.activityTime, isMinimal ? styles.activityTimeMinimal : null]}
+                                            numberOfLines={1}
+                                        >
+                                            {activityTimeLabel}
+                                        </Text>
+                                    )}
+                                </SessionRowTrailingWordFade>
                             ) : null}
                         </View>
                     ) : null}
@@ -2066,9 +2080,14 @@ const SessionItemContent = React.memo(
 
         if (!swipeEnabled) {
             return (
-                <View
+                <GlassSurface
                     ref={contextMenuAnchorRef}
                     collapsable={false}
+                    surfaceGroup={embedded ? containingGroup ?? 'card' : 'card'}
+                    nested
+                    enabled={!embedded || containingGroup !== null}
+                    solidColor={embedded ? 'transparent' : theme.colors.surface.base}
+                    finishRole={null}
                     style={containerStyles}
                     onPointerEnter={isWeb ? handleRowPointerEnter : undefined}
                     onPointerLeave={isWeb ? handleRowPointerLeave : undefined}
@@ -2076,7 +2095,7 @@ const SessionItemContent = React.memo(
                     {itemContent}
                     {menuNodes}
                     {followEditor.editor}
-                </View>
+                </GlassSurface>
             );
         }
 
@@ -2090,9 +2109,14 @@ const SessionItemContent = React.memo(
         );
 
         return (
-            <View
+            <GlassSurface
                 ref={contextMenuAnchorRef}
                 collapsable={false}
+                surfaceGroup={embedded ? containingGroup ?? 'card' : 'card'}
+                nested
+                enabled={!embedded || containingGroup !== null}
+                solidColor={embedded ? 'transparent' : theme.colors.surface.base}
+                finishRole={null}
                 style={containerStyles}
                 onPointerEnter={isWeb ? handleRowPointerEnter : undefined}
                 onPointerLeave={isWeb ? handleRowPointerLeave : undefined}
@@ -2107,10 +2131,46 @@ const SessionItemContent = React.memo(
                 </Swipeable>
                 {menuNodes}
                 {followEditor.editor}
-            </View>
+            </GlassSurface>
         );
     },
 );
+
+/**
+ * The row's trailing word changes between the idle time, "Stops in 4:52" and "Stopped" with one short
+ * cross-fade (plan 50 GM); a row that mounts already showing a word (scrolling) simply shows it, and
+ * reduced motion changes the word at once.
+ */
+function SessionRowTrailingWordFade(props: Readonly<{ wordKey: string; children: React.ReactNode }>) {
+    const reducedMotion = useReducedMotionPreference();
+    const firstKey = React.useRef(props.wordKey);
+    const changed = React.useRef(false);
+    if (props.wordKey !== firstKey.current) changed.current = true;
+    return (
+        <Reanimated.View key={props.wordKey}
+            entering={changed.current && !reducedMotion ? FadeIn.duration(motionTokens.guardMoment.wordCrossFadeMs) : undefined}>
+            {props.children}
+        </Reanimated.View>
+    );
+}
+
+/** The row's guard word (lab `rg` G3-2): amber "Stops in 4:52" while Keep running is still possible; a quiet moon after. */
+function SessionRowGuardWord(props: Readonly<{ guardState: SessionListGuardState; minimal: boolean }>) {
+    const { theme } = useUnistyles();
+    if (props.guardState.kind === 'stopping') {
+        return (
+            <GuardCountdown stopAt={props.guardState.stopAt} testID="session-row-guard-stops"
+                style={[stylesheet.activityTime, props.minimal ? stylesheet.activityTimeMinimal : null, { color: theme.colors.state.attention.textForeground }]}
+                format={duration => t('machineGuard.session.stopsIn', { duration })} />
+        );
+    }
+    return (
+        <View testID="session-row-guard-stopped" style={stylesheet.trailingMetaRow}>
+            <Icon name="moon" size={11} color={theme.colors.text.tertiary} />
+            <Text style={[stylesheet.activityTime, props.minimal ? stylesheet.activityTimeMinimal : null]} numberOfLines={1}>{t('machineGuard.session.stopped')}</Text>
+        </View>
+    );
+}
 
 function SessionItemFromRowViewModel(props: SessionItemProps) {
     const { theme } = useUnistyles();
@@ -2154,6 +2214,7 @@ function SessionItemFromRowViewModel(props: SessionItemProps) {
             isSingle={rowViewModel.isSingle}
             secondaryLineMode={itemProps.secondaryLineMode ?? rowViewModel.secondaryLineMode}
             activityTimeLabel={rowViewModel.activityTimeLabel}
+            guardState={rowViewModel.guardState}
             sessionStatus={sessionStatus}
             externalSessionIdentity={rowViewModel.externalSessionIdentity}
             sessionNameResolved={sessionNameResolved}
@@ -2175,8 +2236,12 @@ function SessionItemFromRowViewModel(props: SessionItemProps) {
 }
 
 export const SessionItem = React.memo(function SessionItem(props: SessionItemProps | WorkflowRunItemProps) {
-    if ('kind' in props && props.kind === 'workflow_run') return <WorkflowRunItemBody {...props} />;
+    const resolveMaterialColor = useGlassMaterialColorResolver('card');
+    const containingRole = useContainingHappierMaterialRole();
+    if ('kind' in props && props.kind === 'workflow_run') return <HappierMaterialRoleProvider role="card" resolveMaterialColor={resolveMaterialColor}><WorkflowRunItemBody {...props} /></HappierMaterialRoleProvider>;
     if (!('rowViewModel' in props)) return null;
     if (!props.rowViewModel) return null;
-    return <SessionItemFromRowViewModel {...props} />;
+    // Publish the sheet role before the body derives chip/skeleton paint; embedded rows
+    // keep their containing plane. GlassSurface still owns the actual coat and backdrop.
+    return <HappierMaterialRoleProvider role={props.embedded ? containingRole : 'card'} resolveMaterialColor={props.embedded ? undefined : resolveMaterialColor}><SessionItemFromRowViewModel {...props} /></HappierMaterialRoleProvider>;
 });

@@ -338,6 +338,39 @@ describe('resolveSessionBoardHostVisibility', () => {
 // the Session pane driver registers with. A fresh-but-equal visibility re-registered the driver on
 // every render, the registry update re-rendered the Session view, and opening a Session looped
 // ("Maximum update depth exceeded").
+describe('inline transcript candidacy', () => {
+    const boardSidebar = resolveSessionBoardHostVisibility(facts({
+        panes: { detailsOpen: false, detailsFocusModeActive: false, rightOpen: true, rightActiveTabId: 'board' },
+    }));
+    const nothingOnScreen = resolveSessionBoardHostVisibility(facts());
+
+    it('runs a transcript visual in its reply when no Board host draws it', () => {
+        expect(resolveSessionBoardItemPrimaryMountHost({
+            visibility: nothingOnScreen, itemVisibleInCompanion: false, itemId: 'visual',
+            boardView: { drawnBySelectedBoardView: false, inlineTranscriptDemanded: true },
+        })).toBe('inlineTranscript');
+    });
+
+    it('keeps the one live body on a visible Board host for an item shown in both places', () => {
+        expect(resolveSessionBoardItemPrimaryMountHost({
+            visibility: boardSidebar, itemVisibleInCompanion: false, itemId: 'visual',
+            boardView: { drawnBySelectedBoardView: true, inlineTranscriptDemanded: true },
+        })).toBe('sidebar');
+    });
+
+    it('elects no reply when no reply that draws the item is on screen', () => {
+        expect(resolveSessionBoardItemPrimaryMountHost({
+            visibility: nothingOnScreen, itemVisibleInCompanion: false, itemId: 'visual',
+            boardView: { drawnBySelectedBoardView: false, inlineTranscriptDemanded: false },
+        })).toBeNull();
+        expect(resolveSessionBoardItemPrimaryMountHost({
+            visibility: resolveSessionBoardHostVisibility(facts({ foreground: false })),
+            itemVisibleInCompanion: false, itemId: 'visual',
+            boardView: { drawnBySelectedBoardView: false, inlineTranscriptDemanded: true },
+        })).toBeNull();
+    });
+});
+
 describe('retainSessionBoardHostVisibility', () => {
     it('keeps the previous visibility when the next one says the same thing', () => {
         const previous = resolveSessionBoardHostVisibility(facts({

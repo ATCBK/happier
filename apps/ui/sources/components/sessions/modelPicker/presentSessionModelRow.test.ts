@@ -24,6 +24,12 @@ const base = {
 };
 
 describe('presentProviderModelRow', () => {
+    it.each(['hidden_agent', 'hidden_all_agents'] as const)('presents the canonical %s visibility fact', (visibility) => {
+        expect(presentProviderModelRow({ ...base, visibility })).toMatchObject({
+            primaryStatus: { kind: 'visibility' },
+            selectionDisabled: false,
+        });
+    });
     it.each([
         {
             name: 'authorization outranks every lower fact',

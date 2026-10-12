@@ -17,7 +17,7 @@ import {
     type ScopedSessionCryptoContext,
 } from '@/sync/runtime/orchestration/serverScopedRpc/resolveScopedSessionDataKey';
 import { resolveServerAccountRequestContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerAccountRequestContext';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReplaced } from '@/sync/domains/machines/identity/machineIdentityTypes';
 
 export type SessionFollowSourceKeyPreparationResult = SessionFollowSourceKeyPreparationResultV1;
 
@@ -40,12 +40,15 @@ type DestinationMachine = Readonly<{
         active: boolean;
         activeAt?: number | null;
         revokedAt?: number | null;
+        replacedByMachineId?: string | null;
+        replacedAt?: unknown;
+        availability?: Readonly<{ kind: string }>;
         operationProtocolCapabilities?: unknown;
     }>;
 }>;
 
 export type PrepareSessionFollowSourceKeyDeps = Readonly<{
-    resolveContext: (serverId: string) => Promise<PreparationContext>;
+    resolveContext: (serverId: string, options?: Readonly<{ intent?: 'retry' }>) => Promise<PreparationContext>;
     resolveDestination: (input: Readonly<{
         serverId: string;
         accountId: string;
@@ -61,7 +64,7 @@ export type PrepareSessionFollowSourceKeyDeps = Readonly<{
 }>;
 
 const defaultDeps: PrepareSessionFollowSourceKeyDeps = {
-    resolveContext: async (serverId) => {
+    resolveContext: async (serverId, options) => {
         const context = await resolveServerAccountRequestContext({ serverId, preferScoped: true });
         if (context.scope !== 'scoped') throw new Error('Expected scoped Follow preparation context');
         return {
@@ -76,6 +79,7 @@ const defaultDeps: PrepareSessionFollowSourceKeyDeps = {
                 token: context.token,
                 sessionId,
                 timeoutMs: context.timeoutMs,
+                ...(options?.intent === 'retry' ? { explicitRetry: true } : {}),
                 ...(context.encryption ? {
                     decryptEncryptionKey: (value: string) => context.encryption!.decryptEncryptionKey(value),
                 } : {}),
@@ -125,12 +129,12 @@ const defaultDeps: PrepareSessionFollowSourceKeyDeps = {
  * exact current Machine; no readiness is inferred from edge eligibility.
  */
 export async function prepareSessionFollowSourceKey(
-    input: Readonly<{ serverId: string; sourceSessionId: string; destinationSessionId: string }>,
+    input: Readonly<{ serverId: string; sourceSessionId: string; destinationSessionId: string; intent?: 'retry' }>,
     deps: PrepareSessionFollowSourceKeyDeps = defaultDeps,
 ): Promise<SessionFollowSourceKeyPreparationResult> {
     let context: PreparationContext;
     try {
-        context = await deps.resolveContext(input.serverId);
+        context = await deps.resolveContext(input.serverId, input.intent ? { intent: input.intent } : undefined);
     } catch {
         return { kind: 'waiting', reason: 'runner_unreachable' };
     }
@@ -148,8 +152,10 @@ export async function prepareSessionFollowSourceKey(
             sessionId: input.destinationSessionId,
         });
         if (!destination) return { kind: 'waiting', reason: 'runner_unreachable' };
+        if ((typeof destination.machine.revokedAt === 'number' && destination.machine.revokedAt > 0)
+            || isMachineReplaced(destination.machine)
+            || destination.machine.availability?.kind === 'locked') return { kind: 'waiting', reason: 'runner_unreachable' };
         if (isPersistentMachine(destination.machine)) return { kind: 'not_needed' };
-        if (!isMachineOnline(destination.machine)) return { kind: 'waiting', reason: 'runner_unreachable' };
         if (!supportsMachineSessionFollowContextV1(destination.machine.operationProtocolCapabilities)) {
             return { kind: 'waiting', reason: 'unsupported' };
         }

@@ -30,7 +30,7 @@ import { getStorage } from '@/sync/domains/state/storage';
 import { selectLocalServiceLaunchTargets, useLocalServiceLauncherState } from '@/sync/domains/local/services/launch';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { resolveOptionalSessionScreenTestId, useSessionScreenTestIdsEnabled } from '../../shell/sessionScreenTestIds';
 
@@ -67,6 +67,7 @@ export const SessionBottomPanel = React.memo((props: Readonly<{ sessionId: strin
     const requestClose = props.onRequestClose ?? pane.closeBottom;
     const sessionScreenTestIdsEnabled = useSessionScreenTestIdsEnabled();
     const [newMenuOpen, setNewMenuOpen] = React.useState(false);
+    const machineMembership = useMachinePresenceMembership(serverId);
 
     const run = React.useCallback(async (actionId: Parameters<typeof execute>[0], input?: Readonly<Record<string, unknown>>) => {
         const result = await execute(actionId, input);
@@ -94,11 +95,11 @@ export const SessionBottomPanel = React.memo((props: Readonly<{ sessionId: strin
         return machines.filter((machine) => machine.id !== context.sessionMachineId).map((machine) => ({
             id: machine.id,
             name: getMachineDisplayName(machine) ?? machine.id,
-            online: isMachineOnline(machine),
+            online: machineMembership.selectableMachineIds.includes(machine.id),
             cwd: machine.metadata?.homeDir ?? null,
             lastSeen: null,
         }));
-    }, [context.sessionMachineId, newMenuOpen, serverId]);
+    }, [context.sessionMachineId, machineMembership.selectableMachineIds, newMenuOpen, serverId]);
 
     const newMenuItems = React.useMemo(() => (newMenuOpen ? buildSessionTerminalNewMenuItems({
         folder: basename(machineTarget?.basePath),

@@ -112,7 +112,8 @@ export function ActionInputFields(props: Readonly<{
                 const selection = readActionInputSelectionForPresentation(field, value);
                 const choices = widget === 'select' || widget === 'multiselect';
                 const optionState = choices ? props.resolveFieldOptions.state?.(field) : undefined;
-                const selectedValues = Array.isArray(selection) ? selection : (selection === undefined ? [] : [selection]);
+                const selectedValues = widget === 'multiselect' && Array.isArray(selection)
+                    ? selection : (selection === undefined ? [] : [selection]);
                 const options: readonly HappierSelectOption<ActionInputOptionValue>[] = choices
                     ? props.resolveFieldOptions(field).map((option) => ({
                         ...option,

@@ -1,4 +1,6 @@
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 import { resolveExactServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { formatSessionPath } from '@/utils/sessions/formatPathRelativeToHome';
@@ -13,6 +15,7 @@ type Candidate = NonNullable<SessionServerStartDraftSeed['candidates']>[number];
 
 export function resolveSessionServerStartCandidateSelection(params: Readonly<{
     mountedTarget: SessionServerStartDraftTarget;
+    accountScope?: MachineReachabilityScope | null;
     selectedCandidate?: Candidate;
     activeServerId: string;
     activeMachines: readonly Machine[];
@@ -48,6 +51,7 @@ export function resolveSessionServerStartCandidateSelection(params: Readonly<{
         machineReady: resolveMachineSpawnReadiness({
             machine,
             selectedMachineId: target.machineId,
+            scope: selectActiveServerAccountScopeForServer(params.accountScope ?? null, target.serverId),
         }).status === 'ready',
     };
 }

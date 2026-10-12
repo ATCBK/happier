@@ -41,6 +41,17 @@ export const instrumentStripStyles = StyleSheet.create((theme) => ({
         flexShrink: 1,
         minWidth: 0,
     },
+    /** The tooltip host around a line that carries a detail: it shrinks like the text it wraps. */
+    connectionTextHost: {
+        flexShrink: 1,
+        minWidth: 0,
+    },
+    /** The guard's countdown inside the line: its own ink weight, tabular so the digits never shift. */
+    connectionCountdown: {
+        fontSize: 12,
+        fontWeight: '600',
+        fontVariant: ['tabular-nums'],
+    },
     spacer: {
         flexGrow: 1,
         flexShrink: 1,

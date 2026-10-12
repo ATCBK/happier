@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 
 import { resolveMachineSetupSatisfied } from '@/components/machines/add/machineAddPaths';
 import { useResolvedActiveServerSelection } from '@/hooks/server/useEffectiveServerSelection';
@@ -10,12 +11,14 @@ import { useSessionGettingStartedActiveServerProfile } from './useSessionGetting
 /** The getting-started selection is unknown until loaded; offline machines count, revoked ones do not. */
 export function useHasMachineForGettingStartedGuidance(): boolean | null {
     const selection = useResolvedActiveServerSelection();
+    const bindings = useServerCredentialAccountScopeBindings([...selection.allowedServerIds, selection.activeServerId]);
     const activeMachines = useLaunchSelectionMachines();
     const machineListByServerId = useMachineListByServerId();
     const activeServerProfile = useSessionGettingStartedActiveServerProfile(selection.activeServerId);
 
     return React.useMemo(() => resolveMachineSetupSatisfied(resolveSessionGettingStartedMachinesSummary({
         activeMachines,
+        accountScopesByServerId: bindings,
         selection: {
             activeTarget: selection.activeTarget,
             activeServerId: selection.activeServerId,
@@ -30,5 +33,6 @@ export function useHasMachineForGettingStartedGuidance(): boolean | null {
         selection.activeServerId,
         selection.activeTarget,
         selection.allowedServerIds,
+        bindings,
     ]);
 }

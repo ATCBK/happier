@@ -19,3 +19,13 @@ export const SessionModelSourceBrowseHandoffContext = React.createContext<Sessio
  * it resolves that label (the running session). Hosts that know it earlier pass `nativeSourceLabel`.
  */
 export const SessionModelNativeSourceLabelContext = React.createContext<string | null>(null);
+
+/**
+ * When a model change takes effect and any note about it, as the composer's own engine pane says
+ * them (`useSessionAuthoringControls`). The composer hands them to a model surface that replaces
+ * its default one, so the running line reads the same in both.
+ */
+export const SessionModelApplyTimingContext = React.createContext<Readonly<{
+    timing: string;
+    notes: readonly string[];
+}> | null>(null);

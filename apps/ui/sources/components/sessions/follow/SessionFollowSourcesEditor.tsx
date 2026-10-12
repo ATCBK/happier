@@ -17,7 +17,13 @@ import {
     setSessionFollowSource,
 } from '@/sync/api/session/sessionFollowSourcesApi';
 import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
-import { useServerScopedMachine, useSessionListRowsByServerId } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useServerScopedMachine, useSessionListRowsByServerId } from '@/sync/domains/state/storage';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
@@ -81,6 +87,11 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     );
     const enabled = useFeatureEnabled('sessions.following', { scopeKind: 'spawn', serverId: props.serverId });
     const rowsByServerId = useSessionListRowsByServerId();
+    const activeScope = useActiveServerAccountScope();
+    const currentScope = selectActiveServerAccountScopeForServer(activeScope, props.serverId);
+    const { binding } = useServerCredentialAccountScopeBinding(currentScope ? null : props.serverId);
+    const accountScope = currentScope ?? (binding?.isCurrent() ? binding.scope : null);
+    const reachabilityRevision = useMachineReachabilityRevision();
     const [sources, setSources] = React.useState<readonly SessionFollowSourceV1[]>([]);
     const [loading, setLoading] = React.useState(false);
     const [savingId, setSavingId] = React.useState<string | null>(null);
@@ -95,7 +106,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const [preparationWaitingReasons, setPreparationWaitingReasons] = React.useState<ReadonlyMap<string, SessionFollowSourceKeyPreparationWaitingReasonV1>>(() => new Map());
     const addSourceRef = React.useRef<React.ComponentRef<typeof Pressable>>(null);
     const requestVersionRef = React.useRef(0);
-    const targetKey = `${props.serverId ?? ''}\u0000${props.destination.id}`;
+    const targetKey = `${props.serverId ?? ''}\u0000${accountScope?.accountId ?? ''}\u0000${props.destination.id}`;
     const preparationTargetKey = `${targetKey}\u0000${props.destinationMachineId ?? ''}`;
     const targetKeyRef = React.useRef(targetKey);
     const preparationTargetKeyRef = React.useRef(preparationTargetKey);
@@ -260,9 +271,17 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     // selector. The picker-oriented Machine list intentionally filters records
     // and is not an authority for an already-bound destination Runner.
     const destinationMachine = useServerScopedMachine(serverId, props.destinationMachineId ?? '');
+    const nowMs = useMachinePresenceNowMs(destinationMachine ? [destinationMachine] : []);
+    const destinationPresence = destinationMachine
+        ? resolveMachinePickerPresence(destinationMachine, nowMs, accountScope).status
+        : null;
+    const canPrepareSource = accountScope !== null && destinationMachine !== null
+        && destinationMachine.availability?.kind !== 'locked'
+        && destinationPresence !== 'revoked' && destinationPresence !== 'replaced';
+    const destinationReachable = destinationMachine !== null && isMachineReachable(accountScope, destinationMachine, nowMs);
 
-    const prepareSource = React.useCallback(async (sourceSessionId: string) => {
-        if (!online || !props.serverId) return;
+    const prepareSource = React.useCallback(async (sourceSessionId: string, intent?: 'retry') => {
+        if (!canPrepareSource || !props.serverId) return;
         const requestTargetKey = targetKey;
         const requestPreparationTargetKey = preparationTargetKey;
         const requestEdgeVersion = edgeVersionBySourceIdRef.current.get(sourceSessionId) ?? 0;
@@ -273,6 +292,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         setPreparingFlightKeys((current) => new Set(current).add(flightKey));
         const result = await prepareSessionFollowSourceKey({
             serverId: props.serverId, sourceSessionId, destinationSessionId: props.destination.id,
+            ...(intent ? { intent } : {}),
         }).catch(() => ({ kind: 'waiting', reason: 'runner_unreachable' } as const));
         preparationInFlightRef.current.delete(flightKey);
         if (
@@ -302,11 +322,12 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             else next.delete(preparationSourceKey);
             return next;
         });
-    }, [online, preparationTargetKey, props.destination.id, props.serverId, targetKey]);
+    }, [canPrepareSource, preparationTargetKey, props.destination.id, props.serverId, targetKey]);
 
     const preparationReadinessSignature = [
         targetKey,
         online ? 'online' : 'offline',
+        destinationReachable ? 'reachable' : 'unreachable',
         props.destinationMachineId ?? '',
         destinationMachine?.active === true ? 'active' : 'inactive',
         String(destinationMachine?.activeAt ?? ''),
@@ -318,11 +339,14 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     ].join('\u0000');
     const lastPreparationReadinessSignatureRef = React.useRef<string | null>(null);
     React.useEffect(() => {
-        if (!online || lastPreparationReadinessSignatureRef.current === preparationReadinessSignature) return;
+        if (lastPreparationReadinessSignatureRef.current === preparationReadinessSignature) return;
         lastPreparationReadinessSignatureRef.current = preparationReadinessSignature;
+        if (!online || !destinationReachable) return;
         for (const source of sources) {
             const sourceSession = homeSessions.find((candidate) => candidate.id === source.sourceSessionId);
             const runtimeState = resolveSessionFollowSourceRuntimeState({
+                accountScope,
+                nowMs,
                 deliveryState: source.deliveryState,
                 machine: destinationMachine,
                 sourceEncryptionMode: sourceSession?.encryptionMode ?? null,
@@ -335,7 +359,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                 void prepareSource(source.sourceSessionId);
             }
         }
-    }, [destinationMachine, homeSessions, online, preparationReadinessSignature, preparationTargetKey, prepareSource, preparedSourceKeys, preparingFlightKeys, sources]);
+    }, [destinationMachine, destinationReachable, homeSessions, online, preparationReadinessSignature, preparationTargetKey, prepareSource, preparedSourceKeys, preparingFlightKeys, sources, accountScope, nowMs, reachabilityRevision]);
 
     if (!enabled || !serverId) return null;
 
@@ -354,6 +378,8 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             {sources.map((source) => {
                 const session = homeSessions.find((candidate) => candidate.id === source.sourceSessionId);
                 const runtimeState = resolveSessionFollowSourceRuntimeState({
+                    accountScope,
+                    nowMs,
                     deliveryState: source.deliveryState,
                     machine: destinationMachine,
                     sourceEncryptionMode: session?.encryptionMode ?? null,
@@ -370,6 +396,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                 // An unavailable SOURCE key can still become available (the Session is unlocked
                 // in this client), so it keeps its retry; only an unavailable Runner key cannot.
                 const canRetryPreparation = presentedRuntimeState === 'waiting_for_source_key'
+                    || presentedRuntimeState === 'waiting_for_runtime'
                     || presentedRuntimeState === 'source_key_unavailable'
                     || preparationWaitingReason === 'runner_unreachable';
                 const canChooseWake = supportsMachineSessionFollowWakeOnHumanChangeV1(
@@ -410,8 +437,8 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                                 size="small"
                                 display="secondary"
                                 accessibilityLabel={`${t('common.retry')}. ${t('session.follow.sources.row', { title: sourceTitle })}`}
-                                disabled={!online || savingId !== null || preparing}
-                                onPress={() => { void prepareSource(source.sourceSessionId); }}
+                                disabled={!canPrepareSource || savingId !== null || preparing}
+                                onPress={() => { void prepareSource(source.sourceSessionId, 'retry'); }}
                             /> : null}
                             <IconButton
                                 testID={`session-follow-source-${source.sourceSessionId}-remove`}

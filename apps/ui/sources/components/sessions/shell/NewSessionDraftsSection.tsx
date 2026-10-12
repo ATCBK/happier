@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, Pressable, useWindowDimensions, View } from 'react-native';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
 
 import {
     buildNewSessionDraftRowPresentation,
@@ -14,21 +14,14 @@ import { summarizeComposerAttachmentDraftAvailability } from '@/components/sessi
 import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
-import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { Eyebrow } from '@/components/ui/text/Eyebrow';
-import { Text } from '@/components/ui/text/Text';
-import { Modal } from '@/modal';
 import { isNewSessionDraftDeletionBlocked, resolveRunnerDraftActivation } from '@/components/sessions/drafts/newSessionDraftDeletion';
 export { isNewSessionDraftDeletionBlocked } from '@/components/sessions/drafts/newSessionDraftDeletion';
 import { readAllActionOperations, useAllActionOperations } from '@/sync/domains/actionOperations/useActionOperations';
 import {
     useActiveServerAccountScope,
-    useLaunchSelectionMachines,
     useMachineListStatusByServerId,
 } from '@/sync/domains/state/storage';
 import {
-    deleteSessionDraftWithScopedRuntime,
-    deleteSessionDraft,
     ensureSessionDraftRepositoryHydratedWithScopedRuntime,
     isNewSessionDraftListed,
     listNewSessionDraftProjections,
@@ -36,13 +29,14 @@ import {
     type NewSessionDraftProjection,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { t } from '@/text';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { restoreFocusToBestTarget, type FocusReturnTarget, useFocusReturnFallbackRef } from '@/keyboard/focusReturn';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import type { SessionRowDensity } from '@/components/sessions/shell/row/resolveSessionRowPresentation';
 import {
-    SESSION_LIST_ROW_CORNER_RADIUS,
     resolveSessionListDensityViewState,
+    resolveSessionListItemDensity,
     resolveSessionListRowIdentityMetrics,
     resolveSessionListRowTitleTextMetrics,
     SESSION_LIST_ROW_STATUS_TEXT_METRICS,
@@ -66,38 +60,15 @@ import {
 import { homeDisplayName } from '@/components/settings/home/governance/homeGovernanceLabels';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { SessionListViewContext } from './search/sessionListViewFilters';
-import { sessionListStyles } from './sessionListStyles';
-import { deleteNewSessionDraftAfterConfirmation } from '@/components/sessions/drafts/deleteNewSessionDraftAfterConfirmation';
+import { SessionListGroup } from './SessionListGroup';
 import { runWithSessionDraftRepositoryScopedRuntime } from '@/sync/ops/sessionDrafts/runWithSessionDraftRepositoryScopedRuntime';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+export { buildNewSessionDraftContinueRoute } from '@/components/sessions/drafts/newSessionDraftNavigation';
 
 export { buildNewSessionDraftRowPresentation } from '@/components/sessions/drafts/newSessionDraftPresentation';
-export { deleteNewSessionDraftAfterConfirmation } from '@/components/sessions/drafts/deleteNewSessionDraftAfterConfirmation';
 
 const EMPTY_DRAFTS: readonly NewSessionDraftProjection[] = Object.freeze([]);
 type FocusableDraftTarget = React.ComponentRef<typeof Pressable>;
-
-export function buildNewSessionDraftContinueRoute(
-    draftId: string,
-    scope: ServerAccountScope,
-): Readonly<{
-    pathname: '/new';
-    params: Readonly<{
-        draftId: string;
-        spawnServerId: string;
-        draftServerId: string;
-        draftAccountId: string;
-    }>;
-}> {
-    return {
-        pathname: '/new',
-        params: {
-            draftId,
-            spawnServerId: scope.serverId,
-            draftServerId: scope.serverId,
-            draftAccountId: scope.accountId,
-        },
-    };
-}
 
 export function resolveNewSessionDraftSectionTitle(input: Readonly<{
     serverId: string | null;
@@ -140,10 +111,6 @@ export function resolveNewSessionDraftMachineUnavailable(input: Readonly<{
 }
 
 const stylesheet = StyleSheet.create(() => ({
-    // The next group's label brings its own top padding (`SESSION_LIST_COLUMN_METRICS`).
-    section: { width: '100%' },
-    group: { borderRadius: SESSION_LIST_ROW_CORNER_RADIUS },
-    headerTitleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
     actionSlot: { width: 24, alignItems: 'flex-end' },
     // Web shows the delete on row hover or keyboard focus only; it stays in the tab order.
     actionSlotHidden: { opacity: 0 },
@@ -171,6 +138,8 @@ const NewSessionDraftRow = React.memo(function NewSessionDraftRow(props: Readonl
     runnerActivationClient: RunnerActivationClient | null;
     rowScope?: ServerAccountScope;
 }>) {
+    // Memoized rows still follow the canonical ready UI locale.
+    usePreferredLanguage();
     const { theme } = useUnistyles();
     const isTablet = useIsTablet();
     const { width: windowWidth } = useWindowDimensions();
@@ -216,21 +185,9 @@ const NewSessionDraftRow = React.memo(function NewSessionDraftRow(props: Readonl
         : activationStatusKey ?? presentation.statusKey;
     const status = statusKey ? t(statusKey) : null;
     const minimal = props.density === 'minimal';
-    const itemDensity = props.density === 'default'
-        ? 'comfortable'
-        : props.density === 'minimal'
-            ? 'tight'
-            : 'compact';
-    const densityViewState = resolveSessionListDensityViewState(
-        props.density === 'minimal' ? 'narrow' : props.density === 'compact' ? 'cozy' : 'comfortable',
-        { isTablet, platform: Platform.OS, windowWidth },
+    const { itemDensity, densityViewState, readableNativePhoneMinimal, titleTextMetrics } = resolveDraftRowGeometry(
+        props.density, { isTablet, windowWidth },
     );
-    const readableNativePhoneMinimal = props.density === 'minimal'
-        && densityViewState.rowHeight !== resolveSessionListDensityViewState('narrow').rowHeight;
-    const titleTextMetrics = resolveSessionListRowTitleTextMetrics({
-        density: props.density,
-        readableNativePhoneMinimal,
-    });
     const identityMetrics = resolveSessionListRowIdentityMetrics({
         density: props.density,
         readableNativePhoneMinimal,
@@ -325,6 +282,50 @@ const NewSessionDraftRow = React.memo(function NewSessionDraftRow(props: Readonl
     );
 });
 
+/** One geometry for every row of the drafts group: the draft rows and their "Show all" row. */
+function resolveDraftRowGeometry(density: SessionRowDensity, window: Readonly<{ isTablet: boolean; windowWidth: number }>) {
+    const itemDensity = resolveSessionListItemDensity(density);
+    const densityViewState = resolveSessionListDensityViewState(
+        density === 'minimal' ? 'narrow' : density === 'compact' ? 'cozy' : 'comfortable',
+        { isTablet: window.isTablet, platform: Platform.OS, windowWidth: window.windowWidth },
+    );
+    const readableNativePhoneMinimal = density === 'minimal'
+        && densityViewState.rowHeight !== resolveSessionListDensityViewState('narrow').rowHeight;
+    const titleTextMetrics = resolveSessionListRowTitleTextMetrics({ density, readableNativePhoneMinimal });
+    return { itemDensity, densityViewState, readableNativePhoneMinimal, titleTextMetrics };
+}
+
+/** The drafts group's last row when it lists only its newest few: a full-height row, quiet, that reveals the rest. */
+const NewSessionDraftsShowAllRow = React.memo(function NewSessionDraftsShowAllRow(props: Readonly<{
+    count: number;
+    density: SessionRowDensity;
+    onPress: () => void;
+}>) {
+    const { theme } = useUnistyles();
+    const isTablet = useIsTablet();
+    const { width: windowWidth } = useWindowDimensions();
+    const { itemDensity, densityViewState, readableNativePhoneMinimal, titleTextMetrics } = resolveDraftRowGeometry(props.density, { isTablet, windowWidth });
+    const identityMetrics = resolveSessionListRowIdentityMetrics({ density: props.density, readableNativePhoneMinimal });
+    return (
+        <Item
+            testID="session-drafts-show-all"
+            title={t('sessionDrafts.showAll', { count: props.count })}
+            density={itemDensity}
+            style={{ height: densityViewState.rowHeight, minHeight: densityViewState.rowHeight, paddingVertical: 0 }}
+            titleStyle={[titleTextMetrics, { color: theme.colors.text.secondary }]}
+            // Minimal rows lead with the agent mark; an empty slot of its size keeps this title on theirs.
+            leftElement={props.density === 'minimal' ? (
+                <View style={{ width: identityMetrics.agentLogoSize, height: identityMetrics.agentLogoSize }} />
+            ) : undefined}
+            showChevron={false}
+            onPress={props.onPress}
+        />
+    );
+});
+
+/** How many drafts a long drafts group lists before its "Show all" row. */
+const DRAFTS_GROUP_PREVIEW_COUNT = 3;
+
 export const NewSessionDraftsSectionView = React.memo(function NewSessionDraftsSectionView(props: Readonly<{
     drafts: readonly NewSessionDraftProjection[];
     availabilityByDraftId?: Readonly<Record<string, NewSessionDraftAvailabilitySummary>>;
@@ -380,32 +381,26 @@ export const NewSessionDraftsSectionView = React.memo(function NewSessionDraftsS
         );
         setPendingFocusRestore(null);
     }, [listFocusFallbackRef, pendingFocusRestore, props.drafts]);
+    const [showAll, setShowAll] = React.useState(false);
     if (props.drafts.length === 0) return null;
     const sectionTitle = props.sectionTitle ?? t('sessionDrafts.sectionTitle');
-    const headerStyles = sessionListStyles;
+    // A long drafts group lists its newest few under the true count, then one row reveals the rest
+    // in place: the group never pushes the sessions below it off the screen (lab xrail P1).
+    const visibleDrafts = showAll || props.drafts.length <= DRAFTS_GROUP_PREVIEW_COUNT
+        ? props.drafts
+        : props.drafts.slice(0, DRAFTS_GROUP_PREVIEW_COUNT);
+    const hiddenCount = props.drafts.length - visibleDrafts.length;
     return (
-        <View testID={props.sectionTestID ?? 'session-drafts-section'} style={stylesheet.section}>
-            {/* The drafts group reads like a project group: a sentence-case label and a quiet count. */}
-            <View
-                testID="session-drafts-header"
-                style={headerStyles.groupHeaderSection}
-                accessibilityRole="header"
-                accessibilityLabel={`${sectionTitle}, ${props.drafts.length}`}
-            >
-                <View style={stylesheet.headerTitleRow}>
-                    <Eyebrow style={headerStyles.groupHeaderTitle} numberOfLines={1}>{sectionTitle}</Eyebrow>
-                    <Text testID="session-drafts-header-count" style={headerStyles.groupHeaderCount}>
-                        {props.drafts.length}
-                    </Text>
-                </View>
-            </View>
-            {/* One sheet, like each project group below it (S1 Grouped). */}
-            <ItemGroup
-                style={headerStyles.groupSheetUnderLabel}
-                containerStyle={[stylesheet.group, headerStyles.groupSheetInset]}
-                selectableItemCountOverride={props.drafts.length}
-            >
-                {props.drafts.map((draft) => (
+        // The drafts group reads like a project group: a sentence-case label, a quiet count, one sheet.
+        <SessionListGroup
+            testID={props.sectionTestID ?? 'session-drafts-section'}
+            headerTestID="session-drafts-header"
+            countTestID="session-drafts-header-count"
+            title={sectionTitle}
+            count={props.drafts.length}
+            selectableItemCountOverride={props.drafts.length}
+        >
+                {visibleDrafts.map((draft) => (
                     <NewSessionDraftRow
                         key={draft.draftId}
                         draft={draft}
@@ -422,8 +417,14 @@ export const NewSessionDraftsSectionView = React.memo(function NewSessionDraftsS
                         rowScope={props.rowScope ?? undefined}
                     />
                 ))}
-            </ItemGroup>
-        </View>
+                {hiddenCount > 0 ? (
+                    <NewSessionDraftsShowAllRow
+                        count={props.drafts.length}
+                        density={props.density ?? 'default'}
+                        onPress={() => setShowAll(true)}
+                    />
+                ) : null}
+        </SessionListGroup>
     );
 });
 
@@ -442,8 +443,8 @@ const ServerScopedNewSessionDraftsSection = React.memo(function ServerScopedNewS
     temporaryComputerOnly?: boolean;
     inactiveScopeBinding?: ServerCredentialAccountScopeBinding;
 }>) {
-    const router = useRouter();
-    const machines = useLaunchSelectionMachines();
+    const action = useMountedActionExecution(props.scope);
+    const machineMembership = useMachinePresenceMembership(props.scope.serverId);
     const machineListStatusByServerId = useMachineListStatusByServerId();
     const allDrafts = useNewSessionDraftProjections(props.scope);
     const drafts = React.useMemo(() => (
@@ -466,9 +467,7 @@ const ServerScopedNewSessionDraftsSection = React.memo(function ServerScopedNewS
                 operations: actionOperations,
             }) ? [draft.draftId] : []
     ))), [actionOperations, drafts, props.scope.accountId]);
-    const onlineMachineIds = React.useMemo(() => new Set(
-        machines.filter((machine) => isMachineOnline(machine)).map((machine) => machine.id),
-    ), [machines]);
+    const onlineMachineIds = React.useMemo(() => new Set(machineMembership.selectableMachineIds), [machineMembership.selectableMachineIds]);
     const availabilityByDraftId = React.useMemo(() => {
         const currentPluginProjection = pluginProjection.phase === 'current'
             ? pluginProjection.pluginUiProjection
@@ -501,9 +500,9 @@ const ServerScopedNewSessionDraftsSection = React.memo(function ServerScopedNewS
         props.scope.serverId,
     ]);
     const handleContinue = React.useCallback((draftId: string, scope?: ServerAccountScope) => {
-        if (!scope) return;
-        router.push(buildNewSessionDraftContinueRoute(draftId, scope));
-    }, [router]);
+        if (!scope || scope.serverId !== props.scope.serverId || scope.accountId !== props.scope.accountId) return;
+        fireAndForget(action.execute('session.draft.open', { draftId }), { tag: 'NewSessionDraftsSection.open' });
+    }, [action.execute, props.scope]);
     const homeProfile = React.useMemo(
         () => getServerProfileById(props.scope.serverId),
         [props.scope.serverId, serverProfilesGeneration],
@@ -555,47 +554,17 @@ const ServerScopedNewSessionDraftsSection = React.memo(function ServerScopedNewS
             activeRequest,
         }));
     }, [activeRequest, props.scope]);
-    const handleDelete = React.useCallback((draftId: string, scope?: ServerAccountScope) => {
+    const handleDelete = React.useCallback(async (draftId: string, scope?: ServerAccountScope) => {
         if (!scope || scope.serverId !== props.scope.serverId || scope.accountId !== props.scope.accountId) {
-            return Promise.resolve(false);
+            return false;
         }
-        return deleteNewSessionDraftAfterConfirmation({
-            confirm: () => Modal.confirm(
-                t('sessionDrafts.delete.confirmTitle'),
-                t('sessionDrafts.delete.confirmDescription'),
-                { confirmText: t('common.delete'), cancelText: t('common.cancel'), destructive: true },
-            ),
-            readCurrentDraftDeletionDisposition: () => {
-                const currentDraft = listNewSessionDraftProjections(scope)
-                    .find((draft) => draft.draftId === draftId);
-                if (!currentDraft) return 'missing';
-                return isNewSessionDraftDeletionBlocked({
-                    draft: currentDraft,
-                    accountId: scope.accountId,
-                    operations: readAllActionOperations(),
-                }) ? 'launch-custody' : 'deletable';
-            },
-            // The canonical server tombstone atomically closes any pending Runner
-            // activation for this draft. A separate cancel call here would create
-            // a competing lifecycle and an offline race.
-            deleteDraft: () => {
-                if (!props.inactiveScopeBinding) {
-                    return deleteSessionDraft({ scope, address: { kind: 'newSession', draftId } });
-                }
-                if (!activeRequest) return Promise.resolve(false);
-                return runWithSessionDraftRepositoryScopedRuntime({
-                    binding: props.inactiveScopeBinding,
-                    activeRequest,
-                    operation: ({ runtime, isCurrent }) => deleteSessionDraftWithScopedRuntime({
-                        scope,
-                        address: { kind: 'newSession', draftId },
-                        runtime,
-                        isCurrent: () => mountedRef.current && isCurrent(),
-                    }),
-                }).then((deleted) => deleted === true);
-            },
-        });
-    }, [activeRequest, props.inactiveScopeBinding, props.scope]);
+        // The Action owner rechecks launch custody after its configurable review,
+        // then the canonical tombstone closes any pending Runner activation.
+        const outcome = await action.execute('session.draft.delete', { draftId });
+        if (!outcome.ok) return false;
+        const parsed = AppShellActionOutputSchemas['session.draft.delete'].safeParse(outcome.result);
+        return parsed.success && parsed.data.status === 'deleted';
+    }, [action.execute, props.scope]);
 
     return (
         <NewSessionDraftsSectionView

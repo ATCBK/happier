@@ -15,9 +15,6 @@ installPopoverCommonModuleMocks({ reactNative: async () => await vi.importActual
 vi.mock('@/components/navigation/shell/sidebarFooter/SessionUsagePopoverContent', () => ({
     SessionUsagePopoverContent: () => null,
 }));
-vi.mock('@/components/navigation/shell/sidebarFooter/SidebarUsagePopoverContent', () => ({
-    USAGE_POPOVER_WIDTH_PX: 372,
-}));
 
 const { QuotaRingInstrument } = await import('./QuotaRingInstrument');
 const { motionTokens } = await import('@/components/ui/motion');

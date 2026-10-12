@@ -1,6 +1,7 @@
 import { t } from '@/text';
 
 export type SessionBoardFailurePresentationKind =
+    | 'approvalRequired'
     | 'conflict'
     | 'outcomeUnknown'
     | 'forbidden'
@@ -21,7 +22,8 @@ export type SessionBoardFailurePresentation = Readonly<{
 }>;
 
 /**
- * The single user-facing interpretation of Board failure codes.
+ * The single user-facing interpretation of non-success Board outcomes,
+ * including work queued for approval.
  *
  * Protocol and Action owners retain the strict code and structured recovery
  * evidence. This presentation boundary deliberately exposes neither raw server
@@ -31,6 +33,8 @@ export type SessionBoardFailurePresentation = Readonly<{
  */
 export function resolveSessionBoardFailurePresentation(code: string): SessionBoardFailurePresentation {
     switch (code) {
+        case 'approval_required':
+            return { kind: 'approvalRequired', message: t('sessionBoard.mutation.approvalRequired'), severity: 'warning' };
         case 'session_board_revision_conflict':
         case 'session_board_source_conflict':
             return { kind: 'conflict', message: t('sessionBoard.mutation.conflict'), severity: 'warning' };

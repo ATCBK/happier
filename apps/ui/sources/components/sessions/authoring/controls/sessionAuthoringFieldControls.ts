@@ -131,7 +131,7 @@ export type SessionAuthoringFieldControlModel =
     }>
     /** The MCP selection, edited through the incumbent New Session MCP owner for the resolved Agent. */
     | Readonly<{
-        field: 'mcpSelection';
+        field: 'capabilitySelection';
         kind: 'mcp';
         agentId: string;
         context: SessionAuthoringMcpContext;
@@ -245,7 +245,7 @@ export function resolveSessionAuthoringFieldTitle(
         case 'profileId': return t('agentInput.profile.sectionTitle');
         case 'sessionConfigOptionOverrides': return t('agentInput.actionMenu.settings');
         case 'transcriptStorage': return t('settingsSession.defaultStorage.title');
-        case 'mcpSelection': return t('newSession.mcpChipLabel');
+        case 'capabilitySelection': return t('newSession.mcpChipLabel');
         case 'connectedServices': return t('connectedServices.authChip.label');
         case 'terminal': return t('profiles.tmux.spawnSessionsTitle');
         case 'runtimeDescriptorV1': return selectedAgentTarget?.runtimeBackendMode?.title
@@ -613,7 +613,7 @@ export function resolveSessionAuthoringFieldControl(params: Readonly<{
             };
         }
 
-        case 'mcpSelection': {
+        case 'capabilitySelection': {
             // The MCP selection is previewed for one Agent against one Machine
             // and folder by the incumbent New Session owner; without an Agent
             // or that scope there is nothing truthful to offer.
@@ -798,7 +798,7 @@ export function resolveSessionAuthoringFieldValue(params: Readonly<{
         }
         // Edited through their own owner's control, which reports the value
         // directly rather than resolving an option id.
-        case 'mcpSelection':
+        case 'capabilitySelection':
         case 'connectedServices':
             return params.values[params.selection.field] ?? null;
     }

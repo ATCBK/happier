@@ -21,6 +21,7 @@ export function realBoardActions(
         repository: createSessionSystemRecordRepository({ scope, request }),
         contentContext: { mode: 'plain' },
         capabilities: { readTranscript: true, editSessionRecords: true },
+        boardEnabled: true,
     });
     const settings = ActionsSettingsV1Schema.parse({
         v: 1,

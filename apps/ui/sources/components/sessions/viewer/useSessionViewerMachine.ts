@@ -1,8 +1,6 @@
 import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
-import { useMachine } from '@/sync/store/hooks';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
 import { useOptionalSessionViewerController } from './SessionViewerController';
 import type { SessionViewerSource } from './sessionViewerPresentation';
@@ -21,10 +19,10 @@ export function useSessionViewerMachine(
     useOptionalSessionViewerController()?.facts[source]?.machineName ?? null;
   const machineId =
     useSessionMachineTarget(sessionId, serverId)?.machineId ?? null;
-  const machine = useMachine(machineId ?? '', machineId !== null);
+  const presence = useMachinePresenceSummary(serverId, machineId);
   return {
-    name: stated ?? getMachineDisplayName(machine) ?? machineId ?? '',
-    online: machine ? isMachineOnline(machine) : false,
+    name: stated ?? presence.name ?? machineId ?? '',
+    online: presence.reachability === 'reachable',
   };
 }
 

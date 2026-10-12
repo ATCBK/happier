@@ -4146,8 +4146,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 expect(screen.getTextContent())
                     .not.toContain('session.agentContinuation.transition.switched');
                 expect(screen.findAllByTestId('session.agentTransitionOutcome.banner')).toHaveLength(0);
-                expect(screen.findAllByTestId('session-pendingActivation').length)
-                    .toBeGreaterThan(0);
+                expect(pendingActivationLine(screen)).not.toBeNull();
             } finally {
                 act(() => { screen.tree?.unmount(); });
                 pendingFireAndForget.length = 0;
@@ -4161,6 +4160,15 @@ describe('SessionView (attachments.uploads resumable send)', () => {
          * store is that sync arriving — the same re-render the store publishes
          * in production.
          */
+        /** The Session's queued-input state, which speaks on the composer's status line rather than as a banner. */
+        function pendingActivationLine(screen: { tree?: Parameters<typeof findTestInstanceByTypeWithProps>[0] | null }) {
+            if (!screen.tree) return null;
+            const status = (findTestInstanceByTypeWithProps(screen.tree, 'AgentInput' as any, {}) as any).props.connectionStatus as
+                | { text: string; action?: { label: string } }
+                | undefined;
+            return status?.text.startsWith('session.pendingActivation.') ? status : null;
+        }
+
         function syncPendingRowForLocalId(localId: string) {
             const row = {
                 id: `pending-${localId}`,
@@ -4219,7 +4227,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 // inactive-session recovery must not compete with its spinner or
                 // imply that the reader needs to resume the source Agent.
                 syncPendingRowForLocalId('armed-local-id');
-                expect(screen.findAllByTestId('session-pendingActivation')).toHaveLength(0);
+                expect(pendingActivationLine(screen)).toBeNull();
                 const inFlightInput = findTestInstanceByTypeWithProps(screen.tree, 'AgentInput' as any, {}) as any;
                 expect(inFlightInput.props.isSending).toBe(true);
                 expect((inFlightInput.props.statusBadges as readonly { testID?: string }[])
@@ -4233,7 +4241,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 // Suppression is only for the live operation. If the target has
                 // not become active yet, the existing pending-activation owner is
                 // still the post-operation recovery surface.
-                expect(screen.findAllByTestId('session-pendingActivation').length).toBeGreaterThan(0);
+                expect(pendingActivationLine(screen)).not.toBeNull();
             } finally {
                 act(() => { screen.tree?.unmount(); });
                 pendingFireAndForget.length = 0;
@@ -4250,18 +4258,16 @@ describe('SessionView (attachments.uploads resumable send)', () => {
             try {
                 expect(modalAlertSpy).not.toHaveBeenCalled();
                 // Nothing yet, correctly: no canonical fact has arrived.
-                expect(screen.findAllByTestId('session-pendingActivation')).toHaveLength(0);
+                expect(pendingActivationLine(screen)).toBeNull();
 
                 sessionState.session.active = false;
                 sessionState.session.presence = 0;
                 syncPendingRowForLocalId('armed-local-id');
 
-                expect(screen.findAllByTestId('session-pendingActivation').length)
-                    .toBeGreaterThan(0);
+                expect(pendingActivationLine(screen)).not.toBeNull();
                 // Never an invitation to send the same input twice: the only action
                 // is the Session's own resume owner, which drains the queue.
-                expect(screen.findAllByTestId('session-pendingActivation-resume').length)
-                    .toBeGreaterThan(0);
+                expect(pendingActivationLine(screen)?.action?.label).toBe('session.pendingActivation.actions.resume');
             } finally {
                 act(() => { screen.tree?.unmount(); });
                 pendingFireAndForget.length = 0;
@@ -4284,7 +4290,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 code: 'target_start_failed',
             });
             try {
-                expect(screen.findAllByTestId('session-pendingActivation')).toHaveLength(0);
+                expect(pendingActivationLine(screen)).toBeNull();
             } finally {
                 sessionState.session.active = restoreActive;
                 sessionState.session.presence = restorePresence;
@@ -4307,8 +4313,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 // Still no second banner of its own — the Session's existing
                 // queued-message owner says it, exactly as for `target_start_failed`.
                 expect(screen.findAllByTestId('session.agentTransitionOutcome.banner')).toHaveLength(0);
-                expect(screen.findAllByTestId('session-pendingActivation').length)
-                    .toBeGreaterThan(0);
+                expect(pendingActivationLine(screen)).not.toBeNull();
             } finally {
                 act(() => { screen.tree?.unmount(); });
                 pendingFireAndForget.length = 0;
@@ -4321,7 +4326,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
             // reported as one whose message never went. Nothing is queued here.
             const screen = await sendArmedAndReadBanner({ type: 'accepted', localId: 'armed-local-id' });
             try {
-                expect(screen.findAllByTestId('session-pendingActivation')).toHaveLength(0);
+                expect(pendingActivationLine(screen)).toBeNull();
                 expect(screen.findAllByTestId('session.agentTransitionOutcome.banner')).toHaveLength(0);
             } finally {
                 act(() => { screen.tree?.unmount(); });

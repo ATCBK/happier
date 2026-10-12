@@ -189,3 +189,61 @@ export function resolveAgentContinuationSubmitPresentation(input: Readonly<{
             : AGENT_MARK_NOMINAL_SIZE,
     };
 }
+
+/**
+ * A route or model change for the SAME Agent, armed for the next message (D15).
+ *
+ * The Agent does not change, so there is no mark to stand in for anything: the
+ * words name the source the Session continues through, and the drawn and spoken
+ * sentences are one string.
+ */
+export function resolveRouteContinuationSubmitPresentation(input: Readonly<{
+    sourceLabel: string;
+}>): AgentContinuationSubmitPresentation {
+    const sentence = t('session.agentContinuation.routeSendLabel', { source: input.sourceLabel });
+    return {
+        accessibilityLabel: sentence,
+        label: sentence,
+        markPlacement: 'trailing',
+        markAgentId: null,
+        markSize: AGENT_MARK_NOMINAL_SIZE,
+    };
+}
+
+/**
+ * What the send control announces, when anything is armed: an Agent switch or a
+ * route/model change for the running Agent. One decision for both, through the
+ * same narrowing, so the button can never announce one while the other applies.
+ *
+ * An armed Agent wins: its transition carries its own model selection, so a
+ * pending route change for the Agent being left would not apply anyway.
+ */
+export function resolveArmedSubmitPresentation(params: Readonly<{
+    armedContinuationTarget: Readonly<{ agentId: string; label: string }> | null | undefined;
+    armedRouteContinuation: Readonly<{ sourceLabel: string }> | null | undefined;
+    otherActionHoldsSubmit: boolean;
+    hasIdentityMark: boolean;
+}>): Readonly<
+    | { kind: 'agent'; presentation: AgentContinuationSubmitPresentation }
+    | { kind: 'route'; presentation: AgentContinuationSubmitPresentation }
+> | null {
+    const agent = resolveArmedSubmitContinuation({
+        armedContinuationTarget: params.armedContinuationTarget,
+        otherActionHoldsSubmit: params.otherActionHoldsSubmit,
+    });
+    if (agent) {
+        return {
+            kind: 'agent',
+            presentation: resolveAgentContinuationSubmitPresentation({
+                agentId: agent.agentId,
+                agentLabel: agent.label,
+                hasIdentityMark: params.hasIdentityMark,
+            }),
+        };
+    }
+    const route = resolveArmedSubmitContinuation({
+        armedContinuationTarget: params.armedRouteContinuation,
+        otherActionHoldsSubmit: params.otherActionHoldsSubmit,
+    });
+    return route ? { kind: 'route', presentation: resolveRouteContinuationSubmitPresentation(route) } : null;
+}

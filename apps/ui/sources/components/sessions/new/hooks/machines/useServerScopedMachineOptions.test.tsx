@@ -8,43 +8,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { renderScreen } from '@/dev/testkit';
 import { adoptHomeProfile } from '@/sync/domains/server/serverProfiles';
 
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const fetchAndApplyMachinesMock = vi.hoisted(() => vi.fn(async (_params: any) => {}));
-const getCredentialsForServerUrlMock = vi.hoisted(() =>
-    vi.fn<(serverUrl: string) => Promise<{ token: string; secret: string } | null>>(async (_serverUrl: string) => null)
-);
-const createEncryptionFromAuthCredentialsMock = vi.hoisted(() => vi.fn(async () => ({})));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
-    return {
-        ...actual,
-        listServerProfiles: () => ([
-            { id: 'server-a', name: 'Server A', serverUrl: 'https://a.example.test', lastUsedAt: 1000 },
-            { id: 'server-b', name: 'Server B', serverUrl: 'https://b.example.test', lastUsedAt: 900 },
-        ]),
-    };
-});
-
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal,
-        tokenStorage: {
-            getCredentialsForServerUrl: getCredentialsForServerUrlMock,
-        },
-    });
-});
-
-vi.mock('@/auth/encryption/createEncryptionFromAuthCredentials', () => ({
-    createEncryptionFromAuthCredentials: createEncryptionFromAuthCredentialsMock,
-}));
-
-vi.mock('@/sync/engine/machines/syncMachines', () => ({
-    fetchAndApplyMachines: fetchAndApplyMachinesMock,
-}));
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -101,6 +65,72 @@ function createMachine(id: string): Machine {
 }
 
 describe('useServerScopedMachineOptions', () => {
+    it.each(['populated', 'empty'] as const)('keeps a hydrated %s Home inventory ready through a profile-alias refresh', async (inventoryKind) => {
+        const identity = `srv_launch_refresh_${inventoryKind}`;
+        const profile = await adoptHomeProfile({ descriptor: {
+            v: 1,
+            homeServerIdentityId: identity,
+            canonicalServerUrl: `https://launch-refresh-${inventoryKind}.example.test`,
+            revision: 1,
+            endpoints: [{ kind: 'https', url: `https://launch-refresh-${inventoryKind}.example.test` }],
+        }, source: 'manual' });
+        expect(profile.id).not.toBe(identity);
+        const rows = inventoryKind === 'populated' ? [createMachine('machine-refresh')] : [];
+        const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
+        act(() => storage.setState({
+            machineListByServerId: { [identity]: rows },
+            machineListStatusByServerId: { [identity]: 'idle' },
+        }));
+        await renderScreen(<Probe allowedServerIds={[profile.id]} activeServerId="foreign-home" activeMachines={[]}
+            onGroups={(groups) => captured.push(groups)} />);
+        expect(captured.at(-1)?.[0]).toMatchObject({
+            machines: rows.map((row) => expect.objectContaining({ id: row.id })),
+            loading: false,
+            signedOut: false,
+            error: false,
+        });
+
+        await act(async () => storage.setState({ machineListStatusByServerId: { [identity]: 'loading' } }));
+
+        expect(captured.at(-1)?.[0]).toMatchObject({
+            machines: rows.map((row) => expect.objectContaining({ id: row.id })),
+            loading: false,
+            signedOut: false,
+            error: false,
+        });
+    });
+
+    it.each(['signedOut', 'error'] as const)('honors canonical %s status for a requested Home profile alias', async (status) => {
+        const identity = `srv_launch_terminal_${status}`;
+        const profile = await adoptHomeProfile({ descriptor: {
+            v: 1,
+            homeServerIdentityId: identity,
+            canonicalServerUrl: `https://launch-terminal-${status.toLowerCase()}.example.test`,
+            revision: 1,
+            endpoints: [{ kind: 'https', url: `https://launch-terminal-${status.toLowerCase()}.example.test` }],
+        }, source: 'manual' });
+        const rows = [createMachine('machine-terminal')];
+        const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
+        act(() => storage.setState({
+            machineListByServerId: { [identity]: rows },
+            machineListStatusByServerId: { [identity]: 'loading' },
+        }));
+        await renderScreen(<Probe allowedServerIds={[profile.id]} activeServerId="foreign-home" activeMachines={[]}
+            onGroups={(groups) => captured.push(groups)} />);
+
+        await act(async () => storage.setState({
+            machineListByServerId: { [identity]: status === 'signedOut' ? null : rows },
+            machineListStatusByServerId: { [identity]: status },
+        }));
+
+        expect(captured.at(-1)?.[0]).toMatchObject({
+            machines: status === 'signedOut' ? [] : [expect.objectContaining({ id: rows[0].id })],
+            loading: false,
+            signedOut: status === 'signedOut',
+            error: status === 'error',
+        });
+    });
+
     it('updates an equivalent profile route when canonical inventory removes a machine', async () => {
         const identity = 'srv_launch_inventory_owner';
         const profile = await adoptHomeProfile({ descriptor: {
@@ -208,20 +238,10 @@ describe('useServerScopedMachineOptions', () => {
         expect(secondGroups?.find((group) => group.serverId === 'server-b')?.machines[0]?.activeAt).toBe(200);
     });
 
-    it('keeps active server machines and uses server-scoped machine cache for non-active servers (no extra fetch)', async () => {
+    it('keeps active server machines and uses server-scoped machine cache for non-active servers', async () => {
         const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
         const activeMachine = createMachine('machine-a');
         const remoteCachedMachine = createMachine('machine-cache');
-        const remoteFetchedMachine = createMachine('machine-fetch');
-
-        getCredentialsForServerUrlMock.mockReset();
-        getCredentialsForServerUrlMock.mockResolvedValue({ token: 'token', secret: 'secret' });
-        createEncryptionFromAuthCredentialsMock.mockReset();
-        createEncryptionFromAuthCredentialsMock.mockResolvedValue({} as any);
-        fetchAndApplyMachinesMock.mockReset();
-        fetchAndApplyMachinesMock.mockImplementation(async (params: any) => {
-            params.applyMachines([remoteFetchedMachine], true);
-        });
 
         act(() => {
             storage.setState((state) => ({
@@ -250,14 +270,11 @@ describe('useServerScopedMachineOptions', () => {
         expect(activeGroup?.machines.map((m) => m.id)).toEqual(['machine-a']);
         expect(remoteGroup?.machines.map((m) => m.id)).toEqual(['machine-cache']);
         expect(remoteGroup?.loading).toBe(false);
-        expect(fetchAndApplyMachinesMock).not.toHaveBeenCalled();
     });
 
     it('uses the active server cache when the active machine array has not hydrated yet', async () => {
         const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
         const cachedActiveMachine = createMachine('machine-a');
-
-        fetchAndApplyMachinesMock.mockReset();
 
         act(() => {
             storage.setState((state) => ({
@@ -284,15 +301,10 @@ describe('useServerScopedMachineOptions', () => {
         const activeGroup = latest.find((group) => group.serverId === 'server-a');
         expect(activeGroup?.machines.map((m) => m.id)).toEqual(['machine-a']);
         expect(activeGroup?.loading).toBe(false);
-        expect(fetchAndApplyMachinesMock).not.toHaveBeenCalled();
     });
 
-    it('marks server as signed out when no scoped credentials exist', async () => {
+    it('marks server as signed out when its canonical inventory status is signed out', async () => {
         const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
-
-        getCredentialsForServerUrlMock.mockReset();
-        getCredentialsForServerUrlMock.mockResolvedValue(null);
-        fetchAndApplyMachinesMock.mockReset();
 
         act(() => {
             storage.setState((state) => ({
@@ -319,15 +331,10 @@ describe('useServerScopedMachineOptions', () => {
         const remoteGroup = latest.find((group) => group.serverId === 'server-b');
         expect(remoteGroup?.signedOut).toBe(true);
         expect(remoteGroup?.machines).toEqual([]);
-        expect(fetchAndApplyMachinesMock).not.toHaveBeenCalled();
     });
 
     it('filters revoked machines out of all groups', async () => {
         const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
-
-        getCredentialsForServerUrlMock.mockReset();
-        getCredentialsForServerUrlMock.mockResolvedValue({ token: 'token', secret: 'secret' });
-        fetchAndApplyMachinesMock.mockReset();
 
         const activeRevoked = { ...createMachine('machine-a'), revokedAt: 123 } as Machine;
         const remoteRevoked = { ...createMachine('machine-b'), revokedAt: 456 } as Machine;
@@ -362,10 +369,6 @@ describe('useServerScopedMachineOptions', () => {
 
     it('filters replaced machines out of all groups', async () => {
         const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
-
-        getCredentialsForServerUrlMock.mockReset();
-        getCredentialsForServerUrlMock.mockResolvedValue({ token: 'token', secret: 'secret' });
-        fetchAndApplyMachinesMock.mockReset();
 
         const activeReplaced = {
             ...createMachine('machine-a'),

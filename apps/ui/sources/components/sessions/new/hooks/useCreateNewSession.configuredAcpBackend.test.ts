@@ -169,7 +169,7 @@ describe('useCreateNewSession configured ACP backend spawning', () => {
                 agentTarget: null, transcriptStorage: null, profileId: null,
                 environmentVariables: null, resumeSessionId: null, permissionMode: 'default',
                 permissionModeUpdatedAt: null, modelId: null, modelUpdatedAt: null,
-                mcpSelection: null, connectedServices: null, terminal: null,
+                capabilitySelection: null, connectedServices: null, terminal: null,
                 windowsRemoteSessionLaunchMode: null, windowsRemoteSessionConsole: null,
                 acpSessionModeId: null, sessionConfigOptionOverrides: null,
                 automation: {

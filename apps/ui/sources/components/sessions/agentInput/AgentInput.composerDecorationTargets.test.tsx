@@ -1,4 +1,5 @@
 import React from 'react';
+import Color from 'color';
 import { describe, expect, it } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -76,6 +77,19 @@ async function renderComposerWithDecorations() {
 }
 
 describe('AgentInput composer decoration interactive targets', () => {
+  it('uses the Elements backing-dependent material for the real composer', async () => {
+    const { AgentInput } = await import('./AgentInput');
+    const { GlassMaterialSettingsProvider } = await import('@/components/ui/glass/useGlassMaterialSettings');
+    const { GlassRuntimeEnvironmentProvider } = await import('@/components/ui/glass/glassRuntimeEnvironment');
+    const { glassPresetMaterials } = await import('@/components/ui/glass/glassMaterial');
+    const screen = await renderScreen(<GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('clear') }}>
+      <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind: 'wallpaper' }}>
+        <AgentInput value="Keep this draft" onChangeText={() => {}} onSend={() => {}} placeholder="p" disabled={false} autocompleteKinds={[]} autocompleteSuggestions={async () => []} />
+      </GlassRuntimeEnvironmentProvider>
+    </GlassMaterialSettingsProvider>, { wrapper: runtime.Wrapper });
+    const surface = screen.tree.findHostByTestId('agent-input-material-surface')!;
+    expect(Color(String(flattenStyle(surface.props.style).backgroundColor)).alpha()).toBeCloseTo(glassPresetMaterials('clear').card.opacity, 2);
+  });
   it('gives composer link decorations the canonical minimum target without overlapping their stacked neighbour', async () => {
     const screen = await renderComposerWithDecorations();
     const expectedMinimum = resolveMinimumInteractiveTargetSize('web');

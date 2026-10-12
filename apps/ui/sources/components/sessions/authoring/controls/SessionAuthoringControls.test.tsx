@@ -270,13 +270,27 @@ describe('SessionAuthoringControls', () => {
         connectedServicesContentProps.value = null;
     });
 
+    it('names the agent alone while it uses the CLI\'s own model (DESIGN-13 card footer)', async () => {
+        const { useSessionAuthoringEngineSummary } = await import('./SessionAuthoringControls');
+        let summary = '';
+        function Host() {
+            summary = useSessionAuthoringEngineSummary({ values: baseValues() });
+            return null;
+        }
+        const screen = await renderScreen(<Host />);
+        expect(summary.length).toBeGreaterThan(0);
+        expect(summary).not.toContain('agentInput.model.useCliSettings');
+        expect(summary).not.toContain(' · ');
+        await screen.unmount();
+    });
+
     it('shows a field it cannot offer as explicitly unavailable', async () => {
         // MCP selection belongs to another owner. Without that owner's control
         // the field must still be visible as unavailable — a missing chip reads
         // as "this step has no MCP setting", which is a different claim.
-        const { screen } = await renderControls({ fields: ['mcpSelection'] });
+        const { screen } = await renderControls({ fields: ['capabilitySelection'] });
 
-        expect(screen.findByTestId('session-authoring-control-mcpSelection-unavailable')).toBeTruthy();
+        expect(screen.findByTestId('session-authoring-control-capabilitySelection-unavailable')).toBeTruthy();
         await screen.unmount();
     });
 
@@ -403,15 +417,15 @@ describe('SessionAuthoringControls', () => {
     it('edits the MCP selection through the incumbent New Session MCP owner for the resolved Agent', async () => {
         mcpPreviewSpy.mockClear();
         const { screen, onChangeField } = await renderControls({
-            fields: ['mcpSelection'],
-            values: { agentTarget: CLAUDE_TARGET, mcpSelection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['review-tools'], forceExcludeServerIds: [] } },
+            fields: ['capabilitySelection'],
+            values: { agentTarget: CLAUDE_TARGET, capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['review-tools'], forceExcludeServerIds: [] } } },
             facts: {
                 agentTargets: [directCapableClaude()],
                 mcp: { machineId: 'machine-1', machineName: 'Mac Studio', directory: '/Users/me/project', serverId: 'server-a', enabled: true },
             },
         });
         await act(async () => {});
-        expect(screen.findByTestId('session-authoring-control-mcpSelection-unavailable')).toBeNull();
+        expect(screen.findByTestId('session-authoring-control-capabilitySelection-unavailable')).toBeNull();
         expect(screen.findByTestId('new-session-mcp-chip')).toBeTruthy();
         expect(mcpPreviewSpy).not.toHaveBeenCalled();
         // Native/web press intent precedes onPress; the render harness only
@@ -435,7 +449,7 @@ describe('SessionAuthoringControls', () => {
         await act(async () => {
             onSelectionChange({ v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['noisy'] });
         });
-        expect(onChangeField).toHaveBeenCalledWith('mcpSelection', {
+        expect(onChangeField).toHaveBeenCalledWith('capabilitySelection', {
             v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['noisy'],
         });
         await screen.unmount();
@@ -906,15 +920,15 @@ describe('SessionAuthoringControls', () => {
 
     it('states the MCP selection unavailable without a resolved Agent or an exact Machine and folder', async () => {
         const noAgent = await renderControls({
-            fields: ['mcpSelection'],
+            fields: ['capabilitySelection'],
             values: {},
             facts: { mcp: { machineId: 'machine-1', machineName: null, directory: '/p', serverId: null, enabled: true } },
         });
-        expect(noAgent.screen.findByTestId('session-authoring-control-mcpSelection-unavailable')).toBeTruthy();
+        expect(noAgent.screen.findByTestId('session-authoring-control-capabilitySelection-unavailable')).toBeTruthy();
         await noAgent.screen.unmount();
 
-        const noScope = await renderControls({ fields: ['mcpSelection'], facts: { agentTargets: [directCapableClaude()] } });
-        expect(noScope.screen.findByTestId('session-authoring-control-mcpSelection-unavailable')).toBeTruthy();
+        const noScope = await renderControls({ fields: ['capabilitySelection'], facts: { agentTargets: [directCapableClaude()] } });
+        expect(noScope.screen.findByTestId('session-authoring-control-capabilitySelection-unavailable')).toBeTruthy();
         await noScope.screen.unmount();
     });
 });

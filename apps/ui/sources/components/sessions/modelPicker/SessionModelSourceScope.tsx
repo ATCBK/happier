@@ -14,11 +14,12 @@ import { t } from '@/text';
 export type SessionModelHiddenSource =
   DaemonProviderModelProjectionHiddenSourceV1;
 
-/** The scope a picker browses: one source, named by its connection label. Local picker state only. */
+/** One model source; null connection means this exact Agent's native models. Local picker state only. */
 export type SessionModelBrowseScope = Readonly<{
-  connectionId: string;
   label: string;
-}>;
+  /** The source visibility owner's projected fact, independent of retained model rows. */
+  hiddenFromPicker?: boolean;
+} & ({ connectionId: string } | { connectionId: null })>;
 
 export function sessionModelBrowseScope(
   source: SessionModelHiddenSource,
@@ -26,6 +27,7 @@ export function sessionModelBrowseScope(
   return {
     connectionId: source.connectionId,
     label: providerConnectionSourceLabel(source),
+    hiddenFromPicker: true,
   };
 }
 
@@ -94,10 +96,14 @@ export function SessionModelSourceScopeBar(
         {t('agentInput.model.browsing')}{' '}
         <Text style={styles.scopeName}>{props.scope.label}</Text>
       </Text>
-      <Icon name="eye-slash" size={12} color={theme.colors.text.tertiary} />
-      <Text style={styles.meta} numberOfLines={1}>
-        {t('agentInput.model.hiddenFromMainPicker')}
-      </Text>
+      {props.scope.hiddenFromPicker === true ? (
+        <>
+          <Icon name="eye-slash" size={12} color={theme.colors.text.tertiary} />
+          <Text style={styles.meta} numberOfLines={1}>
+            {t('agentInput.model.hiddenFromMainPicker')}
+          </Text>
+        </>
+      ) : null}
     </View>
   );
 }
@@ -111,9 +117,9 @@ const styles = StyleSheet.create((theme) => ({
     rowGap: 2,
   },
   linkSlot: { flexDirection: 'row', alignItems: 'center' },
-  meta: { fontSize: 11, color: theme.colors.text.tertiary },
+  meta: { ...Typography.rowMeta(), color: theme.colors.text.tertiary },
   link: {
-    fontSize: 11,
+    ...Typography.rowMeta(),
     ...Typography.default('semiBold'),
     color: theme.colors.text.primary,
   },
@@ -126,7 +132,7 @@ const styles = StyleSheet.create((theme) => ({
     marginLeft: -4,
   },
   scopeText: {
-    fontSize: 12,
+    ...Typography.rowMeta(),
     color: theme.colors.text.secondary,
     flexShrink: 1,
   },

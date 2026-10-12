@@ -4,6 +4,7 @@ import { callWorkflowAction } from '@/sync/domains/workflows/callWorkflowAction'
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 import type { ActionFieldOption } from './ActionInputFields';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { buildSessionActionFieldOptionsResolver } from './sessionActionFieldOptions';
 
 export type InputFieldOptionsState = Readonly<{
     options: readonly ActionFieldOption[];
@@ -38,8 +39,9 @@ function load(read: InputOptionsRead, entry: ReadEntry): void {
         parseResult: (value) => getActionSpec('action.options.resolve').outputSchema!.parse(value) as PublicActionResultById['action.options.resolve'],
     }).then((result) => {
         if (controller.signal.aborted) return;
-        const options = JSON.stringify(entry.state.options) === JSON.stringify(result.options)
-            ? entry.state.options : result.options;
+        const projected = result.optionsSourceId ? buildSessionActionFieldOptionsResolver({ [result.optionsSourceId]: result.options })({ optionsSourceId: result.optionsSourceId }) : result.options;
+        const options = JSON.stringify(entry.state.options) === JSON.stringify(projected)
+            ? entry.state.options : projected;
         entry.state = { status: 'ready', options };
         entry.listeners.forEach((listener) => listener());
     }).catch((error: unknown) => {

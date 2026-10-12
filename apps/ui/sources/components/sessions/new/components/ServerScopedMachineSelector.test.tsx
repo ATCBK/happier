@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 
 import type { ServerScopedMachine } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import { renderScreen } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
 
 
@@ -52,9 +53,9 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: ({ children }: { children?: React.ReactNode }) => React.createElement('Text', null, children),
 }));
 
-vi.mock('@/utils/sessions/machineUtils', () => ({
-    isMachineOnline: (machine: { active?: boolean | null }) => Boolean(machine.active),
-}));
+const network = await installSessionOpsNetworkBoundary();
+beforeAll(async () => { await network.addHome('https://server-b', 'account-b'); });
+afterAll(() => network.dispose());
 
 describe('ServerScopedMachineSelector', () => {
     it('assigns stable option and readiness test IDs when a prefix is provided for grouped machine rows', async () => {

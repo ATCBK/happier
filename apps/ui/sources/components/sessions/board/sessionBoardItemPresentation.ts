@@ -54,6 +54,10 @@ export function createSessionBoardSourceAvailabilityResolver(
     return (source) => {
         if (source.kind === 'declarative' || source.kind === 'walkthrough') return AVAILABLE;
         if (source.kind === 'hostedHtml') return options?.hostedHtmlRendererAvailable === true ? AVAILABLE : NO_HTML_RENDERER;
+        if (source.kind === 'widget' && source.instance.definition.kind === 'inline') {
+            return source.instance.definition.definition.body.kind === 'html' && options?.hostedHtmlRendererAvailable !== true
+                ? NO_HTML_RENDERER : AVAILABLE;
+        }
         if (source.kind === 'widget' && source.instance.definition.kind === 'installed') return AVAILABLE;
         if (source.kind === 'widget' && readBuiltinWidgetDescriptorV1(source.instance.definition)) return AVAILABLE;
         return NO_WIDGET_CONTRIBUTION;

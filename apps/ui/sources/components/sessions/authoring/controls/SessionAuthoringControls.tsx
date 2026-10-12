@@ -312,8 +312,8 @@ function SessionAuthoringFieldControl(props: Readonly<{
                 <SessionAuthoringMcpSelectionField
                     agentId={control.agentId}
                     context={control.context}
-                    value={values.mcpSelection}
-                    onChange={(selection) => onChangeField('mcpSelection', selection)}
+                    value={values.capabilitySelection}
+                    onChange={(selection) => onChangeField('capabilitySelection', selection)}
                     chipRenderContext={props.chipRenderContext}
                     testID={`${testID}-mcp`}
                 />
@@ -506,8 +506,11 @@ function formatSessionAuthoringEngineLabel(params: Readonly<{
     if (!params.values.agentTarget) return t('agentInput.agent.unselected');
     const modelControl = resolveSessionAuthoringFieldControl({ field: 'modelSelection', values: params.values,
         controls: params.controls, facts: params.facts, agentId: params.agentId });
+    // The CLI's own model is no choice to name: the summary is the agent alone ("Claude"), and
+    // names a model only when one is chosen ("Claude · Opus 5.5").
     const modelLabel = modelControl.kind === 'options'
-        ? resolveSessionAuthoringOptionLabel(modelControl.options, modelControl.selectedOptionId, modelControl.unselectedLabel)
+        ? modelControl.selectedOptionId === 'default' ? undefined
+            : resolveSessionAuthoringOptionLabel(modelControl.options, modelControl.selectedOptionId, modelControl.unselectedLabel)
         : params.values.modelSelection?.ref.modelId;
     return [params.agentLabel, modelLabel].filter(Boolean).join(' · ');
 }

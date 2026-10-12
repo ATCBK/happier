@@ -1,4 +1,5 @@
 import React from 'react';
+import { AtmosphereSurfaceFrame } from '@/components/atmosphere/AtmosphereSurfaceFrame';
 import { StoredPluginUiNewSessionSeedOriginV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { ProjectSetupDraftFootnote, ProjectSetupDraftHeader } from '@/components/projects/projectSetup/ProjectSetupReturn';
 import type { SessionDirectoryIntentV1 } from '@happier-dev/protocol';
@@ -41,9 +42,10 @@ import { readAllActionOperations, useAllActionOperations } from '@/sync/domains/
 import { parseNewSessionCheckoutDraft } from '@/sync/domains/state/newSessionCheckoutDraft';
 import {
     clearNewSessionOrdinaryEntryDraftIdExact,
+    readNewSessionOrdinaryEntryDraftId,
     setNewSessionOrdinaryEntryDraftId,
 } from '@/sync/domains/settings/localOnlyAccountSettings';
-import { useActiveServerAccountScope, useSettingMutable } from '@/sync/store/hooks';
+import { useActiveServerAccountScope, useActiveServerAccountScopeLifetime, useSetting, useSettingMutable } from '@/sync/store/hooks';
 import {
     getSessionDraftSnapshot,
     subscribeSessionDraft,
@@ -51,13 +53,16 @@ import {
     deleteSessionDraftWithScopedRuntime,
     type SessionDraftSnapshot,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
-import { useServerCredentialAccountScopeBindings, useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { useServerCredentialAccountScopeBindings, useServerCredentialAccountScopeResolution, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { areServerAccountScopesEqual, type ServerAccountScope, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { createServerFetchAtEndpoint } from '@/sync/http/client';
 import { runWithSessionDraftRepositoryScopedRuntime } from '@/sync/ops/sessionDrafts/runWithSessionDraftRepositoryScopedRuntime';
 import { peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
 import { t } from '@/text';
+import { SessionDraftHydrationBoundary } from '@/components/sessions/drafts/SessionDraftHydrationBoundary';
+import { GlassSurface } from '@/components/ui/glass/GlassSurface';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 
 /**
  * How the New Session surface is presented. `screen` is the `/new` route (the panel or the
@@ -81,10 +86,18 @@ function NewSessionScreenInner(props: Readonly<{
     statusTrailingActions?: React.ReactNode;
     automationExactTurnRetarget?: ExactTurnAutomationPrefill | null;
     fixedDirectoryIntent?: SessionDirectoryIntentV1;
+    inputPlaceholder?: string;
 }>) {
     const model = useNewSessionScreenModel(props);
     // A host that fixes part of the creation (the embed's new chat) narrows this same composer.
     const creationProfile = useNewSessionHostCreationProfile();
+    const simpleProps = model.variant === 'simple' ? model.simpleProps : null;
+    const inputPlaceholder = props.inputPlaceholder;
+    // An embedding page's placeholder rides the composer's own input; the props keep their identity.
+    const embeddedPanelProps = React.useMemo(
+        () => (simpleProps && inputPlaceholder ? { ...simpleProps, inputPlaceholder } : simpleProps),
+        [inputPlaceholder, simpleProps],
+    );
 
     if (model.variant === 'simple') {
         return (
@@ -98,7 +111,9 @@ function NewSessionScreenInner(props: Readonly<{
                 overlayAccessibilityLabel={model.overlayAccessibilityLabel}
             >
                 {props.presentation === 'embedded'
-                    ? <NewSessionEmbeddedComposerCard panelProps={model.simpleProps} creationProfile={creationProfile} />
+                    ? <NewSessionEmbeddedComposerCard
+                        panelProps={embeddedPanelProps ?? model.simpleProps}
+                        creationProfile={creationProfile} />
                     : <NewSessionSimplePanel {...withBotDraftPresentation(model.simpleProps, model.botCreation)} />}
             </NewSessionLaunchSurface>
         );
@@ -176,6 +191,7 @@ function NewSessionContent(props: Readonly<{
     statusTrailingActions?: React.ReactNode;
     automationExactTurnRetarget?: ExactTurnAutomationPrefill | null;
     fixedDirectoryIntent?: SessionDirectoryIntentV1;
+    inputPlaceholder?: string;
 }>) {
     const shouldBlock = useShouldBlockNewSessionWithGettingStartedGuidance();
 
@@ -185,7 +201,9 @@ function NewSessionContent(props: Readonly<{
 
     return (
         <NewSessionScreenPortalScope>
-            <NewSessionScreenInner {...props} />
+            {props.presentation === 'screen' ? <AtmosphereSurfaceFrame surface="new-session">
+                <NewSessionScreenInner {...props} />
+            </AtmosphereSurfaceFrame> : <NewSessionScreenInner {...props} />}
         </NewSessionScreenPortalScope>
     );
 }
@@ -195,7 +213,7 @@ function NewSessionContent(props: Readonly<{
  * actions, and the authoring model behind them. The `/new` route and Home both render it; the
  * host seam (`newSessionHost`) decides where its params live and how a draft change navigates.
  */
-export function NewSessionScreen(props: Readonly<{
+type NewSessionScreenProps = Readonly<{
     presentation: NewSessionScreenPresentation;
     automationExactTurnRetarget?: ExactTurnAutomationPrefill | null;
     /**
@@ -203,27 +221,18 @@ export function NewSessionScreen(props: Readonly<{
      * The folder and checkout controls then render nothing; see `useNewSessionMachinePathState`.
      */
     fixedDirectoryIntent?: SessionDirectoryIntentV1;
-}>) {
-    const { router, openDraft } = useNewSessionHostNavigation();
-    const {
-        dataId,
-        draftId: routeDraftId,
-        draftOrigin,
-        machineId,
-        directory,
-        draftServerId,
-        draftAccountId,
-    } = useNewSessionHostParams<{
-        dataId?: string;
+    /** An embedding page's own question for the empty composer ("Ask about edge-1…"). */
+    inputPlaceholder?: string;
+}>;
+
+export function NewSessionScreen(props: NewSessionScreenProps) {
+    const { draftId: routeDraftId, draftServerId, draftAccountId } = useNewSessionHostParams<{
         draftId?: string;
-        draftOrigin?: string;
-        spawnServerId?: string;
-        machineId?: string;
-        directory?: string;
         draftServerId?: string;
         draftAccountId?: string;
     }>();
     const activeDraftScope = useActiveServerAccountScope();
+    const activeLifetime = useActiveServerAccountScopeLifetime();
     const creationProfile = useNewSessionHostCreationProfile();
     const requestedDraftScopeResolution = useServerCredentialAccountScopeResolution(draftServerId);
     const draftScope = resolveNewSessionDraftRouteScope({
@@ -233,14 +242,77 @@ export function NewSessionScreen(props: Readonly<{
         draftAccountId,
         requestedScopeResolution: requestedDraftScopeResolution,
     });
-    const requestedDraftScopeBindings = useServerCredentialAccountScopeBindings(
-        draftServerId ? [draftServerId] : [],
-    );
-    const requestedDraftScopeBinding = draftServerId
+    const bindingServerId = draftScope && !areServerAccountScopesEqual(activeLifetime?.scope, draftScope)
+        ? draftScope.serverId
+        : null;
+    const bindingServerIds = React.useMemo(() => bindingServerId ? [bindingServerId] : [], [bindingServerId]);
+    const requestedDraftScopeBindings = useServerCredentialAccountScopeBindings(bindingServerIds);
+    const requestedDraftScopeBinding = draftScope
         ? [...requestedDraftScopeBindings.values()].find((binding) => (
-            draftScope !== null && areServerAccountScopesEqual(binding.scope, draftScope)
+            areServerAccountScopesEqual(binding.scope, draftScope)
         )) ?? null
         : null;
+    const lifetime = draftScope && areServerAccountScopesEqual(activeLifetime?.scope, draftScope)
+        ? activeLifetime
+        : requestedDraftScopeBinding;
+    const entryMode = useSetting('newSessionDraftEntryMode');
+    const ordinaryEntryDraftId = useSetting('newSessionOrdinaryEntryDraftId');
+    // Validation uses the existing route owner; allocation belongs to Ready,
+    // after the remembered draft's exact read has established whether it exists.
+    const routeIdentity = resolveNewSessionDraftRouteIdentity({ routeDraftId, createDraftId: () => '' });
+    const explicitDraftId = routeIdentity.shouldWriteRouteParam ? null : routeIdentity.draftId;
+    const requestRef = React.useRef<{
+        lifetime: ServerAccountScopeLifetime | null;
+        routeDraftId: string | null;
+        assignedDraftId: string | null;
+        addresses: readonly Readonly<{ kind: 'newSession'; draftId: string }>[];
+    } | null>(null);
+    let request = requestRef.current;
+    if (!request || request.lifetime !== lifetime || (
+        request.routeDraftId !== explicitDraftId && (explicitDraftId === null || request.assignedDraftId !== explicitDraftId)
+    )) {
+        const requestedDraftId = explicitDraftId ?? (entryMode === 'resumePrevious'
+            ? readNewSessionOrdinaryEntryDraftId({ newSessionOrdinaryEntryDraftId: ordinaryEntryDraftId })
+            : null);
+        request = { lifetime, routeDraftId: explicitDraftId, assignedDraftId: null,
+            addresses: requestedDraftId ? [{ kind: 'newSession', draftId: requestedDraftId }] : [] };
+    }
+    // Writing this surface's allocated id into its host does not turn a fresh
+    // request into another hydration barrier and remount its consumed seed.
+    const admissionRequest = request;
+    React.useLayoutEffect(() => {
+        admissionRequest.routeDraftId = explicitDraftId;
+        requestRef.current = admissionRequest;
+    }, [admissionRequest, explicitDraftId]);
+    const onDraftIdentityResolved = React.useCallback((draftId: string) => {
+        admissionRequest.assignedDraftId = draftId;
+    }, [admissionRequest]);
+    return <SessionDraftHydrationBoundary addresses={admissionRequest.addresses} lifetime={lifetime}
+        fallback={props.presentation === 'embedded' ? (
+            <GlassSurface testID="new-session-draft-loading" finishRole="composer">
+                <ItemLoadStateRows state={{ kind: 'loading' }} rows={2} lines={1} accessibilityLabel={t('common.loading')} />
+            </GlassSurface>
+        ) : undefined}>
+        <NewSessionScreenReady {...props} activeDraftScope={activeDraftScope} draftScope={draftScope}
+            requestedDraftScopeBinding={requestedDraftScopeBinding} onDraftIdentityResolved={onDraftIdentityResolved} />
+    </SessionDraftHydrationBoundary>;
+}
+
+function NewSessionScreenReady(props: NewSessionScreenProps & Readonly<{
+    activeDraftScope: ServerAccountScope | null;
+    draftScope: ServerAccountScope | null;
+    requestedDraftScopeBinding: ServerCredentialAccountScopeBinding | null;
+    onDraftIdentityResolved: (draftId: string) => void;
+}>) {
+    const { router, openDraft } = useNewSessionHostNavigation();
+    const { dataId, draftId: routeDraftId, draftOrigin, machineId, directory } = useNewSessionHostParams<{
+        dataId?: string;
+        draftId?: string;
+        draftOrigin?: string;
+        machineId?: string;
+        directory?: string;
+    }>();
+    const { activeDraftScope, draftScope, requestedDraftScopeBinding, onDraftIdentityResolved } = props;
     const requestedDraftProfile = React.useMemo(
         () => draftScope && requestedDraftScopeBinding
             ? getServerProfileById(draftScope.serverId)
@@ -274,6 +346,9 @@ export function NewSessionScreen(props: Readonly<{
             shouldWriteRouteParam: true,
         };
     }, [draftOrigin, resolveOrdinaryEntry, routeDraftId]);
+    React.useLayoutEffect(() => {
+        onDraftIdentityResolved(draftIdentity.draftId);
+    }, [draftIdentity.draftId, onDraftIdentityResolved]);
     React.useEffect(() => {
         if (!draftIdentity.shouldWriteRouteParam) return;
         router.setParams({ draftId: draftIdentity.draftId, draftOrigin: draftIdentity.draftOrigin ?? undefined });
@@ -436,6 +511,7 @@ export function NewSessionScreen(props: Readonly<{
             statusTrailingActions={statusTrailingActions}
             automationExactTurnRetarget={props.automationExactTurnRetarget ?? null}
             fixedDirectoryIntent={props.fixedDirectoryIntent}
+            inputPlaceholder={props.inputPlaceholder}
         />
     );
 }

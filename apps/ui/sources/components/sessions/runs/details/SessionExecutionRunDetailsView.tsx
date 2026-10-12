@@ -8,7 +8,6 @@ import { useUnistyles } from 'react-native-unistyles';
 import {
     isExecutionRunNotRunningMutationError,
     sessionExecutionRunGet,
-    sessionExecutionRunStop,
 } from '@/sync/ops/sessionExecutionRuns';
 import {
     useMessage,
@@ -402,7 +401,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     // this brief state visible until the canonical sidechain/pending projections
     // provide content; do not infer a timer, queue, or producer-owned lifecycle.
     const showPreMarkerState = state.status === 'loaded'
-        && transcriptToolId === null
+        && state.run.status === 'running'
         && transcriptMessage === null
         && runTranscriptMessages.length === 0
         && targetPending.messages.length === 0
@@ -554,31 +553,37 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         if (isStopping) return;
         fireAndForget((async () => {
             setStopError(null);
+            setInteractionError(null);
             setStopUnconfirmed(false);
             setIsStopping(true);
+            let transportIssued = false;
             try {
-                const result = props.serverId
-                    ? await sessionExecutionRunStop(props.sessionId, { runId: props.runId }, { serverId: props.serverId })
-                    : await sessionExecutionRunStop(props.sessionId, { runId: props.runId });
+                const result = await executeAction('execution.run.stop', { sessionId: props.sessionId, runId: props.runId }, {
+                    onTransportIssued: () => { transportIssued = true; },
+                });
+                if (!actionScopeIsCurrent()) return;
                 if (result.ok === false) {
                     setStopError(String(result.error ?? t('runs.stop.failedToStopRun')));
+                    if (!transportIssued) setInteractionError(String(result.error ?? t('runs.stop.failedToStopRun')));
                     if (isExecutionRunNotRunningMutationError(result)) {
                         await load();
                     } else {
                         // The machine did not confirm: offer the existing whole-session fallback.
-                        setStopUnconfirmed(true);
+                        setStopUnconfirmed(transportIssued);
                     }
                 } else {
                     await load();
                 }
             } catch (error) {
+                if (!actionScopeIsCurrent()) return;
                 setStopError(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
-                setStopUnconfirmed(true);
+                if (!transportIssued) setInteractionError(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
+                setStopUnconfirmed(transportIssued);
             } finally {
                 setIsStopping(false);
             }
         })(), { tag: 'SessionExecutionRunDetailsView.stopRun' });
-    }, [isStopping, load, props.runId, props.serverId, props.sessionId]);
+    }, [actionScopeIsCurrent, executeAction, isStopping, load, props.runId, props.sessionId]);
     const onSessionStopped = React.useCallback(() => {
         setStopUnconfirmed(false);
         setStopError(null);
@@ -730,6 +735,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 {props.showInfoCard === false ? null : (
                     <SessionExecutionRunInfoCard
                         run={state.run}
+                        serverId={explicitServerId}
                         acpCatalogSnapshot={acpCatalogSnapshot}
                         hostSessionId={props.sessionId}
                         daemonProcessLine={daemonProcessLine}

@@ -22,7 +22,7 @@ import {
     MACHINE_PLAIN_DATA_KEY_MARKER,
     SessionModelSelectionV1Schema,
     SessionSpawnNewInputV2Schema,
-    type SessionMcpSelectionV1,
+    type SessionCapabilitySelectionV1,
     type SessionSpawnNewInputV2,
     type SessionSpawnNewResultV1,
 } from '@happier-dev/protocol';
@@ -123,7 +123,7 @@ function buildAutomationAuthoringDraft(params: Readonly<{
     permissionModeUpdatedAt?: number | null;
     automation: NewSessionAutomationDraft;
     connectedServices?: unknown;
-    mcpSelection?: SessionMcpSelectionV1 | null;
+    capabilitySelection?: SessionCapabilitySelectionV1 | null;
     transcriptStorage?: 'persisted' | 'direct' | null;
     checkoutCreationDraft?: {
         kind: 'git_worktree';
@@ -148,7 +148,7 @@ function buildAutomationAuthoringDraft(params: Readonly<{
         permissionModeUpdatedAt: params.permissionModeUpdatedAt ?? null,
         modelId: params.modelMode === 'default' ? null : params.modelMode,
         modelUpdatedAt: null,
-        mcpSelection: params.mcpSelection ?? null,
+        capabilitySelection: params.capabilitySelection ?? null,
         connectedServices: normalizeSessionAuthoringConnectedServices(params.connectedServices ?? null),
         terminal: null,
         windowsRemoteSessionLaunchMode: null,
@@ -906,7 +906,7 @@ describe('useCreateNewSession permission seeding', () => {
                     modelId: 'default',
                 },
             }),
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -997,7 +997,7 @@ describe('useCreateNewSession permission seeding', () => {
             resumeSessionId: null,
             permissionMode: 'default',
             permissionModeUpdatedAt: null,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             terminal: null,
             windowsRemoteSessionLaunchMode: null,
@@ -1200,7 +1200,7 @@ describe('useCreateNewSession permission seeding', () => {
         });
     });
 
-    it('passes mcpSelection into the strict Action request when provided', async () => {
+    it('passes capabilitySelection into the strict Action request when provided', async () => {
         const { useCreateNewSession, captured } = await setupUseCreateNewSessionHarness();
 
         let handleCreateSession: null | (() => Promise<void>) = null;
@@ -1233,12 +1233,12 @@ describe('useCreateNewSession permission seeding', () => {
                 promptStore: createNewSessionPromptStore(''),
                 resumeSessionId: '',
                 agentNewSessionOptions: null,
-                mcpSelection: {
+                capabilitySelection: { mcp: {
                     v: 1,
                     managedServersEnabled: false,
                     forceIncludeServerIds: ['server-portable'],
                     forceExcludeServerIds: [],
-                },
+                } },
                 machineEnvPresence,
                 secrets: [],
                 secretBindingsByProfileId: {},
@@ -1259,7 +1259,7 @@ describe('useCreateNewSession permission seeding', () => {
             await handleCreateSession?.();
         });
 
-        expect(captured.value?.mcpSelection).toEqual({
+        expect(captured.value?.capabilitySelection).toEqual({
             v: 1,
             managedServersEnabled: false,
             forceIncludeServerIds: ['server-portable'],

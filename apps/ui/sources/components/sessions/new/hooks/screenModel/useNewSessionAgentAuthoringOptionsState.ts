@@ -5,7 +5,7 @@ import { getAgentModelConfig } from '@happier-dev/agents';
 import { resolveInitialNewSessionModelMode } from '@/components/sessions/new/hooks/newSessionModelModePolicy';
 import type { ModelMode } from '@/sync/domains/permissions/permissionTypes';
 import { buildAcpConfigOptionOverridesV1, type AcpConfigOptionOverridesV1 } from '@happier-dev/protocol/sessions/metadata/overrides';
-import { SessionMcpSelectionV1Schema, type SessionMcpSelectionV1 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { SessionCapabilitySelectionV1Schema, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SessionModelSelectionV1Schema, type SessionModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import type { RuntimeDescriptorV1 } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
@@ -19,7 +19,7 @@ type PersistedAuthoringDraftLike = Readonly<{
     modelSelection?: SessionModelSelectionV1 | null;
     acpSessionModeId?: string | null;
     sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1 | null;
-    mcpSelection?: unknown;
+    capabilitySelection?: unknown;
     runtimeDescriptorV1?: RuntimeDescriptorV1 | null;
 }> | null | undefined;
 
@@ -29,7 +29,7 @@ type TempAuthoringDraftLike = Readonly<{
     modelSelection?: SessionModelSelectionV1 | null;
     acpSessionModeId?: string | null;
     sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1 | null;
-    mcpSelection?: unknown;
+    capabilitySelection?: unknown;
     runtimeDescriptorV1?: RuntimeDescriptorV1 | null;
 }> | null | undefined;
 
@@ -205,8 +205,8 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
     setSessionConfigOptionOverrides: React.Dispatch<React.SetStateAction<AcpConfigOptionOverridesV1 | null>>;
     setEngineSelectionForBackendTarget: (backendTargetKey: string, selection: TargetScopedEngineSelection) => void;
     setAcpConfigOptionOverride: (configId: string, value: string) => void;
-    mcpSelection: SessionMcpSelectionV1;
-    setMcpSelection: React.Dispatch<React.SetStateAction<SessionMcpSelectionV1>>;
+    capabilitySelection: SessionCapabilitySelectionV1;
+    setCapabilitySelection: React.Dispatch<React.SetStateAction<SessionCapabilitySelectionV1>>;
 }> {
     const currentBackendTargetKey = params.backendTargetKey ?? null;
     const previousBackendTargetKeyRef = React.useRef(currentBackendTargetKey);
@@ -464,43 +464,43 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
         });
     }, []);
 
-    const resolvedMcpSelection = React.useMemo(() => {
-        return SessionMcpSelectionV1Schema.parse(
-            targetScopedTempAuthoringDraft?.mcpSelection ?? targetScopedPersistedAuthoringDraft?.mcpSelection ?? {},
+    const resolvedCapabilitySelection = React.useMemo(() => {
+        return SessionCapabilitySelectionV1Schema.parse(
+            targetScopedTempAuthoringDraft?.capabilitySelection ?? targetScopedPersistedAuthoringDraft?.capabilitySelection ?? {},
         );
     }, [
-        targetScopedPersistedAuthoringDraft?.mcpSelection,
-        targetScopedTempAuthoringDraft?.mcpSelection,
+        targetScopedPersistedAuthoringDraft?.capabilitySelection,
+        targetScopedTempAuthoringDraft?.capabilitySelection,
     ]);
-    const [mcpSelectionState, setMcpSelectionState] = React.useState<TargetScopedState<SessionMcpSelectionV1>>(() => ({
+    const [capabilitySelectionState, setCapabilitySelectionState] = React.useState<TargetScopedState<SessionCapabilitySelectionV1>>(() => ({
         backendTargetKey: currentBackendTargetKey,
-        value: resolvedMcpSelection,
+        value: resolvedCapabilitySelection,
     }));
-    const mcpSelection = mcpSelectionState.backendTargetKey === currentBackendTargetKey
-        ? mcpSelectionState.value
-        : resolvedMcpSelection;
+    const capabilitySelection = capabilitySelectionState.backendTargetKey === currentBackendTargetKey
+        ? capabilitySelectionState.value
+        : resolvedCapabilitySelection;
 
-    if (backendTargetChanged && mcpSelectionState.backendTargetKey !== currentBackendTargetKey) {
-        setMcpSelectionState({
+    if (backendTargetChanged && capabilitySelectionState.backendTargetKey !== currentBackendTargetKey) {
+        setCapabilitySelectionState({
             backendTargetKey: currentBackendTargetKey,
-            value: resolvedMcpSelection,
+            value: resolvedCapabilitySelection,
         });
     }
 
-    const setMcpSelection = React.useCallback<React.Dispatch<React.SetStateAction<SessionMcpSelectionV1>>>((next) => {
-        setMcpSelectionState((current) => {
+    const setCapabilitySelection = React.useCallback<React.Dispatch<React.SetStateAction<SessionCapabilitySelectionV1>>>((next) => {
+        setCapabilitySelectionState((current) => {
             const currentValue = current.backendTargetKey === currentBackendTargetKey
                 ? current.value
-                : resolvedMcpSelection;
+                : resolvedCapabilitySelection;
             const value = typeof next === 'function'
-                ? (next as (value: SessionMcpSelectionV1) => SessionMcpSelectionV1)(currentValue)
+                ? (next as (value: SessionCapabilitySelectionV1) => SessionCapabilitySelectionV1)(currentValue)
                 : next;
             return {
                 backendTargetKey: currentBackendTargetKey,
-                value: SessionMcpSelectionV1Schema.parse(value),
+                value: SessionCapabilitySelectionV1Schema.parse(value),
             };
         });
-    }, [currentBackendTargetKey, resolvedMcpSelection]);
+    }, [currentBackendTargetKey, resolvedCapabilitySelection]);
 
     const setAcpConfigOptionOverride = React.useCallback((configId: string, value: string) => {
         const normalizedConfigId = typeof configId === 'string' ? configId.trim() : '';
@@ -531,7 +531,7 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
         setSessionConfigOptionOverrides,
         setEngineSelectionForBackendTarget,
         setAcpConfigOptionOverride,
-        mcpSelection,
-        setMcpSelection,
+        capabilitySelection,
+        setCapabilitySelection,
     };
 }

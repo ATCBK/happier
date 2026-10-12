@@ -7,6 +7,7 @@ import {
 import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 import type { NewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import type { ManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 
 import type { NewSessionAuthoringContext } from './sessionAuthoringContext';
@@ -17,6 +18,7 @@ export function buildNewSessionAuthoringContext(params: Readonly<{
     selectedMachineId: string | null;
     managedMachineSelection?: ManagedMachineSelectionDraft | null;
     selectedMachine: Machine | null;
+    scope?: MachineReachabilityScope | null;
     hostBoundMachineId?: string | null;
     selectedMachineSpawnReadiness?: MachineSpawnReadiness | null;
     selectedPath: string;
@@ -42,6 +44,7 @@ export function buildNewSessionAuthoringContext(params: Readonly<{
             managedMachineSelection: params.managedMachineSelection,
             selectedMachineId: params.selectedMachineId,
             selectedMachine: params.selectedMachine,
+            scope: params.scope,
             hostBoundMachineId: params.hostBoundMachineId,
             selectedPath: params.selectedPath,
             directoryKind: params.directoryKind,

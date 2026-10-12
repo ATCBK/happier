@@ -1,28 +1,31 @@
 import * as React from 'react';
-import { Platform, Pressable, View, type StyleProp, type TextStyle } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { Platform, Pressable } from 'react-native';
 
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
-import type { AgentInputPopoverContent } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
+import type { AgentInputContentPopoverHeader, AgentInputPopoverContent } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
 import { AgentInputChipLabel } from '@/components/sessions/agentInput/components/AgentInputChipLabel';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { Icon } from '@/components/ui/icons/Icon';
-import { StatusDot } from '@/components/ui/status/StatusDot';
-import { Text } from '@/components/ui/text/Text';
+import { getAgentCore, isBundledAgentId } from '@/agents/catalog/catalog';
+import { t } from '@/text';
 
 import { AGENT_INPUT_CHIP_ICON_SIZE_PX, AGENT_INPUT_CHIP_ICON_STYLE, AGENT_INPUT_MENU_ICON_SIZE_PX } from './agentInputChipIconMetrics';
 
 export type ConnectedServicesAuthActionChipSource = 'native' | 'connected' | 'mixed' | 'unknown';
 
-/** Amber dot + "Change pending" while the runtime reports a requested route that has not applied yet. */
-function RouteChangePendingMark(props: Readonly<{ label: string; textStyle: StyleProp<TextStyle> }>) {
-    const { theme } = useUnistyles();
-    return (
-        <View style={styles.pending}>
-            <StatusDot size={6} color={theme.colors.state.warning.foreground} />
-            <Text numberOfLines={1} style={[props.textStyle, styles.pendingText]}>{props.label}</Text>
-        </View>
-    );
+/** The lab's narrow source list (RT1): one column of sources, not a wide sheet. */
+const RUNS_THROUGH_POPOVER_MAX_WIDTH_PX = 400;
+const RUNS_THROUGH_POPOVER_MAX_HEIGHT_PX = 560;
+
+/** The popover names itself and the Agent it routes (lab RT1/RT1p). */
+function resolveRunsThroughPopoverHeader(agentId: string | null | undefined): AgentInputContentPopoverHeader {
+    const id = typeof agentId === 'string' ? agentId.trim() : '';
+    const displayNameKey = id && isBundledAgentId(id) ? getAgentCore(id)?.displayNameKey ?? null : null;
+    const agent = displayNameKey ? t(displayNameKey) : id;
+    return {
+        title: t('connectedServices.authChip.popoverTitle'),
+        ...(agent ? { description: t('connectedServices.authChip.popoverDescription', { agent }) } : {}),
+    };
 }
 
 /**
@@ -32,13 +35,11 @@ function RouteChangePendingMark(props: Readonly<{ label: string; textStyle: Styl
  */
 export function createConnectedServicesAuthActionChip(params: Readonly<{
     label: string;
-    /** Set only while a requested change waits for the runtime ("Now via …" + this mark). */
-    changePendingLabel?: string | null;
     connectedCount: number;
     authSource: ConnectedServicesAuthActionChipSource;
     popoverContent: AgentInputPopoverContent;
-    maxHeightCap?: number;
-    maxWidthCap?: number;
+    /** The Agent whose models the popover routes; named in its header. */
+    agentId?: string | null;
     testID?: string;
 }>): AgentInputExtraActionChip {
     const webAuthSourceProps = Platform.OS === 'web'
@@ -54,8 +55,11 @@ export function createConnectedServicesAuthActionChip(params: Readonly<{
             icon: (tint: string) =>
                 normalizeNodeForView(<Icon name="path" size={AGENT_INPUT_MENU_ICON_SIZE_PX} color={tint} />),
             renderContent: params.popoverContent,
-            maxHeightCap: params.maxHeightCap,
-            maxWidthCap: params.maxWidthCap,
+            header: resolveRunsThroughPopoverHeader(params.agentId),
+            // A phone gets the shared sheet (lab RT1p) rather than a card floating over the composer.
+            phonePresentation: 'sheet',
+            maxHeightCap: RUNS_THROUGH_POPOVER_MAX_HEIGHT_PX,
+            maxWidthCap: RUNS_THROUGH_POPOVER_MAX_WIDTH_PX,
             scrollEnabled: false,
         },
         render: ({ chipStyle, iconColor, showLabel, textStyle, countTextStyle, chipAnchorRef, toggleCollapsedPopover }) => (
@@ -75,13 +79,7 @@ export function createConnectedServicesAuthActionChip(params: Readonly<{
                         countTextStyle={countTextStyle}
                     />
                 ) : null}
-                {params.changePendingLabel ? <RouteChangePendingMark label={params.changePendingLabel} textStyle={textStyle} /> : null}
             </Pressable>
         ),
     };
 }
-
-const styles = StyleSheet.create((theme) => ({
-    pending: { flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 6 },
-    pendingText: { color: theme.colors.state.warning.textForeground },
-}));

@@ -1,13 +1,14 @@
 import * as React from 'react';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { Pressable, View, type LayoutChangeEvent } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
+import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { useUnistyles } from 'react-native-unistyles';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import { INSTRUMENT_DURATIONS, staggerDelayForIndex, useMotionPreferences } from '@/components/instrument';
 import { StatusDot } from '@/components/ui/status/StatusDot';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Text } from '@/components/ui/text/Text';
+import { Tooltip } from '@/components/ui/overlays/Tooltip';
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { CurrentSessionRunnerProcessIdentity } from '@/sync/domains/models/resolveSessionModelSelectionDisposition';
 import { useSetting } from '@/sync/domains/state/storage';
@@ -22,6 +23,9 @@ import { resolveContextWarningWindowTokens } from '../resolveContextWarningWindo
 import { ContextGaugeInstrument } from './ContextGaugeInstrument';
 import { GitDeltaInstrument } from './GitDeltaInstrument';
 import { QuotaRingInstrument } from './QuotaRingInstrument';
+import { GuardCountdown } from '@/components/machines/guard/GuardCountdown';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+
 import { instrumentStripStyles } from './instrumentStripStyles';
 import { useInstrumentStripModel } from './useInstrumentStripModel';
 
@@ -36,7 +40,24 @@ export type SessionInstrumentStripConnectionStatus = Readonly<{
     dotColor: string;
     isPulsing?: boolean;
     action?: Readonly<{ label: string; onPress: () => void }>;
+    /** The longer explanation behind a short line: the shared tooltip on hover/focus, and read with the line. */
+    detail?: string;
+    /** A coming stop (plan 50 G3-5): the text is followed by a countdown that ticks in its own leaf. */
+    countdownTo?: number;
+    /** The line's moment (the guard's warning, stopped, waking); a change cross-fades the line (plan 50 GM). */
+    transitionKey?: string;
 }>;
+
+/** A line with a detail keeps its short text in place and offers the detail through the shared tooltip. */
+function wrapConnectionDetail(line: React.ReactElement, status: SessionInstrumentStripConnectionStatus): React.ReactElement {
+    if (!status.detail) return line;
+    return (
+        <Tooltip testID="agent-input-connection-detail" label={status.detail}
+            accessibilityLabel={`${status.text}. ${status.detail}`} style={instrumentStripStyles.connectionTextHost}>
+            {line}
+        </Tooltip>
+    );
+}
 
 export type SessionInstrumentStripPermission = Readonly<{
     label: string;
@@ -257,6 +278,13 @@ export const SessionInstrumentStrip = React.memo(function SessionInstrumentStrip
         </View>
     ) : null;
 
+    // The guard's moments (warning ↔ stopped ↔ waking ↔ ordinary) cross-fade the line; the first line a
+    // strip shows simply appears, and reduced motion changes the text at once.
+    const lineKey = props.connectionStatus?.transitionKey ?? 'status';
+    const firstLineKey = React.useRef(lineKey);
+    const lineChanged = React.useRef(false);
+    if (lineKey !== firstLineKey.current) lineChanged.current = true;
+    const reducedMotion = motion.reduceMotion;
     const hasAnything = props.connectionStatus
         || collapsibleInstruments.length > 0
         || permissionChip !== null
@@ -274,33 +302,42 @@ export const SessionInstrumentStrip = React.memo(function SessionInstrumentStrip
     return (
         <View style={instrumentStripStyles.root} onLayout={onLayout}>
             {props.connectionStatus ? (
-                <View style={instrumentStripStyles.connectionGroup}>
+                <Animated.View key={lineKey} style={instrumentStripStyles.connectionGroup}
+                    entering={lineChanged.current && !reducedMotion ? FadeIn.duration(motionTokens.guardMoment.lineCrossFadeMs) : undefined}>
                     <StatusDot
                         color={props.connectionStatus.dotColor}
                         isPulsing={props.connectionStatus.isPulsing}
                         size={6}
                         style={instrumentStripStyles.connectionDot}
                     />
-                    <Text
-                        testID="agent-input-connection-status-text"
-                        style={[instrumentStripStyles.connectionText, { color: props.connectionStatus.color }]}
-                        numberOfLines={props.connectionStatus.action ? 2 : 1}
-                    >
-                        {props.connectionStatus.text}
-                    </Text>
-                    {props.connectionStatus.action ? (
-                        <HappierPressable
-                            testID="agent-input-connection-recovery"
-                            accessibilityRole="button"
-                            accessibilityLabel={props.connectionStatus.action.label}
-                            onPress={props.connectionStatus.action.onPress}
+                    {wrapConnectionDetail(
+                        <Text
+                            testID="agent-input-connection-status-text"
+                            style={[instrumentStripStyles.connectionText, { color: props.connectionStatus.color }]}
+                            numberOfLines={props.connectionStatus.action ? 2 : 1}
                         >
-                            <Text style={{ color: theme.colors.text.primary, fontSize: 12, textDecorationLine: 'underline' }}>
-                                {props.connectionStatus.action.label}
-                            </Text>
-                        </HappierPressable>
+                            {props.connectionStatus.text}
+                            {props.connectionStatus.countdownTo !== undefined ? (
+                                <>
+                                    {' '}
+                                    <GuardCountdown testID="agent-input-connection-countdown" stopAt={props.connectionStatus.countdownTo}
+                                        style={instrumentStripStyles.connectionCountdown} format={remaining => remaining} />
+                                </>
+                            ) : null}
+                        </Text>,
+                        props.connectionStatus,
+                    )}
+                    {/* The status line's one recovery ends its sentence (lab `b-ask E`), drawn by the shared text link. */}
+                    {props.connectionStatus.action ? (
+                        <TextLinkButton
+                            testID="agent-input-connection-recovery"
+                            tone="strong"
+                            size="meta"
+                            label={props.connectionStatus.action.label}
+                            onPress={props.connectionStatus.action.onPress}
+                        />
                     ) : null}
-                </View>
+                </Animated.View>
             ) : null}
 
             <View style={instrumentStripStyles.spacer} />

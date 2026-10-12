@@ -226,7 +226,7 @@ export function SessionBoardNoteEditorCard(props: SessionBoardNoteEditorCardProp
                 return { text: presentation.message, alert: presentation.severity === 'error' };
             }
             case 'approvalPending':
-                return { text: t('approvals.status.open'), alert: false };
+                return { text: resolveSessionBoardFailurePresentation('approval_required').message, alert: false };
             case 'unavailable': {
                 const presentation = resolveSessionBoardFailurePresentation(status.reason);
                 return { text: presentation.message, alert: presentation.severity === 'error' };

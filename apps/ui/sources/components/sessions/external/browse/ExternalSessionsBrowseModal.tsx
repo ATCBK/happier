@@ -32,6 +32,8 @@ export const ExternalSessionsBrowseModal = React.memo(function ExternalSessionsB
     const chrome = React.useMemo(() => buildCommandSurfaceCardChrome({
         title,
         testID: 'external-sessions-browse:modal',
+        // The browser's band carries the field, Titles | Conversations and its scope chips (lab H2).
+        layout: 'detail',
     }), [title]);
     useModalCardChrome(props.setChrome, chrome);
     return (

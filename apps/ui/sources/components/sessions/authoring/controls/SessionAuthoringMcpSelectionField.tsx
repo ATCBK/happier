@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
-import { SessionMcpSelectionV1Schema, type SessionMcpSelectionV1 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { SessionCapabilitySelectionV1Schema, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 import type { AgentInputExtraActionChipRenderContext } from '@/components/sessions/agentInput/agentInputContracts';
 import { AgentInputContentPopover } from '@/components/sessions/agentInput/components/AgentInputContentPopover';
@@ -22,13 +22,13 @@ import type { SessionAuthoringMcpContext } from './sessionAuthoringFieldControls
  */
 
 /** An omitted or explicit-automatic selection is previewed as the canonical default policy. */
-const AUTOMATIC_MCP_SELECTION: SessionMcpSelectionV1 = SessionMcpSelectionV1Schema.parse({});
+const AUTOMATIC_MCP_SELECTION: SessionCapabilitySelectionV1 = SessionCapabilitySelectionV1Schema.parse({});
 
 export function SessionAuthoringMcpSelectionField(props: Readonly<{
     agentId: string;
     context: SessionAuthoringMcpContext;
-    value: SessionMcpSelectionV1 | null | undefined;
-    onChange: (value: SessionMcpSelectionV1) => void;
+    value: SessionCapabilitySelectionV1 | null | undefined;
+    onChange: (value: SessionCapabilitySelectionV1) => void;
     chipRenderContext: AgentInputExtraActionChipRenderContext;
     testID: string;
 }>): React.ReactElement | null {
@@ -39,7 +39,7 @@ export function SessionAuthoringMcpSelectionField(props: Readonly<{
     selectionRef.current = selection;
     // The owner's contract is a state setter; a functional update reads the
     // controlled value rather than a private copy of it.
-    const setSelection = React.useCallback<React.Dispatch<React.SetStateAction<SessionMcpSelectionV1>>>((next) => {
+    const setSelection = React.useCallback<React.Dispatch<React.SetStateAction<SessionCapabilitySelectionV1>>>((next) => {
         onChange(typeof next === 'function' ? next(selectionRef.current) : next);
     }, [onChange]);
     const onOpenSettings = React.useCallback(() => {
@@ -53,8 +53,8 @@ export function SessionAuthoringMcpSelectionField(props: Readonly<{
         selectedMachineName: props.context.machineName,
         agentType: props.agentId,
         targetServerId: props.context.serverId,
-        mcpSelection: selection,
-        setMcpSelection: setSelection,
+        capabilitySelection: selection,
+        setCapabilitySelection: setSelection,
         onOpenSettings,
     });
 

@@ -8,6 +8,7 @@ import { useWorkTheme, WORK_HOST, workTextStyle } from '@/components/work/map/Wo
 import { hasAgentIconMark } from '@/agents/catalog/catalog';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import { useCurrentWorkerUpdate } from '@/components/sessions/transcript/source/useCurrentWorkerUpdate';
 import { buildSessionExecutionRunRouteHref } from '@/components/sessions/agents/navigation/buildSessionExecutionRunRouteHref';
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -148,8 +149,8 @@ function WorkerDeliverable(props: Readonly<{
  * A worker Session's waiting requests on its needs-you card (ORC S-1, lab `cards-T1`: "Deny · Allow
  * for this session · Allow once"): the real request cards, decided through that Session's own approval
  * custody — the same owner the composer, the peek and the Inbox answer through. Mounted only on a
- * card whose worker needs the person, so the worker's requests are read only while there may be
- * something to decide; once it is answered anywhere, it leaves every card.
+ * current eligible card, so historical reports do not subscribe to or display later requests;
+ * once it is answered anywhere, it leaves the current card.
  */
 const WorkerUpdateAnswers = React.memo(function WorkerUpdateAnswers(props: Readonly<{ address: SessionAddress }>) {
     const { session, prompts } = useSessionPendingPrompts(props.address);
@@ -171,6 +172,12 @@ const WorkerUpdateAnswers = React.memo(function WorkerUpdateAnswers(props: Reado
         </View>
     );
 });
+
+/** Transcript order owns currentness; the worker's existing pending-prompt owner owns the answers. */
+function CurrentWorkerUpdateAnswers(props: Readonly<{ update: WorkerUpdateV1; messageId: string; address: SessionAddress }>) {
+    const current = useCurrentWorkerUpdate(props.update, props.messageId, props.address.serverId);
+    return current ? <WorkerUpdateAnswers address={props.address} /> : null;
+}
 
 /** Peek, mounted only where a pane host exists: it opens the worker in the lead's Details pane. */
 function WorkerUpdatePeekAction(props: Readonly<{ sessionId: string; title: string }>) {
@@ -206,6 +213,8 @@ function renderWorkerUpdateSurface(surface: HappierWorkUpdateCardSurface) {
  */
 export function WorkerUpdateCard(props: Readonly<{
     update: WorkerUpdateV1;
+    /** Existing transcript row identity; historical or standalone cards do not infer answer ownership. */
+    messageId?: string;
     serverId?: string | null;
     navigationEnabled?: boolean;
     /** When the update reached the transcript; drives the head's age. */
@@ -264,7 +273,7 @@ export function WorkerUpdateCard(props: Readonly<{
     const peekSessionId = canInspect && needsYou && pointer?.kind === 'session' && deviceType !== 'phone' && hasPaneHost
         ? pointer.sessionId : null;
 
-    const answersAddress = needsYou && update.workerKind === 'session' && props.navigationEnabled !== false
+    const answersAddress = needsYou && props.messageId && update.workerKind === 'session' && props.navigationEnabled !== false
         ? normalizeSessionAddress(serverId, update.workerId) : null;
     const resultBody = props.children === undefined
         ? (content.result ? <Text testID="worker-update-result" selectable style={styles.result}>{decorate('result', content.result, true)}</Text> : null)
@@ -274,7 +283,7 @@ export function WorkerUpdateCard(props: Readonly<{
         {update.deliverables?.map((reference, index) => <WorkerDeliverable
             key={JSON.stringify([serverId, reference, index])} reference={reference} index={index}
             serverId={serverId} enabled={props.navigationEnabled !== false && Boolean(serverId)} />)}
-        {answersAddress ? <WorkerUpdateAnswers address={answersAddress} /> : null}
+        {answersAddress && props.messageId ? <CurrentWorkerUpdateAnswers update={update} messageId={props.messageId} address={answersAddress} /> : null}
     </> : null;
 
     const facts: HappierWorkUpdateCardFact[] = [];
@@ -291,7 +300,7 @@ export function WorkerUpdateCard(props: Readonly<{
     // place: a run's review or request is decided on its own page.
     const review = canInspect && needsYou && update.workerKind === 'workflow_run';
     const actions = !content.inspect ? undefined : review ? (
-        <RoundButton testID="worker-update-action:review" size="small" display="default" title={t('inboxWork.rows.review')} onPress={inspect} />
+        <RoundButton testID="worker-update-action:review" size="small" display="default" title={t('inbox.work.rows.review')} onPress={inspect} />
     ) : (
         <RoundButton testID="worker-update-inspect" size="small"
             display={needsYou && update.workerKind === 'execution_run' ? 'default' : 'inverted'}

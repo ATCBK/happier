@@ -10,6 +10,7 @@ import { createSessionSurfaceNoteDocumentV1, readSessionSurfaceNoteTextV1, Sessi
 import { realBoardActions } from '../sessionBoardActionsTestkit';
 
 import { SessionBoardNoteEditorCard } from './SessionBoardNoteEditorCard';
+import { resolveSessionBoardFailurePresentation } from '../sessionBoardFailurePresentation';
 
 const navigationHarness = vi.hoisted(() => ({
     dispatch: vi.fn(),
@@ -204,7 +205,10 @@ describe('SessionBoardNoteEditorCard', () => {
         });
         expect(approvalsCreate).toHaveBeenCalledOnce();
         expect(screen.findByTestId('session-board-note-editor-title')?.props.value).toBe('Release plan');
-        expect(screen.findHostByTestId('session-board-note-editor-notice')).not.toBeNull();
+        expect(screen.findHostByTestId('session-board-note-editor-notice')?.props.children)
+            .toBe(resolveSessionBoardFailurePresentation('approval_required').message);
+        expect(resolveSessionBoardFailurePresentation('approval_required').kind).toBe('approvalRequired');
+        expect(screen.findByTestId('session-board-note-editor-cancel')?.props.disabled).not.toBe(true);
         expect(screen.findByTestId('session-board-note-editor-save')?.props.disabled).toBe(true);
     });
 
@@ -246,6 +250,8 @@ describe('SessionBoardNoteEditorCard', () => {
 
         await vi.waitFor(async () => {
             await act(async () => {});
+            expect(screen.findHostByTestId('session-board-note-editor-notice')?.props.children)
+                .toBe(resolveSessionBoardFailurePresentation('session_board_revision_conflict').message);
             expect(requestRecoveryRefresh).toHaveBeenCalledOnce();
         });
         expect(screen.findByTestId('session-board-note-editor-review-latest')?.props.disabled).toBe(true);

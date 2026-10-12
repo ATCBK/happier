@@ -3,7 +3,11 @@ import { AgentExecutionTargetV1Schema, type AgentExecutionTargetV1 } from '@happ
 import { SessionAuthoringValueV1Schema } from '@happier-dev/protocol/sessions/authoring/index';
 import { SessionIdentityAdditionsV1Schema } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { SessionPromptStackV1Schema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
-import { readSessionInstructionsAuthoringDraft } from '@/sync/ops/promptLibrary/sessionInstructions';
+import { readSessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
+import {
+    hasConnectedServicesBindingsInAgentOptionState,
+    parseConnectedServicesBindingsByServiceIdFromAgentOptionState,
+} from '@/sync/domains/connectedServices/connectedServicesAgentOptionStateBindings';
 import { SessionCreationKeyV1Schema, type SessionCreationKeyV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { SessionServerStartSpawnDraftV1Schema, SessionSpawnNewInputV2Schema, type SessionServerStartSpawnDraftV1, type SessionSpawnNewInputV2 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { ManagedAcquireAgentStartV1Schema, type ManagedAcquireAgentStartV1 } from '@happier-dev/protocol/machines/managed/agentStartV1';
@@ -60,6 +64,7 @@ import type { NewSessionDraft } from '@/sync/domains/state/persistence';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
 import type { SessionAuthoringDraft } from './sessionAuthoringDraft';
+import { readCapabilitySelectionCarrierV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 type ExistingSessionAuthoringSnapshotSession = Pick<
     Session,
@@ -177,7 +182,7 @@ function buildExistingSessionAuthoringDraftFromSnapshotData(params: Readonly<{
                 ),
             })
             : params.snapshot.modelSelection,
-        mcpSelection: params.snapshot.mcpSelection,
+        capabilitySelection: params.snapshot.capabilitySelection,
         connectedServices: params.snapshot.connectedServices,
         terminal: params.snapshot.terminal,
         windowsRemoteSessionLaunchMode: null,
@@ -216,7 +221,7 @@ export function mergeExistingSessionAuthoringDraftInheritedFields(
         modelSelection: current.modelSelection !== undefined
             ? current.modelSelection
             : fallback.modelSelection,
-        mcpSelection: current.mcpSelection ?? fallback.mcpSelection,
+        capabilitySelection: current.capabilitySelection ?? fallback.capabilitySelection,
         connectedServices: current.connectedServices ?? fallback.connectedServices,
         terminal: current.terminal ?? fallback.terminal,
         windowsRemoteSessionLaunchMode: current.windowsRemoteSessionLaunchMode ?? fallback.windowsRemoteSessionLaunchMode,
@@ -341,8 +346,8 @@ function resolveConnectedServicesFromAgentOptionState(params: Readonly<{
     if (!targetOptions || typeof targetOptions !== 'object' || Array.isArray(targetOptions)) {
         return null;
     }
-    return Object.prototype.hasOwnProperty.call(targetOptions, 'connectedServices')
-        ? (targetOptions as Record<string, unknown>).connectedServices ?? null
+    return hasConnectedServicesBindingsInAgentOptionState(targetOptions)
+        ? { v: 2, bindingsByServiceId: parseConnectedServicesBindingsByServiceIdFromAgentOptionState({ agentOptionState: targetOptions }) }
         : null;
 }
 
@@ -401,7 +406,7 @@ export function buildNewSessionAuthoringDraft(params: NewSessionAuthoringDraftPa
         permissionMode: normalizeOptionalString(params.permissionMode),
         permissionModeUpdatedAt: normalizeOptionalNumber(params.permissionModeUpdatedAt),
         ...(hasModelSelectionInput ? { modelSelection: normalizedModelSelection } : {}),
-        mcpSelection: params.mcpSelection ?? null,
+        capabilitySelection: params.capabilitySelection ?? null,
         connectedServices: params.connectedServices,
         terminal: params.terminal ?? null,
         windowsRemoteSessionLaunchMode: params.windowsRemoteSessionLaunchMode ?? null,
@@ -446,7 +451,7 @@ type ResolvedNewSessionAuthoringDraftInputs = Readonly<{
     modelSelection?: SessionModelSelectionV1 | null;
     modelId?: SessionAuthoringDraft['modelId'];
     modelUpdatedAt?: SessionAuthoringDraft['modelUpdatedAt'];
-    mcpSelection?: SessionAuthoringDraft['mcpSelection'];
+    capabilitySelection?: SessionAuthoringDraft['capabilitySelection'];
     connectedServices: SessionAuthoringDraft['connectedServices'];
     terminal?: SessionAuthoringDraft['terminal'];
     windowsRemoteSessionLaunchMode?: SessionAuthoringDraft['windowsRemoteSessionLaunchMode'];
@@ -489,7 +494,7 @@ export function buildNewSessionAuthoringDraftFromResolvedInputs(
         modelSelection: params.modelSelection,
         modelId: params.modelSelection === undefined ? params.modelId : undefined,
         modelUpdatedAt: params.modelUpdatedAt,
-        mcpSelection: params.mcpSelection ?? null,
+        capabilitySelection: params.capabilitySelection ?? null,
         connectedServices: params.connectedServices,
         terminal: params.terminal ?? null,
         windowsRemoteSessionLaunchMode: params.windowsRemoteSessionLaunchMode ?? null,
@@ -587,7 +592,7 @@ function buildNewSessionAuthoringDraftFromSource(source: NewSessionAuthoringDraf
             ? resolveNewSessionSourceModelId(source)
             : undefined,
         modelUpdatedAt: source.source.modelSelection?.updatedAt,
-        mcpSelection: source.source.mcpSelection ?? null,
+        capabilitySelection: readCapabilitySelectionCarrierV1(source.source),
         connectedServices: normalizeSessionAuthoringConnectedServices(resolveConnectedServicesFromAgentOptionState({
             target: source.source.agentTarget ?? backendTarget,
             backendNewSessionOptionStateByTargetKey,
@@ -687,7 +692,7 @@ export function hydrateSessionAuthoringDraftFromAutomationTemplate(params: Reado
         permissionModeUpdatedAt: normalizeOptionalNumber(params.template.permissionModeUpdatedAt),
         ...(hasModelSelectionInput ? { modelSelection } : {}),
         sessionConfigOptionOverrides: normalizeSessionConfigOptionOverrides(params.template.sessionConfigOptionOverrides),
-        mcpSelection: params.template.mcpSelection ?? null,
+        capabilitySelection: params.template.capabilitySelection ?? null,
         connectedServices: normalizeSessionAuthoringConnectedServices(params.template.connectedServices),
         terminal: normalizeSessionAuthoringTerminal(params.template.terminal),
         windowsRemoteSessionLaunchMode: params.template.windowsRemoteSessionLaunchMode ?? null,
@@ -741,7 +746,7 @@ export function buildAutomationTemplateFromSessionAuthoringDraft(draft: SessionA
         ...(typeof draft.permissionModeUpdatedAt === 'number' ? { permissionModeUpdatedAt: draft.permissionModeUpdatedAt } : {}),
         ...(draft.modelSelection ? { modelSelection: draft.modelSelection } : {}),
         ...(draft.sessionConfigOptionOverrides ? { sessionConfigOptionOverrides: draft.sessionConfigOptionOverrides } : {}),
-        ...(draft.mcpSelection ? { mcpSelection: draft.mcpSelection } : {}),
+        ...(draft.capabilitySelection ? { capabilitySelection: draft.capabilitySelection } : {}),
         ...(draft.connectedServices !== undefined && draft.connectedServices !== null ? { connectedServices: draft.connectedServices } : {}),
         ...(draft.terminal !== undefined && draft.terminal !== null ? { terminal: draft.terminal } : {}),
         ...(draft.windowsRemoteSessionLaunchMode ? { windowsRemoteSessionLaunchMode: draft.windowsRemoteSessionLaunchMode } : {}),
@@ -803,7 +808,7 @@ function resolveSharedSessionAuthoringSpawnFields(draft: SessionAuthoringDraft) 
         modelSelection: draft.modelSelection ?? null,
         sessionConfigOptionOverrides: draft.sessionConfigOptionOverrides ?? null,
         connectedServices: draft.connectedServices,
-        mcpSelection: draft.mcpSelection,
+        capabilitySelection: draft.capabilitySelection,
         transcriptStorage: draft.transcriptStorage,
     };
 }
@@ -1021,7 +1026,7 @@ export function buildSessionAuthoringDraftFromServerStartSpawnDraftV1(params: Re
                 permissionMode: spawn.permissionMode,
                 permissionModeUpdatedAt: configuration.permissionIntent.updatedAtMs,
                 modelSelection: spawn.modelSelection ?? null,
-                mcpSelection: spawn.mcpSelection ?? null,
+                capabilitySelection: spawn.capabilitySelection ?? null,
                 connectedServices,
                 terminal: spawn.terminal ?? null,
                 windowsRemoteSessionLaunchMode: windows?.launchMode ?? null,
@@ -1104,7 +1109,7 @@ function resolveSessionAuthoringSpawnInput(params: SessionServerStartSpawnDraftF
                 : {}),
         },
         ...(fields.connectedServices != null ? { connectedServices: fields.connectedServices } : {}),
-        ...(fields.mcpSelection ? { mcpSelection: fields.mcpSelection } : {}),
+        ...(fields.capabilitySelection ? { capabilitySelection: fields.capabilitySelection } : {}),
         ...(fields.transcriptStorage ? { transcriptStorage: fields.transcriptStorage } : {}),
         ...(terminal ? { terminal } : {}),
         // A checkout needs a folder. The draft keeps it while there is none, so choosing a folder
@@ -1176,7 +1181,7 @@ export function applyWorkflowSelectionToServerStartSpawnDraftV1(params: Readonly
         modelSelection: selection.modelSelection === undefined
             ? params.spawn.modelSelection ?? null
             : selection.modelSelection,
-        mcpSelection: selection.mcpSelection ?? params.spawn.mcpSelection ?? null,
+        capabilitySelection: selection.capabilitySelection ?? params.spawn.capabilitySelection ?? null,
         connectedServices: normalizeSessionAuthoringConnectedServices(
             selection.connectedServices === undefined
                 ? params.spawn.connectedServices ?? null
@@ -1342,7 +1347,7 @@ export function buildNewSessionTempDataFromAuthoringDraft(params: Readonly<{
         acpSessionModeId: params.draft.acpSessionModeId ?? null,
         sessionConfigOptionOverrides: params.draft.sessionConfigOptionOverrides ?? null,
         runtimeDescriptorV1: params.draft.runtimeDescriptorV1 ?? null,
-        mcpSelection: params.draft.mcpSelection,
+        capabilitySelection: params.draft.capabilitySelection,
         ...(params.draft.automation ? { automationDraft: params.draft.automation } : {}),
         backendNewSessionOptionStateByTargetKey: backendOptionStateByTargetKey,
         resumeSessionId: params.draft.resumeSessionId ?? undefined,
@@ -1447,7 +1452,7 @@ export function buildPersistedNewSessionDraftFromAuthoringDraft(params: Readonly
         acpSessionModeId: normalizeOptionalString(params.draft.acpSessionModeId),
         ...(params.draft.sessionConfigOptionOverrides ? { sessionConfigOptionOverrides: params.draft.sessionConfigOptionOverrides } : {}),
         ...(params.draft.runtimeDescriptorV1 ? { runtimeDescriptorV1: params.draft.runtimeDescriptorV1 } : {}),
-        ...(params.draft.mcpSelection ? { mcpSelection: params.draft.mcpSelection } : {}),
+        ...(params.draft.capabilitySelection ? { capabilitySelection: params.draft.capabilitySelection } : {}),
         ...(readNonBlankOpaqueIdentifier(params.draft.resumeSessionId)
             ? { resumeSessionId: readNonBlankOpaqueIdentifier(params.draft.resumeSessionId)! }
             : {}),

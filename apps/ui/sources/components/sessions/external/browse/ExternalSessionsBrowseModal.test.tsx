@@ -64,7 +64,8 @@ describe('ExternalSessionsBrowseModal', () => {
             scrollHost: 'body',
             bodyScroll: 'none',
         });
-        expect(browseChrome?.dimensions).toEqual(searchChrome?.dimensions);
+        // The same frame family; Browse opens in the wide form, as Search does for a detail column.
+        expect(browseChrome?.dimensions).toEqual({ ...(searchChrome?.dimensions as object), width: 960 });
         expect(browseChrome?.title).toBe('External sessions');
     });
 

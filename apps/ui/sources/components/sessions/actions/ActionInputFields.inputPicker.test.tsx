@@ -111,7 +111,11 @@ describe('Action fields with a declared custom picker', () => {
     it('offers no picker for an uninstalled type, and none without a host port, while the field still works', async () => {
         for (const mounted of [await mountFields({ type: null }), await mountFields({ withPort: false })]) {
             expect(mounted.browse()).toBeUndefined();
-            const saved = findTestInstanceByTypeContainingText(mounted.screen.tree, 'Pressable', 'Review assistant');
+            // The compact field names the saved choice and opens its rows in place.
+            await pressTestInstanceAsync(mounted.screen.findAllByType('Pressable')
+                .find((node) => String(node.props.accessibilityLabel ?? '').startsWith('Repository:')));
+            const saved = mounted.screen.findAllByType('Pressable').find((node) => node.props.accessibilityRole === 'radio'
+                && String(node.props.accessibilityLabel ?? '').startsWith('Review assistant'));
             expect(saved).toBeDefined();
             expect(saved?.props.accessibilityState?.checked ?? saved?.props['aria-checked']).toBe(true);
         }

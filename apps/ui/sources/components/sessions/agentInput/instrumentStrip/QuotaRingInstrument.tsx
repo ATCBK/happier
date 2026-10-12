@@ -3,7 +3,7 @@ import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { SessionUsagePopoverContent } from '@/components/navigation/shell/sidebarFooter/SessionUsagePopoverContent';
-import { USAGE_POPOVER_WIDTH_PX } from '@/components/navigation/shell/sidebarFooter/SidebarUsagePopoverContent';
+import { RAIL_POPOVER_WIDE_WIDTH_PX } from '@/components/navigation/shell/sidebarFooter/sidebarFooterLayout';
 import { TokenUsageRing, type TokenUsageTone } from '@/components/sessions/usage';
 import { useHoverPreviewPopover } from '@/components/ui/popover/useHoverPreviewPopover';
 import { Text } from '@/components/ui/text/Text';
@@ -123,7 +123,7 @@ export const QuotaRingInstrument = React.memo(function QuotaRingInstrument(props
                 hoverProps={hoverProps}
                 anchorRef={anchorRef}
                 onRequestClose={close}
-                maxWidthCap={USAGE_POPOVER_WIDTH_PX}
+                maxWidthCap={RAIL_POPOVER_WIDE_WIDTH_PX}
                 testID="session-instrument-quota-popover"
                 content={(
                     <SessionUsagePopoverContent

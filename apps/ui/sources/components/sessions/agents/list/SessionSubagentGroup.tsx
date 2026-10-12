@@ -9,10 +9,12 @@ import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropd
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { resolveSubagentStructuredSend } from '@/sync/domains/input/subagents/resolveSubagentStructuredSend';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { Modal } from '@/modal';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { sync } from '@/sync/sync';
 import { t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -94,6 +96,10 @@ export const SessionSubagentGroup = React.memo((props: SessionSubagentGroupProps
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const [menuOpen, setMenuOpen] = React.useState(false);
+    const exactServerId = props.serverId?.trim() || null;
+    const actionExecution = useMountedActionExecution(exactServerId);
+    const pendingRef = React.useRef(false);
+    const router = useRouter();
     const liveTeamId = React.useMemo(() => {
         for (const { subagent } of props.rows) {
             if (subagent.kind !== 'agent_team_member' || subagent.status !== 'running') continue;
@@ -110,9 +116,11 @@ export const SessionSubagentGroup = React.memo((props: SessionSubagentGroupProps
         if (canLaunchTeammate) {
             items.push({ id: 'add-teammate', testID: `session-subagent-team-add:${liveTeamId}`, title: t('session.subagents.panel.launchTeammateAction') });
         }
-        items.push({ id: 'delete-team', testID: `session-subagent-team-delete:${liveTeamId}`, title: t('session.subagents.messages.command.deleteTeamTitle'), destructive: true });
+        if (exactServerId) {
+            items.push({ id: 'delete-team', testID: `session-subagent-team-delete:${liveTeamId}`, title: t('session.subagents.messages.command.deleteTeamTitle'), destructive: true });
+        }
         return items;
-    }, [canLaunchTeammate, liveTeamId]);
+    }, [canLaunchTeammate, exactServerId, liveTeamId]);
 
     const { onLaunchTeammate, sessionId } = props;
     const runTeamCommand = React.useCallback((command: TeamCommand) => {
@@ -121,18 +129,25 @@ export const SessionSubagentGroup = React.memo((props: SessionSubagentGroupProps
             onLaunchTeammate?.(liveTeamId);
             return;
         }
-        const structured = resolveSubagentStructuredSend({
-            envelopeKind: 'subagent_command.v1',
-            payload: { kind: 'agent_team_delete', teamId: liveTeamId },
-        });
-        fireAndForget(
-            sync.submitMessage(sessionId, structured.text, structured.displayText, structured.metaOverrides, {
-                callerSurface: 'subagent_command',
-                forceImmediate: true,
-            }),
-            { tag: 'SessionSubagentGroup.deleteTeam' },
-        );
-    }, [liveTeamId, onLaunchTeammate, sessionId]);
+        if (!exactServerId || pendingRef.current) return;
+        pendingRef.current = true;
+        fireAndForget((async () => {
+            try {
+                const result = await actionExecution.execute('session.message.send', {
+                    sessionId, kind: 'sessionSubagentCommand', command: { kind: 'agent_team_delete', teamId: liveTeamId },
+                });
+                if (!result.ok && actionExecution.isCurrent()) {
+                    Modal.alert(t('common.error'), result.error || t('common.requestFailed'));
+                }
+            } catch (error) {
+                if (actionExecution.isCurrent()) {
+                    Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.requestFailed'));
+                }
+            } finally {
+                pendingRef.current = false;
+            }
+        })(), { tag: 'SessionSubagentGroup.deleteTeam' });
+    }, [exactServerId, liveTeamId, onLaunchTeammate, sessionId, actionExecution.execute, actionExecution.isCurrent]);
 
     const renderRow = (row: SessionAgentActivityRow) => {
         const { subagent } = row;
@@ -182,6 +197,11 @@ export const SessionSubagentGroup = React.memo((props: SessionSubagentGroupProps
                     />
                 ) : null}
             </View>
+            {actionExecution.approval.approvalPending && actionExecution.approval.approvalId && exactServerId ? (
+                <ActionApprovalPendingNotice testID={`session-subagent-team-approval:${props.label}`}
+                    message={t('approvals.status.open')}
+                    onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(actionExecution.approval.approvalId!)}?serverId=${encodeURIComponent(exactServerId)}`)} />
+            ) : null}
             <View style={styles.members}>{props.rows.map(renderRow)}</View>
         </View>
     );

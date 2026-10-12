@@ -132,9 +132,14 @@ function createScopedMachine(
     };
 }
 
+/**
+ * The list as the person sees it: the latest render. The shared list model also settles the
+ * Account's managed-machine inventory (`useManagedMachineInventory`) after mount, so the content
+ * legitimately renders more than once; how many times is not this surface's contract.
+ */
 function getLastSelectionList(): SelectionListProps {
-    expect(capturedSelectionLists).toHaveLength(1);
-    return capturedSelectionLists[0]!;
+    expect(capturedSelectionLists.length).toBeGreaterThan(0);
+    return capturedSelectionLists.at(-1)!;
 }
 
 function getSection(
@@ -162,7 +167,9 @@ function getOption(
 
 function readIconName(option: SelectionListOption): unknown {
     if (!React.isValidElement(option.icon)) return undefined;
-    return (option.icon.props as Readonly<{ name?: unknown }>).name;
+    const props = option.icon.props as Readonly<{ name?: unknown; machineId?: unknown }>;
+    // A machine row draws its own machine's mark (`MachineRowMark`); other rows a named glyph.
+    return typeof props.machineId === 'string' ? `machine:${props.machineId}` : props.name;
 }
 
 describe('NewSessionMachineSelectionContent', () => {
@@ -244,10 +251,11 @@ describe('NewSessionMachineSelectionContent', () => {
 
         const recentOption = getOption(recentSection, 'm-recent');
         expect(recentOption.testID).toBe('new-session-machine-option:m-recent');
-        expect(readIconName(recentOption)).toBe('clock');
+        // A recent machine keeps its machine mark; the section title already says it is recent.
+        expect(readIconName(recentOption)).toBe('machine:m-recent');
 
         const favoriteOption = getOption(favoritesSection, 'm-fav');
-        expect(readIconName(favoriteOption)).toBe('desktop');
+        expect(readIconName(favoriteOption)).toBe('machine:m-fav');
 
         const offlineOption = getOption(allSection, 'm-offline');
         expect(offlineOption.disabled).toBe(true);
@@ -403,7 +411,7 @@ describe('NewSessionMachineSelectionContent', () => {
         expect(onSelectPool).not.toHaveBeenCalled();
     });
 
-    it('shows a non-destination Pool loading row while the zero-cached Pool answer is pending', async () => {
+    it('leads with machines, not a Pool loading row, while a zero-cached Pool answer is pending', async () => {
         const { NewSessionMachineSelectionContent } = await import('./NewSessionMachineSelectionContent');
         const machine = createMachine({ id: 'm-only', metadata: { displayName: 'Only', host: 'host', homeDir: '/Users/tester' } });
         const scopedMachine = createScopedMachine(machine, { serverId: 'server-a', serverName: 'Server A' });
@@ -438,13 +446,11 @@ describe('NewSessionMachineSelectionContent', () => {
             testIdPrefix="new-session-machine"
         />);
 
-        const poolSection = getSection(capturedSelectionLists.at(-1)!, 'machine-pools');
-        const status = getOption(poolSection, 'pool-status:server-a');
-        expect(status.label).toBe('common.loading');
-        expect(status.disabled).toBe(true);
-        await screen.pressByTestIdAsync('new-session-machine-pool-status:server-a');
-        expect(onSelectMachine).not.toHaveBeenCalled();
-        expect(onSelectScopedMachine).not.toHaveBeenCalled();
+        // A section whose existence is still unknown never heads the list (it would jump away a moment
+        // later for the many Accounts without Pools); Pools appear once they are known, failures say so.
+        const sections = capturedSelectionLists.at(-1)!.rootStep.sections.map((section) => section.id);
+        expect(sections).not.toContain('machine-pools');
+        expect(screen.findByTestId('new-session-machine-pool-status:server-a')).toBeNull();
         expect(onSelectPool).not.toHaveBeenCalled();
 
         const destinations = buildMachineDestinationModel({
@@ -524,6 +530,9 @@ describe('NewSessionMachineSelectionContent', () => {
                 status: 'idle',
                 projectionReady: true,
             }],
+            // A session's destination set also waits on the managed-machine answer (ee62fef68b);
+            // a Home without managed creation settles it as unavailable.
+            managedMachineProjection: { state: 'unavailable', rowCount: 0 },
         });
         expect(destinations.destinationRowCount).toBe(1);
         expect(destinations.destinationSetSettled).toBe(true);

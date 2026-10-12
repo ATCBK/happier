@@ -37,16 +37,17 @@ export function useMachineDestinationWorkerStatus(params: Readonly<{
     const { binding } = useServerCredentialAccountScopeBinding(request?.workspace.serverId);
     const controllers = useMachineListForServer(request?.workspace.serverId ?? '');
     const reachabilityRevision = useMachineReachabilityRevision();
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const wakes = new Map<string, 'asleep' | 'starting'>();
     if (purpose === 'finite' && binding?.isCurrent()) {
         for (const managed of params.managedMachines ?? []) {
             if (!managed.enrolledMachineId || !managed.wakeOnAcceptedMessage) continue;
             const guest = params.groups.find(group => group.serverId === request?.workspace.serverId
                 && !group.loading && !group.signedOut && !group.error)?.machines.find(machine => machine.id === managed.enrolledMachineId);
-            if (!guest || resolveMachinePickerPresence(guest, undefined, request?.workspace.serverId).selectable) continue;
+            if (!guest || resolveMachinePickerPresence(guest, undefined, scope).selectable) continue;
             const controller = controllers?.find(machine => machine.id === managed.controller.machineId
                 && machine.installationId === managed.controller.installationId && !machine.revokedAt && !machine.replacedByMachineId
-                && resolveMachinePickerPresence(machine, undefined, request?.workspace.serverId).selectable
+                && resolveMachinePickerPresence(machine, undefined, scope).selectable
                 && (machine.isShared !== true || machine.access?.role === 'manage' && machine.access.accessState === 'ready'));
             const state = controller && resolveManagedMachineWakeStateV1(managed, managed.enrolledMachineId);
             if (state) wakes.set(managed.enrolledMachineId, state);
@@ -54,7 +55,7 @@ export function useMachineDestinationWorkerStatus(params: Readonly<{
     }
     const candidates = new Map(params.groups.flatMap(group => {
         if (!request || group.serverId !== request.workspace.serverId || group.loading || group.signedOut || group.error) return [];
-        return group.machines.filter(machine => resolveMachinePickerPresence(machine, undefined, group.serverId).selectable).map(machine => [machine.id, machine] as const);
+        return group.machines.filter(machine => resolveMachinePickerPresence(machine, undefined, scope).selectable).map(machine => [machine.id, machine] as const);
     }));
     const candidateIds = [...candidates.keys()].sort();
     const candidateHints = candidateIds.map(id => {
@@ -134,7 +135,7 @@ export function useMachineDestinationWorkerStatus(params: Readonly<{
     return React.useCallback((machine: MachineDisplayRenderable, serverId: string): MachineDestinationPlacementFacts => {
         const current = binding?.isCurrent() && request?.workspace.serverId === serverId && projection?.demandKey === demandKey
             ? projection : null;
-        const managedWake = binding?.isCurrent() && request?.workspace.serverId === serverId && !resolveMachinePickerPresence(machine, undefined, serverId).selectable
+        const managedWake = binding?.isCurrent() && request?.workspace.serverId === serverId && !resolveMachinePickerPresence(machine, undefined, scope).selectable
             ? wakes.get(machine.id) : undefined;
         const worker = current?.statuses.get(machine.id);
         const failed = current?.failed?.has(machine.id) === true;
@@ -142,5 +143,5 @@ export function useMachineDestinationWorkerStatus(params: Readonly<{
             ...(worker ? { worker } : failed ? { workerStatusFailed: true } : {}) };
         // Exact semantic power/controller changes, not inventory array identities, refresh the callback.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [binding, demandKey, projection, request?.workspace.serverId, wakeKey]);
+    }, [binding, demandKey, projection, request?.workspace.serverId, scope, wakeKey]);
 }

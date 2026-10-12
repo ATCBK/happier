@@ -2292,9 +2292,7 @@ describe('useSessionBoardController', () => {
 
     // Removing the last Board view with the unpin disposition leaves a layout
     // with no views and every readable item in Recovered items. The layout
-    // `item.place` operation deliberately refuses a view it cannot name, so a
-    // pin aimed at the synthetic Overview would be answered
-    // `session_board_invalid` and the person could never get their note back.
+    // Pin supplies the synthetic view title explicitly, without editing the item.
     it('recreates the Overview view atomically when pinning onto a layout with no views', async () => {
         const actions = recordingActions();
         const hook = await mountController({
@@ -2310,18 +2308,10 @@ describe('useSessionBoardController', () => {
 
         expect(actions.calls).toHaveLength(1);
         const call = actions.calls[0]!;
-        // A layout operation here cannot succeed: it can only name a view the
-        // stored layout does not contain.
-        expect(call.kind).toBe('upsert');
-        if (call.kind !== 'upsert') throw new Error('expected an atomic item+placement mutation');
-        expect(call.input.itemId).toBe('orphan-1');
-        expect(call.input.expectedItemRevision).toBe('rev-orphan-1');
-        // The stored item is replaced by itself: pinning is a placement, never
-        // an edit of the person's content.
-        expect(call.input.item).toEqual(note('Orphan', 'body'));
-        expect(call.input.placement?.tabId).toBe('overview');
-        expect(typeof call.input.placement?.tabTitle).toBe('string');
-        expect((call.input.placement?.tabTitle ?? '').length).toBeGreaterThan(0);
+        expect(call.kind).toBe('layout');
+        if (call.kind !== 'layout') throw new Error('expected a layout-only mutation');
+        expect(call.input.operation).toMatchObject({ op: 'item.place', itemId: 'orphan-1', tabId: 'overview', width: 'medium' });
+        expect('tabTitle' in call.input.operation && call.input.operation.tabTitle).toEqual(expect.any(String));
     });
 
     it('explains rather than silently dropping a pin of an unreadable recovered item', async () => {

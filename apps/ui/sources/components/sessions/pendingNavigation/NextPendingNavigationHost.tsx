@@ -28,7 +28,7 @@ export function NextPendingNavigationHost() {
     const summary = useActivityAttentionSummarySource();
     const homeIds = React.useMemo(() => [
         summary.activeServerId,
-        ...buildPendingNavigationFromSource({ source: summary, nowMs: Date.now(), includeUnavailable: true })
+        ...buildPendingNavigationFromSource({ source: summary, nowMs: Date.now() })
             .map(candidate => candidate.address.serverId),
     ], [summary]);
     const bindings = useServerCredentialAccountScopeBindings(homeIds);
@@ -123,6 +123,13 @@ export function NextPendingNavigationHost() {
             unregister();
         };
     }, [invoke]);
-    useKeyboardShortcutHandlers({ 'session.pending.next': () => { void invokeNextPendingRequest(); } });
+    // The person pressed the key: when nothing waits, say so once, quietly, where they are (Find lab `fnext` ST).
+    // Actions and MCP callers get the typed `none` instead; their result never interrupts the screen.
+    useKeyboardShortcutHandlers({ 'session.pending.next': () => {
+        void invokeNextPendingRequest().then((result) => {
+            if (result.status !== 'none' || !mountedRef.current) return;
+            publishPresentationNotice({ key: NOTICE_KEY, severity: 'info', message: t('pendingNavigation.nothingWaiting') });
+        });
+    } });
     return null;
 }

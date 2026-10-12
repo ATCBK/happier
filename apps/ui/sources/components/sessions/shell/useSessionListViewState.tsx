@@ -472,6 +472,7 @@ export function useSessionListViewState(
         queryHomes: filterController.pagingHomes,
         emptyQuerySelectionComplete: filterController.emptyQuerySelectionComplete,
         corpusStorage: options.corpusStorage ?? 'active',
+        workFilter: filterController.filters,
     });
     return useSessionListViewStateFromPaneState(effectiveStorageKind, sessionListPaneState, filterController, {
         ...options,
@@ -1443,6 +1444,7 @@ export function useSessionListViewStateFromPaneState(
         setSessionPinForKey: setSessionPinForSessionKey,
         setSessionTagsForKey: setSessionTagsForSessionKey,
         scrollToOffset: scrollToTreeOffset,
+        scrollToIndex: index => scrollToRetainedIndex({ index, animated: true, viewPosition: 0.5 }),
     });
     const measureVirtualizedNodeViewportOffset = React.useCallback((nodeId: string) => {
         const listRef = virtualizedListRef.current;
@@ -1912,6 +1914,8 @@ export function useSessionListViewStateFromPaneState(
     });
 
     const collapsedKeys = normalizedShellState.collapsedGroupKeys;
+    // A Runs-only list holds no place a Session could start: its group headers carry no "+".
+    const newSessionEnabled = filterController.filters.show !== 'runs';
     const renderHeaderItem = React.useCallback((item: Extract<SessionListIndexItem, { type: 'header' }>, index: number) => (
         <SessionListHeaderItem
             item={item}
@@ -1959,6 +1963,7 @@ export function useSessionListViewStateFromPaneState(
             }}
             workspaceFaviconsEnabled={workspaceFaviconsEnabled}
             workspaceMachineSubtitlesEnabled={workspaceMachineSubtitlesEnabled}
+            newSessionEnabled={newSessionEnabled}
             dataIndex={index}
             overlayShared={rowInteractions.dropOverlayShared}
             onRegisterTreeRowBounds={rowInteractions.registerTreeRowBounds}
@@ -1995,6 +2000,7 @@ export function useSessionListViewStateFromPaneState(
         rowInteractions.registerTreeRowBounds,
         rowInteractions.resolveTreeDropResult,
         rowInteractions.unregisterTreeRowBounds,
+        newSessionEnabled,
         rowLabelByTreeRowId,
         workspaceFaviconsEnabled,
         workspaceMachineSubtitlesEnabled,

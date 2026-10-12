@@ -2,6 +2,7 @@ import { SessionCompanionPresentationItemRefV1Schema, SessionCompanionPresentati
 import { z } from 'zod';
 import type { WidgetExpectedPresentationV1, WidgetInputBindingsV1, WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { UiSurfaceNetworkRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
 
 /**
  * Session Companion is a viewer/device-local presentation preference: which
@@ -302,6 +303,10 @@ export function areSessionCompanionPreferencesEqual(
 
 export function setSessionCompanionInstanceInputs(preference: SessionCompanionPreferenceV1, instanceId: string, bindings: WidgetInputBindingsV1): SessionCompanionPreferenceV1 {
     return updateSessionCompanionInstance(preference, instanceId, (instance) => ({ ...instance, bindings }));
+}
+
+export function setSessionCompanionInstanceNetwork(preference: SessionCompanionPreferenceV1, instanceId: string, network: UiSurfaceNetworkRequestV1): SessionCompanionPreferenceV1 {
+    return updateSessionCompanionInstance(preference, instanceId, (instance) => ({ ...instance, networkOverride: network }));
 }
 
 export function renameSessionCompanionInstance(preference: SessionCompanionPreferenceV1, instanceId: string, displayName: string | null): SessionCompanionPreferenceV1 {

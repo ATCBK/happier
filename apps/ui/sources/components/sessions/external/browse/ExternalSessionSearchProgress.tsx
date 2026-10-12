@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
@@ -31,7 +31,8 @@ export function ExternalSessionSearchProgress(props: Readonly<{
                 {props.total === undefined ? <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" {...({ 'aria-hidden': true } as Record<string, unknown>)}><ActivitySpinner size="small" color={theme.colors.text.secondary} /></View> : null}
                 <Text style={[styles.label, Typography.tabular()]} numberOfLines={1}>{props.label}</Text>
             </View>
-            {props.onStop ? <RoundButton testID={props.stopTestID} size="small" display="inverted" title={t('externalSessions.browseIndexingStop')} onPress={props.onStop} /> : null}
+            {/* Stop ends the status line as words (lab ST "1,184 of 3,102 · Stop"), not as a second pill. */}
+            {props.onStop ? <TextLinkButton testID={props.stopTestID} size="meta" tone="strong" label={t('externalSessions.browseIndexingStop')} onPress={props.onStop} /> : null}
         </View>
     </View>;
 }

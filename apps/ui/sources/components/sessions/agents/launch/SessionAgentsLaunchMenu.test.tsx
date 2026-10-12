@@ -1,10 +1,12 @@
 import React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import type { WorkflowDefinitionListResultV1 } from '@happier-dev/protocol';
 
 import { SessionAgentsLaunchMenu } from './SessionAgentsLaunchMenu';
 import type { SessionAgentLauncher } from './useSessionAgentLauncher';
+import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -37,18 +39,14 @@ const executeMock = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
     createFrontDoorActionExecute: () => executeMock,
 }));
-vi.mock('@/sync/domains/scope/activeServerAccountScope', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/domains/scope/activeServerAccountScope')>()),
-    captureActiveServerAccountScopeLifetime: () => ({
-        scope: { serverId: 'server-a', accountId: 'account-a' },
-        isCurrent: () => true,
-        onRetire: () => ({ dispose() {} }),
-    }),
-}));
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/domains/state/storage')>()),
-    useActiveServerAccountScope: () => ({ serverId: 'server-a', accountId: 'account-a' }),
-}));
+let accountScope: Awaited<ReturnType<typeof activateStorageAccountScope>>;
+beforeEach(async () => {
+    accountScope = await activateStorageAccountScope({ serverId: 'server-a', accountId: 'account-a' });
+});
+afterEach(() => {
+    standardCleanup();
+    act(() => accountScope.dispose());
+});
 
 function launcher(): SessionAgentLauncher {
     return {

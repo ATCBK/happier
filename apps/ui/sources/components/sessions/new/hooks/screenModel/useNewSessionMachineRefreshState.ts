@@ -8,6 +8,7 @@ import { prefetchMachineCapabilities, prefetchMachineCapabilitiesIfStale } from 
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useStableRecentPathsForMachine } from '@/utils/sessions/useStableRecentPathsForMachine';
 import { resolveDaemonCapabilitiesCacheKeySalt } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
 
@@ -59,9 +60,11 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
     recentPaths: ReadonlyArray<string>;
 }> {
     const reachabilityRevision = useMachineReachabilityRevision();
+    const { binding } = useServerCredentialAccountScopeBinding(params.capabilityServerId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const machineReachable = React.useCallback(
-        (machine: Machine) => isMachineReachable(params.capabilityServerId, machine),
-        [params.capabilityServerId, reachabilityRevision],
+        (machine: Machine) => isMachineReachable(scope, machine),
+        [scope, reachabilityRevision],
     );
     const refreshMachineData = React.useCallback(() => {
         fireAndForget(sync.refreshMachinesThrottled({ staleMs: 0, force: true }), { tag: 'NewSessionScreenModel.refreshMachinesThrottled.manual' });

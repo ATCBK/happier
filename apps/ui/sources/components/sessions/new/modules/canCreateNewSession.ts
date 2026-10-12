@@ -1,4 +1,5 @@
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { canAttemptMachineSpawn, type MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 import type { SessionAuthoringExecutionTargetV2 } from '@happier-dev/protocol';
 import type { ManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
@@ -16,6 +17,7 @@ export function isHostBoundNewSessionMachine(params: Readonly<{
 export function canCreateNewSession(params: Readonly<{
     selectedMachineId: string | null;
     selectedMachine: Machine | null;
+    scope?: MachineReachabilityScope | null;
     /** An injected creation host owns this exact managed-directory machine. */
     hostBoundMachineId?: string | null;
     selectedPath: string;
@@ -40,6 +42,7 @@ export function canCreateNewSession(params: Readonly<{
     return canAttemptMachineSpawn({
         selectedMachineId: params.selectedMachineId,
         machine: params.selectedMachine,
+        scope: params.scope,
         spawnReadiness: params.spawnReadiness,
     });
 }

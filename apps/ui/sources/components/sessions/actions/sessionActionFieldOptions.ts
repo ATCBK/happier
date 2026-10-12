@@ -4,6 +4,8 @@ import type { ActionFieldOption } from './ActionInputFields';
 import type { InputFieldOptionsState } from './inputFieldOptionsStore';
 import type { InputOptionsConsumerV1 } from '@happier-dev/protocol/inputs';
 import type { InputTypePickerHostContext } from './InputTypePickerHostProvider';
+import { usageDimensionLabel } from '@/sync/domains/usage/usageLabels';
+import { localizeBuiltinInputLabel } from '@/text/builtinInputPrompts';
 
 export type InputFieldOptionsContext = Readonly<{ actionId?: string; consumer?: InputOptionsConsumerV1; draftInput?: Readonly<Record<string, unknown>> }>;
 export type ResolveSessionActionFieldOptions = ((
@@ -19,9 +21,23 @@ const EMPTY_OPTIONS: readonly ActionFieldOption[] = Object.freeze([]);
 
 /** A pure paint projection; all source decisions and reads belong to Action discovery. */
 export function buildSessionActionFieldOptionsResolver(lists: SessionActionFieldOptionLists): ResolveSessionActionFieldOptions {
+    const projected = Object.fromEntries(Object.entries(lists).map(([source, options]) => {
+        if (source === 'usage.query.breakdown') return [source, options.map(option => ({ ...option, label: localizeBuiltinInputLabel(option.label) }))];
+        const dimension = source === 'usage.filters.agents' ? 'agent' : source === 'usage.filters.machines' ? 'machine'
+            : source === 'usage.filters.projects' ? 'project' : source === 'usage.filters.sources' ? 'source' : null;
+        if (!dimension) return [source, options];
+        // Names were opened in the captured Account read, never in the ambient active server.
+        const machineNames = new Map(options.flatMap(option => typeof option.value === 'string' && option.label !== option.value
+            ? [[option.value, option.label] as const] : []));
+        return [source, options.map(option => {
+            if (typeof option.value !== 'string') return option;
+            const label = usageDimensionLabel(dimension, option.value, option.label, machineNames);
+            return { ...option, label: dimension === 'source' ? label.charAt(0).toUpperCase() + label.slice(1) : label };
+        })];
+    }));
     return (field) => field.options?.length || !field.optionsSourceId
         ? field.options ?? EMPTY_OPTIONS
-        : lists[field.optionsSourceId] ?? EMPTY_OPTIONS;
+        : projected[field.optionsSourceId] ?? EMPTY_OPTIONS;
 }
 
 /** Changes only when option content can change row geometry; availability is interaction-only. */

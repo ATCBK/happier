@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 
 import { buildNewSessionAuthoringContext } from '@/components/sessions/authoring/context/buildNewSessionAuthoringContext';
 import {
@@ -72,7 +73,7 @@ export function useNewSessionAuthoringState(params: Readonly<{
     resumeSessionId: string;
     permissionMode: PermissionMode;
     modelSelection: SessionModelSelectionV1 | null;
-    mcpSelection: BuildResolvedInputs['mcpSelection'];
+    capabilitySelection: BuildResolvedInputs['capabilitySelection'];
     agentNewSessionOptions: Record<string, unknown> | null;
     settings: Settings;
     effectiveWindowsRemoteSessionLaunchMode: BuildResolvedInputs['windowsRemoteSessionLaunchMode'];
@@ -112,6 +113,8 @@ export function useNewSessionAuthoringState(params: Readonly<{
     draftPersistenceEnabled: boolean;
     draftPersistenceGenerationRef: React.MutableRefObject<number>;
 }> {
+    const { binding } = useServerCredentialAccountScopeBinding(params.targetServerId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const initiallyFrozenByActivation = params.draftScope !== null
         && params.draftScope !== undefined
         && params.temporaryComputerActivationRef != null;
@@ -167,7 +170,7 @@ export function useNewSessionAuthoringState(params: Readonly<{
         permissionMode: params.permissionMode,
         permissionModeUpdatedAt: null,
         modelSelection: params.modelSelection,
-        mcpSelection: params.mcpSelection ?? null,
+        capabilitySelection: params.capabilitySelection ?? null,
         connectedServices: normalizeSessionAuthoringConnectedServices(params.agentNewSessionOptions?.connectedServices ?? null),
         terminal: resolveTerminalSpawnOptions({
             settings: params.settings,
@@ -203,7 +206,7 @@ export function useNewSessionAuthoringState(params: Readonly<{
         params.checkoutCreationDraft,
         draftAgentId,
         params.effectiveWindowsRemoteSessionLaunchMode,
-        params.mcpSelection,
+        params.capabilitySelection,
         params.modelSelection,
         params.permissionMode,
         params.resumeSessionId,
@@ -229,6 +232,7 @@ export function useNewSessionAuthoringState(params: Readonly<{
         selectedMachineId: params.selectedMachineId,
         managedMachineSelection: params.managedMachineSelection,
         selectedMachine: params.selectedMachine,
+        scope,
         hostBoundMachineId: params.hostBoundMachineId,
         selectedMachineSpawnReadiness: params.selectedMachineSpawnReadiness ?? null,
         selectedPath: params.selectedPath,
@@ -245,6 +249,7 @@ export function useNewSessionAuthoringState(params: Readonly<{
         params.managedMachineSelection,
         params.selectedMachineId,
         params.selectedPath,
+        scope,
     ]);
 
     const currentAuthoringDraft = authoringContext.draft;

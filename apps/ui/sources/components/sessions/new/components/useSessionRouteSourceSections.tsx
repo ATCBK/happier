@@ -10,6 +10,7 @@ import { ProviderIcon } from '@/providers/connection/ProviderIcon';
 import { useProviderConnections } from '@/providers/hooks/useProviderConnections';
 import { buildSessionRouteSourceRows, type SessionRouteSourceRow } from '@/providers/session/buildSessionRouteSourceRows';
 import { t } from '@/text';
+import type { SessionRoute } from '@/providers/session/resolveSessionRoutePresentation';
 
 /** What the "Runs through" popover needs to name an Agent's Gateways and Providers and browse one. */
 export type SessionRouteSources = Readonly<{
@@ -20,15 +21,14 @@ export type SessionRouteSources = Readonly<{
     hiddenSources: readonly Readonly<{ connectionId: string; modelCount: number }>[];
 }>;
 
-function RouteSourceIcon(props: Readonly<{ gateway: boolean; icon: string | null; dimmed: boolean }>) {
+function RouteSourceIcon(props: Readonly<{ contributionKey: string | null; icon: string | null; dimmed: boolean }>) {
     const { theme } = useUnistyles();
     const color = props.dimmed ? theme.colors.text.tertiary : theme.colors.text.secondary;
-    return normalizeNodeForView(props.gateway
-        ? <Icon name="path" size={20} color={color} />
-        : <ProviderIcon icon={props.icon} size={20} color={color} />);
+    return normalizeNodeForView(<ProviderIcon contributionKey={props.contributionKey} icon={props.icon} size={20} color={color} />);
 }
 
-function RouteSourceChevron() {
+/** Trailing mark of a row that opens a source to browse. */
+export function RouteSourceChevron() {
     const { theme } = useUnistyles();
     return normalizeNodeForView(<Icon name="caret-right" size={16} color={theme.colors.text.tertiary} />);
 }
@@ -46,6 +46,7 @@ function routeSourceSubtitle(row: SessionRouteSourceRow): string {
  */
 export function useSessionRouteSourceSections(
     sources: SessionRouteSources | undefined,
+    appliedRoute?: SessionRoute,
 ): readonly SelectionListSectionDescriptor[] {
     const handoff = React.useContext(SessionModelSourceBrowseHandoffContext);
     const browse = handoff?.browse;
@@ -58,6 +59,7 @@ export function useSessionRouteSourceSections(
     const agentTargetKey = sources?.agentTargetKey;
     const shownSources = sources?.shownSources;
     const hiddenSources = sources?.hiddenSources;
+    const selectedConnectionId = appliedRoute?.kind === 'provider' ? appliedRoute.connectionId : null;
 
     return React.useMemo(() => {
         if (!views || !agentTargetKey || !browse) return [];
@@ -74,11 +76,14 @@ export function useSessionRouteSourceSections(
                     id: `route-source:${row.connectionId}`,
                     label: row.label,
                     subtitle: routeSourceSubtitle(row),
-                    icon: <RouteSourceIcon gateway={id === 'gateways'} icon={row.icon} dimmed={row.worksWith !== null} />,
+                    icon: <RouteSourceIcon contributionKey={row.contributionKey}
+                        icon={row.icon} dimmed={row.worksWith !== null} />,
+                    selected: row.connectionId === selectedConnectionId,
                     ...(row.worksWith ? { disabled: true } : {
                         rightAccessory: <RouteSourceChevron />,
                         accessibilityLabel: t('agentInput.model.browseSource', { source: row.label }),
-                        onSelect: () => browse(agentTargetKey, { connectionId: row.connectionId, label: row.label }),
+                        onSelect: () => browse(agentTargetKey, { connectionId: row.connectionId, label: row.label,
+                            hiddenFromPicker: row.hiddenFromPicker }),
                     }),
                 })),
             }]
@@ -87,5 +92,5 @@ export function useSessionRouteSourceSections(
             ...section('gateways', t('settingsProvidersCollection.gateway.railGroup'), rows.gateways),
             ...section('providers', t('settingsProviders.title'), rows.providers),
         ];
-    }, [agentTargetKey, browse, hiddenSources, shownSources, views]);
+    }, [agentTargetKey, browse, hiddenSources, selectedConnectionId, shownSources, views]);
 }

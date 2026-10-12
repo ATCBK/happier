@@ -15,6 +15,7 @@ import { sessionScmHostingRepositoryDescribePublishTargets, sessionScmHostingRep
 import { t } from '@/text';
 
 import { useSessionGitRepositoryMutations } from './useSessionGitRepositoryMutations';
+import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
 type Props = Readonly<{ sessionId: string; serverId?: string; navigation: Pick<Router, 'push'>; onClose: () => void }>;
 
@@ -41,7 +42,7 @@ function GitRemotesAndMergesSheetBody(props: Props) {
     const openMachineInstallables = React.useCallback(() => {
         if (!machineId) return;
         props.onClose();
-        router.push(`/machine/${encodeURIComponent(machineId)}/installables${serverId ? `?serverId=${encodeURIComponent(serverId)}` : ''}` as never);
+        router.push(machinePageHref({ door: 'rail', target: { machineId, serverId: serverId || undefined }, page: 'installables' }) as never);
     }, [machineId, props, router, serverId]);
     const openGitHub = React.useCallback(() => {
         props.onClose();

@@ -1116,7 +1116,8 @@ describe('SessionWidgetHost installed surface placements', () => {
             const codes = cards.map((node) => (node.props as { diagnosticCode: string }).diagnosticCode);
             expect(codes).toContain('widget_projection_establishing');
             expect(codes).not.toContain('plugin_unavailable');
-            expect(cards.some(node => node.props.kind === 'loading')).toBe(true);
+            // Loading reserves the body as a busy region (lab dashboards ST), not an explanatory card.
+            expect(screen.tree.root.findAll(node => node.props.accessibilityRole === 'progressbar' && node.props['aria-busy'] === true).length).toBeGreaterThan(0);
             state.deferredProjection = null;
             settleProjection?.({ protocolVersion: 1, projection: state.projection });
             await vi.waitFor(async () => { await flushHookEffects(); expect(state.activeMountKeys.size).toBe(1); });

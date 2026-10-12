@@ -41,6 +41,35 @@ vi.mock('@/modal', async () => {
 });
 
 describe('TranscriptEventRow', () => {
+    it('does not describe a terminal policy decision as a user cancellation', async () => {
+        const screen = await renderScreen(<TranscriptEventRow event={{
+            type: 'connected-service-runtime-auth-recovery',
+            status: 'cancelled', serviceId: 'happier.agent.claude/claude-subscription', profileId: 'work',
+            terminal: true, reason: 'switch_reason_disabled',
+        }} />);
+        expect(screen.getTextContent()).not.toContain(t('message.connectedServiceRuntimeAuthRecoveryCancelled'));
+        expect(screen.getTextContent()).toContain(t('message.connectedServiceRuntimeAuthRecoveryStopped'));
+        expect(screen.findByTestId('transcript-event-connected-service-runtime-auth-recovery')).toBeTruthy();
+    });
+    it('keeps a guard stop intent quiet without claiming exit or freed memory before current settlement', async () => {
+        const event = { type: 'message', message: 'Happier requested this session to stop. Resume it after it stops to continue.',
+            sessionStopV1: { v: 1, status: 'requested', at: new Date(2026, 9, 10, 13, 40).getTime(), rule: 'idle_sessions', idleMs: 7_200_000, freedBytes: 820 * 1024 ** 2 } };
+        const screen = await renderScreen(<TranscriptEventRow event={event as AgentEvent} sessionId="stopped" />);
+        expect(screen.findByTestId('transcript-event-session-stop')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('Stop requested');
+        expect(screen.getTextContent()).not.toContain('freed');
+        expect(screen.getTextContent()).not.toContain('Resume it after it stops');
+    });
+
+    it('lets a stop marker that arrives now rise in, and shows one met again in history at once', async () => {
+        const marker = (at: number) => ({ type: 'message', message: 'requested', sessionStopV1: { v: 1, status: 'requested', at, rule: 'memory_guard' } }) as unknown as AgentEvent;
+        const fresh = await renderScreen(<TranscriptEventRow event={marker(Date.now())} sessionId="fresh" />);
+        expect(fresh.findAll(node => node.props?.testID === 'transcript-event-session-stop' && node.props?.entering !== undefined)).not.toHaveLength(0);
+        const old = await renderScreen(<TranscriptEventRow event={marker(Date.now() - 3_600_000)} sessionId="old" />);
+        expect(old.findAll(node => node.props?.testID === 'transcript-event-session-stop' && node.props?.entering !== undefined)).toHaveLength(0);
+        expect(old.findByTestId('transcript-event-session-stop')).not.toBeNull();
+    });
+
     it('renders a worker publish summary in its own transcript without lead controls', async () => {
         const summary = 'Implemented the requested fix; the focused check passed.';
         const screen = await renderScreen(<TranscriptEventRow event={{ type: 'worker-report', summary }} sessionId="worker" />);

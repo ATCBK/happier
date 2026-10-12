@@ -4,7 +4,8 @@ import type { SessionFollowSourceKeyPreparationWaitingReasonV1 } from '@happier-
 import type { SessionFollowSourceModeV1, SessionFollowSourceDeliveryStateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 
 import { t } from '@/text';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 export type SessionFollowSourceRuntimeState =
     | SessionFollowSourceDeliveryStateV1
@@ -39,7 +40,9 @@ export function listEligibleSessionFollowSourceCandidates<T extends Readonly<{ i
 
 export function resolveSessionFollowSourceRuntimeState(input: Readonly<{
     deliveryState: SessionFollowSourceDeliveryStateV1;
+    accountScope?: ServerAccountScope | null;
     machine: Readonly<{
+        id: string;
         kind?: 'persistent' | 'ephemeral_session_runner';
         active: boolean;
         activeAt?: number | null;
@@ -53,7 +56,7 @@ export function resolveSessionFollowSourceRuntimeState(input: Readonly<{
     nowMs?: number;
 }>): SessionFollowSourceRuntimeState {
     if (input.deliveryState === 'paused_archived') return 'paused_archived';
-    if (!input.machine || !isMachineOnline(input.machine, input.nowMs)) return 'waiting_for_runtime';
+    if (!input.machine || !isMachineReachable(input.accountScope, input.machine, input.nowMs)) return 'waiting_for_runtime';
     if (!supportsMachineSessionFollowContextV1(input.machine.operationProtocolCapabilities)) return 'runtime_unsupported';
     if (input.mode === 'wake_on_human_change'
         && !supportsMachineSessionFollowWakeOnHumanChangeV1(input.machine.operationProtocolCapabilities)) {

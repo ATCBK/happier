@@ -1,4 +1,6 @@
 import * as React from 'react';
+import Color from 'color';
+import { StyleSheet } from 'react-native';
 import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture, createSessionMessagesFixture, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -147,6 +149,23 @@ describe('EmbeddedSessionProvider', () => {
         expect(screen.tree.findAll(matchesComponent(ChatList))).toHaveLength(1);
         expect(screen.tree.findAll(matchesComponent(AgentInput))).toHaveLength(1);
         expect(screen.tree.findAll(matchesComponent(AppPaneScopeHost))).toHaveLength(0);
+    });
+
+    it('renders embedded composer Elements through the root material runtime', async () => {
+        const { GlassMaterialRuntime } = await import('@/components/ui/glass/GlassMaterialRuntime');
+        const { useSetGlassAtmosphereBehind } = await import('@/components/ui/glass/glassRuntimeEnvironment');
+        const { glassPresetMaterials } = await import('@/components/ui/glass/glassMaterial');
+        storage.setState({ settings: { ...storage.getState().settings, glassSurfaceMaterials: glassPresetMaterials('auto') } });
+        function Backing() {
+            const setAtmosphere = useSetGlassAtmosphereBehind();
+            React.useEffect(() => { setAtmosphere('wallpaper'); }, [setAtmosphere]);
+            return embedded();
+        }
+        const screen = await renderScreen(host(<GlassMaterialRuntime><Backing /></GlassMaterialRuntime>));
+        const composer = screen.tree.findHostByTestId('agent-input-material-surface')!;
+        const paint = StyleSheet.flatten(composer.props.style);
+        expect(Color(paint.backgroundColor).alpha()).toBeCloseTo(glassPresetMaterials('auto').card.opacity, 2);
+        expect(screen.tree.findAll(matchesComponent(AgentInput))).toHaveLength(1);
     });
 
     it('leaves the route pane mounted when a second presentation appears and disappears', async () => {

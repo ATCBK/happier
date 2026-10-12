@@ -32,6 +32,7 @@ const projection = {
         id: service.localId, serviceId: service.localId, pluginId: service.pluginId,
         provenance: 'first_party', sourceKind: 'bundled', title: 'Codex',
         authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode',
+        callbackUrl: 'http://127.0.0.1:4000/auth/callback',
             scopes: ['openid'], pkce: 'required', outcomeReconciliation: 'none' }] },
         capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
     }], conflicts: [], errorReason: null,
@@ -76,6 +77,7 @@ it('previews destination-only armed defaults without inferring Native from unrea
     const armed = { agentId: 'codex', agentIdentity: consumer, connectedAccounts: declarations };
     type ArmedTarget = NonNullable<Parameters<typeof useSessionConnectedServicesAuthSwitch>[0]['armedContinuationAgent']>;
     const hook = await renderHook((target: ArmedTarget | null) => useSessionConnectedServicesAuthSwitch({
+        applyBinding: async () => ({ ok: true, action: 'unchanged' }),
         sessionId: 'armed-session', agentId: 'codex', agentIdentity: consumer, machineId: null, serverId: connection.home.id,
         connectedAccounts: declarations, armedContinuationAgent: target,
         sessionMetadata: { connectedServices: { v: 2, bindingsByServiceId: {

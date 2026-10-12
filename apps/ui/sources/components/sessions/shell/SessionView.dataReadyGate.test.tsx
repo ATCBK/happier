@@ -215,6 +215,7 @@ const themeColors = {
 const routerPushSpy = vi.fn();
 let endpointConnectivityStatus: EndpointConnectivityStatus = 'online';
 let isDataReadyState = false;
+let isSessionDraftsReadyState = true;
 let syncErrorState: {
     message: string;
     retryable: boolean;
@@ -407,6 +408,8 @@ const { storage: canonicalStorage } = await import('@/sync/domains/state/storage
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 let previousStorage: ReturnType<typeof canonicalStorage.getState>;
+let foregroundDraftRead: ReturnType<typeof createDeferred<void>> | null = null;
+let foregroundDraftReadStarted = false;
 
 async function renderScreen(...args: Parameters<typeof renderCanonicalScreen>) {
     // Route acceptance and every narrow reader observe the SAME canonical store.
@@ -418,7 +421,7 @@ async function renderScreen(...args: Parameters<typeof renderCanonicalScreen>) {
     } else {
         canonicalStorage.setState({ sessions: {}, sessionListRowsByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} });
     }
-    canonicalStorage.setState({ isDataReady: isDataReadyState });
+    canonicalStorage.setState({ isDataReady: isDataReadyState, isSessionDraftsReady: isSessionDraftsReadyState });
     canonicalStorage.getState().applySettingsLocal({ sessionMessageSendMode: 'agent_queue' });
     canonicalStorage.getState().setSyncError(syncErrorState);
     canonicalStorage.getState().setEndpointConnectivity({
@@ -429,14 +432,22 @@ async function renderScreen(...args: Parameters<typeof renderCanonicalScreen>) {
 }
 
 beforeEach(async () => {
+    foregroundDraftRead = null;
+    foregroundDraftReadStarted = false;
     previousStorage = canonicalStorage.getState();
     await loadSyncSingletonForTests();
     account = await restoreServerAccountForTest({ serverUrl: 'https://server-a', accountId: 'account-1', request: async url => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({ features: { sessions: { drafts: { enabled: true } } } }));
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+        if (path === '/v2/account/session-drafts/list') return Response.json({ items: [] });
+        if (path === '/v2/account/session-drafts/read') {
+            foregroundDraftReadStarted = true;
+            await foregroundDraftRead?.promise;
+            return Response.json({ status: 'absent' });
+        }
         if (path === '/v2/sessions/s1/pending') return Response.json({ pending: [] });
         if (path === '/v1/sessions/s1/messages') return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
         return new Response('{}', { status: 404 });
@@ -476,6 +487,7 @@ const { AppPaneProvider } = await import('@/components/appShell/panes/AppPanePro
 
 describe('SessionView (data ready gating)', () => {
     beforeEach(async () => {
+        isSessionDraftsReadyState = true;
         const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
         await prepareSessionDraftPersistenceStorage();
     });
@@ -591,6 +603,32 @@ describe('SessionView (data ready gating)', () => {
 
         expect(screen.findAllByTestId('session-composer-input')).toHaveLength(1);
         expect(screen.findAllByTestId('session-header-action-menu-trigger')).toHaveLength(1);
+    });
+
+    it('admits composer custody after its exact draft read while Account draft readiness stays pending', async () => {
+        const { SessionView } = await sessionViewModulePromise;
+        isDataReadyState = true;
+        isSessionDraftsReadyState = false;
+        const readHeld = createDeferred<void>();
+        foregroundDraftRead = readHeld;
+        try {
+            const screen = await renderScreen(<AppPaneProvider><SessionView routeServerId={account.home.id} id="s1" /></AppPaneProvider>);
+            await vi.waitFor(() => expect(foregroundDraftReadStarted).toBe(true));
+            expect(screen.findAllByTestId('session-drafts-hydrating').length).toBeGreaterThan(0);
+            expect(screen.findAllByTestId('session-composer-input')).toHaveLength(0);
+            const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+            const { sync } = await import('@/sync/sync');
+            const lifetime = captureActiveServerAccountScopeLifetime();
+            expect(lifetime?.isCurrent()).toBe(true);
+            await act(async () => {
+                readHeld.resolve();
+                await sync.prepareSessionDraftSurface(lifetime!, [{ kind: 'session', sessionId: 's1' }]);
+            });
+            await vi.waitFor(() => expect(screen.findAllByTestId('session-composer-input')).toHaveLength(1));
+            expect(canonicalStorage.getState().isSessionDraftsReady).toBe(false);
+        } finally {
+            readHeld.resolve();
+        }
     });
 
     it('projects decorations and edit locks through the mounted session AgentInput', async () => {

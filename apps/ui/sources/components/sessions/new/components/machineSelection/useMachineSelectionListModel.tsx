@@ -35,6 +35,9 @@ import {
     type MachinePoolRowUnavailableReason,
 } from './buildMachineDestinationModel';
 import { resolveMachinePickerPresence } from '../resolveMachinePickerPresence';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { Icon } from '@/components/ui/icons/Icon';
 import type { MachinePoolViewV1, SessionAuthoringExecutionTargetV2 } from '@happier-dev/protocol';
 import type { MachineDestinationPurposeV1 } from '@happier-dev/protocol/machines/pools';
@@ -65,6 +68,12 @@ type MachineSelectionListModel = Readonly<{
     rootStep: SelectionListStep;
     selectedOptionId: string | null;
     managedWakeByServerId: Readonly<Record<string, Readonly<Record<string, 'asleep' | 'starting'>>>>;
+    /**
+     * Machines whose only reason for not being selectable is that they are offline, per Home. A Machine
+     * refused for locked content, pending access or a worker refusal keeps its own named reason and is
+     * never listed, so a presentation that groups offline Machines cannot hide a repair reason.
+     */
+    offlineOnlyMachineIdsByServerId: Readonly<Record<string, ReadonlyArray<string>>>;
 }>;
 
 export type ServerScopedMachinePoolGroup = Readonly<{
@@ -198,8 +207,8 @@ function machineSubtitle(machine: MachineDisplayRenderable): string | undefined 
  * The machine row's second line (K1 picker anatomy): presence first ("Online", "Offline · last seen
  * 4 days ago"), then the row's own fact when it has one (a domain's reason, the Home's detail).
  */
-function machineStatusLine(machine: MachineDisplayRenderable, serverId: string, detail: string | undefined, managedMachine?: ManagedMachineV1): string {
-    const presence = describeMachinePresenceLine(machine, undefined, managedMachine, serverId);
+function machineStatusLine(machine: MachineDisplayRenderable, scope: MachineReachabilityScope | null | undefined, detail: string | undefined, managedMachine?: ManagedMachineV1): string {
+    const presence = describeMachinePresenceLine(machine, undefined, managedMachine, scope);
     // An online machine says what it is ("Online · Linux", lab m-pick); an offline one keeps its
     // last-seen time as its only fact, so the line stays short.
     const platform = presence.online ? formatOSPlatform(machine.metadata?.platform ?? undefined) : '';
@@ -304,6 +313,19 @@ function bucketTitle(bucketId: MachineSelectionBucketId): string {
 
 
 /**
+ * Presence is the Machine's only blocker: it is offline and nothing else (content, access, a worker's
+ * own refusal) stands between it and the destination. The one decision both the row reason and the
+ * offline grouping read.
+ */
+function isBlockedOnlyByPresence(
+    eligibility: ReturnType<typeof resolveMachineDestinationPurposeEligibility>,
+    presence: ReturnType<typeof resolveMachinePickerPresence>,
+): boolean {
+    if (presence.status !== 'offline') return false;
+    return eligibility.eligible ? !eligibility.managedWake : eligibility.reason === 'worker_status_unavailable';
+}
+
+/**
  * Whether a row can be chosen, and the reason it shows. Presence is the default; a consuming domain's
  * decision replaces it, and its reason is shown whenever the row is disabled or the machine is not
  * online, so an offline row the domain keeps selectable still says why.
@@ -314,14 +336,14 @@ function resolveRowAvailability<TMachine extends MachineDisplayRenderable>(
     resolveMachineAvailability: BuildMachineSelectionListModelParams<TMachine>['resolveMachineAvailability'],
     purpose: MachineDestinationPurposeV1,
     resolveMachinePlacementFacts: BuildMachineSelectionListModelParams<TMachine>['resolveMachinePlacementFacts'],
-    workerSubject?: MachineDestinationWorkerSubject,
+    workerSubject: MachineDestinationWorkerSubject | undefined,
+    scope: MachineReachabilityScope | null | undefined,
 ): Readonly<{ selectable: boolean; reason?: string }> {
-    const eligibility = resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, serverId), machine);
-    const presence = resolveMachinePickerPresence(machine, undefined, serverId);
+    const eligibility = resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, serverId), machine, scope);
+    const presence = resolveMachinePickerPresence(machine, undefined, scope);
     if (!eligibility.eligible) {
         // An offline machine answers no worker status; its presence line already says why it can't be chosen.
-        const awaitingStatusOffline = eligibility.reason === 'worker_status_unavailable' && !presence.selectable;
-        return { selectable: false, reason: awaitingStatusOffline ? undefined : describeMachineDestinationEligibility(eligibility, machine, workerSubject, purpose) };
+        return { selectable: false, reason: isBlockedOnlyByPresence(eligibility, presence) ? undefined : describeMachineDestinationEligibility(eligibility, machine, workerSubject, purpose) };
     }
     const decided = resolveMachineAvailability?.(machine, serverId);
     // An eligible worker row says its current load (or that it is unknown), never a guessed zero.
@@ -337,6 +359,11 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
 ): MachineSelectionListModel {
     const purpose = params.purpose ?? 'session';
     const managedHomes = React.useMemo(() => params.groups.map(group => group.serverId), [params.groups]);
+    const bindings = useServerCredentialAccountScopeBindings(managedHomes);
+    const scopeForServer = React.useCallback((serverId: string) => {
+        const binding = bindings.get(resolveServerProfileScopeIdForIdentifier(serverId));
+        return binding?.isCurrent() ? binding.scope : null;
+    }, [bindings]);
     const { machinesByEnrolledMachineIdByServerId, entries: managedEntries } = useManagedMachineInventory(managedHomes);
     const managedEntry = params.workerPlacement ? managedEntries[params.workerPlacement.workspace.serverId] : undefined;
     const demandedWorkerFacts = useMachineDestinationWorkerStatus({ purpose, workerPlacement: params.workerPlacement, groups: params.groups,
@@ -805,21 +832,25 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
         const temporaryComputerRetrySource = temporaryComputers.find((candidate) => (
             candidate.disabled === true && candidate.onRetry !== undefined
         )) ?? null;
+        // One failure, one row: the failed row says why, and Retry is the section's action (as Presets
+        // is New machine's) rather than a second option row (DRA D13).
         const temporaryComputerRetry = temporaryComputerRetrySource?.onRetry
             ? {
-                id: `temporary-computer-retry:${temporaryComputerRetrySource.serverId}`,
                 label: t('common.retry'),
-                icon: <Icon name="arrow-clockwise" size={24} color={theme.colors.text.secondary} />,
-                onSelect: temporaryComputerRetrySource.onRetry,
-            } satisfies SelectionListOption
+                onPress: temporaryComputerRetrySource.onRetry,
+                ...(params.testIdPrefix
+                    ? { testID: `${params.testIdPrefix}-temporary-computer-retry:${temporaryComputerRetrySource.serverId}` }
+                    : {}),
+            }
             : null;
         const temporaryComputerSection: SelectionListSectionDescriptor | null = temporaryComputers.length > 0
             ? {
                 kind: 'static',
                 id: 'temporary-computer',
                 title: t('newSession.temporaryComputer.publishedTitle'),
+                ...(temporaryComputerRetry ? { action: temporaryComputerRetry } : {}),
                 options: temporaryComputers.length === 1
-                    ? [...temporaryComputerOptions, ...(temporaryComputerRetry ? [temporaryComputerRetry] : [])]
+                    ? temporaryComputerOptions
                     : [{
                         id: 'temporary-computer',
                         label: t('newSession.temporaryComputer.publishedTitle'),
@@ -851,6 +882,7 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
             const group = params.groups[0]!;
             const machineNames = resolveMachineDisplayNames(group.machines);
             const bucketModel = buildMachineSelectionBuckets<TMachine>({
+                scope: scopeForServer(group.serverId),
                 machines: group.machines,
                 recentMachines: params.recentMachines,
                 favoriteMachines: params.favoriteMachines,
@@ -868,14 +900,14 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
                     ? describeMachineSharedGroupTitle(bucket.custodian)
                     : params.sectionTitles?.[bucket.id] ?? bucketTitle(bucket.id),
                 options: bucket.machines.map((machine) => {
-                    const availability = resolveRowAvailability(machine, group.serverId, params.resolveMachineAvailability, purpose, resolveMachinePlacementFacts, params.workerSubject);
+                    const availability = resolveRowAvailability(machine, group.serverId, params.resolveMachineAvailability, purpose, resolveMachinePlacementFacts, params.workerSubject, scopeForServer(group.serverId));
                     const presentation = params.resolveMachinePresentation?.(machine);
                     return {
                         id: machine.id,
                         testID: buildOptionTestID(params.testIdPrefix, machine),
                         label: presentation?.title ?? machineNames.get(machine.id) ?? machine.id,
                         labelEllipsizeMode: 'middle',
-                        subtitle: machineStatusLine(machine, group.serverId, availability.reason ?? presentation?.subtitle,
+                        subtitle: machineStatusLine(machine, scopeForServer(group.serverId), availability.reason ?? presentation?.subtitle,
                             machinesByEnrolledMachineIdByServerId[group.serverId]?.[machine.id]),
                         subtitleLeading: (
                             <MachinePresenceDot
@@ -905,7 +937,7 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
                             />
                         ),
                         onSelect: () => {
-                            if (!resolveRowAvailability(machine, group.serverId, params.resolveMachineAvailability, purpose, resolveMachinePlacementFacts, params.workerSubject).selectable) return;
+                            if (!resolveRowAvailability(machine, group.serverId, params.resolveMachineAvailability, purpose, resolveMachinePlacementFacts, params.workerSubject, scopeForServer(group.serverId)).selectable) return;
                             selectMachine(machine);
                         },
                     } satisfies SelectionListOption;
@@ -962,7 +994,7 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
             } else {
                 const machineNames = resolveMachineDisplayNames(group.machines);
                 options = group.machines.map((machine) => {
-                    const availability = resolveRowAvailability(machine, group.serverId, params.resolveMachineAvailability, purpose, resolveMachinePlacementFacts, params.workerSubject);
+                    const availability = resolveRowAvailability(machine, group.serverId, params.resolveMachineAvailability, purpose, resolveMachinePlacementFacts, params.workerSubject, scopeForServer(group.serverId));
                     const presentation = params.resolveMachinePresentation?.(machine);
                     return {
                         id: `${group.serverId}::${machine.id}`,
@@ -971,7 +1003,7 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
                         labelEllipsizeMode: 'middle',
                         subtitle: machineStatusLine(
                             machine,
-                            group.serverId,
+                            scopeForServer(group.serverId),
                             availability.reason ?? (presentation ? presentation.subtitle : machineSubtitle(machine)),
                             machinesByEnrolledMachineIdByServerId[group.serverId]?.[machine.id],
                         ),
@@ -992,7 +1024,7 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
                         ),
                         disabled: !availability.selectable,
                         onSelect: () => {
-                            if (!resolveRowAvailability(machine, group.serverId, params.resolveMachineAvailability, purpose, resolveMachinePlacementFacts, params.workerSubject).selectable) return;
+                            if (!resolveRowAvailability(machine, group.serverId, params.resolveMachineAvailability, purpose, resolveMachinePlacementFacts, params.workerSubject, scopeForServer(group.serverId)).selectable) return;
                             selectScopedMachine(machine);
                         },
                     } satisfies SelectionListOption;
@@ -1108,12 +1140,22 @@ export function useMachineSelectionListModel<TMachine extends MachineDisplayRend
         hasOpenManagedPresets,
         pendingExpiry,
         theme.colors.text.secondary,
+        scopeForServer,
     ]);
     const managedWakeByServerId = React.useMemo(() => Object.fromEntries(params.groups.map(group => [group.serverId,
         Object.fromEntries(group.machines.flatMap(machine => {
-            const eligibility = resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, group.serverId), machine);
+            const eligibility = resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, group.serverId), machine, scopeForServer(group.serverId));
             return eligibility.eligible && eligibility.managedWake ? [[machine.id, eligibility.managedWake]] : [];
         })),
-    ])), [params.groups, purpose, resolveMachinePlacementFacts]);
-    return { ...model, managedWakeByServerId };
+    ])), [params.groups, purpose, resolveMachinePlacementFacts, reachabilityRevision, scopeForServer]);
+    const offlineOnlyMachineIdsByServerId = React.useMemo(() => Object.fromEntries(params.groups.map(group => [group.serverId,
+        group.machines.filter(machine => isBlockedOnlyByPresence(
+            resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, group.serverId), machine, scopeForServer(group.serverId)),
+            resolveMachinePickerPresence(machine, undefined, scopeForServer(group.serverId)),
+        )).map(machine => machine.id),
+    ])),
+    // Request reachability changes presence without any Machine row change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params.groups, purpose, resolveMachinePlacementFacts, reachabilityRevision, scopeForServer]);
+    return { ...model, managedWakeByServerId, offlineOnlyMachineIdsByServerId };
 }

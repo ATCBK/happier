@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
     LocalServiceLaunchTargetV1,
@@ -15,6 +15,10 @@ import {
 } from '@/sync/domains/local/services/publicPreview/store';
 
 import { LocalServicePublicPreviewControls } from './LocalServicePublicPreviewControls';
+import { storage } from '@/sync/domains/state/storage';
+
+const originalSettings = storage.getState().settings;
+afterEach(() => storage.setState({ settings: originalSettings }));
 
 const modalSpies = vi.hoisted(() => ({
     confirm: vi.fn<IModal['confirm']>(async () => true),
@@ -269,6 +273,8 @@ describe('LocalServicePublicPreviewControls (consequence sheet before create)', 
         const pressable = findCreatePressable(result);
         await pressable.props.onPress();
 
+        await flushCreateChain();
+
         expect(modalSpies.show).toHaveBeenCalledTimes(1);
         expect(create).not.toHaveBeenCalled();
         await result.unmount();
@@ -289,6 +295,7 @@ describe('LocalServicePublicPreviewControls (consequence sheet before create)', 
         const pressable = findRevokePressable(result);
         expect(pressable).toBeTruthy();
         await pressable.props.onPress();
+        await flushCreateChain();
 
         expect(modalSpies.confirm).toHaveBeenCalledTimes(1);
         const confirmationCall = modalSpies.confirm.mock.calls[0] as Parameters<IModal['confirm']> | undefined;
@@ -299,6 +306,61 @@ describe('LocalServicePublicPreviewControls (consequence sheet before create)', 
         expect(confirmationCall?.[1]).not.toContain('public_preview_1');
         expect(revoke).toHaveBeenCalledExactlyOnceWith(activeCurrentPreviewExposure);
         await result.unmount();
+    });
+
+    it('honours the UI revoke waiver without a second confirmation', async () => {
+        storage.setState({ settings: { ...originalSettings, actionsSettingsV1: {
+            v: 1, actions: {}, approvalWaivedSurfaces: { 'localServices.publicPreview.revoke': ['ui'] },
+        } } });
+        modalSpies.confirm.mockResolvedValue(false);
+        const revoke = vi.fn(async () => undefined);
+        const result = await renderWithAppProviders(
+            <LocalServicePublicPreviewControls launchTargets={[target]} state={activePreviewState}
+                actions={{ create: vi.fn(), copyUrl: vi.fn(async () => true), revoke }} />,
+        );
+        await findRevokePressable(result).props.onPress();
+        await flushCreateChain();
+        expect(modalSpies.confirm).not.toHaveBeenCalled();
+        expect(revoke).toHaveBeenCalledWith(activeCurrentPreviewExposure);
+        await result.unmount();
+    });
+
+    it('honours the UI create waiver with the current policy-admitted link choices', async () => {
+        storage.setState({ settings: { ...originalSettings, actionsSettingsV1: {
+            v: 1, actions: {}, approvalWaivedSurfaces: { 'localServices.publicPreview.create': ['ui'] },
+        } } });
+        const create = vi.fn(async () => undefined);
+        const result = await renderWithAppProviders(
+            <LocalServicePublicPreviewControls launchTargets={[target]} state={previewState}
+                actions={{ create, copyUrl: vi.fn(async () => true), revoke: vi.fn() }} />,
+        );
+        await findCreatePressable(result).props.onPress();
+        await flushCreateChain();
+        expect(modalSpies.show).not.toHaveBeenCalled();
+        expect(create).toHaveBeenCalledWith(target, { mode: 'secret_link', ttlMs: 600_000 });
+        await result.unmount();
+    });
+
+    it('honours the target Home public-link waiver rather than a foreign focused Account policy', async () => {
+        const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+        const { saveAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+        const { settingsParse } = await import('@/sync/domains/settings/settings');
+        const home = await createPlainArtifactHomeFixture('https://public-link-approval.test');
+        try {
+            saveAccountSettings({ serverId: home.home.id, accountId: 'artifact-account' }, settingsParse({
+                actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'localServices.publicPreview.revoke': ['ui'] } },
+            }), 1);
+            storage.setState({ settingsScope: { serverId: 'foreign-home', accountId: 'foreign-account' }, settings: settingsParse({}) });
+            const revoke = vi.fn(async () => undefined);
+            const result = await renderWithAppProviders(
+                <LocalServicePublicPreviewControls launchTargets={[target]} state={activePreviewState}
+                    actions={{ serverId: home.home.id, create: vi.fn(), copyUrl: vi.fn(async () => true), revoke }} />,
+            );
+            await findRevokePressable(result).props.onPress();
+            await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith(activeCurrentPreviewExposure));
+            expect(modalSpies.confirm).not.toHaveBeenCalled();
+            await result.unmount();
+        } finally { home.dispose(); }
     });
 
     it('does not revoke an active public preview when confirmation is declined', async () => {
@@ -315,6 +377,7 @@ describe('LocalServicePublicPreviewControls (consequence sheet before create)', 
 
         await findRevokePressable(result).props.onPress();
 
+        await flushCreateChain();
         expect(modalSpies.confirm).toHaveBeenCalledTimes(1);
         expect(revoke).not.toHaveBeenCalled();
         await result.unmount();
@@ -428,6 +491,7 @@ describe('LocalServicePublicPreviewControls (consequence sheet before create)', 
 
         await findCreatePressable(result).props.onPress();
 
+        await flushCreateChain();
         // `maxTtlMs` is 10 minutes on this policy, so a longer lifetime must never be offered —
         // the ceiling is the server's, and the sheet may not invite a choice the daemon will refuse.
         const offered = lastExposureSheetProps().ttlChoices.map((choice) => choice.ttlMs);

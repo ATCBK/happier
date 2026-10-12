@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
@@ -9,7 +10,12 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
-import { ActionSettingsTargetModeControl } from '@/components/settings/actions/ActionSettingsTargetModeControl';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { Modal } from '@/modal';
 import type { SessionInstructionsSource } from '../useSessionInstructionsSource';
 
 (
@@ -17,6 +23,7 @@ import type { SessionInstructionsSource } from '../useSessionInstructionsSource'
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+const actionOutcomes = vi.hoisted(() => ({ results: [] as ActionExecuteResult[] }));
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
   return createExpoRouterMock({ router: navigation }).module;
@@ -29,10 +36,22 @@ vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
   return createModalModuleMock().module;
 });
+vi.mock('@react-navigation/native', async importOriginal => ({
+  ...await importOriginal<typeof import('@react-navigation/native')>(),
+  ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
+}));
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
   const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
-  return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
+  const create = createFrontDoorActionExecuteForVitest(original);
+  return { ...original, createFrontDoorActionExecute: (...args: Parameters<typeof create>) => {
+    const execute = create(...args);
+    return Object.assign(async (...operation: Parameters<typeof execute>) => {
+      const result = await execute(...operation);
+      actionOutcomes.results.push(result);
+      return result;
+    }, { prepare: execute.prepare });
+  } };
 });
 installDisconnectedServerSocketBoundary();
 const originalState = storage.getState();
@@ -40,6 +59,7 @@ const originalState = storage.getState();
 afterEach(() => {
   standardCleanup();
   navigation.push.mockClear();
+  actionOutcomes.results.length = 0;
   storage.setState(originalState, true);
 });
 
@@ -86,19 +106,75 @@ async function render(state: SessionInstructionsSource, serverId = 'home-a') {
 }
 
 describe('Work › Instructions', () => {
+  it.each(['approve', 'reject'] as const)('continues Work Instructions Create after its document approval (%s)', async decision => {
+    const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+    const fixture = await createPlainArtifactHomeFixture(`https://work-instructions-${decision}.test`, {
+      handleRequest: async (path, init) => {
+        if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {
+          actionsSettingsV1: { v: 1, actions: { 'prompt_doc.create': { approvalRequiredSurfaces: ['ui'] } } },
+        } } });
+        return sessionHttp.handle(`https://work-instructions-${decision}.test${path}`, init);
+      },
+    });
+    try {
+      // The app entry loads Sync before mounting Work; keep its metadata writer real here too.
+      await loadSyncSingletonForTests();
+      await fixture.hydrateAccountSettings();
+      const session = createSessionFixture({ id: 'bot', serverId: fixture.home.id, metadataVersion: 1,
+        metadata: { ...createSessionFixture().metadata, work: { promptStack: [{ id: 'neighbor',
+          ref: { kind: 'doc', artifactId: 'neighbor-doc' }, enabled: true, placement: 'system_append' }] } } });
+      storage.setState({ sessions: { ...storage.getState().sessions, bot: session } });
+      const screen = await renderScreen(<SessionInstructionsBody session={session} serverId={fixture.home.id} source={source({})} />);
+      await screen.pressByTestIdAsync('session-work-instructions.create');
+      const rowsOfKind = (kind: string) => fixture.boundary.list().filter(row => {
+        const header = decodePlainArtifactStoredContent(row.header);
+        return header && typeof header === 'object' && 'kind' in header && header.kind === kind;
+      });
+      await vi.waitFor(() => expect(rowsOfKind('approval_request.v1')).toHaveLength(1));
+      expect(rowsOfKind('prompt_doc.v2')).toHaveLength(0);
+      expect(sessionHttp.writes).toEqual([]);
+      expect(navigation.push).not.toHaveBeenCalled();
+      expect(await decideApprovalAsInbox(fixture.home.id, rowsOfKind('approval_request.v1')[0]!.id, decision))
+        .toMatchObject({ ok: true, result: { status: decision === 'approve' ? 'executed' : 'rejected' } });
+      if (decision === 'approve') {
+        await vi.waitFor(() => expect(navigation.push, JSON.stringify({ outcomes: actionOutcomes.results,
+          writes: sessionHttp.writes,
+          refusal: ['conflict', 'refused', 'failed'].filter(reason => screen.findByTestId(`session-work-instructions.${reason}`))
+        })).toHaveBeenCalledTimes(1));
+        const created = rowsOfKind('prompt_doc.v2');
+        expect(created).toHaveLength(1);
+        expect(navigation.push).toHaveBeenCalledWith(`/settings/prompts/docs/${created[0]!.id}?serverId=${fixture.home.id}`);
+        const { readSessionOwnerMetadataView } = await import('@/sync/domains/session/readSessionOwnerMetadataView');
+        expect(readSessionOwnerMetadataView(storage.getState().sessions.bot!)?.work?.promptStack).toMatchObject([
+          { id: 'neighbor', ref: { artifactId: 'neighbor-doc' } },
+          { id: 'session.instructions', ref: { artifactId: created[0]!.id, serverId: fixture.home.id } },
+        ]);
+      } else {
+        await vi.waitFor(() => expect(screen.findByTestId('session-work-instructions.failed')).not.toBeNull());
+        expect(rowsOfKind('prompt_doc.v2')).toHaveLength(0);
+        expect(sessionHttp.writes).toEqual([]);
+        expect(navigation.push).not.toHaveBeenCalled();
+      }
+      await screen.unmount();
+    } finally { standardCleanup(); fixture.dispose(); }
+  });
+
   it('admits the exact Agent edits mode and preserves current neighboring Account policies', async () => {
     const account = await createVoiceSettingsAccountTestHarness(settingsParse({ actionsSettingsV1: { v: 1, actions: {} } }));
     try {
       const screen = await render(source({ status: 'ready', ref, document: documentOf('Current instructions') }), account.scope.serverId);
-      const control = screen.findAllByType(ActionSettingsTargetModeControl)[0];
-      if (!control) throw new Error('Agent edits control missing');
-      const select = control.props.onChange;
-      act(() => account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1, actions: {
+      await act(async () => account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1, actions: {
         'prompt_doc.create': { disabledSurfaces: ['mcp'] },
         'prompt_doc.update': { disabledSurfaces: ['cli'] },
       } } })));
-      await act(async () => { select('allowed'); });
-      await vi.waitFor(() => expect(account.persistedSettings.actionsSettingsV1.actions['prompt_doc.update']?.approvalWaivedSurfaces).toContain('agent'));
+      await screen.pressByTestIdAsync('session-work-instructions.agentEdits:mode:allowed');
+      await act(async () => {
+        await vi.waitFor(() => expect(actionOutcomes.results).toMatchObject([{ ok: true,
+          result: { anchor: 'actions.promptDocAgentEdits', value: 'allowed' } }]));
+      });
+      await act(async () => {
+        await vi.waitFor(() => expect(account.persistedSettings.actionsSettingsV1.approvalWaivedSurfaces?.['prompt_doc.update']).toContain('agent'));
+      });
       expect(account.persistedSettings.actionsSettingsV1.actions['prompt_doc.create']?.disabledSurfaces).toEqual(['mcp']);
       expect(account.persistedSettings.actionsSettingsV1.actions['prompt_doc.update']?.disabledSurfaces).toEqual(['cli']);
     } finally { standardCleanup(); await account.dispose(); }
@@ -110,10 +186,12 @@ describe('Work › Instructions', () => {
     } } }));
     try {
       const screen = await render(source({ status: 'ready', ref, document: documentOf('Current instructions') }), account.scope.serverId);
-      const control = screen.findAllByType(ActionSettingsTargetModeControl)[0];
-      if (!control) throw new Error('Agent edits control missing');
-      await act(async () => { control.props.onChange('allowed'); });
-      expect(account.settings.actionsSettingsV1.actions['prompt_doc.update']?.approvalWaivedSurfaces).not.toContain('agent');
+      await screen.pressByTestIdAsync('session-work-instructions.agentEdits:mode:allowed');
+      await act(async () => {
+        await vi.waitFor(() => expect(screen.findByTestId('session-work-instructions.refused')).toBeTruthy());
+      });
+      expect(actionOutcomes.results).toMatchObject([{ ok: false, errorCode: 'action_disabled' }]);
+      expect(account.settings.actionsSettingsV1.approvalWaivedSurfaces?.['prompt_doc.update'] ?? []).not.toContain('agent');
       expect(account.writes).toEqual([]);
     } finally { standardCleanup(); await account.dispose(); }
   });
@@ -195,6 +273,38 @@ describe('Work › Instructions', () => {
     ).toBeTruthy();
     expect(shared.findByTestId('session-work-instructions.body')).toBeNull();
     expect(shared.findByTestId('session-work-instructions.edit')).toBeNull();
+  });
+
+  it('says a stale-basis Detach was overtaken, not refused, and keeps the document', async () => {
+    const account = await createVoiceSettingsAccountTestHarness(settingsParse({ actionsSettingsV1: { v: 1, actions: {} } }));
+    try {
+      const serverId = account.scope.serverId;
+      // The Home already holds a newer revision of this Session than the one this section reviewed.
+      const current = createSessionFixture({ id: 'bot', serverId, metadataVersion: 2 });
+      storage.setState({ sessions: { ...storage.getState().sessions, bot: current } });
+      const sessionHttp = createSessionMetadataHttpBoundary(() => storage.getState().sessions);
+      const homeRequest = account.request.getMockImplementation();
+      if (!homeRequest) throw new Error('Expected the Home HTTP boundary');
+      account.request.mockImplementation(async (input, init) => sessionHttp.handle(input, init) ?? homeRequest(input, init));
+      vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+      const screen = await renderScreen(
+        <SessionInstructionsBody
+          session={{ ...current, metadataVersion: 1 }}
+          serverId={serverId}
+          source={source({ status: 'ready', ref, document: documentOf('Current instructions') })}
+        />,
+      );
+      await screen.pressByTestIdAsync('session-work-instructions.detach');
+      // Only the metadata CAS's `conflict` outcome reaches this line; a refusal would say the user can't.
+      await act(async () => {
+        await vi.waitFor(() => expect(['conflict', 'refused', 'failed']
+          .filter((reason) => screen.findByTestId(`session-work-instructions.${reason}`))).not.toEqual([]));
+      });
+      expect(screen.findByTestId('session-work-instructions.refused')).toBeNull();
+      expect(screen.findByTestId('session-work-instructions.conflict')).toBeTruthy();
+      expect(screen.findByTestId('session-work-instructions.body')).toBeTruthy();
+      expect(sessionHttp.writes).toEqual([]);
+    } finally { standardCleanup(); await account.dispose(); }
   });
 
   it('withholds instructions from a shared viewer before any read', () => {

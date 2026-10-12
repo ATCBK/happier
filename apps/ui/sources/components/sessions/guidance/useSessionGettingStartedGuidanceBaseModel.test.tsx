@@ -15,6 +15,7 @@ import {
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useSessionGettingStartedGuidanceBaseModel } from './useSessionGettingStartedGuidanceBaseModel';
+import { t } from '@/text';
 
 const accountId = 'guidance-account';
 const token = 'header.' + Buffer.from(JSON.stringify({ sub: accountId })).toString('base64') + '.signature';
@@ -121,9 +122,9 @@ describe('useSessionGettingStartedGuidanceBaseModel', () => {
         expect(hook.getCurrent()).toEqual({
             kind: 'create_session',
             unavailableServerIds: [],
-            targetLabel: 'localhost:52753',
+            targetLabel: t('settingsAccount.thisHomeTitle'),
             serverId: selectedHome.profile.id,
-            serverName: 'localhost:52753',
+            serverName: t('settingsAccount.thisHomeTitle'),
             serverUrl: 'http://localhost:52753',
             showServerSetup: true,
         });

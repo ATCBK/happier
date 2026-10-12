@@ -90,6 +90,12 @@ export type SessionBoardItemBoardViewFacts = Readonly<{
     drawnBySelectedBoardView: boolean;
     /** Generic Board surfaces whose existing body window actually builds this item. */
     bodyEligibleHosts?: readonly SessionBoardMountHost[];
+    /**
+     * A transcript reply that draws this item has content demand from the transcript list's own
+     * visibility owner. The transcript is then a candidate, ranked last: a visible Board host
+     * that draws the item keeps its one live body, otherwise the reply runs it.
+     */
+    inlineTranscriptDemanded?: boolean;
 }>;
 
 /** Publishes physical body-window facts, never a primary-host decision. */
@@ -242,7 +248,9 @@ export function resolveSessionBoardItemPrimaryMountHost(input: Readonly<{
         : null;
     const host = resolveSessionBoardPrimaryMountHost({
         foreground: input.visibility.foreground,
-        visibleHosts,
+        visibleHosts: input.boardView?.inlineTranscriptDemanded === true
+            ? [...visibleHosts, 'inlineTranscript']
+            : visibleHosts,
         focusedHost,
     });
     if (host !== 'details' && host !== 'focusedDetails') return host;

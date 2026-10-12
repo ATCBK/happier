@@ -13,9 +13,11 @@ import { persistCreatedSessionAuthoringOrigin } from './newSessionAuthoringOrigi
 afterEach(() => resetSessionDraftRepositoryForTests());
 
 describe('created Session authoring origin', () => {
-    it('hands the reopened original destination to the real owner tuple without replacing unrelated work or publishing it to recipients', async () => {
+    it.each(['files', { kind: 'plugin', destination: { pluginId: 'acme.preview', localId: 'project-review' }, instanceKey: 'review-a' }] as const)
+        ('hands the reopened original destination to the real owner tuple without replacing unrelated work or publishing it to recipients (%j)', async companion => {
         const scope = { serverId: 'server-a', accountId: 'account-a' };
-        const origin = { kind: 'project', accountId: scope.accountId, page: 'changes', comparisonId: 'comparison-a',
+        const origin = { kind: 'project', purpose: 'session', accountId: scope.accountId, page: 'overview', layoutId: 'release-dashboard',
+            surface: 'tabs', companion, resource: { kind: 'file', path: 'src/a.ts' },
             workspace: { serverId: scope.serverId, workspaceId: 'workspace-a', machineId: 'original-machine', rootPath: '/original' } } as const;
         writeNewSessionDraftToRepository({ scope, draftId: 'authoring-send', draft: {
             input: 'Review the changes', selectedMachineId: 'edited-machine', selectedPath: '/edited',
@@ -70,7 +72,8 @@ describe('created Session authoring origin', () => {
         } } }]);
         const wire = transportWrites[0];
         if (!wire || typeof wire !== 'object' || !('sharedMetadata' in wire)) throw new Error('Expected tuple transport output');
-        expect(JSON.stringify(wire.sharedMetadata)).not.toContain('comparison-a');
+        expect(JSON.stringify(wire.sharedMetadata)).not.toContain('release-dashboard');
         expect(JSON.stringify(wire.sharedMetadata)).not.toContain('/original');
+        expect(JSON.stringify(wire.sharedMetadata)).not.toContain('acme.preview');
     });
 });

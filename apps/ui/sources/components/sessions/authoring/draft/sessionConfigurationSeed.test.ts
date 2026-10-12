@@ -96,12 +96,12 @@ describe('sessionConfigurationSeed', () => {
                     effort: { updatedAt: 101, value: 'high' },
                 },
             },
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable'],
                 forceExcludeServerIds: ['disabled'],
-            },
+            } },
             backendNewSessionOptionStateByTargetKey: {
                 'agent:happier.agent.codex/codex': {
                     connectedServices: {

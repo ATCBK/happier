@@ -1,18 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { createMachineFixture } from '@/dev/testkit';
 import { ProjectWorkerStatusResultV1Schema, type MachinePoolViewV1, type ProjectWorkerStatusResultV1 } from '@happier-dev/protocol';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 
 import {
-    buildMachineDestinationModel,
+    buildMachineDestinationModel as buildScopedMachineDestinationModel,
     resolveMachinePoolRowUnavailableReason,
-    resolveMachineDestinationPurposeEligibility,
+    resolveMachineDestinationPurposeEligibility as resolveScopedMachineDestinationPurposeEligibility,
     describeMachineDestinationWorkerFacts,
 } from './buildMachineDestinationModel';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+
+afterEach(clearMachineRequestReachabilityForTest);
+const fixtureScope = { serverId: 'server-a', accountId: 'account-a' };
+const resolveMachineDestinationPurposeEligibility: typeof resolveScopedMachineDestinationPurposeEligibility =
+    (purpose, facts, machine, scope = fixtureScope) => resolveScopedMachineDestinationPurposeEligibility(purpose, facts, machine, scope);
+function buildMachineDestinationModel(input: Parameters<typeof buildScopedMachineDestinationModel>[0]) {
+    const scopesByServerId = new Map(input.groups.map(group => [group.serverId, { serverId: group.serverId, accountId: 'account-a' }]));
+    return buildScopedMachineDestinationModel({ ...input, scopesByServerId: input.scopesByServerId ?? scopesByServerId });
+}
 
 function machine(id: string, overrides: Partial<Machine> = {}): Machine & { serverId: string; serverName: string } {
     return {
@@ -96,6 +105,23 @@ describe('resolveMachinePoolRowUnavailableReason', () => {
 });
 
 describe('buildMachineDestinationModel', () => {
+    it.each(['all', 'recent', 'favorites', 'shared'] as const)('denies the sole %s destination after an exact-Home failure and restores it only after success', placement => {
+        const candidate = machine('reachability-machine', placement === 'shared' ? { isShared: true, access: {
+            custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'plain', accessState: 'ready',
+        } } : {});
+        const params = { groups: [group({ machines: [candidate] })],
+            managedMachineProjection: { state: 'unavailable' as const, rowCount: 0 },
+            ...(placement === 'recent' ? { recentMachines: [candidate] } : {}),
+            ...(placement === 'favorites' ? { favoriteMachines: [candidate] } : {}),
+        };
+        const read = () => buildMachineDestinationModel(params);
+        recordMachineRequestFailed({ serverId: 'other-home', accountId: fixtureScope.accountId, machineId: candidate.id, observedAtMs: 1 });
+        expect(read().soleSelectableDestination?.machine).toBe(candidate);
+        recordMachineRequestFailed({ ...fixtureScope, machineId: candidate.id, observedAtMs: 2 });
+        expect(read()).toMatchObject({ machineRowCount: 1, destinationSetSettled: true, soleSelectableDestination: null });
+        recordMachineRequestSucceeded({ ...fixtureScope, machineId: candidate.id, observedAtMs: 3 });
+        expect(read().soleSelectableDestination?.machine).toBe(candidate);
+    });
     it('does not shortcut a Session while New machine offer availability is unobserved', () => {
         const unobserved = buildMachineDestinationModel({ purpose: 'session', groups: [group()] });
         expect(unobserved.destinationSetSettled).toBe(false);
@@ -439,16 +465,15 @@ describe('describeMachineDestinationWorkerFacts', () => {
         expect(describeMachineDestinationWorkerFacts(refused('draining'))).toBe(t('projectWorkers.draining'));
         expect(describeMachineDestinationWorkerFacts(refused('forbidden'))).toBe(t('projectWorkers.accessRefused'));
         expect(describeMachineDestinationWorkerFacts(refused('memory_insufficient'), subject))
-            .toBe(t('projectWorkers.tooSmall', { script: 'test', need: formatByteSize(8 * 1024 ** 3) }));
+            .toBe(t('projectWorkers.tooSmall', { script: 'test', need: '8 GB' }));
         const observedMemory = { totalBytes: 4 * 1024 ** 3, availableBytes: 1024 ** 3 };
-        const interpolation = { script: 'test', need: formatByteSize(subject.memoryDemandBytes),
-            available: formatByteSize(observedMemory.totalBytes) };
+        const interpolation = { script: 'test', need: '8 GB', available: '4 GB' };
         const tooSmall = describeMachineDestinationWorkerFacts(refused('memory_insufficient', observedMemory), subject);
         expect(tooSmall).toBe(t('projectWorkers.tooSmall', interpolation));
         // The numeric fact is the contract, not the translated wording. Comparing
         // only t(...) would miss a locale that also drops the available argument.
-        expect(tooSmall).toContain(formatByteSize(observedMemory.totalBytes));
-        expect(tooSmall).not.toContain(formatByteSize(observedMemory.availableBytes));
+        expect(tooSmall).toContain('4 GB');
+        expect(tooSmall).not.toContain('1 GB');
         expect(describeMachineDestinationWorkerFacts(refused('memory_unavailable'), subject))
             .toBe(t('projectWorkers.memoryUnavailable'));
         expect(describeMachineDestinationWorkerFacts(resolveMachineDestinationPurposeEligibility('finite', { ownership: 'owned' })))

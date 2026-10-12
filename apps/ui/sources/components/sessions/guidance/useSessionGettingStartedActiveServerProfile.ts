@@ -8,13 +8,7 @@ import { resolveActiveServerProfile } from './gettingStartedModel';
 export function useSessionGettingStartedActiveServerProfile(activeServerId: string) {
     const serverProfilesGeneration = useServerProfilesGeneration();
     const serverProfiles = React.useMemo(() => {
-        return listServerProfiles().map((p) => ({
-            id: p.id,
-            name: p.name,
-            serverUrl: p.serverUrl,
-            serverIdentityId: p.serverIdentityId ?? null,
-            legacyServerIds: p.legacyServerIds ?? [],
-        }));
+        return listServerProfiles();
     }, [serverProfilesGeneration]);
 
     return React.useMemo(() => {
