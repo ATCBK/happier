@@ -630,7 +630,59 @@ describe('sync AccountChange catch-up projection', () => {
         syncHarness.disconnectServer();
     });
 
-    it('publishes a fetched AccountChange to the Home whose cursor was read when focus changes in flight', async () => {
+    it('keeps mounted Account-mode disclosure through Settings and Connected Service changes', async () => {
+        const harness = await prepareAccountChangeWakeSchedulingHarness();
+        const { captureActiveServerAccountScopeLifetime } = await import('./domains/scope/activeServerAccountScope');
+        const { getAccountEncryptionModeCacheRevision } = await import('./api/account/apiAccountEncryptionMode');
+        const { usePluginSurfaceAccountEncryptionMode } = await import('@/components/plugins/surfaces/pluginSurfaceContext');
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime || !harness.credentials) throw new Error('Restoration must establish the Account');
+        const credentials = harness.credentials;
+        const isCurrent = () => lifetime.isCurrent();
+        const disclosures: Array<'plain' | 'e2ee' | null> = [];
+        const hook = await renderHook(() => {
+            const mode = usePluginSurfaceAccountEncryptionMode({ accountLifetime: lifetime, credentials, isCurrent });
+            disclosures.push(mode);
+            return mode;
+        });
+        try {
+            await waitForHomeGovernance(() => expect(hook.getCurrent()).toBe('plain'));
+            disclosures.length = 0;
+            const revision = getAccountEncryptionModeCacheRevision();
+            changesResponse.mockResolvedValueOnce({
+                changes: [
+                    { cursor: 1, kind: 'account', entityId: 'self', changedAt: 1, hint: { connectedServices: true } },
+                    { cursor: 2, kind: 'account', entityId: 'self', changedAt: 2, hint: { settingsVersion: 1 } },
+                ],
+                nextCursor: '2',
+            });
+            await act(async () => {
+                await expect(harness.resumeViaChanges({ accountId: ACCOUNT_ID })).resolves.toMatchObject({ status: 'ok' });
+            });
+            expect(disclosures).not.toContain(null);
+            expect(getAccountEncryptionModeCacheRevision()).toBe(revision);
+            expect(hook.getCurrent()).toBe('plain');
+            expect(harness.changesCursor).toBe('2');
+            // A migration changes both Settings and mode. Its extra hint must
+            // not be mistaken for an ordinary Settings write.
+            disclosures.length = 0;
+            changesResponse.mockResolvedValueOnce({
+                changes: [{ cursor: 3, kind: 'account', entityId: 'self', changedAt: 3,
+                    hint: { settingsVersion: 2, accountEncryptionTransitionId: 'transition-1' } }],
+                nextCursor: '3',
+            });
+            await act(async () => {
+                await expect(harness.resumeViaChanges({ accountId: ACCOUNT_ID })).resolves.toMatchObject({ status: 'ok' });
+            });
+            expect(disclosures).toContain(null);
+            expect(getAccountEncryptionModeCacheRevision()).toBeGreaterThan(revision);
+            await waitForHomeGovernance(() => expect(hook.getCurrent()).toBe('plain'));
+        } finally {
+            await hook.unmount();
+        }
+    });
+
+    it('publishes a fetched AccountChange and its kind to the Home whose cursor was read when focus changes in flight', async () => {
         const harness = await prepareAccountChangeWakeSchedulingHarness();
         const { subscribeHomeAccountChange } = await import('./runtime/orchestration/homeAccountChange');
         const { getActiveServerSnapshot, upsertAndActivateServer } = await import('./domains/server/serverRuntime');
@@ -667,23 +719,28 @@ describe('sync AccountChange catch-up projection', () => {
         }> = [];
         const dispose = subscribeHomeAccountChange((event) => observedWakes.push(event));
         const catchUp = harness.resumeViaChanges({ accountId: ACCOUNT_ID });
-        await changesStarted;
-        const focusedServer = await upsertAndActivateServer({
-            serverUrl: 'http://localhost:53289',
-            scope: 'tab',
-        });
-        expect(focusedServer.id).not.toBe(sourceServerId);
-        releaseChanges();
+        try {
+            await changesStarted;
+            const focusedServer = await upsertAndActivateServer({
+                serverUrl: 'http://localhost:53289',
+                scope: 'tab',
+            });
+            expect(focusedServer.id).not.toBe(sourceServerId);
+            releaseChanges();
 
-        await expect(catchUp).resolves.toMatchObject({ status: 'ok' });
-        expect(observedWakes).toMatchObject([{
-            serverId: sourceServerId,
-            entityIds: ['self'],
-            // An unqualified self change can alter credential/Account currentness.
-            sessionListQueryAffects: true,
-        }]);
-        dispose();
-        harness.disconnectServer();
+            await expect(catchUp).resolves.toMatchObject({ status: 'ok' });
+            expect(observedWakes).toMatchObject([{
+                serverId: sourceServerId,
+                entityIds: ['self'],
+                changeKinds: ['account'],
+                // An unqualified self change can alter credential/Account currentness.
+                sessionListQueryAffects: true,
+            }]);
+        } finally {
+            releaseChanges();
+            dispose();
+            harness.disconnectServer();
+        }
     });
 
     it('keeps an AccountChange refresh on the applied Home while another Home is staged', async () => {
