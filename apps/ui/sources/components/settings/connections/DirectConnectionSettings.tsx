@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { useUnistyles } from 'react-native-unistyles';
 
 import { PeerMediationPreferencesV1Schema, type PeerMediationPreferencesV1 } from '@happier-dev/protocol/account/settings/peerMediationPreferencesV1';
 import type { FeatureId } from '@happier-dev/protocol/features/catalog';
@@ -48,7 +47,6 @@ function usePeerMediationPreferences(): [PeerMediationPreferencesV1, (value: Pee
 
 /** Account › Connections: one account-wide answer to "may my devices connect to my machines directly?". */
 export const AccountDirectConnectionsSection = React.memo(function AccountDirectConnectionsSection() {
-    const { theme } = useUnistyles();
     const [preferences, setPreferences] = usePeerMediationPreferences();
     const serverDenies = useServerDeniesDirectConnections();
     const enabled = !serverDenies && readDirectConnectionsEnabled(preferences);
@@ -61,7 +59,6 @@ export const AccountDirectConnectionsSection = React.memo(function AccountDirect
                 testID="settings-account-direct-connections-item"
                 setting={ACCOUNT_SETTINGS.settings.directConnections}
                 subtitle={subtitle}
-                subtitleLines={3}
                 disabled={serverDenies}
                 showChevron={false}
                 rightElement={
@@ -70,17 +67,25 @@ export const AccountDirectConnectionsSection = React.memo(function AccountDirect
                         value={enabled}
                         disabled={serverDenies}
                         onValueChange={(value) => setPreferences(withDirectConnectionsEnabled(preferences, value))}
-                        trackColor={{
-                            false: theme.colors.switch.track.inactive,
-                            true: theme.colors.switch.track.active,
-                        }}
-                        thumbColor={enabled ? theme.colors.switch.thumb.active : theme.colors.switch.thumb.inactive}
                     />
                 }
             />
         </ItemGroup>
     );
 });
+
+/**
+ * The machine's Connection answer in a few words, for its This machine row: the choice the section
+ * shows, read from the same preferences (no request).
+ */
+export function useMachineDirectConnectionSummary(machineId: string): string {
+    const [preferences] = usePeerMediationPreferences();
+    const serverDenies = useServerDeniesDirectConnections();
+    const choice = serverDenies ? 'relay' : readMachineDirectConnectionChoice(preferences, machineId);
+    return choice === 'direct' ? t('settingsConnections.machineOptionDirect')
+        : choice === 'relay' ? t('settingsConnections.machineOptionRelay')
+            : t('machineDetailPage.connectionFollowsAccount');
+}
 
 /**
  * A machine's Connection section: follow the account, or override it for this machine only
@@ -107,7 +112,8 @@ export const MachineDirectConnectionSection = React.memo(function MachineDirectC
         { id: 'relay', label: t('settingsConnections.machineOptionRelay'), description: t('settingsConnections.machineRelayDescription') },
     ], [accountEnabled, machine]);
     return (
-        <ItemGroup title={t('settingsConnections.machineSectionTitle')}>
+        // The page header already says "Connection"; the section repeats nothing (Sharing's page does the same).
+        <ItemGroup>
             <SegmentedChoiceItem<MachineDirectConnectionChoice>
                 testID="machine-direct-connection-item"
                 testIDPrefix="machine-direct-connection"
