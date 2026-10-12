@@ -6,25 +6,33 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { createActionExecutor, normalizeActionsSettingsV1, type ActionExecutorDeps, RPC_METHODS } from '@happier-dev/protocol';
+import { createActionExecutor, normalizeActionsSettingsV1, type ActionExecutorDeps, RPC_METHODS, UiActionDispatchRequestV1Schema } from '@happier-dev/protocol';
 import { WidgetInstanceRefV1Schema, WidgetInstanceActionOutputSchemasV1 } from '@happier-dev/protocol/widgets';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 // The answering app publishes Sync before loading its UI Action consumers.
 await loadSyncSingletonForTests();
+const { createWorkspaceState, createWorkspaceEmptyTab, reduceWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
+const { createWorkspaceActionAdapter } = await import('@/components/appShell/workspace/workspaceActions');
+const { createWorkspaceNavigationAdapter } = await import('@/components/appShell/workspace/workspaceNavigationAdapter');
+const { resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
 const { useCorePageWidgetAreaBinding } = await import('./useCorePageWidgetAreaBinding');
 const { useWidgetAreaLayout } = await import('./useWidgetAreaLayout');
 const { useProjectWidgetAreaBinding } = await import('./useProjectWidgetAreaBinding');
 const { createUiClientActionReverseHandler } = await import('@/sync/ops/actions/clientActionReverseDispatch');
 const { API_TOKEN_FULL_GRANT_V1 } = await import('@happier-dev/protocol/auth/apiTokenGrant');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
 const { createClientActionReverseDispatcher } = await import('../../../../../cli/src/session/actions/clientActionReverseDispatch');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let serverId: string;
+const releases: (() => void)[] = [];
 beforeEach(async () => {
     await homes.reset();
     serverId = await homes.addHome({ name: 'Home', serverUrl: 'https://area-selection.test', accountId: 'account-a' });
@@ -32,6 +40,7 @@ beforeEach(async () => {
         serverIdentityId: 'srv_0123456789abcdefghijklmnopqrstuv', accountId: 'account-a', request: homes.request });
 });
 afterEach(async () => {
+    for (const release of releases.splice(0)) release();
     standardCleanup();
     await connection?.dispose();
     connection = undefined;
@@ -120,20 +129,41 @@ it('delivers Project selection through both reverse dispatchers using the portab
     });
     await vi.waitFor(() => expect(hook.getCurrent().layout.state).toMatchObject({ status: 'ready' }));
     const receive = createUiClientActionReverseHandler({ ...scope, isCurrent: () => true });
+    let connectedMethod: string = RPC_METHODS.UI_ACTION_EXECUTE;
     const caller = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => ({
-        hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+        hasConnectedClientRpcHandler: method => method === connectedMethod,
         // Only the network hop is replaced; both dispatchers and Action owners run.
         callConnectedClientRpc: async (_method, payload, options) => {
+            const request = UiActionDispatchRequestV1Schema.parse(payload);
             options.onIssued();
-            return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
+            return { ok: true, result: await receive(request, { signal: options.signal ?? new AbortController().signal }) };
         },
     })) } as unknown as ActionExecutorDeps);
     const remoteContext = { surface: 'cli' as const, authority: 'present_user' as const, serverId: scope.serverId };
+    let workspace = createWorkspaceState(createWorkspaceEmptyTab('kept'));
+    const workspaceBefore = workspace;
+    const navigation = createWorkspaceNavigationAdapter({ getState: () => workspace,
+        getCatalog: () => resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] }),
+        dispatch: action => { workspace = reduceWorkspaceState(workspace, action); },
+        transport: { commit: () => {} }, createId: () => 'unexpected-tab', onChange: () => {} });
+    const workspaceExecute = createWorkspaceActionAdapter({ getState: () => workspace, navigation, readCanvas: () => null, createId: () => 'unexpected-tab' });
+    releases.push(registerMountedWorkspaceAction(async request => workspaceExecute(request.actionId, request.input)));
+    // A client bound to another RPC must not receive either widget Action.
+    connectedMethod = 'wrong-widget-rpc';
+    for (const request of [
+        { id: 'widgets.area.layout.select' as const, input: { surface: target } },
+        { id: 'widgets.item.refresh' as const, input: { ref: { surface: target, instanceId: instance.id } } },
+    ]) {
+        expect(await caller.execute(request.id, request.input, remoteContext)).toMatchObject({ ok: false, error: 'noClient' });
+    }
+    expect(hook.getCurrent().layoutId).toBeNull();
+    connectedMethod = RPC_METHODS.UI_ACTION_EXECUTE;
     await act(async () => {
         const selected = await caller.execute('widgets.area.layout.select', { surface: target }, remoteContext);
         expect(selected, JSON.stringify(selected)).toMatchObject({ ok: true });
     });
     await vi.waitFor(() => expect(hook.getCurrent().layoutId).toBe('checks'));
+    expect(workspace).toBe(workspaceBefore);
     const ref = WidgetInstanceRefV1Schema.parse({ surface: target, instanceId: instance.id });
     const refreshed = await caller.execute('widgets.item.refresh', { ref }, remoteContext);
     expect(refreshed, JSON.stringify(refreshed)).toMatchObject({ ok: false, errorCode: 'widget_refresh_unavailable' });

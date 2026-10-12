@@ -1,0 +1,224 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+    createHomeGovernanceHarness, installHomeGovernanceBoundaries,
+} from '@/dev/testkit/harness/homeGovernanceHarness';
+import {
+    installDisconnectedServerSocketBoundary, restoreServerAccountForTest,
+} from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { standardCleanup } from '@/dev/testkit';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { HomeHubLayoutV1Schema, buildHomeHubArtifactIdV1 } from '@happier-dev/protocol/home';
+import { WorkBoardV1Schema, WorkBoardWidgetPlacementV1Schema } from '@happier-dev/protocol/boards/workBoardV1';
+import {
+    WidgetDefinitionV1Schema, WidgetInstanceV1Schema, WidgetInstanceActionOutputSchemasV1,
+    WidgetAreaLayoutV1Schema, WidgetLayoutFragmentDraftV1Schema, WidgetLayoutFragmentV1Schema,
+    WidgetLayoutFragmentActionOutputSchemasV1, captureWidgetLayoutFragmentGroupV1,
+    buildWidgetSurfaceArtifactIdV1, USAGE_WIDGET_PRESET_IDS, flattenWidgetLayoutWidgetsV1, type WidgetSurfaceRefV1,
+} from '@happier-dev/protocol/widgets';
+import { resolveWidgetLayoutEntityDrop } from '@/components/ui/treeDragDrop/widgetLayoutEntityDrop';
+
+// HTTP, device credentials and Socket.IO are the external boundaries. No
+// executor, policy, domain port, reducer, Artifact codec or store is replaced.
+installDisconnectedServerSocketBoundary();
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+await loadSyncSingletonForTests();
+const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let serverId: string;
+const accountId = 'widget-seam-account';
+
+beforeEach(async () => {
+    await homes.reset();
+    serverId = await homes.addHome({ name: 'Widget Home', serverUrl: 'https://widget-seams.test', accountId });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-seams.test', accountId, request: homes.request });
+    installHomeGovernanceBoundaries(homes);
+    // These are acknowledged semantic writes, not approval-creation cases.
+    homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+        actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
+            'widgets.item.add': ['ui'], 'widgets.item.rename': ['ui'], 'widgets.item.move': ['ui'],
+            'widgets.item.size.set': ['ui'], 'widgets.group.create': ['ui'],
+            'widgets.fragment.create': ['ui'], 'widgets.area.layout.create': ['ui'],
+            'widgets.area.layout.reset': ['ui'], 'widgets.area.layout.undo': ['ui'],
+            'home.hub.layout.update': ['ui'], 'boards.apply': ['ui'],
+        } }),
+    } }, version: 1 } });
+});
+afterEach(async () => {
+    standardCleanup();
+    await connection?.dispose();
+    connection = undefined;
+});
+
+function instance(id: string) {
+    return WidgetInstanceV1Schema.parse({ v: 1, id, bindings: {}, definition: { kind: 'inline', definition:
+        WidgetDefinitionV1Schema.parse({ v: 1, id: 'constant', name: 'Constant', inputs: { fields: [] },
+            inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            sizeDeclaration: { sizes: ['medium', 'full'], defaultSize: 'medium' },
+            provenance: { source: { kind: 'authored' } },
+            body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Checks' } } },
+        }),
+    } });
+}
+function storedBody(artifactId: string): unknown {
+    const encoded = homes.artifacts(serverId).read(artifactId)?.body;
+    if (!encoded) throw new Error(`Missing stored Artifact ${artifactId}`);
+    const opened = decodePlainArtifactStoredContent(encoded);
+    if (!opened || typeof opened !== 'object' || typeof Reflect.get(opened, 'body') !== 'string') {
+        throw new Error('Expected Artifact text body');
+    }
+    return JSON.parse(String(Reflect.get(opened, 'body')));
+}
+function scope(owner: WidgetSurfaceRefV1['owner']): WidgetSurfaceRefV1 {
+    return { serverId, accountId, owner };
+}
+function context() { return { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: accountId }; }
+
+describe('widget semantic Actions through production UI composition', () => {
+    it('projects untouched Usage defaults through the real host preset producer and preserves personalization through Reset and Undo', async () => {
+        const executor = createDefaultActionExecutor();
+        const base = scope({ kind: 'corePage', pageId: 'usage', area: 'main' });
+        const list = await executor.execute('widgets.area.layout.list', { surface: base }, context());
+        expect(list, JSON.stringify(list)).toMatchObject({ ok: true });
+        if (!list.ok) throw new Error(list.errorCode);
+        const views = WidgetInstanceActionOutputSchemasV1['widgets.area.layout.list'].parse(list.result).layouts;
+        expect(views.map(view => view.surface.owner.kind === 'corePage' ? view.surface.owner.layoutId : null)).toEqual([...USAGE_WIDGET_PRESET_IDS]);
+        const initial = [];
+        for (const view of views) {
+            expect(homes.artifacts(serverId).read(view.artifactId)).toBeNull();
+            const read = await executor.execute('widgets.item.list', { surface: view.surface }, context());
+            expect(read, JSON.stringify(read)).toMatchObject({ ok: true });
+            if (!read.ok) throw new Error(read.errorCode);
+            const state = WidgetInstanceActionOutputSchemasV1['widgets.item.list'].parse(read.result);
+            expect(state).toMatchObject({ state: 'missing', preset: { isEdited: false } });
+            expect(state.instances.length).toBeGreaterThan(0);
+            initial.push(state);
+        }
+        const selected = views[0]!;
+        const ref = { surface: selected.surface, instanceId: initial[0]!.instances[0]!.instance.id };
+        expect(await executor.execute('widgets.item.rename', { ref, displayName: 'Mine' }, context())).toMatchObject({ ok: true });
+        const edited = WidgetAreaLayoutV1Schema.parse(storedBody(selected.artifactId));
+        expect(flattenWidgetLayoutWidgetsV1(edited.items)[0]!.instance.displayName).toBe('Mine');
+        const read = await createDefaultActionExecutor().execute('widgets.item.list', { surface: selected.surface }, context());
+        expect(read).toMatchObject({ ok: true, result: { preset: { isEdited: true }, items: edited.items } });
+        if (!read.ok) throw new Error(read.errorCode);
+        const current = WidgetInstanceActionOutputSchemasV1['widgets.item.list'].parse(read.result);
+        const reset = await executor.execute('widgets.area.layout.reset', { surface: selected.surface, expectedRevision: current.revision }, context());
+        expect(reset, JSON.stringify(reset)).toMatchObject({ ok: true });
+        if (!reset.ok) throw new Error(reset.errorCode);
+        const result = WidgetInstanceActionOutputSchemasV1['widgets.area.layout.reset'].parse(reset.result);
+        expect(result.layout.items).toEqual(initial[0]!.items);
+        expect(await executor.execute('widgets.area.layout.undo', { capture: result.undo }, context())).toMatchObject({ ok: true });
+        expect(WidgetAreaLayoutV1Schema.parse(storedBody(selected.artifactId))).toEqual(edited);
+        expect(await executor.execute('widgets.area.layout.list', { surface: { ...base, accountId: 'other' } }, context())).toMatchObject({ ok: false });
+        expect(WidgetAreaLayoutV1Schema.parse(storedBody(selected.artifactId))).toEqual(edited);
+    });
+
+    it('persists independent Home copies, groups and fragments and reads actual producer bytes through strict consumers', async () => {
+        const surface = scope({ kind: 'home' });
+        const executor = createDefaultActionExecutor();
+        for (const id of ['one', 'two']) {
+            const added = await executor.execute('widgets.item.add', { surface, instance: instance(id) }, context());
+            expect(added, JSON.stringify(added)).toMatchObject({ ok: true });
+            if (!added.ok) throw new Error(added.errorCode);
+            expect(WidgetInstanceActionOutputSchemasV1['widgets.item.add'].parse(added.result).instance).toEqual(instance(id));
+        }
+        expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'widget_rename', instanceId: 'one', displayName: 'First' } }, context()))
+            .toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.group.create', { surface, groupId: 'group', instanceIds: ['one', 'two'] }, context()))
+            .toMatchObject({ ok: true });
+        const layout = HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)));
+        const group = layout.items.find(item => item.kind === 'group');
+        if (!group || group.kind !== 'group') throw new Error('Group was not persisted');
+        expect(group.children.map(child => child.instance.displayName)).toEqual(['First', undefined]);
+        expect(HomeHubLayoutV1Schema.safeParse({ ...layout, authority: 'forged' }).success).toBe(false);
+        expect(WidgetInstanceV1Schema.safeParse({ ...group.children[0]!.instance, machineId: 'forged' }).success).toBe(false);
+
+        const draft = WidgetLayoutFragmentDraftV1Schema.parse({ name: 'Saved group', inputs: { fields: [] },
+            inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            group: captureWidgetLayoutFragmentGroupV1(group) });
+        const saved = await executor.execute('widgets.fragment.create', { account: { serverId, accountId }, artifactId: 'saved-group', fragment: draft }, context());
+        expect(saved, JSON.stringify(saved)).toMatchObject({ ok: true });
+        if (!saved.ok) throw new Error(saved.errorCode);
+        const output = WidgetLayoutFragmentActionOutputSchemasV1['widgets.fragment.create'].parse(saved.result);
+        const stored = WidgetLayoutFragmentV1Schema.parse(storedBody('saved-group'));
+        expect(stored).toEqual(output.fragment);
+        expect(stored.group.children.every(child => !('id' in child.instance))).toBe(true);
+        expect(WidgetLayoutFragmentV1Schema.safeParse({ ...stored, group: { ...stored.group, accountId: 'forged' } }).success).toBe(false);
+        const listed = await createDefaultActionExecutor().execute('widgets.item.list', { surface }, context());
+        expect(listed).toMatchObject({ ok: true, result: { items: layout.items } });
+        // A wrongly bound Account cannot reach or modify the Home persistence seam.
+        const before = homes.artifacts(serverId).read(buildHomeHubArtifactIdV1(accountId));
+        expect(await executor.execute('widgets.item.rename', { ref: { surface: { ...surface, accountId: 'other' }, instanceId: 'one' }, displayName: 'Wrong' }, context()))
+            .toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
+        expect(homes.artifacts(serverId).read(buildHomeHubArtifactIdV1(accountId))).toEqual(before);
+    });
+
+    it('writes Board placements through both native and widget Actions and refuses a mis-bound Board', async () => {
+        const executor = createDefaultActionExecutor();
+        const surface = scope({ kind: 'workBoard', boardId: 'board' });
+        expect(await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'board', name: 'Checks' } } }, context()))
+            .toMatchObject({ ok: true });
+        const ref = { surface, instanceId: 'board-copy' };
+        expect(await executor.execute('boards.apply', { intent: { kind: 'widget_add', boardId: 'board', ref, instance: instance(ref.instanceId) } }, context()))
+            .toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.size.set', { ref, size: 'full' }, context())).toMatchObject({ ok: true });
+        const persisted = WorkBoardV1Schema.parse(storedBody('board'));
+        expect(persisted.widgets).toMatchObject([{ ref, instance: instance(ref.instanceId), size: 'full' }]);
+        const listed = await createDefaultActionExecutor().execute('widgets.item.list', { surface }, context());
+        expect(listed).toMatchObject({ ok: true });
+        if (!listed.ok) throw new Error(listed.errorCode);
+        const read = WidgetInstanceActionOutputSchemasV1['widgets.item.list'].parse(listed.result);
+        expect(read.surface).toEqual(surface);
+        expect(read.instances).toEqual([{ instance: instance(ref.instanceId), size: 'full' }]);
+        const placement = WorkBoardWidgetPlacementV1Schema.parse(persisted.widgets![0]);
+        expect(WorkBoardWidgetPlacementV1Schema.safeParse({ ...placement, authority: 'forged' }).success).toBe(false);
+        expect(await executor.execute('widgets.item.rename', { ref: { ...ref, surface: scope({ kind: 'workBoard', boardId: 'missing' }) }, displayName: 'Wrong' }, context()))
+            .toMatchObject({ ok: false });
+        expect(WorkBoardV1Schema.parse(storedBody('board'))).toEqual(persisted);
+    });
+
+    it('routes a real drag admission into the Home semantic writer and refuses a mismatched source realm', async () => {
+        const surface = scope({ kind: 'home' });
+        const executor = createDefaultActionExecutor();
+        for (const id of ['moving', 'anchor']) {
+            expect(await executor.execute('widgets.item.add', { surface, instance: instance(id) }, context())).toMatchObject({ ok: true });
+        }
+        const before = HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)));
+        const input = { surface, items: before.items, topLevelIds: before.order, canEdit: true,
+            destination: { anchorId: 'anchor', placement: 'after' as const }, preview: { verb: 'Move', target: 'Home' } };
+        const admission = resolveWidgetLayoutEntityDrop({ ...input, item: { kind: 'widget-area-instance',
+            scope: { serverId, accountId }, ref: { surface, instanceId: 'moving' } } });
+        if (admission.status !== 'allowed') throw new Error(`Drag refused: ${JSON.stringify(admission)}`);
+        expect(admission.effect.actionId).toBe('widgets.item.move');
+        expect(await executor.execute('widgets.item.move', admission.effect.input, context())).toMatchObject({ ok: true });
+        const after = HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)));
+        expect(after.order.indexOf('moving')).toBe(after.order.indexOf('anchor') + 1);
+        expect(after.items.find(item => item.kind === 'widget' && item.instance.id === 'moving'))
+            .toEqual(before.items.find(item => item.kind === 'widget' && item.instance.id === 'moving'));
+        expect(resolveWidgetLayoutEntityDrop({ ...input, item: { kind: 'widget-area-instance',
+            scope: { serverId, accountId: 'wrong' }, ref: { surface: { ...surface, accountId: 'wrong' }, instanceId: 'moving' } } }))
+            .toMatchObject({ status: 'refused' });
+        expect(HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)))).toEqual(after);
+    });
+
+    it('stores a named layout through its producer and consumes it through the strict layout schema and fresh executor', async () => {
+        const executor = createDefaultActionExecutor();
+        const base = scope({ kind: 'corePage', pageId: 'usage', area: 'main' });
+        const surface = scope({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'checks' });
+        expect(await executor.execute('widgets.area.layout.create', { surface: base, layoutId: 'checks', name: 'Checks' }, context()))
+            .toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.add', { surface, instance: instance('area-copy') }, context())).toMatchObject({ ok: true });
+        const layout = WidgetAreaLayoutV1Schema.parse(storedBody(buildWidgetSurfaceArtifactIdV1(surface)));
+        expect(layout).toMatchObject({ surface, items: [{ instance: instance('area-copy') }] });
+        expect(WidgetAreaLayoutV1Schema.safeParse({ ...layout, surface: { ...layout.surface, executionMachineId: 'forged' } }).success).toBe(false);
+        expect(await createDefaultActionExecutor().execute('widgets.item.list', { surface }, context()))
+            .toMatchObject({ ok: true, result: { items: layout.items } });
+        const misbound = scope({ kind: 'corePage', pageId: 'usage', area: 'other', layoutId: 'checks' });
+        const other = await executor.execute('widgets.item.list', { surface: misbound }, context());
+        expect(other, JSON.stringify(other)).toMatchObject({ ok: false });
+        expect(WidgetAreaLayoutV1Schema.parse(storedBody(buildWidgetSurfaceArtifactIdV1(surface)))).toEqual(layout);
+    });
+});

@@ -27,13 +27,6 @@ vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
   return createTextModuleMock();
 });
-// Menu presentation reads ambient app settings; mutation policy and persistence
-// below use the real executor and Artifact owners, independent of this boundary.
-vi.mock('@/sync/domains/state/storage', async () => {
-  const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-  return createStorageModuleStub({});
-});
-
 const { buildWidgetGroupActions, buildWidgetGroupMembershipActions } =
   await import('./widgetGroupMenu');
 

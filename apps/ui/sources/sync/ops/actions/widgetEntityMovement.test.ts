@@ -14,6 +14,8 @@ import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHub
 import { HOME_HUB_DEFAULT_LAYOUT } from '@happier-dev/protocol/home';
 import type { WidgetLayoutGroupV1 } from '@happier-dev/protocol/widgets';
 
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 
 const scope = { serverId: getActiveServerSnapshot().serverId, accountId: 'account' };

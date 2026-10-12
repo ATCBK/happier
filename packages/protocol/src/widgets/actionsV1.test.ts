@@ -8,6 +8,7 @@ it('changes and copies only the stored guest-network choice through the widget A
   const boundary = createWorkBoardArtifactBoundary();
   const surface = { serverId: 'home', accountId: 'owner', owner: { kind: 'home' } } as const;
   const port = createHomeHubArtifactPortV1(boundary.forAccount('owner'), { accountId: 'owner' });
+  const defaults = flattenWidgetLayoutWidgetsV1((await port.read()).items).map(item => item.instance);
   const instance = { v: 1, id: 'original', definition: { kind: 'builtin', id: 'summary' },
     bindings: { period: { kind: 'value', value: 'week' } } } as const;
   await port.apply({ kind: 'widget_add', instance });
@@ -19,12 +20,13 @@ it('changes and copies only the stored guest-network choice through the widget A
   expect(result).toMatchObject({ ok: true, result: { instance: {
     ...instance, networkOverride: { networkOrigins: ['https://cdn.example.com'] },
   } } });
-  const saved = flattenWidgetLayoutWidgetsV1((await port.read()).items)[0]!.instance;
+  const saved = flattenWidgetLayoutWidgetsV1((await port.read()).items).find(item => item.instance.id === instance.id)!.instance;
   await port.apply({ kind: 'widget_add', instance: { ...saved, id: 'copy' } });
   expect(await executor.execute('widgets.item.network.set', {
     ref: { surface, instanceId: instance.id }, network: { network: 'none' },
   }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: true });
   expect(flattenWidgetLayoutWidgetsV1((await port.read()).items).map(item => item.instance)).toEqual([
+    ...defaults,
     { ...instance, networkOverride: { network: 'none' } },
     { ...saved, id: 'copy' },
   ]);

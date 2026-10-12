@@ -25,6 +25,8 @@ vi.mock('@/modal', async () => {
 });
 
 const scope = { serverId: 'home', accountId: 'account' };
+const moveContext = { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const },
+    actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'widgets.item.move': ['ui'] } }) };
 const surface: WidgetSurfaceRefV1 = { ...scope, owner: { kind: 'home' } };
 const widget = (id: string, size: 'small' | 'full' = 'small'): WidgetLayoutWidgetV1 => ({ kind: 'widget',
     instance: { v: 1, id, definition: { kind: 'builtin', id: 'changes' }, bindings: {} }, size });
@@ -109,10 +111,7 @@ describe('shared layout DnD admission', () => {
             // Area moves are configurable danger Actions. Use the real Account
             // setting for direct UI moves; do not mock admission or bypass it.
             expect(admission.effect.actionId).toBe('widgets.item.move');
-            const result = await executor.execute('widgets.item.move', admission.effect.input, {
-                surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
-                actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'widgets.item.move': ['ui'] } }),
-            });
+            const result = await executor.execute('widgets.item.move', admission.effect.input, moveContext);
             expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
             const committed = isHome ? (await homeOwner.describe(await homeOwner.read())).sections.flatMap<WidgetLayoutItemV1>(section =>
                 section.kind === 'builtin' ? [] : section.kind === 'group' ? [section.group] : [{ kind: 'widget', instance: section.instance }])
@@ -149,7 +148,7 @@ describe('shared layout DnD admission', () => {
         const owner = createHomeHubArtifactPortV1(boundary.forAccount(scope.accountId), { accountId: scope.accountId });
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({ homeHubArtifacts: owner, widgetAccountScope: () => scope }));
         expect(admission.effect.actionId).toBe('widgets.item.move');
-        expect(await executor.execute('widgets.item.move', admission.effect.input, { surface: 'ui' })).toMatchObject({ ok: true });
+        expect(await executor.execute('widgets.item.move', admission.effect.input, moveContext)).toMatchObject({ ok: true });
         expect((await owner.read()).order).toEqual([...preceding, ...unresolved, '53ab', 'c1ea', '0389']);
     });
     it.each(['home', 'project'] as const)('keeps the %s below-anchor line when extracting the last child removes a preceding group', ownerKind => {
@@ -185,7 +184,7 @@ describe('shared layout DnD admission', () => {
         await owner.apply({ kind: 'group_add', group });
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({ homeHubArtifacts: owner, widgetAccountScope: () => scope }));
         expect(await executor.execute('widgets.item.move', { ref: { surface, instanceId: group.id },
-            to: { surface, index: 0, groupId: null } }, { surface: 'ui' })).toMatchObject({ ok: true });
+            to: { surface, index: 0, groupId: null } }, moveContext)).toMatchObject({ ok: true });
         expect((await owner.read()).order[0]).toBe(group.id);
     });
     const orderCases: readonly { name: string; ids: string[]; sourceId: string; anchorId: string; placement: 'before' | 'after';
@@ -249,7 +248,7 @@ describe('shared layout DnD admission', () => {
                     builtins: [{ id: 'start', hideable: false }, { id: 'attention', hideable: false }, { id: 'usage', hideable: true, afterWidgets: true }] });
                 const port = createHomeWidgetActionPortV1(owner);
                 const executor = createActionExecutor(createActionExecutorBoundaryFixture({ homeHubArtifacts: owner, widgetAccountScope: () => scope }));
-                expect(await executor.execute('widgets.item.move', move, { surface: 'ui' })).toMatchObject({ ok: true });
+                expect(await executor.execute('widgets.item.move', move, moveContext)).toMatchObject({ ok: true });
                 const result = await owner.describe(await owner.read());
                 expect(result.sections.map(section => section.id)).toEqual(['start', 'attention', ...scenario.expected, 'usage']);
                 const read = await port.read(targetSurface, { surface: 'ui' });

@@ -44,16 +44,13 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 }));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
-vi.mock('@/sync/domains/state/storage', async () => (await import('@/dev/testkit/mocks/storage')).createStorageModuleStub({}));
-vi.mock('@/sync/store/hooks', async () => await import('@/sync/domains/state/storage'));
 // The platform recycler is a native boundary; the Collection model and rows remain real.
 vi.mock('@legendapp/list/react-native', async original => (await import('@/dev/testkit/mocks/legendList'))
     .createCapturingLegendListMock({ original: await original<Record<string, unknown>>() }).module);
-// The app shell's admitted plugin projection is the external daemon feed; no plugin is installed here.
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useAppShellPluginUiProjection: () => ({ pluginUiProjection: null }),
-    useProjectedPluginLocalizedTextResolver: () => undefined,
-}));
+// The real unmounted app-shell context admits no installed plugin. Core store
+// subscriptions, descriptor lookup and card admission all remain real.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 const searchRuntime = { open: () => {}, buildCommands: () => [] };
 function Wrapper({ children }: React.PropsWithChildren) {

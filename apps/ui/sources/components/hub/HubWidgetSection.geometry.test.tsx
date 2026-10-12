@@ -9,10 +9,9 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/' }).module);
-// The daemon projection is outside this native geometry corridor; no installed renderer is needed.
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useAppShellPluginUiProjection: () => ({ pluginUiProjection: null }), useProjectedPluginLocalizedTextResolver: () => undefined,
-}));
+// No app-shell provider is mounted: its real context admits no installed renderer.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 afterEach(standardCleanup);
 
 describe('nested Home widget native geometry', () => {

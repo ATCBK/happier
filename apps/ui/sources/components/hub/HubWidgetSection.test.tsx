@@ -14,20 +14,14 @@ import {
 } from '@/components/appShell/plugins/pluginAppPageNavigation';
 import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 import { HubWidgetSection } from './HubWidgetSection';
+import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { storage } from '@/sync/domains/state/storage';
 
 const boundary = vi.hoisted(() => ({ projection: null as PluginUiProjectionModel | null, pushed: [] as unknown[], stage: null as ((open: { pageId: string; subPath: string; input: { selection: string } }) => boolean) | null, moments: {} as Record<string, boolean> }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/', router: { push: (href: unknown) => boundary.pushed.push(href) } }).module);
-// The Account settings are a store boundary: only the atmosphere moments vary here.
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createUseSettingMock } = await import('@/dev/testkit/mocks/storage');
-    const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-    return createStorageModuleStub({ useSetting: createUseSettingMock({ values: {}, fallback: (key) => key === 'homeAtmosphere'
-        ? { ...settingsDefaults.homeAtmosphere, moments: boundary.moments } : settingsDefaults[key as keyof typeof settingsDefaults] }) });
-});
-vi.mock('@/sync/store/hooks', async () => await import('@/sync/domains/state/storage'));
 // Unused HTTP envelope API is outside this navigation corridor. Throw if reached;
 // the test must never perform Session key preparation or network mutation.
 vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
@@ -35,12 +29,18 @@ vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
     return { createSessionDataKeyEnvelopeClient: unused, readSessionDataKeyEnvelopeCollectionPage: unused,
         prepareSessionDataKeyEnvelopesForScope: unused, prepareSessionDataKeyEnvelopesDetached: unused };
 });
-// App-shell admitted projection input is the external daemon feed. Destination
-// normalization, catalog availability, activation and launch custody are real.
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useAppShellPluginUiProjection: () => ({ pluginUiProjection: boundary.projection }),
-    useProjectedPluginLocalizedTextResolver: () => undefined,
-}));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+const initialState = storage.getState();
+
+function Projection({ children }: React.PropsWithChildren) {
+    return <AppShellPluginUiProjectionValueProvider value={{ pluginUiProjection: boundary.projection,
+        pluginBrowserProjection: null, phase: 'current', interactionEnabled: true, machineId: null,
+        serverId: 'home-a', platform: 'web', accountLifetime: null,
+        clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>
+        {children}
+    </AppShellPluginUiProjectionValueProvider>;
+}
 
 function projection(availability: 'available' | 'disabled' = 'available', phase: 'current' | 'retainedOffline' = 'current', pageCount = 1) {
     const entries = Array.from({ length: pageCount }, (_, index) => {
@@ -60,10 +60,10 @@ function LaunchProbe() {
     return <>{open ? JSON.stringify(open.input) ?? 'input-cleared' : 'no-open'}</>;
 }
 function home() {
-    return <PluginAppPageLaunchInputScope pluginUiProjection={boundary.projection}><LaunchProbe /><HubWidgetSection widget={widget} instance={instance} frameStyle="plain" menu={null} tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 800 })} testID="home-widget" /></PluginAppPageLaunchInputScope>;
+    return <Projection><PluginAppPageLaunchInputScope pluginUiProjection={boundary.projection}><LaunchProbe /><HubWidgetSection widget={widget} instance={instance} frameStyle="plain" menu={null} tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 800 })} testID="home-widget" /></PluginAppPageLaunchInputScope></Projection>;
 }
 beforeEach(() => { boundary.projection = projection(); boundary.pushed = []; boundary.moments = {}; clearActiveUnsavedChangesGuard(); });
-afterEach(() => { clearActiveUnsavedChangesGuard(); standardCleanup(); });
+afterEach(() => { clearActiveUnsavedChangesGuard(); standardCleanup(); storage.setState(initialState, true); });
 
 describe('Home widget Open', () => {
     it('opens through the catalog launch owner, clearing a previously staged plugin argument', async () => {
@@ -96,8 +96,13 @@ describe('Home widget Open', () => {
 describe('Home widget switched off by its atmosphere moment', () => {
     const yourHome = { v: 1 as const, id: 'your-home-copy', definition: { kind: 'builtin' as const, id: 'your_home' as const }, bindings: {} };
     // Far below the viewport: the frame is drawn, its body stays deferred.
-    const section = () => <HubWidgetSection instance={yourHome} frameStyle="plain" menu={null}
-        tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 0 })} testID="home-your-home" />;
+    const section = () => {
+        storage.setState({ settings: { ...storage.getState().settings, homeAtmosphere: {
+            ...storage.getState().settings.homeAtmosphere, moments: boundary.moments,
+        } } });
+        return <HubWidgetSection instance={yourHome} frameStyle="plain" menu={null}
+            tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 0 })} testID="home-your-home" />;
+    };
 
     it('keeps a placed Your Home copy on Home while the moment is on', async () => {
         boundary.moments = { yourHome: true };
