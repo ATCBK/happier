@@ -398,6 +398,7 @@ import {
   restartSessionRunnerOnCurrentRuntime,
   type RestartSessionRunnerCompletion,
 } from './plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
+import { restartStaleSessionRunnersAfterDaemonStart } from './plannedRunnerRestart/restartStaleRunnersAfterDaemonStart';
 import { resolveCurrentSessionRunnerLaunchIdentity } from './sessionRunnerRuntime/resolveRunnerEntrypointIdentity';
 import { shouldRefreshSessionRunnerResumeIdentity } from './sessionRunnerRuntime/resolveRestartEligibility';
 import { resolveSessionRunnerRuntimeState } from './sessionRunnerRuntime/resolveRuntimeState';
@@ -9112,6 +9113,20 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         };
 
     logger.debug('[DAEMON RUN] Daemon started successfully, waiting for shutdown request');
+
+    // Startup reattach and every restart dependency are ready here; the pass logs and contains
+    // its own failures, so it must not delay or abort waiting for shutdown.
+    void restartStaleSessionRunnersAfterDaemonStart({
+      readSettings: () => readSettings(),
+      isShuttingDown: () => shutdownInitiated || connectedServiceQuotaProducersQuiesced,
+      resolveCurrentIdentity: resolveCurrentSessionRunnerLaunchIdentity,
+      trackedSessions: getCurrentChildren,
+      requestRestart: requestVersionRuntimeRefreshWithDeferral,
+      resolveActivityDisabledReason: resolveSessionRunnerActivityDisabledReason,
+      refreshTrackedSessionRuntimeSnapshot: refreshTrackedSessionRuntimeSnapshotForPlannedRestart,
+      logDebug: (message, payload) => logger.debug(message, payload),
+      logWarn: (message, payload) => logger.warn(message, payload),
+    });
 
     // Wait for shutdown request
     const shutdownRequest = await resolvesWhenShutdownRequested;

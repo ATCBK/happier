@@ -731,6 +731,7 @@ vi.mock('@/persistence', () => ({
   acquireDaemonLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
   releaseDaemonLock: vi.fn(async () => {}),
   readCredentials: vi.fn(async () => null),
+  readSettings: vi.fn(async () => ({})),
 }));
 
 vi.mock('@/session/metadata/updateSessionMetadataWithRetry', () => ({
@@ -4220,6 +4221,105 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       } else {
         process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
       }
+      await restoreDaemonExitBoundary(exitSpy);
+    }
+  });
+
+  it('restarts stale reattached runners onto the current CLI after startup when restartSessionRunnersOnUpdate is on', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    // OS boundaries only: process signalling, the pid identity probe, and the exit poller.
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
+    const pidSafetyModule = await import('@/daemon/pidSafety');
+    const pidSafetySpy = vi.spyOn(pidSafetyModule, 'isPidSafeHappySessionProcess').mockResolvedValue(true);
+    const waitForExitModule = await import('./sessions/waitForExistingSessionExitIfStopRequested');
+    const waitForExitSpy = vi.spyOn(waitForExitModule, 'waitForExistingSessionExitIfStopRequested')
+      .mockImplementation(async () => {});
+    const persistence = await import('@/persistence');
+    vi.mocked(persistence.readSettings).mockResolvedValue({
+      schemaVersion: 6,
+      onboardingCompleted: true,
+      restartSessionRunnersOnUpdate: true,
+    });
+    const { buildHappyCliSubprocessLaunchSpec } = await import('@/utils/spawnHappyCLI');
+    vi.mocked(buildHappyCliSubprocessLaunchSpec).mockImplementation((args) => ({
+      runtime: 'node',
+      filePath: process.execPath,
+      args: ['/home/alice/.happier/cli/versions/0.2.11/package-dist/index.mjs', ...args],
+    }));
+    const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    let run: Promise<void> | null = null;
+
+    try {
+      const reattachModule = await import('./sessions/reattachFromMarkers');
+      vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockImplementation(async ({ pidToTrackedSession }) => {
+        pidToTrackedSession.set(6480, {
+          pid: 6480,
+          startedBy: 'daemon',
+          happySessionId: 'sess-stale-on-update',
+          reattachedFromDiskMarker: true,
+          processCommand:
+            'node /home/alice/.happier/cli/versions/0.2.10/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+          vendorResumeId: 'claude-stale-thread',
+          spawnOptions: {
+            directory: '/tmp/workspace-stale-on-update',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            resume: 'claude-stale-thread',
+          },
+        });
+        pidToTrackedSession.set(6481, {
+          pid: 6481,
+          startedBy: 'daemon',
+          happySessionId: 'sess-current-on-update',
+          reattachedFromDiskMarker: true,
+          processCommand:
+            'node /home/alice/.happier/cli/versions/0.2.11/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+          vendorResumeId: 'claude-current-thread',
+          spawnOptions: {
+            directory: '/tmp/workspace-current-on-update',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            resume: 'claude-current-thread',
+          },
+        });
+        return { orphanedDeadDaemonSessions: [], connectedServiceRestartIntents: [] };
+      });
+
+      const { startDaemon } = await import('./startDaemon');
+      run = startDaemon();
+
+      const isSignalled = (pid: number) => killSpy.mock.calls.some(
+        ([target, signal]) => (target === pid || target === -pid) && signal === 'SIGTERM',
+      );
+      for (let attempt = 0; attempt < 200 && !isSignalled(6480); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      expect(isSignalled(6480)).toBe(true);
+      expect(isSignalled(6481)).toBe(false);
+
+      harness.requestShutdown('happier-cli');
+      await run;
+      run = null;
+    } finally {
+      if (run) {
+        harness.requestShutdown('happier-cli');
+        await run;
+      }
+      const reattachModule = await import('./sessions/reattachFromMarkers');
+      vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockImplementation(async () => ({
+        orphanedDeadDaemonSessions: [],
+        connectedServiceRestartIntents: [],
+      }));
+      vi.mocked(persistence.readSettings).mockResolvedValue({ schemaVersion: 6, onboardingCompleted: true });
+      vi.mocked(buildHappyCliSubprocessLaunchSpec).mockReset();
+      if (refreshEnvOriginal === undefined) {
+        delete process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
+      } else {
+        process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
+      }
+      waitForExitSpy.mockRestore();
+      pidSafetySpy.mockRestore();
+      killSpy.mockRestore();
       await restoreDaemonExitBoundary(exitSpy);
     }
   });
