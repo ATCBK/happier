@@ -15,6 +15,7 @@ function resolveAsset(platform: string, arch: string, descriptor = COMPUTER_CUA_
 export function getComputerCuaDriverRuntimeInstallableAdapter(descriptor: InstallableDependencyDescriptor): RuntimeInstallableAdapter {
   const asset = resolveAsset(process.platform, process.arch, descriptor);
   if (!asset || descriptor.source.kind !== 'pinned_archive') throw new Error('Unsupported native computer driver platform');
+  if (!asset.sha256) throw new Error('Native computer driver requires a pinned checksum');
   return { ...createPinnedArchiveRuntimeInstallableAdapter({
     installId: descriptor.capabilityId, managedInstallId: COMPUTER_CUA_DRIVER_INSTALLABLE_KEY,
     version: descriptor.source.version, asset,
@@ -39,8 +40,13 @@ export function getComputerCuaDriverArchiveDownloadInstallableAdapter(): Archive
       const platform = params.platform ?? process.platform;
       const asset = resolveAsset(platform, params.arch ?? process.arch);
       if (!asset) return { ok: false, errorMessage: `Unsupported native computer driver platform: ${platform}/${params.arch ?? process.arch}` };
+      if (!asset.sha256) return { ok: false, errorMessage: 'Native computer driver requires a pinned checksum', errorCode: 'verification-failed' };
       const result = await installPinnedArchive({ installId: COMPUTER_CUA_DRIVER_INSTALLABLE_KEY, version: COMPUTER_CUA_DRIVER_VERSION, asset, platform });
-      return result.ok ? { ok: true, executablePath: result.executablePath, pinnedVersion: result.version, integrityDigest: result.integrityDigest } : result;
+      if (!result.ok) return result;
+      if (result.checksum !== 'verified' || !result.integrityDigest) {
+        return { ok: false, errorMessage: 'Native computer driver checksum was not verified', errorCode: 'verification-failed' };
+      }
+      return { ok: true, executablePath: result.executablePath, pinnedVersion: result.version, integrityDigest: result.integrityDigest };
     },
   };
 }

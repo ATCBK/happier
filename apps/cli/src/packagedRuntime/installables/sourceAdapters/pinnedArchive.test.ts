@@ -1,8 +1,11 @@
 import { appendFile, chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getHappierTempRoot } from '@happier-dev/cli-common/tempDirs';
 
 const { configurationState } = vi.hoisted(() => ({
   configurationState: { happyHomeDir: '' },
@@ -82,6 +85,57 @@ afterEach(async () => {
 });
 
 describe('pinned archive runtime installable adapter', () => {
+  it('writes a minimal definition receipt through the installer and uses its canonical reader and remover', async () => {
+    const home = await makeTempHome();
+    configurationState.happyHomeDir = home;
+    const payload = Buffer.from('#!/bin/sh\necho registry-agent\n');
+    const actual = await vi.importActual<typeof import('@happier-dev/cli-common/agents')>('@happier-dev/cli-common/agents');
+    downloadMock.mockImplementation(actual.downloadGitHubReleaseAsset);
+    const server = createServer((_request, response) => response.end(payload));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Fixture has no port');
+      const mod = await import('./pinnedArchive');
+      const adapter = mod.createPinnedArchiveRuntimeInstallableAdapter({
+        installId: 'dep.registry-agent', version: '1', asset: {
+          archiveUrl: `http://127.0.0.1:${address.port}/agent`, sha256: createHash('sha256').update(payload).digest('hex'),
+          kind: 'executable', executableSubpath: 'agent',
+        },
+      });
+      const managedAcpDefinition = { definitionId: 'definition-1', title: 'Registry agent', env: { PRIVATE_KEY: 'fixture-secret' } };
+      await expect(adapter.installOrUpgrade({ managedAcpDefinition })).resolves.toMatchObject({ ok: true });
+      const receipt = { version: '1', definitionId: 'definition-1', title: 'Registry agent', kind: 'archive' };
+      const versionPath = join(home, 'tools', adapter.key, 'current', '.happier-managed-version');
+      expect(JSON.parse(await readFile(versionPath, 'utf8'))).toEqual(receipt);
+      await expect(mod.readPinnedArchiveManagedVersion({ installId: adapter.key })).resolves.toEqual(receipt);
+      await expect(adapter.resolveLaunchCommand?.()).resolves.toMatchObject({ ok: true });
+      await writeFile(versionPath, JSON.stringify({ ...receipt, futurePresentationField: 'ignored' }));
+      await expect(mod.readPinnedArchiveManagedVersion({ installId: adapter.key })).resolves.toEqual(receipt);
+      await expect(adapter.resolveLaunchCommand?.()).resolves.toMatchObject({ ok: true });
+      await writeFile(versionPath, JSON.stringify({ version: '1', kind: 'archive' }));
+      await expect(mod.readPinnedArchiveManagedVersion({ installId: adapter.key })).resolves.toBeNull();
+      await expect(adapter.resolveLaunchCommand?.()).resolves.toMatchObject({ ok: false });
+      await mod.removePinnedArchiveManagedInstall({ installId: adapter.key, env: { HAPPIER_HOME_DIR: home } });
+      await expect(readFile(versionPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('refuses a first-party computer driver descriptor without its mandatory checksum', async () => {
+    const { getComputerCuaDriverRuntimeInstallableAdapter } = await import('./computerCuaDriver');
+    const { InstallableDependencyDescriptorSchema, COMPUTER_CUA_DRIVER_INSTALLABLE_DESCRIPTOR } = await import('@happier-dev/protocol/installables');
+    const descriptor = InstallableDependencyDescriptorSchema.parse({
+      ...COMPUTER_CUA_DRIVER_INSTALLABLE_DESCRIPTOR,
+      source: { kind: 'pinned_archive', version: '1', assetsByPlatform: {
+        [`${process.platform}-${process.arch}`]: { archiveUrl: 'https://example.test/driver.zip', executableSubpath: 'driver' },
+      } },
+    });
+    expect(() => getComputerCuaDriverRuntimeInstallableAdapter(descriptor)).toThrow();
+  });
+
   it('repairs the native Computer capability in its retained archive destination with the same pins and executable validation', async () => {
     configurationState.happyHomeDir = await makeTempHome();
     stageArchiveContaining('cua-driver');
@@ -140,7 +194,7 @@ describe('pinned archive runtime installable adapter', () => {
     // This installer writes no install log, and readers label `logPath` /
     // `lastInstallLogPath` as exactly that. The installed executable is not an
     // install log, so the truthful answer is "none".
-    await expect(adapter.installOrUpgrade()).resolves.toEqual({ ok: true, logPath: null });
+    await expect(adapter.installOrUpgrade()).resolves.toEqual({ ok: true, logPath: null, checksum: 'verified' });
 
     const launch = await resolveLaunchCommand();
     expect(launch).toMatchObject({ ok: true, source: 'managed', args: ['--uid='] });
@@ -170,6 +224,7 @@ describe('pinned archive runtime installable adapter', () => {
       platform: 'linux',
     });
     expect(firstInstall).toMatchObject({ ok: true, integrityDigest: `sha256:${AGY_LINUX_ASSET.sha256}` });
+    await expect(mod.readPinnedArchiveManagedVersion({ installId: 'dep.antigravity.agy-acp-server' })).resolves.toEqual({ version: '1.1.0' });
     expect(extractRootMock).toHaveBeenCalledWith(expect.objectContaining({
       limits: AGY_ARCHIVE_EXTRACTION_LIMITS,
     }));
@@ -256,7 +311,7 @@ describe('pinned archive runtime installable adapter', () => {
     await expect(readFile(installedPath)).resolves.toEqual(installedBytes);
     const installRoot = join(configurationState.happyHomeDir, 'tools', installId);
     await expect(readdir(installRoot)).resolves.toEqual(['.lock', '.tmp', 'current']);
-    await expect(readdir(join(installRoot, '.tmp'))).resolves.toEqual([]);
+    await expect(readdir(getHappierTempRoot(join(installRoot, '.tmp')))).resolves.toEqual([]);
   });
 
   it('restores a mutated install through authoritative V2 ensure without extra downloads when clean', async () => {

@@ -2,6 +2,7 @@ import { CHROMIUM_FOR_TESTING_PRODUCT_SOURCE, resolveChromiumForTestingPlatform,
 import type { ChromiumForTestingPlatformAsset } from '@happier-dev/protocol';
 import { DEFAULT_ARCHIVE_EXTRACTION_LIMITS } from '@happier-dev/release-runtime/archiveExtraction';
 import { installPinnedArchive, resolveInstalledPinnedArchiveExecutable } from './pinnedArchive';
+import type { RuntimeInstallableInstallErrorCode } from '../registry';
 
 /**
  * Chrome-for-Testing projection over the reusable pinned-archive installer.
@@ -11,7 +12,7 @@ const MANAGED_KEY = CHROMIUM_FOR_TESTING_PRODUCT_SOURCE.key;
 
 export type InstallChromiumForTestingResult =
   | Readonly<{ ok: true; executablePath: string; pinnedVersion: string; integrityDigest: string }>
-  | Readonly<{ ok: false; errorMessage: string }>;
+  | Readonly<{ ok: false; errorMessage: string; errorCode?: RuntimeInstallableInstallErrorCode }>;
 
 export async function resolveInstalledChromiumForTestingExecutable(params: Readonly<{
   platform?: NodeJS.Platform | string;
@@ -86,7 +87,9 @@ export async function installChromiumForTesting(params: Readonly<{
     // is streamed; reuse the existing total expansion budget instead of a shorter cap.
     archiveExtractionLimits: { maxFileBytes: DEFAULT_ARCHIVE_EXTRACTION_LIMITS.maxExpandedBytes },
   });
-  return result.ok
-    ? { ok: true, executablePath: result.executablePath, pinnedVersion, integrityDigest: result.integrityDigest }
-    : result;
+  if (!result.ok) return result;
+  if (result.checksum !== 'verified' || !result.integrityDigest) {
+    return { ok: false, errorMessage: 'Chrome-for-Testing checksum was not verified.', errorCode: 'verification-failed' };
+  }
+  return { ok: true, executablePath: result.executablePath, pinnedVersion, integrityDigest: result.integrityDigest };
 }
