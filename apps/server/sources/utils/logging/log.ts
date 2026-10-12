@@ -1,4 +1,6 @@
 import pino from 'pino';
+import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
+import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { redactHttpRequestUrlForLog } from './redactHttpRequestUrlForLog';
@@ -7,7 +9,7 @@ import { redactHttpRequestUrlForLog } from './redactHttpRequestUrlForLog';
 let consolidatedLogFile: string | undefined;
 
 function prepareConsolidatedLogFile(env: NodeJS.ProcessEnv): void {
-  if (!env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING || consolidatedLogFile) return;
+  if (!readServerConfig(env, SERVER_CONFIG.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING) || consolidatedLogFile) return;
   const logsDir = join(process.cwd(), '.logs');
   try {
     mkdirSync(logsDir, { recursive: true });
@@ -88,7 +90,7 @@ export function createLoggingTransportTargets(env: NodeJS.ProcessEnv = process.e
   }
 
   if (
-    env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING &&
+    readServerConfig(env, SERVER_CONFIG.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING) &&
     consolidatedLogFile
   ) {
     transports.push({
@@ -158,7 +160,7 @@ export let fileConsolidatedLogger: pino.Logger | undefined;
 export function initializeServerLogging(env: NodeJS.ProcessEnv): void {
   prepareConsolidatedLogFile(env);
   logger = createServerLogger(env, createLoggingTransportTargets(env));
-  fileConsolidatedLogger = env.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING && consolidatedLogFile
+  fileConsolidatedLogger = readServerConfig(env, SERVER_CONFIG.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING) && consolidatedLogFile
     ? createServerLogger(env, [{ target: 'pino/file', options: { destination: consolidatedLogFile, mkdir: true } }])
     : undefined;
 }
