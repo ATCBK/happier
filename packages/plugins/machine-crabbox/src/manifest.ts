@@ -52,6 +52,10 @@ export const CRABBOX_MACHINE_PROVISIONER = {
 export const CRABBOX_PLUGIN = definePlugin({
   id: CRABBOX_PLUGIN_ID, version: '0.0.0', displayName: 'Crabbox Machines',
   description: 'Native Crabbox leases with exact resource custody and host-owned SSH enrollment.',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: { required: [
     { id: processAccess, capability: 'process', reason: 'Operate the exact native retained lease from private non-repository staging.',
