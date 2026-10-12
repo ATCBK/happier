@@ -4,7 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
 
-import { RowActionRevealSlot } from './RowActionRevealSlot';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 
 /**
  * Timestamp + hover-revealed actions for one transcript message.
@@ -41,6 +41,7 @@ export function MessageActionRow(props: Readonly<{
             {hasTimestamp ? (
                 <Text
                     testID={`transcript-message-timestamp:${props.messageId}`}
+                    numberOfLines={1}
                     style={[
                         styles.timestampText,
                         props.invertTimestampAndActions ? styles.timestampTextInverted : null,
@@ -72,10 +73,17 @@ export function MessageActionRow(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
+    // The row spans the message's width and keeps one line: on a narrow screen the timestamp gives way
+    // (ellipsized) to the actions instead of wrapping upward over the message it belongs to.
     container: {
         position: 'absolute',
+        left: 0,
         right: 0,
         bottom: 0,
+        // The row lives in the gap its message reserves below itself. Touch-sized targets overflow
+        // that band evenly (centred) instead of growing the row upward over the message text.
+        height: theme.transcript.messageGap,
+        overflow: 'visible',
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
@@ -87,6 +95,8 @@ const styles = StyleSheet.create((theme) => ({
         pointerEvents: 'box-none',
     },
     timestampText: {
+        flexShrink: 1,
+        minWidth: 0,
         color: theme.colors.text.tertiary,
         fontSize: 11,
         lineHeight: 16,

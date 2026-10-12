@@ -116,7 +116,7 @@ export function CommittedMessageActions(props: Props) {
             </HappierPressable>;
             return <View key={action.id} ref={action.id === 'savePrompt' ? saveAnchorRef : undefined} collapsable={false}
                 style={props.invertTimestampAndActions ? styles.inverted : styles.button}><IconButton testID={`transcript-message-${action.id === 'savePrompt' ? 'save-prompt' : action.id === 'makeRepeatable' ? 'repeatable' : action.id}:${props.message.id}`}
-                size={Platform.OS === 'web' ? 28 : resolveMinimumInteractiveTargetSize(Platform.OS)}
+                size={28}
                 icon={<Icon name={action.icon} size={ICON_SIZE.xs} color={action.id === 'copy' && action.icon === 'check'
                     ? theme.colors.state.success.foreground : theme.colors.text.secondary} />}
                 accessibilityLabel={action.title}

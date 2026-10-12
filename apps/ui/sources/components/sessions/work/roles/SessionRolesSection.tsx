@@ -14,7 +14,7 @@ import { useRoleCatalog } from '@/components/roles/catalog/useRoleCatalog';
 import { useRoleEnginePresentation } from '@/components/roles/catalog/useRoleEnginePresentation';
 import { RoleEngineField } from '@/components/roles/engine/RoleEngineField';
 import { SessionRolePopover, settleSessionRoleWrite, useSessionRoleSelection } from '@/components/roles/session/sessionRole';
-import { RowActionRevealSlot } from '@/components/sessions/transcript/messageActions/RowActionRevealSlot';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { WorkSection } from '@/components/sessions/work/WorkSection';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
