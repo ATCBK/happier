@@ -6,6 +6,7 @@ import { parseOptionalBooleanEnv } from "@/config/env";
 import { redactSentryEvent, redactSentryLog } from "./sentryLogRedaction";
 import { redactPublicShareCapabilityUrl } from "@happier-dev/protocol";
 import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
+import { resolveSentryEnvironment } from './sentryEnvironment';
 
 type ServerSentryConfig = {
     dsn: string;
@@ -80,15 +81,6 @@ function parseLogLevelsEnv(raw: string | undefined, defaultValue: Array<Log["lev
     return out.length > 0 ? out : defaultValue;
 }
 
-function resolveEnvironment(env: NodeJS.ProcessEnv): string | undefined {
-    const explicit = (env.SENTRY_ENVIRONMENT ?? env.HAPPIER_SENTRY_ENVIRONMENT ?? "").trim();
-    if (explicit) return explicit;
-    const nodeEnv = (env.NODE_ENV ?? "").trim();
-    const flavor = (env.HAPPIER_SERVER_FLAVOR ?? env.HAPPY_SERVER_FLAVOR ?? "").trim();
-    const inferred = flavor ? `${nodeEnv || "production"}:${flavor}` : (nodeEnv || "production");
-    return inferred || undefined;
-}
-
 function resolveRelease(env: NodeJS.ProcessEnv): string | undefined {
     const explicit = (env.SENTRY_RELEASE ?? env.HAPPIER_SENTRY_RELEASE ?? env.HAPPIER_RELEASE ?? "").trim();
     return explicit || undefined;
@@ -117,7 +109,7 @@ export function resolveServerSentryConfig(env: NodeJS.ProcessEnv): ServerSentryC
 
     const sendDefaultPii = parseOptionalBooleanEnv(env.SENTRY_SEND_DEFAULT_PII ?? env.HAPPIER_SENTRY_SEND_DEFAULT_PII) ?? false;
     const tracesSampleRate = parseRateEnv(env.SENTRY_TRACES_SAMPLE_RATE ?? env.HAPPIER_SENTRY_TRACES_SAMPLE_RATE, 0);
-    const environment = resolveEnvironment(env);
+    const environment = resolveSentryEnvironment(env);
     const release = resolveRelease(env);
     const profileSessionSampleRate = parseRateEnv(
         env.SENTRY_PROFILE_SESSION_SAMPLE_RATE ?? env.HAPPIER_SENTRY_PROFILE_SESSION_SAMPLE_RATE,
