@@ -1,8 +1,5 @@
 import type { HostRuntimeLimitMeasurementRecorder } from '@/agent/runtime/state/runtimeLimitMeasurement';
 
-export const INTERNAL_MAX_PLUGIN_PROTOCOL_PENDING_CALLBACKS = 256;
-export const INTERNAL_MAX_PLUGIN_PROTOCOL_PENDING_CALLBACK_BYTES = 8 * 1024 * 1024;
-
 type CallbackQueueFailure = Readonly<{
     code: 'PLUGIN_EXEC_CLIENT_BACKPRESSURE_EXCEEDED' | 'PLUGIN_EXEC_CLIENT_CALLBACK_FAILED';
     cause?: unknown;
@@ -19,10 +16,8 @@ export function createPluginProtocolCallbackQueue(params: Readonly<{
     onFailure(failure: CallbackQueueFailure): void;
     recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
 }>): PluginProtocolCallbackQueue {
-    const maxPendingCallbacks = params.maxPendingCallbacks
-        ?? INTERNAL_MAX_PLUGIN_PROTOCOL_PENDING_CALLBACKS;
-    const maxPendingBytes = params.maxPendingBytes
-        ?? INTERNAL_MAX_PLUGIN_PROTOCOL_PENDING_CALLBACK_BYTES;
+    const maxPendingCallbacks = params.maxPendingCallbacks;
+    const maxPendingBytes = params.maxPendingBytes;
     const recordRuntimeLimitMeasurement = params.recordRuntimeLimitMeasurement;
     let pendingCallbacks = 0;
     let pendingBytes = 0;
@@ -46,8 +41,8 @@ export function createPluginProtocolCallbackQueue(params: Readonly<{
             const normalizedBytes = Math.max(0, Math.trunc(byteLength));
             if (failed) return false;
             if (
-                pendingCallbacks + 1 > maxPendingCallbacks
-                || pendingBytes + normalizedBytes > maxPendingBytes
+                (maxPendingCallbacks !== undefined && pendingCallbacks + 1 > maxPendingCallbacks)
+                || (maxPendingBytes !== undefined && pendingBytes + normalizedBytes > maxPendingBytes)
             ) {
                 recordRuntimeLimitMeasurement?.(Object.freeze({
                     family: 'plugin-protocol-callbacks',

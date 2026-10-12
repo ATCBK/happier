@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -79,6 +79,8 @@ describe('NPM registry credential legacy migration recovery', () => {
 
   it('keeps the legacy credential readable when resealing fails before the destination rewrite', async () => {
     const { happyHomeDir, legacyKeyPath } = await createLegacyCredentialStore();
+    const key = JSON.parse(await readFile(legacyKeyPath, 'utf8'));
+    await writeFile(legacyKeyPath, JSON.stringify({ ...key, retired: true }));
     migrationFaults.failBeforeReseal = true;
 
     const credentials = createNpmRegistryCredentialStore({ happyHomeDir });

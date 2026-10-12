@@ -1,15 +1,141 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { once } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
     readSupervisedPluginProcessIdForHost,
     spawnSupervisedPluginProcess,
 } from './processSupervisor';
+import { createEndOwnerRemainder } from '@/daemon/processes/endOwnerRemainder';
+import { createProcessOwnershipRuntime } from '@/daemon/processes/ownership/processOwnershipRuntime';
+import { readProcessCensus } from '@/processes/census/processCensus';
+import { resolveProcessOwnership } from '@/daemon/processes/ownership/resolveProcessOwnership';
+import type { HappierProcessRoot } from '@/daemon/processes/ownership/types';
 
 describe('spawnSupervisedPluginProcess', () => {
-    it('terminates the owned POSIX process group after its launcher root exits', async () => {
+    it('awaits native cleanup beyond five seconds without rejecting the next turn preparation', async () => {
+        let releaseNativeCleanup!: () => void;
+        const nativeCleanup = new Promise<void>(resolve => { releaseNativeCleanup = resolve; });
+        const supervised = spawnSupervisedPluginProcess({ command: process.execPath,
+            args: ['-e', 'setInterval(() => {}, 1000)'], env: {},
+            // The OS cleanup adapter is the boundary; custody and joining stay real.
+            terminateProcessTree: async child => {
+                await nativeCleanup;
+                const exited = once(child, 'exit');
+                child.kill('SIGKILL');
+                await exited;
+            },
+        });
+        let outcome: 'pending' | 'settled' | 'rejected' = 'pending';
+        let disposal: Promise<void> | undefined;
+        try {
+            vi.useFakeTimers();
+            disposal = supervised.dispose();
+            void disposal.then(() => { outcome = 'settled'; }, () => { outcome = 'rejected'; });
+            await vi.advanceTimersByTimeAsync(5_001);
+            expect(outcome).toBe('pending');
+            vi.useRealTimers();
+            releaseNativeCleanup();
+            await disposal;
+            expect(outcome).toBe('settled');
+            await expect(supervised.waitForSettlement()).resolves.toEqual({ status: 'ended' });
+        } finally {
+            vi.useRealTimers();
+            releaseNativeCleanup();
+            await disposal?.catch(() => undefined);
+            await supervised.handle.wait();
+        }
+    });
+    it('settles a generic departed spawner and observes captured survivors without killing shared-owner peers', async () => {
+        if (process.platform === 'win32') return;
+        const directory = mkdtempSync(join(tmpdir(), 'happier-generic-root-exit-'));
+        const childPidPath = join(directory, 'child.pid');
+        const owner = { kind: 'happier' } as const;
+        const initial = await readProcessCensus({ freshness: 'fresh', scope: 'all' });
+        if (initial.status !== 'ok') throw new Error('Native census unavailable');
+        const self = initial.rows.find(row => row.pid === process.pid)!;
+        const roots: HappierProcessRoot[] = [{ owner, pid: self.pid, start: self.start, live: true, ownerCreatedAtMs: 0 }];
+        const runtime = createProcessOwnershipRuntime({ daemonScopeKey: '123456789abc', listRoots: () => roots });
+        let observed = false;
+        const remainder = createEndOwnerRemainder({ processOwnershipRuntime: runtime, daemonScopeKey: '123456789abc',
+            retainEndedRoots: ended => { roots.push(...ended); }, firstPass: () => { observed = true; } });
+        const supervised = spawnSupervisedPluginProcess({ command: process.execPath, env: {},
+            args: ['-e', `const{spawn}=require('node:child_process');const fs=require('node:fs');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});c.unref();process.on('SIGTERM',()=>setTimeout(()=>process.exit(0),1000));fs.writeFileSync(${JSON.stringify(childPidPath)},String(c.pid));process.stdout.write('ready');setInterval(()=>{},1000);`],
+            rootExitObservation: { owner, ownerRemainder: remainder }, spawnOptions: { detached: true } });
+        let childPid: number | undefined;
+        try {
+            await vi.waitFor(() => expect(existsSync(childPidPath)).toBe(true));
+            childPid = Number(readFileSync(childPidPath, 'utf8'));
+            // The existing root-first stop is an actual pre-exit capture opportunity.
+            // SIGTERM exits this launcher while its independent child survives.
+            const exited = once(supervised.child, 'exit');
+            supervised.child.kill('SIGTERM'); await exited;
+            await supervised.handle.wait();
+            await supervised.dispose();
+            await supervised.waitForSettlement();
+            expect(observed).toBe(true);
+            expect(() => process.kill(childPid!, 0)).not.toThrow();
+            expect(roots.some(root => root.pid === process.pid && root.live)).toBe(true);
+            const current = await runtime.readOwners({ freshness: 'fresh' });
+            if (current.status !== 'ok') throw new Error('Native census unavailable');
+            const rows = resolveProcessOwnership({ snapshot: current.snapshot, roots, daemonScopeKey: '123456789abc', daemonPrincipal: self.principal });
+            expect(rows.find(row => row.pid === childPid)?.level).toBe('left_behind');
+        } finally {
+            supervised.child.kill('SIGKILL');
+            if (childPid) { try { process.kill(childPid, 'SIGKILL'); } catch { /* owned probe only */ } }
+            rmSync(directory, { recursive: true, force: true });
+        }
+    }, 15_000);
+    it('preserves an asynchronous spawn errno in the existing failed diagnostic', async () => {
+        const supervised = spawnSupervisedPluginProcess({ command: 'happier-nonexistent-spawn-fixture', args: [], env: {} });
+        await expect(supervised.handle.wait()).resolves.toMatchObject({
+            termination: { observed: { kind: 'failed', diagnostic: {
+                code: 'PLUGIN_EXEC_PROCESS_FAILED', details: { errorCode: 'ENOENT', spawnFailure: { reason: 'other', errno: 'ENOENT' } },
+            } } },
+        });
+        await supervised.waitForSettlement();
+    });
+    it('lets an admitted activation clean up before terminating its owned descendants', async () => {
+        if (process.platform === 'win32') return;
+        const directory = mkdtempSync(join(tmpdir(), 'happier-native-activation-stop-'));
+        const childPidPath = join(directory, 'child.pid');
+        const cleanupPath = join(directory, 'cleanup');
+        const supervised = spawnSupervisedPluginProcess({
+            command: process.execPath,
+            args: ['-e', [
+                'const { spawn } = require("node:child_process");',
+                'const fs = require("node:fs");',
+                'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+                'process.on("SIGTERM", () => setTimeout(() => {',
+                `fs.writeFileSync(${JSON.stringify(cleanupPath)}, child.exitCode === null && child.signalCode === null ? "present" : "terminated");`,
+                'process.exit(0);',
+                '}, 50));',
+                `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+                'setInterval(() => {}, 1000);',
+            ].join('\n')],
+            env: {},
+            spawnOptions: { detached: true },
+            waitForGracefulRootExitBeforeTreeStop: true,
+        });
+        let childPid: number | undefined;
+        try {
+            await vi.waitFor(() => expect(existsSync(childPidPath)).toBe(true));
+            childPid = Number.parseInt(readFileSync(childPidPath, 'utf8'), 10);
+            await supervised.dispose('hostShutdown');
+            expect(readFileSync(cleanupPath, 'utf8')).toBe('present');
+            await supervised.waitForSettlement();
+            expect(() => process.kill(childPid!, 0)).toThrow();
+        } finally {
+            supervised.child.kill('SIGKILL');
+            if (childPid) { try { process.kill(childPid, 'SIGKILL'); } catch { /* already settled */ } }
+            await supervised.dispose('hostShutdown');
+            rmSync(directory, { recursive: true, force: true });
+        }
+    }, 10_000);
+
+    it.each([undefined, 'happier', 'session', 'run', 'service'] as const)('settles only a shared-owner departed launcher as unobserved without sweeping survivors (owner=%s)', async (ownerKind) => {
         if (process.platform === 'win32') return;
         const directory = mkdtempSync(join(tmpdir(), 'happier-supervised-tree-'));
         const childPidPath = join(directory, 'child.pid');
@@ -22,7 +148,7 @@ describe('spawnSupervisedPluginProcess', () => {
                 'child.unref();',
                 `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
             ].join('\n')],
-            env: {},
+            env: ownerKind ? { HAPPIER_PROCESS_OWNER: `v1.123456789abc.${ownerKind}.${ownerKind === 'happier' ? 'daemon' : 'fixture'}` } : {},
             spawnOptions: { detached: true },
         });
         let childPid: number | null = null;
@@ -33,10 +159,13 @@ describe('spawnSupervisedPluginProcess', () => {
             expect(Number.isSafeInteger(childPid)).toBe(true);
             expect(() => process.kill(childPid!, 0)).not.toThrow();
 
-            await expect(supervised.dispose('hostShutdown')).resolves.toBeUndefined();
-            await vi.waitFor(() => {
-                expect(() => process.kill(childPid!, 0)).toThrow();
-            }, { timeout: 3_000 });
+            if (ownerKind === 'run' || ownerKind === 'service') {
+                await expect(supervised.dispose('hostShutdown')).rejects.toMatchObject({ code: 'plugin_exec_termination_incomplete' });
+            } else {
+                await supervised.dispose('hostShutdown');
+                await expect(supervised.waitForSettlement()).resolves.toEqual({ status: 'ended', remainder: 'unobserved' });
+            }
+            expect(() => process.kill(childPid!, 0)).not.toThrow();
         } finally {
             if (childPid) {
                 try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ }
@@ -235,6 +364,41 @@ describe('spawnSupervisedPluginProcess', () => {
                 requestedBy: { kind: 'abort' },
             },
         });
+    });
+
+    it('waits for native termination settlement without an implicit join deadline', async () => {
+        let finishTermination!: () => void;
+        const nativeTermination = new Promise<void>((resolve) => { finishTermination = resolve; });
+        const supervised = spawnSupervisedPluginProcess({
+            command: process.execPath,
+            args: ['-e', 'process.exit(0)'],
+            env: {},
+            // Only the OS termination boundary is delayed; supervision stays real.
+            terminateProcessTree: () => nativeTermination,
+        });
+        const terminal = await supervised.handle.wait();
+        const uncertainty = vi.fn();
+        supervised.onOutcomeUncertain(uncertainty);
+        vi.useFakeTimers();
+        let outcome = 'pending';
+        const disposal = supervised.dispose('caller');
+        const observedDisposal = disposal.then(
+            () => { outcome = 'disposed'; },
+            () => { outcome = 'failed'; },
+        );
+        try {
+            await vi.advanceTimersByTimeAsync(6_000);
+            expect(outcome).toBe('pending');
+            expect(uncertainty).not.toHaveBeenCalled();
+            finishTermination();
+            await expect(disposal).resolves.toBeUndefined();
+            await expect(supervised.waitForSettlement()).resolves.toEqual({ status: 'ended' });
+            expect(await supervised.handle.wait()).toBe(terminal);
+        } finally {
+            finishTermination();
+            await observedDisposal;
+            vi.useRealTimers();
+        }
     });
 
     it('reports incomplete termination without manufacturing a terminal process fact', async () => {

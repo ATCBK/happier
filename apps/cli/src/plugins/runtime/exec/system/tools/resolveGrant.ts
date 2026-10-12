@@ -476,6 +476,7 @@ export function createPluginExecSystemToolResolver(params: CreatePluginExecSyste
                     legacyCandidates: runnableLegacy,
                     cwd: request.cwd ?? process.cwd(),
                     env: { ...process.env },
+                    signal: request.signal,
                 });
                 assertNotAborted(request.signal);
                 if (verdict.kind === 'selected') {

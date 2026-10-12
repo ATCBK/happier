@@ -1,5 +1,7 @@
 import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+import { spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -51,7 +53,7 @@ async function createHangingUpgradeServer(): Promise<{
     readonly port: number;
     readonly requested: Promise<void>;
     readonly completeUpgrade: () => void;
-    readonly sendJsonBurst: (count: number) => void;
+    readonly sendJsonBurst: (count: number, payloadBytes?: number) => void;
     readonly ponged: Promise<void>;
     readonly close: () => Promise<void>;
 }> {
@@ -59,7 +61,7 @@ async function createHangingUpgradeServer(): Promise<{
     let markRequested!: () => void;
     const requested = new Promise<void>(resolve => { markRequested = resolve; });
     let completeUpgrade = () => undefined;
-    let sendJsonBurst = (_count: number) => undefined;
+    let sendJsonBurst = (_count: number, _payloadBytes = 0) => undefined;
     let markPonged!: () => void;
     const ponged = new Promise<void>(resolve => { markPonged = resolve; });
     const server = createServer((socket) => {
@@ -88,10 +90,17 @@ async function createHangingUpgradeServer(): Promise<{
                 ].join('\r\n'));
                 upgraded = true;
             };
-            sendJsonBurst = count => {
+            sendJsonBurst = (count, payloadBytes = 0) => {
                 const frames = Array.from({ length: count }, (_, index) => {
-                    const text = Buffer.from(JSON.stringify(index));
-                    return Buffer.concat([Buffer.from([0x81, text.length]), text]);
+                    const text = Buffer.from(JSON.stringify(payloadBytes === 0 ? index : { index, payload: 'x'.repeat(payloadBytes) }));
+                    const header = Buffer.alloc(text.byteLength < 126 ? 2 : 4);
+                    header[0] = 0x81;
+                    if (header.byteLength === 2) header[1] = text.byteLength;
+                    else {
+                        header[1] = 126;
+                        header.writeUInt16BE(text.byteLength, 2);
+                    }
+                    return Buffer.concat([header, text]);
                 });
                 socket.write(Buffer.concat([...frames, Buffer.from([0x89, 0])]));
             };
@@ -110,7 +119,7 @@ async function createHangingUpgradeServer(): Promise<{
         port: address.port,
         requested,
         completeUpgrade: () => completeUpgrade(),
-        sendJsonBurst: count => sendJsonBurst(count),
+        sendJsonBurst: (count, payloadBytes) => sendJsonBurst(count, payloadBytes),
         ponged,
         close: async () => {
             for (const socket of sockets) {
@@ -247,6 +256,79 @@ function createAlreadyFlowingHandshakeProcess(
 }
 
 describe('A.13p.10 spawned loopback WebSocket client transport', () => {
+    it('settles ended handshake stdout while the live child leaves a real stdin write blocked', async () => {
+        const child = spawn(process.execPath, ['-e', "process.on('message', () => require('node:fs').closeSync(1)); setInterval(() => {}, 1000)"], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
+        const stdin = child.stdin;
+        const stdout = child.stdout;
+        if (!stdin || !stdout) throw new Error('Fixture pipe handles unavailable');
+        const exit = new Promise<Awaited<ExecProcessHandleV1['exit']>>((resolve, reject) => {
+            child.once('error', reject);
+            child.once('exit', (exitCode, signal) => resolve({ exitCode, signal, stdout: '', stderr: '' }));
+        });
+        stdin.on('error', () => {});
+        const stdoutEnded = new Promise<void>(resolve => { stdout.once('end', resolve); });
+        stdout.resume();
+        const cancellation = new AbortController();
+        let pending: ReturnType<typeof createLoopbackWebSocketProcessClient> | undefined;
+        let writeStarted = false;
+        let writeSettled = false;
+        try {
+            const spec = createSpec(process.execPath, {});
+            pending = createLoopbackWebSocketProcessClient({
+                optionsSignal: cancellation.signal,
+                spec: {
+                    ...spec,
+                    transport: {
+                        ...spec.transport,
+                        handshake: {
+                            byteOrder: 'little-endian',
+                            requestFrames: [new Uint8Array(2 * 1024 * 1024)],
+                            response: { maxFrameBytes: 4 * 1024 * 1024 },
+                        },
+                    },
+                },
+                process: {
+                    child: { stdin, stdout },
+                    readStderrPreview: () => '',
+                    handle: {
+                        pid: child.pid ?? null,
+                        exit,
+                        writeStdin(data) {
+                            writeStarted = true;
+                            const writing = new Promise<void>((resolve, reject) => {
+                                stdin.write(data, error => error ? reject(error) : resolve());
+                            });
+                            void writing.then(() => { writeSettled = true; }, () => { writeSettled = true; });
+                            return writing;
+                        },
+                        kill: signal => { child.kill(signal); },
+                        dispose: async () => { child.kill('SIGKILL'); await exit; },
+                    },
+                },
+            });
+            expect(writeStarted).toBe(true);
+            expect(writeSettled).toBe(false);
+            await new Promise<void>((resolve, reject) => {
+                child.send('close-stdout', error => error ? reject(error) : resolve());
+            });
+            await Promise.race([stdoutEnded, exit.then(() => { throw new Error('Fixture exited before closing stdout'); })]);
+            const result = await Promise.race([
+                pending.catch((error: unknown) => error),
+                new Promise(resolve => setTimeout(() => resolve({ status: 'still_pending' }), 150)),
+            ]);
+            expect(writeStarted).toBe(true);
+            expect(writeSettled).toBe(false);
+            expect(child.exitCode).toBeNull();
+            expect(child.signalCode).toBeNull();
+            expect(result).toMatchObject({ code: 'PLUGIN_EXEC_CLIENT_PROTOCOL_ERROR' });
+        } finally {
+            cancellation.abort();
+            await pending?.catch(() => undefined);
+            child.kill('SIGKILL');
+            await exit;
+        }
+    });
+
     it('settles a handshake read whose stdout already ended before readiness observation', async () => {
         const stdout = new PassThrough();
         const ended = new Promise<void>(resolve => { stdout.once('end', resolve); });
@@ -316,10 +398,42 @@ describe('A.13p.10 spawned loopback WebSocket client transport', () => {
         }
     });
 
+    it.each([undefined, 64 * 1024 * 1024])('delivers individually valid frames with aggregate byte budget %s after a slow listener resumes', async (maxBufferedBytes) => {
+        const server = await createHangingUpgradeServer();
+        const pending = createLoopbackWebSocketJsonClient({
+            endpoint: { host: '127.0.0.1', port: server.port },
+            ...(maxBufferedBytes === undefined ? {} : { limits: { maxBufferedBytes } }),
+        });
+        let protocol: Awaited<typeof pending> | undefined;
+        let resume!: () => void;
+        const held = new Promise<void>(resolve => { resume = resolve; });
+        const messages: unknown[] = [];
+        try {
+            await Promise.race([server.requested, pending]);
+            server.completeUpgrade();
+            protocol = await pending;
+            protocol.client.subscribe(async value => {
+                messages.push(value);
+                if (messages.length === 1) await held;
+            });
+            server.sendJsonBurst(60, 20_000);
+            await Promise.race([server.ponged, protocol.client.closed]);
+            resume();
+            await expect.poll(() => messages.length).toBe(60);
+            expect(messages).toEqual(Array.from({ length: 60 }, (_, index) => ({ index, payload: 'x'.repeat(20_000) })));
+        } finally {
+            resume();
+            protocol?.dispose();
+            await pending.catch(() => undefined);
+            await server.close();
+        }
+    });
+
     it.each([undefined, 65_000])('honors an omitted or authored connection budget %s beyond the former 60-second clamp', async (timeoutMs) => {
         const server = await createHangingUpgradeServer();
         const cancellation = new AbortController();
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+        const monotonicClock = vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
         let settled = false;
         const pending = createLoopbackWebSocketJsonClient({
             endpoint: { host: '127.0.0.1', port: server.port },
@@ -337,6 +451,7 @@ describe('A.13p.10 spawned loopback WebSocket client transport', () => {
         } finally {
             cancellation.abort();
             await pending.catch(() => undefined);
+            monotonicClock.mockRestore();
             vi.useRealTimers();
             await server.close();
         }

@@ -29,9 +29,6 @@ type JsonRpcApplicationError = Error & Readonly<{
     method?: string;
 }>;
 const MAX_JSON_RPC_ERROR_MESSAGE_BYTES = 500;
-const MAX_PENDING_JSON_RPC_REQUESTS = 256;
-const MAX_IN_FLIGHT_JSON_RPC_REQUEST_HANDLERS = 256;
-const MAX_IN_FLIGHT_JSON_RPC_WRITES = 256;
 
 export type CreateJsonRpcProcessClientParams = Readonly<{
     process: ExecProcessHandleV1;
@@ -192,8 +189,6 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
     const notificationSubscribers = new Set<(message: Readonly<{ method: string; params?: unknown }>) => void | Promise<void>>();
     const maxFrameBytes = params.maxFrameBytes ?? 1024 * 1024;
     let nextId = 1;
-    let inFlightRequestHandlers = 0;
-    let inFlightWrites = 0;
     let disposedError: Error | null = null;
     let detachLineReader: () => void = () => undefined;
 
@@ -213,30 +208,18 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
         if (disposedError) {
             throw disposedError;
         }
-        if (inFlightWrites >= MAX_IN_FLIGHT_JSON_RPC_WRITES) {
-            throw new PluginExecClientError(
-                'PLUGIN_EXEC_CLIENT_BACKPRESSURE_EXCEEDED',
-                'JSON-RPC writes exceeded their bounded concurrency',
-                { stderrPreview: readStderrPreview() },
-            );
+        const nextMessage = await applyJsonRpcMessageHook(message, 'outgoing');
+        if (!nextMessage) {
+            return false;
         }
-        inFlightWrites += 1;
-        try {
-            const nextMessage = await applyJsonRpcMessageHook(message, 'outgoing');
-            if (!nextMessage) {
-                return false;
-            }
-            const encoded = JSON.stringify(nextMessage);
-            if (Buffer.byteLength(encoded, 'utf8') > maxFrameBytes) {
-                throw createFrameSizeError(maxFrameBytes, readStderrPreview());
-            }
-            await params.write(params.framing === 'contentLength'
-                ? encodeContentLengthFrame(new Uint8Array(Buffer.from(encoded, 'utf8')))
-                : `${encoded}\n`);
-            return true;
-        } finally {
-            inFlightWrites -= 1;
+        const encoded = JSON.stringify(nextMessage);
+        if (Buffer.byteLength(encoded, 'utf8') > maxFrameBytes) {
+            throw createFrameSizeError(maxFrameBytes, readStderrPreview());
         }
+        await params.write(params.framing === 'contentLength'
+            ? encodeContentLengthFrame(new Uint8Array(Buffer.from(encoded, 'utf8')))
+            : `${encoded}\n`);
+        return true;
     }
 
     function failClient(error: Error): void {
@@ -383,21 +366,9 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
             return;
         }
         if (id !== null) {
-            if (inFlightRequestHandlers >= MAX_IN_FLIGHT_JSON_RPC_REQUEST_HANDLERS) {
-                failClient(new PluginExecClientError(
-                    'PLUGIN_EXEC_CLIENT_BACKPRESSURE_EXCEEDED',
-                    'JSON-RPC child request handlers exceeded their bounded concurrency',
-                    { stderrPreview: readStderrPreview() },
-                ));
-                return;
-            }
-            inFlightRequestHandlers += 1;
             void handleRequest(jsonMessage, id, method)
                 .catch((error) => {
                     failClient(createPluginExecClientProtocolError('JSON-RPC request handler dispatch failed', error, readStderrPreview()));
-                })
-                .finally(() => {
-                    inFlightRequestHandlers -= 1;
                 });
             return;
         }
@@ -487,13 +458,6 @@ export function createJsonRpcProcessClient(params: CreateJsonRpcProcessClientPar
             }
             if (options?.signal?.aborted) {
                 throw createPluginExecClientAbortError();
-            }
-            if (pendingRequestMethods.size >= MAX_PENDING_JSON_RPC_REQUESTS) {
-                throw new PluginExecClientError(
-                    'PLUGIN_EXEC_CLIENT_BACKPRESSURE_EXCEEDED',
-                    'JSON-RPC pending request correlation exceeded its bounded capacity',
-                    { stderrPreview: readStderrPreview() },
-                );
             }
             const id = nextId++;
             const requestTimeoutMs = options?.timeoutMs === null

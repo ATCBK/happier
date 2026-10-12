@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { connect, type Socket } from 'node:net';
+import { createServer } from 'node:http';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -133,6 +134,7 @@ async function runPermissionForwarder(params: {
   hookEventName: string;
   secretFile: string;
   body: unknown;
+  denyOnUnavailable?: boolean;
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const scriptPath = resolve(process.cwd(), 'scripts', 'permission_hook_forwarder.cjs');
   return await new Promise((resolvePromise, reject) => {
@@ -142,6 +144,7 @@ async function runPermissionForwarder(params: {
       params.hookEventName,
       '--secret-file',
       params.secretFile,
+      ...(params.denyOnUnavailable ? ['--deny-on-unavailable'] : []),
     ], {
       cwd: join(process.cwd()),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -683,6 +686,62 @@ describe('startSessionHookServer', () => {
 
     expect(result).toEqual({ code: 0, stdout: '', stderr: '' });
     expect(onSessionHook).not.toHaveBeenCalled();
+  });
+
+  it.each(['invalid_port', 'refused', 'unauthorized', 'missing_decision'] as const)(
+    'denies a confined pre-tool call when permission forwarding is %s', async (failure) => {
+      const server = await startSessionHookServer({
+        permissionHookSecret: 'confined-hook-secret',
+        onPermissionHook: async () => ({ continue: true, suppressOutput: true }),
+        defaultPermissionHookResponse: buildDefaultPermissionHookResponse,
+      });
+      servers.push(server);
+      const secretFile = await createSecretFile(failure === 'unauthorized' ? 'wrong-secret' : 'confined-hook-secret');
+      if (failure === 'refused') { server.stop(); await server.closed; }
+      const result = await runPermissionForwarder({
+        port: failure === 'invalid_port' ? 0 : server.port, hookEventName: 'PreToolUse',
+        secretFile, denyOnUnavailable: true,
+        body: { tool_name: 'Read', tool_input: { file_path: '/tmp/confined-canary' }, tool_use_id: 'confined-read' },
+      });
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' },
+      });
+    },
+  );
+
+  it('preserves an authoritative allow through confined permission forwarding', async () => {
+    const server = await startSessionHookServer({
+      permissionHookSecret: 'confined-allow-secret',
+      onPermissionHook: async () => ({ continue: true, suppressOutput: true,
+        hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }),
+      defaultPermissionHookResponse: buildDefaultPermissionHookResponse,
+    });
+    servers.push(server);
+    const result = await runPermissionForwarder({
+      port: server.port, hookEventName: 'PreToolUse', secretFile: await createSecretFile('confined-allow-secret'),
+      denyOnUnavailable: true, body: { tool_name: 'Read', tool_input: { file_path: '/tmp/attachments/allowed' } },
+    });
+    expect(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision).toBe('allow');
+  });
+
+  it('denies a confined permission when the hook response disconnects after headers', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.write('{"hookSpecificOutput":');
+      setImmediate(() => response.destroy());
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Hook fixture failed to bind');
+    try {
+      const result = await runPermissionForwarder({
+        port: address.port, hookEventName: 'PreToolUse', secretFile: await createSecretFile('unused-secret'),
+        denyOnUnavailable: true, body: { tool_name: 'Read', tool_input: { file_path: '/tmp/protected-canary' } },
+      });
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision).toBe('deny');
+    } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
   });
 
   it('returns 403 when the permission secret header is missing or mismatched', async () => {

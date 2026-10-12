@@ -8,15 +8,6 @@ import type {
     PluginExecSystemToolReadiness,
 } from './definitions';
 
-/**
- * Bounded observed-behavior budgets for readiness probes. The ACP budget matches
- * the shared probe default; the command-surface budget matches the shared CLI
- * probe default. Both bound session-launch latency for tools that declare a
- * readiness probe; tools without one keep pure executable resolution.
- */
-const ACP_READINESS_PROBE_TIMEOUT_MS = 2_500;
-const COMMAND_SURFACE_PROBE_TIMEOUT_MS = 1_000;
-
 export type SystemToolFingerprintMatch = 'current' | 'legacy' | 'unknown';
 
 export type SystemToolReadinessVerdict =
@@ -103,6 +94,7 @@ async function probeCandidate(params: Readonly<{
     cwd: string;
     env: Record<string, string | undefined>;
     readiness: PluginExecSystemToolReadiness;
+    signal?: AbortSignal;
 }>): Promise<ProbedCandidate> {
     const transport = readinessProbeTransport(params.toolId);
     const [probe, surface] = await Promise.all([
@@ -112,12 +104,14 @@ async function probeCandidate(params: Readonly<{
             cwd: params.cwd,
             env: params.env,
             transport,
-            timeoutMs: ACP_READINESS_PROBE_TIMEOUT_MS,
+            timeoutMs: null,
+            signal: params.signal,
         }),
         runCliCommandBestEffort({
             resolvedPath: params.command,
             args: [...params.readiness.commandSurfaceArgs],
-            timeoutMs: COMMAND_SURFACE_PROBE_TIMEOUT_MS,
+            timeoutMs: null,
+            signal: params.signal,
         }),
     ]);
     return {
@@ -149,6 +143,7 @@ export async function resolveSystemToolReadiness(params: Readonly<{
     legacyCandidates: readonly string[];
     cwd: string;
     env: Record<string, string | undefined>;
+    signal?: AbortSignal;
 }>): Promise<SystemToolReadinessVerdict> {
     if (params.candidates.length === 0) {
         const legacy = params.legacyCandidates[0];
@@ -164,6 +159,7 @@ export async function resolveSystemToolReadiness(params: Readonly<{
         cwd: params.cwd,
         env: params.env,
         readiness: params.readiness,
+        signal: params.signal,
     })));
     const current = probed.find((candidate) => candidate.fingerprint === 'current');
     if (current) return { kind: 'selected', executablePath: current.command };

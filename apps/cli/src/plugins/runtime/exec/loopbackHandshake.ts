@@ -1,4 +1,6 @@
 import type { ExecLengthPrefixedByteOrderV1 } from './privateContract';
+import { performance } from 'node:perf_hooks';
+import { createPluginAcquisitionLifetime } from '../../distribution/acquisitionLifetime';
 
 import {
     PluginExecClientError,
@@ -8,11 +10,12 @@ import {
 
 const LENGTH_PREFIX_BYTES = 4;
 const DEFAULT_MAX_FRAME_BYTES = 1024 * 1024;
-const DEFAULT_RESPONSE_TIMEOUT_MS = 5_000;
 
 type ByteReadableStream = NodeJS.ReadableStream & Readonly<{
     pause?: () => unknown;
     resume?: () => unknown;
+    readableEnded?: boolean;
+    destroyed?: boolean;
 }>;
 
 type ReadHandshakeFrameParams = Readonly<{
@@ -61,7 +64,6 @@ export function encodeLoopbackHandshakeFrame(
 export async function readLoopbackHandshakeFrame(params: ReadHandshakeFrameParams): Promise<Uint8Array> {
     const stdout = params.stdout as ByteReadableStream;
     const maxFrameBytes = params.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
-    const timeoutMs = params.timeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS;
     const stderrPreview = () => {
         const preview = params.readStderrPreview?.();
         return preview && preview.length > 0 ? preview : undefined;
@@ -70,25 +72,28 @@ export async function readLoopbackHandshakeFrame(params: ReadHandshakeFrameParam
     if (params.signal?.aborted) {
         throw createPluginExecClientAbortError();
     }
+    const lifetime = createPluginAcquisitionLifetime({
+        signal: params.signal,
+        ...(params.timeoutMs === undefined ? {} : {
+            deadlineAtMonotonicMs: performance.now() + (
+                Number.isFinite(params.timeoutMs) ? Math.max(0, params.timeoutMs) : 0
+            ),
+        }),
+        errorLabel: 'Loopback WebSocket handshake',
+    });
+    const signal = lifetime.signal;
 
     return await new Promise<Uint8Array>((resolve, reject) => {
         let buffer = Buffer.alloc(0);
         let settled = false;
-        const timeout = setTimeout(() => {
-            fail(new PluginExecClientError(
-                'PLUGIN_EXEC_CLIENT_REQUEST_TIMEOUT',
-                'Timed out waiting for loopback WebSocket handshake response',
-                { stderrPreview: stderrPreview() },
-            ));
-        }, Math.max(0, timeoutMs));
 
         function cleanup(): void {
-            clearTimeout(timeout);
+            lifetime.dispose();
             stdout.off('data', onData);
             stdout.off('end', onEnd);
             stdout.off('close', onEnd);
             stdout.off('error', onError);
-            params.signal?.removeEventListener('abort', onAbort);
+            signal?.removeEventListener('abort', onAbort);
         }
 
         function succeed(frame: Uint8Array): void {
@@ -142,14 +147,22 @@ export async function readLoopbackHandshakeFrame(params: ReadHandshakeFrameParam
         }
 
         function onAbort(): void {
-            fail(createPluginExecClientAbortError());
+            fail(params.signal?.aborted ? createPluginExecClientAbortError() : new PluginExecClientError(
+                'PLUGIN_EXEC_CLIENT_REQUEST_TIMEOUT',
+                'Timed out waiting for loopback WebSocket handshake response',
+                { stderrPreview: stderrPreview() },
+            ));
         }
 
         stdout.on('data', onData);
         stdout.once('end', onEnd);
         stdout.once('close', onEnd);
         stdout.once('error', onError);
-        params.signal?.addEventListener('abort', onAbort, { once: true });
-        stdout.resume?.();
+        signal?.addEventListener('abort', onAbort, { once: true });
+        if (signal?.aborted) onAbort();
+        else if (stdout.readableEnded || stdout.destroyed) onEnd();
+        else {
+            if (!settled) stdout.resume?.();
+        }
     });
 }

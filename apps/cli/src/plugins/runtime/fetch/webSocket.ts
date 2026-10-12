@@ -13,6 +13,7 @@ import type {
     PluginWebSocketOpenInput,
 } from '@happier-dev/plugin-sdk/http';
 import WebSocket from 'ws';
+import { createPluginAcquisitionLifetime } from '../../distribution/acquisitionLifetime';
 
 export type PluginWebSocketRuntimeOptions = PluginCancellationOptions & Readonly<{
     /** Host-owned lifecycle signal; never exposed through the public SDK. */
@@ -28,7 +29,7 @@ export type NormalizedPluginWebSocketOpenInput = Readonly<{
     targetOrigin: string;
     protocols: readonly string[];
     headers: Readonly<Record<string, string>>;
-    connectTimeoutMs: number;
+    connectTimeoutMs: number | undefined;
     maxMessageBytes: number;
     maxPendingMessages: number;
     maxPendingBytes: number;
@@ -37,19 +38,8 @@ export type NormalizedPluginWebSocketOpenInput = Readonly<{
 
 const MAX_URL_BYTES = 8 * 1024;
 const MAX_HEADER_BYTES = 64 * 1024;
-const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
-const MIN_CONNECT_TIMEOUT_MS = 100;
-const MAX_CONNECT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
 const MAX_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
-const DEFAULT_MAX_PENDING_MESSAGES = 64;
-const MAX_MAX_PENDING_MESSAGES = 1024;
-const DEFAULT_MAX_PENDING_BYTES = 4 * 1024 * 1024;
-const MAX_MAX_PENDING_BYTES = 32 * 1024 * 1024;
-const DEFAULT_MAX_BUFFERED_SEND_BYTES = 1024 * 1024;
-const MAX_MAX_BUFFERED_SEND_BYTES = 16 * 1024 * 1024;
-const MAX_WEBSOCKET_PROTOCOLS = 16;
-const MAX_FRAGMENTS = 1024;
 const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const WEBSOCKET_PROTOCOL_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const RESERVED_HANDSHAKE_HEADERS = new Set([
@@ -137,12 +127,6 @@ function readBoundedPositiveInteger(
 
 function normalizeProtocols(protocols: readonly string[] | undefined): readonly string[] {
     const values = protocols ?? Object.freeze([]);
-    if (values.length > MAX_WEBSOCKET_PROTOCOLS) {
-        throw pluginWebSocketError(
-            'plugin_websocket_invalid_protocol',
-            `Plugin WebSocket accepts at most ${MAX_WEBSOCKET_PROTOCOLS} subprotocols`,
-        );
-    }
     const seen = new Set<string>();
     const normalized: string[] = [];
     for (const protocol of values) {
@@ -285,12 +269,8 @@ export function normalizePluginWebSocketOpenInput(
         targetOrigin: webSocketTargetOrigin(url),
         protocols,
         headers: headers.headers,
-        connectTimeoutMs: readBoundedPositiveInteger(
-            input.connectTimeoutMs,
-            DEFAULT_CONNECT_TIMEOUT_MS,
-            MIN_CONNECT_TIMEOUT_MS,
-            MAX_CONNECT_TIMEOUT_MS,
-            'connectTimeoutMs',
+        connectTimeoutMs: input.connectTimeoutMs === undefined ? undefined : readBoundedPositiveInteger(
+            input.connectTimeoutMs, 1, 1, Number.MAX_SAFE_INTEGER, 'connectTimeoutMs',
         ),
         maxMessageBytes: readBoundedPositiveInteger(
             input.maxMessageBytes,
@@ -301,23 +281,23 @@ export function normalizePluginWebSocketOpenInput(
         ),
         maxPendingMessages: readBoundedPositiveInteger(
             input.maxPendingMessages,
-            DEFAULT_MAX_PENDING_MESSAGES,
+            Infinity,
             1,
-            MAX_MAX_PENDING_MESSAGES,
+            Number.MAX_SAFE_INTEGER,
             'maxPendingMessages',
         ),
         maxPendingBytes: readBoundedPositiveInteger(
             input.maxPendingBytes,
-            DEFAULT_MAX_PENDING_BYTES,
+            Infinity,
             1,
-            MAX_MAX_PENDING_BYTES,
+            Number.MAX_SAFE_INTEGER,
             'maxPendingBytes',
         ),
         maxBufferedSendBytes: readBoundedPositiveInteger(
             input.maxBufferedSendBytes,
-            DEFAULT_MAX_BUFFERED_SEND_BYTES,
+            Infinity,
             1,
-            MAX_MAX_BUFFERED_SEND_BYTES,
+            Number.MAX_SAFE_INTEGER,
             'maxBufferedSendBytes',
         ),
     });
@@ -355,11 +335,6 @@ function validateCloseRequest(request: Readonly<{ code?: number; reason?: string
         );
     }
 }
-
-/** @types/ws lags the v8 driver option this adapter deliberately owns. */
-type BoundedWsClientOptions = WebSocket.ClientOptions & Readonly<{
-    maxFragments: number;
-}>;
 
 type WsReceiverInspection = Readonly<{
     _fragmented?: unknown;
@@ -477,16 +452,14 @@ export async function createPluginWebSocketConnection(
         );
     }
 
-    const driverOptions: BoundedWsClientOptions = Object.freeze({
+    const driverOptions: WebSocket.ClientOptions = Object.freeze({
         headers: normalized.headers,
         followRedirects: false,
         maxRedirects: 0,
-        // The adapter owns the typed deadline. Keep the driver deadline just
-        // beyond it so an opening timeout retains its canonical terminal code.
-        handshakeTimeout: normalized.connectTimeoutMs + 100,
         // ws uses zero to mean no payload byte limit.
         maxPayload: Number.isFinite(normalized.maxMessageBytes) ? normalized.maxMessageBytes : 0,
-        maxFragments: MAX_FRAGMENTS,
+        // Retain ws's fragment/chunk security limits for structural allocation
+        // (GHSA-96hv-2xvq-fx4p), without imposing a shorter host count limit.
         allowSynchronousEvents: false,
         autoPong: true,
         // TLS verification is a host invariant, not a process-environment
@@ -810,12 +783,10 @@ export async function createPluginWebSocketConnection(
         if (!opened) openFailureCause = error;
         const driverCode = readDriverErrorCode(error);
         const isPayloadLimit = driverCode === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH';
-        const isFragmentLimit = driverCode === 'WS_ERR_TOO_MANY_BUFFERED_PARTS';
         const isProtocolError = driverCode?.startsWith('WS_ERR_') === true;
         forceClose(Object.freeze({
             kind: 'error' as const,
             ...(isPayloadLimit ? { code: 1009, reason: 'plugin_websocket_message_too_large' } : {}),
-            ...(isFragmentLimit ? { code: 1008, reason: 'plugin_websocket_fragment_limit_exceeded' } : {}),
             wasClean: false,
             diagnostic: closeDiagnostic(!opened
                 ? isTlsDriverError(error, normalized.url)
@@ -823,8 +794,6 @@ export async function createPluginWebSocketConnection(
                     : 'plugin_websocket_connect_failed'
                 : isPayloadLimit
                     ? 'plugin_websocket_message_too_large'
-                    : isFragmentLimit
-                        ? 'plugin_websocket_fragment_limit_exceeded'
                     : isProtocolError
                         ? 'plugin_websocket_protocol_error'
                         : 'plugin_websocket_connection_error'),
@@ -844,12 +813,25 @@ export async function createPluginWebSocketConnection(
             ...(diagnostic === undefined ? {} : { diagnostic }),
         }));
     });
-    clearConnectTimer = () => clearTimeout(connectTimer);
-    const connectTimer = setTimeout(() => forceClose(Object.freeze({
-        kind: 'error' as const,
-        wasClean: false,
-        diagnostic: closeDiagnostic('plugin_websocket_connect_timeout'),
-    })), normalized.connectTimeoutMs);
+    if (normalized.connectTimeoutMs !== undefined) {
+        const lifetime = createPluginAcquisitionLifetime({
+            timeoutMs: normalized.connectTimeoutMs,
+            errorLabel: 'Plugin WebSocket connection',
+        });
+        const onTimeout = (): void => {
+            forceClose(Object.freeze({
+                kind: 'error' as const,
+                wasClean: false,
+                diagnostic: closeDiagnostic('plugin_websocket_connect_timeout'),
+            }));
+        };
+        clearConnectTimer = () => {
+            lifetime.dispose();
+            lifetime.signal?.removeEventListener('abort', onTimeout);
+        };
+        lifetime.signal?.addEventListener('abort', onTimeout, { once: true });
+        if (lifetime.signal?.aborted) onTimeout();
+    }
     detachConnectAbort = attachAbort(options.signal, false);
     detachLifecycleAbort = attachAbort(options.lifecycleSignal, true);
 

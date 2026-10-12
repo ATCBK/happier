@@ -230,24 +230,6 @@ describe('system tool readiness (capability fingerprint, never semver)', () => {
         expect(grant.executablePath).toBe(current);
     }, 20_000);
 
-    it('selects known-current ACP beyond the diagnostic surface policy without invoking its hanging command', async () => {
-        if (process.platform === 'win32') return;
-        const root = await makeRoot();
-        const processLog = join(root, 'processes.log');
-        const current = await writeKimiFixture({
-            dir: root, acpMode: 'current', surface: 'hang', version: '0.1.1',
-            invocationLog: join(root, 'invocations.log'), processLog,
-        });
-
-        const grant = await resolverForPath(root).resolve({ toolId: 'kimi-cli', purpose: 'test' });
-
-        expect(grant.executablePath).toBe(current);
-        const { readFile } = await import('node:fs/promises');
-        const processes = (await readFile(processLog, 'utf8')).trim().split('\n')
-            .map((line) => JSON.parse(line) as { command: string });
-        expect(processes.some((child) => child.command === 'migrate')).toBe(false);
-    }, 20_000);
-
     it('waits for a responsive command surface instead of inheriting legacy-name guidance', async () => {
         if (process.platform === 'win32') return;
         const root = await makeRoot();
@@ -264,12 +246,13 @@ describe('system tool readiness (capability fingerprint, never semver)', () => {
         expect(failure).toMatchObject({ code: 'plugin_exec_system_tool_unidentified' });
     }, 20_000);
 
-    it.each(['acp', 'migrate'] as const)('cancels both pending readiness phases (%s) and observes process exit before returning', async (phase) => {
+    it.each(['acp', 'migrate', 'current'] as const)('cancels both pending readiness phases (%s) and observes process exit before returning', async (phase) => {
         if (process.platform === 'win32') return;
         const root = await makeRoot();
         const processLog = join(root, 'processes.log');
         await writeKimiFixture({
-            dir: root, acpMode: phase === 'acp' ? 'hang' : 'exit', surface: 'hang', version: '0.1.1',
+            dir: root, acpMode: phase === 'acp' ? 'hang' : phase === 'current' ? 'current' : 'exit',
+            surface: 'hang', version: '0.1.1',
             invocationLog: join(root, 'invocations.log'), processLog,
         });
         const controller = new AbortController();
@@ -282,7 +265,15 @@ describe('system tool readiness (capability fingerprint, never semver)', () => {
             await expect.poll(async () => {
                 const text = await readFile(processLog, 'utf8').catch(() => '');
                 processes = text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as { pid: number; command: string });
-                return processes.some((child) => child.command === phase);
+                if (phase !== 'current') return processes.some((child) => child.command === phase);
+                const acp = processes.find((child) => child.command === 'acp');
+                if (!acp || !processes.some((child) => child.command === 'migrate')) return false;
+                try {
+                    process.kill(acp.pid, 0);
+                    return false;
+                } catch {
+                    return true;
+                }
             }, { timeout: 10_000 }).toBe(true);
             controller.abort();
             const failure = await pending;

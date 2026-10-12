@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-    createPluginProtocolCallbackQueue,
-    INTERNAL_MAX_PLUGIN_PROTOCOL_PENDING_CALLBACK_BYTES,
-} from './callbackQueue';
+import { createPluginProtocolCallbackQueue } from './callbackQueue';
 
 describe('createPluginProtocolCallbackQueue', () => {
     it('retains more than 256 callbacks in order until they drain and accepts later work', async () => {
@@ -62,13 +59,43 @@ describe('createPluginProtocolCallbackQueue', () => {
         expect(queue.enqueue(1, async () => { await blocked; invoked.push(1); })).toBe(true);
         expect(queue.enqueue(1, () => { invoked.push(2); })).toBe(true);
         expect(queue.enqueue(1, () => { invoked.push(3); })).toBe(false);
-        expect(onFailure).toHaveBeenCalledExactlyOnceWith({ code: 'PLUGIN_EXEC_CLIENT_BACKPRESSURE_EXCEEDED' });
+        expect(onFailure).toHaveBeenCalledTimes(1);
+        expect(onFailure).toHaveBeenCalledWith({ code: 'PLUGIN_EXEC_CLIENT_BACKPRESSURE_EXCEEDED' });
         release();
         await queue.drained();
         expect(invoked).toEqual([1, 2]);
     });
 
-    it('accepts the exact byte bound and rejects bound plus one without invoking it', async () => {
+    it('retains valid callbacks above 8 MiB aggregate bytes until they drain and accepts later work', async () => {
+        let release!: () => void;
+        const blocked = new Promise<void>((resolve) => { release = resolve; });
+        const onFailure = vi.fn();
+        const received: Array<{ index: number; bytes: number }> = [];
+        const queue = createPluginProtocolCallbackQueue({ onFailure });
+        try {
+            for (let index = 0; index < 9; index += 1) {
+                const payload = Buffer.alloc(1024 * 1024, index);
+                expect(queue.enqueue(payload.byteLength, async () => {
+                    await blocked;
+                    received.push({ index: payload[0] ?? -1, bytes: payload.byteLength });
+                })).toBe(true);
+            }
+            expect(onFailure).not.toHaveBeenCalled();
+            expect(received).toEqual([]);
+            release();
+            await queue.drained();
+            expect(received).toEqual(Array.from({ length: 9 }, (_, index) => ({ index, bytes: 1024 * 1024 })));
+            expect(queue.enqueue(1, () => { received.push({ index: 9, bytes: 1 }); })).toBe(true);
+            await queue.drained();
+            expect(received.at(-1)).toEqual({ index: 9, bytes: 1 });
+        } finally {
+            release();
+            await queue.drained();
+        }
+    });
+
+    it('preserves an explicit caller byte budget and rejects bound plus one without invoking it', async () => {
+        const maxPendingBytes = 64;
         let release!: () => void;
         const blocked = new Promise<void>((resolve) => {
             release = resolve;
@@ -81,13 +108,14 @@ describe('createPluginProtocolCallbackQueue', () => {
             backpressured: boolean;
         }> = [];
         const queue = createPluginProtocolCallbackQueue({
+            maxPendingBytes,
             onFailure: () => undefined,
             recordRuntimeLimitMeasurement: (sample) => {
                 if (sample.family === 'plugin-protocol-callbacks') queueSamples.push(sample);
             },
         });
 
-        expect(queue.enqueue(INTERNAL_MAX_PLUGIN_PROTOCOL_PENDING_CALLBACK_BYTES, async () => {
+        expect(queue.enqueue(maxPendingBytes, async () => {
             invoked.push('exact');
             await blocked;
         })).toBe(true);
@@ -102,13 +130,13 @@ describe('createPluginProtocolCallbackQueue', () => {
             {
                 family: 'plugin-protocol-callbacks',
                 queuedItems: 1,
-                queuedBytes: INTERNAL_MAX_PLUGIN_PROTOCOL_PENDING_CALLBACK_BYTES,
+                queuedBytes: maxPendingBytes,
                 backpressured: false,
             },
             {
                 family: 'plugin-protocol-callbacks',
                 queuedItems: 2,
-                queuedBytes: INTERNAL_MAX_PLUGIN_PROTOCOL_PENDING_CALLBACK_BYTES + 1,
+                queuedBytes: maxPendingBytes + 1,
                 backpressured: true,
             },
         ]);

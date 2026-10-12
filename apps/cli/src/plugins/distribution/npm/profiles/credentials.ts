@@ -1,5 +1,7 @@
 import { lstat, readdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
 import {
@@ -13,16 +15,16 @@ import { resolvePluginStorePaths, type PluginStorePaths } from '@/plugins/store/
 const HOST_NAMESPACE = 'happier.npm.registry.credentials';
 const LEGACY_KEY_FILE_NAME = 'plugin-secrets-key.v1';
 const LEGACY_KEY_TYPE = 'happier_plugin_secret_key_v1';
+const LegacyKeyStoredReadSchema = createStoredReadSchema(z.object({
+  t: z.literal(LEGACY_KEY_TYPE),
+  key: z.string(),
+}).strict());
 
 type NpmCredentialSecretStore = ReturnType<typeof createPluginSecretStore>;
 type StoreReadability = Readonly<
   | { readable: true }
   | { readable: false; error: unknown }
 >;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
 
 function legacyKeyPath(paths: PluginStorePaths): string {
   return join(paths.secretsDir, LEGACY_KEY_FILE_NAME);
@@ -62,15 +64,11 @@ async function readLegacyNpmKey(paths: PluginStorePaths): Promise<Uint8Array | n
   } catch {
     throw legacyMigrationError('LEGACY_KEY_INVALID');
   }
-  if (
-    !isRecord(value)
-    || value.t !== LEGACY_KEY_TYPE
-    || Object.keys(value).length !== 2
-    || !Object.hasOwn(value, 'key')
-  ) {
+  const parsed = LegacyKeyStoredReadSchema.safeParse(value);
+  if (!parsed.success) {
     throw legacyMigrationError('LEGACY_KEY_INVALID');
   }
-  return decodeLegacyKey(value.key);
+  return decodeLegacyKey(parsed.data.key);
 }
 
 /**

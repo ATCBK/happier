@@ -75,7 +75,6 @@ type CandidateCompatibility = Readonly<{
   diagnostics: readonly PluginCompatibilityDiagnostic[];
 }>;
 
-const MAX_BLOCKED_NEWER_VERSIONS = 32;
 
 function compatibilityDiagnostic(
   code: PluginCompatibilityDiagnostic['code'],
@@ -171,7 +170,7 @@ function selectCompatibleVersion(params: Readonly<{
         automaticEligible: true,
         ...(compatibility.projection ? { projection: compatibility.projection } : {}),
         diagnostics: Object.freeze([]),
-        blockedNewerVersions: Object.freeze(candidates.slice(0, Math.min(candidateIndex, MAX_BLOCKED_NEWER_VERSIONS)).map((blockedVersion) => Object.freeze({
+        blockedNewerVersions: Object.freeze(candidates.slice(0, candidateIndex).map((blockedVersion) => Object.freeze({
           version: blockedVersion,
           diagnostics: evaluate(blockedVersion).diagnostics,
         }))),
@@ -188,7 +187,7 @@ function selectCompatibleVersion(params: Readonly<{
       ...(fallbackCompatibility.projection ? { projection: fallbackCompatibility.projection } : {}),
       diagnostics: fallbackCompatibility.diagnostics,
       blockedNewerVersions: Object.freeze(
-        (fallbackIndex < 0 ? [] : candidates.slice(0, Math.min(fallbackIndex, MAX_BLOCKED_NEWER_VERSIONS))).map((blockedVersion) => Object.freeze({
+        (fallbackIndex < 0 ? [] : candidates.slice(0, fallbackIndex)).map((blockedVersion) => Object.freeze({
           version: blockedVersion,
           diagnostics: evaluate(blockedVersion).diagnostics,
         })),

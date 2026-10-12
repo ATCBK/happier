@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createSecureServer } from 'node:https';
@@ -27,9 +28,18 @@ function acceptWebSocketKey(key: string): string {
 }
 
 function encodeFrame(opcode: number, payload: Buffer, final = true, compressed = false): Buffer {
-    if (payload.byteLength >= 126) throw new Error('Test frame is unexpectedly large');
+    const header = Buffer.alloc(payload.byteLength < 126 ? 2 : payload.byteLength <= 65535 ? 4 : 10);
+    header[0] = (final ? 0x80 : 0) | (compressed ? 0x40 : 0) | opcode;
+    if (header.byteLength === 2) header[1] = payload.byteLength;
+    else if (header.byteLength === 4) {
+        header[1] = 126;
+        header.writeUInt16BE(payload.byteLength, 2);
+    } else {
+        header[1] = 127;
+        header.writeBigUInt64BE(BigInt(payload.byteLength), 2);
+    }
     return Buffer.concat([
-        Buffer.from([(final ? 0x80 : 0) | (compressed ? 0x40 : 0) | opcode, payload.byteLength]),
+        header,
         payload,
     ]);
 }
@@ -65,7 +75,7 @@ async function createWebSocketPeer(options: Readonly<{
     sendBinary(data: Uint8Array): void;
     sendFragmentedText(first: string, second: string): void;
     sendIncompleteTextFragmentAndTerminate(text: string): void;
-    sendTooManyTextFragments(): void;
+    sendManyTextFragments(): void;
     sendCompressedText(text: string): void;
     sendClose(code: number, reason: string): void;
     sendPing(text: string): void;
@@ -154,7 +164,7 @@ async function createWebSocketPeer(options: Readonly<{
             write(encodeFrame(0x1, Buffer.from(text), false));
             socket?.end();
         },
-        sendTooManyTextFragments() {
+        sendManyTextFragments() {
             const fragments: Buffer[] = [];
             for (let index = 0; index <= 1024; index += 1) {
                 fragments.push(encodeFrame(index === 0 ? 0x1 : 0x0, Buffer.alloc(0), index === 1024));
@@ -366,6 +376,7 @@ describe('plugin WebSocket host adapter', () => {
         const peer = await createHangingUpgradePeer();
         const cancellation = new AbortController();
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+        const monotonicClock = vi.spyOn(performance, 'now').mockImplementation(() => Date.now());
         let settled = false;
         const opening = createPluginWebSocketConnection({
             url: peer.url,
@@ -383,6 +394,7 @@ describe('plugin WebSocket host adapter', () => {
         } finally {
             cancellation.abort();
             await opening.catch(() => undefined);
+            monotonicClock.mockRestore();
             vi.useRealTimers();
             await peer.close();
         }
@@ -401,6 +413,28 @@ describe('plugin WebSocket host adapter', () => {
             expect(messages).toEqual(Array.from({ length: 65 }, (_, index) => ({ kind: 'text', text: String(index) })));
         } finally {
             connection.dispose();
+            await peer.close();
+        }
+    });
+
+    it.each([undefined, 64 * 1024 * 1024])('retains individually valid frames with aggregate pending-byte budget %s', async (byteBudget) => {
+        const peer = await createWebSocketPeer();
+        let connection: Awaited<ReturnType<typeof createPluginWebSocketConnection>> | undefined;
+        const payloads = Array.from({ length: 5 }, (_, index) => String(index) + 'x'.repeat((1024 * 1024) - 1));
+        try {
+            connection = await createPluginWebSocketConnection({
+                url: peer.url,
+                protocols: ['fixture-v1'],
+                ...(byteBudget === undefined ? {} : { maxPendingBytes: byteBudget, maxBufferedSendBytes: byteBudget }),
+            });
+            for (const payload of payloads) peer.sendText(payload);
+            peer.sendPing('queued');
+            expect(await Promise.race([peer.nextReceived(), connection.closed])).toMatchObject({ opcode: 0xa });
+            for (const text of payloads) {
+                await expect(connection.receive()).resolves.toEqual({ kind: 'text', text });
+            }
+        } finally {
+            connection?.dispose();
             await peer.close();
         }
     });
@@ -425,6 +459,11 @@ describe('plugin WebSocket host adapter', () => {
     });
 
     it('bounds the encoded offered-protocol header together with UTF-8 custom header lines', () => {
+        const manyProtocols = Array.from({ length: 17 }, (_, index) => `protocol-${index}`);
+        expect(normalizePluginWebSocketOpenInput({
+            url: 'wss://gateway.example.test/socket',
+            protocols: manyProtocols,
+        })).toMatchObject({ protocols: manyProtocols });
         const header = Object.freeze({ name: 'x-boundary', value: 'é' });
         const protocolTokenBytesJustUnderLimit = (64 * 1024)
             - Buffer.byteLength(`${header.name}: ${header.value}\r\n`)
@@ -685,7 +724,7 @@ describe('plugin WebSocket host adapter', () => {
         }
     });
 
-    it('fails closed when a message exceeds the fixed 1,024-fragment driver bound', async () => {
+    it('reassembles a valid message beyond the former 1,024-fragment count and remains usable', async () => {
         const peer = await createWebSocketPeer();
         try {
             const connection = await createPluginWebSocketConnection({
@@ -693,14 +732,11 @@ describe('plugin WebSocket host adapter', () => {
                 protocols: ['fixture-v1'],
             });
 
-            peer.sendTooManyTextFragments();
+            peer.sendManyTextFragments();
 
-            await expect(connection.closed).resolves.toMatchObject({
-                kind: 'error',
-                code: 1008,
-                wasClean: false,
-                diagnostic: { code: 'plugin_websocket_fragment_limit_exceeded' },
-            });
+            await expect(connection.receive()).resolves.toEqual({ kind: 'text', text: '' });
+            peer.sendPing('usable');
+            await expect(peer.nextReceived()).resolves.toMatchObject({ opcode: 0xa, payload: Buffer.from('usable') });
         } finally {
             await peer.close();
         }

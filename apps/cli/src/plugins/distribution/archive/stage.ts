@@ -29,7 +29,6 @@ import { readPortableNpmPackageFiles } from '../npm/packageFiles';
 const PACKAGE_MANIFEST_PATH = '.happier-plugin/plugin.json';
 const UI_ARTIFACTS_ROOT = 'dist/happier-plugin-ui';
 const UI_ARTIFACTS_MANIFEST_PATH = `${UI_ARTIFACTS_ROOT}/ui-artifacts.json`;
-const MAX_METADATA_BYTES = 1024 * 1024;
 type OwnedStagedCandidateState = {
   extracted: Awaited<ReturnType<typeof extractPortableTarGzipArchive>>;
   cleanupPromise: Promise<void> | null;
@@ -135,7 +134,7 @@ function findInventoryFile(
   return file;
 }
 
-async function readBoundedJson(input: Readonly<{
+async function readJson(input: Readonly<{
   rootPath: string;
   path: string;
   inventoryByPath: ReadonlyMap<string, PortableArchiveFile>;
@@ -145,7 +144,6 @@ async function readBoundedJson(input: Readonly<{
 }>): Promise<Readonly<{ value: unknown; file: PortableArchiveFile }>> {
   assertStagingNotAborted(input.signal);
   const file = findInventoryFile(input.inventoryByPath, input.path, input.missingCode);
-  if (file.byteLength > MAX_METADATA_BYTES) reject(input.invalidCode, `${input.path} exceeds the metadata byte limit`);
   try {
     const raw = await readFile(join(input.rootPath, ...input.path.split('/')), {
       encoding: 'utf8',
@@ -392,7 +390,7 @@ async function validateUiArtifacts(input: Readonly<{
       reject('ui_artifact_identity_mismatch', 'Candidate contains generated UI artifacts that no contribution declares');
     }
     if (manifestFile) {
-      const parsedJson = await readBoundedJson({
+      const parsedJson = await readJson({
         rootPath: input.rootPath,
         path: UI_ARTIFACTS_MANIFEST_PATH,
         inventoryByPath: input.inventoryByPath,
@@ -415,7 +413,7 @@ async function validateUiArtifacts(input: Readonly<{
     });
   }
   if (!manifestFile) reject('ui_artifact_manifest_missing', 'Candidate is missing generated UI artifact inventory');
-  const parsedJson = await readBoundedJson({
+  const parsedJson = await readJson({
     rootPath: input.rootPath,
     path: UI_ARTIFACTS_MANIFEST_PATH,
     inventoryByPath: input.inventoryByPath,
@@ -561,7 +559,7 @@ export async function stageNpmCompatiblePluginArchive(
     });
     assertStagingNotAborted(params.signal);
     const inventoryByPath = new Map(extracted.inventory.map((file) => [file.path, file] as const));
-    const packageJson = await readBoundedJson({
+    const packageJson = await readJson({
       rootPath: extracted.rootPath,
       path: 'package.json',
       inventoryByPath,

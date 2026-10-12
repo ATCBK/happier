@@ -1,4 +1,5 @@
 import { isPluginError } from '@happier-dev/plugin-sdk';
+import { performance } from 'node:perf_hooks';
 import { isLiteralLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHostname';
 import type {
     PluginWebSocketClose,
@@ -75,6 +76,7 @@ export type CreateLoopbackWebSocketJsonClientParams = Readonly<{
     connect?: ExecLoopbackWebSocketConnectV1;
     limits?: ExecLoopbackWebSocketLimitsV1;
     signal?: AbortSignal;
+    process?: SpawnedLoopbackProcess;
     readDiagnosticPreview?: () => string | undefined;
     recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
 }>;
@@ -93,12 +95,9 @@ type NormalizedLoopbackLimits = Readonly<{
     maxBufferedBytes: number;
 }>;
 
-const DEFAULT_CONNECT_TIMEOUT_MS = 1_000;
 const DEFAULT_RETRY_INITIAL_DELAY_MS = 10;
 const DEFAULT_RETRY_MAX_DELAY_MS = 50;
 const DEFAULT_MAX_MESSAGE_BYTES = 1024 * 1024;
-const DEFAULT_MAX_PENDING_MESSAGES = 64;
-const DEFAULT_MAX_BUFFERED_BYTES = 1024 * 1024;
 const DEFAULT_SHUTDOWN_GRACE_MS = 250;
 const SAFE_ORIGIN_FORM_PATH_PATTERN = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@/%]*(?:\?[A-Za-z0-9\-._~!$&'()*+,;=:@/%?]*)?$/;
 
@@ -155,8 +154,8 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
 function normalizeLimits(limits: ExecLoopbackWebSocketLimitsV1 | undefined): NormalizedLoopbackLimits {
     return Object.freeze({
         maxMessageBytes: limits?.messageByteLimits === null ? Infinity : normalizePositiveInteger(limits?.maxMessageBytes, DEFAULT_MAX_MESSAGE_BYTES),
-        maxPendingMessages: normalizePositiveInteger(limits?.maxPendingMessages, DEFAULT_MAX_PENDING_MESSAGES),
-        maxBufferedBytes: limits?.messageByteLimits === null ? Infinity : normalizePositiveInteger(limits?.maxBufferedBytes, DEFAULT_MAX_BUFFERED_BYTES),
+        maxPendingMessages: normalizePositiveInteger(limits?.maxPendingMessages, Infinity),
+        maxBufferedBytes: limits?.messageByteLimits === null ? Infinity : normalizePositiveInteger(limits?.maxBufferedBytes, Infinity),
     });
 }
 
@@ -297,11 +296,20 @@ async function raceWithExit<T>(
     promise: Promise<T>,
     process: SpawnedLoopbackProcess,
     readStderrPreview: () => string | undefined,
+    signal?: AbortSignal,
 ): Promise<T> {
-    return await Promise.race([
-        promise,
-        waitForExitError(process, readStderrPreview),
-    ]);
+    return await new Promise<T>((resolve, reject) => {
+        const onAbort = () => {
+            signal?.removeEventListener('abort', onAbort);
+            reject(createPluginExecClientAbortError());
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        void Promise.race([promise, waitForExitError(process, readStderrPreview)]).then(
+            value => { signal?.removeEventListener('abort', onAbort); resolve(value); },
+            (error: unknown) => { signal?.removeEventListener('abort', onAbort); reject(error); },
+        );
+        if (signal?.aborted) onAbort();
+    });
 }
 
 async function rethrowProcessExitIfReady(
@@ -328,9 +336,11 @@ async function rethrowProcessExitIfReady(
 async function writeHandshakeFrames(
     handshake: ExecLoopbackWebSocketHandshakeV1,
     process: SpawnedLoopbackProcess,
+    signal?: AbortSignal,
 ): Promise<void> {
     const maxFrameBytes = handshake.response?.maxFrameBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
     for (const frame of handshake.requestFrames) {
+        if (signal?.aborted) throw createPluginExecClientAbortError();
         const payloadLength = typeof frame === 'string' ? Buffer.byteLength(frame) : frame.byteLength;
         if (payloadLength > maxFrameBytes) {
             throw createPluginExecClientProtocolError('Loopback WebSocket handshake request exceeded the configured size limit');
@@ -365,6 +375,9 @@ function toExecClientError(
     if (isPluginError(error) && error.code === 'plugin_websocket_backpressure_exceeded') {
         return createBackpressureError(readStderrPreview());
     }
+    if (isPluginError(error) && error.code === 'plugin_websocket_connect_timeout') {
+        return createConnectionTimeoutError(error, readStderrPreview());
+    }
     return createPluginExecClientProtocolError('Loopback WebSocket transport failed', error, readStderrPreview());
 }
 
@@ -383,17 +396,10 @@ function closeError(
 async function openSharedLoopbackWebSocket(
     endpoint: ValidatedEndpoint,
     limits: NormalizedLoopbackLimits,
-    timeoutMs: number,
+    timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
-    readStderrPreview: () => string | undefined,
 ): Promise<PluginWebSocketConnection> {
     if (signal?.aborted) throw createPluginExecClientAbortError();
-    const deadline = new AbortController();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-        timedOut = true;
-        deadline.abort(Object.freeze({ kind: 'loopbackConnectTimeout' }));
-    }, timeoutMs);
     try {
         return await createPluginWebSocketConnection({
             url: loopbackUrl(endpoint),
@@ -402,9 +408,9 @@ async function openSharedLoopbackWebSocket(
                 value: header.value,
                 ...(header.sensitive === true ? { sensitive: true } : {}),
             })),
-            connectTimeoutMs: Math.min(60_000, Math.max(100, timeoutMs)),
+            ...(timeoutMs === undefined ? {} : { connectTimeoutMs: timeoutMs }),
             ...(Number.isFinite(limits.maxMessageBytes) ? { maxMessageBytes: limits.maxMessageBytes } : {}),
-            maxPendingMessages: limits.maxPendingMessages,
+            ...(Number.isFinite(limits.maxPendingMessages) ? { maxPendingMessages: limits.maxPendingMessages } : {}),
             ...(Number.isFinite(limits.maxBufferedBytes) ? {
                 maxPendingBytes: limits.maxBufferedBytes,
                 maxBufferedSendBytes: limits.maxBufferedBytes,
@@ -413,16 +419,13 @@ async function openSharedLoopbackWebSocket(
             // The adapter's public signal only governs opening. The spawned
             // client signal remains authoritative after a successful upgrade;
             // use the private lifecycle slot for that longer-lived ownership.
-            signal: deadline.signal,
+            signal,
             ...(!Number.isFinite(limits.maxMessageBytes) ? { messageByteLimits: null } : {}),
             ...(signal ? { lifecycleSignal: signal } : {}),
         });
     } catch (error) {
         if (signal?.aborted) throw createPluginExecClientAbortError();
-        if (timedOut) throw createConnectionTimeoutError(error, readStderrPreview());
         throw error;
-    } finally {
-        clearTimeout(timeout);
     }
 }
 
@@ -433,27 +436,27 @@ async function connectWithRetry(
     signal: AbortSignal | undefined,
     readStderrPreview: () => string | undefined,
 ): Promise<PluginWebSocketConnection> {
-    const timeoutMs = normalizePositiveInteger(connect?.timeoutMs, DEFAULT_CONNECT_TIMEOUT_MS);
+    const timeoutMs = connect?.timeoutMs === undefined ? undefined : normalizePositiveInteger(connect.timeoutMs, 0);
     const retryInitialDelayMs = normalizePositiveInteger(connect?.retryInitialDelayMs, DEFAULT_RETRY_INITIAL_DELAY_MS);
     const retryMaxDelayMs = normalizePositiveInteger(connect?.retryMaxDelayMs, DEFAULT_RETRY_MAX_DELAY_MS);
-    const deadline = Date.now() + timeoutMs;
+    const deadline = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
     let nextDelay = retryInitialDelayMs;
     let lastError: unknown;
 
     for (;;) {
         try {
-            const remainingMs = deadline - Date.now();
-            if (remainingMs <= 0) throw createConnectionTimeoutError(lastError, readStderrPreview());
-            return await openSharedLoopbackWebSocket(endpoint, limits, remainingMs, signal, readStderrPreview);
+            const remainingMs = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
+            if (remainingMs !== undefined && remainingMs <= 0) throw createConnectionTimeoutError(lastError, readStderrPreview());
+            return await openSharedLoopbackWebSocket(endpoint, limits, remainingMs, signal);
         } catch (error) {
             if (signal?.aborted) throw createPluginExecClientAbortError();
             if (!isRetryableReadinessError(error)) {
                 throw toExecClientError(error, readStderrPreview);
             }
             lastError = error;
-            const remainingMs = deadline - Date.now();
-            if (remainingMs <= 0) throw createConnectionTimeoutError(lastError, readStderrPreview());
-            await delay(Math.min(nextDelay, remainingMs), signal);
+            const remainingMs = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
+            if (remainingMs !== undefined && remainingMs <= 0) throw createConnectionTimeoutError(lastError, readStderrPreview());
+            await delay(remainingMs === undefined ? nextDelay : Math.min(nextDelay, remainingMs), signal);
             nextDelay = Math.min(nextDelay * 2, retryMaxDelayMs);
         }
     }
@@ -611,21 +614,26 @@ export async function createLoopbackWebSocketJsonClient(
     const validatedEndpoint = validateEndpoint(params.endpoint, params.headers ?? []);
     const readStderrPreview = params.readDiagnosticPreview ?? (() => undefined);
     const limits = normalizeLimits(params.limits);
-    const connection = await connectWithRetry(
-        validatedEndpoint,
-        params.connect,
-        limits,
-        params.signal,
-        readStderrPreview,
-    );
-    return createJsonClient({
-        connection,
-        ...limits,
-        readStderrPreview,
-        ...(params.recordRuntimeLimitMeasurement
-            ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
-            : {}),
-    });
+    const startup = new AbortController();
+    const signal = params.signal ? AbortSignal.any([params.signal, startup.signal]) : startup.signal;
+    try {
+        const opening = connectWithRetry(validatedEndpoint, params.connect, limits, signal, readStderrPreview);
+        const connection = params.process
+            ? await raceWithExit(opening, params.process, readStderrPreview, signal)
+            : await opening;
+        return createJsonClient({
+            connection,
+            ...limits,
+            readStderrPreview,
+            ...(params.recordRuntimeLimitMeasurement
+                ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
+                : {}),
+        });
+    } catch (error) {
+        startup.abort();
+        if (params.signal?.aborted) throw createPluginExecClientAbortError();
+        throw error;
+    }
 }
 
 export async function createLoopbackWebSocketProcessClient(
@@ -653,43 +661,50 @@ export async function createLoopbackWebSocketHandshakeClient<
     params: CreateLoopbackWebSocketHandshakeClientParams<TEndpoint>,
 ): Promise<LoopbackWebSocketProcessClient> {
     const initialPreview = createSanitizedPreviewReader(params.process, params.sanitizer);
+    const startup = new AbortController();
+    const signal = params.optionsSignal ? AbortSignal.any([params.optionsSignal, startup.signal]) : startup.signal;
     const responsePromise = raceWithExit(
-        readHandshakeResponse(params.handshake, params.process, params.optionsSignal, initialPreview),
+        readHandshakeResponse(params.handshake, params.process, signal, initialPreview),
         params.process,
         initialPreview,
-    ).catch((error: unknown) => rethrowProcessExitIfReady(error, params.process, initialPreview));
+        signal,
+    ).catch((error: unknown) => {
+        if (signal.aborted) throw createPluginExecClientAbortError();
+        return rethrowProcessExitIfReady(error, params.process, initialPreview);
+    });
     try {
-        await raceWithExit(writeHandshakeFrames(params.handshake, params.process), params.process, initialPreview);
+        const [response] = await Promise.all([
+            responsePromise,
+            raceWithExit(writeHandshakeFrames(params.handshake, params.process, signal), params.process, initialPreview, signal),
+        ]);
+        const endpoint = await raceWithExit(
+            Promise.resolve(params.endpoint.decodeHandshakeResponse(response)), params.process, initialPreview, signal,
+        );
+        const headers = params.endpoint.buildHeaders?.(endpoint) ?? [];
+        const validatedEndpoint = validateEndpoint(endpoint, headers);
+        const sanitizer = mergeSanitizer(params.sanitizer, validatedEndpoint.sensitiveValues);
+        const readStderrPreview = createSanitizedPreviewReader(params.process, sanitizer);
+        const limits = normalizeLimits(params.limits);
+        const connection = await raceWithExit(
+            connectWithRetry(validatedEndpoint, params.connect, limits, signal, readStderrPreview),
+            params.process,
+            readStderrPreview,
+            signal,
+        );
+        return createJsonClient({
+            connection,
+            ...limits,
+            readStderrPreview,
+            ...(params.recordRuntimeLimitMeasurement
+                ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
+                : {}),
+        });
     } catch (error) {
+        startup.abort();
         void responsePromise.catch(() => undefined);
+        if (params.optionsSignal?.aborted) throw createPluginExecClientAbortError();
         throw error;
     }
-    const response = await responsePromise;
-    const endpoint = await params.endpoint.decodeHandshakeResponse(response);
-    const headers = params.endpoint.buildHeaders?.(endpoint) ?? [];
-    const validatedEndpoint = validateEndpoint(endpoint, headers);
-    const sanitizer = mergeSanitizer(params.sanitizer, validatedEndpoint.sensitiveValues);
-    const readStderrPreview = createSanitizedPreviewReader(params.process, sanitizer);
-    const limits = normalizeLimits(params.limits);
-    const connection = await raceWithExit(
-        connectWithRetry(
-            validatedEndpoint,
-            params.connect,
-            limits,
-            params.optionsSignal,
-            readStderrPreview,
-        ),
-        params.process,
-        readStderrPreview,
-    );
-    return createJsonClient({
-        connection,
-        ...limits,
-        readStderrPreview,
-        ...(params.recordRuntimeLimitMeasurement
-            ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
-            : {}),
-    });
 }
 
 export async function disposeLoopbackWebSocketProcess(params: Readonly<{

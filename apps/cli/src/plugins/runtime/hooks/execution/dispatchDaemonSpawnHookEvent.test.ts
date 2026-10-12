@@ -129,6 +129,7 @@ function createSpawnHookRuntimeRegistry(params: Readonly<{
   dispose?: ResolvedExecutablePluginRuntimeRegistry['dispose'];
 }>): ResolvedExecutablePluginRuntimeRegistry {
   return {
+    claimReleaseLessDeclarations: async () => undefined,
     contributes: params.contributes,
     hookHandlersByHookId: params.hookHandlersByHookId ?? new Map(),
     agentRuntimesByAgentId: new Map(),

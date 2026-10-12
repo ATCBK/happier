@@ -32,6 +32,15 @@ async function writeArchive(entries: readonly TestTarEntry[]): Promise<Readonly<
   return { archivePath, bytes, root };
 }
 
+function paxRecord(value: string): string {
+  const suffix = ` ${value}\n`;
+  let length = Buffer.byteLength(suffix, 'utf8') + 1;
+  while (Buffer.byteLength(`${length}${suffix}`, 'utf8') !== length) {
+    length = Buffer.byteLength(`${length}${suffix}`, 'utf8');
+  }
+  return `${length}${suffix}`;
+}
+
 describe('extractPortableTarGzipArchive', () => {
   it('backpressures empty-file writes through their filesystem settlement instead of exhausting descriptors', async () => {
     const input = await writeArchive(Array.from({ length: 3 }, (_, index) => ({ name: `package/${index}.txt`, body: '' })));
@@ -294,13 +303,8 @@ describe('extractPortableTarGzipArchive', () => {
 
   it('rejects a PAX path with an overlong portable segment before filesystem extraction', async () => {
     const longPath = `package/${'a'.repeat(256)}`;
-    const recordSuffix = ` path=${longPath}\n`;
-    let recordLength = Buffer.byteLength(recordSuffix, 'utf8') + 1;
-    while (Buffer.byteLength(`${recordLength}${recordSuffix}`, 'utf8') !== recordLength) {
-      recordLength = Buffer.byteLength(`${recordLength}${recordSuffix}`, 'utf8');
-    }
     const input = await writeArchive([
-      { name: 'PaxHeader/file', type: 'extended-header', body: `${recordLength}${recordSuffix}` },
+      { name: 'PaxHeader/file', type: 'extended-header', body: paxRecord(`path=${longPath}`) },
       { name: 'package/placeholder', body: 'unsafe' },
     ]);
 
@@ -425,18 +429,22 @@ describe('extractPortableTarGzipArchive', () => {
     })).rejects.toMatchObject({ code: 'archive_limit_file_bytes' });
   });
 
-  it('retains the tar parser buffered PAX metadata limit', async () => {
+  it.each([false, true])('applies only PAX metadata within the parser buffer contract (oversized: %s)', async (oversized) => {
+    const metadata = paxRecord('path=package/replaced.txt')
+      + paxRecord(`comment=${'x'.repeat(oversized ? 1024 * 1024 : 1)}`);
     const input = await writeArchive([
-      { name: 'PaxHeader/a.txt', type: 'extended-header', body: 'x'.repeat(1024 * 1024 + 1) },
+      { name: 'PaxHeader/a.txt', type: 'extended-header', body: metadata },
       { name: 'package/a.txt', body: 'a' },
     ]);
-    await expect(extractPortableTarGzipArchive({
+    const archive = await extractPortableTarGzipArchive({
       archivePath: input.archivePath,
       expectedArchiveBytes: input.bytes.byteLength,
       expectedIntegrity: sriSha512(input.bytes),
       stagingParentPath: join(input.root, 'pax-buffer-limit'),
       stripRootDirectory: 'package',
-    })).rejects.toMatchObject({ code: 'archive_format_invalid' });
+    });
+    expect(archive.inventory.map((file) => file.path)).toEqual([oversized ? 'a.txt' : 'replaced.txt']);
+    await cleanupExtractedPortableArchive(archive);
   });
 
   it('rejects a truncated gzip stream without hanging or publishing a partial stage', async () => {

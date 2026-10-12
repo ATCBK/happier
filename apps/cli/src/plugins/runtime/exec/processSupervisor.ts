@@ -9,14 +9,16 @@ import type {
 } from '@happier-dev/plugin-sdk/exec';
 import { PluginError } from '@happier-dev/plugin-sdk';
 
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { captureProcessTree, terminateProcessTree, type ProcessTreeCapture } from '@/processes/terminate/terminateProcessTree';
 import {
     removeProcessCustodyHandshakeFile,
-    terminateProcessCustodyByJob,
     waitForProcessCustodyHandshake,
     type ProcessCustodySpawnSpec,
 } from '@/subprocess/supervision/processCustody';
 import type { HostRuntimeLimitMeasurementRecorder } from '@/agent/runtime/state/runtimeLimitMeasurement';
+import { classifySpawnFailure, spawnFailureMessage, type SpawnFailure, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
+import type { OwnerRemainderPort } from '@/daemon/processes/endOwnerRemainder';
+import { parseProcessOwnerTag, PROCESS_OWNER_ENV_KEY, type ProcessOwnerRef } from '@/processes/ownerTag';
 
 type DisposeReason = Extract<PluginProcessTerminationRequest, { kind: 'dispose' }>['reason'];
 
@@ -44,14 +46,17 @@ export function readSupervisedPluginProcessIdForHost(
     return HOST_PROCESS_CHILDREN.get(handle)?.pid ?? null;
 }
 
+/** Lease settlement is distinct from proof that every descendant was cleaned. */
+export type SupervisedProcessSettlement = Readonly<{ status: 'ended'; remainder?: 'unobserved' }>;
+
 export type SupervisedPluginProcess = Readonly<{
     child: ChildProcessWithoutNullStreams;
     handle: PluginProcessHandle;
     readBufferedStderr(): Uint8Array;
     requestTermination(request: Exclude<PluginProcessTerminationRequest, { kind: 'none' }>): Promise<void>;
     dispose(reason?: DisposeReason): Promise<void>;
-    /** Root/output exit is not evidence that the owned containment settled. */
-    waitForSettlement(): Promise<void>;
+    /** An unobserved shared-owner remainder is not a cleanup guarantee. */
+    waitForSettlement(): Promise<SupervisedProcessSettlement>;
     onOutcomeUncertain(listener: (error: unknown) => void): () => void;
 }>;
 
@@ -113,10 +118,15 @@ type SpawnSupervisedPluginProcessInput = Readonly<{
     maxStderrBytes?: number;
     terminationJoinTimeoutMs?: number;
     terminateProcessTree?: (child: ChildProcessWithoutNullStreams) => Promise<void>;
+    /** Let an admitted native activation run its own cleanup before tree settlement. */
+    waitForGracefulRootExitBeforeTreeStop?: true;
     /** Native containment facts; present only when the command is the custody helper. */
     processCustody?: SpawnProcessCustodySpec;
     spawnOptions?: Omit<SpawnOptionsWithoutStdio, 'cwd' | 'env'>;
     recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
+    readSpawnFailureLimits?: SpawnFailureLimitsReader;
+    /** Generic daemon-scoped IO observes leftovers; it has no exclusive Run/Service identity. */
+    rootExitObservation?: Readonly<{ owner: Extract<ProcessOwnerRef, { kind: 'happier' }>; ownerRemainder: OwnerRemainderPort }>;
 }>;
 
 function appendBounded(
@@ -134,7 +144,7 @@ function appendBounded(
     };
 }
 
-function failedTermination(error: unknown): PluginProcessObservedTermination {
+function failedTermination(error: unknown, spawnFailure?: SpawnFailure): PluginProcessObservedTermination {
     const errorCode = typeof error === 'object'
         && error !== null
         && 'code' in error
@@ -146,8 +156,8 @@ function failedTermination(error: unknown): PluginProcessObservedTermination {
         diagnostic: Object.freeze({
             code: 'PLUGIN_EXEC_PROCESS_FAILED',
             severity: 'error' as const,
-            message: 'Process failed after its handle was created',
-            ...(errorCode ? { details: { errorCode } } : {}),
+            message: spawnFailure ? spawnFailureMessage(spawnFailure, 'Process failed after its handle was created') : 'Process failed after its handle was created',
+            ...(errorCode || spawnFailure ? { details: { ...(errorCode ? { errorCode } : {}), ...(spawnFailure ? { spawnFailure } : {}) } } : {}),
         }),
     });
 }
@@ -171,6 +181,10 @@ function terminationIncompleteError(cause?: unknown): PluginError {
 }
 
 export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcessInput): SupervisedPluginProcess {
+    const ownerTag = (input.env ?? process.env)[PROCESS_OWNER_ENV_KEY];
+    const processOwner = parseProcessOwnerTag(ownerTag)?.owner;
+    const sharedOwner = ownerTag === undefined || processOwner?.kind === 'session'
+        || (processOwner?.kind === 'happier' && processOwner.component === undefined);
     const stdoutMaximum = Math.max(
         0,
         Math.min(
@@ -192,6 +206,28 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
         stdio: ['pipe', 'pipe', 'pipe'],
         ...input.spawnOptions,
     });
+    let rootExitCapture = input.rootExitObservation && child.pid
+        ? input.rootExitObservation.ownerRemainder.captureTree(input.rootExitObservation.owner, { pid: child.pid })
+        : undefined;
+    let refreshedRootExitCapture = false;
+    let capturedTreeOnOutput: Promise<ProcessTreeCapture> | undefined;
+    const refreshRootExitCapture = () => {
+        if (refreshedRootExitCapture || !child.pid
+            || child.exitCode !== null || child.signalCode !== null) return;
+        const needsNativeCapture = !input.rootExitObservation && !input.processCustody
+            && !input.terminateProcessTree && input.spawnOptions?.detached === true;
+        if (!input.rootExitObservation && !needsNativeCapture) return;
+        refreshedRootExitCapture = true;
+        // One existing first-output boundary offers a later pre-exit observation;
+        // never sample on every chunk or add an observer cadence.
+        if (input.rootExitObservation) {
+            rootExitCapture = input.rootExitObservation.ownerRemainder.captureTree(input.rootExitObservation.owner, { pid: child.pid });
+        } else {
+            capturedTreeOnOutput = captureProcessTree({ pid: child.pid });
+            void capturedTreeOnOutput.catch(() => undefined);
+        }
+    };
+    let rootExitObservation: Promise<unknown> | undefined;
     const outputListeners = new Set<(chunk: PluginProcessOutput) => void>();
     let stdoutChunks: readonly Buffer[] = [];
     let stderrChunks: readonly Buffer[] = [];
@@ -219,17 +255,17 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
     const observedPromise = new Promise<void>((resolve) => {
         resolveObserved = resolve;
     });
-    let resolveSettlement!: () => void;
+    let resolveSettlement!: (result: SupervisedProcessSettlement) => void;
     let settled = false;
     let uncertain: unknown;
-    const settlementPromise = new Promise<void>(resolve => { resolveSettlement = resolve; });
+    const settlementPromise = new Promise<SupervisedProcessSettlement>(resolve => { resolveSettlement = resolve; });
     const uncertaintyListeners = new Set<(error: unknown) => void>();
-    const confirmSettlement = () => {
+    const confirmSettlement = (remainder?: SupervisedProcessSettlement['remainder']) => {
         if (settled) return;
         settled = true;
         uncertain = undefined;
         uncertaintyListeners.clear();
-        resolveSettlement();
+        resolveSettlement(Object.freeze({ status: 'ended', ...(remainder ? { remainder } : {}) }));
     };
     let terminationPromise: Promise<void> | null = null;
     let disposePromise: Promise<void> | null = null;
@@ -251,6 +287,7 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
     };
 
     child.stdout.on('data', (value: Buffer | Uint8Array | string) => {
+        refreshRootExitCapture();
         const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
         publishOutput('stdout', chunk);
         const next = appendBounded(stdoutChunks, stdoutBytes, chunk, stdoutMaximum);
@@ -270,6 +307,7 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
         }
     });
     child.stderr.on('data', (value: Buffer | Uint8Array | string) => {
+        refreshRootExitCapture();
         const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
         publishOutput('stderr', chunk);
         const next = appendBounded(stderrChunks, stderrBytes, chunk, stderrMaximum);
@@ -315,12 +353,18 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
     };
 
     child.once('error', (error) => {
-        freezeObserved(failedTermination(error));
+        freezeObserved(failedTermination(error, classifySpawnFailure(error, { syscall: 'spawn', limits: input.readSpawnFailureLimits?.() })));
         seal();
         if (!child.pid) confirmSettlement();
     });
     child.once('exit', (exitCode, signal) => {
         freezeObserved(observedTermination(exitCode, signal));
+        if (input.rootExitObservation) {
+            const lifecycle = input.rootExitObservation;
+            rootExitObservation = Promise.resolve(rootExitCapture).then(capture => lifecycle.ownerRemainder.observeEnd(lifecycle.owner, capture));
+            // Lifecycle diagnostics belong to the shared port, never the byte path.
+            void rootExitObservation.catch(() => undefined);
+        }
     });
     child.once('close', (exitCode, signal) => {
         freezeObserved(observedTermination(exitCode, signal));
@@ -334,57 +378,90 @@ export function spawnSupervisedPluginProcess(input: SpawnSupervisedPluginProcess
         if (!observed && !requestedBy) {
             requestedBy = Object.freeze({ ...request });
         }
+        if (observed && input.rootExitObservation) {
+            return Promise.resolve(rootExitObservation).then(() => { seal(); confirmSettlement(); });
+        }
         if (terminationPromise) return terminationPromise;
         const attempt = (async () => {
             const terminate = input.terminateProcessTree
                 ?? (async (target: ChildProcessWithoutNullStreams) => {
                     if (input.processCustody) {
-                        // The containment is the named job, not this process:
-                        // terminate by job and prove the FULL member list gone,
-                        // including every descendant, including after the
-                        // root already exited. An unproven outcome keeps the
-                        // job and reports termination as incomplete.
-                        const outcome = await terminateProcessCustodyByJob({
-                            executablePath: input.processCustody.executablePath,
-                            jobName: input.processCustody.jobName,
-                        });
-                        if (outcome !== 'absent') {
-                            throw terminationIncompleteError(
-                                new Error(`Job custody termination was not proven (${outcome})`),
-                            );
-                        }
+                        // Native custody establishes this generation-unique Job.
+                        // One terminator rereads its membership and each native identity.
+                        const result = await terminateProcessTree({ targets: [],
+                            containment: { kind: 'windows_job', name: input.processCustody.jobName }, policy: 'kill' });
+                        if (result.status !== 'complete') throw terminationIncompleteError();
                         return;
                     }
-                    await killProcessTree(target, {
+                    await terminateProcessTree(target, {
                         graceMs: 100,
                         ownedProcessGroup: process.platform !== 'win32'
                             && input.spawnOptions?.detached === true,
                     });
                 });
             const joined = (async () => {
-                // Root exit settles process output, not the owned containment.
-                // Always ask the canonical tree terminator to prove the POSIX
-                // process group / Windows tree absent, including when the
-                // launcher root exited before disposal began.
-                await terminate(child);
+                if (observed && observed.kind !== 'failed' && sharedOwner
+                    && !input.terminateProcessTree && !input.processCustody
+                    && !input.waitForGracefulRootExitBeforeTreeStop) {
+                    const captured = await capturedTreeOnOutput;
+                    if (!captured || captured.status !== 'ok') {
+                        // The original root ended, but no subtree is known. A
+                        // shared tag or recycled numeric group is not custody.
+                        // Settle the lease without signalling or claiming cleanup.
+                        seal();
+                        confirmSettlement('unobserved');
+                        return;
+                    }
+                }
+                let capturedTargets: import('@/processes/terminate/terminateProcessTree').ProcessTreeTerminationResult['capturedTargets'];
+                if (input.waitForGracefulRootExitBeforeTreeStop && !observed) {
+                    // Signalling every descendant first can kill the native
+                    // activation watchdog before it releases its service manager.
+                    // The existing join budget bounds the caller's wait, not custody.
+                    const requested = await terminateProcessTree({ targets: child.pid ? [{ pid: child.pid }] : [],
+                        tree: false, captureDescendants: true, waitForExit: false });
+                    if (requested.status === 'unavailable' || requested.outcomes.some(row => row.outcome === 'refused')) {
+                        throw terminationIncompleteError();
+                    }
+                    capturedTargets = requested.capturedTargets;
+                    await observedPromise;
+                }
+                // Known subtree or exclusive custody still needs the canonical
+                // terminator's absence proof even after the launcher exits.
+                if (!input.terminateProcessTree && !input.processCustody && capturedTargets?.length) {
+                    const result = await terminateProcessTree({ targets: capturedTargets, tree: false, graceMs: 100 });
+                    if (result.status !== 'complete') throw terminationIncompleteError();
+                } else if (!input.terminateProcessTree && !input.processCustody && observed && capturedTreeOnOutput) {
+                    const captured = await capturedTreeOnOutput;
+                    if (captured.status === 'ok') {
+                        const result = await terminateProcessTree({ targets: captured.capturedTargets, tree: false, graceMs: 100 });
+                        if (result.status !== 'complete') throw terminationIncompleteError();
+                    }
+                    // Exact known identities do not authorize discovering peers
+                    // from a missing root. Unknown group members still refuse.
+                    await terminate(child);
+                } else await terminate(child);
                 await observedPromise;
                 seal();
                 confirmSettlement();
             })();
-            // A bounded caller wait may finish first. Keep a rejection from a
-            // later tree-kill attempt observed without relabeling the process.
+            // Only an explicit caller budget can end observation before native
+            // cleanup. A default phase deadline would reject next-turn setup
+            // while the same cleanup still owns the process.
             void joined.catch(() => undefined);
-            const joinTimeoutMs = Math.max(1, input.terminationJoinTimeoutMs ?? 5_000);
             let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
             let joinedBeforeDeadline: boolean;
             try {
-                joinedBeforeDeadline = await Promise.race([
-                    joined.then(() => true),
-                    new Promise<false>((resolve) => {
-                        timeoutHandle = setTimeout(() => resolve(false), joinTimeoutMs);
-                        timeoutHandle.unref?.();
-                    }),
-                ]);
+                const joinTimeoutMs = input.terminationJoinTimeoutMs;
+                joinedBeforeDeadline = joinTimeoutMs === undefined
+                    ? await joined.then(() => true)
+                    : await Promise.race([
+                        joined.then(() => true),
+                        new Promise<false>((resolve) => {
+                            timeoutHandle = setTimeout(() => resolve(false), Math.max(1, joinTimeoutMs));
+                            timeoutHandle.unref?.();
+                        }),
+                    ]);
             } catch (error) {
                 if (!observed && (child.exitCode !== null || child.signalCode !== null)) {
                     freezeObserved(observedTermination(child.exitCode, child.signalCode));
