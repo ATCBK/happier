@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 
 import { isPidPresent } from '@happier-dev/cli-common/process'
-import psList from 'ps-list'
+import { readProcessCensus } from '@/processes/census/processCensus'
 
 export function spawnTestProcess(
   command: string,
@@ -52,8 +52,8 @@ async function waitForProcessParent(
 
   while (Date.now() - start < opts.timeoutMs) {
     try {
-      const processes = await psList()
-      const entry = processes.find((processInfo) => processInfo.pid === pid)
+      const snapshot = await readProcessCensus({ freshness: 'fresh', pids: [pid] })
+      const entry = snapshot.status === 'ok' ? snapshot.rows.find((processInfo) => processInfo.pid === pid) : undefined
       if (entry?.ppid === expectedParentPid) return
     } catch {
       await new Promise((resolve) => setTimeout(resolve, Math.min(100, opts.timeoutMs)))
@@ -140,8 +140,9 @@ async function isPidRunning(pid: number): Promise<boolean> {
   if (!isPidAlive(pid)) return false
   if (process.platform === 'win32') return true
   try {
-    const processes = await psList()
-    return processes.some((processInfo) => processInfo.pid === pid)
+    const snapshot = await readProcessCensus({ freshness: 'fresh', pids: [pid] })
+    if (snapshot.status !== 'ok') return isPidAlive(pid)
+    return snapshot.rows.some((processInfo) => processInfo.pid === pid && processInfo.state !== 'zombie')
   } catch {
     return isPidAlive(pid)
   }

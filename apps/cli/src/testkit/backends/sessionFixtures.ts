@@ -172,6 +172,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
     let agentState = options?.agentState ?? {};
     const events = new EventEmitter();
     let closed = false;
+    let mcpRequestAuth: ReturnType<ApiSessionClient['getMcpRequestAuthPort']>;
     const rpcHandlerManager = createRpcHandlerManager({
         scopePrefix: sessionId,
         encryptionKey: new Uint8Array(32),
@@ -183,6 +184,10 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
     const fixture = {
         sessionId,
         getServerBinding: () => serverBinding,
+        bindMcpRequestAuthPort(port: Parameters<ApiSessionClient['bindMcpRequestAuthPort']>[0]) {
+            mcpRequestAuth = port;
+        },
+        getMcpRequestAuthPort: () => mcpRequestAuth,
         rpcHandlerManager,
         subscribeDaemonPluginCatalogChanges: registerPluginCatalogSignal({ rpcHandlerManager, events }),
         getEphemeralStreamConnectionEpoch: () => 0,

@@ -60,11 +60,11 @@ describe('process spawn helpers', () => {
     expect(processHelpers.isPidAlive(childPid)).toBe(true);
 
     try {
-      process.kill(parent.pid!, 'SIGTERM');
-    } catch {
-      // ignore
+      process.kill(childPid, 'SIGTERM');
+      await expect(processHelpers.waitForProcessExit(childPid, { timeoutMs: 2_000 })).resolves.toBe(true);
+    } finally {
+      parent.kill();
+      await expect(processHelpers.waitForProcessExit(parent.pid!, { timeoutMs: 2_000 })).resolves.toBe(true);
     }
-
-    await expect(processHelpers.waitForProcessExit(parent.pid!, { timeoutMs: 2_000 })).resolves.toBe(true);
   });
 });
