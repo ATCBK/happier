@@ -6273,6 +6273,9 @@ describe('PluginSurfacePlacementHost', () => {
         await flushHookEffects();
         expect(accountEncryptionModeFetch).toHaveBeenCalled();
         expect(reactNativeSurfaceProps).toHaveLength(0);
+        expect(screen.findByTestId('plugin-surface-unavailable-loading-skeleton')).toBeTruthy();
+        expect(screen.findByTestId('plugin-surface-unavailable-action')).toBeNull();
+        expect(screen.findByTestId('plugin-surface-unavailable-diagnostic-account_encryption_mode_unavailable')).toBeNull();
 
         await act(async () => {
             resolveAccountEncryptionMode({ mode: 'plain', updatedAt: 2 });

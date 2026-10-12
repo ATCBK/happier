@@ -281,11 +281,18 @@ export function createPluginSurfaceContext(input: Readonly<{
     });
 }
 
+export type PluginSurfaceAccountEncryptionModeReadiness =
+    | Readonly<{ status: 'loading' }>
+    | Readonly<{ status: 'unavailable' }>
+    | Readonly<{ status: 'ready'; mode: SurfaceContext['accountEncryptionMode'] }>;
+
+const ACCOUNT_MODE_LOADING = Object.freeze({ status: 'loading' as const });
+
 type ResolvedAccountEncryptionMode = Readonly<{
     accountLifetime: ActiveServerAccountScopeLifetime;
     credentials: AuthCredentials;
     cacheRevision: number;
-    mode: SurfaceContext['accountEncryptionMode'];
+    result: Exclude<PluginSurfaceAccountEncryptionModeReadiness, { status: 'loading' }>;
 }>;
 
 /**
@@ -299,7 +306,7 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
     credentials: AuthCredentials | null | undefined;
     /** Gates disclosure through the incumbent physical mount. */
     isCurrent: () => boolean;
-}>): SurfaceContext['accountEncryptionMode'] | null {
+}>): PluginSurfaceAccountEncryptionModeReadiness {
     const cacheRevision = React.useSyncExternalStore(
         subscribeAccountEncryptionModeCacheInvalidation,
         getAccountEncryptionModeCacheRevision,
@@ -347,7 +354,7 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
                 ) {
                     return;
                 }
-                setResolved({ accountLifetime, credentials, cacheRevision, mode });
+                setResolved({ accountLifetime, credentials, cacheRevision, result: { status: 'ready', mode } });
             },
             () => {
                 if (
@@ -355,7 +362,7 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
                     && accountLifetime.isCurrent()
                     && isCurrentRef.current()
                 ) {
-                    setResolved(null);
+                    setResolved({ accountLifetime, credentials, cacheRevision, result: { status: 'unavailable' } });
                 }
             },
         );
@@ -371,6 +378,6 @@ export function usePluginSurfaceAccountEncryptionMode(input: Readonly<{
         && resolved.cacheRevision === cacheRevision
         && input.accountLifetime?.isCurrent() === true
         && isCurrentRef.current()
-        ? resolved.mode
-        : null;
+        ? resolved.result
+        : ACCOUNT_MODE_LOADING;
 }

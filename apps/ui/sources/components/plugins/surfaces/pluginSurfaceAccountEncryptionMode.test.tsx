@@ -25,11 +25,6 @@ const accountModeTransport = vi.hoisted(() => ({
     },
 }));
 
-vi.mock('@/utils/timing/time', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/utils/timing/time')>()),
-    backoff: async <T,>(run: () => Promise<T>): Promise<T> => await run(),
-}));
-
 vi.mock('@/sync/http/client', () => ({
     serverFetch: (...args: unknown[]) => accountModeTransport.serverFetch(...args),
 }));
@@ -109,12 +104,12 @@ describe('usePluginSurfaceAccountEncryptionMode', () => {
             initialProps: { isCurrent: retiredControllerIsCurrent },
         });
 
-        expect(hook.getCurrent()).toBeNull();
+        expect(hook.getCurrent()).toEqual({ status: 'loading' });
 
         await hook.rerender({ isCurrent: successorControllerIsCurrent });
         await flushHookEffects();
 
-        expect(hook.getCurrent()).toBe('plain');
+        expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' });
         expect(accountModeTransport.serverFetch).toHaveBeenCalledTimes(1);
 
         await hook.unmount();
@@ -150,7 +145,7 @@ describe('usePluginSurfaceAccountEncryptionMode', () => {
             flushOptions: { cycles: 0 },
         });
 
-        expect(hook.getCurrent()).toBeNull();
+        expect(hook.getCurrent()).toEqual({ status: 'loading' });
 
         await act(async () => {
             accountA.retire();
@@ -160,32 +155,50 @@ describe('usePluginSurfaceAccountEncryptionMode', () => {
             credentials: credentialsB,
             isCurrent: accountBIsCurrent,
         });
-        expect(hook.getCurrent()).toBeNull();
+        expect(hook.getCurrent()).toEqual({ status: 'loading' });
 
         await act(async () => {
             accountBResponse.resolve(response('plain'));
         });
         await flushHookEffects();
-        expect(hook.getCurrent()).toBe('plain');
+        expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' });
 
         await act(async () => {
             accountAResponse.resolve(response('e2ee'));
         });
         await flushHookEffects();
-        expect(hook.getCurrent()).toBe('plain');
+        expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' });
 
         await act(async () => {
             invalidateAccountEncryptionModeCache();
         });
-        expect(hook.getCurrent()).toBeNull();
+        expect(hook.getCurrent()).toEqual({ status: 'loading' });
 
         await act(async () => {
             refreshedAccountBResponse.resolve(response('e2ee'));
         });
         await flushHookEffects();
-        expect(hook.getCurrent()).toBe('e2ee');
+        expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'e2ee' });
         expect(accountModeTransport.serverFetch).toHaveBeenCalledTimes(3);
 
+        await hook.unmount();
+    });
+
+    it('reports a terminal refusal only after the pending mode request settles', async () => {
+        const account = createLifetime('account-a');
+        const pending = createDeferredResponse();
+        accountModeTransport.serverFetch.mockReturnValue(pending.promise);
+        const isCurrent = () => account.lifetime.isCurrent();
+        const hook = await renderHook(() => usePluginSurfaceAccountEncryptionMode({
+            accountLifetime: account.lifetime,
+            credentials: credentialsA,
+            isCurrent,
+        }));
+
+        expect(hook.getCurrent()).toEqual({ status: 'loading' });
+        await act(async () => pending.resolve(new Response('{}', { status: 401 })));
+        await flushHookEffects();
+        expect(hook.getCurrent()).toEqual({ status: 'unavailable' });
         await hook.unmount();
     });
 });

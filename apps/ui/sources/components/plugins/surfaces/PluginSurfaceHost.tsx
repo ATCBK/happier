@@ -3255,11 +3255,14 @@ function PluginSurfaceHostMount(props: Readonly<(
             && resolveAuthCredentialsScopeKey(currentCredentials) === accountEncryptionModeCredentialScope,
         );
     }, [accountEncryptionModeCredentialScope, accountLifetime, controller.isCurrent]);
-    const accountEncryptionMode = usePluginSurfaceAccountEncryptionMode({
+    const accountEncryptionModeReadiness = usePluginSurfaceAccountEncryptionMode({
         accountLifetime,
         credentials: accountEncryptionModeCredentials,
         isCurrent: isAccountEncryptionModeCurrent,
     });
+    const accountEncryptionMode = accountEncryptionModeReadiness.status === 'ready'
+        ? accountEncryptionModeReadiness.mode
+        : null;
     // The generated surface receives a closed exact-target resolver through
     // private bindings. Keep that composition stable across equivalent parent
     // renders: the map is its only package-data authority, while the bound
@@ -3410,6 +3413,11 @@ function PluginSurfaceHostMount(props: Readonly<(
             ? <>{embeddedFallback}</>
             : renderPluginSurfaceUnavailable(reason, props.unavailableAction, state, onRetry)
     );
+    const renderAccountEncryptionModeReadiness = (): React.ReactElement => (
+        accountEncryptionModeReadiness.status === 'loading'
+            ? renderUnavailable('account_encryption_mode_pending', 'loading')
+            : renderUnavailable('account_encryption_mode_unavailable')
+    );
     // Only a failed daemon answer can change on a re-ask; unsupported/idle/
     // invalid target answers keep no Retry because asking again cannot help.
     const renderMountedTargetProjectionFallback = (): React.ReactElement => {
@@ -3444,7 +3452,7 @@ function PluginSurfaceHostMount(props: Readonly<(
     // not lend either public Host API transport a stale, inferred, or absent
     // context while the canonical cache is resolving or has just invalidated.
     if (accountLocalInteractionEnabled && !accountEncryptionMode) {
-        return renderUnavailable('account_encryption_mode_unavailable');
+        return renderAccountEncryptionModeReadiness();
     }
     const surfaceTarget = resolvedSurfaceTarget.target;
     const resolvedHostApi = controller.hostApi;
@@ -3617,9 +3625,10 @@ function PluginSurfaceHostMount(props: Readonly<(
         contribution: Readonly<Record<string, unknown>> | null,
         inlineDocument?: PluginHostedHtmlSourceV1,
         inlineDocumentNetworkOrigins?: readonly string[],
+        inlineDocumentNetwork?: 'none' | 'open',
     ) => {
         if (!accountEncryptionMode) {
-            return renderUnavailable('account_encryption_mode_unavailable');
+            return renderAccountEncryptionModeReadiness();
         }
         const explicitBrowserTarget = hasEmbeddedRendererMount
             ? null
@@ -3835,7 +3844,7 @@ function PluginSurfaceHostMount(props: Readonly<(
     const renderReactNative = (): React.ReactNode => {
         if (renderer.kind !== 'reactNative') return null;
         if (!accountEncryptionMode) {
-            return renderUnavailable('account_encryption_mode_unavailable');
+            return renderAccountEncryptionModeReadiness();
         }
         if (hasEmbeddedRendererMount && !mountedRendererArtifact) {
             return renderUnavailable(composerBinding
