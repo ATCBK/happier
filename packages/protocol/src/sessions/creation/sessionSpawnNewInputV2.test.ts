@@ -20,6 +20,16 @@ const input = {
 } as const;
 
 describe('SessionSpawnNewInputV2Schema', () => {
+  it('retains a session tool allowlist and closed unlisted policy at ordinary and browser-safe spawn', () => {
+    const policy = { allowedTools: ['mcp__wilson-intake__*', 'Read(/workspace/attachments/**)'], unlistedTools: 'deny' };
+    expect(SessionSpawnNewInputV2Schema.parse({ ...input, ...policy })).toMatchObject(policy);
+    expect(sessionSpawnInput.SessionServerStartSpawnDraftV1Schema.parse({ ...input, ...policy })).toMatchObject(policy);
+    expect(SessionAuthoringValueV1Schema.shape.allowedTools.parse(policy.allowedTools)).toEqual(policy.allowedTools);
+    expect(SyncedSessionAuthoringValueV2Schema.shape.unlistedTools.parse('deny')).toBe('deny');
+    expect(SessionSpawnNewInputV2Schema.parse(input)).not.toHaveProperty('unlistedTools');
+    expect(SessionSpawnNewInputV2Schema.safeParse({ ...input, unlistedTools: 'allow' }).success).toBe(false);
+    expect(SessionSpawnNewInputV2Schema.safeParse({ ...input, allowedTools: [42] }).success).toBe(false);
+  });
   it('carries exact managed birth provenance without admitting incomplete or caller-selected Session source', () => {
     const managedCreation = { homeId: 'home', managedId: 'managed',
       controller: { machineId: 'controller', installationId: 'installation' } };
