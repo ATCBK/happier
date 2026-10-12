@@ -49,7 +49,7 @@ export const SessionPublicLinkSettingsV1Schema = lazyZodSchema(() => z.object({
   networkOff: z.boolean().optional(),
   updatedAt: z.number(),
   keyDerivation: z.enum(['fragment_v1', 'legacy_token_v1']).optional(),
-  isolatedOrigin: z.string().url().optional(),
+  viewerOrigin: z.string().url().optional(),
 }).strict());
 export type SessionPublicLinkSettingsV1 = z.infer<typeof SessionPublicLinkSettingsV1Schema>;
 export const SessionPublicLinkGetActionResultV1Schema = lazyZodSchema(() => SessionPublicLinkSettingsV1Schema.nullable());
@@ -60,14 +60,14 @@ export const SessionPublicLinkRemoveActionResultV1Schema = lazyZodSchema(() => z
 export function projectSessionPublicLinkActionResultV1(value: unknown): SessionPublicLinkSettingsV1 | null {
   const response = z.object({
     publicShare: SessionPublicLinkSettingsV1Schema.loose().nullable(),
-    isolatedOrigin: z.string().url().optional(),
+    viewerOrigin: z.string().url().optional(),
   }).loose().parse(value);
   if (response.publicShare === null) return null;
   const { id, expiresAt, maxUses, useCount, isConsentRequired, networkOff, updatedAt, keyDerivation } = response.publicShare;
   return { id, expiresAt, maxUses, useCount, isConsentRequired, updatedAt,
     ...(networkOff !== undefined ? { networkOff } : {}),
     ...(keyDerivation ? { keyDerivation } : {}),
-    ...(response.isolatedOrigin ? { isolatedOrigin: response.isolatedOrigin } : {}),
+    ...(response.viewerOrigin ? { viewerOrigin: response.viewerOrigin } : {}),
   };
 }
 
@@ -75,9 +75,11 @@ export function projectSessionPublicLinkActionResultV1(value: unknown): SessionP
 export function projectSessionPublicLinkCreateActionResultV1(
   value: unknown,
   material: Readonly<{ lookupId: string; secret: string }>,
+  networkOff: boolean,
 ): z.infer<typeof SessionPublicLinkCreateActionResultV1Schema> {
   const settings = projectSessionPublicLinkActionResultV1(value);
-  if (!settings || !settings.isolatedOrigin || settings.keyDerivation !== 'fragment_v1') throw new Error('public_link_publication_unconfirmed');
+  if (!settings || !settings.viewerOrigin || settings.keyDerivation !== 'fragment_v1'
+    || (networkOff && settings.networkOff !== true)) throw new Error('public_link_publication_unconfirmed');
   return SessionPublicLinkCreateActionResultV1Schema.parse({ ...settings,
-    url: buildStoredContentPublicShareUrlV1({ origin: settings.isolatedOrigin, ...material }) });
+    url: buildStoredContentPublicShareUrlV1({ origin: settings.viewerOrigin, ...material }) });
 }
