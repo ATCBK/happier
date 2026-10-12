@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { resolveHappierTypeScale } from '@happier-dev/plugin-ui/presentation';
 
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 export { HAPPIER_MENU_ROW_METRICS as MENU_ROW_METRICS } from '@happier-dev/plugin-ui/presentation';
@@ -11,59 +12,24 @@ function selectValue<T>(values: { ios?: T; default: T }): T {
     return Platform.OS === 'ios' && values.ios !== undefined ? values.ios : values.default;
 }
 
-export const ITEM_TITLE_TEXT_METRICS: Record<ResolvedItemDensity, Readonly<{
-    fontSize: number;
-    lineHeight: number;
-    letterSpacing: number;
-}>> = {
-    comfortable: {
-        fontSize: selectValue({ ios: 17, default: 16 }),
-        lineHeight: selectValue({ ios: 22, default: 24 }),
-        letterSpacing: selectValue({ ios: -0.41, default: 0.15 }),
-    },
-    cozy: {
-        fontSize: selectValue({ ios: 15, default: 14 }),
-        lineHeight: selectValue({ ios: 20, default: 20 }),
-        letterSpacing: selectValue({ ios: -0.3, default: 0.12 }),
-    },
-    compact: {
-        fontSize: selectValue({ ios: 14, default: 13 }),
-        lineHeight: selectValue({ ios: 18, default: 18 }),
-        letterSpacing: selectValue({ ios: -0.24, default: 0.1 }),
-    },
-    tight: {
-        fontSize: selectValue({ ios: 12, default: 12 }),
-        lineHeight: selectValue({ ios: 18, default: 16 }),
-        letterSpacing: selectValue({ ios: -0.24, default: 0.1 }),
-    },
-};
+function roleMetrics(role: Parameters<typeof resolveHappierTypeScale>[0]) {
+    const { weight: _weight, ...metrics } = resolveHappierTypeScale(role, Platform.OS);
+    return metrics;
+}
 
-export const ITEM_SUBTITLE_TEXT_METRICS: Record<ResolvedItemDensity, Readonly<{
-    fontSize: number;
-    lineHeight: number;
-    letterSpacing: number;
-}>> = {
-    comfortable: {
-        fontSize: selectValue({ ios: 15, default: 14 }),
-        lineHeight: 20,
-        letterSpacing: selectValue({ ios: -0.24, default: 0.1 }),
-    },
-    cozy: {
-        fontSize: selectValue({ ios: 13, default: 12 }),
-        lineHeight: 18,
-        letterSpacing: selectValue({ ios: -0.24, default: 0.1 }),
-    },
-    compact: {
-        fontSize: selectValue({ ios: 13, default: 12 }),
-        lineHeight: 16,
-        letterSpacing: selectValue({ ios: -0.24, default: 0.1 }),
-    },
-    tight: {
-        fontSize: selectValue({ ios: 11, default: 11 }),
-        lineHeight: 14,
-        letterSpacing: selectValue({ ios: -0.24, default: 0.1 }),
-    },
-};
+export const ITEM_TITLE_TEXT_METRICS = {
+    comfortable: roleMetrics('heading'),
+    cozy: roleMetrics('label'),
+    compact: roleMetrics('body'),
+    tight: roleMetrics('meta'),
+} satisfies Record<ResolvedItemDensity, ReturnType<typeof roleMetrics>>;
+
+export const ITEM_SUBTITLE_TEXT_METRICS = {
+    comfortable: roleMetrics('body'),
+    cozy: roleMetrics('meta'),
+    compact: roleMetrics('meta'),
+    tight: roleMetrics('micro'),
+} satisfies Record<ResolvedItemDensity, ReturnType<typeof roleMetrics>>;
 
 /** Canonical horizontal inset for each Item density. */
 export const ITEM_ROW_PADDING_HORIZONTAL: Record<ResolvedItemDensity, number> = {
@@ -71,6 +37,17 @@ export const ITEM_ROW_PADDING_HORIZONTAL: Record<ResolvedItemDensity, number> = 
     cozy: 14,
     compact: 12,
     tight: 10,
+};
+
+/**
+ * A grouped row's vertical padding when it carries a subtitle. Content beside a group that must start
+ * level with its first row's title (a preview caption) adds this to the group's own top inset.
+ */
+export const ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX: Record<ResolvedItemDensity, number> = {
+    comfortable: selectValue({ ios: 11, default: 16 }),
+    cozy: selectValue({ ios: 9, default: 10 }),
+    compact: selectValue({ ios: 7, default: 6 }),
+    tight: selectValue({ ios: 7, default: 2 }),
 };
 
 export const ITEM_ICON_BOX_SIZE: Record<ResolvedItemDensity, number> = {

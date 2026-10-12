@@ -134,6 +134,33 @@ describe('Item page operation placement', () => {
     await layout({ row: 398, operation: 132 });
     expect(direction()).toBe('column');
   });
+    it('lets a field that measured inline keep its width beside the label instead of overflowing the trailing inset', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Item } = await import('./Item');
+        const { ListPresentationProvider } = await import('./listPresentation');
+        const screen = await renderScreen(
+            <ListPresentationProvider value="page">
+                <Item
+                    title="Folder"
+                    rightElement={React.createElement('Operation', { testID: 'operation' })}
+                    accessoryLayout="adaptive"
+                    showChevron={false}
+                />
+            </ListPresentationProvider>,
+        );
+        const { direction, layout } = measuredRow(screen, act);
+        // A ~490px dialog row holds the label column, the gap, the 240px inline field and both insets.
+        await layout({ row: 490, operation: 240 });
+        expect(direction()).not.toBe('column');
+        // No box around the field is also capped at half the row: half of 490 less the insets is
+        // narrower than the field, which then drew past the sheet's trailing inset.
+        const halfCaps = screen.findAll((node) => typeof node.type === 'string'
+            && node.findAll((child) => child.props?.testID === 'operation').length > 0)
+            .map((node) => [node.props.style].flat(Infinity).filter(Boolean)
+                .reduce<unknown>((current, entry) => (entry as Record<string, unknown>).maxWidth ?? current, undefined))
+            .filter((maxWidth) => maxWidth === '50%');
+        expect(halfCaps).toEqual([]);
+    });
     it('starts a control placed under its label at the label\'s edge, after the section\'s mark column', async () => {
         const { act } = await import('react-test-renderer');
         const { Item } = await import('./Item');

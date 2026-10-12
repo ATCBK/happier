@@ -65,10 +65,6 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
-}));
-
 vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(),
 }));

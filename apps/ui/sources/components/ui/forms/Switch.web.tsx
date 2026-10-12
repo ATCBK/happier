@@ -3,7 +3,7 @@ import type { SwitchProps } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierSwitch, type HappierSwitchProps } from '@happier-dev/plugin-ui/presentation';
 
-import { useItemRowAccessibleName } from '@/components/ui/lists/ItemRowAccessibleName';
+import { ITEM_ROW_SWITCH, useItemRowAccessibleName, useItemRowOwnsSwitch } from '@/components/ui/lists/ItemRowAccessibleName';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 export type AppSwitchProps = SwitchProps & {
@@ -30,6 +30,7 @@ export const Switch = React.forwardRef<unknown, AppSwitchProps>(function Switch(
     const controlRef = useForwardedControlRef(ref);
     const { theme } = useUnistyles();
     const rowAccessibleName = useItemRowAccessibleName();
+    const rowOwnsSwitch = useItemRowOwnsSwitch();
     const reducedMotion = useReducedMotionPreference();
     const accessibleName = rest['aria-label'] ?? rest.accessibilityLabel ?? rowAccessibleName;
 
@@ -50,9 +51,13 @@ export const Switch = React.forwardRef<unknown, AppSwitchProps>(function Switch(
             reducedMotion={reducedMotion}
             nativeID={rest.nativeID}
             testID={rest.testID}
+            presentational={rowOwnsSwitch}
             controlRef={controlRef}
             // App callers pass React Native styles (layout only); the shared control keeps its own box over them.
             style={style as HappierSwitchProps['style']}
         />
     );
 });
+
+// The row owns this switch's press when it is a row's accessory (see `readItemRowSwitch`).
+(Switch as unknown as Record<symbol, unknown>)[ITEM_ROW_SWITCH] = true;

@@ -58,9 +58,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingTop: 0,
     },
     label: {
-        fontSize: 14,
         color: theme.colors.text.primary,
-        ...Typography.default(),
+        ...Typography.variant('label', 'regular'),
     },
     // A destructive row says so in its words as well as its glyph (as DropdownMenu's destructive rows do).
     labelDestructive: {

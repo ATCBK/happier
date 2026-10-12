@@ -138,6 +138,27 @@ describe('SegmentedChoiceItem', () => {
         expect(onChange).not.toHaveBeenCalled();
     });
 
+    it('keeps the row explanation and option reason visible while the whole row is disabled', async () => {
+        const { SegmentedChoiceItem } = await import('./SegmentedChoiceItem');
+        const screen = await renderScreen(
+            <SegmentedChoiceItem<'recent' | 'resume'>
+                title="Restore memory by"
+                subtitle="Turn on “Remember” to choose."
+                disabled
+                options={[
+                    { id: 'recent', label: 'Recent messages' },
+                    { id: 'resume', label: 'Resuming the agent', unavailableReason: 'Needs the Voice agent.' },
+                ]}
+                value="recent"
+                onChange={() => {}}
+                testIDPrefix="restore"
+            />,
+        );
+        const { Item } = await import('./Item');
+        expect(screen.findAllByType(Item)[0]?.props.subtitle).toBe('Turn on “Remember” to choose. Needs the Voice agent.');
+        expect(screen.findByTestId('restore:resume')!.props.accessibilityLabel).toBe('Resuming the agent, Needs the Voice agent.');
+    });
+
     it('shows icon-only segments named by their labels when every option has an icon', async () => {
         const { SegmentedChoiceItem } = await import('./SegmentedChoiceItem');
         const screen = await renderScreen(

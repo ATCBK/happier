@@ -73,9 +73,10 @@ export function SegmentedChoiceItem<T extends string>(props: SegmentedChoiceItem
                     tabs={tabs}
                     activeTabId={value}
                     onSelectTab={onChange}
-                    slidingThumb
                     labelSize={labelSize}
-                    segmentSizing={accessoryLayout === 'stacked' ? 'equal' : 'content'}
+                    // Content width in every placement: under its label too, equal segments across the row
+                    // read as a tab bar, not a value choice (lab tsAuth-A, R-TH-5).
+                    segmentSizing="content"
                     targetSize="platform"
                     disabled={disabled}
                     accessibilityLabel={title}

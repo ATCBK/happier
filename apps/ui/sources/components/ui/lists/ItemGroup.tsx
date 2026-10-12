@@ -38,7 +38,8 @@ import {
 import { Text } from '@/components/ui/text/Text';
 import { useListPresentation, usePageListInsets } from './listPresentation';
 import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from './pageListMetrics';
-import { SectionItemDensityProvider, type ResolvedItemDensity } from './useResolvedItemDensity';
+import { SectionItemDensityProvider, useResolvedItemDensity, type ResolvedItemDensity } from './useResolvedItemDensity';
+import { ITEM_ROW_PADDING_HORIZONTAL } from './itemDensityMetrics';
 import { SectionLeadingColumnProvider } from './sectionLeadingColumn';
 import {
     HappierItemGroupBehavior,
@@ -173,11 +174,11 @@ const stylesheet = StyleSheet.create((theme) => {
         // U8.5 craft S2: grouped section titles (menus, pickers, sheets) are sentence case in the
         // secondary colour, medium weight — never an uppercase eyebrow.
         headerText: {
-            ...Typography.default('medium'),
+
             color: theme.colors.text.secondary,
-            fontSize: 13,
-            lineHeight: 18,
-            letterSpacing: 0,
+            ...Typography.variant('body', 'medium'),
+
+
             textTransform: 'none',
         },
         contentContainerOuter: {
@@ -238,14 +239,14 @@ const stylesheet = StyleSheet.create((theme) => {
             flexDirection: 'row',
             alignItems: 'center',
             flexWrap: 'wrap',
-            columnGap: 10,
-            rowGap: 2,
+            columnGap: theme.space.s10,
+            rowGap: theme.space.s2,
         },
         pageDescription: {
             ...Typography.default('regular'),
             ...happierPageTextMetrics('sectionDescription'),
             color: theme.colors.text.secondary,
-            marginTop: 2,
+            marginTop: theme.space.s2,
         },
         // A page section's sheet sits on the same content margin as the grouped card; its look is the
         // shared page sheet's (`HappierPageSheet`).
@@ -260,11 +261,8 @@ const stylesheet = StyleSheet.create((theme) => {
             paddingHorizontal: Platform.select({ ios: 32, default: 24 }),
         },
         footerText: {
-            ...Typography.default('regular'),
+            ...Typography.variant('body'),
             color: theme.colors.text.secondary,
-            fontSize: Platform.select({ ios: 13, default: 14 }),
-            lineHeight: Platform.select({ ios: 18, default: 20 }),
-            letterSpacing: Platform.select({ ios: -0.08, default: 0 }),
         },
     };
 });
@@ -297,7 +295,7 @@ const ItemGroupSharedCardBody = React.memo(function ItemGroupSharedCardBody(prop
         );
     }
     return (
-        <GlassSurface surfaceGroup="content" nested finishRole="card"
+        <GlassSurface surfaceGroup="card" nested finishRole="card"
             accessibilityRole={Platform.OS === 'web' ? undefined : props.accessibilityRole}
             accessibilityLabel={props.accessibilityLabel}
             aria-label={Platform.OS === 'web' ? props.accessibilityLabel : undefined}
@@ -491,7 +489,7 @@ const ItemGroupColumnedBody = React.memo(function ItemGroupColumnedBody(props: R
             accessibilityLabel={props.accessibilityLabel}
             aria-label={Platform.OS === 'web' ? props.accessibilityLabel : undefined}
         >
-            <GlassSurface surfaceGroup="content" nested enabled={!isGrid} solidColor={isGrid ? 'transparent' : undefined} finishRole={isGrid ? null : 'card'}
+            <GlassSurface surfaceGroup="card" nested enabled={!isGrid} solidColor={isGrid ? 'transparent' : undefined} finishRole={isGrid ? null : 'card'}
                 style={[
                     // Collapsed to one column the group IS the single shared card,
                     // so the chrome sits here — on a View that exists in both
@@ -523,7 +521,7 @@ const ItemGroupColumnedBody = React.memo(function ItemGroupColumnedBody(props: R
                                 key={row.key ?? `item-group-cell-${index}`}
                                 style={[styles.columnCell, cellStyle]}
                             >
-                                <GlassSurface surfaceGroup="content" nested enabled={isGrid} solidColor={isGrid ? undefined : 'transparent'} finishRole={isGrid ? 'card' : null} style={isGrid ? styles.columnCardOuter : styles.contentContainerInner}>
+                                <GlassSurface surfaceGroup="card" nested enabled={isGrid} solidColor={isGrid ? undefined : 'transparent'} finishRole={isGrid ? 'card' : null} style={isGrid ? styles.columnCardOuter : styles.contentContainerInner}>
                                     <ItemGroupRowPositionProvider
                                         value={isGrid
                                             ? { isFirst: true, isLast: true }
@@ -548,7 +546,8 @@ export const ItemGroup = React.memo<ItemGroupProps>((props) => {
 
     const presentation = useListPresentation();
     const isPage = presentation === 'page';
-    const contained = usePageListInsets() === 'contained' && isPage;
+    // A contained scope (a column or widget body that owns its padding) adds no second inset, page or grouped.
+    const contained = usePageListInsets() === 'contained';
     const {
         title,
         description,
@@ -572,7 +571,13 @@ export const ItemGroup = React.memo<ItemGroupProps>((props) => {
         density,
     } = props;
     const resolvedAccessibilityLabel = accessibilityLabel ?? (typeof title === 'string' ? title : undefined);
-    const resolvedContainerStyle = contained ? [styles.containedContent, containerStyle] : containerStyle;
+    // Bare rows in a contained grouped scope (a widget body) bleed by their own padding: their marks and titles
+    // keep the column's edge (the frame header's mark), while the press fill reaches into the frame's padding.
+    const rowPaddingPx = ITEM_ROW_PADDING_HORIZONTAL[useResolvedItemDensity(density)];
+    const bleedRows = contained && !isPage && surface === 'none';
+    const resolvedContainerStyle = contained
+        ? [styles.containedContent, bleedRows ? { marginHorizontal: -rowPaddingPx } : null, containerStyle]
+        : containerStyle;
 
     const wantsColumns = (columns ?? 1) > 1;
     if (wantsColumns && clipContent) {

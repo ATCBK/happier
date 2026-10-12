@@ -73,8 +73,9 @@ describe('SectionButtonRow', () => {
             </SectionButtonRow>,
         );
         const error = refusal.findHostByTestId('form.error');
-        expect(error?.props.children).toBe('Enter a name first.');
+        expect(refusal.getTextContent()).toContain('Enter a name first.');
         expect(error?.props.accessibilityRole).toBe('alert');
+        expect(error?.props.accessibilityLiveRegion).toBe('assertive');
 
         const note = await renderScreen(
             <SectionButtonRow footnote="Deleting removes the Team for everyone." footnoteTestID="form.note">

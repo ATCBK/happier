@@ -67,14 +67,13 @@ export function FilesystemBrowserToolbarChrome(props: FilesystemBrowserToolbarCh
     );
     const renderOverflowTriggerButton = React.useCallback((props: Readonly<{
         testID?: string;
-        includeDefaultTestID?: boolean;
         accessibilityLabel?: string;
         accessibilityHint?: string;
         accessibilityState?: Readonly<{ expanded?: boolean }>;
         onPress?: () => void;
     }>) => (
         <FileBrowserToolbarIconButton
-            testID={props.testID ?? (props.includeDefaultTestID === false ? undefined : overflowTriggerTestID)}
+            testID={props.testID ?? overflowTriggerTestID}
             accessibilityLabel={props.accessibilityLabel ?? t('common.moreActions')}
             accessibilityHint={props.accessibilityHint}
             accessibilityState={props.accessibilityState}
@@ -104,7 +103,6 @@ export function FilesystemBrowserToolbarChrome(props: FilesystemBrowserToolbarCh
                     overflowTriggerTestID={overflowTriggerTestID}
                     compactThreshold={Number.POSITIVE_INFINITY}
                     compactActionIds={[]}
-                    renderOverflowAnchorOverlay={() => renderOverflowTriggerButton({ includeDefaultTestID: false })}
                     renderOverflowTrigger={({ open, toggle, testID, accessibilityLabel, accessibilityHint }) =>
                         renderOverflowTriggerButton({
                             testID: testID ?? overflowTriggerTestID,

@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { HAPPIER_MENU_ROW_TEXT } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { buildActionRowAccessibilityLabel } from './actionRowAccessibility';
 import { ICON_LABEL_OPTICAL_NUDGE_STYLE } from '@/components/ui/icons/iconOpticalAlignment';
@@ -93,20 +94,20 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderColor: 'transparent',
     },
     rowSlim: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
         borderRadius: 0,
     },
     rowDefault: {
-        paddingHorizontal: 16,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s10,
     },
     rowSelectable: {
         // Match historical CommandPalette look
-        paddingHorizontal: 24,
-        paddingVertical: 12,
-        marginHorizontal: 8,
-        marginVertical: 2,
+        paddingHorizontal: theme.space.s24,
+        paddingVertical: theme.space.s12,
+        marginHorizontal: theme.space.s8,
+        marginVertical: theme.space.s2,
         borderRadius: theme.borderRadius.md,
     },
     rowPressed: {
@@ -141,7 +142,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.selected,
     },
     left: {
-        marginRight: 12,
+        marginRight: theme.space.s12,
         alignItems: 'center',
         justifyContent: 'center',
         // Optical, not geometric — see ICON_LABEL_OPTICAL_NUDGE_STYLE.
@@ -154,7 +155,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     titleRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         minWidth: 0,
         width: '100%',
         alignSelf: 'stretch',
@@ -164,12 +165,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 1,
         minWidth: 0,
     },
+    // The one menu row type, shared with plugin menus (`HAPPIER_MENU_ROW_TEXT`).
     title: {
         ...Typography.default(),
         color: theme.colors.text.primary,
-        fontSize: Platform.select({ ios: 16, default: 15 }),
-        lineHeight: Platform.select({ ios: 20, default: 20 }),
-        letterSpacing: Platform.select({ ios: -0.2, default: 0 }),
+        fontSize: HAPPIER_MENU_ROW_TEXT.label.fontSize,
+        lineHeight: HAPPIER_MENU_ROW_TEXT.label.lineHeight,
+        letterSpacing: HAPPIER_MENU_ROW_TEXT.label.letterSpacing,
     },
     titleSelectable: {
         color: theme.colors.text.primary,
@@ -183,13 +185,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
         flexShrink: 1,
         color: theme.colors.text.secondary,
-        fontSize: Platform.select({ ios: 13, default: 13 }),
-        lineHeight: 18,
+        fontSize: HAPPIER_MENU_ROW_TEXT.subtitle.fontSize,
+        lineHeight: HAPPIER_MENU_ROW_TEXT.subtitle.lineHeight,
     },
     subtitleRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         marginTop: MENU_ROW_METRICS.subtitleGapPx,
         minWidth: 0,
     },
@@ -198,13 +200,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         letterSpacing: -0.1,
     },
     right: {
-        marginLeft: 12,
+        marginLeft: theme.space.s12,
         alignItems: 'center',
         justifyContent: 'center',
     },
     accessoryTitleAligned: {
         alignSelf: 'flex-start',
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     splitPressable: {
         flex: 1,

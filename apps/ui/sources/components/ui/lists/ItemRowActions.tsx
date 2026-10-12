@@ -4,7 +4,6 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { ITEM_ROW_ACTIONS_COMPACT_THRESHOLD_PX, type ItemAction } from '@/components/ui/lists/itemActions';
 import { Popover, type PopoverPlacement, type PopoverPortalOptions } from '@/components/ui/popover';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
-import { resolveWebBlurTintColor } from '@/components/ui/overlays/resolveWebBlurTintColor';
 import { ActionListSection, type ActionListItem } from '@/components/ui/lists/ActionListSection';
 import { t } from '@/text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
@@ -48,7 +47,6 @@ export interface ItemRowActionsProps {
         accessibilityHint: string;
         onKeyDown?: (event: OverflowTriggerKeyEvent) => void;
     }>) => React.ReactNode;
-    renderOverflowAnchorOverlay?: () => React.ReactNode;
     /** Controlled overflow, for a row that also opens its actions another way (a long press on touch). */
     overflowOpen?: boolean;
     onOverflowOpenChange?: (open: boolean) => void;
@@ -128,10 +126,6 @@ export function ItemRowActions(props: ItemRowActionsProps) {
         event.preventDefault();
         event.stopPropagation();
     }, [props.onOverflowTriggerKeyDown]);
-
-    const blurTintOnWeb = React.useMemo(() => {
-        return resolveWebBlurTintColor({ surfaceColor: theme.colors.surface.base, dark: theme.dark });
-    }, [theme.colors.surface.base, theme.dark]);
 
     const compactIds = React.useMemo(() => new Set(props.compactActionIds ?? []), [props.compactActionIds]);
     const pinnedIds = React.useMemo(() => new Set(props.pinnedActionIds ?? []), [props.pinnedActionIds]);
@@ -261,26 +255,18 @@ export function ItemRowActions(props: ItemRowActionsProps) {
             borderRadius: Math.min(width, height) / 2,
         };
     }, [actionControlSize, targetExpandX, targetExpandY]);
-    const overflowPlacement = props.overflowPlacement ?? 'left';
+    // An anchored ⋯ menu is non-blocking (DESIGN.md: never dim the world for parallel work; lab
+    // wgmenu M): it opens below its trigger with its trailing edge on the trigger's, flips above near
+    // the window's foot, and leaves the page sharp. An outside tap still closes it.
+    const overflowPlacement = props.overflowPlacement ?? 'auto-vertical';
     const overflowPortal = React.useMemo<PopoverPortalOptions>(() => ({
         web: true,
         native: true,
         matchAnchorWidth: false,
+        anchorAlign: 'end',
         anchorAlignVertical: 'center',
         ...props.overflowPortal,
     }), [props.overflowPortal]);
-    const overflowAnchorOverlay = React.useMemo(() => {
-        if (props.renderOverflowAnchorOverlay) {
-            return props.renderOverflowAnchorOverlay();
-        }
-        return normalizeNodeForView(
-            <Icon
-                name="dots-three"
-                size={iconSize + 2}
-                color={theme.colors.button.secondary.tint}
-            />,
-        );
-    }, [iconSize, props, theme.colors.button.secondary.tint]);
 
     const renderInlineAction = React.useCallback((action: ItemAction) => {
         const color = action.color ?? (action.destructive ? theme.colors.state.danger.foreground : theme.colors.button.secondary.tint);
@@ -405,17 +391,11 @@ export function ItemRowActions(props: ItemRowActionsProps) {
                         portal={overflowPortal}
                         boundaryRef={props.popoverBoundaryRef}
                         onRequestClose={onRequestClose}
-                        backdrop={{
-                            effect: 'blur',
-                            blurOnWeb: Platform.OS === 'web' ? { px: 3, tintColor: blurTintOnWeb } : undefined,
-                            anchorOverlay: overflowAnchorOverlay,
-                            closeOnPan: true,
-                        }}
+                        backdrop={{ effect: 'none', closeOnPan: true }}
                     >
-                        {({ maxHeight, placement }) => (
+                        {({ maxHeight }) => (
                             <FloatingOverlay
                                 maxHeight={maxHeight}
-                                arrow={{ placement }}
                                 keyboardShouldPersistTaps="always"
                                 edgeFades={{ top: true, bottom: true, size: 24 }}
                                 edgeIndicators={true}
@@ -427,7 +407,7 @@ export function ItemRowActions(props: ItemRowActionsProps) {
                 ) : null}
             </View>
         );
-    }, [actionControlFrame, blurTintOnWeb, iconSize, onOverflowTriggerKeyDown, overflowActionSections, overflowAnchorOverlay, overflowPlacement, overflowPortal, props, showOverflow, theme.colors.border.focus, theme.colors.button.secondary.tint]);
+    }, [actionControlFrame, iconSize, onOverflowTriggerKeyDown, overflowActionSections, overflowPlacement, overflowPortal, props, showOverflow, theme.colors.border.focus, theme.colors.button.secondary.tint]);
 
     return (
         <View style={[styles.container, { gap }]}>

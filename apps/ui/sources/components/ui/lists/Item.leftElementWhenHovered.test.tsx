@@ -10,6 +10,28 @@ import { installUiListsCommonModuleMocks } from './uiListsTestHelpers';
 
 installUiListsCommonModuleMocks();
 
+describe('Item leading element', () => {
+    it('lets a compact list row\'s leading element wider than the glyph box take its width instead of overhanging the title', async () => {
+        const { Item } = await import('./Item');
+        const screen = await renderScreen(
+            <Item
+                title="happier"
+                density="compact"
+                onPress={() => {}}
+                leftElement={<View testID="tree-leading" style={{ width: 44 }} />}
+            />,
+        );
+        // The box that holds the leading element: its parent host.
+        const box = screen.findAll((node) => typeof node.type === 'string'
+            && node.findAll((child) => child.props?.testID === 'tree-leading').length > 0
+            && !node.findAll((child) => typeof child.type === 'string' && child.props?.numberOfLines !== undefined).length)
+            .at(-2)!;
+        const style = Object.assign({}, ...[box.props.style].flat(Infinity).filter(Boolean)) as Record<string, unknown>;
+        expect(style.width).toBe('auto');
+        expect(typeof style.minWidth).toBe('number');
+    });
+});
+
 describe('Item leftElementWhenHovered', () => {
     it('swaps left element while hovered on web', async () => {
         const { Item } = await import('./Item');

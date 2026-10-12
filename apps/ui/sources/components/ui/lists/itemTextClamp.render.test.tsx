@@ -195,4 +195,15 @@ describe('itemTextClamp is the clamp Item actually paints', () => {
         expect(slot.height).toBe(lineHeight);
         expect(row.alignItems).toBe('flex-start');
     });
+    it('keeps the separator before a middle-ellipsis suffix visible: a run of its own cannot start with a collapsible space', async () => {
+        const { Item } = await import('./Item');
+        const screen = await renderScreen(<Item title="NLDW4-5-40-40 · 0da8" subtitle="No work" titleEllipsizeMode="middle" showChevron={false} />);
+        const runs = screen.tree.findAllByType('Text' as never)
+            .map((node: { props: Record<string, unknown> }) => node.props.children)
+            .filter((child: unknown): child is string => typeof child === 'string');
+        expect(runs).toContain('NLDW4-5-40-40');
+        const tail = runs.find((run) => run.endsWith('0da8') && run !== 'NLDW4-5-40-40')!;
+        expect(tail.startsWith(' ')).toBe(false);
+        expect(tail).toBe('\u00a0· 0da8');
+    });
 });

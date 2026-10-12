@@ -12,12 +12,15 @@ export const SectionActionButton = React.memo(function SectionActionButton(props
     testID?: string;
     title: string;
     icon: IconName;
-    onPress: () => void;
+    /** Receives the press event, so a caller can return focus to this control. */
+    onPress: (event?: unknown) => void;
     disabled?: boolean;
     loading?: boolean;
     accessibilityLabel?: string;
     /** For an action that opens something in place (a picker under the section): whether it is open. */
     expanded?: boolean;
+    /** The press target's box (a header action keeps the platform's minimum target around its quiet pill). */
+    style?: React.ComponentProps<typeof RoundButton>['style'];
 }>) {
     const { theme } = useUnistyles();
     return (
@@ -32,6 +35,7 @@ export const SectionActionButton = React.memo(function SectionActionButton(props
             disabled={props.disabled}
             loading={props.loading}
             expanded={props.expanded}
+            style={props.style}
             onPress={props.onPress}
         />
     );

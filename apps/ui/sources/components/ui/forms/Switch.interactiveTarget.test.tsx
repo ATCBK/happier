@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { renderScreen } from '@/dev/testkit';
+import { HAPPIER_SWITCH_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -31,24 +32,23 @@ function flattenStyle(style: unknown): Record<string, unknown> {
 }
 
 describe('Switch interactive target', () => {
-    it('keeps the default web switch interaction node on the canonical web target', async () => {
+    it('lays the web switch out at its drawn track while its hit region keeps the full target', async () => {
         const { Switch } = await import('./Switch.web');
         const screen = await renderScreen(
-            <Switch
-                value={false}
-                onValueChange={() => {}}
-                testID="web-switch"
-                style={{ minWidth: 1, minHeight: 1 }}
-            />,
+            <Switch value={false} onValueChange={() => {}} testID="web-switch" />,
         );
 
         const interactionNode = screen.findByTestId('web-switch');
         expect(interactionNode?.props.accessibilityRole).toBe('switch');
         expect(typeof interactionNode?.props.onPress).toBe('function');
-        expect(flattenStyle(interactionNode?.props.style)).toMatchObject({
-            minWidth: resolveMinimumInteractiveTargetSize('web'),
-            minHeight: resolveMinimumInteractiveTargetSize('web'),
-        });
+        const style = flattenStyle(interactionNode?.props.style);
+        const { trackWidth, trackHeight } = HAPPIER_SWITCH_METRICS.default;
+        // Hit region: the full touch target.
+        expect(style.width).toBe(HAPPIER_SWITCH_METRICS.webTargetPx);
+        expect(style.height).toBe(HAPPIER_SWITCH_METRICS.webTargetPx);
+        // Layout footprint: exactly the drawn track, so a row never grows around the switch.
+        expect((style.width as number) + 2 * (style.marginHorizontal as number)).toBe(trackWidth);
+        expect((style.height as number) + 2 * (style.marginVertical as number)).toBe(trackHeight);
     });
 
     it('keeps default and compact native switch interaction nodes on the canonical native target', async () => {

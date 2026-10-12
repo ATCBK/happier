@@ -43,3 +43,8 @@ export function useSectionLeadingColumn(hasLeading: boolean): boolean {
     }, [hasLeading, register]);
     return section?.reserve ?? false;
 }
+
+/** Whether this row sits inside a section (`ItemGroup`), so a row-shaped notice knows it already has its sheet. */
+export function useIsInsideItemSection(): boolean {
+    return React.useContext(SectionLeadingColumnContext) !== null;
+}

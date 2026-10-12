@@ -4,7 +4,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { HappierSwitchNative, type HappierSwitchProps } from '@happier-dev/plugin-ui/presentation';
 
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { useItemRowAccessibleName } from '@/components/ui/lists/ItemRowAccessibleName';
+import { ITEM_ROW_SWITCH, useItemRowAccessibleName, useItemRowOwnsSwitch } from '@/components/ui/lists/ItemRowAccessibleName';
 
 import { Deferred } from './Deferred';
 
@@ -33,6 +33,7 @@ export const Switch = React.forwardRef<React.ElementRef<typeof ReactNativeSwitch
     const controlRef = useForwardedControlRef(ref);
     const { theme } = useUnistyles();
     const rowAccessibleName = useItemRowAccessibleName();
+    const rowOwnsSwitch = useItemRowOwnsSwitch();
     const accessibleName = rest.accessibilityLabel ?? rest['aria-label'] ?? rowAccessibleName;
     return (
         <Deferred enabled={Platform.OS === 'android'}>
@@ -51,9 +52,13 @@ export const Switch = React.forwardRef<React.ElementRef<typeof ReactNativeSwitch
                 minimumTouchTarget={MINIMUM_INTERACTIVE_TARGET_SIZE}
                 nativeID={rest.nativeID}
                 testID={rest.testID}
+            presentational={rowOwnsSwitch}
                 controlRef={controlRef}
                 style={style as HappierSwitchProps['style']}
             />
         </Deferred>
     );
 });
+
+// The row owns this switch's press when it is a row's accessory (see `readItemRowSwitch`).
+(Switch as unknown as Record<symbol, unknown>)[ITEM_ROW_SWITCH] = true;

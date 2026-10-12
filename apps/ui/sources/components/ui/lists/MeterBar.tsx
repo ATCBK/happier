@@ -41,7 +41,7 @@ const DEFAULT_TRACK_HEIGHT_PX = 6;
 const stylesheet = StyleSheet.create((theme) => ({
     caption: {
         color: theme.colors.text.secondary,
-        marginTop: 4,
+        marginTop: theme.space.s4,
         fontSize: 12,
         lineHeight: 16,
     },

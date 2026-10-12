@@ -2,12 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 async function importItemDensityMetricsForPlatform(os: 'ios' | 'web') {
     vi.resetModules();
-    vi.doMock('react-native', () => ({
-        Platform: {
-            OS: os,
-            select: (value: Record<string, unknown>) => value[os] ?? value.default ?? undefined,
-        },
-    }));
+    vi.doMock('react-native', async () => {
+        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+        return createReactNativeWebMock({ Platform: { OS: os, select: (value: Record<string, unknown>) => value[os] ?? value.default } });
+    });
 
     return await import('./itemDensityMetrics');
 }
@@ -29,6 +27,34 @@ describe('itemDensityMetrics', () => {
 
         expect(ITEM_ICON_BOX_SIZE.comfortable).toBe(32);
     });
+});
+
+describe('density text hierarchy', () => {
+    // Each density draws its row text from the type-role table. A larger density must keep a real step
+    // between title and description, and must never draw smaller text than a tighter one.
+    for (const os of ['web', 'ios'] as const) {
+        it(`keeps the description below the title and never grows as the density tightens (${os})`, async () => {
+            const { ITEM_TITLE_TEXT_METRICS, ITEM_SUBTITLE_TEXT_METRICS } = await importItemDensityMetricsForPlatform(os);
+            const { resolvePageRowMetrics } = await import('./pageRowMetrics');
+            const item = (['comfortable', 'cozy', 'compact', 'tight'] as const).map((density) => ({
+                title: ITEM_TITLE_TEXT_METRICS[density].fontSize,
+                subtitle: ITEM_SUBTITLE_TEXT_METRICS[density].fontSize,
+            }));
+            const page = (['comfortable', 'cozy', 'compact'] as const).map((density) => {
+                const metrics = resolvePageRowMetrics({ density, shape: 'standard', touch: false });
+                return { title: metrics.title.fontSize, subtitle: metrics.subtitle.fontSize };
+            });
+            for (const ladder of [item, page]) {
+                for (const step of ladder) expect(step.subtitle).toBeLessThan(step.title);
+                for (let i = 1; i < ladder.length; i += 1) {
+                    expect(ladder[i].title).toBeLessThanOrEqual(ladder[i - 1].title);
+                    expect(ladder[i].subtitle).toBeLessThanOrEqual(ladder[i - 1].subtitle);
+                }
+                // The roomiest density is a visible step up from the default (cozy) title.
+                expect(ladder[0].title).toBeGreaterThan(ladder[1].title);
+            }
+        });
+    }
 });
 
 describe('itemDensityMetrics glyph vs box', () => {

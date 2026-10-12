@@ -47,6 +47,11 @@ export const AttentionBanner = React.memo(function AttentionBanner(props: Readon
     /** A domain-specific status mark, still rendered through the shared banner slot. */
     icon?: React.ReactNode;
     action?: AttentionBannerAction | null;
+    /**
+     * A notice whose sibling states differ in how many ways forward they offer keeps its actions in one
+     * place: `below` puts even a single action under the words, where two or more always sit.
+     */
+    actionPlacement?: 'below';
     compactActionPlacement?: 'full-width';
     /** A second way forward (open the page that fixes it), beside the action. */
     secondaryAction?: AttentionBannerAction | null;
@@ -112,7 +117,7 @@ export const AttentionBanner = React.memo(function AttentionBanner(props: Readon
                 action={actions}
                 compactActionPlacement={props.compactActionPlacement}
                 // Two or more ways forward, or a list of steps, never share a line with the words.
-                actionPlacement={props.secondaryAction || (props.moreActions?.length ?? 0) > 0 ? 'below' : undefined}
+                actionPlacement={props.actionPlacement ?? (props.secondaryAction || (props.moreActions?.length ?? 0) > 0 ? 'below' : undefined)}
                 onLayout={(event) => { const width = event.nativeEvent.layout.width; if (width > 0) setCompact(width < PAGE_LIST_METRICS.rowStackBelowWidthPx); }}
                 details={<>
                     {hasDetails ? (
@@ -176,13 +181,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default('regular'),
         ...happierPageTextMetrics('rowDescription'),
         color: theme.colors.text.secondary,
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
     pointText: {
         flex: 1,
@@ -197,8 +202,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         alignSelf: 'flex-start',
-        gap: 4,
-        marginTop: 6,
+        gap: theme.space.s4,
+        marginTop: theme.space.s6,
     },
     detailsToggleText: {
         ...Typography.default('medium'),
@@ -206,8 +211,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     detailsContent: {
-        marginTop: 6,
-        gap: 2,
+        marginTop: theme.space.s6,
+        gap: theme.space.s2,
     },
     detailsLine: {
         ...Typography.mono(),

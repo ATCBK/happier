@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, Pressable, StyleProp, ViewStyle, TextStyle, Platform, Dimensions, StyleSheet as RNStyleSheet, type AccessibilityRole, type TextProps, type ViewProps, type LayoutChangeEvent } from 'react-native';
+import { View, Pressable, StyleProp, ViewStyle, TextStyle, Platform, StyleSheet as RNStyleSheet, type AccessibilityRole, type TextProps, type ViewProps, type LayoutChangeEvent } from 'react-native';
 import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -8,7 +8,8 @@ import {
     ItemGroupSelectionContext,
 } from '@/components/ui/lists/ItemGroup';
 import { useItemGroupRowPosition } from '@/components/ui/lists/ItemGroupRowPosition';
-import { ItemRowAccessibleNameProvider } from '@/components/ui/lists/ItemRowAccessibleName';
+import { ItemRowAccessibleNameProvider, ItemRowOwnsSwitchProvider, readItemRowSwitch } from '@/components/ui/lists/ItemRowAccessibleName';
+import { ItemRowHoverProvider } from '@/components/ui/lists/ItemRowHover';
 import { getItemGroupRowCornerRadii } from '@/components/ui/lists/itemGroupRowCorners';
 import {
     resolveItemSubtitleMaxLines,
@@ -16,6 +17,7 @@ import {
 } from '@/components/ui/lists/itemTextClamp';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { Text } from '@/components/ui/text/Text';
+import { MiddleEllipsisText, splitForWebMiddleEllipsis } from '@/components/ui/text/MiddleEllipsisText';
 import {
     WEB_START_ELLIPSIS_CONTAINER_TEXT_STYLE,
     WEB_START_ELLIPSIS_CONTENT_TEXT_STYLE,
@@ -32,6 +34,7 @@ import {
     MENU_ROW_METRICS,
     ITEM_ICON_MARGIN_RIGHT,
     ITEM_ROW_PADDING_HORIZONTAL,
+    ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX,
     ITEM_SUBTITLE_TEXT_METRICS,
     ITEM_TITLE_TEXT_METRICS,
 } from '@/components/ui/lists/itemDensityMetrics';
@@ -49,15 +52,15 @@ import { ICON_LABEL_OPTICAL_NUDGE_STYLE } from '@/components/ui/icons/iconOptica
 import { useListPresentation } from './listPresentation';
 import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from './pageListMetrics';
 import { useSectionLeadingColumn } from './sectionLeadingColumn';
-import { PageRowFieldWidthContext } from './pageRowFieldWidth';
-import { resolveViewportClass } from '@/utils/platform/viewportClass';
 import {
     HAPPIER_COLLECTION_LIST_METRICS,
-    HAPPIER_FIELD_BOX_METRICS,
+    HappierPageRowFieldLayoutContext,
     HAPPIER_META_COLUMN_STYLE,
     resolveHappierItemBehavior,
+    resolveHappierPageRowFieldMaxWidth,
     HappierDivider,
     isHappierPageRowNarrow,
+    isHappierPageRowAccessoryStacked,
     useHappierItemGroupItemBehavior,
     useHappierPageSection,
     useHappierMaterialColorResolver,
@@ -78,21 +81,7 @@ function resizeItemIconForDensity(icon: React.ReactNode, iconSize: number, color
 
 type ItemTextEllipsizeMode = NonNullable<TextProps['ellipsizeMode']>;
 
-const WEB_MIDDLE_ELLIPSIS_ROW_STYLE = { display: 'flex', flexDirection: 'row', overflow: 'hidden', minWidth: 0 } as const;
-const WEB_MIDDLE_ELLIPSIS_HEAD_STYLE = { flexShrink: 1, minWidth: 0 } as const;
-const WEB_MIDDLE_ELLIPSIS_TAIL_STYLE = { flexShrink: 0 } as const;
-
-/** Where a middle ellipsis keeps the end: a path's last segment, otherwise the last two fifths. */
-function splitForWebMiddleEllipsis(value: string): Readonly<{ head: string; tail: string }> | null {
-    const slash = value.lastIndexOf('/');
-    if (slash > 0 && slash < value.length - 1) return { head: value.slice(0, slash), tail: value.slice(slash) };
-    if (value.length < 8) return null;
-    const cut = Math.ceil(value.length * 0.6);
-    return { head: value.slice(0, cut), tail: value.slice(cut) };
-}
-
 /** The share of a wide row an adaptive control may take beside its label (the accessory slot's cap). */
-const ADAPTIVE_ACCESSORY_MAX_ROW_SHARE = 0.5;
 
 export interface ItemProps {
     testID?: string;
@@ -107,6 +96,11 @@ export interface ItemProps {
     subtitleAccessory?: React.ReactNode;
     /** Full-width row content below identity and controls, before this row's divider. */
     bottomElement?: React.ReactNode;
+    /**
+     * `row` (default): the bottom content spans the row. `text`: it starts on the title's edge, past the
+     * leading glyph or mark, so a row's own figures (a bar, a verdict) read as part of its text.
+     */
+    bottomElementInset?: 'row' | 'text';
     /** An inline mark after a string title, such as a "Beta" badge. */
     titleAccessory?: React.ReactNode;
     /**
@@ -309,16 +303,16 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         minHeight: Platform.select({ ios: 36, default: 24 }),
     },
     containerWithSubtitle: {
-        paddingVertical: Platform.select({ ios: 11, default: 16 }),
+        paddingVertical: ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX.comfortable,
     },
     containerWithSubtitleCompact: {
-        paddingVertical: Platform.select({ ios: 7, default: 6 }),
+        paddingVertical: ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX.compact,
     },
     containerWithSubtitleCozy: {
-        paddingVertical: Platform.select({ ios: 9, default: 10 }),
+        paddingVertical: ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX.cozy,
     },
     containerWithSubtitleTight: {
-        paddingVertical: Platform.select({ ios: 7, default: 2 }),
+        paddingVertical: ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX.tight,
     },
     containerWithoutSubtitle: {
         paddingVertical: Platform.select({ ios: 12, default: 16 }),
@@ -333,7 +327,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         paddingVertical: Platform.select({ ios: 8, default: 2 }),
     },
     iconContainer: {
-        marginRight: 12,
+        marginRight: theme.space.s12,
         width: ITEM_ICON_BOX_SIZE.comfortable,
         height: ITEM_ICON_BOX_SIZE.comfortable,
         alignItems: 'center',
@@ -342,17 +336,17 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         ...ICON_LABEL_OPTICAL_NUDGE_STYLE,
     },
     iconContainerCompact: {
-        marginRight: 10,
+        marginRight: theme.space.s10,
         width: ITEM_ICON_BOX_SIZE.compact,
         height: ITEM_ICON_BOX_SIZE.compact,
     },
     iconContainerCozy: {
-        marginRight: 14,
+        marginRight: theme.space.s12,
         width: ITEM_ICON_BOX_SIZE.cozy,
         height: ITEM_ICON_BOX_SIZE.cozy,
     },
     iconContainerTight: {
-        marginRight: 8,
+        marginRight: theme.space.s8,
         width: ITEM_ICON_BOX_SIZE.tight,
         height: ITEM_ICON_BOX_SIZE.tight,
     },
@@ -395,13 +389,13 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     inlineMarkRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
     },
     subtitleMarkRow: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
     },
     subtitleMarkSlot: {
@@ -415,6 +409,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         ...Typography.rowMeta(),
         color: theme.colors.text.secondary,
         flexShrink: 0,
+        // A short qualifier (a machine's telling suffix, a Team) stays whole; a long one (a folded Machine's full
+        // name) ellipsizes past half the line, so the title it qualifies always keeps the other half.
+        maxWidth: '50%',
     },
     subtitle: {
         ...Typography.default('regular'),
@@ -440,7 +437,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         maxWidth: '50%',
         minWidth: 0,
         flexShrink: 1,
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
     },
     splitPressable: {
         flex: 1,
@@ -496,7 +493,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     pageContainerStacked: {
         flexDirection: 'column',
         alignItems: 'stretch',
-        gap: 10,
+        gap: theme.space.s10,
     },
     pageDivider: {
         height: StyleSheet.hairlineWidth,
@@ -513,8 +510,19 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         maxWidth: '100%',
         flexShrink: 1,
     },
+    // The detail's natural one-line width, measured against the whole row and never seen.
+    detailMeasure: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        opacity: 0,
+        pointerEvents: 'none',
+    },
     accessoryMeasureStacked: {
         alignSelf: 'stretch',
+    },
+    rightSectionField: {
+        maxWidth: '100%',
     },
     rightSectionStacked: {
         maxWidth: '100%',
@@ -552,6 +560,7 @@ export const Item = React.memo<ItemProps>((props) => {
         subtitleTestID,
         subtitleAccessory,
         bottomElement,
+        bottomElementInset,
         titleAccessory,
         titleQualifier,
         subtitleLeading,
@@ -564,8 +573,8 @@ export const Item = React.memo<ItemProps>((props) => {
         leftElementWhenHovered,
         iconBoxSize,
     rowRole,
-        rightElement,
-        onPress,
+        rightElement: rightElementProp,
+        onPress: onPressProp,
         onDoublePress,
         onLongPress,
         onPressIn,
@@ -573,17 +582,17 @@ export const Item = React.memo<ItemProps>((props) => {
         onContextMenu,
         onHoverIn,
         onHoverOut,
-        accessibilityRole,
-        accessibilityChecked,
+        accessibilityRole: accessibilityRoleProp,
+        accessibilityChecked: accessibilityCheckedProp,
         accessibilityCurrent,
-        accessibilityLabel,
+        accessibilityLabel: accessibilityLabelProp,
         accessibilityHint,
         accessibilityLiveRegion,
         accessibilityActions,
         onAccessibilityAction,
         accessibilityExpanded: explicitAccessibilityExpanded,
         accessibilityState,
-        webRole,
+        webRole: webRoleProp,
         webTabIndex,
         accessibilityLevel,
         webKeyShortcuts,
@@ -593,7 +602,7 @@ export const Item = React.memo<ItemProps>((props) => {
         webId,
         accessibilityPositionInSet,
         accessibilitySetSize,
-        disabled,
+        disabled: disabledProp,
         loading,
         selected,
         focused,
@@ -617,6 +626,26 @@ export const Item = React.memo<ItemProps>((props) => {
         copy,
         itemGroupRadioIndex,
     } = props;
+    // A switch row (owner ruling 2026-10-12): with no press of its own, a row whose accessory is a
+    // switch toggles it from anywhere and is itself the one `switch` control; the switch only draws.
+    const rowSwitch = !onPressProp && !props.onDoublePress && !rightElementOutsidePressable && mode !== 'info'
+        ? readItemRowSwitch(rightElementProp)
+        : null;
+    const toggleRowSwitch = React.useCallback(() => {
+        if (!rowSwitch || rowSwitch.disabled) return;
+        rowSwitch.onValueChange?.(!rowSwitch.value);
+    }, [rowSwitch]);
+    const onPress = rowSwitch ? toggleRowSwitch : onPressProp;
+    const disabled = rowSwitch ? disabledProp === true || rowSwitch.disabled : disabledProp;
+    const accessibilityRole = rowSwitch ? 'switch' as AccessibilityRole : accessibilityRoleProp;
+    const webRole = rowSwitch ? 'switch' : webRoleProp;
+    const accessibilityChecked = rowSwitch ? rowSwitch.value : accessibilityCheckedProp;
+    const accessibilityLabel = rowSwitch
+        ? accessibilityLabelProp ?? rowSwitch.label ?? buildActionRowAccessibilityLabel([title])
+        : accessibilityLabelProp;
+    const rightElement = rowSwitch
+        ? <ItemRowOwnsSwitchProvider value>{rightElementProp}</ItemRowOwnsSwitchProvider>
+        : rightElementProp;
     const accessibilityExpanded = explicitAccessibilityExpanded ?? accessibilityState?.expanded;
     const webTestIdProps = isWeb && testID
         ? ({ 'data-testid': testID } as const)
@@ -721,7 +750,8 @@ export const Item = React.memo<ItemProps>((props) => {
     const hasCopyPress = Boolean(copy && isWeb && !onPress);
     const isInteractive = !isInfoMode && (hasPrimaryPressAction || hasCopyLongPress || hasCopyPress);
     const isRadioRole = accessibilityRole === 'radio' || webRole === 'radio';
-    const isCheckboxRole = accessibilityRole === 'checkbox' || webRole === 'checkbox';
+    // A switch row shares the checkbox path: a checked state, Space/Enter, one press.
+    const isCheckboxRole = accessibilityRole === 'checkbox' || webRole === 'checkbox' || rowSwitch !== null;
     const inferredInteractiveWebRole = isWeb
         ? (webRole ?? (isRadioRole ? 'radio' : isCheckboxRole ? 'checkbox' : (accessibilityRole === 'button' || !rightElement || rightElementOutsidePressable ? 'button' : undefined)))
         : undefined;
@@ -826,11 +856,14 @@ export const Item = React.memo<ItemProps>((props) => {
     const [rowWidthPx, setRowWidthPx] = React.useState<number | null>(null);
     const [accessoryWidthPx, setAccessoryWidthPx] = React.useState<number | null>(null);
     const [fieldMaxWidthPx, setFieldMaxWidthPx] = React.useState<number | null>(null);
+    const pageSheetContext = useHappierPageSection();
+    const pageSheet = isMenuRow ? null : pageSheetContext;
+    const pageRowInsetPx = pageSheet?.rowInsetPx;
     // An independently activated page operation follows the phone rule even when a caller asks
     // for inline placement. Grouped controls retain their explicitly chosen composition.
     const pageOperation = isPageRow && rightElementOutsidePressable && accessoryLayout === 'inline';
     const adaptiveAccessory = accessoryLayout === 'adaptive' || pageOperation;
-    const measuresRowWidth = adaptiveAccessory;
+    const measuresRowWidth = adaptiveAccessory || (isPageRow && Boolean(detail));
     const handleRowLayout = React.useCallback((event: LayoutChangeEvent) => {
         const widthPx = event.nativeEvent.layout.width;
         if (!Number.isFinite(widthPx) || widthPx <= 0) return;
@@ -838,32 +871,39 @@ export const Item = React.memo<ItemProps>((props) => {
         const next = isHappierPageRowNarrow(widthPx);
         setIsNarrowRow((current) => (current === next ? current : next));
         setRowWidthPx((current) => (current === widthPx ? current : widthPx));
-        // A select field in a narrow pane column keeps the label's column and takes what is left, down to
-        // its narrowest trigger; a phone viewport keeps the phone rule (it moves beneath).
-        const fieldMaxPx = widthPx - 2 * PAGE_LIST_METRICS.rowPaddingHorizontalPx - PAGE_LIST_METRICS.rowLeadingGapPx
-            - PAGE_LIST_METRICS.sectionTextMinWidthPx;
-        const nextFieldMax = fieldAccessory && next && fieldMaxPx >= HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx
-            && resolveViewportClass(Dimensions.get('window')) !== 'compact' ? fieldMaxPx : null;
-        setFieldMaxWidthPx((current) => (current === nextFieldMax ? current : nextFieldMax));
-    }, [fieldAccessory]);
-    // An adaptive control also moves beneath the label when its natural width does not fit its half of
-    // a wide row (a segmented bar of long labels), instead of overflowing the sheet.
-    const accessoryOverflows = rowWidthPx !== null && accessoryWidthPx !== null
-        && accessoryWidthPx > rowWidthPx * ADAPTIVE_ACCESSORY_MAX_ROW_SHARE;
-    // A menu is narrow by design: its adaptive control (a segmented choice) stays beside the label and
-    // moves beneath it only when it would take more than its share of the row.
-    // An operation (a button) is the phone rule's "short value": it stays on its label's line in a
-    // narrow row — a phone, a dialog pane — while the label keeps its column (the section-action
-    // rule, `sectionTextMinWidthPx`), and moves beneath only when measured wider than that. It is
-    // drawn inline until measured: a stacked control spans the row and reports no natural width.
-    const operationSqueezesLabel = rowWidthPx !== null && accessoryWidthPx !== null
-        && rowWidthPx - accessoryWidthPx - PAGE_LIST_METRICS.rowLeadingGapPx < PAGE_LIST_METRICS.sectionTextMinWidthPx;
+        const nextFieldMaxWidthPx = isPageRow && fieldAccessory
+            ? resolveHappierPageRowFieldMaxWidth({ rowWidthPx: widthPx, rowInsetPx: pageRowInsetPx })
+            : null;
+        setFieldMaxWidthPx((current) => (current === nextFieldMaxWidthPx ? current : nextFieldMaxWidthPx));
+    }, [fieldAccessory, isPageRow, pageRowInsetPx]);
+    // The one row-accessory rule (`isHappierPageRowAccessoryStacked`): an operation (a button) stays on
+    // its label's line while the label keeps its column; an adaptive control moves beneath on a narrow
+    // row (never in a menu); either moves beneath when wider than its share of a wide row.
+    // A page row's detail is the phone rule's "short value": it stays on its label's line while the
+    // label keeps its column, and moves beneath the title (unclamped, where a description sits) once
+    // its natural width would squeeze the label below that column. Only a narrow row measures it: on
+    // a wider row the label always keeps its column beside a detail held to half the row.
+    const [detailWidthPx, setDetailWidthPx] = React.useState<number | null>(null);
+    const measuresDetail = isPageRow && Boolean(detail) && isNarrowRow;
+    const detailBeneath = measuresDetail && rowWidthPx !== null && detailWidthPx !== null
+        && rowWidthPx - detailWidthPx - PAGE_LIST_METRICS.rowLeadingGapPx < PAGE_LIST_METRICS.sectionTextMinWidthPx;
+    const handleDetailLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const widthPx = event.nativeEvent.layout.width;
+        if (!Number.isFinite(widthPx) || widthPx <= 0) return;
+        setDetailWidthPx((current) => (current === widthPx ? current : widthPx));
+    }, []);
     const stackAccessory = rightElement != null
         // A field held beside its label at its content width is capped below half the row, so neither
         // narrow-row rule applies to it.
         && (accessoryLayout === 'stacked' || (adaptiveAccessory && fieldMaxWidthPx === null && (
-            (pageOperation ? operationSqueezesLabel : isNarrowRow && !isMenuRow) || accessoryOverflows)));
+            isHappierPageRowAccessoryStacked({
+                kind: pageOperation ? 'operation' : 'adaptive',
+                rowWidthPx,
+                accessoryWidthPx,
+                menuRow: isMenuRow,
+            }))));
     const stackAccessoryRef = React.useRef(stackAccessory);
+    const fieldLayout = React.useMemo(() => ({ maxWidthPx: fieldMaxWidthPx, stacked: stackAccessory }), [fieldMaxWidthPx, stackAccessory]);
     stackAccessoryRef.current = stackAccessory;
     const handleAccessoryLayout = React.useCallback((event: LayoutChangeEvent) => {
         // Only the inline position reports the control's natural width; a stacked control spans the row.
@@ -875,8 +915,6 @@ export const Item = React.memo<ItemProps>((props) => {
     // On a shared page-section sheet (`HappierPageSheet`: a page section, or a flat section in a pane)
     // the row follows the sheet's policy: its row inset, so its text lines up with the sheet's
     // sub-headings and the list around it, and its hairline. A menu row keeps the menu anatomy.
-    const pageSheetContext = useHappierPageSection();
-    const pageSheet = isMenuRow ? null : pageSheetContext;
     const pageSheetInsetStyle = pageSheet ? resolveSheetRowInsetStyle(pageSheet.rowInsetPx) : null;
     const pageContainerStyle = pageRowStyles || pageSheetInsetStyle
         ? [pageRowStyles ? styles.pageContainer : null, pageRowStyles?.box ?? null, pageSheetInsetStyle]
@@ -936,9 +974,13 @@ export const Item = React.memo<ItemProps>((props) => {
             marginRight: PAGE_LIST_METRICS.rowLeadingGapPx,
         } as const
         : null;
-    const leadingMarkFitStyle = isPageRow && leftElement != null && iconBoxSize == null
-        ? { width: 'auto', height: 'auto', minWidth: PAGE_LIST_METRICS.rowLeadingColumnPx, minHeight: PAGE_LIST_METRICS.rowLeadingColumnPx } as const
-        : null;
+    const leadingMarkFitStyle = leftElement == null || iconBoxSize != null || isMenuRow
+        ? null
+        : isPageRow
+            ? { width: 'auto', height: 'auto', minWidth: PAGE_LIST_METRICS.rowLeadingColumnPx, minHeight: PAGE_LIST_METRICS.rowLeadingColumnPx } as const
+            // A list row's leading element wider than the glyph box (a tree row's disclosure + glyph) takes its
+            // width instead of overhanging the title; the density box stays its minimum, so glyph rows align.
+            : { width: 'auto', minWidth: resolvedIconBoxSize } as const;
     const iconContainerStyle = isTight
         ? [styles.iconContainer, styles.iconContainerTight, menuIconBoxStyle, pageLeadingColumnStyle, leadingMarkFitStyle, iconBoxSizeOverride]
         : isCompact
@@ -966,6 +1008,8 @@ export const Item = React.memo<ItemProps>((props) => {
     const detailSizeStyle = pageRowStyles ? pageRowStyles.detail : isTight ? styles.detailTight : isCompact ? styles.detailCompact : isCozy ? styles.detailCozy : null;
 
     const [isHovered, setIsHovered] = React.useState(false);
+    // The pointer over an accessory that sits beside the press target (a row's own menu) still engages the row.
+    const [isAccessoryHovered, setIsAccessoryHovered] = React.useState(false);
     React.useEffect(() => {
         // Keep hover state coherent with disabled/loading changes.
         if (disabled || loading) setIsHovered(false);
@@ -1001,18 +1045,18 @@ export const Item = React.memo<ItemProps>((props) => {
         if (normalized == null) return null;
         const named = (
             <ItemRowAccessibleNameProvider value={accessoryAccessibleName}>
-                {isPageRow ? <RoundButtonSizeScope size="small">{normalized}</RoundButtonSizeScope> : normalized}
+                <ItemRowHoverProvider value={isHovered || isAccessoryHovered}>
+                    {isPageRow ? <RoundButtonSizeScope size="small">{normalized}</RoundButtonSizeScope> : normalized}
+                </ItemRowHoverProvider>
             </ItemRowAccessibleNameProvider>
         );
         if (!measuresRowWidth) return <View style={stackAccessory ? styles.accessoryMeasureStacked : styles.accessoryInline}>{named}</View>;
         return (
             <View onLayout={handleAccessoryLayout} style={stackAccessory ? styles.accessoryMeasureStacked : styles.accessoryMeasure}>
-                {fieldMaxWidthPx !== null && !stackAccessory ? (
-                    <PageRowFieldWidthContext.Provider value={fieldMaxWidthPx}>{named}</PageRowFieldWidthContext.Provider>
-                ) : named}
+                <HappierPageRowFieldLayoutContext.Provider value={fieldLayout}>{named}</HappierPageRowFieldLayoutContext.Provider>
             </View>
         );
-    }, [accessoryAccessibleName, handleAccessoryLayout, isPageRow, measuresRowWidth, rightElement, fieldMaxWidthPx, stackAccessory]);
+    }, [accessoryAccessibleName, handleAccessoryLayout, isAccessoryHovered, isHovered, isPageRow, measuresRowWidth, rightElement, fieldLayout, stackAccessory]);
     const subtitleAccessoryNode = React.useMemo(() => normalizeNodeForView(subtitleAccessory ?? null), [subtitleAccessory]);
     const titleTrailing = titleQualifier ? (
         <>
@@ -1029,7 +1073,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 name={name}
                 size={chevronSize}
                 color={theme.colors.text.secondary}
-                style={{ marginLeft: 4 }}
+                style={{ marginLeft: theme.space.s4 }}
             />,
         );
     }, [accessibilityExpanded, chevronSize, showAccessory, theme.colors.text.secondary]);
@@ -1066,14 +1110,7 @@ export const Item = React.memo<ItemProps>((props) => {
         const webMiddle = isWeb && params.ellipsizeMode === 'middle' && params.numberOfLines === 1
             ? splitForWebMiddleEllipsis(value)
             : null;
-        if (webMiddle) {
-            return (
-                <Text testID={params.testID} style={[params.style, WEB_MIDDLE_ELLIPSIS_ROW_STYLE]}>
-                    <Text style={WEB_MIDDLE_ELLIPSIS_HEAD_STYLE} numberOfLines={1} ellipsizeMode="tail">{webMiddle.head}</Text>
-                    <Text style={WEB_MIDDLE_ELLIPSIS_TAIL_STYLE} numberOfLines={1}>{webMiddle.tail}</Text>
-                </Text>
-            );
-        }
+        if (webMiddle) return <MiddleEllipsisText testID={params.testID} style={params.style} value={value} />;
         return (
             <Text
                 testID={params.testID}
@@ -1134,6 +1171,11 @@ export const Item = React.memo<ItemProps>((props) => {
                 ) : (
                     normalizeNodeForView(title)
                 )}
+                {detailBeneath && detail ? renderPrimitiveText({
+                    value: detail,
+                    testID: detailTestID,
+                    style: [styles.subtitle, subtitleSizeStyle],
+                }) : null}
                 {subtitle ? (() => {
                     // If subtitle is a ReactNode (not string), render as-is.
                     // This enables richer subtitle layouts (e.g. inline glyphs).
@@ -1216,10 +1258,15 @@ export const Item = React.memo<ItemProps>((props) => {
 
             </View>
             {/* Right Section */}
-            <View style={[styles.rightSection, stackContentAccessory ? [styles.rightSectionStacked, stackedLabelEdgeStyle] : pageRowStyles?.accessoryBleed]}>
+            <View style={[styles.rightSection, stackContentAccessory ? [styles.rightSectionStacked, stackedLabelEdgeStyle] : pageRowStyles?.accessoryBleed,
+                // An adaptive control that measured inline already fits beside the label's column (the
+                // narrow-row and half-row rules decided that), so the box is not held to half the
+                // content width as well: that second cap clipped a 240px field in a ~490px dialog row
+                // past the sheet's trailing inset.
+                !stackContentAccessory && (adaptiveAccessory || fieldMaxWidthPx !== null) ? styles.rightSectionField : null]}>
                 {copyFeedback.isCopied() ? (
                     <CopiedPill visible testID="item-copy-feedback" />
-                ) : detail ? (
+                ) : detail && !detailBeneath ? (
                     <Text
                         testID={detailTestID}
                         style={[
@@ -1246,11 +1293,21 @@ export const Item = React.memo<ItemProps>((props) => {
                 {includeRightAccessory ? rightAccessory : null}
                 {chevronAccessory}
             </View>
+            {measuresDetail && detail ? (
+                <Text style={[styles.detail, detailSizeStyle, styles.detailMeasure]} numberOfLines={1} onLayout={handleDetailLayout}
+                    aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{detail}</Text>
+            ) : null}
         </>
     );
     }, [
         chevronAccessory,
+        detailBeneath,
+        measuresDetail,
+        handleDetailLayout,
+        styles.detailMeasure,
         copyFeedback,
+        adaptiveAccessory,
+        fieldMaxWidthPx,
         stackAccessory,
         stackedLabelEdgeStyle,
         detail,
@@ -1291,7 +1348,11 @@ export const Item = React.memo<ItemProps>((props) => {
         theme.colors.text.secondary,
     ]);
 
-    const bottom = bottomElement ? <View style={{ paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx, paddingBottom: PAGE_LIST_METRICS.rowPaddingVerticalPx }}>{bottomElement}</View> : null;
+    // `text` starts on the title's edge, also when the row has no glyph of its own but its section reserves the column.
+    const bottomTextInset = bottomElementInset === 'text' && isPageRow && (icon != null || leftElement != null || reservesLeadingColumn)
+        ? PAGE_LIST_METRICS.rowLeadingColumnPx + resolvedIconMarginRight
+        : 0;
+    const bottom = bottomElement ? <View style={{ paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx, paddingLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx + bottomTextInset, paddingBottom: PAGE_LIST_METRICS.rowPaddingVerticalPx }}>{bottomElement}</View> : null;
     const content = React.useMemo(() => (
         <>
             <View style={[containerCore, containerPadding, style]} onLayout={measuresRowWidth ? handleRowLayout : undefined}>
@@ -1474,9 +1535,12 @@ export const Item = React.memo<ItemProps>((props) => {
                             styles.rightSection,
                             // A stacked page operation sits above the row's bottom padding.
                             stackAccessory ? [styles.rightSectionStacked, containerPadding, styles.splitRightSectionStacked] : null,
+                            // The same rule as the row's own right section: measured inline, not halved again.
+                            !stackAccessory && adaptiveAccessory ? styles.rightSectionField : null,
                             stackedLabelEdgeStyle,
                         ]}
                         pointerEvents={sharedItemBehavior.secondaryActionsEnabled ? 'auto' : 'none'}
+                        {...(isWeb ? { onPointerEnter: () => setIsAccessoryHovered(true), onPointerLeave: () => setIsAccessoryHovered(false) } : {})}
                         accessibilityElementsHidden={!sharedItemBehavior.secondaryActionsEnabled}
                         importantForAccessibility={sharedItemBehavior.secondaryActionsEnabled ? 'auto' : 'no-hide-descendants'}
                     >

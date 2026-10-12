@@ -40,11 +40,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         overflow: 'hidden',
     },
     caption: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
     },
     body: {
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
 }));
 

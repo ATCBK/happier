@@ -301,6 +301,28 @@ describe('ItemRowActions', () => {
         expect(screen.findAllByTestId('edit')).toHaveLength(0);
     });
 
+    it('opens its ⋯ menu below the trigger as a non-blocking menu: the page is neither blurred nor dimmed and no caret points back', async () => {
+        const { ItemRowActions } = await import('./ItemRowActions');
+        const { Popover } = await import('@/components/ui/popover');
+        const { FloatingOverlay } = await import('@/components/ui/overlays/FloatingOverlay');
+        const screen = await renderScreen(React.createElement(ItemRowActions, {
+            title: 'Group',
+            overflowTriggerTestID: 'row-actions-trigger',
+            actions: [{ id: 'rename', title: 'Rename', icon: 'pencil-simple', onPress: vi.fn() }],
+        }));
+        await screen.pressByTestIdAsync('row-actions-trigger');
+        const popover = screen.tree.root.findByType(Popover);
+        // DESIGN.md: do not dim the world for parallel, non-blocking work (lab wgmenu M: the page stays sharp).
+        const backdrop = popover.props.backdrop;
+        expect(['blur', 'dim']).not.toContain(backdrop && typeof backdrop === 'object' ? backdrop.effect : undefined);
+        expect(['bottom', 'auto-vertical']).toContain(popover.props.placement);
+        expect(popover.props.portal).toEqual(expect.objectContaining({ anchorAlign: 'end' }));
+        const surface = popover.props.children({ maxHeight: 280, maxWidth: 260, placement: 'bottom', requestClose: () => {} });
+        if (!React.isValidElement<React.ComponentProps<typeof FloatingOverlay>>(surface)) throw new Error('Expected the menu surface');
+        expect(surface.type).toBe(FloatingOverlay);
+        expect(surface.props.arrow).toBeFalsy();
+    });
+
     it('renders optional action groups as ordered labelled sections without changing ungrouped menus', async () => {
         const { ItemRowActions } = await import('./ItemRowActions');
 
@@ -399,7 +421,7 @@ describe('ItemRowActions', () => {
         expect(screen.findAllByTestId('edit').length).toBeGreaterThan(0);
     });
 
-    it('passes custom overflow placement, portal alignment, and anchor overlay through to the popover', async () => {
+    it('passes custom overflow placement and portal alignment through to the popover', async () => {
         const { ItemRowActions } = await import('./ItemRowActions');
 
         const screen = await renderScreen(React.createElement(ItemRowActions as any, {
@@ -423,7 +445,6 @@ describe('ItemRowActions', () => {
             overflowPortal: {
                 anchorAlign: 'center',
             },
-            renderOverflowAnchorOverlay: () => React.createElement('AnchorOverlay', { testID: 'custom-anchor-overlay' }),
         }));
 
         await screen.pressByTestIdAsync('custom-trigger');
@@ -434,13 +455,6 @@ describe('ItemRowActions', () => {
         expect(popover.props.portal).toEqual(expect.objectContaining({
             anchorAlign: 'center',
         }));
-        const backdrop = popover.props.backdrop;
-        if (!backdrop || typeof backdrop !== 'object') throw new Error('Expected an overlay backdrop');
-        expect(backdrop.anchorOverlay).toMatchObject({
-            props: expect.objectContaining({
-                testID: 'custom-anchor-overlay',
-            }),
-        });
     });
 
     it('does not emit raw text nodes under Pressable when the vendor overflow glyph renders text on web', async () => {

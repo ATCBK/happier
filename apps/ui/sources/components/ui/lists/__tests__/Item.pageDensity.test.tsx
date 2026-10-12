@@ -24,7 +24,8 @@ vi.mock('@/components/ui/layout/layout', () => ({
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
 
 // The list-density preference is device-local storage: the one boundary this test controls.
-vi.mock('@/sync/store/hooks', () => ({
+vi.mock('@/sync/store/hooks', async importOriginal => ({
+    ...await importOriginal<typeof import('@/sync/store/hooks')>(),
     useLocalSetting: (key: string) => (key === 'uiItemDensity' ? densityState.preferred : key === 'uiFontScale' ? densityState.fontScale : null),
 }));
 
@@ -84,6 +85,22 @@ async function renderPage(density: Density, section?: 'compact') {
 }
 
 describe('Item page rows follow the list-density preference', () => {
+    it('preserves semantic mark sizes while resizing numeric icon glyphs', async () => {
+        const { Item } = await import('../Item');
+        const { ConnectedServiceMark } = await import('@/components/settings/connectedServices/ConnectedServiceMark');
+        const { Icon } = await import('@/components/ui/icons/Icon');
+        const { ListPresentationProvider } = await import('../listPresentation');
+        densityState.preferred = 'compact';
+        const screen = await renderScreen(
+            <ListPresentationProvider value="page">
+                <Item title="Gateway vendor" icon={<ConnectedServiceMark legacyServiceId={null} size="inline" />} />
+                <Item title="Numeric glyph" icon={<Icon name="check" size={24} />} />
+            </ListPresentationProvider>,
+        );
+        expect(screen.findByType(ConnectedServiceMark).props.size).toBe('inline');
+        expect(screen.findAllByType(Icon).find(node => node.props.name === 'check')?.props.size).toBe(16);
+    });
+
     it('leaves web row metrics at their base size for the global CSS scale owner', async () => {
         densityState.fontScale = 1.3;
         const screen = await renderPage('cozy');
@@ -157,7 +174,7 @@ describe('page rows with a trailing control', () => {
         const heights: Record<Density, { plain: number; withControl: number }> = {} as never;
         for (const density of ['comfortable', 'cozy', 'compact'] as const) {
             densityState.preferred = density;
-            // The shared switch draws a 22px track in a 44px focus and hit box (`HAPPIER_SWITCH_METRICS`).
+            // The shared switch draws a 24px track in a 44px focus and hit box (`HAPPIER_SWITCH_METRICS`).
             const screen = await renderScreen(
                 <ListPresentationProvider value="page">
                     <ItemGroup title="Shortcuts">
