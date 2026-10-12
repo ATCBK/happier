@@ -6,6 +6,11 @@ import { join, resolve } from 'node:path';
 
 import {
     buildConnectedServiceCredentialRecord,
+    BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID,
+    buildProviderAccountUsageRecordId,
+    ProviderAccountUsageSnapshotV1Schema,
+    sealProviderAccountUsageSnapshot,
+    sealQualifiedConnectedAccountContentEnvelope,
     sealAccountScopedBlobCiphertext,
     type ConnectedServiceId,
     type ConnectedServiceCredentialHealthV1,
@@ -15,6 +20,7 @@ import {
 import { seedCliAuthForServer } from '../../src/testkit/cliAuth';
 import {
     createQualifiedConnectedAccountGroup,
+    resolveQualifiedConnectedAccountServiceForLegacyServiceId,
     fetchQualifiedConnectedAccountGroup,
 } from '../../src/testkit/connectedServicesRecovery';
 import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
@@ -30,6 +36,7 @@ import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../..
 import { setUiFeatureToggle } from '../../src/testkit/uiE2e/setUiFeatureToggle';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 const CONNECTED_SERVICE_FEATURE_ENV = {
@@ -123,7 +130,6 @@ async function enableConnectedServiceQuotaUi(params: Readonly<{
 }>): Promise<void> {
     await gotoDomContentLoadedWithRetries(params.page, `${params.baseUrl}/settings/features?happier_hmr=0`, 180_000);
     await ensureSwitchEnabled(params.page.getByTestId('settings-feature-experiments-toggle'));
-    await ensureSwitchEnabled(params.page.getByTestId('settings-feature-toggle-connectedServices'));
     await ensureSwitchEnabled(params.page.getByTestId('settings-feature-toggle-connectedServices.quotas'));
     await setUiFeatureToggle({
         page: params.page,
@@ -645,6 +651,100 @@ test.describe('ui e2e: connected-service quota switch and recovery surfaces', ()
         await expect(popover).toBeVisible({ timeout: 60_000 });
         await expect(popover.getByTestId('agent-input-provider-usage-meter:weekly')).toContainText(/12%/);
         await expect(popover.getByTestId('agent-input-provider-usage-meter:daily')).toContainText(/44%/);
+    });
+
+    test('shows saved Claude reset facts for an offline qualified account without allowing consumption', async ({ page }) => {
+        test.setTimeout(180_000);
+        if (!server || !uiBaseUrl) throw new Error('missing ui e2e fixtures');
+        const diagnostics = collectBrowserDiagnostics({ page });
+        try {
+            await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+            await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+            await createAccountIfNeeded(page);
+            await enableConnectedServiceQuotaUi({ page, baseUrl: uiBaseUrl });
+            const auth = await readLegacyAuthCredentialsFromBrowserStorage(page);
+            const serviceId = 'claude-subscription' satisfies ConnectedServiceId;
+            const profileId = `saved-reset-${run.runId}`;
+            const service = resolveQualifiedConnectedAccountServiceForLegacyServiceId(serviceId);
+            const ref = { service, accountId: profileId };
+            const credential = await fetchJson<{ success?: boolean; credentialRevision?: string; configurationRevision?: string | null }>(`${server.baseUrl}/v4/connect/qualified/credential`, {
+                method: 'POST', headers: { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ref, expectedCredentialRevision: null,
+                    authenticationModeId: BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID[serviceId].authenticationModeByCredentialKind.oauth,
+                    content: sealQualifiedConnectedAccountContentEnvelope({
+                        kind: 'credential', accountMode: 'e2ee', material: { type: 'legacy', secret: auth.secret },
+                        payload: { v: 1, values: { accessToken: 'disposable-saved-reset-token' } }, randomBytes,
+                    }),
+                    metadata: { scopes: [], displayName: 'Saved reset account', providerIdentity: { accountId: `acct-${profileId}`, email: 'saved-reset@example.test' } },
+                }),
+                timeoutMs: 20_000,
+            });
+            expect(credential.status).toBe(200);
+            expect(credential.data?.success).toBe(true);
+            const credentialRevision = credential.data?.credentialRevision;
+            if (!credentialRevision) throw new Error('Missing qualified credential revision');
+            const now = Date.now();
+            const recordKey = {
+                providerId: 'claude', accountSubjectId: `acct-${profileId}`,
+                subjectKind: 'account' as const, quotaScope: 'account' as const,
+            };
+            const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({
+                v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+                providerId: recordKey.providerId, accountSubject: { kind: 'providerSubject', id: recordKey.accountSubjectId },
+                observedAtMs: now, fetchedAtMs: now, staleAfterMs: 60_000,
+                source: 'connectedServiceProbe', confidence: 'confirmed', state: 'loaded_data',
+                meters: [{
+                    meterId: 'weekly', label: 'Weekly', used: 88, limit: 100, unit: 'count',
+                    utilizationPct: 88, resetsAt: now + 3_600_000, status: 'ok',
+                    details: { providerLimitId: 'seven_day' },
+                }],
+                recoveryCredits: {
+                    availableCount: 0,
+                    credits: [{ id: 'saved-reset', kind: 'usage_limit_reset', status: 'unknown', expiresAtMs: now + 86_400_000 }],
+                },
+                recoveryCreditDetails: {
+                    'saved-reset': {
+                        remainingCount: 2,
+                        appliesToProviderLimitIds: ['seven_day', 'provider_future_window'],
+                        unavailableReason: 'ineligible',
+                    },
+                },
+            });
+            const write = await fetchJson<{ success?: boolean }>(`${server.baseUrl}/v4/connect/qualified/provider-account-usage`, {
+                method: 'POST', headers: { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    recordId: snapshot.recordId, recordKey, payloadMode: 'sealed_account_scoped_v1', status: 'ok',
+                    sealedPayload: sealProviderAccountUsageSnapshot({ material: { type: 'legacy', secret: auth.secret }, snapshot, randomBytes }),
+                    fetchedAt: now, staleAfterMs: snapshot.staleAfterMs,
+                    source: { ref, bindingKind: 'account' },
+                    expectedCredentialRevision: credentialRevision, expectedConfigurationRevision: credential.data?.configurationRevision ?? null,
+                }),
+                timeoutMs: 20_000,
+            });
+            expect(write.status).toBe(200);
+            expect(write.data?.success).toBe(true);
+
+            const assertSavedReset = async () => {
+                const row = page.getByTestId('account-detail-resets:saved-reset');
+                await expect(row).toBeVisible({ timeout: 60_000 });
+                await expect(row).toContainText('Saved resets: 2');
+                await expect(row).toContainText('Weekly');
+                await expect(row).toContainText('provider_future_window');
+                await expect(row).toContainText('Not eligible');
+                // The qualified detail keeps saved facts available offline and withholds machine actions.
+                await expect(page.getByTestId('account-detail-resets:saved-reset:use')).toHaveCount(0);
+                await expect(page.getByTestId('account-detail-usage:meter:weekly')).toBeVisible();
+                await expect(page.getByTestId('account-detail-usage:error')).toHaveCount(0);
+            };
+            const query = new URLSearchParams({ pluginId: service.pluginId, localId: service.localId, accountId: profileId, happier_hmr: '0' });
+            await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/settings/connected-services/account?${query}`, 180_000);
+            await assertSavedReset();
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            await assertSavedReset();
+        } catch (error) {
+            throw appendBrowserDiagnostics(error, diagnostics());
+        }
     });
 
     test('renders connected-service switch event rows and notification topic controls', async ({ page }) => {
