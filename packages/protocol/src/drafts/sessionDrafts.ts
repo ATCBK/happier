@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 
 import { getAccountScopedBlobCiphertextBase64LengthV1 } from '../crypto/accountScopedCipherEnvelope.js';
 import {
@@ -135,7 +136,7 @@ export function createSessionDraftAuthoringFieldsSchema<TShape extends Record<st
   type FieldId = Extract<keyof TShape, string>;
   const fieldIds = Object.keys(valueSchema.shape) as [FieldId, ...FieldId[]];
   const currentShape: Readonly<Record<string, z.ZodType>> = valueSchema.shape;
-  return z
+  const fieldsSchema = z
   .partialRecord(z.enum(fieldIds), DraftFieldV1Schema)
   .superRefine((fields, context) => {
     for (const [fieldId, field] of Object.entries(fields)) {
@@ -152,6 +153,19 @@ export function createSessionDraftAuthoringFieldsSchema<TShape extends Record<st
       }
     }
   });
+  return defineStoredReadProjection(fieldsSchema, () => z.preprocess(raw => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+    const projected: Record<string, unknown> = {};
+    for (const [fieldId, value] of Object.entries(raw)) {
+      const currentFieldSchema = currentShape[fieldId];
+      if (!currentFieldSchema) continue;
+      const field = createStoredReadSchema(DraftFieldV1Schema).safeParse(value);
+      if (!field.success) { projected[fieldId] = value; continue; }
+      const knownValue = createStoredReadSchema(currentFieldSchema).safeParse(field.data.value);
+      projected[fieldId] = knownValue.success ? { ...field.data, value: knownValue.data } : field.data;
+    }
+    return projected;
+  }, fieldsSchema));
 }
 const SyncedAuthoringFieldsSchema = createSessionDraftAuthoringFieldsSchema(
   SyncedSessionAuthoringValueV1Schema,
@@ -220,11 +234,12 @@ export const SessionDraftStoredContentEnvelopeV1Schema = lazyZodSchema(() => z.d
   }).strict(),
 ]));
 export type SessionDraftStoredContentEnvelopeV1 = z.infer<typeof SessionDraftStoredContentEnvelopeV1Schema>;
+export const SessionDraftStoredContentEnvelopeV1StoredSchema = createStoredReadSchema(SessionDraftStoredContentEnvelopeV1Schema);
 
 export const SessionDraftRecordV1Schema = lazyZodSchema(() => z.object({
   address: SessionDraftAddressV1Schema,
   revision: z.number().int().nonnegative(),
-  content: SessionDraftStoredContentEnvelopeV1Schema.nullable(),
+  content: SessionDraftStoredContentEnvelopeV1StoredSchema.nullable(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
 }).strict());

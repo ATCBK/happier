@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -69,6 +70,23 @@ function discussionDocument(kind: 'discussion' | 'newDiscussion') {
 }
 
 describe('session draft V2 addresses', () => {
+  it('projects retired fields inside retained known authoring values before catalog validation', () => {
+    const canonicalTarget = { kind: 'machine', target: { serverId: 'home-a', machineId: 'machine-a' } };
+    const payload = { v: 2, address: { kind: 'newSession', draftId: '00000000-0000-4000-8000-00000000000a' },
+      document: { v: 2, composer: { text: field('hello'), mentions: field([]), attachments: field([]) },
+        target: { kind: 'newSession', authoring: { executionTarget: field({ ...canonicalTarget, retired: true,
+          target: { ...canonicalTarget.target, retired: true } }) } },
+        extensions: {} } };
+    const expected = { ...payload, document: { ...payload.document,
+      target: { ...payload.document.target, authoring: { executionTarget: field(canonicalTarget) } } } };
+    expect(SessionDraftPrivatePayloadV2Schema.safeParse(expected).success).toBe(true);
+    const read = createStoredReadSchema(SessionDraftPrivatePayloadV2Schema);
+    expect(read.parse(payload)).toEqual(expected);
+    expect(SessionDraftPrivatePayloadV2Schema.safeParse(payload).success).toBe(false);
+    expect(read.safeParse({ ...payload, document: { ...payload.document,
+      target: { ...payload.document.target, authoring: { executionTarget: field({ ...canonicalTarget,
+        target: { ...canonicalTarget.target, machineId: 7 } }) } } } }).success).toBe(false);
+  });
   it('retains agent-free project selections and uncertain issued inputs in an Account draft', () => {
     const address = { kind: 'projectOpen' as const, draftId: '00000000-0000-4000-8000-00000000000a' };
     const input = {

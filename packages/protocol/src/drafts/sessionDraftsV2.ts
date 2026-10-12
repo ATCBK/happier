@@ -274,6 +274,7 @@ export const SessionDraftPrivatePayloadV2Schema = z.union([
   SessionDraftPrivatePayloadV2OnlySchema,
 ]);
 export type SessionDraftPrivatePayloadV2 = z.infer<typeof SessionDraftPrivatePayloadV2Schema>;
+export const SessionDraftPrivatePayloadV2StoredSchema = createStoredReadSchema(SessionDraftPrivatePayloadV2Schema);
 
 /**
  * A lossless Machine-only projection retains ordinary V1 interoperability.
@@ -321,7 +322,7 @@ export const SessionDraftEpochUnavailableResponseV2Schema = z.object({
 export const SessionDraftRecordV2Schema = z.object({
   address: SessionDraftAddressV2Schema,
   revision: z.number().int().nonnegative(),
-  content: SessionDraftStoredContentEnvelopeV2Schema.nullable(),
+  content: SessionDraftStoredContentEnvelopeV2StoredSchema.nullable(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
 }).strict();
