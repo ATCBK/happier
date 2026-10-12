@@ -1,5 +1,6 @@
 import { parsePermissionIntentAlias, type PermissionIntent } from './permissions/index.js';
 import { CHANGE_TITLE_TOOL_NAME_ALIASES } from '@happier-dev/protocol/tools/v2/aliases';
+import { listHappierToolAutoApprovedNamesV1, listHappierToolAutoApprovedNameSpellingsV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 type AgentAcpTimeouts = Partial<Readonly<{
   initMs: number;
@@ -79,53 +80,16 @@ type AgentAcpToolPermissionPolicy =
 const ACP_TOOL_READ_PERMISSIONS = ['read', 'glob', 'grep', 'list', 'ls'] as const;
 const ACP_TOOL_EDIT_PERMISSIONS = ['edit', 'write'] as const;
 const ACP_TOOL_OTHER_COMMON_PERMISSIONS = ['bash', 'task'] as const;
-const ACP_TOOL_SAFE_NAME_TOKENS = [
-  'session_title_set',
-  'save_memory',
-  'think',
-] as const;
 
 export const ACP_WRITE_LIKE_PERMISSION_KINDS = Object.freeze([
   'external_directory',
   'doom_loop',
 ] as const);
 
-const ACP_HAPPIER_ACTION_TOOL_NAME_ALIASES = [
-  'action_execute',
-  'happier_action_execute',
-  'happier__action_execute',
-  'mcp__happier__action_execute',
-  'action_spec_search',
-  'happier_action_spec_search',
-  'happier__action_spec_search',
-  'mcp__happier__action_spec_search',
-  'action_spec_get',
-  'happier_action_spec_get',
-  'happier__action_spec_get',
-  'mcp__happier__action_spec_get',
-  'action_options_resolve',
-  'happier_action_options_resolve',
-  'happier__action_options_resolve',
-  'mcp__happier__action_options_resolve',
-] as const;
+// Retained public projection; the protocol owns the approval decision.
+export const ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES = listHappierToolAutoApprovedNamesV1();
 
-export const ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES = Object.freeze([
-  'action_options_resolve',
-  'action_spec_get',
-  'action_spec_search',
-  'change_title',
-  'execution_run_get',
-  'execution_run_list',
-  'execution_run_wait',
-  'session_title_set',
-] as const);
-
-const ACP_TOOL_SAFE_ALLOW_PERMISSIONS = [
-  ...CHANGE_TITLE_TOOL_NAME_ALIASES,
-  ...ACP_HAPPIER_ACTION_TOOL_NAME_ALIASES,
-  ...ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES,
-  ...ACP_TOOL_SAFE_NAME_TOKENS,
-] as const;
+const ACP_TOOL_SAFE_ALLOW_PERMISSIONS = listHappierToolAutoApprovedNameSpellingsV1();
 
 const ACP_TOOL_KNOWN_PERMISSION_KEYS = [
   ...ACP_TOOL_READ_PERMISSIONS,

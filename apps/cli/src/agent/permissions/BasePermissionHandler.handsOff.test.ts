@@ -3,7 +3,6 @@ import { accountSettingsParse } from '@happier-dev/protocol';
 import { clearActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { AgentState } from '@/api/types';
-import { CodexLikePermissionHandler } from './CodexLikePermissionHandler';
 import { ProviderEnforcedPermissionHandler } from './providerEnforced/handler';
 import { ServerBoundPermissionRpcHandlerManager } from './testkit/serverBoundPermissionRpcHandlerManager';
 
@@ -30,12 +29,10 @@ describe('BasePermissionHandler hands-off policy', () => {
       promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
   });
   afterEach(() => resetActiveAccountSettingsSnapshotForTests());
-  it.each(['codex-like', 'provider-enforced'] as const)('reads current Account deny and refuses unavailable authority before YOLO (%s)', async (kind) => {
+  it('reads current Account deny and refuses unavailable authority before YOLO', async () => {
     const { session, setMetadata } = fixture();
     setMetadata({ work: { sessionRolesV1: { roleId: 'builder', overrides: {}, sessionRoles: {}, notes: '' } } });
-    const handler = kind === 'codex-like'
-      ? new CodexLikePermissionHandler({ session, logPrefix: '[HandsOff]' })
-      : new ProviderEnforcedPermissionHandler(session, { logPrefix: '[HandsOff]' });
+    const handler = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[HandsOff]' });
     handler.setPermissionMode('yolo');
     setActiveAccountSettingsSnapshot({ scopeKey: 'permission-test', source: 'network', settingsVersion: 2, settings: accountSettingsParse({}),
       rawSettings: { rolesV1: { overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } } } }, settingsSecretsReadKeys: [], loadedAtMs: 2 });
@@ -45,14 +42,12 @@ describe('BasePermissionHandler hands-off policy', () => {
     expect(handler.getImmediateDecision('read', 'Bash', { command: 'git status' })?.decision).not.toBe('denied');
     await handler.reset();
   });
-  it.each(['codex-like', 'provider-enforced'] as const)('uses the current host-resolved role ceiling (%s)', async (kind) => {
+  it('uses the current host-resolved role ceiling', async () => {
     const { session, setMetadata } = fixture();
     setMetadata(null);
     let workspaceWrites: 'allow' | 'deny' = 'deny';
     const getWorkspaceWrites = () => workspaceWrites;
-    const handler = kind === 'codex-like'
-      ? new CodexLikePermissionHandler({ session, logPrefix: '[HandsOff]', getWorkspaceWrites })
-      : new ProviderEnforcedPermissionHandler(session, { logPrefix: '[HandsOff]', getWorkspaceWrites });
+    const handler = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[HandsOff]', getWorkspaceWrites });
     handler.setPermissionMode('yolo');
     expect(handler.getImmediateDecision('write', 'Write', { path: '/workspace/a' })).toEqual({ decision: 'denied' });
     expect(handler.getImmediateDecision('spawn', 'mcp__happier__session_spawn_new', {})).toEqual({ decision: 'approved' });
@@ -63,11 +58,9 @@ describe('BasePermissionHandler hands-off policy', () => {
     await handler.reset();
   });
 
-  it.each(['codex-like', 'provider-enforced'] as const)('denies writes before YOLO and existing grants, preserving coordination (%s)', async (kind) => {
+  it('denies writes before YOLO and existing grants, preserving coordination', async () => {
     const { session, readState } = fixture();
-    const handler = kind === 'codex-like'
-      ? new CodexLikePermissionHandler({ session, logPrefix: '[HandsOff]' })
-      : new ProviderEnforcedPermissionHandler(session, { logPrefix: '[HandsOff]' });
+    const handler = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[HandsOff]' });
     handler.setPermissionMode('yolo');
     expect(handler.getImmediateDecision('write', 'Write', { path: '/workspace/a', content: 'changed' })).toEqual({ decision: 'denied' });
     await expect(handler.handleToolCall('write', 'Write', { path: '/workspace/a', content: 'changed' })).resolves.toEqual({ decision: 'denied' });
@@ -82,7 +75,7 @@ describe('BasePermissionHandler hands-off policy', () => {
   it('rechecks a pending user approval after the session becomes hands-off', async () => {
     const { session, setMetadata, rpcHandlerManager } = fixture();
     setMetadata(null);
-    const handler = new CodexLikePermissionHandler({ session, logPrefix: '[HandsOff]' });
+    const handler = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[HandsOff]' });
     const result = handler.handleToolCall('pending-write', 'Write', { path: '/workspace/a' });
     setMetadata({ work: { sessionRolesV1: { roleId: 'orchestrator', overrides: {}, sessionRoles: {}, notes: '' } } });
     await rpcHandlerManager.handlers.get('permission')?.({ id: 'pending-write', approved: true, decision: 'approved' });

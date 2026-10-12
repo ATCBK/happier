@@ -1,9 +1,8 @@
-import { isChangeTitleToolLikeName } from '@happier-dev/protocol/tools/v2/aliases';
+import { isHappierToolAutoApprovedByAgentLayerV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 import { isDefaultWriteLikeToolName } from './writeLikeToolNameHeuristics';
 
 export const SHARED_PERMISSION_SAFE_TOOL_NAME_TOKENS = [
-  'session_title_set',
   'save_memory',
   'think',
 ] as const;
@@ -35,11 +34,6 @@ function normalizePermissionToolName(toolName: string): string {
 }
 
 export const SHARED_PROVIDER_ENFORCED_SAFE_TOOL_NAME_SEGMENTS = [
-  // Action-spec discovery tools are read-only and used by several providers before invoking actions/tools.
-  // Auto-approve to avoid blocking harmless capability discovery behind provider-native permission prompts.
-  'action_spec_search',
-  'action_spec_get',
-  'action_options_resolve',
   ...SHARED_PERMISSION_SAFE_TOOL_NAME_TOKENS,
   // ACP fs bridge operations are host-side capability calls. Reads and writes outside Read Only/Plan
   // remain auto-approved to avoid duplicating provider permission policy at the host layer.
@@ -52,14 +46,14 @@ export const SHARED_PROVIDER_ENFORCED_SAFE_TOOL_NAME_SEGMENTS = [
 export function isSharedPermissionSafeToolName(toolName: string): boolean {
   const normalized = normalizePermissionToolName(toolName);
   if (!normalized) return false;
-  if (isChangeTitleToolLikeName(normalized)) return true;
+  if (isHappierToolAutoApprovedByAgentLayerV1(normalized)) return true;
   return SHARED_PERMISSION_SAFE_TOOL_NAMES.has(normalized);
 }
 
 export function isSharedHappierShellBridgeToolName(toolName: string): boolean {
   const normalized = normalizePermissionToolName(toolName);
   if (!normalized) return false;
-  return normalized === 'change_title' || isSharedPermissionSafeToolName(normalized);
+  return isSharedPermissionSafeToolName(normalized);
 }
 
 export function isPermissionGuardToolName(toolName: string): boolean {

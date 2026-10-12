@@ -1,11 +1,20 @@
-import { describe, expect, it, vi } from 'vitest';
-import { buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { accountSettingsParse, buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol';
 import { ActionsSettingsV1Schema, createActionExecutor, isApprovalRequiredByActionsSettings, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
 
 import { AgentStateRequestStore, AgentStateResponseTargetDispatcher, type PermissionResponseClaim } from './agentStateRequestStore';
 import { createSessionActionConfirmationAdapter } from '@/session/actions/approvals/sessionActionConfirmation';
-import { CodexLikePermissionHandler } from './CodexLikePermissionHandler';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { ServerBoundPermissionRpcHandlerManager } from './testkit/serverBoundPermissionRpcHandlerManager';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+
+beforeEach(() => {
+  resetActiveAccountSettingsSnapshotForTests();
+  setActiveAccountSettingsSnapshot({ scopeKey: 'permission-test', source: 'network', settingsVersion: 1,
+    settings: accountSettingsParse({}), rawSettings: {}, settingsSecretsReadKeys: [], loadedAtMs: 1,
+    promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+});
+afterEach(() => resetActiveAccountSettingsSnapshotForTests());
 
 class FakeSession {
   sessionId = 'session-test';
@@ -63,7 +72,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
       arguments: { actionId: 'session.message.send', sessionId: session.sessionId },
       turnId: 'turn-current', createdAt: 1,
     };
-    new CodexLikePermissionHandler({ session: session as never, logPrefix: '[Test]' });
+    new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Test]' });
     const rpc = session.rpcHandlerManager.handlers.get('session.permission.respond')!;
     const settings = ActionsSettingsV1Schema.parse({ v: 1,
       approvalWaivedSurfaces: { 'session.permission.respond': ['agent'] } });
@@ -85,7 +94,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
   });
   it('rejects unknown permission RPC fields before settling the pending request', async () => {
     const session = new FakeSession();
-    const handler = new CodexLikePermissionHandler({ session: session as never, logPrefix: '[Test]' });
+    const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Test]' });
     handler.setPermissionMode('safe-yolo');
     const pending = handler.handleToolCall('contradictory-request', 'Write', { path: '/tmp/x', content: 'hi' });
     const rpc = session.rpcHandlerManager.handlers.get('session.permission.respond')!;
@@ -98,7 +107,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
   });
   it('keeps predecessor scalar question answers on the legacy permission route', async () => {
     const session = new FakeSession();
-    const handler = new CodexLikePermissionHandler({ session: session as never, logPrefix: '[Test]' });
+    const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Test]' });
     const pending = handler.handleToolCall('legacy-question', 'AskUserQuestion', {
       questions: [{ question: 'Choose?', options: [{ label: 'Yes', description: 'Continue' }], multiSelect: false }],
     });
@@ -108,7 +117,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
   });
   it.each(['approve', 'reset'] as const)('preserves live Action confirmation delivery after handler replacement: %s', async (completion) => {
     const session = new FakeSession();
-    const initialHandler = new CodexLikePermissionHandler({ session: session as never, logPrefix: '[Initial]' });
+    const initialHandler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Initial]' });
     const initialStore = session.getAgentStateRequestStore()!;
     const adapter = createSessionActionConfirmationAdapter({
       sessionId: session.sessionId, store: initialStore,
@@ -128,7 +137,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
       .then((result) => { resolvedDecision = result?.decision; });
     await vi.waitFor(() => expect(initialStore.listOutstandingRequests()).toHaveLength(1));
     const requestId = initialStore.listOutstandingRequests()[0]!.requestId;
-    const currentHandler = new CodexLikePermissionHandler({ session: session as never, logPrefix: '[Current]' });
+    const currentHandler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Current]' });
     const rpc = session.rpcHandlerManager.handlers.get('session.permission.respond')!;
     if (completion === 'approve') {
       await rpc({ id: requestId, turnId: 'turn-action', approved: true, decision: 'approved' });
@@ -158,7 +167,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
       source: 'happier_action',
       createdAt: 1,
     };
-    new CodexLikePermissionHandler({ session: session as never, logPrefix: '[Test]' });
+    new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Test]' });
     const rpc = session.rpcHandlerManager.handlers.get('session.permission.respond');
     const result = await rpc!({ id: 'action-confirmation', approved: true, ...grant });
     expect(result).toEqual(expect.objectContaining({ ok: false }));
@@ -176,7 +185,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
       turnId: 'turn-action',
       createdAt: 1,
     };
-    new CodexLikePermissionHandler({ session: session as never, logPrefix: '[Test]' });
+    new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Test]' });
     const rpc = session.rpcHandlerManager.handlers.get('session.permission.respond');
     await expect(rpc!({
       id: 'action-confirmation', turnId: 'turn-action', approved: true, decision: 'approved', answeringClientCategory: 'ios',
@@ -193,7 +202,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
 
   it('returns a typed permission_request_not_found for an unknown explicit id over the RPC route', async () => {
     const session = new FakeSession();
-    const handler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Test]' });
+    const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });
     handler.setPermissionMode('safe-yolo');
 
     const rpc = session.rpcHandlerManager.handlers.get('permission');
@@ -209,7 +218,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
 
   it('returns void (success) over the RPC route when the explicit id resolves a pending request', async () => {
     const session = new FakeSession();
-    const handler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Test]' });
+    const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });
     handler.setPermissionMode('safe-yolo');
 
     const promise = handler.handleToolCall('tool-1', 'Write', { path: '/tmp/x', content: 'hi' });
@@ -222,7 +231,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
 
   it('durably claims an authenticated present-user answer before settling the request', async () => {
     const session = new FakeSession();
-    const handler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Test]' });
+    const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });
     handler.setPermissionMode('safe-yolo');
 
     const promise = handler.handleToolCall('preactivation-request', 'Write', { path: '/tmp/x', content: 'hi' });
@@ -235,7 +244,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
 
   it('does not let a delayed answer from turn A settle a reused request id in turn B', async () => {
     const session = new FakeSession();
-    const handler = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Test]' });
+    const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });
     handler.setPermissionMode('safe-yolo');
     const rpc = session.rpcHandlerManager.handlers.get('session.permission.respond');
     const causalContext = (turnId: string) => ({
@@ -295,7 +304,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
 
   it('keeps a claimed present-user answer nonauthorizing after handler reset', async () => {
     const session = new FakeSession();
-    const original = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Original]' });
+    const original = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Original]' });
     original.setPermissionMode('safe-yolo');
 
     const originalWaiter = original.handleToolCall(
@@ -324,7 +333,7 @@ describe('BasePermissionHandler permission-response routing (gap 28/29)', () => 
     // Reset is a lifecycle cancellation boundary. Its Agent-state terminal
     // cancellation, not the in-flight answer claim, survives replacement.
     await original.reset();
-    const replacement = new CodexLikePermissionHandler({ session: session as any, logPrefix: '[Replacement]' });
+    const replacement = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Replacement]' });
     replacement.setPermissionMode('safe-yolo');
     const rpc = session.rpcHandlerManager.handlers.get('session.permission.respond');
     expect(rpc).toBeDefined();

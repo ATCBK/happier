@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { listHappierToolAutoApprovedNamesV1, listHappierToolAutoApprovedNameSpellingsV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 import {
   ACP_AGENT_CLI_TRANSPORT_TIMEOUTS,
@@ -49,16 +50,9 @@ describe('native Agent ACP presets', () => {
   });
 
   it('keeps the static approval list narrow and provider-neutral', () => {
-    expect(ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES).toEqual([
-      'action_options_resolve',
-      'action_spec_get',
-      'action_spec_search',
-      'change_title',
-      'execution_run_get',
-      'execution_run_list',
-      'execution_run_wait',
-      'session_title_set',
-    ]);
+    expect(ACP_HAPPIER_MCP_BRIDGE_STATIC_APPROVAL_TOOL_NAMES).toEqual(listHappierToolAutoApprovedNamesV1());
+    const policy = resolveAcpToolPermissionPolicy('plan');
+    for (const name of listHappierToolAutoApprovedNameSpellingsV1()) expect(policy[name], name).toBe('allow');
     expect(acpPresetExports).not.toHaveProperty('resolveOpenCodeStylePermissionPolicy');
   });
 });
