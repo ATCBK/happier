@@ -206,10 +206,23 @@ export const PLUGIN = definePlugin({
     },
     destroy: { ...defaults, title: 'Delete Boat sandbox', dangerLevel: 'destructive',
       confirmation: { title: 'Delete this Boat sandbox?', body: 'This permanently deletes the sandbox. Named snapshots remain independent.' },
-      inputSchema: reconciliation.destroyInput, resultSchema: MachineProvisionerPowerResultV1Schema,
-      async run() {
-        // Fail closed until the shared owner can retain Boat's required deletion-operation identity.
-        return { kind: 'refused' as const, code: 'native_cleanup_custody_unavailable' };
+      inputSchema: reconciliation.destroyInput, resultSchema: reconciliation.destroyResult,
+      async run(input, context) {
+        try {
+          const native = runtime(context);
+          if ('nativeOperation' in input) {
+            if (input.nativeOperation.kind !== 'delete') return { kind: 'refused' as const, code: 'invalid_request' };
+            const result = await native.reconcileDestroy(input.nativeOperation);
+            if (result.kind === 'confirmed') return result;
+            if (result.kind === 'failed') return { kind: 'refused' as const, code: result.code };
+            return { kind: 'unknown' as const, code: 'native_destroy_pending' };
+          }
+          const result = await native.destroy({ resource: input.resource });
+          return { kind: 'accepted' as const, nativeOperationRef: resourceRef(result.operation) };
+        } catch (error) {
+          const code = error instanceof Error && error.message.startsWith('native_') ? error.message : 'provider_unavailable';
+          return { kind: 'unknown' as const, code };
+        }
       },
     },
   },
