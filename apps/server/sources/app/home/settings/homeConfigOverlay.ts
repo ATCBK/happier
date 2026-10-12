@@ -1,8 +1,7 @@
 import {
-    parseServerConfigRaw,
     readServerConfigRaw,
     serializeServerConfigValue,
-    validateServerConfigValue,
+    readStoredServerConfigValue,
     type ServerConfigApply,
     type ServerConfigEditable,
     type HomeSettingDeclarationV1,
@@ -13,14 +12,15 @@ import {
 } from '@happier-dev/protocol';
 
 import { SERVER_CONFIG_REGISTRY } from '@/config/serverConfigRegistry';
+import { readServerConfigRuntimeValue, resolveServerConfigRuntimeDefault } from '@/config/serverConfigRuntimeDefaults';
 
 import { stampHomeConfigValues } from './homeConfigProvenance';
-import type { StartupHomeEnv, StartupHomeSettingIgnoredReason } from './startupHomeEnv';
+import { type StartupHomeEnv, type StartupHomeSettingIgnoredReason } from './startupHomeEnv';
 
 /**
  * The one precedence decision for server configuration (plan §3.1, §3.4, invariant I2):
  *
- *     explicit deployment env → persisted Home setting → registry default
+ *     explicit deployment env → persisted Home setting → effective runtime default
  *
  * An env value that is set (non-blank, under the key or one of its aliases) is a lock: it wins and
  * the console shows it as fixed. A persisted value applies only to `editable: 'home'` entries and
@@ -46,7 +46,7 @@ function readPersistedValue(entry: ServerConfigEntry, persisted: PersistedHomeSe
     if (!hasOwn(persisted, entry.key)) return undefined;
     const raw = persisted[entry.key];
     if (raw === null || raw === undefined) return undefined;
-    const validated = validateServerConfigValue(entry, raw);
+    const validated = readStoredServerConfigValue(entry, raw);
     return validated.ok ? validated.value : undefined;
 }
 
@@ -54,16 +54,17 @@ export function resolveHomeSetting(
     entry: ServerConfigEntry,
     env: ServerConfigEnv,
     persisted: PersistedHomeSettingValues,
+    runtimeEnv: ServerConfigEnv = env,
 ): ResolvedHomeSetting {
     const explicit = readServerConfigRaw(env, entry);
     if (explicit) {
-        const parsed = parseServerConfigRaw(entry, explicit.raw);
-        const value = parsed.kind === 'value' ? parsed.value : entry.default;
+        const value = readServerConfigRuntimeValue(entry, runtimeEnv);
         return { value: value ?? null, source: 'deployment', fixed: true };
     }
     const persistedValue = readPersistedValue(entry, persisted);
     if (persistedValue !== undefined) return { value: persistedValue, source: 'home', fixed: false };
-    return { value: entry.default ?? null, source: 'default', fixed: false };
+    const fallback = readServerConfigRuntimeValue(entry, runtimeEnv);
+    return { value: fallback ?? null, source: 'default', fixed: false };
 }
 
 /**
@@ -193,6 +194,7 @@ function appliedAtStart(
     startup: StartupHomeEnv,
     current: Readonly<{ value: ServerConfigValue | null; secretSet?: boolean }>,
     persistedRestartSecrets: Readonly<Record<string, string | Readonly<{ unreadable: true }>>>,
+    runtimeEnv?: ServerConfigEnv,
 ): NonNullable<HomeSettingProjection['applied']> {
     const ignoredReason = Object.prototype.hasOwnProperty.call(startup.snapshot.ignored, entry.key)
         ? startup.snapshot.ignored[entry.key]
@@ -203,7 +205,7 @@ function appliedAtStart(
         const currentSecret = readServerConfigRaw(startup.deploymentEnv, entry)?.raw ?? persistedRestartSecrets[entry.key] ?? null;
         return { value: null, pending: applied !== currentSecret, ...reason };
     }
-    const value = resolveHomeSetting(entry, startup.env, {}).value;
+    const value = runtimeEnv ? readServerConfigRuntimeValue(entry, runtimeEnv) ?? null : resolveHomeSetting(entry, startup.env, {}).value;
     return { value, pending: JSON.stringify(value) !== JSON.stringify(current.value), ...reason };
 }
 
@@ -220,14 +222,15 @@ function declarationBoundsOf(bounds: NonNullable<ServerConfigEntry['bounds']>): 
  * default, and where it sits. A secret's default is never projected (a secret has none, and the
  * projection must not grow a place for one).
  */
-function declarationOf(entry: ServerConfigEntry): HomeSettingDeclaration {
+function declarationOf(entry: ServerConfigEntry, fallback: ServerConfigValue | undefined): HomeSettingDeclaration {
     return {
         type: entry.type,
         section: entry.section,
         ...(entry.group !== undefined ? { group: entry.group } : {}),
+        ...(entry.appliesWhen !== undefined ? { appliesWhen: { key: entry.appliesWhen.key, values: [...entry.appliesWhen.values] } } : {}),
         ...(entry.family !== undefined ? { family: entry.family } : {}),
         ...(entry.featureId !== undefined ? { featureId: entry.featureId } : {}),
-        ...(entry.default !== undefined && entry.sensitivity !== 'secret' ? { default: entry.default } : {}),
+        ...(fallback !== undefined && entry.sensitivity !== 'secret' ? { default: fallback } : {}),
         ...(entry.bounds !== undefined ? { bounds: declarationBoundsOf(entry.bounds) } : {}),
         ...(entry.editable === 'bootstrap' && entry.readOnlyReason !== undefined ? { readOnlyReason: entry.readOnlyReason } : {}),
     };
@@ -247,6 +250,8 @@ function isProjectedEntry(entry: ServerConfigEntry): entry is ProjectedEntry {
 export function projectHomeSettings(params: Readonly<{
     registry?: ServerConfigRegistry;
     env: ServerConfigEnv;
+    /** The running process plus its request-scoped live overlay, not prospective restart values. */
+    runtimeEnv?: ServerConfigEnv;
     persisted: PersistedHomeSettingValues;
     persistedSecretKeys: readonly string[];
     /** Opened restart secrets stay private; only their identity comparison is projected. */
@@ -255,17 +260,22 @@ export function projectHomeSettings(params: Readonly<{
 }>): HomeSettingProjection[] {
     const registry = params.registry ?? SERVER_CONFIG_REGISTRY;
     const persistedSecrets = new Set(params.persistedSecretKeys);
+    const runtimeEnv = params.runtimeEnv ?? buildHomeConfigEnv(params.startup?.env ?? params.env, params.persisted, registry);
     // `internal` entries are server-written markers, not settings: never projected (plan §3.14, r4).
     return Object.values(registry).filter(isProjectedEntry).map((entry): HomeSettingProjection => {
+        const resolved = entry.sensitivity === 'secret' ? undefined : resolveHomeSetting(entry, params.env, params.persisted, runtimeEnv);
+        const fallback = !resolved ? undefined : resolved.source === 'default' ? resolved.value ?? undefined : resolveServerConfigRuntimeDefault(entry, runtimeEnv);
         const base = {
             key: entry.key,
             editable: entry.editable,
             apply: entry.apply,
-            declaration: declarationOf(entry),
+            declaration: declarationOf(entry, fallback),
             ...(entry.editable === 'bootstrap' && entry.reason ? { readOnlyReason: entry.reason } : {}),
         };
         let row: HomeSettingProjection;
-        if (entry.sensitivity === 'secret') {
+        if (resolved) {
+            row = { ...base, ...resolved };
+        } else {
             const fixed = readServerConfigRaw(params.env, entry) !== null;
             const homeSet = !fixed && entry.editable === 'home' && persistedSecrets.has(entry.key);
             row = {
@@ -275,10 +285,8 @@ export function projectHomeSettings(params: Readonly<{
                 fixed,
                 secretSet: fixed || homeSet,
             };
-        } else {
-            row = { ...base, ...resolveHomeSetting(entry, params.env, params.persisted) };
         }
         if (!params.startup || entry.apply !== 'restart') return row;
-        return { ...row, applied: appliedAtStart(entry, params.startup, row, params.persistedRestartSecrets ?? {}) };
+        return { ...row, applied: appliedAtStart(entry, params.startup, row, params.persistedRestartSecrets ?? {}, params.runtimeEnv) };
     });
 }

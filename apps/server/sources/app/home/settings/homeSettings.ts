@@ -160,7 +160,7 @@ export function buildHomeConfigEnvFromRecord(
 export async function readHomeConfigEnv(base: ServerConfigEnv = process.env): Promise<ServerConfigEnv> {
     const [record, policyValues] = await inTx(tx => Promise.all([
         readHomeSettingsInTx(tx), readHomeAuthenticationPolicyValues(tx),
-    ]), { readOnly: true });
+    ]), { isolationLevel: "Serializable", /* Home settings and authentication policy are captured as one effective configuration snapshot. */ readOnly: true });
     return buildHomeConfigEnvFromRecord(base, record, SERVER_CONFIG_REGISTRY, policyValues);
 }
 
@@ -214,16 +214,18 @@ async function projectRecordInTx(
 ): Promise<HomeSettingsProjectionV1> {
     const policyValues = await readHomeAuthenticationPolicyValues(tx);
     const startup = readStartupHomeEnv();
+    const runtimeEnv = buildHomeConfigEnvFromRecord(process.env, record, registry, policyValues);
     const entries: HomeSettingEntryV1[] = projectHomeSettings({
         registry,
         env: readHomeDeploymentEnv(),
+        runtimeEnv,
         persisted: { ...record.values, ...policyValues },
         persistedSecretKeys: Object.keys(record.sealedSecrets),
         persistedRestartSecrets: openHomeSettingSecrets(record, Object.keys(record.sealedSecrets).filter((key) => registry[key]?.apply === "restart")),
         startup,
     }).map((row) => ({ ...row }));
     // The same overlay a request would read, answered by the canonical feature decision engine.
-    const featureDecisions = resolveFeatureDecisionsFromEnv(buildHomeConfigEnvFromRecord(process.env, record, registry, policyValues));
+    const featureDecisions = resolveFeatureDecisionsFromEnv(runtimeEnv);
     return { revision: record.revision, startedAt: startup?.snapshot.appliedAt ?? null, entries, featureDecisions };
 }
 

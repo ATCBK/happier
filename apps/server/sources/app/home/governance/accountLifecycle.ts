@@ -6,6 +6,7 @@ import { eventRouter } from "@/app/events/connectionEventRouter";
 import {
     applySessionAccessAccountStatusImpactInTx,
     captureSessionAccessAccountStatusImpactInTx,
+    acquireSessionAccountStatusCursorLocksInTx,
 } from "@/app/session/access/sessionAccessAccountStatusImpact";
 import { publishAccountTeamMembershipsChangedInTx } from "@/app/teams/teamChanges";
 import {
@@ -44,6 +45,10 @@ export type AccountLifecycleResult =
  */
 export async function setAccountStatusInTx(tx: Tx, input: AccountLifecycleInput): Promise<AccountLifecycleResult> {
     const accountIds = [...new Set([input.actorAccountId, input.targetAccountId])].sort();
+    await acquireSessionAccountStatusCursorLocksInTx(tx, {
+        accountId: input.targetAccountId,
+        additionalAccountIds: accountIds,
+    });
     for (const accountId of accountIds) {
         try {
             await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);

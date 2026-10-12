@@ -2,7 +2,7 @@ import {
     readServerConfigRaw,
     serializeServerConfigValue,
     validateServerConfigText,
-    validateServerConfigValue,
+    readStoredServerConfigValue,
     type ServerConfigEnv,
     type ServerConfigInvalidReason,
     type ServerConfigRegistry,
@@ -78,7 +78,7 @@ export function buildStartupHomeEnv(params: Readonly<{
         }
         const validated = typeof stored === 'string' && entry.sensitivity === 'secret'
             ? validateServerConfigText(entry, stored)
-            : validateServerConfigValue(entry, stored);
+            : readStoredServerConfigValue(entry, stored);
         if (!validated.ok) {
             ignored[entry.key] = validated.reason;
             continue;
