@@ -2,11 +2,13 @@
 /**
  * Convert the GitHub social preview image to the website's og:image format.
  * 
- * Source: .github/header.png (3168x1500, 2.112:1)
+ * Source: uploads/gh-social_d1a0.png (3072x1500, 2.048:1)
+ * Design: 'Start coding anywhere. Continue everywhere.' with desktop and phones
  * Target: public/images/og.png (1200x630, 1.905:1)
  * 
  * The source is wider than the target, so we scale to fit the width and extend
- * the background at top and bottom to reach 630px height.
+ * the background at top and bottom to reach 630px height, sampling from the
+ * dark gradient at the top.
  */
 
 import { fileURLToPath } from 'node:url';
@@ -15,7 +17,8 @@ import sharp from 'sharp';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-const SOURCE = path.resolve(ROOT, '..', '..', '.github', 'header.png');
+// Use the uploaded GitHub social preview (the current design with 'Start coding anywhere. Continue everywhere.')
+const SOURCE = path.resolve(ROOT, '..', '..', 'uploads', 'gh-social_d1a0.png');
 const OUTPUT = path.join(ROOT, 'public', 'images', 'og.png');
 
 const TARGET_WIDTH = 1200;
@@ -40,13 +43,25 @@ async function main() {
     
     console.log(`Padding: ${topPadding}px top, ${bottomPadding}px bottom`);
     
-    // Sample the background color from the middle-top (the dark gradient area)
-    const pixel = await sharp(SOURCE)
-        .extract({ left: Math.floor(metadata.width / 2), top: 10, width: 1, height: 1 })
-        .raw()
-        .toBuffer();
+    // Sample the background color from the top area (dark textured gradient)
+    // Sample from multiple points and average to get a smooth extension
+    const topY = Math.min(5, metadata.height - 1);
+    const samples = [];
+    for (let x = metadata.width * 0.3; x < metadata.width * 0.7; x += metadata.width * 0.1) {
+        const pixel = await sharp(SOURCE)
+            .extract({ left: Math.floor(x), top: topY, width: 1, height: 1 })
+            .raw()
+            .toBuffer();
+        samples.push({ r: pixel[0], g: pixel[1], b: pixel[2] });
+    }
     
-    const bg = { r: pixel[0], g: pixel[1], b: pixel[2], alpha: 1 };
+    // Average the samples
+    const bg = {
+        r: Math.round(samples.reduce((sum, s) => sum + s.r, 0) / samples.length),
+        g: Math.round(samples.reduce((sum, s) => sum + s.g, 0) / samples.length),
+        b: Math.round(samples.reduce((sum, s) => sum + s.b, 0) / samples.length),
+        alpha: 1
+    };
     console.log(`Background: rgba(${bg.r}, ${bg.g}, ${bg.b}, ${bg.alpha})`);
     
     // Scale the source image
