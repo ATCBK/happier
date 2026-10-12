@@ -220,7 +220,7 @@ export function selectVoiceProviderOption(
     let parsedPreviousConfig: VoiceProviderSettingsJsonValueV1 | null = null;
     try {
       parsedPreviousConfig = previousEnvelope
-        ? entry.providerSettings.parseConfig(previousEnvelope.config)
+        ? entry.providerSettings.parseStoredConfig(previousEnvelope.config)
         : null;
     } catch {
       parsedPreviousConfig = null;
@@ -239,9 +239,13 @@ export function selectVoiceProviderOption(
     ...(option.configPatch ?? {}),
   });
   if (!nextConfig.success || !isVoiceProviderSettingsJsonObject(nextConfig.data)) return null;
+  const config = entry.providerSettings
+    ? entry.providerSettings.parseConfig(nextConfig.data)
+    : nextConfig.data;
+  if (!isVoiceProviderSettingsJsonObject(config)) return null;
   const nextEnvelope = {
     schemaVersion,
-    config: nextConfig.data,
+    config,
   };
   const projection = projectVoiceProviderSettings(entry, nextEnvelope);
   if (!isVoiceProviderSettingsProjectionCurrent(projection)

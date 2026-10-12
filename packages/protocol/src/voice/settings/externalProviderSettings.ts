@@ -1,5 +1,5 @@
-import { compilePluginJsonSchema } from '../../plugins/actions/jsonSchemaValidation.js';
-import { isValidPluginJsonSchemaValue } from '../../plugins/actions/protocolComposableSchema.js';
+import { createPluginJsonSchemaZodValueAdapter } from '../../plugins/actions/jsonSchemaValidation.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { ConnectedServiceBindingsV1Schema, PersistedConnectedServiceBindingsV1Schema, readBuiltInLegacyConnectedAccountServiceKeyIngress, type ConnectedServiceId } from '../../connect/connectedServiceBindings.js';
 import type { PluginSettingFieldV2 } from '../../plugins/contributions/settings.js';
 import type { VoiceProviderSettings, VoiceProviderSettingsPresentation } from '../../plugins/contributions/voiceProviders.js';
@@ -20,6 +20,7 @@ export type ExternalVoiceProviderSettingsDescriptor = Readonly<{
   }> | null;
   defaultConfig: Readonly<Record<string, VoiceProviderSettingsJsonValueV1>>;
   parseConfig(config: unknown): VoiceProviderSettingsJsonValueV1 | null;
+  parseStoredConfig(config: unknown): VoiceProviderSettingsJsonValueV1 | null;
 }>;
 
 function hasRequiredConnectedServicesBinding(
@@ -42,7 +43,7 @@ export function isExternalVoiceProviderConnectedServicesBindingReady(
   if (!envelope || envelope.schemaVersion !== settings.schemaVersion) return false;
   if (!envelope.config || typeof envelope.config !== 'object' || Array.isArray(envelope.config)) return false;
   const selectedBinding = (envelope.config as Readonly<Record<string, unknown>>)[binding.id];
-  return ConnectedServiceBindingsV1Schema.safeParse(selectedBinding).success;
+  return createStoredReadSchema(ConnectedServiceBindingsV1Schema).safeParse(selectedBinding).success;
 }
 
 export function projectExternalVoiceProviderSettings(
@@ -54,7 +55,7 @@ export function projectExternalVoiceProviderSettings(
   if (envelope.schemaVersion !== settings.schemaVersion) {
     return { status: 'unsupported_version' as const, modeId: null };
   }
-  const config = settings.parseConfig(envelope.config);
+  const config = settings.parseStoredConfig(envelope.config);
   if (config === null) {
     return { status: 'invalid' as const, modeId: null };
   }
@@ -105,7 +106,7 @@ export function createExternalVoiceProviderSettingsDescriptor(
   const defaultConfig: Readonly<Record<string, VoiceProviderSettingsJsonValueV1>> = deepFreeze(
     mutableDefaultConfig,
   );
-  const validate = compilePluginJsonSchema({
+  const fieldConfigSchema = createPluginJsonSchemaZodValueAdapter({
     type: 'object',
     properties: {
       ...Object.fromEntries(fields.map((field) => [field.id, field.schema])),
@@ -118,7 +119,8 @@ export function createExternalVoiceProviderSettingsDescriptor(
         Object.entries(defaultConfig).filter(([key]) => key !== connectedServicesBinding.id),
       )
     : defaultConfig;
-  if (!isValidPluginJsonSchemaValue(validate, defaultFieldConfig)) {
+  const storedFieldConfigSchema = createStoredReadSchema(fieldConfigSchema);
+  if (!fieldConfigSchema.safeParse(defaultFieldConfig).success) {
     throw new Error('invalid_external_voice_provider_settings_defaults');
   }
   return Object.freeze({
@@ -129,39 +131,49 @@ export function createExternalVoiceProviderSettingsDescriptor(
     presentation,
     connectedServicesBinding,
     defaultConfig,
-    parseConfig(config: unknown): VoiceProviderSettingsJsonValueV1 | null {
-      if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
-      const record = config as Readonly<Record<string, unknown>>;
-      const fieldConfig = connectedServicesBinding
-        ? Object.fromEntries(
-            Object.entries(record).filter(([key]) => key !== connectedServicesBinding.id),
-          )
-        : record;
-      if (!isValidPluginJsonSchemaValue(validate, fieldConfig)) return null;
-      if (!connectedServicesBinding) return cloneJson(config);
-      const expectedKeys = new Set([
-        ...fields.map((field) => field.id),
-        connectedServicesBinding.id,
-      ]);
-      if (Object.keys(record).some((key) => !expectedKeys.has(key))
-        || Object.keys(record).length !== expectedKeys.size) return null;
-      const rawBinding = record[connectedServicesBinding.id];
-      if (rawBinding !== null) {
-        const parsed = PersistedConnectedServiceBindingsV1Schema.safeParse(rawBinding);
-        if (!parsed.success) return null;
-        const requiredServiceIds = new Set(connectedServicesBinding.serviceIds.map((serviceId) => {
-          const serviceKey = readBuiltInLegacyConnectedAccountServiceKeyIngress(serviceId);
-          if (!serviceKey) throw new Error('invalid_external_voice_provider_connected_service');
-          return serviceKey;
-        }));
-        const bindings = Object.entries(parsed.data.bindingsByServiceId);
-        if (bindings.length !== requiredServiceIds.size
-          || bindings.some(([serviceId, binding]) => (
-            !requiredServiceIds.has(serviceId as ConnectedServiceId)
-            || binding.source !== 'connected'
-          ))) return null;
-      }
-      return cloneJson(config);
-    },
+    parseConfig: (config: unknown) => parseConfig(config, false),
+    parseStoredConfig: (config: unknown) => parseConfig(config, true),
   });
+
+  function parseConfig(config: unknown, stored: boolean): VoiceProviderSettingsJsonValueV1 | null {
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
+    const record = config as Readonly<Record<string, unknown>>;
+    const fieldConfig = connectedServicesBinding
+      ? Object.fromEntries(
+          Object.entries(record).filter(([key]) => key !== connectedServicesBinding.id),
+        )
+      : record;
+    const parsedFields = (stored ? storedFieldConfigSchema : fieldConfigSchema).safeParse(fieldConfig);
+    if (!parsedFields.success || parsedFields.data === null
+      || typeof parsedFields.data !== 'object' || Array.isArray(parsedFields.data)) return null;
+    if (!connectedServicesBinding) return cloneJson(parsedFields.data);
+    const expectedKeys = new Set([
+      ...fields.map((field) => field.id),
+      connectedServicesBinding.id,
+    ]);
+    if (!stored && (Object.keys(record).some((key) => !expectedKeys.has(key))
+      || Object.keys(record).length !== expectedKeys.size)) return null;
+    const rawBinding = record[connectedServicesBinding.id];
+    let normalizedBinding: unknown = rawBinding;
+    if (rawBinding !== null) {
+      const parsed = (stored ? createStoredReadSchema(PersistedConnectedServiceBindingsV1Schema)
+        : PersistedConnectedServiceBindingsV1Schema).safeParse(rawBinding);
+      if (!parsed.success) return null;
+      normalizedBinding = parsed.data;
+      const requiredServiceIds = new Set(connectedServicesBinding.serviceIds.map((serviceId) => {
+        const serviceKey = readBuiltInLegacyConnectedAccountServiceKeyIngress(serviceId);
+        if (!serviceKey) throw new Error('invalid_external_voice_provider_connected_service');
+        return serviceKey;
+      }));
+      const bindings = Object.entries(parsed.data.bindingsByServiceId);
+      if (bindings.length !== requiredServiceIds.size
+        || bindings.some(([serviceId, binding]) => (
+          !requiredServiceIds.has(serviceId as ConnectedServiceId)
+          || binding.source !== 'connected'
+        ))) return null;
+    }
+    return cloneJson(stored
+      ? { ...parsedFields.data, [connectedServicesBinding.id]: normalizedBinding }
+      : config);
+  }
 }

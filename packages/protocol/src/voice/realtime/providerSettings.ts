@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { z } from 'zod';
 
 import { SavedSecretSlotBindingsV1Schema } from '../../providers/settings/v1.js';
@@ -97,20 +98,24 @@ export function classifyLegacyVoiceCredentialCandidateV1(input: Readonly<{
   let rawSecret = input.rawAdapters;
   for (const key of input.candidate.path) rawSecret = legacyVoiceRecord(rawSecret)?.[key];
   if (rawSecret == null) return { kind: 'absent' };
-  const parsed = SecretStringV1Schema.safeParse(rawSecret);
+  const parsed = createStoredReadSchema(SecretStringV1Schema).safeParse(rawSecret);
   const unsupported = { kind: 'unsupported' as const, rawSecret };
   if (!parsed.success || (input.credentialBindings !== undefined && !Array.isArray(input.credentialBindings))) return unsupported;
   const bindings: readonly unknown[] = Array.isArray(input.credentialBindings) ? input.credentialBindings : [];
   let binding: PredecessorVoiceCredentialBindingV1 | null = null;
   for (const candidate of bindings) {
     if (legacyVoiceRecord(candidate)?.providerId !== input.candidate.providerId) continue;
-    const parsedBinding = PredecessorVoiceCredentialBindingV1Schema.safeParse(candidate);
+    const parsedBinding = createStoredReadSchema(PredecessorVoiceCredentialBindingV1Schema).safeParse(candidate);
     if (!parsedBinding.success) return unsupported;
     binding = parsedBinding.data;
     break;
   }
   const material = { rawSecret: rawSecret as SecretStringV1, parsedSecret: parsed.data, binding };
   const encoded = JSON.stringify(parsed.data);
+  const hasSameSecret = (candidate: unknown): boolean => {
+    const source = createStoredReadSchema(SecretStringV1Schema).safeParse(legacyVoiceRecord(candidate)?.encryptedValue);
+    return source.success && JSON.stringify(source.data) === encoded;
+  };
   const boundSecretId = binding?.credentialBindings.account?.[input.candidate.slotId];
   if (boundSecretId) {
     let reference: SavedSecretRefV1;
@@ -118,12 +123,12 @@ export function classifyLegacyVoiceCredentialCandidateV1(input: Readonly<{
     const bound = input.personalSources.find(candidate => legacyVoiceRecord(candidate)?.id === boundSecretId);
     if (reference.kind === 'shared_resource') return bound ? unsupported
       : { ...material, kind: 'existing-resource-reference', resourceRef: boundSecretId };
-    return JSON.stringify(legacyVoiceRecord(bound)?.encryptedValue) === encoded
+    return hasSameSecret(bound)
       ? { ...material, kind: 'existing-personal', secretId: boundSecretId } : unsupported;
   }
   const secretId = `voice:${input.candidate.providerId}:${input.candidate.slotId}`;
   const existing = input.personalSources.find(candidate => legacyVoiceRecord(candidate)?.id === secretId);
-  if (existing) return JSON.stringify(legacyVoiceRecord(existing)?.encryptedValue) === encoded
+  if (existing) return hasSameSecret(existing)
     ? { ...material, kind: 'existing-personal', secretId } : unsupported;
   return { ...material, kind: 'inline-personal-alias', secretId };
 }

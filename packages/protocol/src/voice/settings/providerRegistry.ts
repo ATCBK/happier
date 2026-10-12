@@ -107,7 +107,7 @@ export function createDeclaredSettingsProjector(declaration: VoiceProviderContri
     return (envelope: Readonly<{ schemaVersion: number; config: unknown }> | null): VoiceProviderSettingsProjection => {
         const projection = projectExternalVoiceProviderSettings(envelope, providerSettings);
         if (!isVoiceProviderSettingsProjectionCurrent(projection)) return projection;
-        const config = VoiceProviderSettingsJsonObjectV1Schema.safeParse(providerSettings.parseConfig(envelope?.config));
+        const config = VoiceProviderSettingsJsonObjectV1Schema.safeParse(providerSettings.parseStoredConfig(envelope?.config));
         if (!config.success) return INVALID_SETTINGS_PROJECTION;
         const modeId = options.find((option) => option.configPatch && isConfigPatchMatch(config.data, option.configPatch))?.modeId
             ?? options[0]?.modeId ?? projection.modeId;

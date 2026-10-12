@@ -2,6 +2,8 @@ import { VoiceLocalConversationSchema } from './localConversation.js';
 import { VoiceLocalDirectSchema } from './localDirect.js';
 import type { VoiceProviderSettingsProjection, VoiceSettingsRegistryEntry } from './providerRegistry.js';
 import type { SessionVoiceDeclarationV1 } from '../../sessions/instructions/sessionVoicePreferenceV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { z } from 'zod';
 
 export const BUILT_IN_LOCAL_NEURAL_VOICE_PROVIDER_ID = 'happier.voice.builtin/local-neural';
 /** Only the existing Kokoro voice is Session-selectable; engine/model/speed remain Account settings. */
@@ -13,13 +15,13 @@ export const BUILT_IN_LOCAL_NEURAL_VOICE_DECLARATION: SessionVoiceDeclarationV1 
     catalogs: [{ kind: 'voices', settingFieldId: 'voiceId', allowCustom: false }],
 };
 
-type SettingsSchema = Readonly<{ safeParse(value: unknown): Readonly<{ success: boolean }> }>;
+type SettingsSchema = z.core.$ZodType;
 function projectVersionOneSettings(envelope: Readonly<{ schemaVersion: number; config: unknown }> | null,
     schema: SettingsSchema): VoiceProviderSettingsProjection {
     if (!envelope) return { status: 'needs_migration', modeId: null };
     if (envelope.schemaVersion > 1) return { status: 'unsupported_version', modeId: null };
     if (envelope.schemaVersion < 1) return { status: 'needs_migration', modeId: null };
-    return schema.safeParse(envelope.config).success ? { status: 'ready', modeId: null } : { status: 'invalid', modeId: null };
+    return z.core.safeParse(createStoredReadSchema(schema), envelope.config).success ? { status: 'ready', modeId: null } : { status: 'invalid', modeId: null };
 }
 const platforms = ['web', 'ios', 'android'] as const;
 const entries = {

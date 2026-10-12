@@ -1,4 +1,5 @@
 import type { SecretStringV1 } from '../../crypto/settingsSecretStringSchemasV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import type {
   VoiceProviderSettingsEnvelopeV1,
   VoiceProviderSettingsJsonValueV1,
@@ -34,6 +35,7 @@ export type VoiceProviderSettingsOwner = Readonly<{
   defaultLegacyConfig: VoiceProviderSettingsJsonValueV1;
   legacyDefaultSelection: boolean;
   parseConfig: (config: unknown) => unknown | null;
+  parseStoredConfig: (config: unknown) => unknown | null;
   readLegacySecret?: (config: unknown) => unknown | null;
   migrateLegacy: (config: unknown) => Readonly<{
     config: unknown;
@@ -75,6 +77,7 @@ export function createExternalVoiceProviderSettingsOwner(
     defaultLegacyConfig: cloneJson(settings.defaultConfig),
     legacyDefaultSelection: false,
     parseConfig: settings.parseConfig,
+    parseStoredConfig: settings.parseStoredConfig,
     migrateLegacy: () => null,
     projectLegacy: () => null,
     mergeLegacy: () => null,
@@ -108,6 +111,10 @@ function createBuiltInOwners(): readonly VoiceProviderSettingsOwner[] {
         const parsed = VoiceLocalDirectSchema.safeParse(config);
         return parsed.success ? parsed.data : null;
       },
+      parseStoredConfig(config: unknown) {
+        const parsed = createStoredReadSchema(VoiceLocalDirectSchema).safeParse(config);
+        return parsed.success ? parsed.data : null;
+      },
       migrateLegacy: localDirectCompatibility.migrateLegacy,
       projectLegacy: localDirectCompatibility.projectLegacy,
       mergeLegacy: localDirectCompatibility.mergeLegacy,
@@ -120,6 +127,10 @@ function createBuiltInOwners(): readonly VoiceProviderSettingsOwner[] {
       legacyDefaultSelection: localConversationCompatibility.legacyDefaultSelection,
       parseConfig(config: unknown) {
         const parsed = VoiceLocalConversationSchema.safeParse(config);
+        return parsed.success ? stripLegacyLocalConversationOwnership(parsed.data) : null;
+      },
+      parseStoredConfig(config: unknown) {
+        const parsed = createStoredReadSchema(VoiceLocalConversationSchema).safeParse(config);
         return parsed.success ? stripLegacyLocalConversationOwnership(parsed.data) : null;
       },
       migrateLegacy: localConversationCompatibility.migrateLegacy,
@@ -149,6 +160,7 @@ function extractBundledOwner(raw: unknown): VoiceProviderSettingsOwner | null {
         : settings.defaultConfig),
       legacyDefaultSelection: releasedCompatibility?.legacyDefaultSelection === true,
       parseConfig: settings.parseConfig,
+      parseStoredConfig: settings.parseStoredConfig,
       ...(releasedCompatibility?.readLegacySecret
         ? { readLegacySecret: releasedCompatibility.readLegacySecret }
         : {}),
@@ -159,11 +171,14 @@ function extractBundledOwner(raw: unknown): VoiceProviderSettingsOwner | null {
         return parsed === null ? null : Object.freeze({ ...migrated, config: parsed });
       },
       projectLegacy(config, context) {
-        const parsed = settings.parseConfig(config);
+        const parsed = settings.parseStoredConfig(config);
         return parsed === null ? null : releasedCompatibility?.projectLegacy(parsed, context) ?? null;
       },
       mergeLegacy(currentConfig, migratedConfig) {
-        const merged = releasedCompatibility?.mergeLegacy(currentConfig, migratedConfig) ?? migratedConfig;
+        const current = settings.parseStoredConfig(currentConfig);
+        const migrated = settings.parseStoredConfig(migratedConfig);
+        if (current === null || migrated === null) return null;
+        const merged = releasedCompatibility?.mergeLegacy(current, migrated) ?? migrated;
         return settings.parseConfig(merged);
       },
       ...(releasedCompatibility?.preserveLegacyEnvelope
@@ -219,7 +234,7 @@ export function createVoiceProviderSettingsCatalog(input: Readonly<{
         if (!owner.projectAnalytics) continue;
         const envelope = providers[owner.providerId];
         if (!envelope || envelope.schemaVersion !== owner.currentSchemaVersion) continue;
-        const config = owner.parseConfig(envelope.config);
+        const config = owner.parseStoredConfig(envelope.config);
         if (config === null) continue;
         Object.assign(result, owner.projectAnalytics(config));
       }

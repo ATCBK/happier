@@ -2,6 +2,7 @@ import {
     PredecessorVoiceCredentialBindingV1Schema,
     type PredecessorVoiceCredentialBindingV1,
 } from '../realtime/providerSettings.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 export { PredecessorVoiceCredentialBindingV1Schema };
 export type { PredecessorVoiceCredentialBindingV1 };
@@ -13,7 +14,7 @@ export function parsePredecessorVoiceCredentialBindings(
     const raw = value as Readonly<Record<string, unknown>>;
     if (!Array.isArray(raw.credentialBindings)) return [];
     return raw.credentialBindings.slice(0, 64).flatMap((candidate) => {
-        const parsed = PredecessorVoiceCredentialBindingV1Schema.safeParse(candidate);
+        const parsed = createStoredReadSchema(PredecessorVoiceCredentialBindingV1Schema).safeParse(candidate);
         return parsed.success ? [parsed.data] : [];
     });
 }

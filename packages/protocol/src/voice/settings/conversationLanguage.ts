@@ -14,7 +14,7 @@ export function serviceLanguage(voice: VoiceSettings, registry: VoiceSettingsReg
     if (entry?.kind !== 'voice.conversation-provider.v1' || !entry.providerSettings) return undefined;
     const envelope = voice.providers[entry.providerId];
     if (envelope && envelope.schemaVersion !== entry.providerSettings.schemaVersion) return undefined;
-    if (!entry.providerSettings.parseConfig(envelope ? envelope.config : entry.providerSettings.defaultConfig)) return undefined;
+    if (!entry.providerSettings.parseStoredConfig(envelope ? envelope.config : entry.providerSettings.defaultConfig)) return undefined;
     return entry.providerSettings.presentation?.language;
 }
 

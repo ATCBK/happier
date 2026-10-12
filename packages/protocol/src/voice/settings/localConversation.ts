@@ -5,6 +5,8 @@ import { PluginContributionIdentityV1Schema } from '../../plugins/contributionId
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 import { ProviderConnectionIdSchema } from '../../providers/ids.js';
 import { z } from 'zod';
+import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
+import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 
 import { VoiceLocalSttSchema } from './localStt.js';
 import { VoiceLocalTtsSchema } from './localTts.js';
@@ -21,16 +23,19 @@ const VoiceAgentSelectionTargetKeySchema = z.preprocess(
   (value) => (typeof value === 'string' && BackendTargetKeyV2Schema.safeParse(value).success ? value : null),
   z.string().nullable(),
 ).default(null);
+const VoiceAgentSelectionIdentityValueSchema = asProtocolZod(PluginContributionIdentityV1Schema).nullable();
 const VoiceAgentSelectionIdentitySchema = z.preprocess(
   (value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     return PluginContributionIdentityV1Schema.safeParse(value).success ? value : null;
   },
-  z.object({
-    pluginId: z.string().trim().min(1),
-    localId: z.string().trim().min(1),
-  }).nullable(),
+  VoiceAgentSelectionIdentityValueSchema,
 ).default(null);
+defineStoredReadProjection(VoiceAgentSelectionIdentitySchema, () => z.preprocess((value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const parsed = createStoredReadSchema(asProtocolZod(PluginContributionIdentityV1Schema)).safeParse(value);
+  return parsed.success ? parsed.data : null;
+}, VoiceAgentSelectionIdentityValueSchema).default(null));
 const VoiceAgentSelectionProjectionGenerationSchema = z.preprocess(
   (value) => {
     if (value === null || value === undefined) return null;

@@ -1,8 +1,115 @@
 import { describe, expect, it } from 'vitest';
 import { createVoiceSettingsOwner } from './voiceSettings.js';
+import { createExternalVoiceProviderSettingsDescriptor, projectExternalVoiceProviderSettings } from './externalProviderSettings.js';
+import { createExternalVoiceProviderSettingsOwner } from './providerSettings.js';
+import { VoiceProviderSettingsSchema } from '../../plugins/contributions/voiceProviders.js';
+import { parsePredecessorVoiceCredentialBindings } from './voiceCredentialBindingCompatibility.js';
+import { VoiceCredentialBindingV1Schema, classifyLegacyVoiceCredentialCandidateV1 } from '../realtime/providerSettings.js';
+import { selectVoiceProviderOption } from './providerSelection.js';
+import type { VoiceSettingsRegistryEntry } from './providerRegistry.js';
 
 describe('shared Voice settings owner', () => {
   const owner = createVoiceSettingsOwner({ bundledContributions: [] });
+
+  it('validates declaration-selected config patches strictly after reading stored preferences', () => {
+    const descriptor = createExternalVoiceProviderSettingsDescriptor(VoiceProviderSettingsSchema.parse({
+      schemaVersion: 1, fields: [{ id: 'voice', title: 'Voice', schema: { type: 'string', maxLength: 32 }, default: 'default', presentation: { control: 'text' } }],
+    }));
+    const providerId = 'example.voice/provider';
+    const entry = { providerId, kind: 'voice.conversation-provider.v1', roles: ['realtime_conversation'],
+      providerSettings: descriptor,
+      projectSettings: (envelope: Readonly<{ schemaVersion: number; config: unknown }> | null) => projectExternalVoiceProviderSettings(envelope, descriptor),
+      selectionOptions: [
+        { id: 'valid', modeId: 'default', order: 1, titleKey: 'fixture', subtitleKey: 'fixture', configPatch: { voice: 'selected' } },
+        { id: 'invalid', modeId: 'default', order: 2, titleKey: 'fixture', subtitleKey: 'fixture', configPatch: { retired: true } },
+      ],
+    } satisfies VoiceSettingsRegistryEntry;
+    const registry = { get: (id: string) => id === providerId ? entry : null, list: () => [entry] };
+    const settings = owner.voiceSettingsParse({ providers: { [providerId]: { schemaVersion: 1, config: { voice: 'stored', retired: true } } } });
+    expect(selectVoiceProviderOption(settings, registry, providerId, 'valid')?.providers[providerId]?.config).toEqual({ voice: 'selected' });
+    expect(selectVoiceProviderOption(settings, registry, providerId, 'invalid')).toBeNull();
+  });
+
+  it('projects retired fields from stored external provider settings without admitting them in edits', () => {
+    const descriptor = createExternalVoiceProviderSettingsDescriptor(VoiceProviderSettingsSchema.parse({
+      schemaVersion: 2,
+      fields: [{ id: 'profile', title: 'Profile', schema: {
+        type: 'object', properties: { voice: { type: 'string' } }, required: ['voice'], additionalProperties: false,
+      }, default: { voice: 'default' }, presentation: { control: 'json' } }],
+    }));
+    const providerId = 'example.voice/provider';
+    const providerOwner = createExternalVoiceProviderSettingsOwner(providerId, descriptor);
+    const externalOwner = createVoiceSettingsOwner({ bundledContributions: [],
+      resolveExternalProviderSettingsOwner: id => id === providerId ? providerOwner : null });
+    const rawConfig = { profile: { voice: 'retained', retired: true }, retired: { active: true } };
+    const accessorConfig = Object.defineProperty({}, 'profile', {
+      enumerable: true, get: () => ({ voice: 'retained' }),
+    });
+    expect(descriptor.parseConfig(accessorConfig)).toBeNull();
+    const settings = externalOwner.voiceSettingsParse({ providers: { [providerId]: { schemaVersion: 2, config: rawConfig, retired: true } } });
+    expect(settings.providers[providerId]?.config).toEqual({ profile: { voice: 'retained' } });
+    expect(externalOwner.readVoiceProviderSettingsConfig(settings, providerId)).toEqual({ profile: { voice: 'retained' } });
+    expect(() => externalOwner.writeVoiceProviderSettingsConfig(settings, providerId, rawConfig)).toThrow();
+    expect(externalOwner.readVoiceProviderSettingsConfig(externalOwner.voiceSettingsParse({ providers: {
+      [providerId]: { schemaVersion: 2, config: { profile: { voice: 42, retired: true } } },
+    } }), providerId)).toBeNull();
+  });
+
+  it('retains stored local conversation selections while dropping nested retired fields', () => {
+    const settings = owner.voiceSettingsParse({ providers: { local_conversation: { schemaVersion: 1, config: {
+      agent: { agentIdentity: { pluginId: 'example.agent', localId: 'agent', retired: true },
+        providerChat: { status: 'configured', retired: true,
+          chat: { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'chat', retired: true },
+          commit: { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'commit', retired: true } } },
+    } } } });
+    const local = owner.readLocalConversationVoiceSettings(settings);
+    expect(local.agent.agentIdentity).toEqual({ pluginId: 'example.agent', localId: 'agent' });
+    expect(local.agent.providerChat).toEqual({ status: 'configured',
+      chat: { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'chat' },
+      commit: { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'commit' } });
+  });
+
+  it('retains known stored credential bindings without assigning retired fields credential meaning', () => {
+    const binding = { contribution: { pluginId: 'example.voice', localId: 'provider', retired: true },
+      credentialSlotId: 'api_key', credentialSource: { kind: 'savedSecret', retired: true },
+      credentialBindings: { account: { api_key: 'secret-id' }, retired: true }, retired: true };
+    expect(owner.voiceSettingsParse({ credentialBindings: [binding] }).credentialBindings).toEqual([{
+      contribution: { pluginId: 'example.voice', localId: 'provider' }, credentialSlotId: 'api_key',
+      credentialSource: { kind: 'savedSecret' }, credentialBindings: { account: { api_key: 'secret-id' } },
+    }]);
+    expect(VoiceCredentialBindingV1Schema.safeParse(binding).success).toBe(false);
+    expect(owner.voiceSettingsParse({ credentialBindings: [{ ...binding, credentialSource: { kind: 'retired' } }] }).credentialBindings).toEqual([]);
+  });
+
+  it('reads predecessor credential carriers with retired fields', () => {
+    expect(parsePredecessorVoiceCredentialBindings({ credentialBindings: [{ providerId: 'openai_compat',
+      credentialBindings: { account: { chat_api_key: 'secret-id' }, retired: true }, retired: true }] })).toEqual([{
+      providerId: 'openai_compat', credentialBindings: { account: { chat_api_key: 'secret-id' } },
+    }]);
+  });
+
+  it('classifies retained legacy credential material through the same tolerant binding projection', () => {
+    const secret = { _isSecretValue: true, encryptedValue: { t: 'enc-v1', c: 'encrypted' } };
+    expect(classifyLegacyVoiceCredentialCandidateV1({
+      candidate: { providerId: 'realtime_elevenlabs', slotId: 'api_key', path: ['realtime_elevenlabs', 'byo', 'apiKey'] },
+      rawAdapters: { realtime_elevenlabs: { byo: { apiKey: secret } } },
+      personalSources: [{ id: 'existing-personal', encryptedValue: { ...secret, retired: true } }],
+      credentialBindings: [{ providerId: 'realtime_elevenlabs', credentialBindings: {
+        account: { api_key: 'existing-personal' }, retired: true,
+      }, retired: true }],
+    })).toMatchObject({ kind: 'existing-personal', secretId: 'existing-personal',
+      binding: { providerId: 'realtime_elevenlabs', credentialBindings: { account: { api_key: 'existing-personal' } } } });
+  });
+
+  it('preserves stored diagnostics consent without enabling invalid capture settings', () => {
+    const diagnostics = { v: 1, enabled: true, consentVersion: 1, captureSttInput: true, retired: true };
+    const settings = owner.voiceSettingsParse({ diagnostics });
+    expect(owner.readVoiceDiagnosticsSettings(settings)).toMatchObject({ enabled: true, consentVersion: 1, captureSttInput: true });
+    expect(Reflect.get(settings.diagnostics, 'retired')).toBeUndefined();
+    expect(owner.voiceSettingsParse({ diagnostics: { ...diagnostics, consentVersion: 2 } }).diagnostics.enabled).toBe(false);
+    const diagnosticsWithRetiredFields = { ...settings.diagnostics, retired: true };
+    expect(() => owner.writeVoiceDiagnosticsSettings(settings, diagnosticsWithRetiredFields)).toThrow();
+  });
 
   it('preserves forward provider envelopes and unknown roots while recovering malformed known preferences', () => {
     const future = { schemaVersion: 2, config: { futureMode: true } };

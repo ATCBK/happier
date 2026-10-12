@@ -1,6 +1,7 @@
 import { SecretStringV1Schema } from '../../../crypto/settingsSecretStringSchemasV1.js';
 import type { VoiceProviderSettingsJsonValueV1 } from '../../realtime/providerSettings.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../../json/storedReadSchema.js';
 
 import { VoiceLocalDirectSchema } from '../localDirect.js';
 import {
@@ -55,7 +56,7 @@ function projectLegacyLocalSpeechSettings(
   config: unknown,
   resolveProviderConfig: ReleasedVoiceLegacyProjectionContext['resolveProviderConfig'],
 ): Record<string, VoiceProviderSettingsJsonValueV1> | null {
-  const parsed = VoiceLocalDirectSchema.safeParse(config);
+  const parsed = createStoredReadSchema(VoiceLocalDirectSchema).safeParse(config);
   if (!parsed.success) return null;
   const stt = parsed.data.stt;
   const tts = parsed.data.tts;
@@ -99,8 +100,8 @@ function projectLegacyLocalSpeechSettings(
 }
 
 function mergeLegacyLocalSpeechSettings(currentConfig: unknown, migratedConfig: unknown) {
-  const current = VoiceLocalDirectSchema.safeParse(currentConfig);
-  const migrated = VoiceLocalDirectSchema.safeParse(migratedConfig);
+  const current = createStoredReadSchema(VoiceLocalDirectSchema).safeParse(currentConfig);
+  const migrated = createStoredReadSchema(VoiceLocalDirectSchema).safeParse(migratedConfig);
   if (!current.success || !migrated.success) return null;
   return VoiceLocalDirectSchema.parse({
     ...migrated.data,
@@ -125,7 +126,7 @@ const localDirectCompatibility: ReleasedVoiceSettingsCompatibility = Object.free
   defaultLegacyConfig: VoiceLocalDirectSchema.parse({}),
   legacyDefaultSelection: false,
   migrateLegacy(config) {
-    const parsed = VoiceLocalDirectSchema.safeParse(config);
+    const parsed = createStoredReadSchema(VoiceLocalDirectSchema).safeParse(config);
     return parsed.success ? Object.freeze({ config: parsed.data, root: Object.freeze({}) }) : null;
   },
   projectLegacy(config, context) {
@@ -138,7 +139,7 @@ const localConversationCompatibility: ReleasedVoiceSettingsCompatibility = Objec
   defaultLegacyConfig: VoiceLocalConversationSchema.parse({}),
   legacyDefaultSelection: false,
   migrateLegacy(config) {
-    const parsed = VoiceLocalConversationSchema.safeParse(normalizeLegacyLocalConversationInput(config));
+    const parsed = createStoredReadSchema(VoiceLocalConversationSchema).safeParse(normalizeLegacyLocalConversationInput(config));
     if (!parsed.success) return null;
     return Object.freeze({
       config: stripLegacyLocalConversationOwnership(parsed.data),
@@ -152,7 +153,7 @@ const localConversationCompatibility: ReleasedVoiceSettingsCompatibility = Objec
     });
   },
   projectLegacy(config, context) {
-    const parsed = VoiceLocalConversationSchema.safeParse(config);
+    const parsed = createStoredReadSchema(VoiceLocalConversationSchema).safeParse(config);
     if (!parsed.success) return null;
     const localSpeech = projectLegacyLocalSpeechSettings(parsed.data, context.resolveProviderConfig);
     if (!localSpeech) return null;
@@ -170,8 +171,8 @@ const localConversationCompatibility: ReleasedVoiceSettingsCompatibility = Objec
     } as VoiceProviderSettingsJsonValueV1;
   },
   mergeLegacy(currentConfig, migratedConfig) {
-    const current = VoiceLocalConversationSchema.safeParse(currentConfig);
-    const migrated = VoiceLocalConversationSchema.safeParse(migratedConfig);
+    const current = createStoredReadSchema(VoiceLocalConversationSchema).safeParse(currentConfig);
+    const migrated = createStoredReadSchema(VoiceLocalConversationSchema).safeParse(migratedConfig);
     if (!current.success || !migrated.success) return null;
     const mergedSpeech = mergeLegacyLocalSpeechSettings(current.data, migrated.data);
     if (!mergedSpeech) return null;

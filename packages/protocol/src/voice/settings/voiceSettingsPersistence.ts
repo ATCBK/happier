@@ -10,6 +10,7 @@ import { VoiceCredentialBindingV1Schema, type VoiceCredentialBindingV1, type Voi
 import { VoiceSpeechDiagnosticsSettingsV1Schema, type VoiceSpeechDiagnosticsSettingsV1 } from '../diagnostics.js';
 import { resolvePredecessorVoiceProviderContributionIdentityV1 } from '../providerContributionIdentity.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { backendTargetKeysMatch, resolveBackendTargetKeyV2 } from '../../backends/targets/backendTargetRefV2.js';
 
 import { stripMigratedSessionOrganizationSettings } from '../../account/settings/accountSettingsLegacyCleanup.js';
@@ -110,7 +111,7 @@ function projectPredecessorVoicePrivacy(
 }
 
 function parseCanonicalDiagnostics(value: unknown): VoiceSpeechDiagnosticsSettingsV1 {
-    const parsed = VoiceSpeechDiagnosticsSettingsV1Schema.safeParse(value);
+    const parsed = createStoredReadSchema(VoiceSpeechDiagnosticsSettingsV1Schema).safeParse(value);
     return parsed.success ? parsed.data : DEFAULT_DIAGNOSTICS;
 }
 
@@ -175,9 +176,9 @@ function normalizeQualifiedCredentialBindings(value: unknown): readonly VoiceCre
     // duplicate would silently retract every stored Voice credential binding at
     // the next settings write. Emit a set the canonical schema always accepts.
     return dedupeCredentialBindings(value.credentialBindings.slice(0, 64).flatMap((candidate) => {
-        const canonical = VoiceCredentialBindingV1Schema.safeParse(candidate);
+        const canonical = createStoredReadSchema(VoiceCredentialBindingV1Schema).safeParse(candidate);
         if (canonical.success) return [canonical.data];
-        const legacy = PredecessorVoiceCredentialBindingV1Schema.safeParse(candidate);
+        const legacy = createStoredReadSchema(PredecessorVoiceCredentialBindingV1Schema).safeParse(candidate);
         if (!legacy.success) return [];
         const binding = legacy.data;
         const slotIds = new Set<string>([
@@ -444,7 +445,7 @@ function readSavedSecretEnvelope(
 ): unknown {
     if (!Array.isArray(account.secrets)) return undefined;
     for (const candidate of account.secrets) {
-        const parsed = SavedSecretSchema.safeParse(candidate);
+        const parsed = createStoredReadSchema(SavedSecretSchema).safeParse(candidate);
         if (parsed.success && parsed.data.id === secretId) {
             return parsed.data.encryptedValue;
         }
@@ -508,7 +509,7 @@ function mergePredecessorOpenAiCompatSpeechConfigs(
         const currentEnvelope = mergedProviders[providerId];
         const currentConfig = owner
             && currentEnvelope?.schemaVersion === owner.currentSchemaVersion
-            ? owner.parseConfig(currentEnvelope.config)
+            ? owner.parseStoredConfig(currentEnvelope.config)
             : owner?.defaultConfig;
         if (!owner || !isRecord(currentConfig)) continue;
         const nextConfig = owner.parseConfig({ ...currentConfig, ...releasedConfig });
@@ -632,7 +633,7 @@ function mergePredecessorCredentialOwningProviderConfig(
         const current = providers[providerId];
         const merged = current?.schemaVersion === owner.currentSchemaVersion
             ? owner.mergeLegacy(current.config, migrated.config)
-            : owner.parseConfig(migrated.config);
+            : owner.parseStoredConfig(migrated.config);
         if (merged === null) continue;
         providers[providerId] = {
             schemaVersion: owner.currentSchemaVersion,
@@ -762,7 +763,7 @@ function readEncryptedSavedSecretCredential(
     const savedSecretId = binding?.credentialBindings.account?.[slotId] ?? null;
     if (!savedSecretId || !Array.isArray(account.secrets)) return null;
     for (const candidate of account.secrets) {
-        const parsed = SavedSecretSchema.safeParse(candidate);
+        const parsed = createStoredReadSchema(SavedSecretSchema).safeParse(candidate);
         if (!parsed.success || parsed.data.id !== savedSecretId) continue;
         const encryptedValue = parsed.data.encryptedValue.encryptedValue;
         return encryptedValue
@@ -828,7 +829,7 @@ function readExactEncryptedSavedSecretEnvelope(
         isRecord(candidate) && candidate.id === savedSecretId
     ));
     if (candidates.length !== 1) return undefined;
-    const parsed = SavedSecretSchema.safeParse(candidates[0]);
+    const parsed = createStoredReadSchema(SavedSecretSchema).safeParse(candidates[0]);
     if (!parsed.success) return undefined;
     const encryptedValue = parsed.data.encryptedValue.encryptedValue;
     return encryptedValue
@@ -868,7 +869,7 @@ function projectPredecessorOpenAiCompatChatSidecar(
         agent: legacyAgent,
     };
 
-    const parsedConfig = VoiceLocalConversationSchema.safeParse(providerConfig);
+    const parsedConfig = createStoredReadSchema(VoiceLocalConversationSchema).safeParse(providerConfig);
     if (!parsedConfig.success) return withoutChat;
     const localConversation = parsedConfig.data;
     const providerChat = localConversation.agent.providerChat;
@@ -1060,7 +1061,7 @@ function createPredecessorVoiceProjection(
         const owner = getCanonicalVoiceProviderSettingsOwner(providerId);
         const envelope = readProviderEnvelope(voice, providerId);
         if (!owner || !envelope || envelope.schemaVersion !== owner.currentSchemaVersion) return null;
-        const parsed = owner.parseConfig(envelope.config);
+        const parsed = owner.parseStoredConfig(envelope.config);
         return isRecord(parsed) ? parsed : null;
     };
     const root = {
@@ -1147,7 +1148,7 @@ function createPredecessorVoiceProjection(
         ? selectedPredecessorProviderId
         : 'off';
     const local = preserveUnchangedChat
-        ? VoiceLocalConversationSchema.safeParse(readProviderEnvelope(voice, 'local_conversation')?.config)
+        ? createStoredReadSchema(VoiceLocalConversationSchema).safeParse(readProviderEnvelope(voice, 'local_conversation')?.config)
         : null;
     const retainedChatBinding = local?.success
         && local.data.agent.providerChat?.status === 'migration_required'
@@ -1426,7 +1427,7 @@ function normalizeVoiceSettingsServerDelta<T extends object>(
     }
     const pendingLegacyImport = currentRecord ? resolveLegacyVoiceOpenAiChatImportState(currentRecord, account) : null;
     const chatAuthority = (voice: VoiceSettingsPersistenceV1 | null, legacyIngress = false) => {
-        const parsed = VoiceLocalConversationSchema.safeParse(voice && readProviderEnvelope(voice, 'local_conversation')?.config);
+        const parsed = createStoredReadSchema(VoiceLocalConversationSchema).safeParse(voice && readProviderEnvelope(voice, 'local_conversation')?.config);
         return parsed.success ? { agentSource: parsed.data.agent.agentSource, agentId: parsed.data.agent.agentId,
             providerChat: legacyIngress && !parsed.data.agent.providerChat ? pendingLegacyImport : parsed.data.agent.providerChat } : null;
     };

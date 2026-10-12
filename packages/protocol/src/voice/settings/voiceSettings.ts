@@ -6,6 +6,7 @@ import {
   VoiceProviderIdSchema as QualifiedVoiceProviderIdSchema,
 } from '../realtime/index.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import {
   LEGACY_BUILT_IN_VOICE_ADAPTER_IDS,
   readLegacyVoiceSettingsMigrationSource,
@@ -282,11 +283,6 @@ function preserveMalformedLegacyCredentialFields(
   return Object.keys(preserved).length > 0 ? preserved : null;
 }
 
-function parseKnownProviderConfig(providerId: string, config: unknown): unknown | null {
-  return (providerSettingsCatalog.get(providerId)
-    ?? resolveExternalVoiceProviderSettingsOwner(providerId))?.parseConfig(config) ?? config;
-}
-
 function parseProviderEnvelopes(raw: unknown): Record<string, VoiceProviderSettingsEnvelopeV1> {
   const result = createDefaultProviderEnvelopes();
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return result;
@@ -297,22 +293,24 @@ function parseProviderEnvelopes(raw: unknown): Record<string, VoiceProviderSetti
       && Object.prototype.hasOwnProperty.call(rawRecord, canonicalProviderId)) continue;
     const providerId = VoiceProviderIdSchema.safeParse(canonicalProviderId);
     if (!providerId.success) continue;
-    const envelope = VoiceProviderSettingsEnvelopeV1Schema.safeParse(candidate);
+    const envelope = createStoredReadSchema(VoiceProviderSettingsEnvelopeV1Schema).safeParse(candidate);
     if (!envelope.success || !isBoundedJsonValue(envelope.data.config)) {
       delete result[providerId.data];
       continue;
     }
     const configCopy = JSON.parse(JSON.stringify(envelope.data.config)) as VoiceProviderSettingsJsonValueV1;
-    if (envelope.data.schemaVersion !== 1) {
+    const owner = providerSettingsCatalog.get(providerId.data)
+      ?? resolveExternalVoiceProviderSettingsOwner(providerId.data);
+    if (!owner || envelope.data.schemaVersion !== owner.currentSchemaVersion) {
       result[providerId.data] = { schemaVersion: envelope.data.schemaVersion, config: configCopy };
       continue;
     }
-    const config = parseKnownProviderConfig(providerId.data, configCopy);
+    const config = owner.parseStoredConfig(configCopy);
     // The generic envelope owner must preserve valid JSON even when a bundled
     // provider rejects its config. Runtime/readiness then fail closed instead
     // of silently substituting a runnable default for corrupted future data.
     result[providerId.data] = {
-      schemaVersion: 1,
+      schemaVersion: envelope.data.schemaVersion,
       config: (config ?? configCopy) as VoiceProviderSettingsJsonValueV1,
     };
   }
@@ -489,7 +487,7 @@ function migratePredecessorSpeechProviderSettings(
     if (owner.defaultConfig === null
       || typeof owner.defaultConfig !== 'object'
       || Array.isArray(owner.defaultConfig)) continue;
-    const config = owner.parseConfig(supportedLegacyConfig === null
+    const config = owner.parseStoredConfig(supportedLegacyConfig === null
       ? envelope.data.config
       : { ...owner.defaultConfig, ...supportedLegacyConfig });
     if (config === null) continue;
@@ -553,7 +551,7 @@ function readVoiceProviderSettingsConfig(
     ?? resolveExternalVoiceProviderSettingsOwner(providerId);
   const envelope = settings.providers?.[providerId];
   if (!owner || envelope?.schemaVersion !== owner.currentSchemaVersion) return null;
-  const parsed = owner.parseConfig(envelope.config);
+  const parsed = owner.parseStoredConfig(envelope.config);
   return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
     ? parsed as Readonly<Record<string, unknown>>
     : null;
@@ -562,7 +560,7 @@ function readVoiceProviderSettingsConfig(
 function readLocalDirectVoiceSettings(settings: Pick<CanonicalVoiceSettings, 'providers'>): VoiceLocalDirectSettings {
   const envelope = settings.providers?.local_direct;
   if (envelope?.schemaVersion === 1) {
-    const parsed = VoiceLocalDirectSchema.safeParse(envelope.config);
+    const parsed = createStoredReadSchema(VoiceLocalDirectSchema).safeParse(envelope.config);
     if (parsed.success) return parsed.data;
   }
   return VoiceLocalDirectSchema.parse({});
@@ -571,7 +569,7 @@ function readLocalDirectVoiceSettings(settings: Pick<CanonicalVoiceSettings, 'pr
 function readLocalConversationVoiceSettings(settings: Pick<CanonicalVoiceSettings, 'providers'>): VoiceLocalConversationSettings {
   const envelope = settings.providers?.local_conversation;
   if (envelope?.schemaVersion === 1) {
-    const parsed = VoiceLocalConversationSchema.safeParse(envelope.config);
+    const parsed = createStoredReadSchema(VoiceLocalConversationSchema).safeParse(envelope.config);
     if (parsed.success) return stripLegacyLocalConversationOwnership(parsed.data);
   }
   return stripLegacyLocalConversationOwnership(VoiceLocalConversationSchema.parse({}));
@@ -603,7 +601,7 @@ function writeLocalConversationVoiceSettings(settings: VoiceSettings, config: Vo
 function readVoiceDiagnosticsSettings(
   settings: Pick<CanonicalVoiceSettings, 'diagnostics'>,
 ): VoiceSpeechDiagnosticsSettingsV1 {
-  return VoiceSpeechDiagnosticsSettingsV1Schema.parse(settings.diagnostics ?? {});
+  return createStoredReadSchema(VoiceSpeechDiagnosticsSettingsV1Schema).parse(settings.diagnostics ?? {});
 }
 
 function writeVoiceDiagnosticsSettings(
@@ -672,10 +670,10 @@ function voiceSettingsParse(
   const canonicalExecutionMachine = VoiceExecutionMachineSettingsSchema.safeParse(raw.executionMachine);
   if (canonicalExecutionMachine.success) base.executionMachine = canonicalExecutionMachine.data;
 
-  const canonicalDiagnostics = VoiceSpeechDiagnosticsSettingsV1Schema.safeParse(raw.diagnostics);
+  const canonicalDiagnostics = createStoredReadSchema(VoiceSpeechDiagnosticsSettingsV1Schema).safeParse(raw.diagnostics);
   if (canonicalDiagnostics.success) base.diagnostics = canonicalDiagnostics.data;
 
-  const canonicalCredentialBindings = VoiceCredentialBindingsSchema.safeParse(raw.credentialBindings);
+  const canonicalCredentialBindings = createStoredReadSchema(VoiceCredentialBindingsSchema).safeParse(raw.credentialBindings);
   if (canonicalCredentialBindings.success) base.credentialBindings = canonicalCredentialBindings.data;
 
   base.providers = parseProviderEnvelopes(raw.providers);
