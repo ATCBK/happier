@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getAgentStaticModels } from '@happier-dev/agents';
 import {
     createProviderErrorV1,
@@ -18,6 +18,9 @@ import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/a
 import { renderScreen } from '@/dev/testkit';
 import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { applyProviderCatalogSnapshot, resetProviderCatalogSnapshotsForTests } from '@/sync/store/settings/providerCatalogSnapshot';
+import { splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 
 import {
     installProfileEditFormModuleMocks,
@@ -58,6 +61,7 @@ resetProfileEditFormTestState();
 installProfileEditFormModuleMocks({
     storageModule: () => createStorageModuleStub({
         useSettings: () => settingsState,
+        useSetting: (key: string) => key === 'providerDefaultModelSelectionsByAgentTargetKeyV1' ? {} : undefined,
     }),
 });
 
@@ -222,6 +226,7 @@ function sameModelProviderGroup(input: Readonly<{
 }
 
 describe('SlimProfileRoutingFields model visibility', () => {
+    const previousScope = getStorage().getState().settingsScope;
     beforeEach(() => {
         profileEditFormTestState.modalShowSpy.mockReset();
         settingsState = settingsParse({});
@@ -234,6 +239,12 @@ describe('SlimProfileRoutingFields model visibility', () => {
         confirmExperimental.mockClear();
         clearExperimentalFailure.mockClear();
         confirmationHookInputs.length = 0;
+        getStorage().setState({ settingsScope: { serverId: 'server-profile', accountId: 'profile-routing-fixture' } });
+        resetProviderCatalogSnapshotsForTests();
+    });
+    afterEach(() => {
+        resetProviderCatalogSnapshotsForTests();
+        getStorage().setState({ settingsScope: previousScope });
     });
 
     it('renders a hidden current native model as disabled recovery and omits other hidden native models', async () => {
@@ -259,6 +270,13 @@ describe('SlimProfileRoutingFields model visibility', () => {
                 },
             },
         });
+        // Visibility is now authored by the scoped Provider catalog, not legacy Settings.
+        applyProviderCatalogSnapshot({ serverId: 'server-profile', accountId: 'profile-routing-fixture' }, {
+            status: 'ready', revision: 1, catalog: splitProviderSettingsV1({
+                ...DEFAULT_PROVIDER_SETTINGS_V1,
+                modelVisibilityByRef: { [hiddenCurrentKey]: 'hidden', [hiddenNonCurrentKey]: 'hidden' },
+            }).catalog,
+        }, true);
         const { SlimProfileRoutingFields } = await import('./SlimProfileRoutingFields');
         const screen = await renderScreen(<SlimProfileRoutingFields
             entries={[entry]}
@@ -523,5 +541,54 @@ describe('SlimProfileRoutingFields model visibility', () => {
         expect(screen.findByTestId('provider-error-action:provider_endpoint_unavailable')).toBeTruthy();
         await screen.pressByTestIdAsync('provider-error-action:provider_endpoint_unavailable');
         expect(providerProjectionRefresh).toHaveBeenCalledOnce();
+    });
+});
+
+describe('SlimProfileRoutingFields per-agent defaults', () => {
+    function codexEntry(): ResolvedBackendCatalogEntry {
+        return {
+            ...claudeEntry(),
+            agentCatalogEntry: createResolvedAgentCatalogEntryFixture({ agentId: 'codex' }),
+            backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+            backendTargetKey: 'agent:codex',
+            backendId: 'codex',
+            agentId: 'codex',
+            catalogAgentId: 'codex',
+            builtInAgentId: 'codex',
+            iconAgentId: 'codex',
+            title: 'Codex',
+            subtitle: 'Codex',
+        };
+    }
+
+    it('summarizes a per-agent section in one row and opens the agents on demand', async () => {
+        const claude = claudeEntry();
+        const { SlimProfileRoutingFields } = await import('./SlimProfileRoutingFields');
+        const render = (persistence: Record<string, 'persisted' | 'direct'>) => renderScreen(<SlimProfileRoutingFields
+            entries={[claude, codexEntry()]}
+            machineId={null}
+            serverId="server-profile"
+            defaultPermissionModeByTargetKey={{}}
+            defaultPersistenceModeByTargetKey={persistence}
+            onPermissionDefaultsChange={vi.fn()}
+            onPersistenceDefaultsChange={vi.fn()}
+            onPreferredAgentChange={vi.fn()}
+            onPreferredModelChange={vi.fn()}
+        />);
+        const summaryOf = (screen: Awaited<ReturnType<typeof render>>) => screen
+            .findAll((node) => node.props.testID === 'profile-routing.storage.header' && typeof node.props.title === 'string').at(0);
+        const agentTriggers = (screen: Awaited<ReturnType<typeof render>>) => screen.findAll((node) => (
+            node.props.itemTrigger?.title === 'Claude' || node.props.itemTrigger?.title === 'Codex'
+        ));
+
+        expect(summaryOf(await render({}))?.props.subtitle).toBe('profiles.agentDefaults.allAccountDefault');
+
+        const screen = await render({ [resolveProfileBackendTargetKeyForEntry(claude)]: 'direct' });
+        expect(summaryOf(screen)?.props.subtitle).toBe('profiles.agentDefaults.changedFor');
+        expect(agentTriggers(screen)).toHaveLength(0);
+        await act(async () => {
+            summaryOf(screen)?.props.onPress?.();
+        });
+        expect(agentTriggers(screen)).toHaveLength(2);
     });
 });

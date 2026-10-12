@@ -5,7 +5,7 @@ import type { ProfileLegacyCloneSourceV1, ProfileRecordV1 } from '@happier-dev/p
 import { Modal } from '@/modal';
 import { DEFAULT_PROFILES, getBuiltInProfileNameKey } from '@/sync/domains/profiles/profileUtils';
 import { useAiLaunchProfiles } from '@/sync/store/useAiLaunchProfiles';
-import { useApplyProfileSave } from '@/sync/store/settingsWriters';
+import { useApplyProfileSave, type ProfileActionExecutionOptions } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 import { promptUnsavedChangesAlert, type UnsavedChangesDecision } from '@/utils/ui/promptUnsavedChangesAlert';
 
@@ -26,13 +26,13 @@ export type SavedLaunchProfile = Readonly<{ profile: AiLaunchProfile; created: b
  * Saves a launch profile through the canonical entity operation and its acknowledged row writer. A refusal
  * is explained to the user and returns `null`, so the editor stays open with its changes.
  */
-export function useSaveLaunchProfile(): (
+export function useSaveLaunchProfile(options?: ProfileActionExecutionOptions): (
     profile: AiLaunchProfile,
     secretBindings?: Readonly<ProfileRecordV1['secretBindings']>,
     legacyCloneSource?: ProfileLegacyCloneSourceV1,
 ) => Promise<SavedLaunchProfile | null> {
     const profiles = useAiLaunchProfiles();
-    const applyProfileSave = useApplyProfileSave();
+    const applyProfileSave = useApplyProfileSave(options);
     return React.useCallback(async (profile, secretBindings, legacyCloneSource) => {
         const currentProfile = profiles.find(entry => entry.id === profile.id);
         const exists = currentProfile !== undefined;

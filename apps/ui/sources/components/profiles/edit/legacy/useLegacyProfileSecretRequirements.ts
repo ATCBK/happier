@@ -55,35 +55,40 @@ export function useLegacyProfileSecretRequirements(params: Readonly<{
     const [profileSecretBindings, setProfileSecretBindings] = React.useState<ProfileRecordV1['secretBindings']>(
         () => ({ ...capture.current?.bindings }),
     );
-    const readPrivateSecretBindingsForSave = React.useCallback((): ProfileRecordV1['secretBindings'] | null => {
+    const readSaveRefusal = React.useCallback((): 'profile_editor_revision_unavailable' | 'profile_revision_conflict' | null => {
         const captured = capture.current;
-        if (!captured?.bindings || !areAccountSettingsScopesEqual(captured.scope, getStorage().getState().settingsScope)) return null;
+        if (!captured?.bindings || !areAccountSettingsScopesEqual(captured.scope, getStorage().getState().settingsScope)) return 'profile_editor_revision_unavailable';
         const current = getProfileCatalogSnapshot(captured.scope);
         const source = captured.profile;
         const clone = captured.legacyCloneSource;
         const expectedRevision = clone?.revision ?? source.profileRecordRevision;
         if (expectedRevision === undefined) {
             return isLaunchProfileV2(source) && !source.artifactId
-                && !current?.data?.some(row => row.record.id === source.id) ? profileSecretBindings : null;
+                && !current?.data?.some(row => row.record.id === source.id) ? null : 'profile_editor_revision_unavailable';
         }
-        if (current?.catalog.status !== 'ready' || current.catalog.source !== 'destination' || current.stale) return null;
+        if (current?.catalog.status !== 'ready' || current.catalog.source !== 'destination' || current.stale) return 'profile_editor_revision_unavailable';
         const row = current.data?.find(candidate => candidate.record.id === (clone?.id ?? source.id));
-        if (!row || row.revision !== expectedRevision) return null;
+        if (!row) return 'profile_editor_revision_unavailable';
+        if (row.revision !== expectedRevision) return 'profile_revision_conflict';
         if (row.record.definition.kind === 'artifact') {
             const artifactId = row.record.definition.artifactId;
             const revision = current.artifactsById.get(artifactId)?.revision;
             const expected = clone?.artifactRevision ?? source.revision;
-            if (!revision || !expected || (clone ? clone.artifactRevision?.artifactId !== artifactId : source.artifactId !== artifactId)
-                || revision.headerVersion !== expected.headerVersion || revision.bodyVersion !== expected.bodyVersion) return null;
+            if (!revision || !expected || (clone ? clone.artifactRevision?.artifactId !== artifactId : source.artifactId !== artifactId)) return 'profile_editor_revision_unavailable';
+            if (revision.headerVersion !== expected.headerVersion || revision.bodyVersion !== expected.bodyVersion) return 'profile_revision_conflict';
         }
-        return profileSecretBindings;
-    }, [profileSecretBindings]);
+        return null;
+    }, []);
+    const readPrivateSecretBindingsForSave = React.useCallback((): ProfileRecordV1['secretBindings'] | null => (
+        readSaveRefusal() === null ? profileSecretBindings : null
+    ), [profileSecretBindings, readSaveRefusal]);
     const notifySaveUnavailable = React.useCallback(() => {
         const capturedScope = capture.current?.scope;
         if (!mountedRef.current || !capturedScope
             || !areAccountSettingsScopesEqual(capturedScope, getStorage().getState().settingsScope)) return;
-        Modal.alert(t('common.error'), 'profile_editor_revision_unavailable');
-    }, [mountedRef]);
+        const refusal = readSaveRefusal();
+        if (refusal) Modal.alert(t('common.error'), refusal);
+    }, [mountedRef, readSaveRefusal]);
     const effectiveBindings = React.useMemo(() => resolveEffectiveProfileSecretBindingsV1(
         profile.secretBindings ?? {}, profileSecretBindings,
     ), [profile.secretBindings, profileSecretBindings]);

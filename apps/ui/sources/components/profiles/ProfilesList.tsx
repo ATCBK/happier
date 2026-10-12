@@ -18,6 +18,7 @@ import { getProfileSubtitle } from '@/components/profiles/profileListModel';
 import { useProfilesListModel } from '@/components/profiles/useProfilesListModel';
 import { getProfileDisplayName } from '@/components/profiles/profileDisplay';
 import { t } from '@/text';
+import { Modal } from '@/modal';
 import { Typography } from '@/constants/Typography';
 import { hasRequiredSecret } from '@/sync/domains/profiles/profileSecrets';
 import type { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
@@ -30,7 +31,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 export interface ProfilesListProps {
     customProfiles: AIBackendProfile[];
     favoriteProfileIds: string[];
-    onFavoriteProfileIdsChange: (next: string[]) => void;
+    onFavoriteProfileIdsChange: (next: string[]) => void | Promise<void>;
 
     selectedProfileId: string | null;
     onPressProfile?: (profile: AIBackendProfile) => void | Promise<void>;
@@ -112,10 +113,27 @@ type ProfileRowProps = {
     onPressProfile?: (profile: AIBackendProfile) => void | Promise<void>;
     onSecretBadgePress?: (profile: AIBackendProfile) => void;
     rightElement: React.ReactNode;
+    /** A page row opens its profile; a picker row chooses it. */
+    showChevron: boolean;
     ignoreRowPressRef: React.MutableRefObject<boolean>;
     getSecretOverrideReady?: (profile: AIBackendProfile) => boolean;
     getSecretMachineEnvOverride?: (profile: AIBackendProfile) => { isReady: boolean; isLoading: boolean } | null;
 };
+
+/** The size every leading mark in this list takes: a profile's compatibility mark (its default size). */
+const PROFILE_ROW_MARK_PX = 32;
+
+/**
+ * A glyph in the list's mark column (the no-profile house, the add row's plus): centered in the box a
+ * profile's mark takes, so every title in a section starts on the same edge whatever its mark.
+ */
+function ProfileRowGlyph(props: Readonly<{ name: React.ComponentProps<typeof Icon>['name']; size: number; color: string }>) {
+    return (
+        <View style={{ width: PROFILE_ROW_MARK_PX, height: PROFILE_ROW_MARK_PX, alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name={props.name} size={props.size} color={props.color} />
+        </View>
+    );
+}
 
 const ProfileRow = React.memo(function ProfileRow(props: ProfileRowProps) {
     const theme = useUnistyles().theme;
@@ -123,7 +141,7 @@ const ProfileRow = React.memo(function ProfileRow(props: ProfileRowProps) {
     const subtitle = React.useMemo(() => {
         if (!props.showMobileBadge) return props.subtitleText;
         return (
-            <View style={{ gap: 6 }}>
+            <View style={{ gap: theme.space.s6 }}>
                 <Text
                     style={{
                         ...Typography.default('regular'),
@@ -167,8 +185,8 @@ const ProfileRow = React.memo(function ProfileRow(props: ProfileRowProps) {
             key={props.profile.id}
             title={props.displayName}
             subtitle={subtitle}
-            leftElement={<ProfileCompatibilityIcon profile={props.profile} backendEntries={props.backendEntries} />}
-            showChevron={false}
+            leftElement={<ProfileCompatibilityIcon profile={props.profile} backendEntries={props.backendEntries} size={PROFILE_ROW_MARK_PX} />}
+            showChevron={props.showChevron}
             selected={props.isSelected}
             disabled={props.isDisabled}
             onPress={onPress}
@@ -208,14 +226,16 @@ export function ProfilesList(props: ProfilesListProps) {
 
     const isDefaultEnvironmentFavorite = groups.favoriteIds.has('');
     // A picker selects one choice; a page lists them, so it draws no selection.
-    const showsSelection = props.presentation !== 'page';
+    const isPage = props.presentation === 'page';
+    const showsSelection = !isPage;
     const defaultEnvironmentSelected = showsSelection && !props.selectedProfileId;
     // On a page, adding happens in the collection it adds to: the last row of your own profiles.
     const addsInCustomGroup = props.presentation === 'page' && Boolean(props.includeAddProfileRow && props.onAddProfilePress);
     const showFavoritesGroup = groups.favoriteProfiles.length > 0 || (props.includeDefaultEnvironmentRow && isDefaultEnvironmentFavorite);
 
     const toggleFavorite = React.useCallback((profileId: string) => {
-        props.onFavoriteProfileIdsChange(toggleFavoriteProfileId(props.favoriteProfileIds, profileId));
+        void Promise.resolve().then(() => props.onFavoriteProfileIdsChange(toggleFavoriteProfileId(props.favoriteProfileIds, profileId)))
+            .catch(error => Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error')));
     }, [props.favoriteProfileIds, props.onFavoriteProfileIdsChange]);
 
     // Precompute action arrays so selection changes don't rebuild them for every row.
@@ -267,7 +287,9 @@ export function ProfilesList(props: ProfilesListProps) {
         toggleFavorite,
     ]);
 
+    // A page row is a destination: favorite, duplicate and delete live on the profile's own page.
     const renderDefaultEnvironmentRightElement = React.useCallback((isSelected: boolean) => {
+        if (isPage) return null;
         const isFavorite = isDefaultEnvironmentFavorite;
         const actions: ItemAction[] = [
             {
@@ -280,7 +302,7 @@ export function ProfilesList(props: ProfilesListProps) {
         ];
 
         return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s16 }}>
                 <View style={{ width: 24, alignItems: 'center', justifyContent: 'center' }}>
                     {normalizeNodeForView(
                         <Icon name="check-circle" size={24} color={selectedIndicatorColor} style={{ opacity: isSelected ? 1 : 0 }} />,
@@ -298,15 +320,16 @@ export function ProfilesList(props: ProfilesListProps) {
                 />
             </View>
         );
-    }, [isDefaultEnvironmentFavorite, selectedIndicatorColor, theme.colors.text.secondary, toggleFavorite]);
+    }, [isDefaultEnvironmentFavorite, isPage, selectedIndicatorColor, theme.colors.text.secondary, toggleFavorite]);
 
     const renderProfileRightElement = React.useCallback((profile: AIBackendProfile, displayName: string, isSelected: boolean, isFavorite: boolean) => {
+        if (isPage) return null;
         const entry = actionsByProfileId.get(profile.id);
         const actions = entry?.actions ?? [];
         const compactActionIds = entry?.compactActionIds ?? ['favorite'];
 
         return (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s16 }}>
                 {!isMobile && (
                     <ProfileRequirementsBadge
                         profile={profile}
@@ -340,6 +363,7 @@ export function ProfilesList(props: ProfilesListProps) {
     }, [
         actionsByProfileId,
         isMobile,
+        isPage,
         props,
         selectedIndicatorColor,
     ]);
@@ -377,6 +401,7 @@ export function ProfilesList(props: ProfilesListProps) {
                 showMobileBadge={showMobileBadge}
                 onPressProfile={props.onPressProfile}
                 onSecretBadgePress={props.onSecretBadgePress}
+                showChevron={isPage}
                 rightElement={renderProfileRightElement(profile, displayName, isSelected, isFavorite)}
                 ignoreRowPressRef={ignoreRowPressRef}
                 getSecretOverrideReady={props.getSecretOverrideReady}
@@ -402,8 +427,8 @@ export function ProfilesList(props: ProfilesListProps) {
                             testID="profiles-list-row:default-environment"
                             title={t('profiles.noProfile')}
                             subtitle={t('profiles.noProfileDescription')}
-                            leftElement={<Icon name="house" size={29} color={theme.colors.text.secondary} />}
-                            showChevron={false}
+                            leftElement={<ProfileRowGlyph name="house" size={24} color={theme.colors.text.secondary} />}
+                            showChevron={isPage}
                             selected={defaultEnvironmentSelected}
                             onPress={() => {
                                 if (ignoreRowPressRef.current) {
@@ -448,7 +473,8 @@ export function ProfilesList(props: ProfilesListProps) {
                                 showMobileBadge={showMobileBadge}
                                 onPressProfile={props.onPressProfile}
                                 onSecretBadgePress={props.onSecretBadgePress}
-                                rightElement={renderProfileRightElement(profile, displayName, isSelected, true)}
+                                showChevron={isPage}
+                rightElement={renderProfileRightElement(profile, displayName, isSelected, true)}
                                 ignoreRowPressRef={ignoreRowPressRef}
                                 getSecretOverrideReady={props.getSecretOverrideReady}
                                 getSecretMachineEnvOverride={props.getSecretMachineEnvOverride}
@@ -472,6 +498,7 @@ export function ProfilesList(props: ProfilesListProps) {
                         <Item
                             testID="profiles-list-add-profile"
                             title={t('profiles.addProfile')}
+                            leftElement={<ProfileRowGlyph name="plus" size={20} color={theme.colors.text.secondary} />}
                             onPress={props.onAddProfilePress}
                             showDivider={false}
                         />
@@ -504,8 +531,8 @@ export function ProfilesList(props: ProfilesListProps) {
                         testID="profiles-list-row:default-environment"
                         title={t('profiles.noProfile')}
                         subtitle={t('profiles.noProfileDescription')}
-                        leftElement={<Icon name="house" size={29} color={theme.colors.text.secondary} />}
-                        showChevron={false}
+                        leftElement={<ProfileRowGlyph name="house" size={24} color={theme.colors.text.secondary} />}
+                        showChevron={isPage}
                         selected={defaultEnvironmentSelected}
                         onPress={() => {
                             if (ignoreRowPressRef.current) {
@@ -551,7 +578,8 @@ export function ProfilesList(props: ProfilesListProps) {
                             showMobileBadge={showMobileBadge}
                             onPressProfile={props.onPressProfile}
                             onSecretBadgePress={props.onSecretBadgePress}
-                            rightElement={renderProfileRightElement(profile, displayName, isSelected, isFavorite)}
+                            showChevron={isPage}
+                rightElement={renderProfileRightElement(profile, displayName, isSelected, isFavorite)}
                             ignoreRowPressRef={ignoreRowPressRef}
                             getSecretOverrideReady={props.getSecretOverrideReady}
                             getSecretMachineEnvOverride={props.getSecretMachineEnvOverride}
@@ -566,7 +594,7 @@ export function ProfilesList(props: ProfilesListProps) {
                         testID="profiles-list-add-profile"
                         title={t('profiles.addProfile')}
                         subtitle={t('profiles.subtitle')}
-                        leftElement={<Icon name="plus-circle" size={29} color={theme.colors.button.secondary.tint} />}
+                        leftElement={<ProfileRowGlyph name="plus-circle" size={24} color={theme.colors.button.secondary.tint} />}
                         onPress={props.onAddProfilePress}
                         showChevron={false}
                         showDivider={false}

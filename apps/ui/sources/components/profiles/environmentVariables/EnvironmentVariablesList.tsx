@@ -1,6 +1,8 @@
 import React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { resolveHappierIconSize } from '@happier-dev/plugin-ui/presentation';
+import { Icon } from '@/components/ui/icons/Icon';
 import { Typography } from '@/constants/Typography';
 import { EnvironmentVariableCard } from './EnvironmentVariableCard';
 import type { ProfileDocumentation } from '@/sync/domains/profiles/profileUtils';
@@ -304,6 +306,9 @@ export function EnvironmentVariablesList({
                     onOpenChange={setIsAddExpanded}
                     title={t('profiles.environmentVariables.addVariable')}
                     trigger={hasCards ? null : undefined}
+                    // With no variables yet, the add row is the section's action: the plus glyph in the
+                    // leading column, as every other "add" row (Add launch profile, Add model).
+                    icon={<Icon name="plus" size={resolveHappierIconSize('medium')} color={theme.colors.text.secondary} />}
                     triggerTestID="profile-environment-add"
                     onCancel={resetAddDraft}
                     onSave={handleAddVariable}
@@ -351,25 +356,24 @@ export function EnvironmentVariablesList({
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        marginBottom: 16,
+        marginBottom: theme.space.s16,
     },
     fieldLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     addInputRow: {
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: theme.colors.input.background,
         borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        marginBottom: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
+        marginBottom: theme.space.s8,
     },
     addInputRowLast: {
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     addTextInput: {
         flex: 1,

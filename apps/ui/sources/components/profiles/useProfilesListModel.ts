@@ -11,7 +11,8 @@ import { readProfileEnabledById, type ProfileEnabledById } from '@/sync/domains/
 import { resolveVisibleBuiltInLaunchProfiles } from '@/sync/domains/profiles/visibleBuiltInLaunchProfiles';
 import { useCurrentSecretBindingsByProfileIdMutable, useSetting } from '@/sync/domains/state/storage';
 
-import { buildProfilesListGroups, getDefaultProfileListStrings, getProfileSubtitle } from './profileListModel';
+import { resolveProfileBackendTargetKeyForEntry } from './edit/profileBackendEntryStorage';
+import { buildProfilesListGroups, getDefaultProfileListStrings, getProfileFacts, getProfileSubtitle } from './profileListModel';
 
 /**
  * The profiles a list shows, grouped (favorites, your profiles, built-in), with what each row says
@@ -91,5 +92,16 @@ export function useProfilesListModel(params: Readonly<{
         strings,
     }), [enabledAgentIds, resolvedBackendEntries, strings]);
 
-    return { groups, enabledAgentIds, resolvedBackendEntries, strings, profileEnabledById, describeProfile };
+    const describeProfileFacts = React.useCallback((profile: AIBackendProfile, preferredAgentTargetKey?: string | null) => getProfileFacts({
+        profile,
+        enabledAgentIds,
+        backendEntries: resolvedBackendEntries,
+        strings,
+        preferredAgentTitle: preferredAgentTargetKey
+            ? resolvedBackendEntries.find((entry) => resolveProfileBackendTargetKeyForEntry(entry) === preferredAgentTargetKey
+                || entry.backendTargetKey === preferredAgentTargetKey)?.title ?? null
+            : null,
+    }), [enabledAgentIds, resolvedBackendEntries, strings]);
+
+    return { groups, enabledAgentIds, resolvedBackendEntries, strings, profileEnabledById, describeProfile, describeProfileFacts };
 }

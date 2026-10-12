@@ -4,7 +4,6 @@ import type { LaunchProfileV2 } from '@happier-dev/protocol';
 
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { MachineSetupTextField } from '@/components/ui/forms/MachineSetupTextField';
-import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { t } from '@/text';
 
 /**
@@ -115,10 +114,6 @@ export function SlimProfilePlacementFields(props: Readonly<{
     ];
 
     return <>
-        <ItemGroup
-            title={t('profiles.launchPlacement.title')}
-            description={t('profiles.launchPlacement.footer')}
-        >
             <DropdownMenu
                 open={placementOpen}
                 onOpenChange={setPlacementOpen}
@@ -153,12 +148,6 @@ export function SlimProfilePlacementFields(props: Readonly<{
                     />
                 </View>
             )}
-        </ItemGroup>
-
-        <ItemGroup
-            title={t('profiles.launchCheckout.title')}
-            description={t('profiles.launchCheckout.footer')}
-        >
             <DropdownMenu
                 open={checkoutOpen}
                 onOpenChange={setCheckoutOpen}
@@ -180,6 +169,5 @@ export function SlimProfilePlacementFields(props: Readonly<{
                     );
                 }}
             />
-        </ItemGroup>
     </>;
 }

@@ -1,13 +1,18 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
+import { ProfileEditForm } from './ProfileEditForm';
+import { Platform } from 'react-native';
 import {
     installProfileEditFormModuleMocks,
-    profileEditFormTestState,
+    loadProfileEditFormCatalogFixtureOwners,
+    publishProfileEditFormAcpCatalogFixture,
 } from './profileEditFormTestHelpers';
 
 (
@@ -22,6 +27,19 @@ const capture = vi.hoisted(() => ({
         this.previewMachinePress = null;
     },
 }));
+const boundarySpies = vi.hoisted(() => ({ push: vi.fn(), show: vi.fn(), alert: vi.fn() }));
+
+// The real editor is a static dependency, so install these boundaries before
+// its imports evaluate; the helper's runtime registration would be too late.
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    params: { backendTargetKey: 'acpBackend:review-bot' },
+    router: { push: boundarySpies.push },
+}).module);
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ spies: {
+    show: boundarySpies.show,
+    alert: boundarySpies.alert,
+} }).module);
 
 installProfileEditFormModuleMocks({
     reactNative: () =>
@@ -84,6 +102,14 @@ vi.mock('@/components/ui/lists/Item', () => ({
     },
 }));
 
+await loadProfileEditFormCatalogFixtureOwners();
+let disposeCatalog: (() => void) | undefined;
+beforeEach(async () => {
+    Platform.OS = 'ios';
+    disposeCatalog = await publishProfileEditFormAcpCatalogFixture(AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [] }));
+});
+afterEach(() => { standardCleanup(); disposeCatalog?.(); disposeCatalog = undefined; });
+
 function buildProfile(): AIBackendProfile {
     return {
         id: 'p1',
@@ -111,11 +137,10 @@ function buildProfile(): AIBackendProfile {
 describe('ProfileEditForm (native preview machine picker)', () => {
     it('opens a picker screen instead of a modal overlay on native', async () => {
         capture.reset();
-        profileEditFormTestState.routerPushSpy.mockReset();
-        profileEditFormTestState.modalShowSpy.mockReset();
-        profileEditFormTestState.modalAlertSpy.mockReset();
+        boundarySpies.push.mockClear();
+        boundarySpies.show.mockClear();
+        boundarySpies.alert.mockClear();
 
-        const { ProfileEditForm } = await import('./ProfileEditForm');
 
         await renderScreen(React.createElement(ProfileEditForm, {
             profile: buildProfile(),
@@ -130,13 +155,13 @@ describe('ProfileEditForm (native preview machine picker)', () => {
             capture.previewMachinePress?.();
         });
 
-        expect(profileEditFormTestState.modalShowSpy).not.toHaveBeenCalled();
-        expect(profileEditFormTestState.routerPushSpy).toHaveBeenCalledTimes(1);
-        expect(profileEditFormTestState.routerPushSpy).toHaveBeenCalledWith(expect.objectContaining({
+        expect(boundarySpies.show).not.toHaveBeenCalled();
+        expect(boundarySpies.push).toHaveBeenCalledTimes(1);
+        expect(boundarySpies.push).toHaveBeenCalledWith(expect.objectContaining({
             pathname: '/new/pick/preview-machine',
             params: expect.objectContaining({
-                backendTargetKey: 'backend:review-bot:configured:review-bot',
-                backendTarget: expect.stringContaining('"backendId":"review-bot"'),
+                backendTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' }),
+                backendTarget: JSON.stringify(parseBackendTargetKeyV2(buildBackendTargetKeyV2({ kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' }))),
             }),
         }));
     });

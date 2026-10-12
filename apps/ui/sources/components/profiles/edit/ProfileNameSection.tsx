@@ -6,8 +6,9 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { t } from '@/text';
 
 /**
- * A profile's name (and, for launch profiles that have one, its description) as page field rows:
- * full-width fields beneath their labels, so a name can use the page's reading column.
+ * A profile's name (and, for launch profiles that have one, its description) as page field rows: the
+ * name is a short field beside its label (beneath it on phones), the description a stacked multiline
+ * field, as in every creation form.
  */
 export function ProfileNameSection(props: Readonly<{
     testIDPrefix: string;
@@ -19,7 +20,7 @@ export function ProfileNameSection(props: Readonly<{
         <ItemGroup title={t(props.description ? 'common.details' : 'profiles.profileName')}>
             <Item
                 title={t('common.name')}
-                accessoryLayout="stacked"
+                accessoryLayout="adaptive"
                 showChevron={false}
                 rightElement={(
                     <FieldTextInput

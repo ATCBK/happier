@@ -226,16 +226,16 @@ export function SlimProfileEditForm(props: SlimProfileEditFormProps) {
                 onPersistenceDefaultsChange={setDefaultPersistenceModeByTargetKey}
                 onPreferredAgentChange={setPreferredAgentTargetKey}
                 onPreferredModelChange={setPreferredModelSelection}
-            />
-
-            <SlimProfilePlacementFields
-                machineId={props.machineId}
-                serverId={serverId}
-                placement={placement}
-                checkout={checkout}
-                onPlacementChange={setPlacement}
-                onCheckoutChange={setCheckout}
-            />
+            >
+                <SlimProfilePlacementFields
+                    machineId={props.machineId}
+                    serverId={serverId}
+                    placement={placement}
+                    checkout={checkout}
+                    onPlacementChange={setPlacement}
+                    onCheckoutChange={setCheckout}
+                />
+            </SlimProfileRoutingFields>
 
             <SlimProfilePromptBehaviorFields
                 value={codingPromptBehaviorOverrides}

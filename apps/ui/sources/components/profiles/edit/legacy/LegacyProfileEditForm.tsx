@@ -19,7 +19,10 @@ import { getBuiltInProfileDocumentation } from '@/sync/domains/profiles/profileU
 import { EnvironmentVariablesList } from '@/components/profiles/environmentVariables/EnvironmentVariablesList';
 import { useSetting, useSettings, useAllMachines, useMachine, useSettingMutable } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
 import { projectMachineAgentsToCliAvailability } from '@/agents/machineAgents/machineAgentCliAvailability';
 import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
@@ -157,6 +160,10 @@ function LegacyProfileEditFormReady({
     const resolvedMachineId = routeMachine ?? previewMachineId;
     const resolvedMachine = useMachine(resolvedMachineId ?? '');
     const activeServerId = getActiveServerId();
+    const { binding: machineBinding } = useServerCredentialAccountScopeBinding(activeServerId);
+    const observedMachines = React.useMemo(() => resolvedMachine ? [resolvedMachine] : [], [resolvedMachine]);
+    const presenceNowMs = useMachinePresenceNowMs(observedMachines);
+    useMachineReachabilityRevision(Boolean(resolvedMachine));
     const daemonMergedProjection = useDaemonMergedProjectionInputs({
         machineId: resolvedMachineId,
         serverId: activeServerId,
@@ -652,7 +659,7 @@ function LegacyProfileEditFormReady({
                         subtitle={resolvedMachine ? t('profiles.previewMachine.resolveSubtitle') : t('profiles.previewMachine.selectSubtitle')}
                         detail={getMachineDisplayName(resolvedMachine) ?? undefined}
                         detailStyle={resolvedMachine
-                            ? { color: isMachineOnline(resolvedMachine) ? theme.colors.status.connected : theme.colors.status.disconnected }
+                            ? { color: isMachineReachable(machineBinding?.isCurrent() ? machineBinding.scope : null, resolvedMachine, presenceNowMs) ? theme.colors.status.connected : theme.colors.status.disconnected }
                             : undefined}
                         onPress={showMachinePreviewPicker}
                     />

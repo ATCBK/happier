@@ -1,10 +1,12 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AIBackendProfileSchema, type AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol';
-import { renderScreen } from '@/dev/testkit';
-import { installProfileEditFormModuleMocks } from './profileEditFormTestHelpers';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { installProfileEditFormModuleMocks, loadProfileEditFormCatalogFixtureOwners, publishProfileEditFormAcpCatalogFixture, publishProfileEditFormPrivateRowFixture } from './profileEditFormTestHelpers';
+import type { AiLaunchProfileSourceV1 } from '@happier-dev/protocol/profiles/read';
 import { ProfileEditForm } from './ProfileEditForm';
 import type { ProfileEditFormProps } from './ProfileEditForm';
 
@@ -66,6 +68,7 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
             typeof value === 'string' && value === 'codex',
         getAgentCore: () => {
             const core = actual.getAgentCore('codex');
+            if (!core) throw new Error('Expected the bundled Codex Agent core');
             return {
                 ...core,
                 sessionStorage: { ...core.sessionStorage, direct: true, persisted: true },
@@ -91,8 +94,17 @@ vi.mock('@/components/ui/lists/Item', () => ({
     Item: () => null,
 }));
 
-function buildProfile(overrides: Record<string, unknown> = {}): AIBackendProfile {
-    return AIBackendProfileSchema.parse({
+await loadProfileEditFormCatalogFixtureOwners();
+let disposeCatalog: (() => void) | undefined;
+let disposePrivateRow: (() => void) | undefined;
+beforeEach(async () => {
+    disposeCatalog = await publishProfileEditFormAcpCatalogFixture(AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [] }));
+    disposePrivateRow = await publishProfileEditFormPrivateRowFixture(buildProfile());
+});
+afterEach(() => { standardCleanup(); disposePrivateRow?.(); disposeCatalog?.(); disposeCatalog = undefined; });
+
+function buildProfile(overrides: Record<string, unknown> = {}): AIBackendProfile & AiLaunchProfileSourceV1 {
+    return { ...AIBackendProfileSchema.parse({
         id: 'p1',
         name: 'P',
         environmentVariables: [],
@@ -112,7 +124,7 @@ function buildProfile(overrides: Record<string, unknown> = {}): AIBackendProfile
         updatedAt: 0,
         version: '1.0.0',
         ...overrides,
-    });
+    }), profileRecordRevision: 1 };
 }
 
 describe('ProfileEditForm default persistence mode', () => {

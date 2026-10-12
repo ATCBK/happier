@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ProfileCompatibilitySummary } from '@/sync/domains/profiles/profileCompatibility';
-import { getProfileBackendSubtitle, getProfileSubtitle, type ProfileListStrings } from '@/components/profiles/profileListModel';
+import { getProfileBackendSubtitle, getProfileFacts, getProfileSubtitle, type ProfileListStrings } from '@/components/profiles/profileListModel';
 import type { AgentId } from '@/agents/catalog/catalog';
 import { installProfilesCommonModuleMocks } from './profilesTestHelpers';
 
@@ -133,4 +133,23 @@ describe('profileListModel', () => {
             .toBe('Any agent · 2 variables');
         expect(describe(buildProfile({ compatibility: everyAgent }))).toBe('Any agent');
     });
+
+    it('states the facts of a profile without its description, for a page that already shows the description', () => {
+        const profile = {
+            ...buildProfile({ compatibility: { claude: true, codex: false, gemini: false } }),
+            description: 'Reviews frontend PRs with Playwright',
+            environmentVariables: [{ name: 'ANTHROPIC_BASE_URL', value: 'https://proxy.internal' }],
+        };
+        expect(getProfileFacts({ profile, enabledAgentIds: ['claude', 'codex', 'gemini'], strings })).toBe('Claude · 1 variable');
+    });
+
+    it('leads the facts with the agent a profile starts with, instead of "Any agent"', () => {
+        const profile = {
+            ...buildProfile({ compatibility: { claude: true, codex: true, gemini: true } }),
+            environmentVariables: [{ name: 'CI', value: '1' }],
+        };
+        expect(getProfileFacts({ profile, enabledAgentIds: ['claude', 'codex', 'gemini'], strings, preferredAgentTitle: 'Codex' }))
+            .toBe('Codex · 1 variable');
+    });
 });
+

@@ -86,24 +86,34 @@ export function getProfileBackendSubtitle(params: {
  * leads; otherwise which Agents it is limited to ("Any agent" when it runs on all of them) and how
  * many variables it sets. Built-in and custom are said by the list's groups, not repeated per row.
  */
-export function getProfileSubtitle(params: {
+type ProfileDescriptionParams = {
     profile: ProfileCompatibilitySummary & Partial<Pick<AIBackendProfile, 'description' | 'environmentVariables'>>;
     enabledAgentIds: readonly AgentId[];
     backendEntries?: readonly ProfileListBackendEntry[];
     strings: ProfileListStrings;
-}): string {
-    const description = params.profile.description?.trim();
-    if (description) return description;
+    /** The agent the profile starts with, when it names one: it leads the facts. */
+    preferredAgentTitle?: string | null;
+};
 
+/** What a profile sets ("Claude · 1 variable"), for a page that already shows its description. */
+export function getProfileFacts(params: ProfileDescriptionParams): string {
     const { titles, candidates } = collectCompatibleAgentTitles(params);
     const facts: string[] = [];
-    if (titles.length > 0) {
+    if (params.preferredAgentTitle) {
+        facts.push(params.preferredAgentTitle);
+    } else if (titles.length > 0) {
         facts.push(titles.length >= candidates ? params.strings.anyAgentLabel : getProfileBackendSubtitle(params));
     }
     const variables = params.profile.environmentVariables?.length ?? 0;
     if (variables > 0) facts.push(params.strings.variableCount(variables));
     if (facts.length > 0) return facts.join(' · ');
     return params.profile.isBuiltIn ? params.strings.builtInLabel : params.strings.customLabel;
+}
+
+/** A profile's one line in a list: the person's own description, else what it sets. */
+export function getProfileSubtitle(params: ProfileDescriptionParams): string {
+    const description = params.profile.description?.trim();
+    return description || getProfileFacts(params);
 }
 
 export function buildProfilesListGroups(params: {

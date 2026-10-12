@@ -9,6 +9,7 @@ const profilesListState = vi.hoisted(() => ({
         favoriteIds: new Set<string>(),
         favoriteProfiles: [],
         customProfiles: [],
+        sharedProfiles: [],
         builtInProfiles: [],
     } as any,
 }));
@@ -165,6 +166,7 @@ describe('ProfilesList', () => {
             favoriteIds: new Set<string>(),
             favoriteProfiles: [],
             customProfiles: [],
+            sharedProfiles: [],
             builtInProfiles: [
                 {
                     id: 'anthropic',
@@ -199,6 +201,7 @@ describe('ProfilesList', () => {
             favoriteIds: new Set<string>(),
             favoriteProfiles: [],
             customProfiles: [],
+            sharedProfiles: [],
             builtInProfiles: [
                 {
                     id: 'anthropic',
@@ -230,5 +233,47 @@ describe('ProfilesList', () => {
         // A picker marks the no-profile choice as the current selection; a page marks nothing.
         expect(selectedRowIds(await render('grouped'))).toContain('profiles-list-row:default-environment');
         expect(selectedRowIds(await render('page'))).toEqual([]);
+    });
+
+    it('lets a page row open its profile, with its operations on the profile page instead of on the row', async () => {
+        profilesListState.groups = {
+            favoriteIds: new Set<string>(),
+            favoriteProfiles: [],
+            customProfiles: [],
+            sharedProfiles: [],
+            builtInProfiles: [
+                {
+                    id: 'anthropic',
+                    name: 'Anthropic',
+                    isBuiltIn: true,
+                    compatibility: {},
+                    compatibilityByTargetKey: {},
+                    environmentVariables: [],
+                },
+            ],
+        };
+        const { ProfilesList } = await import('./ProfilesList');
+        const render = (presentation: 'page' | 'grouped') => renderScreen(
+            <ProfilesList
+                presentation={presentation}
+                customProfiles={[]}
+                favoriteProfileIds={[]}
+                onFavoriteProfileIdsChange={() => {}}
+                selectedProfileId={null}
+                onPressDefaultEnvironment={() => {}}
+                machineId={null}
+                includeDefaultEnvironmentRow
+            />,
+        );
+        const row = (screen: Awaited<ReturnType<typeof render>>, id: string) => screen
+            .findAll((node) => node.props?.testID === id && 'showChevron' in node.props).at(0);
+
+        for (const id of ['profiles-list-row:anthropic', 'profiles-list-row:default-environment']) {
+            // A picker row carries its quick actions; a page row is a destination.
+            expect(row(await render('grouped'), id)?.props.rightElement).toBeTruthy();
+            const pageRow = row(await render('page'), id);
+            expect(pageRow?.props.rightElement ?? null).toBeNull();
+            expect(pageRow?.props.showChevron).toBe(true);
+        }
     });
 });

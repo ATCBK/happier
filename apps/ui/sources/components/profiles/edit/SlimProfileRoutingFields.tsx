@@ -8,6 +8,7 @@ import { getAgentStaticModels } from '@happier-dev/agents';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { CountedDisclosureItem } from '@/components/ui/lists/CountedDisclosureItem';
 import { SafeIonicons } from '@/components/ui/icons/SafeIonicons';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -60,6 +61,13 @@ function PreferredModelModal(props: Readonly<{
     />;
 }
 
+/** A per-agent default's one line: which agents differ from the account default, if any. */
+function summarizeChanged(agentTitles: readonly string[]): string {
+    return agentTitles.length > 0
+        ? t('profiles.agentDefaults.changedFor', { agents: agentTitles.join(', ') })
+        : t('profiles.agentDefaults.allAccountDefault');
+}
+
 export function SlimProfileRoutingFields(props: Readonly<{
     entries: readonly Entry[];
     machineId: string | null;
@@ -72,6 +80,8 @@ export function SlimProfileRoutingFields(props: Readonly<{
     onPersistenceDefaultsChange: (value: LaunchProfileV2['defaultPersistenceModeByTargetKey']) => void;
     onPreferredAgentChange: (value: string | undefined) => void;
     onPreferredModelChange: (value: LaunchProfileV2['preferredModelSelection'] | undefined) => void;
+    /** Rows of the same start decision owned elsewhere (where it runs, working copy), between the model and the per-agent defaults. */
+    children?: React.ReactNode;
 }>) {
     const providersEnabled = useFeatureEnabled('providers', {
         scopeKind: 'spawn',
@@ -185,7 +195,7 @@ export function SlimProfileRoutingFields(props: Readonly<{
     }, [props.entries]);
 
     return <>
-        <ItemGroup title={t('profiles.preferredAgent.title')} description={t('profiles.preferredAgent.footer')}>
+        <ItemGroup title={t('profiles.sessionStart.title')} description={t('profiles.sessionStart.description')}>
             <DropdownMenu
                 open={agentOpen}
                 onOpenChange={setAgentOpen}
@@ -222,9 +232,16 @@ export function SlimProfileRoutingFields(props: Readonly<{
             {providersEnabled && projection.error ? (
                 <ProviderErrorItems error={projection.error} retry={projection.refresh} />
             ) : null}
-        </ItemGroup>
-
-        {permissionEntries.length > 0 ? <ItemGroup title={t('profiles.defaultPermissions.title')} description={t('profiles.defaultPermissions.footer')}>
+            {props.children}
+        {permissionEntries.length > 0 ? (
+            <CountedDisclosureItem
+                testID="profile-routing.permissions"
+                title={t('profiles.defaultPermissions.title')}
+                subtitle={summarizeChanged(permissionEntries
+                    .filter(({ entry }) => props.defaultPermissionModeByTargetKey[resolveProfileBackendTargetKeyForEntry(entry)] != null)
+                    .map(({ entry }) => entry.title))}
+                showDivider
+            >
             {permissionEntries.map(({ entry, agentId, options }) => {
                 const targetKey = resolveProfileBackendTargetKeyForEntry(entry);
                 const selected = props.defaultPermissionModeByTargetKey[targetKey];
@@ -260,9 +277,15 @@ export function SlimProfileRoutingFields(props: Readonly<{
                     }}
                 />;
             })}
-        </ItemGroup> : null}
-
-        <ItemGroup title={t('profiles.defaultStorage.title')} description={t('profiles.defaultStorage.footer')}>
+            </CountedDisclosureItem>
+        ) : null}
+            <CountedDisclosureItem
+                testID="profile-routing.storage"
+                title={t('profiles.defaultStorage.title')}
+                subtitle={summarizeChanged(props.entries
+                    .filter((entry) => props.defaultPersistenceModeByTargetKey[resolveProfileBackendTargetKeyForEntry(entry)] != null)
+                    .map((entry) => entry.title))}
+            >
             {props.entries.map((entry) => {
                 const targetKey = resolveProfileBackendTargetKeyForEntry(entry);
                 const selected = props.defaultPersistenceModeByTargetKey[targetKey];
@@ -277,6 +300,7 @@ export function SlimProfileRoutingFields(props: Readonly<{
                     selectedId={selected ?? '__account__'}
                     itemTrigger={{
                         title: entry.title,
+                        icon: <AgentIcon agentId={entry.builtInAgentId ?? entry.catalogAgentId ?? entry.agentId} size={22} />,
                         subtitle: selected ? t(`sessionsList.storage${selected === 'direct' ? 'Direct' : 'Persisted'}Tab`) : t('profiles.defaultStorage.useAccountDefault'),
                         showSelectedDetail: false,
                         showSelectedSubtitle: false,
@@ -294,6 +318,7 @@ export function SlimProfileRoutingFields(props: Readonly<{
                     }}
                 />;
             })}
+            </CountedDisclosureItem>
         </ItemGroup>
     </>;
 }

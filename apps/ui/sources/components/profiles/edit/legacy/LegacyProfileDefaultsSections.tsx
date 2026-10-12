@@ -79,7 +79,7 @@ export function LegacyProfileDefaultsSections(props: Readonly<{
                                 label: getPermissionModeLabelForAgentType(agentId, accountDefault),
                             })}
                         icon={<Icon name={props.getDisplayAgentIconName(entry) as never} size={29} color={theme.colors.text.secondary} />}
-                        rightElement={<View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        rightElement={<View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                             <Icon name={props.getPermissionIconName(agentId, effectiveMode) as never} size={20} color={theme.colors.text.secondary} />
                             <Icon name={open ? 'caret-up' : 'caret-down'} size={20} color={theme.colors.text.secondary} />
                         </View>}
@@ -146,7 +146,7 @@ export function LegacyProfileDefaultsSections(props: Readonly<{
                                 label: t(`sessionsList.storage${accountDefault === 'direct' ? 'Direct' : 'Persisted'}Tab`),
                             })}
                         icon={<Icon name={props.getDisplayAgentIconName(entry) as never} size={29} color={theme.colors.text.secondary} />}
-                        rightElement={<View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        rightElement={<View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                             <Icon name={effectiveMode === 'direct' ? 'radio' : 'floppy-disk'} size={20} color={theme.colors.text.secondary} />
                             <Icon name={open ? 'caret-up' : 'caret-down'} size={20} color={theme.colors.text.secondary} />
                         </View>}

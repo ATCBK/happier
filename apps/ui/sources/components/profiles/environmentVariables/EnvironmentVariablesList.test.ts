@@ -139,7 +139,8 @@ describe('EnvironmentVariablesList', () => {
         const { screen: empty } = await renderList({ environmentVariables: [] });
         const emptyAdds = empty.findAll((node) => node.props?.testID === 'profile-environment-add');
         expect(emptyAdds.length).toBeGreaterThan(0);
-        expect(emptyAdds.every((node) => node.props.title === 'profiles.environmentVariables.addVariable' && node.props.icon === undefined)).toBe(true);
+        // It reads as an action, with the plus glyph every "add" row carries (orchestrator round 4).
+        expect(emptyAdds.every((node) => node.props.title === 'profiles.environmentVariables.addVariable' && node.props.icon != null)).toBe(true);
         expect(empty.findAll((node) => node.props?.action != null && node.props?.title === 'profiles.environmentVariables.title')).toHaveLength(0);
 
         const { screen: filled } = await renderList({ environmentVariables: [{ name: 'SAFE_FLAG', value: '1' }] });

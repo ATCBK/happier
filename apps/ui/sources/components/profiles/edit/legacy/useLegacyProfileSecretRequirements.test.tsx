@@ -9,7 +9,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { SavedSecretCatalogEntryV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
-import { applyProfileCatalogSnapshot, beginProfileCatalogLoad, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
+import { applyProfileCatalogSnapshot, beginProfileCatalogLoad, getProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
 import { applySavedSecretCatalogPage, resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { readAiLaunchProfileRecords, type AiLaunchProfile } from '@happier-dev/protocol/profiles/read';
 import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordSchemaV1';
@@ -34,13 +34,12 @@ function publishProfile(profile: AiLaunchProfile, secretBindings: ProfileRecordV
 
 const capture = vi.hoisted(() => ({
     modalShow: vi.fn(),
+    modalAlert: vi.fn(),
 }));
 
-vi.mock('@/modal', () => ({
-    Modal: {
-        show: (...args: unknown[]) => capture.modalShow(...args),
-    },
-}));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
+    spies: { show: capture.modalShow, alert: capture.modalAlert },
+}).module);
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -57,7 +56,6 @@ describe('useLegacyProfileSecretRequirements', () => {
                 createdAt: 1, updatedAt: 1,
             }],
         }) });
-        const bindingsBefore = storage.getState().settings.currentSecretBindingsByProfileId;
         const profile = { ...AIBackendProfileSchema.parse({
             id: 'profile-1',
             name: 'OpenRouter profile',
@@ -69,6 +67,8 @@ describe('useLegacyProfileSecretRequirements', () => {
             version: '1.0.0',
         }), profileRecordRevision: 7 };
         publishProfile(profile, {});
+        const rowsBefore = structuredClone(getProfileCatalogSnapshot(scope)?.data);
+        expect(rowsBefore).toMatchObject([{ revision: 7, record: { id: profile.id, secretBindings: {} } }]);
         applySavedSecretCatalogPage({ scope, entries: [SavedSecretCatalogEntryV1Schema.parse({ ref: 'secret-1', name: 'OpenRouter', kind: 'apiKey', source: 'personal',
             relationship: 'owner', revision: 1, materialStatus: 'ready', capabilities: {
                 rename: true, rotate: true, delete: true, use: true, manageAccess: false,
@@ -94,11 +94,12 @@ describe('useLegacyProfileSecretRequirements', () => {
 
         expect(hook.getCurrent().getDefaultSecretNameForSourceVar('TEST_API_KEY')).toBe('OpenRouter');
         expect(hook.getCurrent().profileSecretBindings).toEqual({ TEST_API_KEY: 'secret-1' });
-        expect(storage.getState().settings.currentSecretBindingsByProfileId).toEqual(bindingsBefore);
+        expect(getProfileCatalogSnapshot(scope)?.data).toEqual(rowsBefore);
     });
 
     it('selects None against inherited defaults without pinning other defaults or losing private tombstones', async () => {
         capture.modalShow.mockReset();
+        capture.modalAlert.mockClear();
         const inherited = 'happier:shared-secret:v1:inherited';
         const privateReference = 'happier:shared-secret:v1:private';
         const definition = AIBackendProfileSchema.parse({ id: 'profile-1', name: 'Deploy',
@@ -132,12 +133,16 @@ describe('useLegacyProfileSecretRequirements', () => {
         act(() => applyProfileCatalogSnapshot(scope, catalog, true, new Map([[artifact.artifactId,
             { ...artifact, revision: { headerVersion: 2, bodyVersion: 4 } }]])));
         expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        act(() => hook.getCurrent().notifySaveUnavailable());
+        expect(capture.modalAlert).toHaveBeenLastCalledWith('common.error', 'profile_revision_conflict');
         act(() => applyProfileCatalogSnapshot(scope, catalog, true, artifactsById));
         act(() => storage.setState({ settingsScope: { serverId: 'other-home', accountId: scope.accountId } }));
         expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
         act(() => storage.setState({ settingsScope: scope }));
         act(() => beginProfileCatalogLoad(scope));
         expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        act(() => hook.getCurrent().notifySaveUnavailable());
+        expect(capture.modalAlert).toHaveBeenLastCalledWith('common.error', 'profile_editor_revision_unavailable');
     });
 
     it('authors a new V2 inline draft without a row and preserves captured clone overrides', async () => {
@@ -157,6 +162,7 @@ describe('useLegacyProfileSecretRequirements', () => {
     });
 
     it('retains source-preserving clone private bindings only while its captured source revision remains current', async () => {
+        capture.modalAlert.mockClear();
         const source = { ...AIBackendProfileSchema.parse({ id: 'legacy-source', name: 'Login', authMode: 'machineLogin',
             isBuiltIn: false, createdAt: 1, updatedAt: 1 }), profileRecordRevision: 7 };
         publishProfile(source, { MASKED: null });
@@ -170,6 +176,28 @@ describe('useLegacyProfileSecretRequirements', () => {
                 record: { v: 1, id: source.id, definition: { kind: 'legacy', profile: source },
                     enabled: false, promptStack: [], secretBindings: { MASKED: null } } }] }, true));
         expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        act(() => hook.getCurrent().notifySaveUnavailable());
+        expect(capture.modalAlert).toHaveBeenLastCalledWith('common.error', 'profile_revision_conflict');
+
+        act(() => beginProfileCatalogLoad(scope));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        act(() => hook.getCurrent().notifySaveUnavailable());
+        expect(capture.modalAlert).toHaveBeenLastCalledWith('common.error', 'profile_editor_revision_unavailable');
+        act(() => applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', authority: 'active', records: [],
+            control: null, controlRevision: 'absent', referenceGuardRevision: 'absent', diagnostics: [] }, true));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        act(() => hook.getCurrent().notifySaveUnavailable());
+        expect(capture.modalAlert).toHaveBeenLastCalledWith('common.error', 'profile_editor_revision_unavailable');
+
+        capture.modalAlert.mockClear();
+        act(() => storage.setState({ settingsScope: { ...scope, accountId: 'another-account' } }));
+        expect(hook.getCurrent().readPrivateSecretBindingsForSave()).toBeNull();
+        act(() => hook.getCurrent().notifySaveUnavailable());
+        expect(capture.modalAlert).not.toHaveBeenCalled();
+        await hook.unmount();
+        act(() => storage.setState({ settingsScope: scope }));
+        act(() => hook.getCurrent().notifySaveUnavailable());
+        expect(capture.modalAlert).not.toHaveBeenCalled();
     });
 
     it('admits an unnamed V2 authoring draft and its requirement picker without fabricating a name', async () => {
