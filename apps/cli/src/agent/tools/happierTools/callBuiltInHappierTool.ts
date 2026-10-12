@@ -141,7 +141,7 @@ export async function callBuiltInHappierTool(params: Readonly<{
       : {}),
     ...(sessionMachineId ? { machineId: sessionMachineId } : {}),
   });
-  const daemonCatalog = await readDaemonPluginCatalog().catch(() => ({
+  const daemonCatalog = await readDaemonPluginCatalog({ selection: 'tools' }).catch(() => ({
     kind: 'unavailable' as const,
     code: 'daemon_unavailable',
   }));

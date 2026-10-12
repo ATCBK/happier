@@ -49,6 +49,36 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
+it.each([
+    { intent: 'memory_hints' as const, expected: { pluginId: 'acme.agent', localId: 'memory-hints' } },
+    { intent: 'scm_diff_summary' as const, expected: { pluginId: 'acme.agent', localId: 'scm-diff-summary' } },
+    { intent: 'memory_hints' as const, profileId: 'acme.profiles/custom-profile', expected: { pluginId: 'acme.profiles', localId: 'custom-profile' } },
+])('projects the selected host profile without changing explicit contribution identity: %j', async ({ intent, profileId, expected }) => {
+    const requests: AgentExecutionRunOpenRequest[] = [];
+    const runtime: AgentRuntime = { executionRuns: { async open(request) {
+        requests.push(request);
+        return {
+            async send() { return { status: 'admitted' as const }; },
+            async stop() { return { status: 'requested' as const }; },
+            watch() { return { dispose() {} }; },
+            async dispose() {},
+        };
+    } } };
+    const host = createNativeAgentExecutionRunHostRuntime({
+        runtime,
+        lease: { pluginId: 'acme.agent', pluginVersion: '1.0.0', agentId: 'acme.agent/default',
+            localAgentId: 'default', occurrenceId: 'profile-fixture', isCurrent: () => true },
+        options: { cwd: '/repo', runId: 'profile-run', scope: 'detached', backendId: 'acme.agent/default', permissionMode: 'no_tools',
+            start: { intent, ...(profileId ? { profileId } : {}), runClass: 'bounded', retentionPolicy: 'ephemeral' } },
+    });
+    try {
+        await host.provisionRuntime({ initialPrompt: 'Prepared host input' });
+        expect(requests[0]?.profile).toEqual(expected);
+    } finally {
+        await host.dispose();
+    }
+});
+
 async function createUnexpectedAgentRuntimeSurfaceInvocationContext(): Promise<never> {
     throw new Error('Execution-run fixture should not create an Agent runtime surface invocation context');
 }

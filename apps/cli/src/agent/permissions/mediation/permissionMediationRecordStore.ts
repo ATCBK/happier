@@ -7,6 +7,7 @@ import type {
 } from '@happier-dev/protocol';
 import { SessionPermissionMediationRecordStoredSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { SessionPermissionRemoteGrantRecordV1Schema, SessionPermissionRemoteSettlementRecordV1Schema } from '@happier-dev/protocol/sessions/permissions/mediationRecordsV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { SessionClientPort } from '@/api/session/sessionClientPort';
 import {
@@ -154,7 +155,7 @@ function openStoredRecord(
   raw: unknown,
   expectedIdentity?: SessionPermissionMediationRecordIdentityV1,
 ): PermissionMediationStoredRecord | null {
-  const parsed = SessionPermissionMediationRecordStoredSchema.safeParse(raw);
+  const parsed = createStoredReadSchema(SessionPermissionMediationRecordStoredSchema).safeParse(raw);
   if (!parsed.success) return null;
   const identity = {
     sessionId: parsed.data.sessionId,
@@ -193,7 +194,7 @@ function openMediationRecordPayload(
     return null;
   }
   if (raw.kind === 'remote_settlement.v1') {
-    const record = SessionPermissionRemoteSettlementRecordV1Schema.safeParse(payload);
+    const record = createStoredReadSchema(SessionPermissionRemoteSettlementRecordV1Schema).safeParse(payload);
     if (!record.success || !recordMatchesIdentity(record.data, identity)) return null;
     return {
       identity,
@@ -202,7 +203,7 @@ function openMediationRecordPayload(
       revision: raw.revision,
     };
   }
-  const record = SessionPermissionRemoteGrantRecordV1Schema.safeParse(payload);
+  const record = createStoredReadSchema(SessionPermissionRemoteGrantRecordV1Schema).safeParse(payload);
   if (!record.success || !recordMatchesIdentity(record.data, identity)) return null;
   return {
     identity,

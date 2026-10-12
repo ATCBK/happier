@@ -1,4 +1,6 @@
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, relative, sep } from 'node:path';
 import { isShellCommandAllowed } from './shellCommandAllowlist';
 
 export { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
@@ -46,6 +48,34 @@ export function isToolAllowedForSession(
       continue;
     }
     if (item.toLowerCase() === normalizedToolName) return true;
+    if (normalizedToolName.startsWith('mcp__') && item.toLowerCase().startsWith('mcp__')
+      && item.endsWith('*') && normalizedToolName.startsWith(item.slice(0, -1).toLowerCase())) return true;
+  }
+
+  // Native Read rules need a real-path check: lexical containment alone lets a
+  // symlink in the attachment directory expose another Session or credentials.
+  if (normalizedToolName === 'read' && input && typeof input === 'object') {
+    const record = input as Record<string, unknown>;
+    const filePath = record.file_path ?? record.path;
+    if (typeof filePath === 'string' && isAbsolute(filePath)) {
+      for (const item of allowedIdentifiers) {
+        const parsed = parseParenIdentifier(item);
+        if (parsed?.name.toLowerCase() !== 'read') continue;
+        const directoryRule = parsed.spec.endsWith('/**') || parsed.spec.endsWith('\\**');
+        const allowedPath = directoryRule ? parsed.spec.slice(0, -3) : parsed.spec;
+        if (!isAbsolute(allowedPath)) continue;
+        try {
+          const file = realpathSync(filePath);
+          const scope = realpathSync(allowedPath);
+          if (!directoryRule && file === scope) return true;
+          const child = relative(scope, file);
+          if (directoryRule && child.length > 0 && child !== '..'
+            && !child.startsWith(`..${sep}`) && !isAbsolute(child)) return true;
+        } catch {
+          // Unavailable files cannot establish a scoped read authorization.
+        }
+      }
+    }
   }
 
   // Shell tools: accept per-command identifiers across shell-tool synonyms and prefix patterns.

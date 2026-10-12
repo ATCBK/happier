@@ -11,6 +11,29 @@ type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSig
 type CapturedAccount = Readonly<{ scopeKey: string; lifetimeToken: number }>;
 const pending = new Map<string, Promise<AcpCatalogSnapshotV1>>();
 const refreshAfterInFlight = new Set<string>();
+type DaemonHydrationObserver = Readonly<{ credentials: StoredCredentials; scopeKey: string;
+  onReady(input: Readonly<{ catalog: Extract<AcpCatalogSnapshotV1, { status: 'ready' }>; signal?: AbortSignal; isCurrent(): boolean }>): Promise<void>;
+}>;
+let daemonHydrationObserver: DaemonHydrationObserver | null = null;
+
+/** Bound by the daemon's installed Account, independent of invocation/requester catalog reads. */
+export function installDaemonAcpCatalogHydrationObserver(input: Omit<DaemonHydrationObserver, 'scopeKey'>): () => void {
+  const observer = { ...input, scopeKey: resolveAccountSettingsScopeKey(input.credentials) };
+  daemonHydrationObserver = observer;
+  return () => { if (daemonHydrationObserver === observer) daemonHydrationObserver = null; };
+}
+
+export async function refreshDaemonAcpCatalog(input: Readonly<{ credentials: StoredCredentials; signal?: AbortSignal }>): Promise<AcpCatalogSnapshotV1> {
+  const observer = daemonHydrationObserver;
+  const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+  const catalog = await refreshActiveAcpCatalogAfterChange({ ...input, scopeKey: resolveAccountSettingsScopeKey(input.credentials), lifetimeToken });
+  const isCurrent = () => daemonHydrationObserver === observer && observer !== null
+    && observer.credentials.token === input.credentials.token && observer.scopeKey === getActiveAccountSettingsSnapshot()?.scopeKey
+    && getActiveAccountSettingsSnapshotLifetimeToken() === lifetimeToken && getActiveAccountSettingsSnapshot()?.acpCatalog === catalog
+    && !input.signal?.aborted;
+  if (observer && catalog.status === 'ready' && isCurrent()) await observer.onReady({ catalog, signal: input.signal, isCurrent });
+  return catalog;
+}
 
 function failure(error: unknown, signal?: AbortSignal): AcpCatalogSnapshotV1 {
   const reason = error instanceof Error && 'reason' in error && typeof error.reason === 'string' ? error.reason
@@ -46,7 +69,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
   }
   beginActiveAcpCatalogRefresh({ scopeKey, lifetimeToken });
   let work!: Promise<AcpCatalogSnapshotV1>;
-  work = (async () => {
+  work = (async (): Promise<AcpCatalogSnapshotV1> => {
     let requestInput: RefreshInput = afterChange ? { credentials: input.credentials } : input;
     while (true) {
       let catalog: AcpCatalogSnapshotV1;
@@ -76,10 +99,12 @@ export function refreshActiveAcpCatalogAfterChange(input: RefreshInput & Capture
 }
 export async function refreshDemandedActiveAcpCatalog(input: Readonly<{ token: string; signal?: AbortSignal }>): Promise<void> {
   const active = getActiveAccountSettingsSnapshot();
-  if (!active?.scopeKey || active.acpCatalog === undefined) return;
+  const daemon = daemonHydrationObserver?.credentials.token === input.token ? daemonHydrationObserver : null;
+  if (!active?.scopeKey || active.acpCatalog === undefined && !daemon) return;
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const credentials = await readStoredCredentials();
   if (!credentials || credentials.token !== input.token) return;
   input.signal?.throwIfAborted();
-  await refreshActiveAcpCatalogAfterChange({ credentials, scopeKey: active.scopeKey, lifetimeToken });
+  if (daemon) await refreshDaemonAcpCatalog({ credentials, signal: input.signal });
+  else await refreshActiveAcpCatalogAfterChange({ credentials, scopeKey: active.scopeKey, lifetimeToken });
 }

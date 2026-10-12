@@ -17,7 +17,7 @@ type ScmSnapshotEntry = Readonly<{
 function isScmSnapshotEntry(value: unknown): value is ScmSnapshotEntry {
   if (!value || typeof value !== 'object') return false;
   const anyValue = value as { path?: unknown };
-  return typeof anyValue.path === 'string' && anyValue.path.trim().length > 0;
+  return typeof anyValue.path === 'string' && anyValue.path.length > 0;
 }
 
 export async function loadScmCommitMessageContext(params: Readonly<{
@@ -63,8 +63,7 @@ export async function loadScmCommitMessageContext(params: Readonly<{
     if (parsedScope.success && parsedScope.data.kind === 'paths' && scopeInclude.length > 0) {
       const seen = new Set<string>();
       const out: string[] = [];
-      for (const value of scopeInclude) {
-        const path = value.trim();
+      for (const path of scopeInclude) {
         if (!path || seen.has(path)) continue;
         seen.add(path);
         out.push(path);
@@ -76,7 +75,7 @@ export async function loadScmCommitMessageContext(params: Readonly<{
     return (snapshot.entries ?? [])
       .filter(isScmSnapshotEntry)
       .filter((e) => Boolean(e.hasIncludedDelta || e.hasPendingDelta))
-      .map((e) => e.path.trim())
+      .map((e) => e.path)
       .slice(0, maxFiles);
   };
 

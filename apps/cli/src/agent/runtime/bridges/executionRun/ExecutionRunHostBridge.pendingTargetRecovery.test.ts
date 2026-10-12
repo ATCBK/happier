@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { reloadConfiguration } from '@/configuration';
@@ -20,6 +21,11 @@ import { ScmComparisonSchema, SessionInputAdmissionResultV1Schema, ScmDiffSummar
   type SessionInputAdmissionResultV1, type ScmActionExecute } from '@happier-dev/protocol';
 import { getAgentStaticModels } from '@happier-dev/agents';
 import { executeScmActionOperation } from '@/scm/actions/executeScmActionOperation';
+import { ReviewProfile } from '@/agent/executionRuns/profiles/review/ReviewProfile';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { resolveExecutionRunRoleV1 } from '@/agent/executionRuns/profiles/review/reviewRole';
+import { createExecutionRunRpcActionDeps } from '@/rpc/handlers/executionRuns/dispatchExecutionRunRpcAction';
 
 const nativeOpen = vi.hoisted(() => vi.fn<(request: AgentSessionOpenRequest) => Promise<AgentSessionRuntime>>());
 
@@ -86,7 +92,7 @@ function runState(overrides: Partial<ExecutionRunState> = {}): ExecutionRunState
   };
 }
 
-function createHarness() {
+function createHarness(detached = false) {
   let consume: ExecutionRunPendingInputBinding['consume'] | undefined;
   const acceptedInputs = new Set<string>();
   const enqueueSessionUserMessageWithDisposition = vi.fn<(input: { text: string; localId: string }) => Promise<SessionInputAdmissionResultV1>>(
@@ -101,9 +107,12 @@ function createHarness() {
   const enqueueAgentMessageCommitted = vi.fn(async () => ({ persisted: true, delivered: false }));
   const manager = new ExecutionRunHostBridge({
     parentProvider: TEST_BACKEND_ID,
-    cwd: process.cwd(),
+    cwd: detached ? directory : process.cwd(),
     sendAcp: async () => {},
-    sessionInteractionHost: {
+    ...(!detached ? { sessionInteractionHost: {
+      // Parent Agent configuration is an external runtime observation; child selection stays real.
+      readAppliedChildSelection: async () => ({ status: 'applied' as const, backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' },
+        modelId: getAgentStaticModels('claude', { catalogOnly: true })[0]!.id, connectedServices: null }),
       session: {
         sessionId: 'session-1',
         getMetadataSnapshot: () => null,
@@ -136,7 +145,7 @@ function createHarness() {
       },
       machineId: 'machine-1',
       permissionHandler: { handleToolCall: vi.fn() },
-    },
+    } } : {}),
   });
   bridges.push(manager);
   const runs = (manager as unknown as { runs: Map<string, ExecutionRunState> }).runs;
@@ -155,26 +164,186 @@ function createHarness() {
 }
 
 describe('ExecutionRunHostBridge pending target recovery', () => {
-  it('explains only exact current host findings in their matching saved stops after narration replaces the projection', async () => {
-    const harness = createHarness();
+  it.each([false, true])('reads retained original review findings after narration without disclosing them across Run scope (detached=%s)', async detached => {
+    const harness = createHarness(detached);
+    const sessionId = detached ? null : 'session-1';
+    const finding = { runRef: { runId: 'run-1', callId: 'call-1', backendId: TEST_BACKEND_ID },
+      generatedAtMs: 2, summary: 'Original review', overviewMarkdown: 'Original review', findings: [{ id: 'f1', title: 'Original finding',
+        category: 'correctness', severity: 'high', summary: 'Original diagnosis' }] };
+    harness.runs.set('run-1', runState({ sessionId, intent: 'review', status: 'succeeded',
+      launch: { cwd: directory }, intentInput: { reviewNarration: { reviewFindings: [finding] } },
+      structuredMeta: { kind: 'scm_diff_summary.v1', payload: {} } }));
+    const rpc = createExecutionRunRpcActionDeps({ manager: harness.manager, context: { sessionId, cwd: directory },
+      isExecutionRunsEnabled: () => true, policy: { maxConcurrentRuns: null, boundedTimeoutMs: null,
+        reviewBoundedTimeoutMs: null, maxTurns: null, allowIoModes: new Set(['streaming', 'request_response']) } });
+    const observed = ExecutionRunGetResponseSchema.parse(await rpc.executionRunGet!(sessionId, { runId: 'run-1', includeStructured: true }));
+    expect(observed).toMatchObject({ structuredMeta: { kind: 'scm_diff_summary.v1' },
+      reviewFindings: { runRef: finding.runRef, findings: [{ id: 'f1' }] } });
+    expect(await rpc.executionRunGet!(sessionId, { runId: 'run-1' })).not.toHaveProperty('reviewFindings');
+    expect(await rpc.executionRunGet!(detached ? 'private-session' : null, { runId: 'run-1', includeStructured: true }))
+      .toMatchObject({ ok: false, errorCode: 'execution_run_scope_mismatch' });
+    harness.runs.set('run-1', { ...harness.runs.get('run-1')!, intentInput: {
+      reviewNarration: { reviewFindings: [{ ...finding, runRef: { ...finding.runRef, runId: 'other-run' } }] } } });
+    expect(await rpc.executionRunGet!(sessionId, { runId: 'run-1', includeStructured: true })).not.toHaveProperty('reviewFindings');
+  });
+  it('prepares a findings-first detached review with walkthrough output using its repository capture', async () => {
+    const runtime = await createAdmittedPluginRuntimeFixture({ happyHomeDir: directory, controller: pluginReloadController,
+      runtimeOptions: { pluginIds: ['happier.scm.backend.git'] } });
+    try {
+      execFileSync('git', ['init', directory], { stdio: 'ignore' });
+      execFileSync('git', ['-C', directory, 'config', 'user.name', 'Review fixture']);
+      execFileSync('git', ['-C', directory, 'config', 'user.email', 'review@example.invalid']);
+      writeFileSync(join(directory, 'code.ts'), 'export const enabled = false;\n');
+      execFileSync('git', ['-C', directory, 'add', 'code.ts']);
+      execFileSync('git', ['-C', directory, 'commit', '-m', 'fixture'], { stdio: 'ignore' });
+      writeFileSync(join(directory, 'code.ts'), 'export const enabled = true;\n');
+      const captured = await captureScmComparison({ cwd: directory, source: { kind: 'workingTree' } });
+      const prepared = await ReviewProfile.prepareStartParams!({ cwd: directory, sessionId: null, request: {
+        intent: 'review', instructions: 'Review.', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only',
+        retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+        intentInput: { cwd: '/untrusted-root', comparisonId: captured.comparison.id, outputs: ['walkthrough'] },
+      } });
+      expect(prepared).toMatchObject({ intentInput: { cwd: directory, comparison: captured.comparison, outputs: ['walkthrough'] } });
+      let emit: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+      const sent = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' as const }));
+      nativeOpen.mockImplementation(async () => ({
+        watch(next) { emit = next; next({ kind: 'provider-session-id', providerSessionId: 'provider-review', sequence: 1,
+          sessionId: 'session-parent', emittedAtMs: 1 }); return { dispose() {} }; }, send: sent, async dispose() {},
+      }));
+      const harness = createHarness(true);
+      const started = await harness.manager.start({ sessionId: null, cwd: directory, intent: 'review',
+        resolvedRole: resolveExecutionRunRoleV1({ roleId: 'reviewer', accountRoleOverrides: { status: 'ready', overrides: {} } }),
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, modelId: getAgentStaticModels('claude', { catalogOnly: true })[0]!.id,
+        permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', instructions: 'Review.',
+        intentInput: { comparisonId: captured.comparison.id, outputs: ['walkthrough'] } });
+      await vi.waitFor(() => expect(sent).toHaveBeenCalledOnce());
+      let sequence = 1;
+      const finishTurn = (request: Parameters<AgentSessionRuntime['send']>[0], text: string) => {
+        if (request.delivery.kind !== 'newTurn') throw new Error('Expected native review turn');
+        const turnId = request.delivery.turnId;
+        emit!({ kind: 'input-accepted', sessionId: 'session-parent', sequence: ++sequence, emittedAtMs: sequence, inputIds: request.inputIds, delivery: request.delivery });
+        emit!({ kind: 'turn-start', sessionId: 'session-parent', sequence: ++sequence, emittedAtMs: sequence, turnId, startedBy: 'host' });
+        emit!({ kind: 'message-delta', sessionId: 'session-parent', sequence: ++sequence, emittedAtMs: sequence, turnId, channel: 'assistant', text });
+        emit!({ kind: 'turn-complete', sessionId: 'session-parent', sequence: ++sequence, emittedAtMs: sequence, turnId });
+      };
+      finishTurn(sent.mock.calls[0]![0], JSON.stringify({ summary: 'A changed condition', findings: [
+        { id: 'f1', title: 'Changed condition', category: 'correctness', severity: 'high', summary: 'Check the changed condition', filePath: 'code.ts', startLine: 1 },
+      ] }));
+      await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(2));
+      finishTurn(sent.mock.calls[1]![0], JSON.stringify({ walkthrough: { title: 'Condition update', intro: 'One changed condition',
+        stops: [{ id: 'condition', title: 'Condition', explanationMarkdown: 'The flag changed', changeRefs: ['c1'] }], otherChangeRefs: [] } }));
+      const input = harness.runs.get(started.runId)!.intentInput as { resultId: string };
+      await vi.waitFor(async () => expect(await scmDiffSummaryResultStore.read({ cwd: directory, resultId: input.resultId })).toMatchObject({ success: true,
+        result: { output: { runId: started.runId, producer: { kind: 'review' }, outputs: { walkthrough: { value: { title: 'Condition update' } } } } } }));
+      const saved = await scmDiffSummaryResultStore.read({ cwd: directory, resultId: input.resultId });
+      if (!saved.success) throw new Error('Detached review result was not saved');
+      const rpc = createExecutionRunRpcActionDeps({ manager: harness.manager, context: { sessionId: null, cwd: directory },
+        isExecutionRunsEnabled: () => true, policy: { maxConcurrentRuns: null, boundedTimeoutMs: null,
+          reviewBoundedTimeoutMs: null, maxTurns: null, allowIoModes: new Set(['streaming', 'request_response']) } });
+      const observed = ExecutionRunGetResponseSchema.parse(await rpc.executionRunGet!(null, { runId: started.runId, includeStructured: true }));
+      expect(observed).toMatchObject({ structuredMeta: { kind: 'scm_diff_summary.v1' },
+        reviewFindings: { runRef: { runId: started.runId }, findings: [{ id: 'f1' }] } });
+      expect(await harness.manager.applyAction(started.runId, { actionId: 'review.explain_findings', input: {
+        reviewRunIds: [started.runId], cwd: directory, resultId: input.resultId, expectedRevision: saved.result.revision,
+        findingIds: [{ runId: started.runId, findingId: 'f1' }],
+      } })).toMatchObject({ ok: true, result: { refinement: { input: { stopIds: ['condition'] } } } });
+      expect(harness.runs.size).toBe(1);
+      expect(harness.runs.get(started.runId)?.sessionId).toBeNull();
+      expect(harness.enqueueSessionUserMessageWithDisposition).not.toHaveBeenCalled();
+    } finally { await runtime.dispose(); }
+  });
+  it.each(['continued_review', 'seeded_narrator'] as const)('admits a detached %s walkthrough from exact captured evidence through native Run input custody', async mode => {
+    let emit: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    const sent = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' as const }));
+    nativeOpen.mockImplementation(async () => ({
+      watch(next) { emit = next; next({ kind: 'provider-session-id', providerSessionId: 'provider-session-1', sequence: 1,
+        sessionId: 'session-parent', emittedAtMs: 1 }); return { dispose() {} }; },
+      send: sent, async dispose() {},
+    }));
+    const harness = createHarness(true);
+    const narrator = (await buildReviewEngineInventoryItems({})).find(item => item.backendId === 'claude' && item.enabled && item.capabilities.structuredNarration)!;
+    const modelId = getAgentStaticModels('claude', { catalogOnly: true })[0]!.id;
+    const captured = await captureScmComparison({ cwd: directory, source: { kind: 'workingTree' } });
+    const review = runState({ sessionId: null, intent: 'review', status: 'succeeded', runClass: 'bounded', finishedAtMs: 2,
+      requesterWorkAttributionV1: { serverId: 'home-1', accountId: 'account-1', machineId: 'machine-1', installationId: 'installation-1' },
+      resumeHandle: { kind: 'provider_session.v1', backendTarget: { kind: 'backend', backendId: narrator.backendId, sourceKind: 'built_in' }, providerSessionId: 'provider-session-1' },
+      ...(mode === 'seeded_narrator' ? { retentionPolicy: 'ephemeral' as const, resumeHandle: undefined } : {}),
+      backendId: narrator.backendId, backendTarget: { kind: 'builtInAgent', agentId: narrator.backendId },
+      launch: { cwd: directory, modelId }, intentInput: { cwd: directory, comparisonId: captured.comparison.id },
+      structuredMeta: { kind: 'review_findings.v2', payload: { runRef: { runId: 'run-1', callId: 'call-1', backendId: narrator.backendId },
+        summary: 'Findings', overviewMarkdown: 'Completed review', findings: [], questions: [], assumptions: [], generatedAtMs: 2 } } });
+    harness.runs.set('run-1', review);
+    const acted = await harness.manager.applyAction('run-1', { actionId: 'review.walkthrough', input: {
+      reviewRunIds: ['run-1'], comparisonId: captured.comparison.id, narrator: { engineId: narrator.engineId },
+    } });
+    expect(acted, JSON.stringify(acted)).toMatchObject({ ok: true, result: { mode, comparison: captured.comparison } });
+    if (!acted.ok) throw new Error('Detached narration was refused');
+    const runId = (acted.result as { runId: string }).runId;
+    await vi.waitFor(() => expect(sent).toHaveBeenCalledOnce());
+    expect(harness.enqueueSessionUserMessageWithDisposition).not.toHaveBeenCalled();
+    expect(harness.runs.get(runId)).toMatchObject({ sessionId: null, launch: { cwd: directory },
+      requesterWorkAttributionV1: review.requesterWorkAttributionV1 });
+    const delivery = sent.mock.calls[0]![0];
+    expect(JSON.stringify(delivery)).toContain(mode === 'continued_review' ? 'Do not repeat the review' : 'reading the diffs, not reviewing them');
+    if (delivery.delivery.kind !== 'newTurn') throw new Error('Detached narration must be a native turn');
+    const turnId = delivery.delivery.turnId;
+    emit!({ kind: 'input-accepted', sessionId: 'session-parent', sequence: 2, emittedAtMs: 2, inputIds: delivery.inputIds, delivery: delivery.delivery });
+    emit!({ kind: 'turn-start', sessionId: 'session-parent', sequence: 3, emittedAtMs: 3, turnId, startedBy: 'host' });
+    emit!({ kind: 'message-delta', sessionId: 'session-parent', sequence: 4, emittedAtMs: 4, turnId, channel: 'assistant',
+      text: JSON.stringify({ walkthrough: { title: 'Detached narration', intro: '', stops: [], otherChangeRefs: [] } }) });
+    emit!({ kind: 'turn-complete', sessionId: 'session-parent', sequence: 5, emittedAtMs: 5, turnId });
+    const input = harness.runs.get(runId)!.intentInput as { resultId: string };
+    await vi.waitFor(async () => expect(await scmDiffSummaryResultStore.read({ cwd: directory, resultId: input.resultId })).toMatchObject({ success: true,
+      result: { output: { runId, producer: { kind: 'review' }, outputs: { walkthrough: { value: { title: 'Detached narration' } } } } } }));
+    const savedScope = await scmDiffSummaryResultStore.readStoredScope({ cwd: directory, resultId: input.resultId });
+    expect(savedScope).toMatchObject({ cwd: directory });
+    expect(savedScope?.sessionId).toBeUndefined();
+    const privateCapture = await captureScmComparison({ cwd: directory, source: { kind: 'session', sessionId: 'private-session' }, sessionId: 'private-session' });
+    expect(await harness.manager.applyAction('run-1', { actionId: 'review.walkthrough', input: {
+      reviewRunIds: ['run-1'], comparisonId: privateCapture.comparison.id,
+    } })).toMatchObject({ ok: false, errorCode: 'comparison_unavailable' });
+    harness.runs.set('foreign-root', { ...review, runId: 'foreign-root', launch: { cwd: join(directory, 'other') }, intentInput: { cwd: join(directory, 'other') } });
+    expect(await harness.manager.applyAction('run-1', { actionId: 'review.walkthrough', input: {
+      reviewRunIds: ['run-1', 'foreign-root'], comparisonId: captured.comparison.id,
+    } })).toMatchObject({ ok: false, errorCode: 'review_context_unavailable' });
+    harness.runs.set('foreign-home', { ...review, runId: 'foreign-home', requesterWorkAttributionV1: { ...review.requesterWorkAttributionV1!, serverId: 'home-2' } });
+    expect(await harness.manager.applyAction('run-1', { actionId: 'review.walkthrough', input: {
+      reviewRunIds: ['run-1', 'foreign-home'], comparisonId: captured.comparison.id,
+    } })).toMatchObject({ ok: false, errorCode: 'review_context_unavailable' });
+    harness.runs.set('legacy-owner', { ...review, runId: 'legacy-owner', requesterWorkAttributionV1: undefined });
+    expect(await harness.manager.applyAction('run-1', { actionId: 'review.walkthrough', input: {
+      reviewRunIds: ['run-1', 'legacy-owner'], comparisonId: captured.comparison.id,
+    } })).toMatchObject({ ok: false, errorCode: 'review_context_unavailable' });
+    const privateResult = await scmDiffSummaryResultStore.create({ cwd: directory, sessionId: 'private-session', output: {
+      success: true, sourceKey: captured.comparison.id, comparison: captured.comparison, metadata: captured.metadata,
+    } });
+    expect(await harness.manager.applyAction('run-1', { actionId: 'review.explain_findings', input: {
+      reviewRunIds: ['run-1'], cwd: directory, resultId: privateResult.resultId, expectedRevision: privateResult.revision,
+      findingIds: [{ runId: 'run-1', findingId: 'finding-1' }],
+    } })).toMatchObject({ ok: false, errorCode: 'review_context_unavailable' });
+  });
+  it.each([false, true])('explains only exact current host findings in their matching saved stops (detached=%s)', async detached => {
+    const harness = createHarness(detached);
+    const sessionScope = detached ? {} : { sessionId: 'session-1' };
     const comparison = ScmComparisonSchema.parse({ id: 'captured', source: { kind: 'workingTree' }, repository: { rootPath: directory },
       endpoints: {}, inventory: { state: 'complete', reasons: [], files: [{ path: 'new.ts', previousPath: 'old.ts', changeKind: 'renamed',
         binary: false, generated: false, lockfile: false, evidence: { state: 'available', unifiedDiff: '@@ -20,2 +10,2 @@' },
         occurrences: [{ id: 'change-1', alias: 'c1', path: 'new.ts', position: 0, before: { startLine: 20, lineCount: 2 }, after: { startLine: 10, lineCount: 2 } },
           { id: 'change-2', alias: 'c2', path: 'new.ts', position: 1, before: { startLine: 40, lineCount: 2 }, after: { startLine: 30, lineCount: 2 } }] }] } });
-    const saved = await scmDiffSummaryResultStore.create({ cwd: directory, sessionId: 'session-1', output: { success: true,
+    const saved = await scmDiffSummaryResultStore.create({ cwd: directory, ...sessionScope, output: { success: true,
       sourceKey: comparison.id, comparison, runId: 'run-1', metadata: { source: comparison.source, sourceKey: comparison.id }, requestedOutputs: ['walkthrough'],
       analysis: { suppliedChangeRefs: ['change-1', 'change-2'], analysedChangeRefs: ['change-1', 'change-2'], remainingChangeRefs: [] },
       outputs: { walkthrough: { state: 'complete', value: { title: 'Changes', intro: '', stops: [
         { id: 'target', title: 'Target', explanationMarkdown: 'Original', changeRefs: ['change-1'], findingRefs: ['run-1:f1'] },
         { id: 'unrelated', title: 'Keep me', explanationMarkdown: 'Unrelated prose', changeRefs: ['change-2'] }], otherChangeRefs: [] } } } } });
     const runRef = { runId: 'run-1', callId: 'call-1', backendId: TEST_BACKEND_ID };
-    await scmDiffSummaryResultStore.beginInput({ cwd: directory, sessionId: 'session-1', resultId: saved.resultId,
+    await scmDiffSummaryResultStore.beginInput({ cwd: directory, ...sessionScope, resultId: saved.resultId,
       inputId: 'published-narration', outputs: ['walkthrough'], reviewFindingCitations: [{ alias: 'F1', runId: 'run-1', findingId: 'f1' }] });
-    await scmDiffSummaryResultStore.abandonInput({ cwd: directory, sessionId: 'session-1', resultId: saved.resultId, inputId: 'published-narration' });
+    await scmDiffSummaryResultStore.abandonInput({ cwd: directory, ...sessionScope, resultId: saved.resultId, inputId: 'published-narration' });
     const finding = { id: 'f1', title: 'Issue', category: 'correctness', severity: 'high', summary: 'Old diagnosis', filePath: 'new.ts', startLine: 10 };
-    const review = runState({ intent: 'review', structuredMeta: { kind: 'scm_diff_summary.v1', payload: saved.output },
-      intentInput: { comparisonId: comparison.id, reviewNarration: { reviewStatus: 'succeeded', reviewFindings: [{ runRef,
+    const review = runState({ sessionId: detached ? null : 'session-1', intent: 'review', launch: { cwd: directory },
+      structuredMeta: { kind: 'scm_diff_summary.v1', payload: saved.output },
+      intentInput: { cwd: directory, comparisonId: comparison.id, reviewNarration: { reviewStatus: 'succeeded', reviewFindings: [{ runRef,
         summary: 'Findings', overviewMarkdown: 'Findings', findings: [finding], questions: [], assumptions: [], generatedAtMs: 1 }] } } });
     harness.runs.set('run-1', review);
     harness.runs.set('follow-up', { ...review, runId: 'follow-up', callId: 'follow-up-call', status: 'succeeded', structuredMeta: {
@@ -182,6 +351,13 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
         answerMarkdown: 'Clarified', generatedAtMs: 2, updatedFindings: [{ ...finding, summary: 'Current diagnosis' }] } } });
     const input = { reviewRunIds: ['run-1'], cwd: directory, resultId: saved.resultId, expectedRevision: saved.revision,
       findingIds: [{ runId: 'run-1', findingId: 'f1' }], instructions: 'Keep this human request unchanged.' };
+    const privateSource = await scmDiffSummaryResultStore.create({ cwd: directory, ...sessionScope, output: {
+      success: true, sourceKey: comparison.id, comparison: { ...comparison, source: { kind: 'session', sessionId: 'private-session' } },
+      metadata: { source: { kind: 'session', sessionId: 'private-session' }, sourceKey: comparison.id },
+    } });
+    expect(await harness.manager.applyAction('run-1', { actionId: 'review.explain_findings', input: {
+      ...input, resultId: privateSource.resultId, expectedRevision: privateSource.revision,
+    } })).toMatchObject({ ok: false, errorCode: 'review_context_unavailable' });
     const acted = await harness.manager.applyAction('run-1', { actionId: 'review.explain_findings', input });
     expect(acted).toMatchObject({ ok: true, result: { refinement: { actionId: 'scm.diffSummary.refine', input: { output: 'walkthrough', stopIds: ['target'] } } } });
     expect(JSON.stringify(acted)).toContain('Current diagnosis');
@@ -193,7 +369,7 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
     expect(refinement.instructions).toContain(input.instructions);
     expect(await harness.manager.applyAction('run-1', { actionId: 'review.explain_findings', input: { ...input,
       findingIds: [{ runId: 'foreign-run', findingId: 'f1' }] } })).toMatchObject({ ok: false, errorCode: 'review_finding_unmapped' });
-    expect(await scmDiffSummaryResultStore.read({ cwd: directory, sessionId: 'session-1', resultId: saved.resultId })).toMatchObject({ success: true,
+    expect(await scmDiffSummaryResultStore.read({ cwd: directory, ...sessionScope, resultId: saved.resultId })).toMatchObject({ success: true,
       result: { revision: saved.revision, output: { outputs: { walkthrough: { value: { stops: [{ id: 'target', explanationMarkdown: 'Original' },
         { id: 'unrelated', explanationMarkdown: 'Unrelated prose' }] } } } } } });
     let sent: { message: string; localId: string } | undefined;
@@ -205,16 +381,19 @@ describe('ExecutionRunHostBridge pending target recovery', () => {
         runClass: 'long_lived', ioMode: 'streaming', lifecycle: { v: 1, state: 'current' },
         interaction: { kind: 'retained_agent_session.v1', capabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } },
       } }) };
-      if (actionId !== 'session.message.send') throw new Error('Explanation must target the saved generator');
-      sent = actionInput as NonNullable<typeof sent>;
+      if (actionId !== (detached ? 'execution.run.send' : 'session.message.send')) throw new Error('Explanation must target the saved generator');
+      const message = actionInput as { message: string; localId?: string; localInputId?: string };
+      sent = { message: message.message, localId: (message.localId ?? message.localInputId)! };
+      if (detached) return { ok: true, result: { ok: true } };
       return { ok: true, result: { status: 'accepted', localId: sent.localId } };
     };
     expect(await executeScmActionOperation({ actionId: 'scm.diffSummary.refine', input: refinement, workingDirectory: directory,
-      sessionId: 'session-1', executeCanonicalAction, actionContext: { surface: 'rpc', authority: 'present_user' } }))
+      ...sessionScope, authorizeSession: async id => !detached && id === 'session-1', executeCanonicalAction, actionContext: { surface: 'rpc', authority: 'present_user',
+        ...(detached ? { externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory } } } : {}) } }))
       .toMatchObject({ success: true, runId: 'run-1' });
     expect(sent?.message).toContain('"id":"F1"');
     expect(sent?.message).not.toContain('"id":"f1"');
-    expect(await scmDiffSummaryResultStore.publish({ cwd: directory, sessionId: 'session-1', resultId: saved.resultId, inputId: sent!.localId,
+    expect(await scmDiffSummaryResultStore.publish({ cwd: directory, ...sessionScope, resultId: saved.resultId, inputId: sent!.localId,
       modelOutput: { reviewExplanations: [{ stopId: 'target', markdown: '[current](finding:F1)' }] } }))
       .toMatchObject({ success: true, result: { output: { outputs: { walkthrough: { value: { stops: [
         { explanationMarkdown: 'Original', reviewExplanations: [{ markdown: '[current](finding:run-1:f1)' }] },

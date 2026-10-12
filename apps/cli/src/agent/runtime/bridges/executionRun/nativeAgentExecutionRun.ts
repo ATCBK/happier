@@ -3,7 +3,7 @@ import { AgentLaunchEnvironmentV1Schema, AgentRuntimeJsonValueV1Schema } from '@
 import { HappierStructuredInputV1Schema } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { renderSessionInputContextPromptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
-import type { AccountSettings, SessionMcpSelectionV1 } from '@happier-dev/protocol';
+import type { AccountSettings, SessionCapabilitySelectionV1 } from '@happier-dev/protocol';
 import type {
     AgentExecutionRunEvent,
     AgentExecutionRunOpenRequest,
@@ -52,6 +52,7 @@ import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSessi
 import {
     createNativeAgentSessionInteractionOperations,
     resolveNativeAgentSessionNativeHomeService,
+    resolveAgentSessionMcpLaunchConfigs,
     toNativeAgentUsageObservation,
 } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
 import type { UsageObservation } from '@/usage/usageObservation';
@@ -72,6 +73,12 @@ import { resolveStructuredInputProviderDispatchContext } from '@/agent/runtime/t
 import { readConnectedServiceChildMemberLogContextFromEnv } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { logger } from '@/ui/logger';
 import { createExecutionRunCodedError, readExecutionRunRejectedStartDiagnostic, type ExecutionRunRejectedStartError } from './errors';
+import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
+import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
+import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
+import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
+import { listSelectedMcpSharedSecretReferences, materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
+import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import {
     isWorkflowInteractionCapacityError,
     WORKFLOW_INTERACTION_CAPACITY_EXCEEDED,
@@ -116,6 +123,7 @@ export type NativeAgentSessionContextLeaseFactory = ((params: Readonly<{
 
 type NativeAgentExecutionRunContextLease = Readonly<{
     context: AgentExecutionRunRuntimeContextV1;
+    mcpServers?: AgentSessionOpenRequest['mcpServers'];
     dispose(): Promise<void>;
 }>;
 
@@ -176,13 +184,13 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
     directory: string;
     machineId: string;
     accountSettings: AccountSettings | null;
-    resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; signal?: AbortSignal }>) => Promise<import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null>;
+    resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => Promise<import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null>;
     permissionMode: string;
     workspaceWrites?: 'allow' | 'deny';
     start: ExecutionRunBackendStartContext;
     causalPermissionAuthority?: CreateCliExecutionRunBackendParams['causalPermissionAuthority'];
     getPermissionRequestStore?: CreateCliExecutionRunBackendParams['getPermissionRequestStore'];
-    mcpSelection?: SessionMcpSelectionV1;
+    capabilitySelection?: SessionCapabilitySelectionV1;
     happyHomeDir?: string;
     agent?: EngineResolutionAgent;
     sourceEnvironment?: Readonly<Record<string, string>>;
@@ -198,6 +206,8 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
     const sidechainId = readRequiredString(params.sidechainId, 'a sidechain id');
     const permissionHandler = createExecutionRunPermissionHandler({
         permissionMode: params.permissionMode,
+        ...(params.start.allowedTools !== undefined ? { allowedTools: params.start.allowedTools } : {}),
+        ...(params.start.unlistedTools !== undefined ? { unlistedTools: params.start.unlistedTools } : {}),
         workspaceWrites: params.workspaceWrites,
         backendId: params.lease.agentId,
         ...(Object.hasOwn(params, 'causalPermissionAuthority')
@@ -335,7 +345,7 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
             machineId: params.machineId,
             accountSettings: params.accountSettings,
             resolveAccountSettingsSnapshot: params.resolveAccountSettingsSnapshot,
-            ...(params.mcpSelection ? { mcpSelection: params.mcpSelection } : {}),
+            ...(params.capabilitySelection ? { capabilitySelection: params.capabilitySelection } : {}),
             runtimeRegistry: params.runtimeRegistry,
             ...(params.runtimeAuthority ? { runtimeAuthority: params.runtimeAuthority } : {}),
             pluginId: params.lease.pluginId,
@@ -345,7 +355,34 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
             ...(params.refreshRuntimeAuthViaDaemon ? { refreshRuntimeAuthViaDaemon: params.refreshRuntimeAuthViaDaemon } : {}),
         });
         let context: AgentExecutionRunRuntimeContextV1;
+        let mcpMaterial: Awaited<ReturnType<typeof materializeMcpServerConfigRecord>> | null = null;
+        let mcpServers: AgentSessionOpenRequest['mcpServers'];
         try {
+            if (params.capabilitySelection?.mcp && (params.capabilitySelection.mcp.managedServersEnabled || params.capabilitySelection.mcp.forceIncludeServerIds.length > 0)) {
+                let snapshot = await params.resolveAccountSettingsSnapshot?.({ mcpServerCatalog: true, signal }) ?? null;
+                signal.throwIfAborted();
+                if (!snapshot) throw new McpServerCatalogUnavailableError('catalog-unobserved');
+                const select = (admitted: NonNullable<typeof snapshot>) => resolveSessionCapabilitiesForDirectory({
+                    settings: readMcpServersSettingsFromAccountSettings(admitted),
+                    machineId: params.machineId, directory: params.directory, selection: params.capabilitySelection,
+                    agentId: params.lease.agentId, agentAcceptsUserMcp: agentReceivesUserMcpServersV1(resolveAgentToolsDelivery(params.lease.agentId, params.runtimeRegistry?.contributes)),
+                });
+                let selected = select(snapshot);
+                const references = listSelectedMcpSharedSecretReferences(selected.selectedServersByName);
+                if (references.length > 0) {
+                    snapshot = await params.resolveAccountSettingsSnapshot?.({ mcpServerCatalog: true, savedSecretReferences: references, signal }) ?? null;
+                    signal.throwIfAborted();
+                    if (!snapshot) throw new McpServerCatalogUnavailableError('catalog-unobserved');
+                    selected = select(snapshot);
+                }
+                mcpMaterial = await materializeMcpServerConfigRecord({
+                    resolved: { directory: params.directory, strictMode: selected.strictMode, serversByName: selected.selectedServersByName },
+                    savedSecretMaterializer: createSavedSecretMaterializerFromSnapshotV1(snapshot),
+                    processEnv: { ...process.env, ...params.sourceEnvironment }, tmpDir: null,
+                });
+                mcpServers = await resolveAgentSessionMcpLaunchConfigs(mcpMaterial.mcpServers, params.start, signal);
+                signal.throwIfAborted();
+            }
             const created = createNativeAgentInvocationContext({
                 lease: params.lease,
                 runId,
@@ -371,7 +408,8 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
             context = created;
         } catch (error) {
             try {
-                await executionRunServices.dispose();
+                try { mcpMaterial?.cleanup(); }
+                finally { await executionRunServices.dispose(); }
             } finally {
                 await runPermissionScope.dispose('Execution run context construction failed');
             }
@@ -379,9 +417,11 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
         }
         return Object.freeze({
             context,
+            ...(mcpServers ? { mcpServers } : {}),
             async dispose() {
                 try {
-                    await executionRunServices.dispose();
+                    try { mcpMaterial?.cleanup(); }
+                    finally { await executionRunServices.dispose(); }
                 } finally {
                     await runPermissionScope.dispose('Execution run disposed');
                 }
@@ -709,7 +749,8 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
     }
     const runId = readRequiredString(params.options.runId, 'a run id');
     const profileId = readRequiredString(
-        params.options.start?.profileId ?? params.options.start?.intent,
+        // Host intent keys use underscores; portable contribution ids use hyphens.
+        params.options.start?.profileId ?? params.options.start?.intent?.replaceAll('_', '-'),
         'an execution profile id',
     );
     const profile = resolveExecutionProfileReference(profileId, params.lease.pluginId);
@@ -887,14 +928,16 @@ export function createNativeAgentExecutionRunHostRuntime(params: Readonly<{
             }
             assertUsable();
             let opened: AgentExecutionRunRuntime;
+            const admittedRequest = executionRunContextLease?.mcpServers
+                ? { ...request, mcpServers: executionRunContextLease.mcpServers } : request;
             try {
                 if (params.executionRunContextV1) {
                     if (!('executionRun' in context)) {
                         throw new Error('Session-primary detached execution requires execution-run scope');
                     }
-                    opened = await params.executionRunContextV1.open(request, context);
+                    opened = await params.executionRunContextV1.open(admittedRequest, context);
                 } else {
-                    opened = await directExecutionRuns!.open(request, context);
+                    opened = await directExecutionRuns!.open(admittedRequest, context);
                 }
             } catch (error) {
                 logProviderFailure();

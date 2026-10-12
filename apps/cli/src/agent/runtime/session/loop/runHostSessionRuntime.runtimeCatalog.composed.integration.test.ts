@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
-import { reloadConfiguration } from '@/configuration';
+import { configuration, reloadConfiguration } from '@/configuration';
 import { clearDaemonStateForTestTeardown, writeDaemonState } from '@/persistence';
 import axios from 'axios';
 import { UserMessageSchema } from '@/api/types';
@@ -21,6 +21,7 @@ import { resolveExecutionRunChildSelection } from '@/agent/runtime/bridges/execu
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   buildBackendTargetKey,
+  accountSettingsParse,
   buildBackendTargetKeyV2,
   DEFAULT_SESSION_PENDING_QUEUE_DELIVERY_TIMING,
   deriveSessionFollowWakeEventLocalIdV1,
@@ -110,6 +111,8 @@ import { resolveBuiltInContributions } from '@/plugins/projection/registry/resol
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import type { PermissionMode } from '@/api/types';
 import { resolveAgentSessionRealtimeVoiceAuthority } from '@/agent/runtime/session/realtime/resolveAgentSessionRealtimeVoiceAuthority';
 import {
@@ -325,11 +328,11 @@ function lateExternalProviderBindingHandoff(input: Readonly<{
 
 type CreateAgentSessionRealtimeService = (input: Readonly<{
   provider: Readonly<{ pluginId: string; localId: string }>;
-  conversationSessionId: string;
+  conversationSessionAddress: Readonly<{ serverId: string; sessionId: string }>;
   applicationAttemptId: string;
   signal: AbortSignal;
   sessionRpc(input: Readonly<{
-    sessionId: string;
+    sessionAddress: Readonly<{ serverId: string; sessionId: string }>;
     method: string;
     payload: unknown;
     signal: AbortSignal;
@@ -352,6 +355,29 @@ async function loadAgentSessionRealtimeService(): Promise<CreateAgentSessionReal
     throw new Error('expected the real UI Agent-realtime service factory');
   }
   return loaded.createAgentSessionRealtimeService as CreateAgentSessionRealtimeService;
+}
+
+async function withEmptyVoicePromptCatalogFixture(
+  credentials: HostSessionRuntimeRunOptions['credentials'],
+  run: () => Promise<void>,
+): Promise<void> {
+  // The Account transport fixture publishes real catalog authority: no authored
+  // Voice instructions, rather than an unavailable Account preparation source.
+  setActiveAccountSettingsSnapshot({
+    source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+    settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+    scopeKey: resolveAccountSettingsScopeKey(credentials),
+    promptLibraryCatalog: {
+      status: 'ready', rows: [{ revision: 1, record: {
+        key: 'voice', value: { v: 1, scope: { kind: 'voice' }, entries: [] },
+      } }], tombstones: [], diagnostics: [],
+    },
+  });
+  try {
+    await run();
+  } finally {
+    resetActiveAccountSettingsSnapshotForTests();
+  }
 }
 
 async function unsupportedRuntimeConfigUpdate(): Promise<RuntimeConfigUpdateOutcomeV1> {
@@ -420,6 +446,7 @@ function createSessionFixture(sessionId: string) {
     readCurrentPublisherPreconditionForStartup: vi.fn(async () => ({
       machineId: 'machine-1',
       committedFenceMs: 1,
+      publisherGeneration: '1',
     })),
     activateDurableMutationDelivery: vi.fn(async () => undefined),
     deactivateDurableMutationDelivery: vi.fn(),
@@ -811,6 +838,29 @@ function createTerminalRemoteModeLoopFixture() {
   };
 }
 
+let shellBridgeRuntimeFixture: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | null = null;
+
+async function useShellBridgeRuntimeFixture(config: HostSessionRuntimeConfig) {
+  // Prompt planning reads the canonical active catalog. Admit the physical
+  // declaration through that same controller, and retain its suite lifetime.
+  shellBridgeRuntimeFixture ??= await createAuthoredAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    plugins: [{
+      manifest: createPluginManifestV2Fixture({
+        id: 'com.acme.review',
+        contributes: { systemTools: [{ id: 'fixture-acp', title: 'Fixture ACP', executableNames: ['fixture-acp'] }], agents: [{
+          id: 'review', title: 'Review', primary: 'sessions',
+          runtime: { kind: 'acp', transport: { kind: 'stdio', executable: { kind: 'systemTool', id: 'fixture-acp' } } },
+          capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true }, tools: { delivery: 'shell_bridge' } },
+        }] },
+      }),
+      files: { 'daemon.mjs': 'export function activate(api) {}' },
+    }],
+  });
+  config.policyAgentId = 'com.acme.review/review';
+  config.pluginRuntimeRegistryLease = shellBridgeRuntimeFixture.lease;
+}
+
 describe('runHostSessionRuntime', () => {
   it('rejects a hookless runtime before the Session loop can dispatch provider input', async () => {
     const harness = createHarness();
@@ -847,6 +897,8 @@ describe('runHostSessionRuntime', () => {
   afterAll(async () => {
     await runtimeRegistryLease?.release();
     runtimeRegistryLease = null;
+    await shellBridgeRuntimeFixture?.dispose();
+    shellBridgeRuntimeFixture = null;
     await pluginReloadController.shutdown({ timeoutMs: 5_000 });
   });
 
@@ -1212,6 +1264,11 @@ describe('runHostSessionRuntime', () => {
           data = { status: 'unavailable' };
         } else if (path === '/v1/account/encryption/currentness') data = { mode: 'plain', version: 1, signingKeyFingerprint: null,
           contentKeyFingerprint: null, updatedAt: 1, recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' } };
+        else if (path === '/v1/account/encryption') data = { mode: 'plain', updatedAt: 1 };
+        else if (path === '/v1/machines/machine-1') data = { machine: {
+          id: 'machine-1', kind: 'persistent', storageMode: 'plain',
+          dataEncryptionKey: Buffer.from(JSON.stringify({ t: 'plain', v: null })).toString('base64'),
+        } };
         else if (path === '/v2/sessions/lookup-by-tags') data = { sessions: [] };
         else if (path === `/v2/sessions/${harness.session.sessionId}`) data = { session: rawSession() };
         else if (path.includes('/messages/by-local-id/')) {
@@ -1342,7 +1399,7 @@ describe('runHostSessionRuntime', () => {
         agentModeId: null,
         configuration: null,
         connectedServices: null,
-        mcpSelection: null,
+        capabilitySelection: null,
         transcriptStorage: null,
         terminal: null,
         agentSessionStartupInstructionsMarkerV1: null,
@@ -1486,7 +1543,7 @@ describe('runHostSessionRuntime', () => {
     }));
 
     const rpcCalls: Array<Readonly<{
-      sessionId: string;
+      sessionAddress: Readonly<{ serverId: string; sessionId: string }>;
       method: string;
       payload: unknown;
     }>> = [];
@@ -1499,11 +1556,11 @@ describe('runHostSessionRuntime', () => {
     harness.deps.runSessionLoopLifecycleFn = async () => {
       const service = createAgentSessionRealtimeService({
         provider,
-        conversationSessionId: 'session-1',
+        conversationSessionAddress: { serverId: configuration.activeServerId, sessionId: 'session-1' },
         applicationAttemptId: 'voice:host-runtime-composition',
         signal: new AbortController().signal,
-        sessionRpc: async ({ sessionId, method, payload }) => {
-          rpcCalls.push({ sessionId, method, payload });
+        sessionRpc: async ({ sessionAddress, method, payload }) => {
+          rpcCalls.push({ sessionAddress, method, payload });
           const handler = harness.handlers.get(method);
           if (!handler) throw new Error(`missing host runtime RPC producer: ${method}`);
           return await handler(payload);
@@ -1562,7 +1619,8 @@ describe('runHostSessionRuntime', () => {
       });
     };
 
-    await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    await withEmptyVoicePromptCatalogFixture(harness.opts.credentials,
+      () => runHostSessionRuntime(harness.opts, harness.config, harness.deps));
 
     expect(inspect).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledWith(
@@ -1571,17 +1629,18 @@ describe('runHostSessionRuntime', () => {
           kind: 'webrtc',
           offerSdp: 'v=0\r\na=offer:ui-service\r\n',
         },
+        systemAppendBlocks: [],
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(rpcCalls).toEqual([
       {
-        sessionId: 'session-1',
+        sessionAddress: { serverId: configuration.activeServerId, sessionId: 'session-1' },
         method: SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_INSPECT,
         payload: { v: 1, provider },
       },
       {
-        sessionId: 'session-1',
+        sessionAddress: { serverId: configuration.activeServerId, sessionId: 'session-1' },
         method: SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_START,
         payload: {
           v: 1,
@@ -1594,7 +1653,7 @@ describe('runHostSessionRuntime', () => {
         },
       },
       {
-        sessionId: 'session-1',
+        sessionAddress: { serverId: configuration.activeServerId, sessionId: 'session-1' },
         method: SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_WATCH,
         payload: {
           v: 1,
@@ -1603,7 +1662,7 @@ describe('runHostSessionRuntime', () => {
         },
       },
       {
-        sessionId: 'session-1',
+        sessionAddress: { serverId: configuration.activeServerId, sessionId: 'session-1' },
         method: SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_STOP,
         payload: {
           v: 1,
@@ -1677,10 +1736,11 @@ describe('runHostSessionRuntime', () => {
     harness.deps.runSessionLoopLifecycleFn = async () => {
       const service = createAgentSessionRealtimeService({
         provider,
-        conversationSessionId: 'session-1',
+        conversationSessionAddress: { serverId: configuration.activeServerId, sessionId: 'session-1' },
         applicationAttemptId: 'voice:stop-before-start',
         signal: boundAttempt.signal,
-        sessionRpc: async ({ method, payload, signal }) => {
+        sessionRpc: async ({ sessionAddress, method, payload, signal }) => {
+          expect(sessionAddress).toEqual({ serverId: configuration.activeServerId, sessionId: 'session-1' });
           rpcMethods.push(method);
           const handler = harness.handlers.get(method);
           if (!handler) throw new Error(`missing host runtime RPC producer: ${method}`);
@@ -1733,20 +1793,23 @@ describe('runHostSessionRuntime', () => {
       // A preempted attempt never publishes an owner handle, so the late daemon
       // admission is compensated by the host rather than surfaced to a consumer.
       expect(onStarted).not.toHaveBeenCalled();
-      expect(rpcMethods).toEqual([
-        SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_START,
-        SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_STOP,
-        SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_STOP,
-      ]);
+      // Caller abort settles before the late START's preparation and compensation
+      // tail; observe its existing STOP outcome before asserting the exact order.
       await vi.waitFor(() => {
         expect(stopResults).toEqual([
           { ok: true, status: 'already_stopped' },
           { ok: true, status: 'stopped' },
         ]);
       });
+      expect(rpcMethods).toEqual([
+        SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_START,
+        SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_STOP,
+        SESSION_RPC_METHODS.SESSION_AGENT_REALTIME_STOP,
+      ]);
     };
 
-    await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    await withEmptyVoicePromptCatalogFixture(harness.opts.credentials,
+      () => runHostSessionRuntime(harness.opts, harness.config, harness.deps));
 
     expect(start).toHaveBeenCalledOnce();
     expect(runtimeHandle.stop).toHaveBeenCalledOnce();
@@ -1927,11 +1990,11 @@ describe('runHostSessionRuntime', () => {
 
       const service = createAgentSessionRealtimeService({
         provider: installedProvider,
-        conversationSessionId: 'session-1',
+        conversationSessionAddress: { serverId: configuration.activeServerId, sessionId: 'session-1' },
         applicationAttemptId: 'voice:installed-generation',
         signal: new AbortController().signal,
-        sessionRpc: async ({ sessionId, method, payload }) => {
-          expect(sessionId).toBe('session-1');
+        sessionRpc: async ({ sessionAddress, method, payload }) => {
+          expect(sessionAddress).toEqual({ serverId: configuration.activeServerId, sessionId: 'session-1' });
           return await invoke(method, payload);
         },
         onStarted: vi.fn(),
@@ -1966,7 +2029,8 @@ describe('runHostSessionRuntime', () => {
       expect(inspect).toHaveBeenCalledTimes(1);
     };
 
-    await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    await withEmptyVoicePromptCatalogFixture(harness.opts.credentials,
+      () => runHostSessionRuntime(harness.opts, harness.config, harness.deps));
     expect(start).toHaveBeenCalledOnce();
     expect(runtimeHandle.dispose).toHaveBeenCalledOnce();
   });
@@ -2131,7 +2195,7 @@ describe('runHostSessionRuntime', () => {
         agentModeId: null,
         configuration: null,
         connectedServices: null,
-        mcpSelection: null,
+        capabilitySelection: null,
         transcriptStorage: null,
         terminal: null,
         agentSessionStartupInstructionsMarkerV1: null,
@@ -2710,7 +2774,13 @@ describe('runHostSessionRuntime', () => {
       expect(lifecycleParams.opts).toEqual(expect.objectContaining(harness.opts));
       expect((lifecycleParams.opts as any).agentModeId).toBeUndefined();
       expect((lifecycleParams.opts as any).agentModeUpdatedAt).toBeUndefined();
-      expect(lifecycleParams.config).toBe(harness.config);
+      expect(lifecycleParams.config).toEqual({
+        ...harness.config,
+        mcpBindingIdentities: undefined,
+        onAfterStart: expect.any(Function),
+        onRuntimeStopReady: expect.any(Function),
+        publishHostRuntimeEvent: expect.any(Function),
+      });
       expect(lifecycleParams.session.sessionId).toBe(harness.session.sessionId);
       expect(lifecycleParams.session.getMetadataSnapshot()).toEqual(harness.session.getMetadataSnapshot());
     });
@@ -2930,7 +3000,7 @@ describe('runHostSessionRuntime', () => {
           agentModeId: null,
           configuration: null,
           connectedServices: null,
-          mcpSelection: null,
+          capabilitySelection: null,
           transcriptStorage: null,
           terminal: null,
           agentSessionStartupInstructionsMarkerV1: null,
@@ -3999,7 +4069,7 @@ describe('runHostSessionRuntime', () => {
         ref: {
           agentTargetKey: 'agent:happier.agent.qwen/qwen',
           providerConnectionId: null,
-          modelId: 'qwen-fast',
+          modelId: 'qwen-live',
         },
       },
     });
@@ -5030,7 +5100,7 @@ describe('runHostSessionRuntime', () => {
           agentModeId: null,
           configuration: null,
           connectedServices: null,
-          mcpSelection: null,
+          capabilitySelection: null,
           transcriptStorage: null,
           terminal: null,
           agentSessionStartupInstructionsMarkerV1: null,
@@ -5046,6 +5116,7 @@ describe('runHostSessionRuntime', () => {
         publisherPrecondition: {
           machineId: 'machine-1',
           committedFenceMs: 1,
+          publisherGeneration: '1',
         },
       });
       expect(
@@ -5126,7 +5197,7 @@ describe('runHostSessionRuntime', () => {
           agentModeId: null,
           configuration: null,
           connectedServices: null,
-          mcpSelection: null,
+          capabilitySelection: null,
           transcriptStorage: null,
           terminal: null,
           agentSessionStartupInstructionsMarkerV1: null,
@@ -5142,6 +5213,7 @@ describe('runHostSessionRuntime', () => {
         publisherPrecondition: {
           machineId: 'machine-1',
           committedFenceMs: 1,
+          publisherGeneration: '1',
         },
       });
       expect(harness.session.setSessionRuntimeControls).toHaveBeenCalledOnce();
@@ -5246,6 +5318,7 @@ describe('runHostSessionRuntime', () => {
         publisherPrecondition: {
           machineId: 'machine-1',
           committedFenceMs: 1,
+          publisherGeneration: '1',
         },
       });
       expect(
@@ -6184,8 +6257,22 @@ describe('runHostSessionRuntime', () => {
       });
       await swapSession?.(swapped.session);
       const swappedTransition = swapped.handlers.get(SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION);
-      expect(await swappedTransition?.({ v: 1, selection: next, captureBefore: true }))
+      const swappedApplied = await swappedTransition?.({ v: 1, selection: next, captureBefore: true });
+      expect(swappedApplied)
         .toMatchObject({ ok: true, reversal: { before, applied: next, scope: { accountId: 'owner-account', sessionId: 'session-2' } } });
+      if (!swappedApplied || typeof swappedApplied !== 'object' || !('reversal' in swappedApplied)) throw new Error('Expected replacement owner receipt');
+      const swappedReversal = SessionModelMutationReversalV1Schema.parse(swappedApplied.reversal);
+      if (swappedReversal.owner !== 'active') throw new Error('Expected replacement live owner receipt');
+      const swappedExpected = { owner: 'active' as const, scope: swappedReversal.scope, runId: swappedReversal.runId,
+        selection: swappedReversal.applied, updatedAt: swappedReversal.updatedAt };
+      expect(SessionModelMutationReversalV1Schema.parse(applied.reversal).scope.sessionId).toBe('session-1');
+      const swappedIncumbent = swappedMetadata;
+      expect(await swappedTransition?.({ v: 1, selection: before, expected: { ...swappedExpected, scope: reversal.scope } }))
+        .toMatchObject({ ok: false, status: 'superseded' });
+      expect(swappedMetadata).toBe(swappedIncumbent);
+      expect(await swappedTransition?.({ v: 1, selection: before, expected: swappedExpected }))
+        .toMatchObject({ ok: true, activeSelection: before });
+      expect(swappedMetadata.modelSelectionIntentV1).toMatchObject({ selection: before });
     };
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
   });
@@ -7833,6 +7920,13 @@ describe('runHostSessionRuntime', () => {
       savedSecretCatalogState: 'ready',
       whenRefreshed: null,
     };
+    // Saved Secret material follows the current Account lifetime, not the
+    // invocation's preference snapshot.
+    setActiveAccountSettingsSnapshot({
+      ...harness.opts.accountSettingsContext,
+      scopeKey: resolveAccountSettingsScopeKey(harness.opts.credentials),
+      mcpServerCatalog: { status: 'ready', catalog: emptyMcpServerCatalogV1(), revision: 1, authority: 'active', diagnostics: [] },
+    });
     const createRuntimeOriginal = harness.config.createSessionRuntime;
     if (!createRuntimeOriginal) {
       throw new Error('Expected session runtime factory in harness');
@@ -7852,9 +7946,12 @@ describe('runHostSessionRuntime', () => {
       return createRuntime(params);
     });
 
-    await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
-
-    expect(capturedAccountSettings).toBe(runnerAccountSettings);
+    try {
+      await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      expect(capturedAccountSettings).toBe(runnerAccountSettings);
+    } finally {
+      resetActiveAccountSettingsSnapshotForTests();
+    }
   });
 
   it('threads an explicitly scoped Action policy to the Session tool transports without ambient Account settings', async () => {
@@ -8312,20 +8409,7 @@ describe('runHostSessionRuntime', () => {
 
   it('skips native MCP resolution for shell-bridge providers', async () => {
     const harness = createHarness();
-    const agentId = 'com.acme.review/review';
-    const catalog = getResolvedContributionRegistry();
-    readAgentCatalogSnapshotOverride.mockReturnValue({
-      ...catalog,
-      catalogEntriesById: {
-        ...catalog.catalogEntriesById,
-        [agentId]: {
-          id: agentId,
-          cliSubcommand: 'acme-review',
-          toolDelivery: 'shell_bridge',
-        },
-      },
-    });
-    harness.config.policyAgentId = agentId;
+    await useShellBridgeRuntimeFixture(harness.config);
 
     let capturedMcpServers: any = null;
     setSessionRuntimeFactory(harness.config, (params: any) => {
@@ -8345,22 +8429,19 @@ describe('runHostSessionRuntime', () => {
       mcpServers: { happier: { command: 'built-in' } },
     }));
 
-    try {
-      await runHostSessionRuntime(harness.opts, harness.config, {
-        ...harness.deps,
-        resolveRunnerMcpServersFn,
-      });
+    await runHostSessionRuntime(harness.opts, harness.config, {
+      ...harness.deps,
+      resolveRunnerMcpServersFn,
+    });
 
-      expect(resolveRunnerMcpServersFn).not.toHaveBeenCalled();
-      expect(capturedMcpServers).toEqual({});
-      expect(harness.handlers.has(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1)).toBe(true);
-    } finally {
-      readAgentCatalogSnapshotOverride.mockReset();
-    }
+    expect(resolveRunnerMcpServersFn).not.toHaveBeenCalled();
+    expect(capturedMcpServers).toEqual({});
+    expect(harness.handlers.has(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1)).toBe(true);
   });
 
   it('uses the Happier session id, not the vendor runtime session id, for shell-bridge prompt instructions', async () => {
     const harness = createHarness();
+    await useShellBridgeRuntimeFixture(harness.config);
 
     harness.runtime.getSessionId = vi.fn(() => 'vendor-session-123');
 
@@ -8372,27 +8453,13 @@ describe('runHostSessionRuntime', () => {
     };
 
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
-
     expect(resolvedPrompt).toContain("'--session-id' 'session-1'");
     expect(resolvedPrompt).not.toContain('vendor-session-123');
   });
 
   it('adds shell-bridge startup guidance for an external Agent that declares that delivery', async () => {
     const harness = createHarness();
-    const agentId = 'com.acme.review/review';
-    const catalog = getResolvedContributionRegistry();
-    readAgentCatalogSnapshotOverride.mockReturnValue({
-      ...catalog,
-      catalogEntriesById: {
-        ...catalog.catalogEntriesById,
-        [agentId]: {
-          id: agentId,
-          cliSubcommand: 'acme-review',
-          toolDelivery: 'shell_bridge',
-        },
-      },
-    });
-    harness.config.policyAgentId = agentId;
+    await useShellBridgeRuntimeFixture(harness.config);
 
     let resolvedPrompt = '';
     harness.deps.runPermissionModePromptLoopFn = async (params: Readonly<{
@@ -8401,18 +8468,15 @@ describe('runHostSessionRuntime', () => {
       resolvedPrompt = await params.resolveFreshSessionSystemPrompt?.({ baseOverride: 'BASE' }) ?? '';
     };
 
-    try {
-      await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+    await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
 
-      expect(resolvedPrompt).toContain("'tools' 'call'");
-      expect(resolvedPrompt).toContain("'--session-id' 'session-1'");
-    } finally {
-      readAgentCatalogSnapshotOverride.mockReset();
-    }
+    expect(resolvedPrompt).toContain("'tools' 'call'");
+    expect(resolvedPrompt).toContain("'--session-id' 'session-1'");
   });
 
   it('uses the swapped Happier session id for shell-bridge prompt instructions after a session swap', async () => {
     const harness = createHarness();
+    await useShellBridgeRuntimeFixture(harness.config);
     const swappedSession = harness.createSessionFixture('session-2').session;
 
     let swapSession: ((nextSession: any) => Promise<void>) | null = null;
@@ -8435,7 +8499,6 @@ describe('runHostSessionRuntime', () => {
     };
 
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
-
     expect(resolvedPrompt).toContain("'--session-id' 'session-2'");
     expect(resolvedPrompt).not.toContain("'--session-id' 'session-1'");
   });
@@ -8511,7 +8574,7 @@ describe('runHostSessionRuntime', () => {
     });
   });
 
-  it('settles an unavailable exact steer through the canonical provider-rejection outcome without queue fallback', async () => {
+  it('queues unavailable nonconditional steer and settles conditional steer exactly once without queue fallback', async () => {
     const harness = createHarness();
     let userMessageHandler: ((message: unknown) => boolean | void) | null = null;
     let providerRejectedHandler: ((info: Readonly<{
@@ -8524,10 +8587,11 @@ describe('runHostSessionRuntime', () => {
       userMessageHandler = handler;
     };
     harness.session.getCommittedUserMessageSeq = vi.fn((localId: string) => (
-      localId === 'local-exact-steer-unavailable' ? 92 : null
+      localId === 'local-exact-steer-unavailable' ? 92
+        : localId === 'local-conditional-steer-unavailable' ? 94 : null
     ));
     harness.session.hasPendingProviderInput = vi.fn((localId: string) => (
-      localId === 'local-exact-steer-unavailable'
+      localId === 'local-exact-steer-unavailable' || localId === 'local-conditional-steer-unavailable'
     ));
     harness.session.observeProviderInputSettlement = observeProviderInputSettlement;
 
@@ -8555,18 +8619,35 @@ describe('runHostSessionRuntime', () => {
         localId: 'local-exact-steer-unavailable',
         meta: {},
         pendingProviderAction: 'steer',
+        pendingRequestedAction: { v: 1, kind: 'steer_now' },
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(params.messageQueue.size()).toBe(1);
+      expect(observeProviderInputSettlement).not.toHaveBeenCalled();
+      expect(await params.messageQueue.waitForMessagesAndGetAsString()).toMatchObject({
+        message: { text: 'exact steer only', localId: 'local-exact-steer-unavailable' },
+      });
+
+      userMessageHandler?.({
+        role: 'user',
+        content: { type: 'text', text: 'conditional steer only' },
+        localId: 'local-conditional-steer-unavailable',
+        meta: {},
+        pendingProviderAction: 'steer',
+        pendingRequestedAction: { v: 1, kind: 'steer_if_active' },
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(params.messageQueue.size()).toBe(0);
       expect(observeProviderInputSettlement).toHaveBeenCalledExactlyOnceWith({
         kind: 'rejected_before_effect',
-        localId: 'local-exact-steer-unavailable',
-        userMessageSeq: 92,
-        userMessageSeqs: [92],
-        reason: 'steering_unavailable',
+        localId: 'local-conditional-steer-unavailable',
+        userMessageSeq: 94,
+        userMessageSeqs: [94],
+        reason: 'conditional_steer_unavailable',
         diagnostic: {
-          code: 'steering_unavailable',
+          code: 'conditional_steer_unavailable',
           severity: 'error',
         },
         retryable: false,
@@ -8575,9 +8656,9 @@ describe('runHostSessionRuntime', () => {
       // A duplicate provider-side terminal rejection traverses the same host normalizer and must
       // not settle Pending twice.
       providerRejectedHandler?.({
-        localIds: ['local-exact-steer-unavailable'],
-        userMessageSeq: 92,
-        userMessageSeqs: [92],
+        localIds: ['local-conditional-steer-unavailable'],
+        userMessageSeq: 94,
+        userMessageSeqs: [94],
       });
       expect(observeProviderInputSettlement).toHaveBeenCalledTimes(1);
 
@@ -8593,7 +8674,7 @@ describe('runHostSessionRuntime', () => {
     await runHostSessionRuntime(harness.opts, harness.config, harness.deps);
   });
 
-  it('keeps the foreground turn alive when an exact pre-effect steer rejection cannot be settled', async () => {
+  it('keeps the foreground turn alive when a conditional pre-effect steer rejection cannot be settled', async () => {
     const harness = createHarness();
     let userMessageHandler: ((message: unknown) => boolean | void) | null = null;
     harness.session.onUserMessage = (handler: (message: unknown) => boolean | void) => {
@@ -8623,10 +8704,16 @@ describe('runHostSessionRuntime', () => {
         localId: 'local-exact-steer-settlement-unavailable',
         meta: {},
         pendingProviderAction: 'steer',
+        pendingRequestedAction: { v: 1, kind: 'steer_if_active' },
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(params.messageQueue.size()).toBe(0);
+      expect(harness.session.observeProviderInputSettlement).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'rejected_before_effect',
+        localId: 'local-exact-steer-settlement-unavailable',
+        reason: 'conditional_steer_unavailable',
+      }));
       expect(runtime.isTurnInFlight()).toBe(true);
       expect(harness.session.sendAgentMessage.mock.calls).not.toContainEqual([
         expect.anything(),

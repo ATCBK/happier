@@ -1,6 +1,8 @@
 export type ExecutionRunBackendStartContext = Readonly<{
   cwd?: string;
-  mcpSelection?: import('@happier-dev/protocol').SessionMcpSelectionV1;
+  capabilitySelection?: import('@happier-dev/protocol').SessionCapabilitySelectionV1;
+  allowedTools?: import('@happier-dev/protocol/runtime/agentSessionV1').AgentSessionConfigurationSnapshotV1['allowedTools'];
+  unlistedTools?: import('@happier-dev/protocol/runtime/agentSessionV1').AgentSessionConfigurationSnapshotV1['unlistedTools'];
   intentInput?: unknown;
   structuredInput?: import('@happier-dev/protocol').HappierStructuredInputV1;
   localInputId?: string;

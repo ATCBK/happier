@@ -17,6 +17,7 @@ const metadataStub = {} as Metadata;
 const publisherPrecondition = {
   machineId: 'machine-1',
   committedFenceMs: 1,
+  publisherGeneration: '1',
 } as const;
 
 describe('startup side effects: daemon session reporting retry', () => {

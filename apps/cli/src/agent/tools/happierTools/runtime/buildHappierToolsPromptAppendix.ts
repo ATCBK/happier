@@ -1,6 +1,7 @@
 import { buildHappierToolsShellBridgeCommand } from '@/agent/tools/happierTools/runtime/buildHappierToolsShellBridgeCommand';
 import type { CodingPromptSessionTitleUpdatesModeV1 } from '@happier-dev/protocol';
 import { buildHappierSessionTitleGuidanceV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 export function buildHappierToolsPromptAppendix(params: Readonly<{
   sessionId: string;
@@ -91,7 +92,7 @@ export function buildHappierToolsPromptAppendix(params: Readonly<{
     'action_execute',
     '--args-json',
     JSON.stringify({
-      actionId: '<plugin-action-or-tool-id>',
+      actionId: '<qualified-action-id-from-action_spec_get>',
       input: {},
     }),
     '--json',
@@ -116,6 +117,29 @@ Do not use provider-native memory files or ad-hoc workspace search as a substitu
   const renameCommandGuidance = titleGuidance
     ? `Use \`${renameCommand}\` to perform a title update when the title guidance above permits it.`
     : '';
+  const visualSpec = getActionSpec('session.board.item.upsert');
+  const visualExample: Record<string, unknown> = JSON.parse(visualSpec.examples!.mcp!.argsExample!);
+  const visualCommand = buildHappierToolsShellBridgeCommand([
+    'call', '--session-id', params.sessionId, '--directory', params.directory,
+    '--source', 'happier', '--tool', visualSpec.bindings!.mcpToolName!,
+    '--args-json', JSON.stringify({ ...visualExample, sessionId: params.sessionId }), '--json',
+  ]);
+  const usageCommand = buildHappierToolsShellBridgeCommand([
+    'call', '--session-id', params.sessionId, '--directory', params.directory,
+    '--source', 'happier', '--tool', visualSpec.bindings!.mcpToolName!,
+    '--args-json', JSON.stringify({
+      itemId: 'daily-usage', expectedItemRevision: null, destination: 'transcript',
+      item: { v: 1, title: 'Daily usage', frame: 'frameless', height: { mode: 'auto', fallback: 'regular' },
+        source: { kind: 'widget', instance: { v: 1, id: 'daily-usage',
+          definition: { kind: 'builtin', id: 'usage_daily' }, bindings: {
+            period: { kind: 'value', value: { relative: 'today' } },
+            agents: { kind: 'value', value: [] }, machines: { kind: 'value', value: [] },
+            projects: { kind: 'value', value: [] }, sources: { kind: 'value', value: [] },
+            session: { kind: 'value', value: params.sessionId },
+            costBasis: { kind: 'value', value: 'auto' }, metric: { kind: 'value', value: 'tokens' },
+          } } } },
+    }), '--json',
+  ]);
 
   return `Happier tools are available through the CLI bridge for this provider. They are not exposed as native tools in the provider tool inventory.
 ${titleGuidance}
@@ -123,7 +147,7 @@ ${titleGuidance}
 Use \`${listCommand}\` when you need to discover the available built-in Happier tools and custom configured tools.
 ${renameCommandGuidance}
 
-If you just created or edited a plugin capability yourself and you already know its explicit action id or tool id, do not assume discovery surfaces have refreshed yet. In that case, execute it directly through \`${explicitPluginActionExecuteCommand}\` by replacing \`<plugin-action-or-tool-id>\` with the exact id.
+When you know a plugin's qualified Action ID (\`<plugin-id>/actions/<local-id>\`), use \`${explicitPluginActionExecuteCommand}\` with that exact ID. A Tool ID is not an Action ID; call a named Tool using its published Tool name. The current runtime must admit the Action: editing plugin source alone does not refresh the loaded catalog.
 
 ${memoryGuidance ? `${memoryGuidance}
 
@@ -133,5 +157,19 @@ Never violate the user's explicit constraints on tool usage. If the user says to
 
 Do not claim these Happier tools are unavailable without first using the CLI bridge to list or call them.
 
-Prefer this exact CLI bridge command form over ad-hoc shell equivalents when the capability exists there.`;
+Prefer this exact CLI bridge command form over ad-hoc shell equivalents when the capability exists there.
+
+## Showing visuals
+
+When a visual communicates the result better, prefer typed declarative charts and tables. Charts map neutral rows through typed x/series/value fields: bar stacks values, area stacks ribbons, and line draws independent series. Each x/series pair names one observation; omit missing observations rather than inventing zero. Existing x/y charts remain the single-series form. Use an HTML bundle otherwise: a self-contained entrypoint plus relative assets, not an HTML-string item. A workspace file or folder can be acquired through the Action's workspace source. Do not start a browser, preview server or screenshot loop to validate declarative content; use the tool's validation result.
+
+Show a visual with \`session.board.item.upsert\` (tool \`${visualSpec.bindings!.mcpToolName!}\`). The normal destination is the transcript; \`board\` or \`both\` needs an explicit first placement. Pin/Unpin changes the same item's layout, not a second copy. Keep its stable item id and use the returned exact revision when updating. For example:
+
+\`${visualCommand}\`
+
+For live Daily usage in this Session, show the builtin \`usage_daily\` widget with \`${usageCommand}\`. Its declared inputs filter to this Session; set the \`session\` binding value to \`null\` for Account-wide usage. The viewer's current Account reads it through ordinary \`usage.query\` Resource admission, so showing the widget does not disclose the agent's private Account snapshot or require a separate Resource tool call.
+
+After a successful visual, do not restate its contents in prose. A short conclusion or necessary caveat is enough. If admission fails or needs approval, report that outcome; do not claim the visual was shown.
+
+HTML declares no network by default, exact \`networkOrigins\` for bounded access, or \`network: 'open'\` for open access. The user's agent HTML network setting controls new creation: \`allowed\` honors the declaration (the default), \`ask\` requires approval for network, and \`off\` creates a no-network copy with an \`agent_html_network_off\` notice. Missing or malformed settings fail closed to \`ask\`. This setting does not silently rewrite existing visuals. Changing existing HTML's network consequence defaults to approval under the user's explicit Actions policy. Network access never authorizes Actions or Resources: every bridge request still runs with the current viewer's ordinary authority.`;
 }

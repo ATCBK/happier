@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import type { McpRequestAuthPort } from '@/mcp/runtime/mcpRequestAuth';
+import { bindPluginExecProcessOwnerForHost } from '@/plugins/runtime/invocation/services/exec';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -217,6 +219,18 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
     const requireClaimed = () => requireClaimedRunnerSource(claimed);
     const daemonTurnContributionsBridge:
         DaemonAgentRuntimeTurnContributionsBridge = Object.freeze({
+            mcpRequestAuth: {
+                async open(input: Parameters<McpRequestAuthPort['open']>[0]) {
+                    const port = requireClaimed().daemonTurnContributionsBridge?.mcpRequestAuth;
+                    if (!port) throw new Error('mcp_request_auth_unavailable');
+                    return await port.open(input);
+                },
+                async close(input: Parameters<McpRequestAuthPort['close']>[0]) {
+                    const port = requireClaimed().daemonTurnContributionsBridge?.mcpRequestAuth;
+                    if (!port) throw new Error('mcp_request_auth_unavailable');
+                    await port.close(input);
+                },
+            },
             async admitSessionInput(params) {
                 const bridge =
                     requireClaimed().daemonTurnContributionsBridge;
@@ -995,6 +1009,31 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
             },
         });
     let retirePromise: Promise<void> | null = null;
+    const mcpMaterializations = new Set<string>();
+    const mcpRequestAuth: McpRequestAuthPort = {
+        async open(input) {
+            if (lifetime.signal.aborted) throw new Error('mcp_request_auth_unavailable');
+            const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({
+                authority: expectedAuthority,
+                createRequest: token => ({ v: 1, context: { token, sessionId: expectedAuthority.sessionId },
+                    operation: { kind: 'mcp.request_auth.open', requestId: randomUUID(), ...input } }),
+                signal: lifetime.signal,
+            });
+            if (!response.ok || response.result.kind !== 'mcp.request_auth') throw new Error(response.ok ? 'mcp_request_auth_unavailable' : response.error.code);
+            mcpMaterializations.add(input.materializationId);
+            if (lifetime.signal.aborted) { await this.close(input); throw new Error('mcp_request_auth_unavailable'); }
+            return { capabilityFile: response.result.capabilityFile, resource: response.result.resource };
+        },
+        async close(input) {
+            const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({
+                authority: expectedAuthority,
+                createRequest: token => ({ v: 1, context: { token, sessionId: expectedAuthority.sessionId },
+                    operation: { kind: 'mcp.request_auth.close', requestId: randomUUID(), materializationId: input.materializationId } }),
+            });
+            if (!response.ok || response.result.kind !== 'mcp.request_auth.closed') throw new Error('mcp_request_auth_retirement_failed');
+            mcpMaterializations.delete(input.materializationId);
+        },
+    };
     const retireSource = (): Promise<void> => {
         lifetime.abort();
         readActiveTurnAdmissionWitness = null;
@@ -1002,6 +1041,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
         if (retirePromise) return retirePromise;
         const attempt = (async () => {
             const results = await Promise.allSettled([
+                ...[...mcpMaterializations].map(materializationId => mcpRequestAuth.close({ materializationId })),
                 daemonFacets.dispose(),
                 managedServicesCustodyOwner.dispose(),
                 invocationServiceOwners.dispose(),
@@ -1031,6 +1071,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
     const daemonTurnContributionsBridge:
         DaemonAgentRuntimeTurnContributionsBridge =
             Object.freeze({
+                mcpRequestAuth,
                 async admitSessionInput(params) {
                     if (
                         params.sessionId !== expectedAuthority.sessionId
@@ -1380,6 +1421,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                 >> = null;
                 const pluginServices =
                     await prepareRunnerDaemonPluginServices({
+                    processOwner: { kind: 'session', sessionId: params.sessionId },
                     invocationId: params.sessionId,
                     signal: params.signal,
                     dispatch: async (operation, options) =>
@@ -1544,6 +1586,12 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                 }
             }, { once: true });
             if (preparedManagedProviderPluginServices) {
+                if (params.processOwner) {
+                    return Object.freeze({
+                        ...preparedManagedProviderPluginServices,
+                        exec: bindPluginExecProcessOwnerForHost(preparedManagedProviderPluginServices.exec, params.processOwner, params.signal),
+                    });
+                }
                 return preparedManagedProviderPluginServices;
             }
             const seed = Object.freeze({
@@ -1562,6 +1610,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                 occurrenceId: runnerOccurrenceId,
                 sourceCustody: binding.sourceCustody,
                 correlationId: params.correlationId,
+                ...(params.processOwner ? { processOwner: params.processOwner } : {}),
                 surface: 'agent' as const,
                 ...(params.session
                     ? {
@@ -1599,6 +1648,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                         .hostAccessRequests,
             });
             return await prepareRunnerDaemonPluginServices({
+                ...(params.processOwner ? { processOwner: params.processOwner } : {}),
                 invocationId: params.correlationId,
                 signal: params.signal,
                 dispatch: async (operation, options) =>

@@ -10,6 +10,7 @@ import { ProviderEnforcedPermissionHandler } from './handler';
 import { __resetToolTraceForTests } from '@/agent/tools/trace/toolTrace';
 import { ServerBoundPermissionRpcHandlerManager } from '../testkit/serverBoundPermissionRpcHandlerManager';
 import { createNativeAgentSessionServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
+import { readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 
 beforeEach(() => {
   resetActiveAccountSettingsSnapshotForTests();
@@ -145,6 +146,75 @@ describe('QA Edit button payloads at the native permission owner', () => {
 });
 
 describe('native Agent tool approval policy', () => {
+  it('keeps a birth-approved builtin writer below an admitted read-only ceiling without denying selected external MCP', async () => {
+    const session = new FakeSession();
+    session.metadata = { allowedTools: ['Write', 'mcp__wilson-intake__*'], unlistedTools: 'deny' };
+    const handler = new ProviderEnforcedPermissionHandler(session as unknown as ConstructorParameters<typeof ProviderEnforcedPermissionHandler>[0], {
+      logPrefix: '[Test]', getWorkspaceWrites: () => readSessionWorkspaceWritesV1(session.getMetadataSnapshot()),
+    });
+    handler.setPermissionMode('yolo');
+    const context = { causalPermissionAuthority: {
+      kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only',
+    } } as const;
+    try {
+      await expect(handler.handleToolCall('listed-write-readonly', 'Write', { file_path: '/tmp/example', content: 'not authorized' }, context))
+        .resolves.toMatchObject({ decision: 'denied' });
+      await expect(handler.handleToolCall('listed-mcp-readonly', 'mcp__wilson-intake__intake_lead', {}, context))
+        .resolves.toMatchObject({ decision: 'approved_for_session' });
+      expect(session.agentState.requests).toEqual({});
+    } finally { await handler.reset(); }
+  });
+
+  it('denies unlisted safe built-ins and questions through native interactions without publishing asks', async () => {
+    const session = new FakeSession();
+    session.metadata = { allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' };
+    const handler = new ProviderEnforcedPermissionHandler(session as unknown as ConstructorParameters<typeof ProviderEnforcedPermissionHandler>[0], {
+      logPrefix: '[Test]', getWorkspaceWrites: () => readSessionWorkspaceWritesV1(session.getMetadataSnapshot()),
+    });
+    handler.setPermissionMode('yolo');
+    const services = createNativeAgentSessionServices({
+      permissionHandler: handler,
+      pluginId: 'happier.agent.claude', contributionId: 'claude', runtimeId: 'claude',
+      sessionId: session.sessionId, occurrenceId: 'confined-occurrence',
+      signal: new AbortController().signal, isCurrent: () => true,
+    });
+    for (const name of ['Read', 'Bash', 'WebFetch', 'AskUserQuestion']) {
+      await expect(services.interactions.requestApproval({
+        kind: 'approval', title: 'Tool request', subject: { kind: 'tool', name, input: {} },
+      })).resolves.toMatchObject({ status: 'declined' });
+    }
+    handler.setPermissionMode('read-only');
+    const listed = services.interactions.requestApproval({
+      kind: 'approval', title: 'Tool request',
+      subject: { kind: 'tool', name: 'mcp__wilson-intake__intake_lead', input: {} },
+    });
+    await vi.waitFor(() => {
+      const outstanding = Object.values(session.agentState.requests);
+      expect(outstanding).toEqual([]);
+      expect(Object.values(session.agentState.completedRequests)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ tool: 'mcp__wilson-intake__intake_lead', status: 'approved' }),
+      ]));
+    });
+    await expect(listed).resolves.toMatchObject({ status: 'approved' });
+    const fromMail = handler.handleToolCall('listed-from-mail', 'mcp__wilson-intake__intake_lead', {}, {
+      causalPermissionAuthority: {
+        kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only',
+        sourceAuthority: {
+          kind: 'mediatedExternal', mediatorPluginId: 'happier.channels',
+          sourceRef: 'channels:binding:intake', sourceRevisionOrEpoch: '1:1',
+          admittedPermissionCeiling: 'read-only', remoteApprovalMaxScope: 'request',
+        },
+      },
+    });
+    void fromMail.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(session.agentState.requests).toEqual({}));
+      await expect(fromMail).resolves.toMatchObject({ decision: 'approved' });
+    } finally { await handler.reset(); }
+    expect(session.agentState.requests).toEqual({});
+    await handler.reset();
+  });
+
   it('uses an existing session grant without widening a once-only native approval', async () => {
     const session = new FakeSession();
     // Session state/RPC is the transport boundary; grant policy and interaction owners remain real.
@@ -489,17 +559,13 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     },
   );
 
-  it('retains provider-native permission ownership for an unrecognized action name', async () => {
+  it('auto-approves the policy-gated meta tool without publishing a native prompt', async () => {
     const session = new FakeSession();
     const handler = new ProviderEnforcedPermissionHandler(session as any, { logPrefix: '[Test]' });
-    const pending = handler.handleToolCall('unknown-action', 'happier_action_execute', {
+    await expect(handler.handleToolCall('unknown-action', 'happier_action_execute', {
       actionId: 'not.a.happier.action',
-    });
-    expect(session.agentState.requests['unknown-action']).toBeDefined();
-    await session.rpcHandlerManager.handlers.get('permission')?.({
-      id: 'unknown-action', approved: false, decision: 'denied',
-    });
-    await expect(pending).resolves.toEqual({ decision: 'denied' });
+    })).resolves.toEqual({ decision: 'approved' });
+    expect(session.agentState.requests['unknown-action']).toBeUndefined();
   });
 
   it('auto-approves ACP fs bridge tool names to avoid duplicate host-side permission prompts', async () => {
@@ -556,9 +622,7 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
   });
 
   it('resolves the title decision through the session profile, not the Account value alone', async () => {
-    // The second call site of the shared title gate. Proven separately from
-    // CodexLikePermissionHandler because an un-threaded second handler would be
-    // exactly the split-brain this change exists to remove.
+    // Exercise the shared title gate through the live permission owner.
     const session = new FakeSession();
     session.metadata = { profileId: 'focused' };
     const handler = new ProviderEnforcedPermissionHandler(session as any, {

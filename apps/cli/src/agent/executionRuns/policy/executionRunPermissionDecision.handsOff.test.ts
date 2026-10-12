@@ -1,7 +1,47 @@
 import { describe, expect, it } from 'vitest';
 import { createExecutionRunPermissionHandler } from './executionRunPermissionDecision';
+import { createRunScopedExecutionPermissionHandler } from './runScopedExecutionPermissionHandler';
 
 describe('execution-run hands-off permission ceiling', () => {
+  it.each(['read-only', 'yolo'])('keeps listed builtin writes below the admitted read-only ceiling (%s)', (permissionMode) => {
+    const handler = createExecutionRunPermissionHandler({ permissionMode, backendId: 'claude',
+      allowedTools: ['Write', 'mcp__wilson-brief__*'], unlistedTools: 'deny' });
+    const context = { causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'read-only' as const } };
+    expect(handler.getImmediateDecision('write', 'Write', { path: '/repo/a' }, context)).toEqual({ decision: 'denied' });
+    expect(handler.getImmediateDecision('mcp', 'mcp__wilson-brief__save_brief', {}, context)).toEqual({ decision: 'approved_for_session' });
+  });
+
+  it('uses the attached Run policy ahead of parent grants and preserves parent denial', async () => {
+    const parent = createExecutionRunPermissionHandler({ permissionMode: 'default', backendId: 'claude',
+      workspaceWrites: 'deny', allowedTools: ['Glob', 'Read'] });
+    const run = createRunScopedExecutionPermissionHandler({ runId: 'run', controllerOccurrenceId: 'occurrence',
+      handler: { handleToolCall: parent.handleToolCall, abortPendingRequestAndFlush: parent.abortPendingRequestAndFlush },
+      toolPolicy: { permissionMode: 'default', backendId: 'claude', workspaceWrites: 'deny',
+        allowedTools: ['Read', 'Write'], unlistedTools: 'deny' } });
+    expect(run.handler.getImmediateDecision?.('unlisted', 'Glob', { pattern: '*' })).toEqual({ decision: 'denied' });
+    await expect(run.handler.handleToolCall('unlisted', 'Glob', { pattern: '*' })).resolves.toEqual({ decision: 'denied' });
+    await expect(run.handler.handleToolCall('listed', 'Read', { file_path: '/repo/a' })).resolves.toEqual({ decision: 'approved_for_session' });
+    await expect(run.handler.handleToolCall('parent-deny', 'Write', { path: '/repo/a' })).resolves.toEqual({ decision: 'denied' });
+    await expect(run.handler.handleToolCall('causal-deny', 'Read', { file_path: '/repo/a' },
+      { causalPermissionAuthority: null })).resolves.toEqual({ decision: 'denied' });
+    await run.dispose('test completed');
+  });
+
+  it('denies every unlisted tool before permissive modes without publishing an approval', async () => {
+    const handler = createExecutionRunPermissionHandler({ permissionMode: 'yolo', backendId: 'claude',
+      allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' });
+    await expect(handler.handleToolCall('read', 'Read', { file_path: '/repo/secret' })).resolves.toEqual({ decision: 'denied' });
+    await expect(handler.handleToolCall('coordination', 'mcp__happier__session_spawn_new', {})).resolves.toEqual({ decision: 'denied' });
+    expect(handler.getImmediateDecision('listed', 'mcp__wilson-brief__save_brief', {})).toEqual({ decision: 'approved_for_session' });
+  });
+
+  it('pre-approves listed Run tools in the interactive mode and leaves others interactive by default', () => {
+    const handler = createExecutionRunPermissionHandler({ permissionMode: 'default', backendId: 'claude',
+      allowedTools: ['mcp__wilson-brief__*'] });
+    expect(handler.getImmediateDecision('listed', 'mcp__wilson-brief__save_brief', {})).toEqual({ decision: 'approved_for_session' });
+    expect(handler.getImmediateDecision('other', 'mcp__other__save_brief', {})).toBeNull();
+  });
+
   it('denies writes and unsafe shell before YOLO while preserving coordination', async () => {
     const handler = createExecutionRunPermissionHandler({ permissionMode: 'yolo', backendId: 'codex', workspaceWrites: 'deny' });
     await expect(handler.handleToolCall('write', 'Write', { path: '/repo/a' })).resolves.toEqual({ decision: 'denied' });

@@ -25,6 +25,7 @@ import type { ExecutionRunActionResult, ExecutionRunManagerStartParams, Executio
 import { assertExecutionRunStructuredOutputModelAllowed } from './structuredOutputAdmission';
 import { readExecutionRunErrorCode } from './errors';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { resolve } from 'node:path';
 
 type Host = Readonly<{
   runId: string; input: unknown; cwd: string;
@@ -78,10 +79,32 @@ function readReview(run: ExecutionRunState, runs: ReadonlyMap<string, ExecutionR
 
 function selectedRuns(host: Host, ids: readonly string[]): ExecutionRunState[] | null {
   const owner = host.runs.get(host.runId);
-  if (!owner?.sessionId || !ids.includes(host.runId) || new Set(ids).size !== ids.length) return null;
+  if (!owner || !ids.includes(host.runId) || new Set(ids).size !== ids.length) return null;
   const selected = ids.map(id => host.runs.get(id));
-  return selected.every((run): run is ExecutionRunState => Boolean(run && run.intent === 'review' && run.sessionId === owner.sessionId))
+  const cwd = reviewCwd(owner, host.cwd);
+  return selected.every((run): run is ExecutionRunState => Boolean(run && run.intent === 'review'
+    && run.sessionId === owner.sessionId && reviewCwd(run, host.cwd) === cwd && sameReviewCustody(run, owner)))
     ? selected : null;
+}
+
+function sameReviewCustody(run: ExecutionRunState, owner: ExecutionRunState): boolean {
+  if (owner.sessionId !== null) return true;
+  const left = run.requesterWorkAttributionV1;
+  const right = owner.requesterWorkAttributionV1;
+  // Legacy custodian Runs have no requester attribution. They cannot be joined
+  // to requester-attributed Runs by dropping that protected scope.
+  return left?.serverId === right?.serverId && left?.accountId === right?.accountId
+    && left?.machineId === right?.machineId && left?.installationId === right?.installationId;
+}
+
+function reviewCwd(run: ExecutionRunState, fallback: string): string {
+  const input = readScmDiffSummaryIntent(run.intentInput);
+  return resolve(run.launch?.cwd ?? (typeof input.cwd === 'string' ? input.cwd : fallback));
+}
+
+function belongsToReview(scope: Readonly<{ sessionId?: string; sourceSessionId?: string }>, run: ExecutionRunState): boolean {
+  return scope.sessionId === (run.sessionId ?? undefined)
+    && (scope.sourceSessionId === undefined || scope.sourceSessionId === run.sessionId);
 }
 
 async function provenance(host: Host, runs: readonly ExecutionRunState[], comparisonId: string,
@@ -144,12 +167,21 @@ export async function applyReviewWalkthroughAction(host: Host): Promise<Executio
   if (!parsed.success) return failure('execution_run_invalid_action_input', 'Invalid walkthrough input.');
   const request = parsed.data;
   const runs = selectedRuns(host, request.reviewRunIds);
-  if (!runs) return failure('review_context_unavailable', 'The selected review Runs do not belong to this Session.');
+  if (!runs) return failure('review_context_unavailable', 'The selected review Runs do not belong to this review target.');
   const first = runs[0]!;
-  host = { ...host, cwd: typeof readScmDiffSummaryIntent(first.intentInput).cwd === 'string'
-    ? String(readScmDiffSummaryIntent(first.intentInput).cwd) : host.cwd };
-  const captured = await readCapturedScmComparison({ cwd: host.cwd, comparisonId: request.comparisonId, sessionId: first.sessionId! }).catch(() => null);
-  if (!captured) return failure('comparison_unavailable', 'The saved comparison is unavailable for this Session and repository.');
+  host = { ...host, cwd: reviewCwd(first, host.cwd) };
+  if (runs.some(run => {
+    const input = readScmDiffSummaryIntent(run.intentInput);
+    return typeof input.comparisonId === 'string' && input.comparisonId !== request.comparisonId;
+  })) return failure('comparison_unavailable', 'The saved comparison does not identify the selected review basis.');
+  const captured = await readCapturedScmComparison({ cwd: host.cwd, comparisonId: request.comparisonId,
+    ...(first.sessionId ? { sessionId: first.sessionId } : {}) }).catch(() => null);
+  if (!captured) return failure('comparison_unavailable', 'The saved comparison is unavailable for this review target and repository.');
+  const input = readScmDiffSummaryIntent(first.intentInput);
+  if (typeof input.resultId === 'string') {
+    const scope = await scmDiffSummaryResultStore.readStoredScope({ cwd: host.cwd, resultId: input.resultId }).catch(() => null);
+    if (!scope || !belongsToReview(scope, first)) return failure('review_context_unavailable', 'The saved result does not belong to this review target.');
+  }
   const inventory = await buildReviewEngineInventoryItems({ acpCatalogSnapshot: host.acpCatalogSnapshot, accountSettings: first.runtimeSettings?.accountSettings
     ? AccountSettingsSchema.parse(first.runtimeSettings.accountSettings) : null });
   const policy = resolveReviewNarratorPolicy({ selectedEngineIds: runs.map(run =>
@@ -220,6 +252,7 @@ export async function applyReviewWalkthroughAction(host: Host): Promise<Executio
   const { start: _reviewStart, workspaceWrites: _oldWrites, ...selection } = launch;
   let started: ExecutionRunStartResult;
   try { started = await host.startRun({ sessionId: first.sessionId, intent: 'scm_diff_summary', backendTarget: target,
+    ...(first.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: first.requesterWorkAttributionV1 } : {}),
     ...(selectedReviewer && !request.narrator?.modelId ? selection : {}),
     ...(request.narrator?.modelId ? { modelId: request.narrator.modelId } : {}),
     ...(first.runtimeSettings?.accountSettings ? { accountSettings: first.runtimeSettings.accountSettings } : {}),
@@ -274,13 +307,22 @@ export async function applyReviewExplainFindingsAction(host: Host): Promise<Exec
   if (!parsed.success) return failure('execution_run_invalid_action_input', 'Invalid finding explanation input.');
   const request = parsed.data;
   const runs = selectedRuns(host, request.reviewRunIds);
-  if (!runs) return failure('review_context_unavailable', 'The selected reviews do not belong to this Session.');
-  const saved = await scmDiffSummaryResultStore.read({ cwd: request.cwd, sessionId: runs[0]!.sessionId!, resultId: request.resultId });
+  if (!runs) return failure('review_context_unavailable', 'The selected reviews do not belong to this review target.');
+  const first = runs[0]!;
+  if (resolve(request.cwd) !== reviewCwd(first, host.cwd)) return failure('review_context_unavailable', 'The saved result does not belong to this repository.');
+  const scope = { cwd: request.cwd, resultId: request.resultId, ...(first.sessionId ? { sessionId: first.sessionId } : {}) };
+  const storedScope = await scmDiffSummaryResultStore.readStoredScope(scope).catch(() => null);
+  if (!storedScope || !belongsToReview(storedScope, first)) return failure('review_context_unavailable', 'The saved result does not belong to this review target.');
+  const saved = await scmDiffSummaryResultStore.read(scope);
   if (!saved.success) return failure(saved.errorCode, saved.error);
   if (saved.result.revision !== request.expectedRevision) return failure('revision_conflict', 'The walkthrough changed before finding explanation.');
   const comparison = saved.result.output.comparison;
   const walkthrough = saved.result.output.outputs?.walkthrough?.value;
   if (!comparison || !walkthrough) return failure('review_explanation_unavailable', 'The saved walkthrough is unavailable.');
+  if (runs.some(run => {
+    const input = readScmDiffSummaryIntent(run.intentInput);
+    return typeof input.comparisonId === 'string' && input.comparisonId !== comparison.id;
+  })) return failure('comparison_unavailable', 'The saved comparison does not identify the selected review basis.');
   const overlay = projectReviewFindingsOverlay({ comparison, walkthrough, reviews: runs.map(run => readReview(run, host.runs)) });
   const targeted = request.findingIds.map(identity => overlay.entries.find(entry => entry.runRef.runId === identity.runId && entry.finding.id === identity.findingId));
   if (targeted.some(entry => !entry || entry.state !== 'mapped' || entry.stopIds.length === 0)) {
@@ -288,8 +330,6 @@ export async function applyReviewExplainFindingsAction(host: Host): Promise<Exec
   }
   const entries = targeted.flatMap(entry => entry ? [entry] : []);
   const stopIds = [...new Set(entries.flatMap(entry => entry.stopIds))];
-  const storedScope = await scmDiffSummaryResultStore.readStoredScope({ cwd: request.cwd,
-    sessionId: runs[0]!.sessionId!, resultId: request.resultId });
   const findingFacts = presentReviewFindingCitations(entries.map(entry => ({ runRef: entry.runRef, findings: [entry.finding] })),
     storedScope?.reviewFindingCitations ?? []);
   return { ok: true, result: { refinement: { actionId: 'scm.diffSummary.refine', input: {

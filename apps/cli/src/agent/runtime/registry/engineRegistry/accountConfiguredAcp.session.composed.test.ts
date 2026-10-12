@@ -25,6 +25,7 @@ import { createCustomAcpAdmittedRuntimeFixture } from '@/plugins/testkit/customA
 import { PLUGIN_MANIFEST } from '../../../../../../../packages/plugins/custom-acp/src/manifest';
 import type { ResolveEngineRegistryParams } from './types';
 import { resolveBackendEngineAdapterResolution, resolveCliEngineRegistry } from './registry';
+import { resolveAccountConfiguredAcpLaunch } from './accountConfiguredAcp';
 import { waitForCondition } from '@/testkit/async/waitFor';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { readNewSessionDraftFromRepository, writeNewSessionDraftToRepository } from '../../../../../../../apps/ui/sources/components/sessions/composer/newSessionDraftRepositoryAdapter';
@@ -37,6 +38,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/persistence', () => ({
   readStoredCredentials: mocks.readStoredCredentials,
+  readSettings: async () => ({ machineId: 'configured-machine' }),
 }));
 
 const BACKEND_ID = 'review-bot';
@@ -196,8 +198,7 @@ function setConfiguredAcpAccountSettings(scriptPath: string): void {
           id: BACKEND_ID,
           name: BACKEND_ID,
           title: 'Review Bot',
-          command: process.execPath,
-          args: [scriptPath],
+          launch: { kind: 'command', command: process.execPath, args: [scriptPath] },
           env: {
             CONFIGURED_ACP_LITERAL: { t: 'literal', v: 'from-account-declaration' },
             CONFIGURED_ACP_SECRET: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('acp-secret-resource') },
@@ -282,6 +283,30 @@ describe('Account-configured ACP composed Session journey', () => {
     resetSessionDraftRepositoryForTests();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('refuses foreign Account managed first-use from the captured authenticated admission', async () => {
+    await withTempDir('happier-acp-foreign-managed-', async dir => {
+      setConfiguredAcpAccountSettings('/tmp/unused.mjs');
+      vi.stubEnv('HAPPIER_HOME_DIR', dir);
+      vi.stubEnv('HAPPIER_PNPM_BIN', path.join(dir, 'missing-pnpm'));
+      const active = getActiveAccountSettingsSnapshot()!;
+      if (active.acpCatalog?.status !== 'ready') throw new Error('Missing catalog');
+      const credentials = { token: 'foreign-requester-token', encryption: null } satisfies StoredCredentials;
+      const snapshot = { ...active, scopeKey: resolveAccountSettingsScopeKey(credentials),
+        acpCatalog: { ...active.acpCatalog, record: { v: 1 as const, definitions: active.acpCatalog.record.definitions.map(definition => ({
+          ...definition, env: {}, launch: { kind: 'npm' as const, package: '@fixture/agent', version: '1.2.3', args: [] },
+        })) } } };
+      const context = createInvocationSavedSecretOperationContextV1({ credentials, snapshot,
+        serverHttpBaseUrl: resolveServerHttpBaseUrl(), isCurrent: async () => true,
+        machineAdmission: { actorAccountId: 'foreign-account', custodianAccountId: 'custodian-account' },
+      });
+      const launch = await resolveAccountConfiguredAcpLaunch(BACKEND_ID, context);
+      await expect(launch.resolveHostLaunch({ cwd: dir })).rejects.toMatchObject({
+        code: 'ACP_CATALOG_UNAVAILABLE', reason: 'managed-install-account-unavailable',
+      });
+    });
   });
 
   it('refuses a definition ID that has no declared executable Agent contribution', async () => {
@@ -355,7 +380,7 @@ describe('Account-configured ACP composed Session journey', () => {
       const firstDefinition = active.acpCatalog.record.definitions[0]!;
       commitActiveAcpCatalog({ scopeKey: active.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
         catalog: { ...active.acpCatalog, revision: 5, record: { v: 1, definitions: [firstDefinition,
-          { ...firstDefinition, id: 'second-definition', name: 'second-definition', args: [secondScript],
+          { ...firstDefinition, id: 'second-definition', name: 'second-definition', launch: { kind: 'command', command: process.execPath, args: [secondScript] },
             env: { CONFIGURED_ACP_LITERAL: { t: 'literal', v: 'second-environment' } } },
         ] } } });
       const definitions = [
@@ -412,7 +437,7 @@ describe('Account-configured ACP composed Session journey', () => {
     if (active.acpCatalog?.status !== 'ready') throw new Error('Missing test catalog');
     commitActiveAcpCatalog({ scopeKey: active.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(),
       catalog: { status: 'ready', revision: 5, record: { ...active.acpCatalog.record,
-        definitions: active.acpCatalog.record.definitions.map(definition => ({ ...definition, args: [changedScript] })) } } });
+        definitions: active.acpCatalog.record.definitions.map(definition => ({ ...definition, launch: { kind: 'command', command: process.execPath, args: [changedScript] } })) } } });
     const second = await registry.resolveForBackendId(params.backendId);
     expect(second?.engineAdapter).not.toBe(first?.engineAdapter);
     expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(1);

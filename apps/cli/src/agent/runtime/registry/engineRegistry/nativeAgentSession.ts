@@ -1,5 +1,7 @@
 import { isForegroundTurnRuntimeTranscriptEvent } from '@/agent/runtime/session/events/runtimeTranscriptScope';
 import { randomUUID } from 'node:crypto';
+import { probeMcpStdioServerTools } from '@/mcp/servers/probeMcpStdioServerTools';
+import { isToolAllowedForSession } from '@/agent/permissions/permissionToolIdentifier';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -10,6 +12,7 @@ import { AgentSessionStartupInstructionsV1Schema } from '@happier-dev/protocol/r
 import { TeamCredentialProviderModelSelectionV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { AgentSessionStartupInstructionsV1 } from '@happier-dev/protocol/runtime';
 import { AgentStartSessionCallerV1Schema } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
+import { UsageRequestAttributionSchema, type UsageRequestAttribution } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { applySessionProviderBindingMetadataV1, projectAgentSessionProviderBindingV1, readSessionProviderBindingMetadataV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { ExternalSessionsAgentIdSchema } from '@happier-dev/protocol/sessions/external/sourceCatalog';
 import { materializeSessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -1308,19 +1311,56 @@ function readAgentSessionSubagentObservationPublisher(
 
 /** The one host normalizer from resolved CLI MCP config to the Agent SDK launch shape. */
 export function toAgentSessionMcpLaunchConfigs(
-    mcpServers: Readonly<Record<string, McpServerConfig>>,
+    mcpServers: Readonly<Record<string, AgentSessionMcpLaunchConfig>>,
+    toolPolicy?: Readonly<{
+        allowedTools?: readonly string[];
+        unlistedTools?: 'ask' | 'deny';
+        toolNamesByServer?: Readonly<Record<string, readonly string[]>>;
+    }>,
 ): Readonly<Record<string, AgentSessionMcpLaunchConfig>> | undefined {
     const entries = Object.entries(mcpServers);
     if (entries.length === 0) return undefined;
     const cloned: Record<string, AgentSessionMcpLaunchConfig> = {};
     for (const [name, server] of entries) {
+        const toolNames = toolPolicy?.toolNamesByServer?.[name];
+        if (toolPolicy?.unlistedTools === 'deny' && !toolNames) {
+            throw new Error('mcp_tool_catalog_unavailable');
+        }
         cloned[name] = Object.freeze({
             command: server.command,
             ...(server.args === undefined ? {} : { args: Object.freeze([...server.args]) }),
             ...(server.env === undefined ? {} : { env: Object.freeze({ ...server.env }) }),
+            ...(toolPolicy?.unlistedTools === 'deny'
+                ? { enabledTools: Object.freeze(toolNames!.filter((tool) =>
+                    isToolAllowedForSession(toolPolicy.allowedTools ?? [], `mcp__${name}__${tool}`, {}))) }
+                : server.enabledTools === undefined ? {} : { enabledTools: Object.freeze([...server.enabledTools]) }),
         });
     }
     return Object.freeze(cloned);
+}
+
+/** Uses the existing MCP probe and permission matcher before native launch. */
+export async function resolveAgentSessionMcpLaunchConfigs(
+    mcpServers: Readonly<Record<string, AgentSessionMcpLaunchConfig>>,
+    toolPolicy: Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>,
+    signal?: AbortSignal,
+): Promise<Readonly<Record<string, AgentSessionMcpLaunchConfig>> | undefined> {
+    if (toolPolicy.unlistedTools !== 'deny') return toAgentSessionMcpLaunchConfigs(mcpServers);
+    const catalogs = await Promise.all(Object.entries(mcpServers).map(async ([name, server]) => {
+        const tools = await probeMcpStdioServerTools({
+            signal,
+            config: {
+                command: server.command,
+                ...(server.args === undefined ? {} : { args: [...server.args] }),
+                ...(server.env === undefined ? {} : { env: { ...server.env } }),
+            },
+            // The native launch owns its lifetime; don't add a shorter probe deadline.
+            connectTimeoutMs: 0,
+            listToolsTimeoutMs: 0,
+        });
+        return [name, tools.map((tool) => tool.name)] as const;
+    }));
+    return toAgentSessionMcpLaunchConfigs(mcpServers, { ...toolPolicy, toolNamesByServer: Object.fromEntries(catalogs) });
 }
 
 function isHostOwnedToolTraceEnvironmentKey(key: string): boolean {
@@ -1382,6 +1422,8 @@ function buildNativeAgentSessionOpenInputs(
     );
     const workspaceWrites = getWorkspaceWrites ? getWorkspaceWrites() : readSessionWorkspaceWritesV1(metadata);
     const configuration = AgentSessionConfigurationSnapshotV1Schema.parse({
+        ...(metadata.allowedTools === undefined ? {} : { allowedTools: metadata.allowedTools }),
+        ...(metadata.unlistedTools === undefined ? {} : { unlistedTools: metadata.unlistedTools }),
         ...(workspaceWrites !== undefined ? { workspaceWrites } : {}),
         mode: {
             value: sessionMode?.id ?? null,
@@ -1493,6 +1535,8 @@ function applyNativeAgentConfigurationUpdate(
     );
     const workspaceWrites = update.workspaceWrites ?? (getWorkspaceWrites ? getWorkspaceWrites() : current.workspaceWrites);
     const snapshot = AgentSessionConfigurationSnapshotV1Schema.parse({
+        ...(current.allowedTools === undefined ? {} : { allowedTools: current.allowedTools }),
+        ...(current.unlistedTools === undefined ? {} : { unlistedTools: current.unlistedTools }),
         ...(workspaceWrites !== undefined ? { workspaceWrites } : {}),
         mode: typeof update.modeId === 'string'
             ? { value: update.modeId, updatedAtMs }
@@ -1547,11 +1591,13 @@ type NativeAgentSessionUsagePublisher = Readonly<{
     accountingWitness?: Omit<NativeUsageAccountingIdentityInput, 'inferenceId'> & Readonly<{ nativeSessionId: string }>;
     boundNativeSessionId?: string;
     resolveAccountingWitness?: (nativeSessionId: string) => Promise<NativeAgentSessionUsagePublisher['accountingWitness']>;
+    captureRequestAttribution?: (turnId: string) => UsageRequestAttribution | undefined;
     publish(input: Readonly<{
         observedAt: number;
         observation: UsageObservation;
         turnId: string | null;
         externalKey: string;
+        attribution?: UsageRequestAttribution;
         metadata?: Record<string, unknown>;
     }>): void | Promise<void | UsageObservationPublishResult>;
 }>;
@@ -1905,7 +1951,7 @@ function readBoundExternalSessionSource(
     source: ExternalSessionsSource;
     remoteSessionId: string;
 }> | null {
-    const resolution = resolveLinkedExternalSessionMetadataV1(metadata);
+    const resolution = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
     if (!resolution.ok) return null;
     const linked = resolution.linkedSession;
     return linked.agentId === agent.id
@@ -1958,6 +2004,7 @@ type NativeInputCorrelation = Readonly<{
     causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
     admissionAbortController?: AbortController;
     agentStartCaller?: AgentStartSessionCallerV1;
+    requestAttribution?: UsageRequestAttribution;
 }>;
 
 export type NativeAgentNewTurnAdmissionWitness = Readonly<{
@@ -2788,6 +2835,18 @@ export function createNativeAgentSessionOperations(
             publishCanonicalEvent?.(event);
         }
         if (event.kind === 'usage-observed' && usagePublisher) {
+            const requestProof = [...inputCorrelations.values()].find(candidate => candidate.turnId === event.turnId)?.requestAttribution;
+            const nativeProof = UsageRequestAttributionSchema.safeParse(event.attribution);
+            const suppliedSource = nativeProof.success && nativeProof.data.turnId === event.turnId
+                && nativeProof.data.source.kind === 'native' ? nativeProof.data.source : null;
+            const acceptedNativeSource = suppliedSource?.connectedAccount && directFacets?.connectedAccounts.some(selection =>
+                selection.account.service.pluginId === suppliedSource.connectedAccount?.service.pluginId
+                && selection.account.service.localId === suppliedSource.connectedAccount?.service.localId);
+            const attribution = event.scope === 'turn_delta'
+                ? requestProof?.source.kind === 'provider' ? requestProof
+                    : acceptedNativeSource && nativeProof.success ? nativeProof.data
+                        : requestProof?.source.kind === 'native' && requestProof.source.connectedAccount === null ? requestProof : undefined
+                : undefined;
             const publishUsage = (witness: NativeAgentSessionUsagePublisher['accountingWitness']): void => {
               if (disposeStarted) return;
               try {
@@ -2809,6 +2868,7 @@ export function createNativeAgentSessionOperations(
                     observation: toNativeAgentUsageObservation(event, usagePublisher.provider),
                     turnId: event.turnId ?? null,
                     externalKey: accountingIdentity?.externalKey ?? event.observationId,
+                    ...(attribution ? { attribution } : {}),
                     ...(accountingIdentity?.nativeSessionKey && witness ? {
                         metadata: {
                             accountingSubject: {
@@ -3626,7 +3686,9 @@ export function createNativeAgentSessionOperations(
                         'Native Agent runtime delivery was cancelled before admission',
                     );
             }
-            inputCorrelations.set(correlation.inputId, correlation);
+            inputCorrelations.set(correlation.inputId, {
+                ...correlation, requestAttribution: usagePublisher?.captureRequestAttribution?.(correlation.turnId),
+            });
             activeTurnAdmissionWitness = createNativeAgentTurnAdmissionWitness(
                 correlation,
             );
@@ -5312,9 +5374,6 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     ...(openIntent.kind === 'resume' && openIntent.importHistory
                         ? { resumeHistorySession: hostRuntimeParams.session }
                         : {}),
-                    ...(hostRuntimeParams.mcpServers
-                        ? { mcpServers: hostRuntimeParams.mcpServers }
-                        : {}),
                     ...(params.resolveAcpHostLaunch
                         ? { resolveHostLaunch: params.resolveAcpHostLaunch }
                         : {}),
@@ -5352,7 +5411,7 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                     )) ?? [])
                     .catch(() => [])
                 : [];
-            const mcpServers = toAgentSessionMcpLaunchConfigs(hostRuntimeParams.mcpServers);
+            const mcpServers = await resolveAgentSessionMcpLaunchConfigs(hostRuntimeParams.mcpServers, openInputs.configuration, signal);
             const buildOpenRequest = (): AgentSessionOpenRequest =>
                 nativeForkSource
                     ? Object.freeze({
@@ -5668,6 +5727,21 @@ export async function createNativeAgentRuntimeSessionPlan(params: Readonly<{
                 resumeId ?? undefined,
                 {
                     provider: identity.agentId,
+                    captureRequestAttribution: turnId => {
+                        if (openRequest.providerBinding && 'connectionId' in openRequest.providerBinding && openRequest.providerBinding.connectionId) {
+                            return UsageRequestAttributionSchema.parse({ v: 1, turnId, source: {
+                                kind: 'provider', providerConnectionId: openRequest.providerBinding.connectionId,
+                                providerId: authoritativeProviderBindingMetadata?.connectionId === openRequest.providerBinding.connectionId
+                                    ? authoritativeProviderBindingMetadata.contributionKey ?? null : null,
+                            } });
+                        }
+                        if (!openRequest.providerBinding && appliedTeamCredentialModel === null && openedWithoutConnectedServices) {
+                            return { v: 1, turnId, source: { kind: 'native', connectedAccount: null } };
+                        }
+                        // Selected native accounts require provider request evidence; a
+                        // host-turn start snapshot cannot prove auth across native retries.
+                        return undefined;
+                    },
                     ...(boundExternalSessionSource ? { boundNativeSessionId: boundExternalSessionSource.remoteSessionId } : {}),
                     resolveAccountingWitness,
                     publish: (input) => hostRuntimeParams.session.publishUsageObservation(input),

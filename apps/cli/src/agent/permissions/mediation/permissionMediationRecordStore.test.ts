@@ -95,6 +95,41 @@ function identityKey(identity: SessionPermissionMediationRecordIdentityV1): stri
 }
 
 describe('permissionMediationRecordStore', () => {
+  it.each(['remote_settlement.v1', 'remote_grant.v1'] as const)('projects retained extra fields while reading %s and keeps write admission strict', async (kind) => {
+    const base = settlementRecord();
+    const record = kind === 'remote_grant.v1' ? {
+      ...base,
+      sourceAuthority: { ...base.sourceAuthority, remoteApprovalMaxScope: 'session' as const },
+      requestedScope: 'session' as const,
+      effect: { kind: 'sessionGrant' as const, grantId: 'grant-1', rule: { kind: 'exactTool' as const, identifier: 'Bash:git status' } },
+    } : base;
+    const retained = {
+      ...record,
+      retired: true,
+      sourceAuthority: { ...record.sourceAuthority, retired: true },
+      actor: { ...record.actor, retired: true, assertedBy: { ...record.actor.assertedBy, retired: true } },
+      effect: { ...record.effect, retired: true },
+    };
+    const revision = 'ssr1.AAAACnJlY29yZC1vbmUAAAAB';
+    const row = { ...firstIdentity, kind, content: { t: 'plain' as const, v: retained, retired: true }, revision, retired: true };
+    const write = vi.fn();
+    const store = createPermissionMediationRecordStore(createPlainSession({
+      readPermissionMediationRecord: vi.fn(async () => row),
+      listPermissionMediationRecords: vi.fn(async () => ({ records: [row], nextCursor: null, hasNext: false })),
+      writePermissionMediationRecord: write,
+    }));
+    if (!store) throw new Error('expected typed mediation store');
+    const stored = { identity: firstIdentity, kind, record, revision };
+    await expect(store.read({ identity: firstIdentity })).resolves.toEqual({ status: 'found', stored });
+    await expect(store.list({})).resolves.toEqual({ status: 'ready', records: [stored], nextCursor: null, hasNext: false });
+    // New authority remains closed, even when its known fields are valid.
+    const freshRecord = { ...base, retired: true };
+    await expect(store.createExpectedAbsent({ identity: firstIdentity, kind: 'remote_settlement.v1', record: freshRecord })).resolves.toEqual({ status: 'unavailable' });
+    expect(write).not.toHaveBeenCalled();
+    row.content.v = { ...retained, actor: { ...retained.actor, assertedBy: { ...retained.actor.assertedBy, pluginId: 'other.plugin' } } };
+    await expect(store.read({ identity: firstIdentity })).resolves.toEqual({ status: 'unavailable' });
+  });
+
   it('uses only the fixed typed host route and rejects an envelope whose mode conflicts with the session', async () => {
     const record = settlementRecord();
     const revision = 'ssr1.AAAACnJlY29yZC1vbmUAAAAB';

@@ -9,14 +9,14 @@ import type { AcpCatalogRecordV1 } from '@happier-dev/protocol/acp/catalog/catal
 describe('resolveConfiguredAcpBackendFromAccountSettings', () => {
   it('resolves a destination definition without a settings catalog and refuses unavailable authority', () => {
     const record = { v: 1, definitions: [{
-      id: 'row-review', name: 'row-review', title: 'Row review', command: 'review-agent', args: ['acp'],
+      id: 'row-review', name: 'row-review', title: 'Row review', launch: { kind: 'command', command: 'review-agent', args: ['acp'] },
       env: { REGION: { t: 'literal', v: 'eu' } }, capabilities: {
         supportsLoadSession: true, supportsModes: 'yes', supportsModels: 'unknown',
         supportsConfigOptions: 'unknown', promptImageSupport: 'no',
       }, createdAt: 1, updatedAt: 2,
     }] } satisfies AcpCatalogRecordV1;
     expect(resolveConfiguredAcpBackendFromAccountSettings({}, 'row-review', { status: 'ready', record, revision: 4 }))
-      .toMatchObject({ backendId: 'row-review', command: 'review-agent', args: ['acp'], env: { REGION: { t: 'literal', v: 'eu' } } });
+      .toMatchObject({ backendId: 'row-review', launch: { kind: 'command', command: 'review-agent', args: ['acp'] }, env: { REGION: { t: 'literal', v: 'eu' } } });
     expect(() => resolveConfiguredAcpBackendFromAccountSettings({}, 'row-review', { status: 'unavailable', reason: 'locked' }))
       .toThrow(expect.objectContaining({ code: 'ACP_CATALOG_UNAVAILABLE' }));
     expect(() => resolveConfiguredAcpBackendFromAccountSettings({}, 'row-review', { status: 'loading' }))
@@ -40,8 +40,7 @@ describe('resolveConfiguredAcpBackendFromAccountSettings', () => {
             id: 'backend-1',
             name: 'backend-1',
             title: 'Backend 1',
-            command: 'kiro-cli',
-            args: ['acp', '--agent', 'spec'],
+            launch: { kind: 'command', command: 'kiro-cli', args: ['acp', '--agent', 'spec'] },
             env: {
               REGION: { t: 'literal', v: 'eu' },
               EXTRA: { t: 'literal', v: '1' },
@@ -68,8 +67,7 @@ describe('resolveConfiguredAcpBackendFromAccountSettings', () => {
     expect(out).toMatchObject({
       backendId: 'backend-1',
       title: 'Backend 1',
-      command: 'kiro-cli',
-      args: ['acp', '--agent', 'spec'],
+      launch: { kind: 'command', command: 'kiro-cli', args: ['acp', '--agent', 'spec'] },
     });
     expect(out?.env).toEqual({
       REGION: { t: 'literal', v: 'eu' },

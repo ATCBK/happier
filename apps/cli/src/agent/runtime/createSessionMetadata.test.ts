@@ -5,6 +5,7 @@ import type { Metadata } from '@/api/types';
 
 import {
     applyInitialSessionCreationFactsToMetadata,
+    buildCommittedLaunchMetadata,
     captureSessionLaunchControlMetadata,
     createSessionMetadata,
 } from './createSessionMetadata';
@@ -25,6 +26,29 @@ function createMetadata(
 }
 
 describe('createSessionMetadata', () => {
+    it('refuses malformed captured tool policy rather than starting with default ask behavior', () => {
+        for (const raw of ['not-json', 'null', '{"allowedTools":"Read"}', '{"unlistedTools":"allow"}']) {
+            expect(() => captureSessionLaunchControlMetadata({
+                processEnvironment: { HAPPIER_SESSION_TOOL_POLICY_JSON: raw },
+            })).toThrow();
+        }
+    });
+    it('sets attestation only at birth, removes inherited assertions and keeps the persisted facts on attach', () => {
+        const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
+        const source = { path: '/project', host: 'machine', attestedContext };
+        expect(applyInitialSessionCreationFactsToMetadata(source, {})).not.toHaveProperty('attestedContext');
+        const current = applyInitialSessionCreationFactsToMetadata(source, { attestedContext });
+        expect(current).toMatchObject({ attestedContext });
+        const next = createMetadata({ flavor: 'test-agent', machineId: 'machine-1' }).metadata;
+        expect(mergeSessionMetadataForStartup({ current, next, mode: 'attach', nowMs: 1 })).toMatchObject({ attestedContext });
+    });
+    it('seeds the authored tool policy at birth and preserves it when a runner attaches', () => {
+        const policy = { allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' as const };
+        const current = applyInitialSessionCreationFactsToMetadata({ path: '/project', host: 'machine' }, policy);
+        expect(current).toMatchObject(policy);
+        const next = createMetadata({ flavor: 'test-agent', machineId: 'machine-1' }).metadata;
+        expect(mergeSessionMetadataForStartup({ current, next, mode: 'attach', nowMs: 1 })).toMatchObject(policy);
+    });
     it('clears a previous runner generation when the replacement process cannot read its generation', () => {
         const next = createMetadata({ flavor: 'test-agent', machineId: 'machine-1' }).metadata;
         const current = { ...next, hostProcessStartTimeMs: 123456 };
@@ -202,14 +226,8 @@ describe('createSessionMetadata', () => {
             });
 
             expect(metadata.profileId).toBe('work');
-            expect((metadata as any).mcpSelectionV1).toEqual({
-                v: 1,
-                managedServersEnabled: false,
-                forceIncludeServerIds: ['server-a'],
-                forceExcludeServerIds: [],
-            });
+            expect(metadata).not.toHaveProperty('mcpSelectionV1');
             expect(JSON.stringify(launchControlMetadata)).not.toContain('must-never-enter-metadata');
-            expect(process.env.HAPPIER_SESSION_MCP_SELECTION_JSON).toBeUndefined();
         } finally {
             if (previousProfileId === undefined) delete process.env.HAPPIER_SESSION_PROFILE_ID;
             else process.env.HAPPIER_SESSION_PROFILE_ID = previousProfileId;
@@ -365,7 +383,7 @@ describe('createSessionMetadata', () => {
         expect((metadata as any).sessionLogPath).toContain('.log');
     });
 
-    it('seeds mcpSelectionV1 from the daemon-provided environment override', () => {
+    it('does not let a child environment create a second selection metadata writer', () => {
         const previous = process.env.HAPPIER_SESSION_MCP_SELECTION_JSON;
         process.env.HAPPIER_SESSION_MCP_SELECTION_JSON = JSON.stringify({
             v: 1,
@@ -381,13 +399,8 @@ describe('createSessionMetadata', () => {
                 startedBy: 'daemon',
             } as any);
 
-            expect((metadata as any).mcpSelectionV1).toEqual({
-                v: 1,
-                managedServersEnabled: false,
-                forceIncludeServerIds: ['server-a'],
-                forceExcludeServerIds: ['server-b'],
-            });
-            expect(process.env.HAPPIER_SESSION_MCP_SELECTION_JSON).toBeUndefined();
+            expect(metadata).not.toHaveProperty('mcpSelectionV1');
+            expect(metadata).not.toHaveProperty('skillSelectionV1');
         } finally {
             if (previous === undefined) {
                 delete process.env.HAPPIER_SESSION_MCP_SELECTION_JSON;
@@ -395,6 +408,17 @@ describe('createSessionMetadata', () => {
                 process.env.HAPPIER_SESSION_MCP_SELECTION_JSON = previous;
             }
         }
+    });
+
+    it('commits both kinds of desired selection through the daemon birth owner', () => {
+        const mcp = { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: ['server-a'], forceExcludeServerIds: ['server-b'] };
+        const skills = { v: 1 as const, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: ['review'], excludeNativeSkillNames: ['native'] };
+        const metadata = buildCommittedLaunchMetadata({
+            directory: '/project', options: { directory: '/project', capabilitySelection: { mcp, skills } },
+        });
+        expect(metadata).toMatchObject({ mcpSelectionV1: mcp, skillSelectionV1: skills });
+        expect(metadata).not.toHaveProperty('mcpSelectionRestartRequiredV1');
+        expect(metadata).not.toHaveProperty('skillSelectionRestartRequiredV1');
     });
 
     it('seeds connected service bindings from the daemon-provided environment override', () => {

@@ -5,6 +5,10 @@ import { readAuthenticationStatus } from '@/api/client/httpStatusError';
 import { logger } from '@/ui/logger';
 import { isSessionPendingQueueHoldBlockingPendingDrain } from '@happier-dev/protocol/sessions/metadata/sessionPendingQueueHoldV1';
 import type { SessionPendingQueueDeliveryTiming } from '@happier-dev/protocol';
+import { SessionAgentActivityHeadlineV1Schema, SESSION_AGENT_ACTIVITY_HEADLINE_METADATA_KEY } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityHeadlineV1';
+import { isInProgressAgentActivityStatus } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityStatusV1';
+import { SessionActionConfirmationsV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionActionConfirmationsV1';
+import { derivePendingRequestFlagsFromAgentState } from '@happier-dev/session-core/pending';
 import {
   DEFAULT_SESSION_METADATA_WAIT_RETRY_BACKOFF_MS,
   waitForSessionMetadataRetryBackoff,
@@ -195,9 +199,17 @@ export function createSessionProviderInputConsumer<Mode, Message>(
   const liveWorkListeners = new Set<() => void>();
   let liveWorkObservation: AbortController | null = null;
   let unsubscribeQueueLiveWork: (() => void) | null = null;
+  let unsubscribeSubagentLiveWork: (() => void) | null = null;
+  let settledAt: number | undefined;
+  let observedUnsettled = false;
   let priorLiveWorkNotification: string | null = null;
   const notifyLiveWorkChanged = (): void => {
-    if (liveWorkListeners.size === 0) return;
+    if (liveWorkListeners.size === 0) {
+      // Retire an unobserved custody edge without querying Activity on the input path.
+      settledAt = undefined;
+      observedUnsettled = true;
+      return;
+    }
     const signature = readLiveWorkNotificationSignature();
     if (signature === priorLiveWorkNotification) return;
     priorLiveWorkNotification = signature;
@@ -233,11 +245,51 @@ export function createSessionProviderInputConsumer<Mode, Message>(
       ? 'settled' : tail?.custody?.value.state === 'active'
         || tail?.settlement?.committedProjection.state === 'active' ? 'active' : 'unknown';
   };
+  const readLiveWorkFacts = (input: SessionInputLiveWork['input']): SessionInputLiveWork => {
+    const session = readSessionLiveState();
+    const metadata = opts.session.getMetadataSnapshot?.();
+    const record = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? metadata as Record<string, unknown> : null;
+    const subagents = opts.session.readSubagentLiveWork?.();
+    const rawHeadline = record?.[SESSION_AGENT_ACTIVITY_HEADLINE_METADATA_KEY];
+    const headline = rawHeadline === undefined ? null : SessionAgentActivityHeadlineV1Schema.safeParse(rawHeadline);
+    const entries = headline?.success ? headline.data.activeEntries : [];
+    const activeEntries = entries.filter(entry => isInProgressAgentActivityStatus(entry.status));
+    const headlineCount = activeEntries.filter(entry => entry.kind === 'workflow_agent').length;
+    const agentsActiveCount = (subagents?.activeCount ?? 0) + headlineCount;
+    const agents = agentsActiveCount > 0 || activeEntries.length > 0 ? 'active' : !record || !subagents || subagents.state === 'unknown'
+      || headline?.success === false || entries.some(entry => entry.status === 'unknown') ? 'unknown' : 'settled';
+    const agentState = opts.session.getAgentStateSnapshot?.();
+    // Request attention does not consume capability values, whose nullable host
+    // semantics differ from the client state projection.
+    const ownedFlags = derivePendingRequestFlagsFromAgentState(agentState == null ? agentState : {
+      requests: agentState.requests, completedRequests: agentState.completedRequests,
+    });
+    const rawConfirmations = record?.actionConfirmationsV1;
+    const confirmations = rawConfirmations === undefined ? null : SessionActionConfirmationsV1Schema.safeParse(rawConfirmations);
+    const sharedFlags = derivePendingRequestFlagsFromAgentState(confirmations?.success ? confirmations.data : null);
+    const attention = ownedFlags.hasPendingPermissionRequests || ownedFlags.hasPendingUserActionRequests
+      || sharedFlags.hasPendingPermissionRequests || sharedFlags.hasPendingUserActionRequests ? 'active'
+      : !record || agentState == null || confirmations?.success === false ? 'unknown' : 'settled';
+    if (session === 'settled' && input === 'settled' && agents === 'settled' && attention === 'settled') {
+      const observedAt = opts.session.readRuntimeActivitySnapshotTail?.().settlement?.committedProjection.observedAt;
+      if (typeof observedAt === 'number' && Number.isSafeInteger(observedAt) && observedAt >= 0) {
+        settledAt = Math.max(settledAt ?? observedAt, observedAt, observedUnsettled ? Date.now() : 0);
+        observedUnsettled = false;
+      } else {
+        settledAt = undefined;
+        observedUnsettled = true;
+      }
+    } else {
+      settledAt = undefined;
+      observedUnsettled = true;
+    }
+    return { session, input, agents, attention, agentsActiveCount, ...(settledAt !== undefined ? { settledAt } : {}) };
+  };
   const readLiveWorkNotificationSignature = (): string => {
     const pending = opts.session.getPendingQueueState?.();
-    return JSON.stringify({ session: readSessionLiveState(),
-      input: hasAcceptedInputCustody() || (pending?.known && pending.pendingCount > 0)
-        ? 'active' : pending?.known ? 'settled' : 'unknown' });
+    return JSON.stringify(readLiveWorkFacts(hasAcceptedInputCustody() || (pending?.known && pending.pendingCount > 0)
+      ? 'active' : pending?.known ? 'settled' : 'unknown'));
   };
 
   const runPendingMaterializationExclusive = async <Value>(
@@ -466,10 +518,9 @@ export function createSessionProviderInputConsumer<Mode, Message>(
       } catch {
         // An old empty observation cannot prove current Pending settlement.
       }
-      const session = readSessionLiveState();
       const input = hasAcceptedInputCustody() || pendingActive
         ? 'active' : pendingKnown ? 'settled' : 'unknown';
-      return { session, input };
+      return readLiveWorkFacts(input);
     },
     subscribeLiveWork(listener) {
       liveWorkListeners.add(listener);
@@ -482,6 +533,7 @@ export function createSessionProviderInputConsumer<Mode, Message>(
           if (batch) releasedInputBatch = batch;
           notifyLiveWorkChanged();
         });
+        unsubscribeSubagentLiveWork = opts.session.subscribeSubagentLiveWork?.(notifyLiveWorkChanged) ?? null;
         const observe = async (wait: () => Promise<boolean>): Promise<void> => {
           while (!controller.signal.aborted) {
             if (!await wait()) break;
@@ -502,6 +554,8 @@ export function createSessionProviderInputConsumer<Mode, Message>(
           liveWorkObservation = null;
           unsubscribeQueueLiveWork?.();
           unsubscribeQueueLiveWork = null;
+          unsubscribeSubagentLiveWork?.();
+          unsubscribeSubagentLiveWork = null;
           priorLiveWorkNotification = null;
         }
       };

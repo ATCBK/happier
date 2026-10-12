@@ -17,6 +17,7 @@ import {
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { SessionPermissionApprovalReviewerClaimV1Schema, SessionPermissionAccountUserDecisionActorV1Schema, SessionPermissionExternalHumanDecisionActorV1Schema, SessionPermissionIdempotencyKeyV1Schema, SessionPermissionSourceRefV1Schema, SessionPermissionSourceRevisionOrEpochV1Schema } from '@happier-dev/protocol/sessions/permissions/v1';
 import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { AccountSettings, SessionPermissionApprovalReviewerClaimV1, SessionPermissionAccountUserDecisionActorV1, SessionPermissionExternalHumanDecisionActorV1 } from '@happier-dev/protocol';
 import {
     getSessionNotificationAgentDisplayName,
@@ -404,7 +405,7 @@ export class AgentStateRequestStore {
             }
 
             const hasStoredClaim = Object.prototype.hasOwnProperty.call(existing, 'permissionResponseClaimV1');
-            const storedClaim = hasStoredClaim ? readPermissionResponseClaim(existing.permissionResponseClaimV1) : null;
+            const storedClaim = hasStoredClaim ? readPermissionResponseClaim(existing.permissionResponseClaimV1, 'stored') : null;
             if (hasStoredClaim && !storedClaim) {
                 // A malformed persisted claim is an unknown prior responder, so
                 // fail closed instead of overwriting it with a second authority.
@@ -455,7 +456,7 @@ export class AgentStateRequestStore {
                 outcome = { status: 'unclaimed' };
                 return currentState;
             }
-            const storedClaim = readPermissionResponseClaim(existing.permissionResponseClaimV1);
+            const storedClaim = readPermissionResponseClaim(existing.permissionResponseClaimV1, 'stored');
             if (!storedClaim) {
                 outcome = { status: 'conflict' };
                 return currentState;
@@ -486,7 +487,7 @@ export class AgentStateRequestStore {
             const existing = clonePlainObjectToNullProto(requests[params.requestId]);
             if (!existing) return currentState;
 
-            const storedClaim = readPermissionResponseClaim(existing.permissionResponseClaimV1);
+            const storedClaim = readPermissionResponseClaim(existing.permissionResponseClaimV1, 'stored');
             if (!storedClaim || !permissionResponseClaimsEqual(storedClaim, claim)) return currentState;
 
             delete existing.permissionResponseClaimV1;
@@ -521,7 +522,7 @@ export class AgentStateRequestStore {
 
         const hasActor = Object.prototype.hasOwnProperty.call(entry, 'permissionDecisionActorV1');
         if (!hasActor) return { status: 'not_settled' };
-        const actor = SessionPermissionAccountUserDecisionActorV1Schema.safeParse(entry.permissionDecisionActorV1);
+        const actor = createStoredReadSchema(SessionPermissionAccountUserDecisionActorV1Schema).safeParse(entry.permissionDecisionActorV1);
         if (!actor.success) return { status: 'conflict' };
         const turnId = TurnIdSchema.safeParse(entry.turnId);
 
@@ -959,7 +960,7 @@ export class AgentStateRequestStore {
                     if (
                         params.pluginId
                         && !isPermissionRequestOwnedByPlugin(
-                            normalizePermissionRequestOwner(entry.owner),
+                            normalizePermissionRequestOwner(entry.owner, 'stored'),
                             params.pluginId,
                         )
                     ) {
@@ -991,7 +992,7 @@ export class AgentStateRequestStore {
                     if (
                         params.pluginId
                         && !isPermissionRequestOwnedByPlugin(
-                            normalizePermissionRequestOwner(entry.owner),
+                            normalizePermissionRequestOwner(entry.owner, 'stored'),
                             params.pluginId,
                         )
                     ) {
@@ -1211,7 +1212,7 @@ function readAgentStateRequestMetadata(entry: unknown): AgentStateRequestMetadat
     const permissionSuggestions = Array.isArray(record.permissionSuggestions)
         ? [...record.permissionSuggestions]
         : undefined;
-    const owner = normalizePermissionRequestOwner(record.owner);
+    const owner = normalizePermissionRequestOwner(record.owner, 'stored');
     return {
         ...(typeof record.source === 'string' ? { source: record.source } : {}),
         ...(turnId.success ? { turnId: turnId.data } : {}),
@@ -1357,30 +1358,30 @@ function retainsPermissionGrant(entry: Record<string, unknown>): boolean {
         || typeof entry.updatedPermissions !== 'undefined';
 }
 
-function readPermissionResponseClaim(value: unknown): PermissionResponseClaim | null {
+function readPermissionResponseClaim(value: unknown, source: 'input' | 'stored' = 'input'): PermissionResponseClaim | null {
     const record = clonePlainObjectToNullProto(value);
     if (!record || record.version !== 1 || typeof record.origin !== 'string') return null;
 
     if (record.origin === 'approvalReviewer') {
-        const parsed = SessionPermissionApprovalReviewerClaimV1Schema.safeParse(record);
+        const parsed = (source === 'stored' ? createStoredReadSchema(SessionPermissionApprovalReviewerClaimV1Schema) : SessionPermissionApprovalReviewerClaimV1Schema).safeParse(record);
         return parsed.success ? parsed.data : null;
     }
 
     if (record.origin === 'automaticPolicy') {
-        return hasExactlyKeys(record, ['version', 'origin'])
+        return source === 'stored' || hasExactlyKeys(record, ['version', 'origin'])
             ? { version: 1, origin: 'automaticPolicy' }
             : null;
     }
 
     if (record.origin === 'presentUser') {
         const hasTurnId = Object.prototype.hasOwnProperty.call(record, 'turnId');
-        if (!hasExactlyKeys(
+        if (source === 'input' && !hasExactlyKeys(
             record,
             hasTurnId
                 ? ['version', 'origin', 'actor', 'turnId', 'decision', 'scope']
                 : ['version', 'origin', 'actor', 'decision', 'scope'],
         )) return null;
-        const actor = SessionPermissionAccountUserDecisionActorV1Schema.safeParse(record.actor);
+        const actor = (source === 'stored' ? createStoredReadSchema(SessionPermissionAccountUserDecisionActorV1Schema) : SessionPermissionAccountUserDecisionActorV1Schema).safeParse(record.actor);
         const turnId = hasTurnId ? TurnIdSchema.safeParse(record.turnId) : null;
         if (!actor.success) return null;
         if (turnId && !turnId.success) return null;
@@ -1407,7 +1408,7 @@ function readPermissionResponseClaim(value: unknown): PermissionResponseClaim | 
     }
 
     if (record.origin !== 'remoteMediation') return null;
-    if (!hasExactlyKeys(record, [
+    if (source === 'input' && !hasExactlyKeys(record, [
         'version',
         'origin',
         'actor',
@@ -1419,7 +1420,7 @@ function readPermissionResponseClaim(value: unknown): PermissionResponseClaim | 
         'decision',
         'scope',
     ])) return null;
-    const actor = SessionPermissionExternalHumanDecisionActorV1Schema.safeParse(record.actor);
+    const actor = (source === 'stored' ? createStoredReadSchema(SessionPermissionExternalHumanDecisionActorV1Schema) : SessionPermissionExternalHumanDecisionActorV1Schema).safeParse(record.actor);
     const mediatorPluginId = PluginIdSchema.safeParse(record.mediatorPluginId);
     const turnId = TurnIdSchema.safeParse(record.turnId);
     const sourceRef = SessionPermissionSourceRefV1Schema.safeParse(record.sourceRef);

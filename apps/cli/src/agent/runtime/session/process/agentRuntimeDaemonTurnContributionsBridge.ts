@@ -35,6 +35,7 @@ type DaemonAgentRuntimeAgentCompositionContributions = Extract<
  * This contract is independent of the retired whole-runtime session bridge.
  */
 export type DaemonAgentRuntimeTurnContributionsBridge = Readonly<{
+    mcpRequestAuth?: import('@/mcp/runtime/mcpRequestAuth').McpRequestAuthPort;
     admitSessionInput?(params: Readonly<{
         sessionId: string;
         request: SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2;

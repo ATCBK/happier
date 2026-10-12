@@ -9,6 +9,7 @@ import { createExactTurnUsageAccumulator } from '@/usage/exactTurnUsage';
 import { ScmComparisonSchema, readActionCompletionRunObservationV1, ExecutionRunGetResponseSchema } from '@happier-dev/protocol';
 import { startExecutionRun } from './startExecutionRun';
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
+import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
 import { createTestExecutionRunHostRuntime } from './testkit';
 import type { ExecutionRunPublicState } from '@happier-dev/protocol';
 import { createExecutionRunRpcActionDeps } from '@/rpc/handlers/executionRuns/dispatchExecutionRunRpcAction';
@@ -86,6 +87,12 @@ function composeRetainedRun(admissionFailure?: 'rejected' | 'outcomeUnknown', on
     const manager = new ExecutionRunHostBridge({
         parentProvider: TEST_BACKEND_ID,
         cwd: '/repo',
+        // The synthetic parent Session supplies its admitted metadata boundary;
+        // prompt preparation itself remains the real canonical owner.
+        resolveVoicePromptPreparation: async (input) => await resolveCliVoicePromptPreparation({
+            ...input,
+            sessionMetadata: {},
+        }),
         sendAcp: async () => undefined,
         onPublicStateUpdated,
         sessionInteractionHost: {

@@ -11,6 +11,7 @@ import type {
 import { permissionMode } from '@/agent/executionRuns/policy/permissionMode';
 import { resolveCatalogAgentConnectedAccountServiceIds } from '@/agent/catalog/registry';
 import { createExecutionRunCodedError } from '../errors';
+import { projectExecutionRunChildChoiceV1 } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { areExecutionRunBackendTargetsEqual, resolveExecutionRunRuntimeBackendId } from '../backendTargets';
 
 export type ExecutionRunAppliedParentSelection = Readonly<
@@ -67,7 +68,7 @@ function projectInheritedConnectedServices(
 }
 
 /** Resolves child omissions once, before credential or Provider materialization. */
-export function resolveExecutionRunChildSelection(input: Readonly<{
+export type ExecutionRunChildSelectionInput = Readonly<{
     backendTarget: BackendTargetRefV2Input;
     lifecycle: 'attached' | 'independent' | 'retained';
     modelId?: string;
@@ -76,7 +77,34 @@ export function resolveExecutionRunChildSelection(input: Readonly<{
     connectedServices?: ConnectedServiceBindingsV2 | null;
     connectedServicesDefaultServiceIds?: readonly string[];
     parent?: ExecutionRunAppliedParentSelection;
-}>): ResolvedExecutionRunChildSelection {
+    childSelection?: 'agentDefault';
+    agentDefaultSelection?: ProviderBoundModelRef | null;
+}>;
+
+export function resolveExecutionRunChildSelection(input: ExecutionRunChildSelectionInput): ResolvedExecutionRunChildSelection {
+    try {
+        if (input.childSelection === 'agentDefault') {
+            if (input.modelId !== undefined || input.modelSelection !== undefined || input.teamCredentialModel !== undefined
+                || input.connectedServices !== undefined || input.connectedServicesDefaultServiceIds !== undefined) {
+                throw new Error('Account default choice conflicts with an explicit child selection');
+            }
+            return { ...resolveExecutionRunChildSelectionInput({ ...input, lifecycle: 'independent',
+                modelSelection: input.agentDefaultSelection ?? null }), selectionSource: 'explicit' };
+        }
+        return resolveExecutionRunChildSelectionInput(input);
+    } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'execution_run_child_choice_required') {
+            Object.assign(error, { details: { childChoice: projectExecutionRunChildChoiceV1({
+                agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(input.backendTarget)),
+                parentRouteCompatibility: 'incompatible',
+                parentModelSelection: input.parent?.status === 'applied' ? input.parent.modelSelection ?? null : null,
+            }) } });
+        }
+        throw error;
+    }
+}
+
+function resolveExecutionRunChildSelectionInput(input: ExecutionRunChildSelectionInput): ResolvedExecutionRunChildSelection {
     const { modelSelection: selection, modelId } = resolveExecutionRunModelInput(input);
     const teamCredentialModel = input.teamCredentialModel
         ? TeamCredentialProviderModelSelectionV1Schema.parse(input.teamCredentialModel)
@@ -185,6 +213,8 @@ export function buildExecutionRunConfiguration(input: Readonly<{
     sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1;
     acpSessionModeId?: string;
     permissionMode: string;
+    allowedTools?: AgentSessionConfigurationSnapshot['allowedTools'];
+    unlistedTools?: AgentSessionConfigurationSnapshot['unlistedTools'];
     workspaceWrites?: 'allow' | 'deny';
     updatedAtMs: number;
 }>): Readonly<{
@@ -207,6 +237,8 @@ export function buildExecutionRunConfiguration(input: Readonly<{
             updatedAtMs: input.updatedAtMs,
         },
         ...(input.workspaceWrites !== undefined ? { workspaceWrites: input.workspaceWrites } : {}),
+        ...(input.allowedTools !== undefined ? { allowedTools: input.allowedTools } : {}),
+        ...(input.unlistedTools !== undefined ? { unlistedTools: input.unlistedTools } : {}),
         options: Object.fromEntries(
             Object.entries(
                 input.sessionConfigOptionOverrides?.overrides ?? {},

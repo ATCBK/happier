@@ -188,6 +188,7 @@ type CachedPermissionDecision<TResult> = {
 
 export class PermissionRequestCoordinator<TResult> {
     private readonly store: PermissionRequestCoordinatorStore;
+    private readonly resolveAutomaticDecision?: (request: PermissionRequestCoordinatorRequest) => PermissionRequestCoordinatorCompletion<TResult> | null;
     private readonly pendingRequests = new Map<string, PendingPermissionRequest<TResult>>();
     private readonly cachedDecisions = new Map<string, CachedPermissionDecision<TResult>>();
     /**
@@ -198,8 +199,12 @@ export class PermissionRequestCoordinator<TResult> {
     private readonly responseClaims = new Map<string, Promise<void>>();
     private waiterSequence = 0;
 
-    constructor(params: Readonly<{ store: PermissionRequestCoordinatorStore }>) {
+    constructor(params: Readonly<{
+        store: PermissionRequestCoordinatorStore;
+        resolveAutomaticDecision?: (request: PermissionRequestCoordinatorRequest) => PermissionRequestCoordinatorCompletion<TResult> | null;
+    }>) {
         this.store = params.store;
+        this.resolveAutomaticDecision = params.resolveAutomaticDecision;
     }
 
     requestDecision(
@@ -210,6 +215,18 @@ export class PermissionRequestCoordinator<TResult> {
 
         if (options?.signal?.aborted) {
             return Promise.reject(createPermissionRequestAbortError());
+        }
+
+        const automatic = this.resolveAutomaticDecision?.(request);
+        if (automatic) {
+            return Promise.resolve(this.store.completeRequest({
+                requestId: request.requestId,
+                ...automatic.completedRequest,
+                fallback: { ...request, createdAt: request.createdAt ?? Date.now() },
+            })).then((recorded) => {
+                if (recorded === false) throw new Error('permission_automatic_decision_not_recorded');
+                return automatic.result;
+            });
         }
 
         let entry = this.pendingRequests.get(request.requestId);
@@ -808,7 +825,7 @@ export class PermissionRequestCoordinator<TResult> {
 }
 
 export function createPermissionRequestCoordinator<TResult>(
-    params: Readonly<{ store: PermissionRequestCoordinatorStore }>,
+    params: ConstructorParameters<typeof PermissionRequestCoordinator<TResult>>[0],
 ): PermissionRequestCoordinator<TResult> {
     return new PermissionRequestCoordinator<TResult>(params);
 }

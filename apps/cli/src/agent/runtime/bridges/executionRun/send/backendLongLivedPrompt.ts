@@ -19,7 +19,7 @@ import {
   throwIfExecutionRunControllerFailed,
 } from '@/agent/executionRuns/controllers/failureSignal';
 import type { FinishExecutionRun } from '../executionRunFinishRun';
-import { resumeBackendControllerForResumableRun } from '../resumeBackendController';
+import { resumeBackendControllerForResumableRun, type ExecutionRunResumeMaterializationHooks } from '../resumeBackendController';
 import { isAbortLikeError, normalizeExecutionRunSendDelivery, resolveInFlightDeliveryAction } from '../turnDelivery';
 import type { ExecutionRunHostRuntime } from '../executionRunHostRuntime';
 import type { ExecutionRunPermissionRequestStoreProvider } from '../executionRunPermissionResponseTarget';
@@ -66,7 +66,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
   runs: Map<string, ExecutionRunState>;
   controllers: Map<string, ExecutionRunController>;
   budgetRegistry: ExecutionBudgetRegistry | null;
-  createRuntime: (opts: {
+  createRuntime: (opts: ExecutionRunResumeMaterializationHooks & {
     runId?: string;
     controllerOccurrenceId: string;
     backendId: string;
@@ -84,7 +84,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
   getPermissionRequestStore?: ExecutionRunPermissionRequestStoreProvider | null;
   permissionRequestStore?: ExecutionRunPermissionRequestStore;
   handlePermissionResponseTarget?: (dispatch: AgentStateResponseTargetDispatch) => Promise<boolean>;
-  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean }>) => Promise<void>;
+  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean; resumed?: boolean }>) => Promise<void>;
   onPublicStateUpdated?: (runId: string) => void;
   profileCatalog?: ExecutionRunProfileContributionCatalog;
   authorizeProviderEffect?: () => Promise<{ ok: boolean; errorCode?: string; error?: string }>;

@@ -47,7 +47,7 @@ export const ReviewProfile: ExecutionRunIntentProfile = {
     // The comparison identity is the sole caller selector; reread its machine evidence.
     const captured = typeof existing.comparisonId === 'string'
       ? await readCapturedScmComparison({ cwd, comparisonId: existing.comparisonId, ...(sessionId ? { sessionId } : {}) }) : null;
-    if (requestsWalkthrough(existing) && (!captured || !sessionId)) throw new Error('Review narration requires a captured Session comparison');
+    if (requestsWalkthrough(existing) && !captured) throw new Error('Review narration requires a captured comparison');
     const analysis = requestsWalkthrough(existing) && captured ? await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId,
       request: { ...request, intent: 'scm_diff_summary', intentInput: {
         cwd, source: captured.comparison.source, comparisonId: captured.comparison.id, outputs: ['walkthrough'],

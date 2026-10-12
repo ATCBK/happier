@@ -46,6 +46,12 @@ describe('Session runtime-local metadata', () => {
     });
   });
 
+  it('retains the native resume identity despite retired stored fields', () => {
+    expect(pickSessionRuntimeLocalMetadata({ nativeResumeIdentityV1: {
+      v: 1, vendorResumeId: 'native-1', retiredField: true,
+    } })).toEqual({ nativeResumeIdentityV1: { v: 1, vendorResumeId: 'native-1' } });
+  });
+
   it('does not admit malformed descriptor or unrelated metadata into the local carrier', () => {
     expect(pickSessionRuntimeLocalMetadata({
       runtimeDescriptorV1: { v: 1, agentId: '', agent: {} },

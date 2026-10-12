@@ -7,6 +7,7 @@ import type {
 } from '@/agent/runtime/session/input/_types';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
 import type { SessionPendingQueueDeliveryTiming } from '@happier-dev/protocol';
+import { hostSubagentStore } from '@/session/subagents/hostSubagentStore';
 
 export async function waitForNextPermissionModeMessage<Mode, Message>(opts: {
   messageQueue: MessageQueue2<Mode, Message>;
@@ -54,6 +55,9 @@ export function createSessionProviderInputConsumerSessionAdapter(
       ? { materializeNextPendingMessageSafely: (materializeOpts) => materializeNextPendingMessageSafely.call(session, materializeOpts) }
       : {}),
     getMetadataSnapshot: () => session.getMetadataSnapshot(),
+    getAgentStateSnapshot: () => session.getAgentStateSnapshot(),
+    readSubagentLiveWork: () => hostSubagentStore.readLiveWork(session.sessionId),
+    subscribeSubagentLiveWork: listener => hostSubagentStore.subscribeLiveWork(session.sessionId, listener),
     getPendingQueueState: () => session.getPendingQueueState(),
     readPendingQueueStateForLiveWork: async () => {
       await session.refreshSessionSnapshotFromServerRequired({ reason: 'explicit-drain' });

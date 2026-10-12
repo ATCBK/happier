@@ -88,7 +88,7 @@ describe('standalone Local Voice policy from UI admission to provider input', ()
     const controllers = new Map<string, ExecutionRunController>();
     const activeManager = manager;
     const dispatch = async (method: string, input: unknown) => {
-      if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START) {
+      if (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) {
         const envelope = input as { start: unknown; runId?: string; resume?: boolean };
         if (envelope.runId) {
           if (retainedReadsUnavailable) ensuredWithoutPolicyRead = envelope.runId;
@@ -129,8 +129,12 @@ describe('standalone Local Voice policy from UI admission to provider input', ()
     };
     ui = await uiModule.createStandaloneVoicePolicyHarness({ mode, dispatch });
     const handle = ui.handle;
+    // The admitted policy now retains the bound conversation's localized
+    // literal, rather than resolving another greeting after settings change.
+    const welcomeText = 'Bonjour, tu parles à voice — que souhaites-tu faire ?';
     expect(handle.voicePolicy).toEqual({ assistantLanguage: 'fr-FR', welcome: {
       enabled: mode !== 'off', mode: mode === 'on_first_turn' ? mode : 'immediate',
+      ...(mode !== 'off' ? { text: welcomeText } : {}),
     } });
     const hydrated = await ui.hydrateAfterSettingsChange();
     expect(hydrated.voiceAgentId).toBe(handle.voiceAgentId);
@@ -140,7 +144,7 @@ describe('standalone Local Voice policy from UI admission to provider input', ()
     await ui.welcome();
     if (mode === 'immediate') expect(welcomeRequests).toEqual([{
       runId: handle.voiceAgentId, actionId: 'voice_agent.welcome',
-      input: { welcomeText: 'Bonjour, je vous écoute — que souhaitez-vous faire ?' },
+      input: { welcomeText },
     }]);
     else expect(welcomeRequests).toEqual([]);
     if (mode !== 'immediate') expect(prompts.filter((prompt) => !prompt.includes('reply with exactly READY'))).toEqual([]);

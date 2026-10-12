@@ -100,8 +100,7 @@ describe('ACP runtime definitions', () => {
       source: { kind: 'account_configured' },
       name: 'custom-acp',
       title: 'Custom ACP',
-      command: 'acme-agent',
-      args: ['--acp'],
+      launch: { kind: 'command', command: 'acme-agent', args: ['--acp'] },
       env: {
         REGION: { t: 'literal', v: 'eu' },
       },
@@ -118,6 +117,7 @@ describe('ACP runtime definitions', () => {
     } satisfies ResolvedConfiguredAcpBackend;
     const definition = normalizeConfiguredAcpDefinition({
       backend,
+      launch: { kind: 'ready', command: 'acme-agent', args: ['--acp'], env: {} },
       launchEnv: {
         TOKEN: 'secret-token',
       },

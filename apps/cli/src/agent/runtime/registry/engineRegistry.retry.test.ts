@@ -70,6 +70,7 @@ function createContributionRegistry(params?: Readonly<{
 
 function createRuntimeRegistry(contributes: ResolvedContributionRegistry): ResolvedExecutablePluginRuntimeRegistry {
     return {
+        claimReleaseLessDeclarations: async () => undefined,
         contributes,
         resolveCaptureSource: unexpectedCaptureSourceResolution,
         resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,

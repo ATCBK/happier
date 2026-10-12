@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
+import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
 
 import { AgentToolExecuteAfterHookPayloadSchema, AgentToolExecuteBeforeHookPayloadSchema } from '@happier-dev/protocol/plugins/hooks';
 import { isFeatureId } from '@happier-dev/protocol/features/catalog';
-import type { PluginExecutionInterceptionCapability, AccountSettings, PluginExecutionScopeV1, PluginSourceCustodyV1, SessionMcpSelectionV1 } from '@happier-dev/protocol';
+import type { PluginExecutionInterceptionCapability, AccountSettings, PluginExecutionScopeV1, PluginSourceCustodyV1, SessionCapabilitySelectionV1 } from '@happier-dev/protocol';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type {
     AgentExecutionRunHostServicesV1,
@@ -188,8 +190,8 @@ export function createNativeAgentExecutionRunHostServices(params: Readonly<{
     directory: string;
     machineId: string;
     accountSettings: AccountSettings | null;
-    resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; signal?: AbortSignal }>) => Promise<ActiveAccountSettingsSnapshot | null>;
-    mcpSelection?: SessionMcpSelectionV1;
+    resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => Promise<ActiveAccountSettingsSnapshot | null>;
+    capabilitySelection?: SessionCapabilitySelectionV1;
     runtimeRegistry: ResolvedExecutablePluginRuntimeRegistry | null;
     runtimeAuthority?: PluginRuntimeAuthoritySnapshotV1;
     pluginId: string;
@@ -348,8 +350,10 @@ export function createNativeAgentExecutionRunHostServices(params: Readonly<{
                     accountSettings: accountSettingsSnapshot?.settings ?? params.accountSettings,
                     accountSettingsSnapshot,
                     machineId: params.machineId,
+                    agentId: params.agentId,
+                    agentAcceptsUserMcp: agentReceivesUserMcpServersV1(resolveAgentToolsDelivery(params.agentId, params.runtimeRegistry?.contributes)),
                     directory: params.directory,
-                    selection: params.mcpSelection ?? null,
+                    selection: params.capabilitySelection?.mcp ?? null,
                 });
                 return Object.freeze(servers.map((server) => Object.freeze({
                     id: server.id,
@@ -388,7 +392,7 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
         session: Pick<ApiSessionClient, 'getMetadataSnapshot'>;
         machineId: string;
         accountSettings?: AccountSettings | null;
-        resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; signal?: AbortSignal }>) => Promise<ActiveAccountSettingsSnapshot | null>;
+        resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => Promise<ActiveAccountSettingsSnapshot | null>;
         accountSettingsAuthority?: 'account' | 'session';
         permissionHandler: Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'>;
     }>;
@@ -488,6 +492,8 @@ export function createNativeAgentSessionHostServiceOwners(params: Readonly<{
             machineId: params.hostSession.machineId,
             accountSettingsSnapshot,
             directory: params.directory,
+            agentId: params.identity.agentId,
+            agentAcceptsUserMcp: agentReceivesUserMcpServersV1(resolveAgentToolsDelivery(params.identity.agentId, params.runtimeRegistry?.contributes)),
             sessionMetadata: params.hostSession.session.getMetadataSnapshot(),
         });
     };

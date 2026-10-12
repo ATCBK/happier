@@ -3,7 +3,7 @@ import type {
   AcpBackendCapabilitiesV1,
   McpValueRefV1,
 } from '@happier-dev/protocol';
-import type { AcpBackendDefinitionV1, AcpConfiguredRuntimeV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import type { AcpBackendDefinitionV1, AcpBackendLaunchV1, AcpConfiguredRuntimeV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 export class AcpCatalogUnavailableError extends Error {
@@ -24,8 +24,7 @@ export type ResolvedConfiguredAcpBackend = Readonly<{
   name: string;
   title: string;
   description?: string;
-  command: string;
-  args: ReadonlyArray<string>;
+  launch: AcpBackendLaunchV1;
   env: Readonly<Record<string, McpValueRefV1>>;
   auth?: AcpBackendAuthConfigV1;
   capabilities: AcpBackendCapabilitiesV1;
@@ -47,8 +46,7 @@ function materializeConfiguredAcpBackendFromAccountSettingsEntry(
     name: backend.name,
     title: backend.title,
     description: backend.description,
-    command: backend.command,
-    args: [...backend.args],
+    launch: backend.launch,
     env: { ...backend.env },
     auth: backend.auth,
     capabilities: backend.capabilities,

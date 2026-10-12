@@ -107,6 +107,22 @@ const bashRequest = {
     createdAt: 100,
 };
 
+it('settles a host tool-policy denial before publishing a permission prompt', async () => {
+    const session = new FakeSession();
+    const store = new AgentStateRequestStore({ session, logPrefix: '[CoordinatorTest]' });
+    const coordinator = createPermissionRequestCoordinator<TestPermissionResult>({
+        store,
+        resolveAutomaticDecision: () => ({
+            result: { decision: 'denied' },
+            completedRequest: { status: 'denied', decision: 'denied' },
+        }),
+    });
+    const decision = coordinator.requestDecision(bashRequest);
+    expect(session.agentState.requests).toEqual({});
+    await expect(decision).resolves.toEqual({ decision: 'denied' });
+    expect(session.agentState.completedRequests?.[bashRequest.requestId]).toMatchObject({ status: 'denied' });
+});
+
 function approve(requestId = bashRequest.requestId): TestPermissionResult {
     return { decision: `approved:${requestId}` };
 }

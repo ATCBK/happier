@@ -2,9 +2,8 @@ import type {
   SessionPermissionFollowUpPromptIntentV1,
   SessionPermissionPersistAllowRuleV1,
 } from '@happier-dev/agents';
-export type HostAcpMcpInputPolicy = Readonly<{
-  policy: 'pass_through' | 'drop';
-}>;
+import type { PluginAgentAcpMcpInputPolicyV2 } from '@happier-dev/protocol';
+export type HostAcpMcpInputPolicy = Readonly<PluginAgentAcpMcpInputPolicyV2>;
 
 export type HostAcpTimeouts = Partial<Readonly<{
   initMs: number;

@@ -93,7 +93,7 @@ function readLinkData(
     operation: keyof AgentExternalSessionsContribution,
 ): PluginAgentExternalSessionLinkData | undefined {
     if (!metadata) return undefined;
-    const resolution = resolveLinkedExternalSessionMetadataV1(metadata);
+    const resolution = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
     if (!resolution.ok && resolution.error !== 'linked_session_not_found') {
         throw invalidInput(operation);
     }

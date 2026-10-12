@@ -12,6 +12,7 @@ import type {
   ConnectedServiceMaterializationIdentityV1,
   ExternalSessionsAgentId,
   PluginAgentToolsDeliveryV2,
+  PluginAgentSkillsCapabilityV2,
 } from '@happier-dev/protocol';
 import type { AnyTerminalRuntimeOps } from '@/agent/terminalRuntime/providers/types';
 import type { CommandDispatchPolicy } from '@/agent/runtime/registry/commandContracts';
@@ -42,6 +43,7 @@ import type {
   AgentConnectedAccountStateSharingDynamicEntryPatternV1,
   AgentConnectedAccountResumeReachabilityInputV1,
   AgentConnectedAccountResumeReachabilityResultV1,
+  AgentConnectedAccountSharedStateFileMergeV1,
   AgentDeferredStartupEligibilityInputV1,
   AgentExperimentalVendorResumeSupportInputV1,
   AgentRuntimeSurfaces,
@@ -215,6 +217,8 @@ export type AgentCatalogEntry = Readonly<{
   id: CatalogAgentLookupId;
   /** Agent-declared channel for receiving contributed Happier tools. */
   toolDelivery?: PluginAgentToolsDeliveryV2;
+  /** Agent-declared session-private skills and native discovery facts. */
+  skills?: PluginAgentSkillsCapabilityV2;
   /** Provider-owned authoritative Runtime Activity characterization. */
   runtimeActivityApplicability?: RuntimeActivityApplicability;
   /** Host-private binding from this Agent CLI to one same-plugin declared system tool. */
@@ -226,6 +230,7 @@ export type AgentCatalogEntry = Readonly<{
   connectedAccountRequestAuthUses?: readonly ConnectedAccountRequestAuthUseV1[];
   connectedAccountFileEnvironmentUses?: readonly AgentConnectedAccountFileEnvironmentUseV1[];
   connectedAccountEnvironmentUses?: readonly AgentConnectedAccountEnvironmentUseV1[];
+  connectedAccountEnvironmentUnsetUses?: readonly AgentConnectedAccountEnvironmentUseV1[];
   connectedAccountSwitchContinuity?: AgentConnectedAccountSwitchContinuityV1;
   cliSubcommand: CatalogAgentLookupId;
   /**
@@ -316,6 +321,7 @@ export type AgentCatalogEntry = Readonly<{
    * Optional provider-owned connected-service state/config sharing descriptor.
    */
   getConnectedServiceStateSharingDescriptor?: () => Promise<ConnectedServiceStateSharingDescriptor | null>;
+  getConnectedServiceSharedStateFileMerge?: () => Promise<AgentConnectedAccountSharedStateFileMergeV1 | null>;
   /**
    * Optional provider-owned predecessor-wire compatibility verifier.
    *

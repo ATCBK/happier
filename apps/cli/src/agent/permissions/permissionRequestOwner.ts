@@ -1,5 +1,6 @@
 import { SessionPermissionSourceAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { SessionPermissionSourceAuthorityV1 } from '@happier-dev/protocol';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 export type PermissionRequestOwner = Readonly<{
     kind: 'plugin';
@@ -9,7 +10,7 @@ export type PermissionRequestOwner = Readonly<{
     sourceAuthority?: SessionPermissionSourceAuthorityV1;
 }>;
 
-export function normalizePermissionRequestOwner(value: unknown): PermissionRequestOwner | null {
+export function normalizePermissionRequestOwner(value: unknown, source: 'input' | 'stored' = 'input'): PermissionRequestOwner | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
     if (record.kind !== 'plugin') return null;
@@ -17,7 +18,7 @@ export function normalizePermissionRequestOwner(value: unknown): PermissionReque
     if (!pluginId) return null;
     const runtimeId = typeof record.runtimeId === 'string' ? record.runtimeId.trim() : '';
     const sourceAuthority = Object.hasOwn(record, 'sourceAuthority')
-        ? SessionPermissionSourceAuthorityV1Schema.safeParse(record.sourceAuthority)
+        ? (source === 'stored' ? createStoredReadSchema(SessionPermissionSourceAuthorityV1Schema) : SessionPermissionSourceAuthorityV1Schema).safeParse(record.sourceAuthority)
         : null;
     if (sourceAuthority && !sourceAuthority.success) return null;
     return Object.freeze({

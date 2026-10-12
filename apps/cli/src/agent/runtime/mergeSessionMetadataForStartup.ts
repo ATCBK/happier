@@ -15,7 +15,8 @@ import {
     clearModelIntentSessionMetadata,
     clearPermissionModeIntentSessionMetadata,
 } from '@happier-dev/agents/session/state/metadataWriters';
-import { readSessionMcpSelectionV1FromMetadata } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readSessionCapabilitySelectionFromMetadataV1, resolveSelectionRestartMarkersForStartupV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SessionModelSelectionResolutionError } from '@happier-dev/protocol/providers/model-selection';
 import type { ProviderBoundModelRef, SessionModelSelectionIntentV1, SessionAttachMetadataIdentityPolicy } from '@happier-dev/protocol';
@@ -133,21 +134,19 @@ export type SessionModeOverride = {
 
 export type ModelOverride = SessionModelSelectionIntentV1;
 
-function resolveSessionMcpSelectionForStartup(opts: {
+function resolveSessionCapabilitySelectionForStartup(opts: {
     current: Metadata;
     next: Metadata;
     mode: StartupMergeMode;
 }): Record<string, unknown> | null {
-    const currentSelection = readSessionMcpSelectionV1FromMetadata(opts.current);
-    const nextSelection = readSessionMcpSelectionV1FromMetadata(opts.next);
-
-    if (opts.mode === 'attach') {
-        return currentSelection ? { mcpSelectionV1: currentSelection } : null;
+    const current = readSessionCapabilitySelectionFromMetadataV1(opts.current);
+    const next = readSessionCapabilitySelectionFromMetadataV1(opts.next);
+    const result: Record<string, unknown> = {};
+    for (const [kind, key] of [['mcp', 'mcpSelectionV1'], ['skills', 'skillSelectionV1']] as const) {
+        if (opts.current[key] !== undefined) result[key] = current[kind];
+        else if (opts.mode === 'start' && opts.next[key] !== undefined) result[key] = next[kind];
     }
-
-    if (currentSelection) return { mcpSelectionV1: currentSelection };
-    if (nextSelection) return { mcpSelectionV1: nextSelection };
-    return null;
+    return Object.keys(result).length > 0 ? result : null;
 }
 
 function resolveSessionModeOverrideForStartup(opts: {
@@ -332,6 +331,7 @@ export function mergeSessionMetadataForStartup(opts: {
     modelOverride?: ModelOverride | null;
     metadataKeysToUnsetOnAttach?: readonly string[] | null;
     attachMetadataIdentityPolicy?: SessionAttachMetadataIdentityPolicy | null;
+    appliedCapabilitySelection?: SessionCapabilitySelectionV1 | 'preserved_process';
     mode?: StartupMergeMode;
 }): Metadata {
     const mode: StartupMergeMode = opts.mode ?? 'start';
@@ -349,6 +349,11 @@ export function mergeSessionMetadataForStartup(opts: {
     };
 
     if (mode === 'attach') {
+        // Tool policy belongs to the retained Session, never runner defaults.
+        for (const key of ['allowedTools', 'unlistedTools'] as const) {
+            if (opts.current[key] === undefined) delete merged[key];
+            else Object.assign(merged, { [key]: opts.current[key] });
+        }
         // Process startup titles are birth seeds, not display-title mutations.
         // Keep the stored value and stamp, including an empty or removed title.
         if (opts.current.summary !== undefined) {
@@ -396,10 +401,12 @@ export function mergeSessionMetadataForStartup(opts: {
         // when the process is replacing the physical workspace identity.
         if (opts.current.work !== undefined) merged.work = opts.current.work;
         else delete merged.work;
-        if (opts.current.bot !== undefined) merged.bot = opts.current.bot;
-        else delete merged.bot;
-        if (opts.current.createdAsBot !== undefined) merged.createdAsBot = opts.current.createdAsBot;
-        else delete merged.createdAsBot;
+        const { bot: _bot, createdAsBot: _createdAsBot, ...retainedMetadata } = merged;
+        merged = {
+            ...retainedMetadata,
+            ...(opts.current.bot !== undefined ? { bot: opts.current.bot } : {}),
+            ...(opts.current.createdAsBot !== undefined ? { createdAsBot: opts.current.createdAsBot } : {}),
+        };
     }
 
     const perm = resolvePermissionModeForStartup({
@@ -469,17 +476,22 @@ export function mergeSessionMetadataForStartup(opts: {
         merged = clearAcpConfigOptionIntentSessionMetadata(merged) as Metadata;
     }
 
-    const mcpSelection = resolveSessionMcpSelectionForStartup({
+    const capabilitySelection = resolveSessionCapabilitySelectionForStartup({
         current: opts.current,
         next: opts.next,
         mode,
     });
-    if (mcpSelection) {
-        Object.assign(merged, mcpSelection);
-    } else if (mode === 'attach') {
-        delete (merged as Record<string, unknown>).mcpSelectionV1;
+    if (mode === 'attach') {
+        for (const key of ['mcpSelectionV1', 'skillSelectionV1', 'mcpSelectionRestartRequiredV1', 'skillSelectionRestartRequiredV1'] as const) {
+            delete (merged as Record<string, unknown>)[key];
+            if (opts.current[key] !== undefined) Object.assign(merged, { [key]: opts.current[key] });
+        }
     }
-    delete (merged as Record<string, unknown>).mcpSelectionRestartRequiredV1;
+    if (capabilitySelection) Object.assign(merged, capabilitySelection);
+    merged = resolveSelectionRestartMarkersForStartupV1({ current: merged,
+        applied: opts.appliedCapabilitySelection ?? (mode === 'attach' ? 'preserved_process'
+            : readSessionCapabilitySelectionFromMetadataV1(merged)),
+    });
 
     return merged;
 }

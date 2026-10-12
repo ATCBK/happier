@@ -39,6 +39,7 @@ import type { ResolveManagedProviderPurposeBindingIntent } from '@/providers/man
 import type { ProviderRuntimeModelProjectionReader } from '@/providers/spawn/runtimeCatalog';
 import type { DirectManagedProviderEndpointPreparer } from '@/providers/lifecycle/prepareDirectLaunch';
 import { createProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
+import { normalizeUnsetEnvKeys, stripUnsetEnvironmentVariables } from '@/utils/processEnv/buildScopedProcessEnv';
 
 import { withExecutionRunHostRuntimeCleanup } from '../hostRuntime/cleanup';
 import { createLazyExecutionRunHostRuntime } from '../hostRuntime/lazy';
@@ -187,6 +188,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
     resolveAccountSettingsSnapshot?: (input?: Readonly<{
         secretReferenceOverlay?: SecretReferenceOverlayV1;
         mcpServerCatalog?: boolean;
+        savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[];
         signal?: AbortSignal;
     }>) => Promise<ActiveAccountSettingsSnapshot | null>;
 }>): LazyExecutionRunRuntimeShellConfig {
@@ -240,6 +242,8 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                         ? { acpSessionModeId: opts.start.acpSessionModeId }
                         : {}),
                     permissionMode: opts.permissionMode,
+                    ...(opts.start?.allowedTools !== undefined ? { allowedTools: opts.start.allowedTools } : {}),
+                    ...(opts.start?.unlistedTools !== undefined ? { unlistedTools: opts.start.unlistedTools } : {}),
                     workspaceWrites: opts.workspaceWrites,
                     updatedAtMs: Date.now(),
                 })
@@ -402,12 +406,16 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                     values: Object.values(secretReferenceEnvironment),
                 });
             }
-            const isolationEnv: Record<string, string> = {
+            const isolationUnsetEnvKeys = normalizeUnsetEnvKeys([
+                ...(connectedServicesEnv?.unsetEnvKeys ?? []),
+                ...(providerLaunch?.unsetEnvKeys ?? []),
+            ]);
+            const isolationEnv = stripUnsetEnvironmentVariables({
                 ...(pluginIsolationBundle?.env ?? {}),
                 ...(connectedServicesEnv?.env ?? {}),
                 ...(providerLaunch?.environment ?? {}),
                 ...secretReferenceEnvironment,
-            };
+            }, isolationUnsetEnvKeys);
             const runtimeOpts = {
                 cwd: opts.cwd,
                 scope: opts.scope,
@@ -462,12 +470,12 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                 ...(opts.sessionOwnedRunScope ? { sessionOwnedRunScope: opts.sessionOwnedRunScope } : {}),
                 ...(connectedServicesEnv ? { connectedServiceRuntimeAuthRefresh: connectedServicesEnv.refreshRuntimeAuth } : {}),
                 ...(Object.keys(isolationEnv).length > 0
-                    || (providerLaunch?.unsetEnvKeys.length ?? 0) > 0
+                    || isolationUnsetEnvKeys.length > 0
                     ? {
                         isolation: {
                             env: isolationEnv,
-                            ...(providerLaunch?.unsetEnvKeys.length
-                                ? { unsetEnvKeys: providerLaunch.unsetEnvKeys }
+                            ...(isolationUnsetEnvKeys.length > 0
+                                ? { unsetEnvKeys: isolationUnsetEnvKeys }
                                 : {}),
                         },
                     }
@@ -608,6 +616,7 @@ export function createExecutionRunRuntime(opts: Readonly<{
     resolveAccountSettingsSnapshot?: (input?: Readonly<{
         secretReferenceOverlay?: SecretReferenceOverlayV1;
         mcpServerCatalog?: boolean;
+        savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[];
         signal?: AbortSignal;
     }>) => Promise<ActiveAccountSettingsSnapshot | null>;
 }>): ExecutionRunHostRuntime {

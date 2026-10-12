@@ -10,10 +10,11 @@ import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runti
 import { PortableRuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { SecretReferenceOverlayV1Schema } from '@happier-dev/protocol/profiles/secretReferenceOverlayV1';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { SessionCapabilitySelectionV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { TeamCredentialProviderModelSelectionV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { ExecutionRunState } from './executionRunTypes';
 import { RequesterWorkAttributionV1Schema } from '@/daemon/lifecycle/requesterWorkAttribution';
+import { AgentSessionToolPolicyShapeV1 } from '@happier-dev/protocol/runtime/permissionIntentV1';
 
 /** Private lifecycle custody, independent of the daemon's disposable visibility marker. */
 const RetainedRunStateSchema = z.object({
@@ -29,8 +30,9 @@ const RetainedRunStateSchema = z.object({
   notifyParentOnCompletion: z.boolean().optional(), turnCount: z.number().int().nonnegative().optional(),
   effectiveEngine: z.object({ agentId: z.string().min(1), modelId: z.string().optional() }).strict().optional(),
   launch: z.object({
+    ...AgentSessionToolPolicyShapeV1,
     selectionSource: z.enum(['explicit', 'inherited', 'independent', 'retained']).optional(),
-    cwd: z.string().optional(), mcpSelection: SessionMcpSelectionV1Schema.optional(), acpSessionModeId: z.string().optional(),
+    cwd: z.string().optional(), capabilitySelection: SessionCapabilitySelectionV1Schema.optional(), acpSessionModeId: z.string().optional(),
     runtimeDescriptorV1: PortableRuntimeDescriptorV1Schema.optional(), launchOrigin: ExecutionRunLaunchOriginSchema.optional(),
     modelId: z.string().optional(), modelSelection: ProviderBoundModelRefSchema.optional(),
     teamCredentialModel: TeamCredentialProviderModelSelectionV1Schema.optional(),

@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/protocol';
 
 import type { AgentMessage } from '@/agent/core/AgentMessage';
+import type { CreateCliExecutionRunBackendParams } from '@/agent/runtime/registry/engineRegistryTypes';
 import type {
   ExecutionRunHostRuntime,
   ExecutionRunHostRuntimeMessageHandler,
@@ -620,7 +621,7 @@ describe('createExecutionRunBackend (plugin runtimeCore adapter)', () => {
     expect(messages.filter((message) => message.type === 'event' && message.name === 'runtime.descriptor')).toHaveLength(0);
   });
 
-  it('passes generic isolation env to plugin runtimeCore-backed execution runs', async () => {
+  it('preserves user cache directories in plugin runtimeCore-backed execution runs', async () => {
     const runtimeCoreBackend = createStubRuntimeCoreBackend();
     const createExecutionRunBackendMock = vi.fn(() => runtimeCoreBackend);
     resolveBackendEngineAdapterResolutionMock.mockResolvedValue({
@@ -664,27 +665,33 @@ describe('createExecutionRunBackend (plugin runtimeCore adapter)', () => {
       diagnostics: [],
     });
 
-    const runtime = createExecutionRunRuntime({
-      cwd: '/tmp/plugin-backend',
-      scope: 'detached',
-      backendId: 'acme.sample.backend',
-      backendTarget: { kind: 'builtInAgent', agentId: 'acme.sample.backend' as never },
-      permissionMode: 'read_only',
-      runId: 'run_isolated',
-    });
+    const envScope = createEnvKeyScope(['XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME']);
+    envScope.patch({ XDG_STATE_HOME: '/user/state', XDG_CACHE_HOME: '/user/cache', XDG_DATA_HOME: '/user/data' });
+    try {
+      const runtime = createExecutionRunRuntime({
+        cwd: '/tmp/plugin-backend',
+        scope: 'detached',
+        backendId: 'acme.sample.backend',
+        backendTarget: { kind: 'builtInAgent', agentId: 'acme.sample.backend' as never },
+        permissionMode: 'read_only',
+        runId: 'run_isolated',
+      });
 
-    await expect(runtime.provisionRuntime()).resolves.toEqual({ runtimeId: 'plugin-runtime-1' });
-    await expect(runtime.dispose()).resolves.toBeUndefined();
+      await expect(runtime.provisionRuntime()).resolves.toEqual({ runtimeId: 'plugin-runtime-1' });
+      await expect(runtime.dispose()).resolves.toBeUndefined();
 
-    expect(createExecutionRunBackendMock).toHaveBeenCalledWith(expect.objectContaining({
-      isolation: {
-        env: expect.objectContaining({
-          XDG_STATE_HOME: expect.stringContaining('/isolation/acme.sample.backend/execution_run/run_isolated/xdg/state'),
-          XDG_CACHE_HOME: expect.stringContaining('/isolation/acme.sample.backend/execution_run/run_isolated/xdg/cache'),
-          XDG_DATA_HOME: expect.stringContaining('/isolation/acme.sample.backend/execution_run/run_isolated/xdg/data'),
-        }),
-      },
-    }));
+      expect(createExecutionRunBackendMock).toHaveBeenCalledWith(expect.objectContaining({
+        isolation: {
+          env: expect.objectContaining({
+            XDG_STATE_HOME: '/user/state',
+            XDG_CACHE_HOME: '/user/cache',
+            XDG_DATA_HOME: '/user/data',
+          }),
+        },
+      }));
+    } finally {
+      envScope.restore();
+    }
   });
 
   it('preserves dynamic permission capability through plugin runtime wrappers', async () => {
@@ -1244,6 +1251,7 @@ describe('createExecutionRunBackend (plugin runtimeCore adapter)', () => {
       ok: true,
       result: {
         activationId: registration.activationId,
+        unsetEnvKeys: ['AGY_ACP_CCPA_BASE_URL', 'AGY_ACP_CCPA_PROJECT'],
         env: {
           CODEX_HOME: '/materialized/run_cs_1/codex-home',
           HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: connectedServiceSelectionsEnvJson,
@@ -1263,7 +1271,7 @@ describe('createExecutionRunBackend (plugin runtimeCore adapter)', () => {
       },
     });
     const runtimeCoreBackend = createStubRuntimeCoreBackend();
-    const createExecutionRunBackendMock = vi.fn(() => runtimeCoreBackend);
+    const createExecutionRunBackendMock = vi.fn((_options: CreateCliExecutionRunBackendParams) => runtimeCoreBackend);
     resolveBackendEngineAdapterResolutionMock.mockResolvedValue({
       backendId: 'codex',
       agentId: 'codex',
@@ -1330,9 +1338,13 @@ describe('createExecutionRunBackend (plugin runtimeCore adapter)', () => {
             HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: connectedServiceSelectionsEnvJson,
             HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_JSON: JSON.stringify(['CODEX_HOME']),
           }),
+          unsetEnvKeys: ['AGY_ACP_CCPA_BASE_URL', 'AGY_ACP_CCPA_PROJECT'],
         }),
       }),
     );
+    const launchEnvironment = createExecutionRunBackendMock.mock.calls[0]?.[0]?.isolation?.env;
+    expect(launchEnvironment).not.toHaveProperty('AGY_ACP_CCPA_BASE_URL');
+    expect(launchEnvironment).not.toHaveProperty('AGY_ACP_CCPA_PROJECT');
 
     // Run end releases the materialization (unregister + daemon-side cleanup).
     await runtime.dispose();

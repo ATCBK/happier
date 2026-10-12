@@ -3,10 +3,15 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { z } from 'zod';
 
 import type { SessionProviderInputConsumer } from './_types';
+import { registerSessionGuardNoticeRpc, type SessionGuardNoticeOwner } from './sessionGuardNoticeRpc';
 
 export const SessionInputLiveWorkSchema = z.object({
   session: z.enum(['active', 'settled', 'unknown']),
   input: z.enum(['active', 'settled', 'unknown']),
+  agents: z.enum(['active', 'settled', 'unknown']).optional(),
+  attention: z.enum(['active', 'settled', 'unknown']).optional(),
+  agentsActiveCount: z.number().int().nonnegative().optional(),
+  settledAt: z.number().int().nonnegative().optional(),
 }).strict();
 
 const groupEnforceSchema = z.object({
@@ -41,11 +46,20 @@ type AdmissionRequest = z.infer<typeof admissionRequestSchema>;
 export function registerSessionProviderInputAdmissionRpc<Mode, Message>(params: Readonly<{
   consumer: SessionProviderInputConsumer<Mode, Message>;
   rpcHandlerRegistrar: RpcHandlerRegistrar;
+  guardNotice?: SessionGuardNoticeOwner;
   onApplicationSettled?: (request: Readonly<{
     serviceId: string;
     groupId: string;
   }>) => Promise<void>;
 }>): void {
+  const guardNotice = params.guardNotice;
+  if (guardNotice) registerSessionGuardNoticeRpc({
+    get session() { return guardNotice.session; },
+    machineId: guardNotice.machineId,
+    agentId: guardNotice.agentId,
+    notify: guardNotice.notify,
+    rpcHandlerRegistrar: params.rpcHandlerRegistrar,
+  });
   params.rpcHandlerRegistrar.registerHandler(
     SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION,
     async (raw: unknown) => {

@@ -21,6 +21,7 @@ type SessionTurnLifecycleParams = Readonly<{
     agentId?: string;
     readTurnFacts?: () => SessionTurnFactsV1;
     onTurnFactsChanged?: (input: Readonly<{ turnId: string; facts: SessionTurnFactsV1 | null }>) => void;
+    onAcceptedTurnFailure?: (event: Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>) => Promise<void>;
     onAcceptedTurnLifecycle?: (input: Readonly<{
         event: 'task_started' | 'assistant_message_end' | 'turn_cancelled';
         turnId: string;
@@ -116,6 +117,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
             turnId: string;
             terminalStatus?: 'completed' | 'failed';
         }>,
+        failedEvent?: Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>,
     ): void {
         const enqueue = params.session.enqueueSessionTurnMutation;
         if (!enqueue) return;
@@ -123,7 +125,9 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
         if (!params.onAcceptedTurnLifecycle) {
             try {
                 const persistence = Promise.resolve(enqueue(mutation))
-                    .then(() => undefined, () => undefined);
+                    .then(async () => {
+                        if (failedEvent) await params.onAcceptedTurnFailure?.(failedEvent);
+                    }, () => undefined);
                 acceptedLifecycleTail = Promise.all([acceptedLifecycleTail, persistence])
                     .then(() => undefined);
             } catch {
@@ -169,6 +173,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                 // A failed terminal clear safely retains the exact marker. Observed exit
                 // settlement can then close the stale turn idempotently.
             }
+            if (failedEvent) await params.onAcceptedTurnFailure?.(failedEvent);
         });
     }
 
@@ -313,6 +318,7 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                         }),
                     } satisfies RuntimeSessionTurnMutationV1,
                     { event: 'assistant_message_end', turnId: event.turnId, terminalStatus: 'failed' },
+                    event,
                 );
                 if (activeTurnId === event.turnId) {
                     params.onTurnFactsChanged?.({ turnId: event.turnId, facts: null });

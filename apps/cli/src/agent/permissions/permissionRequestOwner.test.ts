@@ -38,4 +38,20 @@ describe('permission request owner', () => {
             },
         })).toBeNull();
     });
+
+    it('drops retained authority extras only at the stored boundary and preserves known policy validation', () => {
+        const retained = {
+            kind: 'plugin',
+            pluginId: 'provider.codex',
+            sourceAuthority: { ...sourceAuthority, retired: true },
+        };
+        expect(normalizePermissionRequestOwner(retained)).toBeNull();
+        expect(normalizePermissionRequestOwner(retained, 'stored')).toEqual({
+            kind: 'plugin', pluginId: 'provider.codex', sourceAuthority,
+        });
+        expect(normalizePermissionRequestOwner({
+            ...retained,
+            sourceAuthority: { ...retained.sourceAuthority, remoteApprovalMaxScope: 'unbounded' },
+        }, 'stored')).toBeNull();
+    });
 });

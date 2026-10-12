@@ -3,9 +3,9 @@ import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { resolveActionSurfaceAvailability } from '@happier-dev/protocol/actions/actionSurfaceAvailability';
 import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
-import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { ActionId, ActionSurfaceAvailability, ActionSurfaces, ActionsSettingsV1 } from '@happier-dev/protocol';
-import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import type {
@@ -55,6 +55,7 @@ const BUILT_IN_ACTION_TOOL_ENTRIES = Object.freeze(
       title: spec.title,
       description: spec.description ?? spec.title,
       inputSchema: spec.inputSchema,
+      ...(spec.examples ? { examples: spec.examples } : {}),
       ...(spec.contextualDefaults ? { contextualDefaults: spec.contextualDefaults } : {}),
       provenance: 'first_party' as const,
     }))
@@ -178,7 +179,10 @@ function getPluginActionContributionById(
   actionId: string,
   params?: Readonly<{ registry?: ResolvedContributionRegistry }>,
 ): ResolvedActionContribution | null {
-  return resolveActionToolRegistry(params).actionsById?.get(actionId) ?? null;
+  const identity = parseQualifiedPluginActionId(actionId);
+  return identity
+    ? resolveActionToolRegistry(params).actionsById?.get(buildQualifiedPluginContributionKey(identity)) ?? null
+    : null;
 }
 
 function getActionAvailableSurfaces(
@@ -198,8 +202,7 @@ function resolvePluginActionSettings(
   settingsState: ActionToolCatalogAvailability['settingsState'];
   effectiveToolExposureMode: 'direct' | 'discoverable_only';
 }> {
-  const identity = parseQualifiedPluginContributionKey(actionId);
-  const settingsActionId = identity ? formatQualifiedPluginActionId(identity) : null;
+  const settingsActionId = parseQualifiedPluginActionId(actionId) ? actionId : null;
   const override = settingsActionId ? settings?.actions[settingsActionId] : undefined;
   const enabled = settingsActionId !== null && (
     !settings
@@ -215,6 +218,31 @@ function resolvePluginActionSettings(
           ? 'approval_required'
           : 'enabled',
     effectiveToolExposureMode: override?.toolExposureModes?.[surface] ?? 'direct',
+  };
+}
+
+/** Applies surface/preferences to an Action admitted by the current catalog owner. */
+export function resolveDiscoveredPluginActionAvailability(params: Readonly<{
+  actionId: string;
+  surfaces: Readonly<ActionSurfaces>;
+  surface: HappierBuiltInToolSurface;
+  actionsSettings?: ActionsSettingsV1 | null;
+  provenance?: ResolvedContributionProvenance;
+}>): ActionToolCatalogAvailability {
+  const { actionId, surface } = params;
+  const availableSurfaces = getActionAvailableSurfaces(params.surfaces);
+  const provenance = params.provenance ?? 'external';
+  if (params.surfaces[surface] !== true) return {
+    available: false, reason: 'unsupported_surface', actionId, surface, availableSurfaces, provenance,
+  };
+  const settings = resolvePluginActionSettings(actionId, surface, params.actionsSettings);
+  return {
+    available: settings.enabled,
+    reason: settings.enabled ? 'available' : 'disabled_by_settings',
+    actionId, surface, availableSurfaces, provenance,
+    settingsState: settings.settingsState,
+    defaultToolExposureMode: 'direct',
+    effectiveToolExposureMode: settings.effectiveToolExposureMode,
   };
 }
 
@@ -250,48 +278,17 @@ export function resolveActionToolCatalogAvailability(params: Readonly<{
     pluginToolCatalog: params.pluginToolCatalog,
   });
   if (projectedTool) {
-    const availableSurfaces = getActionAvailableSurfaces(projectedTool.surfaces);
-    if (!projectedTool.surfaces[surface]) {
-      return {
-        available: false,
-        reason: 'unsupported_surface',
-        actionId,
-        surface,
-        availableSurfaces,
-        provenance: 'external',
-      };
-    }
-    const settings = resolvePluginActionSettings(actionId, surface, params.actionsSettings);
-    if (!settings.enabled) {
-      return {
-        available: false,
-        reason: 'disabled_by_settings',
-        actionId,
-        surface,
-        availableSurfaces,
-        settingsState: settings.settingsState,
-        defaultToolExposureMode: 'direct',
-        effectiveToolExposureMode: settings.effectiveToolExposureMode,
-        provenance: 'external',
-      };
-    }
-    return {
-      available: true,
-      reason: 'available',
-      actionId,
-      surface,
-      availableSurfaces,
-      defaultToolExposureMode: 'direct',
-      effectiveToolExposureMode: settings.effectiveToolExposureMode,
-      settingsState: settings.settingsState,
-      provenance: 'external',
-    };
+    return resolveDiscoveredPluginActionAvailability({
+      actionId, surface, actionsSettings: params.actionsSettings,
+      surfaces: { ...projectedTool.surfaces, ui: false, voice: false, rpc: false, api: false, plugin: false },
+    });
   }
 
   // An explicitly supplied catalog is a bounded admission snapshot (for
   // example, the active Agent-composition turn). It is authoritative for
-  // external Actions, so an omitted plugin tool must not fall through to a
-  // mutable global registry and bypass the admitted selection.
+  // direct Tools, so an omitted plugin tool must not fall through to a mutable
+  // global registry and bypass the admitted selection. Generic action_execute
+  // separately uses the current Action discovery owner, not this Tool lookup.
   if (params.pluginToolCatalog !== undefined) {
     return {
       available: false,
@@ -329,30 +326,11 @@ export function resolveActionToolCatalogAvailability(params: Readonly<{
       provenance: pluginAction.provenance,
     };
   }
-  if (pluginAction.definition.surfaces[surface] !== true) {
-    return {
-      available: false,
-      reason: 'unsupported_surface',
-      actionId,
-      surface,
-      availableSurfaces,
-      provenance: pluginAction.provenance,
-    };
-  }
-  const settings = resolvePluginActionSettings(actionId, surface, params.actionsSettings);
-  if (!settings.enabled) {
-    return {
-      available: false,
-      reason: 'disabled_by_settings',
-      actionId,
-      surface,
-      availableSurfaces,
-      settingsState: settings.settingsState,
-      defaultToolExposureMode: 'direct',
-      effectiveToolExposureMode: settings.effectiveToolExposureMode,
-      provenance: pluginAction.provenance,
-    };
-  }
+  const availability = resolveDiscoveredPluginActionAvailability({
+    actionId, surface, actionsSettings: params.actionsSettings,
+    surfaces: pluginAction.definition.surfaces, provenance: pluginAction.provenance,
+  });
+  if (!availability.available) return availability;
   if (params.requireToolBinding && !getActionToolEntryById(actionId, {
     registry: params.registry,
     pluginToolCatalog: params.pluginToolCatalog,
@@ -369,17 +347,7 @@ export function resolveActionToolCatalogAvailability(params: Readonly<{
     };
   }
 
-  return {
-    available: true,
-    reason: 'available',
-    actionId,
-    surface,
-    availableSurfaces,
-    defaultToolExposureMode: 'direct',
-    effectiveToolExposureMode: settings.effectiveToolExposureMode,
-    settingsState: settings.settingsState,
-    provenance: pluginAction.provenance,
-  };
+  return availability;
 }
 
 export function isActionKnownToToolCatalog(

@@ -10,7 +10,6 @@ import { resolveSessionNativeToolDescriptors } from '@/agent/tools/happierTools/
 import { shouldDenyAgentSessionTitleToolCall } from '@/agent/permissions/codingPromptTitlePermission';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
-import { CodexLikePermissionHandler } from '@/agent/permissions/CodexLikePermissionHandler';
 import { applySessionRuntimeControls } from '@/api/session/sessionRuntimeControls';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, beginActiveProfileCatalogRefresh, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -340,8 +339,7 @@ describe('session prompt-plan producer', () => {
     const publishedControls = { readCodingPromptBehavior: () => resolve.readCodingPromptBehavior?.() ?? null };
     const policy = { getAccountSettings: () => settings,
       getCodingPromptBehavior: () => controls.readCodingPromptBehavior?.() ?? null };
-    const handlers = [createProviderEnforcedPermissionHandler({ session, logPrefix: '[Test]', ...policy }),
-      new CodexLikePermissionHandler({ session, logPrefix: '[Test]', ...policy })];
+    const handlers = [createProviderEnforcedPermissionHandler({ session, logPrefix: '[Test]', ...policy })];
     // The client owns a stable controls object; the producer can attach after the handler.
     for (const handler of handlers) expect(handler.getImmediateDecision('title', 'change_title', { title: 'Title' }))
       .toEqual({ decision: 'denied' });

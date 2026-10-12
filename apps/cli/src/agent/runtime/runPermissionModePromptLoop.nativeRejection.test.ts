@@ -10,9 +10,11 @@ import { runPermissionModePromptLoop } from './runPermissionModePromptLoop';
 import { createNativeAgentSessionOperations } from './registry/engineRegistry/nativeAgentSession';
 import { createNativeAgentSessionEffectBoundaryError } from './registry/engineRegistry/nativeAgentSessionBoundaryError';
 import type { PermissionMode } from '@/api/types';
+import { once } from 'node:events';
+import { spawnSupervisedPluginProcess } from '@/plugins/runtime/exec/processSupervisor';
 
 describe('native prompt loop non-admission recovery', () => {
-    it.each(['rejected', 'unavailable', 'cancelled'] as const)(
+    it.each(['rejected', 'unavailable', 'cancelled', 'slow_cleanup'] as const)(
         'processes the next prompt after the first is %s before a turn starts',
         async (failure) => {
             const queue = new MessageQueue2<{ permissionMode: PermissionMode }, PermissionModeQueuedPrompt>(
@@ -26,7 +28,7 @@ describe('native prompt loop non-admission recovery', () => {
             let sequence = 0;
             const nativeSession: AgentSessionRuntime = {
                 async send(request) {
-                    if (request.inputIds[0] === 'first') {
+                    if (request.inputIds[0] === 'first' && failure !== 'slow_cleanup') {
                         return { status: 'rejected', diagnostic: { code: 'not_ready', severity: 'error' }, retryable: true };
                     }
                     delivered.push(request.input.text);
@@ -57,7 +59,33 @@ describe('native prompt loop non-admission recovery', () => {
                     manualCompaction: { declared: false },
                 }, undefined, [], undefined, undefined,
                 async (_witness, { signal }) => {
-                    if (++admissionCount === 1 && failure !== 'rejected') {
+                    if (++admissionCount === 1 && failure === 'slow_cleanup') {
+                        let finishCleanup!: () => void;
+                        const cleanup = new Promise<void>(resolve => { finishCleanup = resolve; });
+                        const prior = spawnSupervisedPluginProcess({ command: process.execPath,
+                            args: ['-e', 'setInterval(() => {}, 1000)'], env: {},
+                            // OS cleanup is delayed at its real boundary, not at the queue owner.
+                            terminateProcessTree: async child => {
+                                await cleanup;
+                                const exited = once(child, 'exit');
+                                child.kill('SIGKILL');
+                                await exited;
+                            },
+                        });
+                        try {
+                            vi.useFakeTimers();
+                            const disposal = prior.dispose();
+                            void disposal.catch(() => undefined);
+                            await vi.advanceTimersByTimeAsync(5_001);
+                            vi.useRealTimers();
+                            finishCleanup();
+                            await disposal;
+                        } finally {
+                            vi.useRealTimers();
+                            finishCleanup();
+                            await prior.handle.wait();
+                        }
+                    } else if (admissionCount === 1 && failure !== 'rejected') {
                         if (failure === 'unavailable') {
                             throw createNativeAgentSessionEffectBoundaryError('authority_unavailable_before_effect');
                         }
@@ -104,8 +132,10 @@ describe('native prompt loop non-admission recovery', () => {
                 registerProviderAcceptedEffect: () => undefined,
             });
             try {
-                await vi.waitFor(() => expect(delivered).toEqual(['SESSION_PLAN\n\nsecond']), { timeout: 1000 });
                 await loop;
+                expect(delivered).toEqual(failure === 'slow_cleanup'
+                    ? ['SESSION_PLAN\n\nfirst', 'SESSION_PLAN\n\nsecond']
+                    : ['SESSION_PLAN\n\nsecond']);
             } finally {
                 abort.abort();
                 await runtime.resetOrDisposeRuntime();

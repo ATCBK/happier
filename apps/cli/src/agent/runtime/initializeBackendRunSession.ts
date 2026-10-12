@@ -33,6 +33,7 @@ import { configuration } from '@/configuration'
 import { readTerminalHostAttachmentState, terminalMetadataMatchesHostHandle } from '@/terminal/attachment/terminalAttachmentInfo'
 import { buildActiveTerminalHostHandleFromMetadata } from '@/terminal/runtime/terminalMetadata'
 import { PluginTerminalHostError } from '@/plugins/runtime/context/errors'
+import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1'
 
 export interface InitializeBackendRunSessionOptions {
   api: Pick<ApiClient, 'getOrCreateSession' | 'sessionSyncClient'>
@@ -370,6 +371,8 @@ export async function initializeBackendRunSession(
           if (preservesRetainedTerminal) delete startupMetadata.terminal
         }
         const startupNowMs = nowFn()
+        const appliedCapabilitySelection = preservesRetainedTerminal ? 'preserved_process' as const
+          : readSessionCapabilitySelectionFromMetadataV1(snapshot)
         daemonReportMetadata = mergeSessionMetadataForStartup({
           current: normalizeLegacySessionModeMetadataCompat(snapshot),
           next: normalizeLegacySessionModeMetadataCompat(startupMetadata),
@@ -379,6 +382,7 @@ export async function initializeBackendRunSession(
           modelOverride: opts.startupMetadataOverrides.modelOverride,
           metadataKeysToUnsetOnAttach: opts.metadataKeysToUnsetOnAttach,
           attachMetadataIdentityPolicy,
+          appliedCapabilitySelection,
           mode: 'attach',
         })
         await applyAttachStartupMetadataUpdateWithRetry({
@@ -396,6 +400,7 @@ export async function initializeBackendRunSession(
               modelOverride: opts.startupMetadataOverrides.modelOverride,
               metadataKeysToUnsetOnAttach: opts.metadataKeysToUnsetOnAttach,
               attachMetadataIdentityPolicy,
+              appliedCapabilitySelection,
               mode: 'attach',
             })
           },

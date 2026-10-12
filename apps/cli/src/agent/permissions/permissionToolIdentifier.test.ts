@@ -1,7 +1,35 @@
 import { describe, it, expect } from 'vitest';
+import { mkdir, writeFile, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { withTempDir } from '@/testkit/fs/tempDir';
 import { extractShellCommand, isToolAllowedForSession, makeToolIdentifier } from './permissionToolIdentifier';
 
 describe('permissionToolIdentifier', () => {
+  it('matches an MCP server wildcard without admitting another server', () => {
+    const allowed = ['mcp__wilson-intake__*'];
+    expect(isToolAllowedForSession(allowed, 'mcp__wilson-intake__intake_lead', {})).toBe(true);
+    expect(isToolAllowedForSession(allowed, 'mcp__wilson-other__intake_lead', {})).toBe(false);
+  });
+  it('confines scoped Read rules to real files beneath the allowed directory', async () => {
+    await withTempDir('happier-tool-scope-', async (directory) => {
+      const attachments = join(directory, 'attachments');
+      await mkdir(attachments);
+      const inside = join(attachments, 'lead.pdf');
+      const outside = join(directory, 'canary.txt');
+      await writeFile(inside, 'lead');
+      await writeFile(outside, 'canary');
+      const allowed = [`Read(${attachments}/**)`];
+      expect(isToolAllowedForSession(allowed, 'Read', { file_path: inside })).toBe(true);
+      expect(isToolAllowedForSession(allowed, 'Read', { file_path: outside })).toBe(false);
+      expect(isToolAllowedForSession(allowed, 'Read', { file_path: join(attachments, '..', 'canary.txt') })).toBe(false);
+      expect(isToolAllowedForSession(allowed, 'Read', {})).toBe(false);
+      if (process.platform !== 'win32') {
+        const link = join(attachments, 'escape');
+        await symlink(outside, link);
+        expect(isToolAllowedForSession(allowed, 'Read', { file_path: link })).toBe(false);
+      }
+    });
+  });
   it('extracts command from bash -lc wrapper arrays', () => {
     expect(extractShellCommand({ command: ['bash', '-lc', 'echo hello'] })).toBe('echo hello');
   });

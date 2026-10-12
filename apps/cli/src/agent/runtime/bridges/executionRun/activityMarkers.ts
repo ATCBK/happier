@@ -1,9 +1,9 @@
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import type { ExecutionRunState } from './executionRunTypes';
 import { retainExecutionRunState, writeExecutionRunMarker } from '@/daemon/executionRunRegistry';
-import { projectExecutionRunRequestedConfiguration } from '@happier-dev/protocol/execution/runs/requestedConfiguration';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { buildExecutionRunConnectedServicesCleanupReceipt } from './connectedServicesCleanupReceipt';
+import { projectExecutionRunPublicState } from './publicState';
 
 export function enqueueExecutionRunMarkerWrite(args: Readonly<{
   markerWriteChains: Map<string, Promise<void>>;
@@ -29,7 +29,7 @@ export function enqueueExecutionRunMarkerWrite(args: Readonly<{
 export async function writeExecutionRunActivityMarker(args: Readonly<{
   runId: string;
   nowMs: number;
-  opts?: Readonly<{ force?: boolean }>;
+  opts?: Readonly<{ force?: boolean; resumed?: boolean }>;
   runs: Map<string, ExecutionRunState>;
   retainedState?: ExecutionRunState;
   controllers: Map<string, ExecutionRunController>;
@@ -49,10 +49,7 @@ export async function writeExecutionRunActivityMarker(args: Readonly<{
   const cleanupReceipt = buildExecutionRunConnectedServicesCleanupReceipt(
     run.launch?.connectedServicesRegistration,
   );
-  const requestedConfiguration = projectExecutionRunRequestedConfiguration({
-    modelId: run.launch?.modelSelection?.modelId ?? run.launch?.modelId,
-    sessionConfigOptionOverrides: run.launch?.sessionConfigOptionOverrides,
-  });
+  const { requestedConfiguration, resolvedSelection } = projectExecutionRunPublicState(run);
   const markerPayload = {
     pid: process.pid,
     ...(run.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: run.requesterWorkAttributionV1 } : {}),
@@ -64,6 +61,7 @@ export async function writeExecutionRunActivityMarker(args: Readonly<{
     backendTarget: readBackendTargetRefV2(run.backendTarget),
     ...(run.launch?.launchOrigin ? { launchOrigin: run.launch.launchOrigin } : {}),
     ...(requestedConfiguration ? { requestedConfiguration } : {}),
+    ...(resolvedSelection ? { resolvedSelection } : {}),
     permissionMode: run.permissionMode,
     retentionPolicy: run.retentionPolicy,
     runClass: run.runClass,
@@ -77,8 +75,16 @@ export async function writeExecutionRunActivityMarker(args: Readonly<{
       ? { executionRunConnectedServicesCleanupReceiptV1: cleanupReceipt }
       : {}),
   } as const;
+  const isCurrentOccurrence = (): boolean => {
+    const current = args.runs.get(args.runId);
+    return current?.status === 'running'
+      && current.launch?.connectedServicesRegistration === run.launch?.connectedServicesRegistration
+      && (ctrl ? args.controllers.get(args.runId) === ctrl && !ctrl.cancelled : args.opts?.resumed !== true);
+  };
   await args.enqueueMarkerWrite(args.runId, async () => {
+    if (!isCurrentOccurrence()) return;
     await retainExecutionRunState(args.retainedState ?? run);
-    await writeExecutionRunMarker(markerPayload).catch(() => {});
+    if (!isCurrentOccurrence()) return;
+    await writeExecutionRunMarker(markerPayload, { allowTerminalToRunning: args.opts?.resumed === true }).catch(() => {});
   });
 }

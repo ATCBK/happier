@@ -41,6 +41,56 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('AgentStateRequestStore', () => {
+    it.each<PermissionResponseClaim>([
+        { version: 1, origin: 'automaticPolicy' },
+        { version: 1, origin: 'approvalReviewer', turnId: 'turn-1', decision: 'approved', scope: 'request' },
+        { version: 1, origin: 'presentUser', turnId: 'turn-1', actor: { kind: 'accountUser', accountId: 'account-owner', relationship: 'owner' }, decision: 'approved', scope: 'request' },
+        { version: 1, origin: 'remoteMediation', turnId: 'turn-1', actor: { kind: 'externalHuman', assurance: 'pluginAsserted', namespace: 'discord', principalId: 'person-1', assertedBy: { pluginId: 'happier.channels', contributionLocalId: 'discord' } }, mediatorPluginId: 'happier.channels', sourceRef: 'binding:ops', sourceRevisionOrEpoch: '42', idempotencyKey: 'retry-1', decision: 'allow', scope: 'request' },
+    ])('rejoins and releases the retained $origin claim without granting meaning to extra fields', async (claim) => {
+        const session = new FakeSession();
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+        store.publishRequest({ requestId: 'retained', toolName: 'Bash', toolInput: {}, createdAt: 1 });
+        const retained = { ...claim, retired: true, ...('actor' in claim ? { actor: { ...claim.actor, retired: true, ...('assertedBy' in claim.actor ? { assertedBy: { ...claim.actor.assertedBy, retired: true } } : {}) } } : {}) };
+        session.agentState.requests!['retained'].permissionResponseClaimV1 = retained;
+        await expect(store.acquirePermissionResponseClaim({ requestId: 'retained', claim })).resolves.toEqual({ status: 'rejoined' });
+        await expect(store.rejoinPermissionResponseClaim({ requestId: 'retained', claim })).resolves.toEqual({ status: 'rejoined' });
+        const freshWithExtra = { ...claim, retired: true };
+        await expect(store.acquirePermissionResponseClaim({ requestId: 'retained', claim: freshWithExtra })).rejects.toThrow();
+        const mismatch = claim.origin === 'remoteMediation'
+            ? { ...retained, mediatorPluginId: 'another.plugin' }
+            : claim.origin === 'presentUser'
+                ? { ...retained, actor: { ...claim.actor, accountId: 'another-account' } }
+                : claim.origin === 'approvalReviewer'
+                    ? { ...retained, scope: 'session' }
+                    : { ...retained, origin: 'retiredOrigin' };
+        session.agentState.requests!['retained'].permissionResponseClaimV1 = mismatch;
+        await expect(store.acquirePermissionResponseClaim({ requestId: 'retained', claim })).resolves.toEqual({ status: 'conflict' });
+        session.agentState.requests!['retained'].permissionResponseClaimV1 = retained;
+        await store.releasePermissionResponseClaim({ requestId: 'retained', claim });
+        expect(session.agentState.requests!['retained']).not.toHaveProperty('permissionResponseClaimV1');
+    });
+
+    it('reads retained completed actors but refuses a different known actor identity', async () => {
+        const session = new FakeSession();
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+        const actor = { kind: 'accountUser', accountId: 'account-owner', relationship: 'owner' } as const;
+        const claim = { version: 1, origin: 'presentUser', actor, decision: 'approved', scope: 'request' } as const;
+        session.agentState.completedRequests!.retained = { tool: 'Bash', arguments: {}, createdAt: 1, completedAt: 2, status: 'approved', decision: 'approved', permissionDecisionActorV1: { ...actor, retired: true } };
+        expect(store.readCompletedPermissionResponseClaim({ requestId: 'retained', claim })).toEqual({ status: 'rejoined' });
+        expect(store.readCompletedPermissionResponseClaim({ requestId: 'retained', claim: { ...claim, actor: { ...actor, accountId: 'another-account' } } })).toEqual({ status: 'conflict' });
+    });
+
+    it('projects persisted request owner authority during reload and plugin cancellation', async () => {
+        const session = new FakeSession();
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+        const sourceAuthority = { kind: 'mediatedExternal', mediatorPluginId: 'happier.channels', sourceRef: 'binding:ops', sourceRevisionOrEpoch: '42', admittedPermissionCeiling: 'default', remoteApprovalMaxScope: 'session' } as const;
+        session.agentState.requests!.retained = { tool: 'Bash', arguments: {}, createdAt: 1, owner: { kind: 'plugin', pluginId: 'provider.codex', sourceAuthority: { ...sourceAuthority, retired: true } } };
+        expect(store.readOutstandingRequest('retained')?.owner).toEqual({ kind: 'plugin', pluginId: 'provider.codex', sourceAuthority });
+        await store.cancelRequestsByOwner({ owner: { kind: 'plugin', pluginId: 'provider.codex' }, reason: 'Plugin stopped', requestIds: ['retained'] });
+        expect(session.agentState.requests!.retained).toBeUndefined();
+        expect(session.agentState.completedRequests!.retained?.status).toBe('canceled');
+    });
+
     it('surfaces durable publication failure to an interaction producer', async () => {
         const persistenceError = new Error('workflow interaction exceeds durable content capacity');
         const store = new AgentStateRequestStore({

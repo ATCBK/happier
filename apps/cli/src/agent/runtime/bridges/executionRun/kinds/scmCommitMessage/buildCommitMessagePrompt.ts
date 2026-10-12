@@ -13,7 +13,7 @@ type ScmSnapshotEntry = Readonly<{
 function isScmSnapshotEntry(value: unknown): value is ScmSnapshotEntry {
   if (!value || typeof value !== 'object') return false;
   const anyValue = value as { path?: unknown };
-  return typeof anyValue.path === 'string' && anyValue.path.trim().length > 0;
+  return typeof anyValue.path === 'string' && anyValue.path.length > 0;
 }
 
 function truncate(value: string, maxChars: number): string {

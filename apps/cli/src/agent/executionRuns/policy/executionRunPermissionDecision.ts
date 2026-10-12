@@ -11,6 +11,9 @@ import {
 import { resolveCausalPermissionMode } from '@/agent/permissions/causalPermissionMode';
 import { extractShellCommand } from '@happier-dev/protocol/activity/shellCommand';
 import { isWorkspaceWriteDeniedByRole } from '@/agent/permissions/workspaceWritePolicy';
+import { applyAllowedToolsToAllowlist } from '@/agent/permissions/applyPermissionAllowlistUpdates';
+import { isToolAllowedForSession } from '@/agent/permissions/permissionToolIdentifier';
+import type { AgentSessionConfigurationSnapshotV1 } from '@happier-dev/protocol/runtime/agentSessionV1';
 
 import { permissionMode } from '@/agent/executionRuns/policy/permissionMode';
 
@@ -40,6 +43,8 @@ export function shouldAlwaysApproveExecutionRunTool(toolName: string): boolean {
 
 function resolveExecutionRunImmediateDecision(args: Readonly<{
   permissionMode: string;
+  allowedTools?: AgentSessionConfigurationSnapshotV1['allowedTools'];
+  unlistedTools?: AgentSessionConfigurationSnapshotV1['unlistedTools'];
   workspaceWrites?: 'allow' | 'deny';
   backendId: string;
   toolName: string;
@@ -70,6 +75,11 @@ function resolveExecutionRunImmediateDecision(args: Readonly<{
   if (!effective.ok) return { decision: 'denied' };
   const effectiveMode = effective.effectiveMode;
 
+  const allowedIdentifiers = new Set<string>();
+  applyAllowedToolsToAllowlist(allowedIdentifiers, args.allowedTools);
+  const listed = isToolAllowedForSession(allowedIdentifiers, args.toolName, args.input);
+  if (args.unlistedTools === 'deny' && !listed) return { decision: 'denied' };
+
   if (shouldAlwaysApproveExecutionRunTool(args.toolName)) return { decision: 'approved' };
 
   // Execution runs still support legacy "no_tools" semantics: deny everything except the shared-safe tools
@@ -78,6 +88,9 @@ function resolveExecutionRunImmediateDecision(args: Readonly<{
 
   if (effectiveMode === 'read-only' || effectiveMode === 'plan') {
     const normalizedToolName = String(args.toolName ?? '').trim().toLowerCase();
+    // Explicit external MCP grants are independent of the builtin workspace
+    // write ceiling. Role denial and causal admission were checked above.
+    if (listed && normalizedToolName.startsWith('mcp__')) return { decision: 'approved_for_session' };
     if (
       normalizedToolName === 'bash'
       || normalizedToolName === 'shell'
@@ -90,6 +103,8 @@ function resolveExecutionRunImmediateDecision(args: Readonly<{
     }
     return isExecutionRunWriteLikeToolName(args.toolName) ? { decision: 'denied' } : { decision: 'approved' };
   }
+
+  if (listed) return { decision: 'approved_for_session' };
 
   if (effectiveMode === 'yolo') {
     return { decision: 'approved_for_session' };
@@ -112,6 +127,8 @@ function resolveExecutionRunImmediateDecision(args: Readonly<{
  */
 export function resolveExecutionRunPermissionDecision(args: Readonly<{
   permissionMode: string;
+  allowedTools?: AgentSessionConfigurationSnapshotV1['allowedTools'];
+  unlistedTools?: AgentSessionConfigurationSnapshotV1['unlistedTools'];
   workspaceWrites?: 'allow' | 'deny';
   backendId: string;
   toolName: string;
@@ -125,6 +142,8 @@ export function resolveExecutionRunPermissionDecision(args: Readonly<{
 
 export function createExecutionRunPermissionHandler(args: Readonly<{
   permissionMode: string;
+  allowedTools?: AgentSessionConfigurationSnapshotV1['allowedTools'];
+  unlistedTools?: AgentSessionConfigurationSnapshotV1['unlistedTools'];
   workspaceWrites?: 'allow' | 'deny';
   backendId: string;
   causalPermissionAuthority?: AcpPermissionCausalAuthority;
@@ -153,6 +172,8 @@ export function createExecutionRunPermissionHandler(args: Readonly<{
   ) {
     const immediate = resolveExecutionRunImmediateDecision({
       permissionMode: args.permissionMode,
+      allowedTools: args.allowedTools,
+      unlistedTools: args.unlistedTools,
       workspaceWrites: args.workspaceWrites,
       backendId: args.backendId,
       toolName,

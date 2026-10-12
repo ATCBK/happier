@@ -11,7 +11,7 @@ import {
   type ProviderBoundModelRef,
   type SessionInputCausalPermissionAuthorityV1,
 } from '@happier-dev/protocol';
-import { resumeBackendControllerForResumableRun } from './resumeBackendController';
+import { createExecutionRunResumeMaterialization, resumeBackendControllerForResumableRun, type ExecutionRunResumeMaterializationHooks } from './resumeBackendController';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import type { StreamedTranscriptWriterSession } from '@/api/session/streamedTranscriptWriter';
 import type { ExecutionRunTranscriptPublisher } from './executionRunTranscriptPublisher';
@@ -43,7 +43,7 @@ export async function ensureExecutionRun(args: Readonly<{
   runs: Map<string, ExecutionRunState>;
   controllers: Map<string, ExecutionRunController>;
   budgetRegistry: ExecutionBudgetRegistry | null;
-  createRuntime: (opts: ExecutionRunResumeBackendOptions & {
+  createRuntime: (opts: ExecutionRunResumeBackendOptions & ExecutionRunResumeMaterializationHooks & {
     runId?: string;
     controllerOccurrenceId: string;
     backendId: string;
@@ -63,7 +63,7 @@ export async function ensureExecutionRun(args: Readonly<{
   streamedTranscriptSession: StreamedTranscriptWriterSession | null;
   getPermissionRequestStore?: ExecutionRunPermissionRequestStoreProvider | null;
   getNowMs: () => number;
-  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean }>) => Promise<void>;
+  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean; resumed?: boolean }>) => Promise<void>;
   voiceAgentManager: VoiceAgentManager;
   onPublicStateUpdated?: (runId: string) => void;
   profileCatalog?: ExecutionRunProfileContributionCatalog;
@@ -153,14 +153,14 @@ export async function ensureExecutionRun(args: Readonly<{
     };
     args.controllers.set(args.runId, voiceCtrl);
 
-    const isCurrentResumeOccurrence = (): boolean => (
-      args.runs.get(args.runId) === run
-      && isExecutionRunControllerCurrent({
-        runId: args.runId,
-        controller: voiceCtrl,
-        controllers: args.controllers,
-      })
-    );
+    const materialization = createExecutionRunResumeMaterialization({
+      runId: args.runId, run, runs: args.runs,
+      isCurrentOccurrence: () => isExecutionRunControllerCurrent({
+        runId: args.runId, controller: voiceCtrl, controllers: args.controllers,
+      }),
+    });
+    materialization.publishProvisioning();
+    const isCurrentResumeOccurrence = materialization.isCurrent;
 
     const retireVoiceResumeOccurrence = async (): Promise<boolean> => {
       const owned = isExecutionRunControllerCurrent({
@@ -180,8 +180,9 @@ export async function ensureExecutionRun(args: Readonly<{
       return owned;
     };
 
+    let startedVoice: Awaited<ReturnType<VoiceAgentManager['start']>> | null = null;
     try {
-      const startedVoice = await args.voiceAgentManager.start({
+      startedVoice = await args.voiceAgentManager.start({
         voiceAgentId: args.runId,
         backendTarget: run.backendTarget,
         ...(typeof config.profileId === 'string' && config.profileId.trim().length > 0
@@ -241,6 +242,7 @@ export async function ensureExecutionRun(args: Readonly<{
               ...(start ?? {}),
             },
             ...(connectedServices !== undefined ? { connectedServices } : {}),
+            ...materialization.hooks,
           }),
       });
       if (!isCurrentResumeOccurrence()) {
@@ -250,17 +252,22 @@ export async function ensureExecutionRun(args: Readonly<{
       }
 
       const nextResumeHandle = args.voiceAgentManager.getResumeHandle(startedVoice.voiceAgentId) ?? resumeHandle;
+      const current = args.runs.get(args.runId)!;
+      const preparedRegistration = materialization.readRegistration();
       const resumedRun: ExecutionRunState = {
-        ...run,
+        ...current,
         status: 'running',
         finishedAtMs: undefined,
         error: undefined,
         resumeHandle: nextResumeHandle,
         voiceAgentConfig: config,
+        ...(preparedRegistration ? { launch: {
+          ...(current.launch ?? {}), connectedServicesRegistration: preparedRegistration,
+        } } : {}),
       };
       args.runs.set(args.runId, resumedRun);
 
-      await args.writeActivityMarker(args.runId, args.getNowMs(), { force: true });
+      await args.writeActivityMarker(args.runId, args.getNowMs(), { force: true, resumed: true });
       if (
         args.runs.get(args.runId)?.status !== 'running'
         || !isExecutionRunControllerCurrent({
@@ -274,6 +281,7 @@ export async function ensureExecutionRun(args: Readonly<{
       args.onPublicStateUpdated?.(args.runId);
       return { ok: true };
     } catch (error: unknown) {
+      if (!startedVoice) materialization.rollback();
       await retireVoiceResumeOccurrence();
       const message = error instanceof Error ? error.message : 'Resume failed';
       return { ok: false, errorCode: 'execution_run_not_allowed', error: message, resumeFailureKind: 'indeterminate' };
@@ -286,7 +294,7 @@ export async function ensureExecutionRun(args: Readonly<{
     runs: args.runs,
     controllers: args.controllers,
     budgetRegistry: args.budgetRegistry,
-    createRuntime: ({ controllerOccurrenceId, backendId, backendTarget, permissionMode, causalPermissionAuthority, accountSettings }) =>
+    createRuntime: ({ controllerOccurrenceId, backendId, backendTarget, permissionMode, causalPermissionAuthority, accountSettings, onConnectedServicesSelection, onConnectedServicesRegistration }) =>
       args.createRuntime({
         runId: args.runId,
         controllerOccurrenceId,
@@ -295,6 +303,8 @@ export async function ensureExecutionRun(args: Readonly<{
         permissionMode,
         ...(causalPermissionAuthority ? { causalPermissionAuthority } : {}),
         accountSettings,
+        onConnectedServicesSelection,
+        onConnectedServicesRegistration,
       }),
     sendAcp: args.sendAcp,
     parentProvider: args.parentProvider,
@@ -318,7 +328,6 @@ export async function ensureExecutionRun(args: Readonly<{
   if (!resumed.ok) return resumed;
   const resumedController = args.controllers.get(args.runId) ?? null;
   const resumedRun = args.runs.get(args.runId) ?? null;
-  await args.writeActivityMarker(args.runId, args.getNowMs(), { force: true });
   if (
     !resumedController
     || !resumedRun

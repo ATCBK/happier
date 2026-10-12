@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { readFile } from 'node:fs/promises';
+import { accountSettingsParse, FeaturesResponseSchema, sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
+import { loadMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
+import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import type {
   AgentExecutionRunRuntime,
+  AgentExecutionRunOpenRequest,
   AgentExecutionRunRuntimeContextV1,
   AgentRuntime,
   AgentSessionRuntime,
@@ -19,7 +25,15 @@ import { createNativeAgentSessionWorkStateService } from './nativeAgentSessionWo
 
 import { createEmptyBackendExecutionSurfaces } from '../engineRegistryTypes';
 import type { NativeAgentSessionRunToolBindingRequest } from '../engineRegistryTypes';
-import { resolveBackendRuntimeCore } from './runtimeCore';
+import { resolveBackendRuntimeCore, resolveSessionOwnedRunToolPolicy } from './runtimeCore';
+import { createExecutionRunPermissionHandler } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
+import { createRunScopedExecutionPermissionHandler } from '@/agent/executionRuns/policy/runScopedExecutionPermissionHandler';
+import { createExecutionRunAccountSettingsSnapshotResolver } from '@/api/machine/resolveExecutionRunAccountSettingsSnapshot';
+import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { createManifestAgentCatalogEntry } from '@/plugins/projection/registry/agentCliMetadata';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetInMemoryAccountSettingsContextForTests(); });
 
 const AGENT_ID = 'acme.session-agent';
 
@@ -59,6 +73,7 @@ function createContributions() {
         runtime: { kind: 'custom' },
         primary: 'sessions',
         capabilities: {
+          tools: { delivery: 'native_mcp' },
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn'],
@@ -71,10 +86,91 @@ function createContributions() {
     },
     pluginId: AGENT_ID,
   } as unknown as ResolvedAgentContribution;
-  return { backend, agent };
+  if (agent.richDefinition?.provenance !== 'external') throw new Error('Expected external Agent fixture');
+  const catalogEntry = createManifestAgentCatalogEntry({
+    agentId: AGENT_ID, pluginId: AGENT_ID, definition: agent.richDefinition.definition,
+    cli: null, provenance: 'external',
+  });
+  const contributes = createResolvedContributionRegistry({ agents: [{ ...agent, catalogEntry }] });
+  return { backend, agent, contributes };
 }
 
 describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
+  it.each([
+    { label: 'legacy omission', causal: {}, expected: 'approved_for_session' },
+    { label: 'own undefined', causal: { causalPermissionAuthority: undefined }, expected: 'denied' },
+    { label: 'own null', causal: { causalPermissionAuthority: null }, expected: 'denied' },
+    { label: 'valid admission', causal: { causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const,
+      admittedPermissionCeiling: 'default' as const } }, expected: 'approved_for_session' },
+  ])('preserves $label through the attached Run permission projection', async ({ causal, expected }) => {
+    const parent = createExecutionRunPermissionHandler({ permissionMode: 'default', backendId: AGENT_ID, allowedTools: ['Read'] });
+    const options: Parameters<typeof resolveSessionOwnedRunToolPolicy>[0]['options'] = {
+      permissionMode: 'default', start: { allowedTools: ['Read'], unlistedTools: 'deny' },
+    };
+    // Model invalid/lost authority at the host boundary without asserting that
+    // its malformed value satisfies the admitted authority TypeScript type.
+    for (const [key, value] of Object.entries(causal)) Reflect.defineProperty(options, key, { value, enumerable: true });
+    const run = createRunScopedExecutionPermissionHandler({ runId: 'child', controllerOccurrenceId: 'child-occurrence', handler: parent,
+      toolPolicy: resolveSessionOwnedRunToolPolicy({ agentId: AGENT_ID, parentMetadata: null, options }),
+    });
+    await expect(run.handler.handleToolCall('read', 'Read', { file_path: '/repo/a' })).resolves.toEqual({ decision: expected });
+    await run.dispose('Test completed');
+  });
+  it.each([
+    {},
+    { allowedTools: ['Read'], unlistedTools: 'deny' as const },
+    { allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'ask' as const },
+  ])('refuses a child recipe that broadens a confined parent before native open: %j', async (toolPolicy) => {
+    const { backend, agent } = createContributions();
+    const open = vi.fn();
+    const adapter = await resolveBackendRuntimeCore({
+      backend, agent, executionSurfaces: createEmptyBackendExecutionSurfaces(),
+      runtimeOwner: { backendId: AGENT_ID,
+        selected: { kind: 'plugin_engine', ownerId: AGENT_ID, provenance: 'external', pluginId: AGENT_ID }, candidates: [] },
+      nativeAgentRuntime: { sessions: { open } } as unknown as AgentRuntime,
+      nativeAgentRuntimeIdentity: { pluginId: AGENT_ID, pluginVersion: '1.0.0', agentId: AGENT_ID,
+        occurrenceId: 'agent-occurrence', isCurrent: () => true },
+    } as never);
+    expect(() => adapter?.runtimeCore.createExecutionRunBackend({
+      scope: 'session_owned', cwd: '/parent', runId: 'child', controllerOccurrenceId: 'child-occurrence',
+      callId: 'child-call', sidechainId: 'child-side', backendId: AGENT_ID, permissionMode: 'yolo',
+      start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable', ...toolPolicy },
+      sessionInteractionHost: { session: { sessionId: 'parent', getMetadataSnapshot: () => ({
+        path: '/parent', allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny',
+      }) }, machineId: 'machine-a', permissionHandler: {
+        handleToolCall: async () => ({ decision: 'approved' }), abortPendingRequestAndFlush: async () => undefined,
+      } },
+    } as never)).toThrow(expect.objectContaining({ executionRunErrorCode: 'execution_run_not_allowed' }));
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('admits the same confined parent policy when the Run list is reordered', async () => {
+    const { backend, agent } = createContributions();
+    const open = vi.fn();
+    const adapter = await resolveBackendRuntimeCore({
+      backend, agent, executionSurfaces: createEmptyBackendExecutionSurfaces(),
+      runtimeOwner: { backendId: AGENT_ID,
+        selected: { kind: 'plugin_engine', ownerId: AGENT_ID, provenance: 'external', pluginId: AGENT_ID }, candidates: [] },
+      nativeAgentRuntime: { sessions: { open } } as unknown as AgentRuntime,
+      nativeAgentRuntimeIdentity: { pluginId: AGENT_ID, pluginVersion: '1.0.0', agentId: AGENT_ID,
+        occurrenceId: 'agent-occurrence', isCurrent: () => true },
+    } as never);
+    const runtime = adapter?.runtimeCore.createExecutionRunBackend({
+      scope: 'session_owned', cwd: '/parent', runId: 'child', controllerOccurrenceId: 'child-occurrence',
+      callId: 'child-call', sidechainId: 'child-side', backendId: AGENT_ID, permissionMode: 'read-only',
+      start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable',
+        allowedTools: ['WebSearch', 'mcp__wilson-brief__*'], unlistedTools: 'deny' },
+      sessionInteractionHost: { session: { sessionId: 'parent', getMetadataSnapshot: () => ({
+        path: '/parent', allowedTools: ['mcp__wilson-brief__*', 'WebSearch'], unlistedTools: 'deny',
+      }) }, machineId: 'machine-a', permissionHandler: {
+        handleToolCall: async () => ({ decision: 'approved' }), abortPendingRequestAndFlush: async () => undefined,
+      } },
+    } as never);
+    expect(runtime).toBeDefined();
+    expect(open).not.toHaveBeenCalled();
+    await runtime?.dispose();
+  });
+
   it('keeps parent tasks and readiness authoritative across retained siblings and late child publications', async () => {
     const { backend, agent } = createContributions();
     let metadata = { path: '/parent', machineId: 'machine-a' } as Metadata;
@@ -196,11 +292,11 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
   });
 
   it('constructs a truthful execution-run context only for explicit detached scope', async () => {
-    const { backend, agent } = createContributions();
+    const { backend, agent, contributes } = createContributions();
     const sessionOpen = vi.fn();
     let openedContext: AgentExecutionRunRuntimeContextV1 | null = null;
     const readOpenedContext = (): AgentExecutionRunRuntimeContextV1 | null => openedContext;
-    const executionRunOpen = vi.fn(async (_request: unknown, context: AgentExecutionRunRuntimeContextV1) => {
+    const executionRunOpen = vi.fn(async (_request: AgentExecutionRunOpenRequest, context: AgentExecutionRunRuntimeContextV1) => {
       openedContext = context;
       return {
         send: vi.fn(async () => ({ status: 'admitted' as const })),
@@ -212,6 +308,9 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
     const adapter = await resolveBackendRuntimeCore({
       backend,
       agent,
+      // This direct runtime fixture supplies the real catalog projection used
+      // for Agent delivery admission without activating unrelated plugin services.
+      runtimeRegistry: { contributes },
       executionSurfaces: createEmptyBackendExecutionSurfaces(),
       runtimeOwner: {
         backendId: AGENT_ID,
@@ -233,6 +332,55 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
       },
     } as never);
 
+    const snapshot: ActiveAccountSettingsSnapshot = {
+      source: 'network', settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      mcpServerCatalog: await loadMcpServerCatalogV1({ mode: 'plain', material: null, readRow: async () => ({
+        status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, bindings: [{
+          id: 'wilson-brief-all', serverId: 'wilson-brief', enabled: true,
+          target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1,
+        }], servers: [{
+          id: 'wilson-brief', name: 'wilson-brief', transport: 'stdio',
+          stdio: { command: process.execPath, args: ['--version'] },
+          env: { WILSON_TOKEN: { t: 'savedSecret', secretId: 'happier:shared-secret:v1:wilson-token' } },
+          createdAt: 1, updatedAt: 1,
+        }] } },
+      }) }),
+      savedSecretCatalogState: 'ready', savedSecretResources: [{
+        resourceId: 'wilson-token', ownerAccountId: 'owner', displayName: 'Test token', kind: 'token',
+        encryptionMode: 'plain', revision: 1, materialStatus: 'ready',
+        storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: 'wilson-token', mode: 'plain',
+          content: { v: 1, name: 'Test token', kind: 'token', value: 'synthetic-token' } }),
+      }],
+    };
+
+    const ownerToken = `e30.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
+    const features = FeaturesResponseSchema.parse({ features: { teams: { enabled: true, credentialResources: { enabled: true } } }, capabilities: {} });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json(features)));
+    // Home transport is replaced; the detached Run consumes the actual Machine
+    // snapshot resolver, shared-resource admission and MCP materializer.
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const target = new URL(String(url));
+      expect(target.origin).toBe('https://detached-run-owner.test');
+      if (target.pathname === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+      if (target.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      if (target.pathname === '/v1/account/entity-rows/mcp' && snapshot.mcpServerCatalog?.status === 'ready') return {
+        status: 200, data: { status: 'present', revision: 1, content: { t: 'plain', v: snapshot.mcpServerCatalog.catalog } },
+      };
+      if (target.pathname === '/v1/account/saved-secrets/resources/materials') return { status: 200, data: { resources: [{
+        resourceId: 'wilson-token', encryptionMode: 'plain', recipientEnvelope: null,
+        storedContent: snapshot.savedSecretResources?.[0]?.storedContent,
+        entry: { ref: 'happier:shared-secret:v1:wilson-token', source: 'shared_resource', relationship: 'owner',
+          ownerAccountId: 'owner', name: 'Test token', kind: 'token', revision: 1, materialStatus: 'ready',
+          capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
+      }] } };
+      return { status: 404, data: {} };
+    });
+    const resolveOwnerSnapshot = createExecutionRunAccountSettingsSnapshotResolver({ machineId: 'machine-a',
+      serverHttpBaseUrl: 'https://detached-run-owner.test', readCredentials: async () => ({ token: ownerToken, encryption: null }),
+      isOwnerCurrent: () => true, onSettings: () => {} });
+
     const runtime = adapter?.runtimeCore.createExecutionRunBackend({
       scope: 'detached',
       cwd: '/run/detached',
@@ -242,23 +390,39 @@ describe('resolveBackendRuntimeCore Session-owned Execution Run scope', () => {
       sidechainId: 'run-detached-sidechain',
       backendId: AGENT_ID,
       permissionMode: 'default',
-      start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable' },
+      start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable', capabilitySelection: { mcp: {
+        v: 1, managedServersEnabled: false, forceIncludeServerIds: ['wilson-brief'], forceExcludeServerIds: [],
+      } } },
+      machineId: 'machine-a', resolveAccountSettingsSnapshot: resolveOwnerSnapshot,
     } as never);
     await expect(runtime?.provisionRuntime({ initialPrompt: 'Run independently' })).resolves.toEqual({
       runtimeId: 'run-detached',
     });
 
-    expect(sessionOpen).not.toHaveBeenCalled();
-    expect(executionRunOpen).toHaveBeenCalledOnce();
-    const observedContext = readOpenedContext();
-    if (!observedContext) throw new Error('Expected detached Execution Run context');
-    expect(observedContext).toMatchObject({
-      scope: { kind: 'execution_run', executionRunId: 'run-detached' },
-      executionRun: { id: 'run-detached' },
-    });
-    expect(observedContext).not.toHaveProperty('session');
-    expect(observedContext.executionRun.services).not.toHaveProperty('transcripts');
-    await runtime?.dispose();
+    try {
+      expect(sessionOpen).not.toHaveBeenCalled();
+      expect(executionRunOpen).toHaveBeenCalledOnce();
+      const mcpServers = executionRunOpen.mock.calls[0]?.[0].mcpServers;
+      expect(Object.keys(mcpServers ?? {})).toEqual(['wilson-brief']);
+      const server = mcpServers?.['wilson-brief'];
+      expect(server?.env).not.toHaveProperty('WILSON_TOKEN');
+      const configPath = server?.env?.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE;
+      if (!configPath) throw new Error('Expected owned secure MCP launcher configuration');
+      const launcherConfig: unknown = JSON.parse(await readFile(configPath, 'utf8'));
+      expect(launcherConfig).toMatchObject({
+        command: process.execPath, args: ['--version'], env: { WILSON_TOKEN: 'synthetic-token' },
+      });
+      const observedContext = readOpenedContext();
+      if (!observedContext) throw new Error('Expected detached Execution Run context');
+      expect(observedContext).toMatchObject({
+        scope: { kind: 'execution_run', executionRunId: 'run-detached' },
+        executionRun: { id: 'run-detached' },
+      });
+      expect(observedContext).not.toHaveProperty('session');
+      expect(observedContext.executionRun.services).not.toHaveProperty('transcripts');
+    } finally {
+      await runtime?.dispose();
+    }
   });
 
   it('opens with the Run-bound tool profile and projects host transcript writes into the Run sidechain', async () => {

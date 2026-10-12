@@ -1,7 +1,8 @@
 import type { StoredCredentials } from '@/persistence';
 import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 import { listMcpServerCatalogSavedSecretRefsV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
-import { resolveEffectiveMcpServersForDirectory } from '@/mcp/servers/resolveEffectiveMcpServersForDirectory';
+import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
+import { projectMcpServerMaterializationV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -26,11 +27,13 @@ export async function resolveCustomHappierToolsContext(params: Readonly<{
     throw new McpServerCatalogUnavailableError('scope-retired');
   }
   const settings = readMcpServersSettingsFromAccountSettings(snapshot);
-  const resolved = resolveEffectiveMcpServersForDirectory({
+  // This machine view intentionally has no Session override or Agent qualifier.
+  const capabilities = resolveSessionCapabilitiesForDirectory({
     settings,
     machineId: params.machineId,
     directory: params.directory,
   });
+  const resolved = projectMcpServerMaterializationV1(capabilities, params.directory);
   const references = [...new Set(listMcpServerCatalogSavedSecretRefsV1({ v: 1, bindings: [], servers:
     Object.values(resolved.serversByName).filter(server => server.enabled === true).map(server => server.config),
   }).map(reference => reference.secretId))];

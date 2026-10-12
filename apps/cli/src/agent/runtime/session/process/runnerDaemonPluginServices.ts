@@ -67,6 +67,7 @@ import {
     type HostAuthorizedPluginExecLaunch,
 } from '@/plugins/runtime/invocation/services/exec';
 import {
+    RunnerDaemonAgentCliReadinessResultV1Schema,
     RunnerDaemonExternalSessionsAttachResultV1Schema,
     RunnerDaemonExternalSessionsCapabilitiesResultV1Schema,
     RunnerDaemonExternalSessionsFollowEventV1Schema,
@@ -403,6 +404,7 @@ function readDaemonWitness(
 export async function prepareRunnerDaemonPluginServices(
     input: Readonly<{
         invocationId: string;
+        processOwner?: import('@/processes/ownerTag').ProcessOwnerRef;
         dispatch: RunnerDaemonPluginServicesDispatchV1;
         signal: AbortSignal;
         isAuthorityTransitionError?(error: unknown): boolean;
@@ -2430,6 +2432,7 @@ export async function prepareRunnerDaemonPluginServices(
         return value;
     };
     const exec = createStableRunnerPluginExecService({
+        ...(input.processOwner ? { processOwner: input.processOwner } : {}),
         signal: input.signal,
         isOccurrenceCurrent: () =>
             !input.signal.aborted,
@@ -2446,7 +2449,7 @@ export async function prepareRunnerDaemonPluginServices(
                 >[0],
             ) {
                 assertAvailable('exec');
-                return await dispatch<Awaited<ReturnType<
+                return RunnerDaemonAgentCliReadinessResultV1Schema.parse(await dispatch<Awaited<ReturnType<
                     PluginServices['exec']['agentCli'][
                         'checkReadiness'
                     ]
@@ -2457,6 +2460,9 @@ export async function prepareRunnerDaemonPluginServices(
                     request: {
                         candidates: [...request.candidates],
                         requirement: request.requirement,
+                        ...(request.includeVersion !== undefined
+                            ? { includeVersion: request.includeVersion }
+                            : {}),
                         ...(request.cwd
                             ? { cwd: request.cwd }
                             : {}),
@@ -2477,7 +2483,7 @@ export async function prepareRunnerDaemonPluginServices(
                     ...(request.signal
                         ? { signal: request.signal }
                         : {}),
-                });
+                }));
             },
         } satisfies PluginServices['exec']['agentCli']),
         async resolveSystemTool(request) {

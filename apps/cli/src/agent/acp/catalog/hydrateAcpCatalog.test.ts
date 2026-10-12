@@ -8,6 +8,7 @@ import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotFor
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveConfiguredAcpBackendFromAccountSettings } from './configured/resolveBackend';
 import { refreshActiveAcpCatalog, refreshDemandedActiveAcpCatalog } from './hydrateAcpCatalog';
+import * as hydration from './hydrateAcpCatalog';
 import * as persistence from '@/persistence';
 import { createCliAcpCatalogStore } from './acpCatalogStore';
 import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
@@ -29,20 +30,53 @@ function account(token = 'acp-catalog', rawSettings: Readonly<Record<string, unk
   return credentials;
 }
 const record = (command: string) => AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
-  id: 'review', name: 'review', title: 'Review', command, args: ['acp'], env: {}, capabilities: {
+  id: 'review', name: 'review', title: 'Review', launch: { kind: 'command' as const, command: command, args: ['acp'] }, env: {}, capabilities: {
     supportsLoadSession: true, supportsModes: 'unknown', supportsModels: 'unknown', supportsConfigOptions: 'unknown', promptImageSupport: 'no',
   }, createdAt: 1, updatedAt: 2,
 }] });
+function predecessorDefinitions(command: string) {
+  return record(command).definitions.map(({ launch, ...fields }) => {
+    if (launch.kind !== 'command') throw new Error('Expected command fixture');
+    return { ...fields, command: launch.command, args: launch.args };
+  });
+}
 const currentness = { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 };
 
 describe('ACP Account catalog hydration', () => {
+  it('sweeps only the installed daemon Account at startup and demanded reconnect hydration', async () => {
+    const credentials = account();
+    const successfulHydrations: string[] = [];
+    vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+    vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: currentness };
+      if (path === '/v1/account/entity-rows/acp') return { status: 200, data: { status: 'present', revision: 4,
+        content: { t: 'plain', v: { v: 1, definitions: [] } } } };
+      throw new Error(`Unexpected ACP observation: ${path}`);
+    });
+    const dispose = hydration.installDaemonAcpCatalogHydrationObserver({ credentials,
+      onReady: async ({ catalog, isCurrent }) => {
+        if (isCurrent() && catalog.status === 'ready') successfulHydrations.push(credentials.token);
+      } });
+    try {
+      await hydration.refreshDaemonAcpCatalog({ credentials });
+      expect(successfulHydrations).toEqual([credentials.token]);
+      await refreshDemandedActiveAcpCatalog({ token: credentials.token });
+      expect(successfulHydrations).toEqual([credentials.token, credentials.token]);
+      await refreshActiveAcpCatalog({ credentials });
+      expect(successfulHydrations).toHaveLength(2);
+      const foreign = account('foreign-account');
+      await refreshDemandedActiveAcpCatalog({ token: foreign.token });
+      expect(successfulHydrations).toHaveLength(2);
+    } finally { dispose(); }
+  });
   it.each(['unchanged', 'foreign-source', 'missing-source-cas'] as const)('promotes only the captured personal ACP source before its numeric edit (%s)', async scenario => {
     const sourceChangedBeforeImport = scenario === 'foreign-source';
     const original = record('original-personal-source');
     const secret = { id: 'personal-acp-token', name: 'ACP credential', kind: 'apiKey',
       encryptedValue: { _isSecretValue: true, value: 'private-source-value' }, createdAt: 1, updatedAt: 1 };
     let raw: Readonly<Record<string, unknown>> = { themePreference: 'dark', secrets: [secret],
-      acpCatalogSettingsV1: { v: 2, backends: original.definitions.map(backend => ({ ...backend,
+      acpCatalogSettingsV1: { v: 2, backends: predecessorDefinitions('original-personal-source').map(backend => ({ ...backend,
         env: { API_TOKEN: { t: 'savedSecret', secretId: secret.id } } })) } };
     const credentials = account(`header.${Buffer.from(JSON.stringify({ sub: 'acp-personal-source-owner' })).toString('base64url')}.signature`, raw);
     let settingsVersion = 7;
@@ -70,7 +104,7 @@ describe('ACP Account catalog hydration', () => {
         ? { status: 'present', revision, content: { t: 'plain', v: catalog } } : { status: 'absent' } };
       if (path === '/v2/account/settings') {
         if (editStarted && ++editSourceReads === 2 && sourceChangedBeforeImport) {
-          raw = { ...raw, acpCatalogSettingsV1: { v: 2, backends: original.definitions.map(backend => ({ ...backend,
+          raw = { ...raw, acpCatalogSettingsV1: { v: 2, backends: predecessorDefinitions('original-personal-source').map(backend => ({ ...backend,
             command: 'foreign-source-edit', env: { API_TOKEN: { t: 'savedSecret', secretId: secret.id } } })) } };
           settingsVersion = 8;
         }
@@ -98,7 +132,7 @@ describe('ACP Account catalog hydration', () => {
         raw = mutation.nextSettings.v;
         resourceId = mutation.resourceId;
         sharedRef = `happier:shared-secret:v1:${resourceId}`;
-        expect(raw).toMatchObject({ secrets: [], acpCatalogSettingsV1: { backends: [{ command: sourceChangedBeforeImport ? 'foreign-source-edit' : original.definitions[0].command,
+        expect(raw).toMatchObject({ secrets: [], acpCatalogSettingsV1: { backends: [{ command: sourceChangedBeforeImport ? 'foreign-source-edit' : 'original-personal-source',
           env: { API_TOKEN: { t: 'savedSecret', secretId: sharedRef } } }] } });
         resources.push({ resourceId, encryptionMode: 'plain', storedContent: mutation.storedContent, recipientEnvelope: null,
           entry: { ref: sharedRef, source: 'shared_resource', relationship: 'owner', ownerAccountId: 'acp-personal-source-owner',
@@ -116,7 +150,7 @@ describe('ACP Account catalog hydration', () => {
           expect(events.slice(events.indexOf('promote') + 1)).toContain(`source:${settingsVersion}`);
           expect(mutation).toMatchObject({ expectedRevision: 'absent', source: 'predecessor', sourceSettingsVersion: settingsVersion,
             settingsCleanup: { expectedSettingsVersion: settingsVersion, nextSettings: { t: 'plain', v: { themePreference: 'dark', secrets: [] } } },
-            content: { v: { definitions: [{ command: sourceChangedBeforeImport ? 'foreign-source-edit' : original.definitions[0].command }] } } });
+            content: { v: { definitions: [{ launch: { command: sourceChangedBeforeImport ? 'foreign-source-edit' : 'original-personal-source' } }] } } });
           if (mutation.settingsCleanup?.nextSettings.t !== 'plain') throw new Error('Expected atomic source cleanup');
           raw = mutation.settingsCleanup.nextSettings.v;
           settingsVersion += 1;
@@ -147,9 +181,9 @@ describe('ACP Account catalog hydration', () => {
     }
     editStarted = true;
     const result = await createCliAcpCatalogStore({ credentials }).updateCatalog(current => {
-      if (!sourceChangedBeforeImport) expect(current).toMatchObject({ backends: [{ command: original.definitions[0].command,
+      if (!sourceChangedBeforeImport) expect(current).toMatchObject({ backends: [{ launch: { command: 'original-personal-source' },
         env: { API_TOKEN: { t: 'savedSecret', secretId: sharedRef } } }] });
-      return { v: 2, backends: original.definitions.map(backend => ({ ...backend, command: 'edited-after-transfer',
+      return { v: 2, backends: original.definitions.map(backend => ({ ...backend, launch: { kind: 'command', command: 'edited-after-transfer', args: backend.launch.args },
         env: { API_TOKEN: { t: 'savedSecret', secretId: sharedRef } } })) };
     }, { expectedRevision: 'absent', sourceSettingsVersion: 7 });
     if (sourceChangedBeforeImport) {
@@ -162,12 +196,12 @@ describe('ACP Account catalog hydration', () => {
     expect(result).toMatchObject({ status: 'updated', revision: 1 });
     expect(events.filter(event => ['promote', 'transfer', 'edit'].includes(event))).toEqual(['promote', 'transfer', 'edit']);
     expect(raw).toEqual({ themePreference: 'dark', secrets: [] });
-    expect(catalog).toMatchObject({ definitions: [{ command: 'edited-after-transfer', env: { API_TOKEN: { secretId: sharedRef } } }] });
+    expect(catalog).toMatchObject({ definitions: [{ launch: { command: 'edited-after-transfer' }, env: { API_TOKEN: { secretId: sharedRef } } }] });
   });
   it('retains the acknowledged original-source revision when retirement refuses the numeric candidate', async () => {
     const credentials = account();
     const original = record('original-source');
-    const rawSettings = { schemaVersion: 6, acpCatalogSettingsV1: { v: 2, backends: original.definitions } };
+    const rawSettings = { schemaVersion: 6, acpCatalogSettingsV1: { v: 2, backends: predecessorDefinitions('original-source') } };
     vi.spyOn(axios, 'get').mockImplementation(async input => {
       const pathname = new URL(String(input)).pathname;
       if (pathname === '/v1/account/encryption/currentness') return { status: 200, data: currentness };
@@ -190,7 +224,7 @@ describe('ACP Account catalog hydration', () => {
       return { status: 200, data: { status: 'updated', revision: 0, cursor: 1 } };
     });
     await expect(createCliAcpCatalogStore({ credentials }).updateCatalog(() => ({
-      v: 2, backends: original.definitions.map(backend => ({ ...backend, command: 'candidate-not-written' })),
+      v: 2, backends: original.definitions.map(backend => ({ ...backend, launch: { kind: 'command', command: 'candidate-not-written', args: backend.launch.args } })),
     }))).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE', reason: 'scope-retired', revision: 0 });
     expect(writes).toHaveLength(1);
     expect(getActiveAccountSettingsSnapshot()?.scopeKey).toBe(resolveAccountSettingsScopeKey({ token: 'replacement-account', encryption: null }));
@@ -241,13 +275,13 @@ describe('ACP Account catalog hydration', () => {
       return { status: 200, data: { status: 'updated', revision, cursor: 12 } };
     });
     const result = await createCliAcpCatalogStore({ credentials }).updateCatalog(current => {
-      expect(current).toMatchObject({ v: 2, backends: [{ command: 'before' }] });
-      return { v: 2, backends: currentRecord.definitions.map(backend => ({ ...backend, command: 'after' })) };
+      expect(current).toMatchObject({ v: 2, backends: [{ launch: { command: 'before' } }] });
+      return { v: 2, backends: currentRecord.definitions.map(backend => ({ ...backend, launch: { kind: 'command', command: 'after', args: backend.launch.args } })) };
     });
     expect(result).toMatchObject({ status: 'updated', revision: 5 });
     expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(7);
     expect(getActiveAccountSettingsSnapshot()?.acpCatalog).toMatchObject({ status: 'ready', revision: 5,
-      record: { definitions: [{ command: 'after' }] } });
+      record: { definitions: [{ launch: { command: 'after' } }] } });
   });
   it('publishes catalog-only wakes to the real configured resolver without advancing Settings', async () => {
     const credentials = account();
@@ -263,7 +297,8 @@ describe('ACP Account catalog hydration', () => {
     });
     const notifications: string[] = [];
     const unsubscribe = subscribeActiveAccountSettingsSnapshot((_previous, next) => {
-      if (next?.acpCatalog?.status === 'ready') notifications.push(next.acpCatalog.record.definitions[0].command);
+      const launch = next?.acpCatalog?.status === 'ready' ? next.acpCatalog.record.definitions[0].launch : null;
+      if (launch?.kind === 'command') notifications.push(launch.command);
     });
     try {
       await refreshActiveAcpCatalog({ credentials });
@@ -273,7 +308,7 @@ describe('ACP Account catalog hydration', () => {
       expect(snapshot.settingsVersion).toBe(7);
       expect(snapshot.rawSettings).toEqual({});
       expect(resolveConfiguredAcpBackendFromAccountSettings(snapshot.settings, 'review', snapshot.acpCatalog))
-        .toMatchObject({ command: 'command-2' });
+        .toMatchObject({ launch: { command: 'command-2' } });
       expect(notifications).toEqual(['command-1', 'command-2']);
     } finally { unsubscribe(); }
   });
@@ -329,7 +364,7 @@ describe('ACP Account catalog hydration', () => {
   it('transfers the complete retained recipe before applying an ordinary deletion CAS', async () => {
     const credentials = account();
     const retained = { unaffectedPreference: 'keep', acpCatalogSettingsV1: { v: 2, backends: [{
-      ...record('retained-kiro').definitions[0], transportProfile: 'kiro',
+      ...predecessorDefinitions('retained-kiro')[0], transportProfile: 'kiro',
       auth: { support: 'login_terminal', loginCommand: { command: 'retained-login', args: ['login'] },
         statusCommand: ['whoami', '--json'], parser: 'kiroWhoamiJson' },
     }] } };
@@ -352,7 +387,7 @@ describe('ACP Account catalog hydration', () => {
     expect(writes).toEqual([
       expect.objectContaining({ expectedRevision: 'absent', source: 'predecessor', sourceSettingsVersion: 7,
         settingsCleanup: { expectedSettingsVersion: 7, nextSettings: { t: 'plain', v: { unaffectedPreference: 'keep' } } },
-        content: { t: 'plain', v: { v: 1, definitions: [expect.objectContaining({ command: 'retained-kiro',
+        content: { t: 'plain', v: { v: 1, definitions: [expect.objectContaining({ launch: { kind: 'command', command: 'retained-kiro', args: ['acp'] },
           auth: { support: 'login_terminal', loginCommand: { command: 'retained-login', args: ['login'] } },
           runtime: { stderrRules: expect.any(Object) }, compatibility: { source: 'acp-catalog-v2', authStatus: {
             statusCommand: ['whoami', '--json'], parser: 'kiroWhoamiJson',
@@ -455,7 +490,7 @@ describe('ACP Account catalog hydration', () => {
       expect(catalogWrites[1]).not.toHaveProperty('settingsCleanup');
       expect(historyWrites).toHaveLength(2);
       expect(historyWrites[1]).toMatchObject({ operation: { transferredPrivateCatalogRevisions: { acp: 1 } } });
-      expect(getActiveAccountSettingsSnapshot()?.acpCatalog).toMatchObject({ status: 'ready', revision: 1, record: { definitions: [{ command: 'retry' }] } });
+      expect(getActiveAccountSettingsSnapshot()?.acpCatalog).toMatchObject({ status: 'ready', revision: 1, record: { definitions: [{ launch: { command: 'retry' } }] } });
     }
     expect(retained).toEqual({ neighboringRoot: { keep: true }, acpCatalogSettingsV1: { v: 2, backends: [] } });
   });

@@ -1,17 +1,24 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 
 import {
   deriveAccountMachineKeyFromRecoverySecret,
   sealEncryptedDataKeyEnvelopeV1,
+  computeRunnerMachineContentKeyFingerprintV1,
+  sealRunnerMachineContentKeyVerifierFactV1,
+  signRunnerMachineContentKeyBindingV1,
   type SessionFollowSourceKeyPreparationResultV1,
 } from '@happier-dev/protocol';
 import nacl from 'tweetnacl';
 
 import { encodeBase64 } from '@/api/encryption';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 
 const resolveSessionTransportContext = vi.hoisted(() => vi.fn());
 const resolveSessionOwningMachineId = vi.hoisted(() => vi.fn());
 const prepareSessionFollowSourceKey = vi.hoisted(() => vi.fn());
+const io = vi.hoisted(() => vi.fn());
+vi.mock('socket.io-client', () => ({ io }));
 
 vi.mock('@/session/services/resolveSessionTransportContext', () => ({ resolveSessionTransportContext }));
 vi.mock('@/session/services/resolveSessionOwningMachine', () => ({ resolveSessionOwningMachineId }));
@@ -86,6 +93,40 @@ function createPreparation(credentials: Parameters<typeof createSessionFollowSou
   });
 }
 
+let restoreRunnerHttp = () => {};
+async function useRealRunnerPreparation(credentials: Parameters<typeof createPreparation>[0]) {
+  const encryption = credentials.encryption;
+  if (!encryption) throw new Error('Encrypted Runner fixture needs Account material');
+  const seed = encryption.type === 'legacy' ? deriveAccountMachineKeyFromRecoverySecret(encryption.secret) : encryption.machineKey;
+  const runnerKey = new Uint8Array(32).fill(47);
+  const signing = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(53));
+  const randomBytes = (length: number) => new Uint8Array(length).fill(59);
+  const payload = { v: 1 as const, purpose: 'happier.ephemeral-runner.machine-content-key' as const,
+    homeServerIdentityId: 'home-1', creatorAccountId: 'account-1', machineId: 'machine-1',
+    activationId: '11111111-1111-4111-8111-111111111111', installationId: 'runner-installation',
+    machineContentKeyFingerprint: computeRunnerMachineContentKeyFingerprintV1(runnerKey) };
+  // Substitute only the authenticated Machine HTTP read and Socket.IO boundary.
+  // The real preparer, Machine trust and private request construction stay live.
+  const machineRead = vi.spyOn(axios, 'get').mockResolvedValue({ data: { machine: {
+    id: 'machine-1', kind: 'ephemeral_session_runner', storageMode: 'e2ee', installationId: payload.installationId,
+    dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: runnerKey,
+      recipientPublicKey: nacl.box.keyPair.fromSecretKey(seed).publicKey, randomBytes })),
+    runnerContentKeyBinding: { ...signRunnerMachineContentKeyBindingV1({ payload, activationSigningSecretKey: signing.secretKey }),
+      creatorVerifierFactCiphertext: sealRunnerMachineContentKeyVerifierFactV1({
+        payload: { v: 1, activationId: payload.activationId, machineId: 'machine-1',
+          activationSigningPublicKey: encodeBase64(signing.publicKey, 'base64url') }, material: encryption, randomBytes }),
+    },
+  } } });
+  restoreRunnerHttp = () => machineRead.mockRestore();
+  const socket = createApiSessionSocketStub();
+  io.mockReturnValue(socket);
+  const actual = await vi.importActual<typeof import('./prepareSessionFollowSourceKey')>('./prepareSessionFollowSourceKey');
+  prepareSessionFollowSourceKey.mockImplementation(actual.prepareSessionFollowSourceKey);
+  return socket;
+}
+
+afterEach(() => { restoreRunnerHttp(); restoreRunnerHttp = () => {}; });
+
 describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -117,6 +158,8 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
       fallbackVariant: 'dataKey' as const,
     },
   ])('does not transfer an absent-envelope $name fallback', async ({ credentials, fallbackKey, fallbackVariant }) => {
+    const authenticated = { ...credentials, token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature' };
+    const socket = await useRealRunnerPreparation(authenticated);
     resolveSessionTransportContext
       .mockResolvedValueOnce({
         ok: true,
@@ -128,14 +171,14 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
       })
       .mockResolvedValueOnce(destination);
 
-    await expect(createPreparation(credentials)({
+    await expect(createPreparation(authenticated)({
       sourceSessionId: 'source',
       destinationSessionId: 'destination',
       context: {} as never,
     })).resolves.toEqual({ kind: 'waiting', reason: 'source_key_unavailable' });
 
-    expect(resolveSessionOwningMachineId).not.toHaveBeenCalled();
-    expect(prepareSessionFollowSourceKey).not.toHaveBeenCalled();
+    expect(socket.emitWithAck).not.toHaveBeenCalled();
+    expect(socket.connect).not.toHaveBeenCalled();
   });
 
   it('opens the physical source envelope and transfers exactly its standalone Session DEK', async () => {
@@ -255,7 +298,8 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
     { name: 'unopenable', dataEncryptionKey: encodeBase64(new Uint8Array(105)) },
   ])('fails closed for a $name physical source envelope', async ({ dataEncryptionKey }) => {
     const secret = new Uint8Array(32).fill(13);
-    const credentials = { token: 'legacy-token', encryption: { type: 'legacy' as const, secret } };
+    const credentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature', encryption: { type: 'legacy' as const, secret } };
+    const socket = await useRealRunnerPreparation(credentials);
     resolveSessionTransportContext
       .mockResolvedValueOnce({
         ok: true,
@@ -273,8 +317,8 @@ describe('createSessionFollowSourceKeyPreparationAfterSet', () => {
       context: {} as never,
     })).resolves.toEqual({ kind: 'waiting', reason: 'source_key_unavailable' });
 
-    expect(resolveSessionOwningMachineId).not.toHaveBeenCalled();
-    expect(prepareSessionFollowSourceKey).not.toHaveBeenCalled();
+    expect(socket.emitWithAck).not.toHaveBeenCalled();
+    expect(socket.connect).not.toHaveBeenCalled();
   });
 
   it.each(['wrong_machine', 'revoked_machine'] as const)(

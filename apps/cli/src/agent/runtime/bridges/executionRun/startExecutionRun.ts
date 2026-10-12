@@ -15,7 +15,8 @@ import { ReviewScmScopeV1Schema } from '@happier-dev/protocol/reviews/scope';
 import { ExecutionRunVoiceAgentIntentInputV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { resolveScmPullRequestReviewScope } from '@happier-dev/protocol/reviews/scmPullRequestScope';
 import type { AcpConfigOptionOverridesV1, BackendTargetRefV1, ConnectedServiceBindingsV2, ProviderBoundModelRef, ExecutionRunResultContractV1, SessionInputAdmissionResultV1, SessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol';
-import { withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { withExecutionRunStartFailureDetails, projectExecutionRunChildChoiceV1 } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '@happier-dev/protocol/providers/selection/v1';
 import { projectExecutionRunRequestedConfiguration, projectExecutionRunResolvedSelection } from '@happier-dev/protocol/execution/runs/requestedConfiguration';
 import { resolveExecutionRunNotifyParentDefaultV1 } from '@happier-dev/protocol/execution/runs/executionRunNotifyParentDefaultV1';
 import { SECOND_OPINION_RESULT_SCHEMA_V1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
@@ -25,6 +26,7 @@ import { resolveExecutionRunRoleV1 } from '@/agent/executionRuns/profiles/review
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveEffectiveCodingPromptPlan } from '@/agent/prompting/coding/resolveEffectiveCodingPrompt';
+import { prepareSessionMemoryInheritance } from '@/agent/prompting/coding/sessionPromptStack';
 import { readWorktreeChangeFingerprint } from '@/scm/readWorktreeChangeFingerprint';
 import { runScmCommand } from '@/scm/runtime';
 import type { ExecutionRunHostRuntime } from './executionRunHostRuntime';
@@ -367,17 +369,22 @@ async function startAdmittedExecutionRun(
     if (args.params.roleId && !args.params.resolvedRole) {
       throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });
     }
-    if (role) {
+    const inheritedMemory = args.params.sessionId && args.params.roleSessionMetadata
+      ? await prepareSessionMemoryInheritance({ metadata: readRecord(args.params.roleSessionMetadata),
+        credentials: args.params.promptCredentials })
+      : null;
+    if (role || inheritedMemory?.promptStack.length) {
       const plan = await resolveEffectiveCodingPromptPlan({
         credentials: args.params.promptCredentials,
         settings: args.params.accountSettings,
-        profileId: args.params.launchProfileId ?? role.profileId,
+        profileId: args.params.launchProfileId ?? role?.profileId,
         baseOverride: null,
         memoryRecallGuidanceEnabled: false,
-        roleContext: { role, notes: readSessionRolesV1(args.params.roleSessionMetadata)?.notes },
+        ...(inheritedMemory ? { memoryEnabled: inheritedMemory.memoryEnabled, sessionEntries: inheritedMemory.promptStack } : {}),
+        ...(role ? { roleContext: { role, notes: readSessionRolesV1(args.params.roleSessionMetadata)?.notes } } : {}),
       });
       let secondOpinionInput: Readonly<Record<string, unknown>> | undefined;
-      if (role.roleId === 'second_opinion') {
+      if (role?.roleId === 'second_opinion') {
         const intentInput = readRecord(args.params.intentInput) ?? {};
         const fingerprint = await readWorktreeChangeFingerprint(args.params.cwd ?? process.cwd());
         const supplied = readRecord(intentInput.input) ?? {};
@@ -405,7 +412,7 @@ async function startAdmittedExecutionRun(
         params: {
           ...args.params,
           instructions: [plan.text, args.params.instructions ?? ''].filter(Boolean).join('\n\n'),
-          workspaceWrites: args.params.workspaceWrites === 'deny' || role.workspaceWrites === 'deny' ? 'deny' : role.workspaceWrites,
+          ...(role ? { workspaceWrites: args.params.workspaceWrites === 'deny' || role.workspaceWrites === 'deny' ? 'deny' : role.workspaceWrites } : {}),
           ...(secondOpinionInput ? { intentInput: secondOpinionInput } : {}),
         },
       };
@@ -430,9 +437,9 @@ async function startAdmittedExecutionRun(
   }
   let childSelection: ResolvedExecutionRunChildSelection;
   let voiceCommit: ResolvedExecutionRunChildSelection | undefined;
+  let parent: ExecutionRunAppliedParentSelection | undefined;
   try {
     const lifecycle = args.childSelectionContext?.lifecycle ?? 'independent';
-    let parent: ExecutionRunAppliedParentSelection | undefined;
     if (lifecycle === 'attached') {
       try {
         parent = await args.childSelectionContext?.readAppliedParentSelection?.() ?? { status: 'unavailable' };
@@ -441,6 +448,12 @@ async function startAdmittedExecutionRun(
       }
     }
     const originalParams = args.params;
+    const agentTargetKey = buildBackendTargetKeyV2(readBackendTargetRefV2(originalParams.backendTarget));
+    const defaults = originalParams.childSelection === 'agentDefault'
+      ? ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema.parse(originalParams.accountSettings?.providerDefaultModelSelectionsByAgentTargetKeyV1 ?? {}) : null;
+    if (originalParams.childSelection === 'agentDefault' && !originalParams.accountSettings) {
+      throw Object.assign(new Error('The child Account defaults are unavailable. Choose an explicit model.'), { code: 'execution_run_child_default_unavailable' });
+    }
     childSelection = resolveExecutionRunChildSelection({
       backendTarget: originalParams.backendTarget,
       lifecycle,
@@ -450,6 +463,8 @@ async function startAdmittedExecutionRun(
       connectedServices: originalParams.connectedServices,
       connectedServicesDefaultServiceIds: originalParams.connectedServicesDefaultServiceIds,
       parent,
+      ...(originalParams.childSelection ? { childSelection: originalParams.childSelection,
+        agentDefaultSelection: defaults?.[agentTargetKey]?.ref ?? null } : {}),
     });
     if (childSelection.inheritedFromDifferentAgent && childSelection.modelSelection?.providerConnectionId) {
       if (!args.admitInheritedProviderSelection) {
@@ -493,6 +508,14 @@ async function startAdmittedExecutionRun(
       } : {}),
     } };
   } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'execution_run_child_choice_required') {
+      const details = 'details' in error ? readRecord(error.details) : null;
+      Object.assign(error, { details: { ...details, childChoice: projectExecutionRunChildChoiceV1({
+        agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(args.params.backendTarget)),
+        parentModelSelection: parent?.status === 'applied' ? parent.modelSelection ?? null : null,
+        parentRouteCompatibility: readRecord(details?.providerError)?.code === 'provider_compatibility_unverified' ? 'unverified' : 'incompatible',
+      }) } });
+    }
     throw markExecutionRunStartFailure(error, 'noRunCreated');
   }
   await assertStructuredAnalysisModelAllowed(args.params);
@@ -568,7 +591,9 @@ async function startAdmittedExecutionRun(
   const launch = {
     selectionSource: childSelection.selectionSource,
     ...(args.params.cwd ? { cwd: args.params.cwd } : {}),
-    ...(args.params.mcpSelection ? { mcpSelection: args.params.mcpSelection } : {}),
+    ...(args.params.capabilitySelection ? { capabilitySelection: args.params.capabilitySelection } : {}),
+    ...(args.params.allowedTools !== undefined ? { allowedTools: args.params.allowedTools } : {}),
+    ...(args.params.unlistedTools !== undefined ? { unlistedTools: args.params.unlistedTools } : {}),
     ...(args.params.acpSessionModeId ? { acpSessionModeId: args.params.acpSessionModeId } : {}),
     ...(args.params.runtimeDescriptorV1
       ? { runtimeDescriptorV1: args.params.runtimeDescriptorV1 }
@@ -667,6 +692,7 @@ async function startAdmittedExecutionRun(
       backendTarget: readBackendTargetRefV2(args.params.backendTarget),
       ...(args.params.launchOrigin ? { launchOrigin: args.params.launchOrigin } : {}),
       ...(requestedConfiguration ? { requestedConfiguration } : {}),
+      ...(resolvedSelection ? { resolvedSelection } : {}),
       permissionMode: args.params.permissionMode,
       retentionPolicy: args.params.retentionPolicy,
       runClass: args.params.runClass,

@@ -708,7 +708,7 @@ describe('createActionToolExecutorBridge', () => {
     const calls: unknown[] = [];
     const pluginToolCatalog: readonly ProjectedPluginToolCatalogEntry[] = [{
       toolId: 'acme.memory/search-tool',
-      actionId: 'acme.memory/search',
+      actionId: 'acme.memory/actions/search',
       name: 'acme_memory_search',
       title: 'Search Acme memory',
       description: 'Search memory.',
@@ -736,7 +736,7 @@ describe('createActionToolExecutorBridge', () => {
     await bridge.executeActionByToolName('acme_memory_search', { query: 'handoff' }, 'session-1');
 
     expect(calls).toEqual([{
-      actionId: 'acme.memory/search',
+      actionId: 'acme.memory/actions/search',
       input: { machineId: 'machine-1', query: 'handoff' },
     }]);
   });
@@ -900,6 +900,7 @@ describe('createActionToolExecutorBridge', () => {
           provenance: 'external',
           source: { kind: 'path' },
           pluginId: 'acme.review.plugin',
+          identity: { pluginId: 'acme.review.plugin', localId: 'review-start' },
           manifestPath: '/plugins/acme/review/.happier-plugin/plugin.json',
           daemonEntryPath: '/plugins/acme/review/daemon.mjs',
           sourceSpec: {
@@ -996,7 +997,7 @@ describe('createActionToolExecutorBridge', () => {
     expect(res).toEqual({
       ok: true,
       result: {
-        actionId: 'acme.review.plugin/review-start',
+        actionId: 'acme.review.plugin/actions/review-start',
         input: { scope: 'diff' },
         ctx: expect.objectContaining({
           defaultSessionId: 'sess-1',
@@ -1007,11 +1008,11 @@ describe('createActionToolExecutorBridge', () => {
     });
   });
 
-  it('carries an admitted plugin generation through direct and generic action execution', async () => {
+  it('carries an admitted plugin generation through direct action execution', async () => {
     const calls: Array<{ actionId: string; context: unknown }> = [];
     const pluginToolCatalog: readonly ProjectedPluginToolCatalogEntry[] = [{
       toolId: 'acme.composition/review-tool',
-      actionId: 'acme.composition/review-start',
+      actionId: 'acme.composition/actions/review-start',
       name: 'acme_composition_review_start',
       title: 'Acme composition review',
       description: 'Run the composition-selected review action.',
@@ -1035,21 +1036,10 @@ describe('createActionToolExecutorBridge', () => {
       'acme_composition_review_start',
       {},
       'sess-1',
-    )).resolves.toEqual({ ok: true, result: { actionId: 'acme.composition/review-start' } });
-    await expect(bridge.executeActionByToolName('action_execute', {
-      actionId: 'acme.composition/review-start',
-      input: {},
-    }, 'sess-1')).resolves.toEqual({ ok: true, result: { actionId: 'acme.composition/review-start' } });
-
+    )).resolves.toEqual({ ok: true, result: { actionId: 'acme.composition/actions/review-start' } });
     expect(calls).toEqual([
       expect.objectContaining({
-        actionId: 'acme.composition/review-start',
-        context: expect.objectContaining({
-          expectedContributorOccurrenceId: 'occurrence-g',
-        }),
-      }),
-      expect.objectContaining({
-        actionId: 'acme.composition/review-start',
+        actionId: 'acme.composition/actions/review-start',
         context: expect.objectContaining({
           expectedContributorOccurrenceId: 'occurrence-g',
         }),

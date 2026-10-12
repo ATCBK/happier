@@ -37,6 +37,21 @@ describe('capability selection startup markers', () => {
         expect(merged).not.toHaveProperty('skillSelectionRestartRequiredV1');
     });
 
+    it('acknowledges a resumed process only for selections it actually captured', () => {
+        const current = pendingMetadata();
+        const merged = mergeSessionMetadataForStartup({ current, next: createTestMetadata(), mode: 'attach', nowMs: 100,
+            appliedCapabilitySelection: { mcp: desiredMcp, skills: appliedSkills },
+        });
+        expect(merged).not.toHaveProperty('mcpSelectionRestartRequiredV1');
+        expect(merged).toHaveProperty('skillSelectionRestartRequiredV1', current.skillSelectionRestartRequiredV1);
+        expect(merged).toHaveProperty('skillSelectionV1', desiredSkills);
+        const resumed = mergeSessionMetadataForStartup({ current, next: createTestMetadata(), mode: 'attach', nowMs: 100,
+            appliedCapabilitySelection: { mcp: desiredMcp, skills: desiredSkills },
+        });
+        expect(resumed).not.toHaveProperty('mcpSelectionRestartRequiredV1');
+        expect(resumed).not.toHaveProperty('skillSelectionRestartRequiredV1');
+    });
+
     it('does not seed either selection from new-process defaults on a preserved attach', () => {
         const merged = mergeSessionMetadataForStartup({ current: createTestMetadata(), next: pendingMetadata(), mode: 'attach', nowMs: 100 });
         expect(merged).not.toHaveProperty('mcpSelectionV1');

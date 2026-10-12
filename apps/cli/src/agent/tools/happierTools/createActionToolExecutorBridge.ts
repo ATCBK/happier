@@ -5,7 +5,9 @@ import {
   type ResolvedActionOption,
   type ReviewCommentPrincipalHeaderV1,
 } from '@happier-dev/protocol';
-import { createActionToolNameToIdMap, resolveActionToolCatalogAvailability } from './actionToolCatalog';
+import { createActionToolNameToIdMap, resolveActionToolCatalogAvailability, resolveDiscoveredPluginActionAvailability } from './actionToolCatalog';
+import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { normalizeExecutionRunToolResult } from './executionRunToolResult';
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
@@ -342,12 +344,41 @@ export function createActionToolExecutorBridge(params: Readonly<{
         if (!actionId) {
           return { ok: false, errorCode: 'invalid_action_input', error: 'Missing actionId' };
         }
-        const availability = resolveAvailability(actionId);
+        const executorContext = await buildActionExecutorContext({
+          defaultSessionId,
+          defaultSessionMachineId: params.defaultSessionMachineId,
+          surface,
+          options,
+          resolveCallerPermissionMode: params.resolveCallerPermissionMode,
+          resolveActiveTurnPermissionWitness: params.resolveActiveTurnPermissionWitness,
+          resolveReviewCommentActor: params.resolveReviewCommentActor,
+          sessionInputVia: params.sessionInputVia,
+          sessionAgentSpawnPolicyV1: params.sessionAgentSpawnPolicyV1,
+          getSessionAgentSpawnPolicyV1: params.getSessionAgentSpawnPolicyV1 ?? null,
+          resolveRuntimeRunId: params.resolveRuntimeRunId,
+          actionsSettings: readActionsSettings(),
+          sessionListAccess: params.resolveSessionListAccess?.(defaultSessionId),
+          expectedContributorOccurrenceId: resolveExpectedContributorOccurrenceId({ actionId, pluginToolCatalog: params.pluginToolCatalog }),
+        });
+        let definition: import('@happier-dev/protocol').ActionDefinitionV1 | null = null;
+        if (parseQualifiedPluginActionId(actionId)) {
+          const discovery = await params.executor.execute('action.spec.get', { id: actionId }, executorContext);
+          if (!discovery.ok) return normalizeActionExecutorResult(discovery);
+          const parsed = ActionDefinitionV1Schema.safeParse(isInputRecord(discovery.result) ? discovery.result.actionSpec : null);
+          if (!parsed.success || parsed.data.id !== actionId) {
+            return { ok: false, errorCode: 'action_disabled', error: 'Action is unavailable' };
+          }
+          definition = parsed.data;
+        }
+        const availability = definition
+          ? resolveDiscoveredPluginActionAvailability({ actionId, surfaces: definition.surfaces, surface, actionsSettings: executorContext.actionsSettings })
+          : resolveAvailability(actionId);
         if (!availability.available) {
           return { ok: false, errorCode: 'action_disabled', error: 'Action is disabled', details: availability };
         }
         const actionInput = bindContextualActionToolInput({
           actionId,
+          contextualDefaults: definition?.contextualDefaults,
           input: argsRecord && Object.prototype.hasOwnProperty.call(argsRecord, 'input')
             ? normalizeActionExecuteInput(argsRecord.input)
             : {},
@@ -358,26 +389,7 @@ export function createActionToolExecutorBridge(params: Readonly<{
         return normalizeActionToolResult(actionId, await params.executor.execute(
           actionId as ActionId,
           actionInput,
-          await buildActionExecutorContext({
-            defaultSessionId,
-            defaultSessionMachineId: params.defaultSessionMachineId,
-            surface,
-            options,
-            resolveCallerPermissionMode: params.resolveCallerPermissionMode,
-            resolveActiveTurnPermissionWitness: params.resolveActiveTurnPermissionWitness,
-            resolveReviewCommentActor: params.resolveReviewCommentActor,
-            sessionInputVia: params.sessionInputVia,
-            sessionAgentSpawnPolicyV1: params.sessionAgentSpawnPolicyV1,
-            getSessionAgentSpawnPolicyV1: params.getSessionAgentSpawnPolicyV1 ?? null,
-            resolveRuntimeRunId: params.resolveRuntimeRunId,
-            actionsSettings: readActionsSettings(),
-            sessionListAccess: params.resolveSessionListAccess?.(defaultSessionId),
-            expectedContributorOccurrenceId:
-              resolveExpectedContributorOccurrenceId({
-                actionId,
-                pluginToolCatalog: params.pluginToolCatalog,
-              }),
-          }),
+          executorContext,
         ), actionInput);
       }
 

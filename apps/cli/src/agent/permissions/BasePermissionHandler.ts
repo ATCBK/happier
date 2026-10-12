@@ -25,6 +25,7 @@ import { ExecutionRunStartResponseSchema, ExecutionRunWaitResultSchema } from '@
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { SessionPermissionExternalHumanDecisionActorV1Schema, SessionPermissionRemoteRespondInputV1Schema, SessionUserActionRemoteAnswerInputV1Schema, SessionPermissionRequestIdV1Schema, SESSION_PERMISSION_REMOTE_QUESTION_CHOICE_UTF8_BYTES, SESSION_PERMISSION_REMOTE_QUESTION_TEXT_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_DETAIL_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_MAX_CHOICES_PER_QUESTION, SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS, SESSION_PERMISSION_REMOTE_SUMMARY_TITLE_UTF8_BYTES, SESSION_PERMISSION_REMOTE_SUMMARY_TOOL_LABEL_UTF8_BYTES } from '@happier-dev/protocol/sessions/permissions/v1';
 import { SessionPermissionRemoteGrantRecordV1Schema, SessionPermissionRemoteSettlementRecordV1Schema, SESSION_REMOTE_PERMISSION_ACTIVE_GRANTS_MAX, SESSION_REMOTE_PERMISSION_MEDIATION_ROWS_MAX } from '@happier-dev/protocol/sessions/permissions/mediationRecordsV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { SessionPermissionRespondRpcParamsV1Schema } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
 import { NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE } from '@happier-dev/protocol/sessions/permissions/v1';
 import { SessionInputCausalPermissionAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
@@ -928,6 +929,9 @@ export abstract class BasePermissionHandler {
         this.bindRequestStoreToSession(session);
         this.requestCoordinator = createPermissionRequestCoordinator<PermissionResult>({
             store: this.requestStore,
+            resolveAutomaticDecision: (request) => this.isUnlistedToolDenied(request.toolName, request.toolInput)
+                ? { result: { decision: 'denied' }, completedRequest: { status: 'denied', decision: 'denied' } }
+                : null,
         });
         this.onAbortRequested = typeof opts?.onAbortRequested === 'function' ? opts.onAbortRequested : null;
         this.triggerAbortCallbackOnAbortDecision = opts?.triggerAbortCallbackOnAbortDecision ?? true;
@@ -1190,8 +1194,8 @@ export abstract class BasePermissionHandler {
         stored: PermissionMediationStoredRecord,
     ): PreparedMediatedPermissionResponse | null {
         const parsed = stored.kind === 'remote_grant.v1'
-            ? SessionPermissionRemoteGrantRecordV1Schema.safeParse(stored.record)
-            : SessionPermissionRemoteSettlementRecordV1Schema.safeParse(stored.record);
+            ? createStoredReadSchema(SessionPermissionRemoteGrantRecordV1Schema).safeParse(stored.record)
+            : createStoredReadSchema(SessionPermissionRemoteSettlementRecordV1Schema).safeParse(stored.record);
         if (!parsed.success) return null;
         const record = parsed.data;
         return this.prepareMediatedPermissionResponse({
@@ -1216,7 +1220,7 @@ export abstract class BasePermissionHandler {
         destination: Map<string, ActiveRemoteMediationGrant>,
     ): boolean {
         if (stored.kind !== 'remote_grant.v1') return true;
-        const parsed = SessionPermissionRemoteGrantRecordV1Schema.safeParse(stored.record);
+        const parsed = createStoredReadSchema(SessionPermissionRemoteGrantRecordV1Schema).safeParse(stored.record);
         if (!parsed.success) return false;
         if (parsed.data.revoked) return true;
         // The System Record is the remote first-answer claim, not an active
@@ -1458,6 +1462,7 @@ export abstract class BasePermissionHandler {
 
     private seedAllowedToolsFromAgentState(): void {
         try {
+            applyAllowedToolsToAllowlist(this.allowedToolIdentifiers, this.session.getMetadataSnapshot?.()?.allowedTools);
             const snapshot = this.session.getAgentStateSnapshot?.() ?? null;
             const completed = snapshot?.completedRequests;
             if (!completed) return;
@@ -2582,7 +2587,7 @@ export abstract class BasePermissionHandler {
         const entry = completed as Readonly<Record<string, unknown>>;
         if (typeof entry.tool !== 'string' || resolveAgentRequestKind(entry.tool) !== 'permission') return false;
         if (!matchesMediatedPermissionTurnId(entry.turnId, params.input)) return false;
-        const owner = normalizePermissionRequestOwner(entry.owner);
+        const owner = normalizePermissionRequestOwner(entry.owner, 'stored');
         return matchesRemoteMediationSourceAuthority(
             owner?.sourceAuthority,
             params.input,
@@ -3789,6 +3794,16 @@ export abstract class BasePermissionHandler {
         })();
     }
 
+    protected isUnlistedToolDenied(toolName: string, input: unknown): boolean {
+        const metadata = this.session.getMetadataSnapshot?.();
+        return metadata?.unlistedTools === 'deny'
+            && !this.isAllowedBySessionToolPolicy(toolName, input);
+    }
+
+    protected isAllowedBySessionToolPolicy(toolName: string, input: unknown): boolean {
+        return isToolAllowedForSession(this.session.getMetadataSnapshot?.()?.allowedTools ?? [], toolName, input);
+    }
+
     protected isAllowedForSessionForOwner(
         toolName: string,
         input: unknown,
@@ -3796,7 +3811,7 @@ export abstract class BasePermissionHandler {
     ): boolean {
         const normalizedOwner = normalizePermissionRequestOwner(owner);
         const allowedIdentifiers = normalizedOwner
-            ? this.allowedToolIdentifiersByOwner.get(permissionRequestOwnerAllowlistKey(normalizedOwner)) ?? []
+            ? this.getAllowedToolIdentifiersForOwner(normalizedOwner)
             : this.allowedToolIdentifiers;
         return isToolAllowedForSession(allowedIdentifiers, toolName, input);
     }
@@ -3810,6 +3825,10 @@ export abstract class BasePermissionHandler {
         let allowedIdentifiers = this.allowedToolIdentifiersByOwner.get(key);
         if (!allowedIdentifiers) {
             allowedIdentifiers = new Set<string>();
+            // The spawn seed belongs to the Session, unlike grants approved for
+            // one plugin owner. Seed each incumbent owner allowlist without
+            // borrowing another owner's later approvals.
+            applyAllowedToolsToAllowlist(allowedIdentifiers, this.session.getMetadataSnapshot?.()?.allowedTools);
             this.allowedToolIdentifiersByOwner.set(key, allowedIdentifiers);
         }
         return allowedIdentifiers;

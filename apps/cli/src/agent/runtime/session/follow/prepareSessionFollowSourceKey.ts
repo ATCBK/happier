@@ -20,7 +20,7 @@ export async function prepareSessionFollowSourceKey(input: Readonly<{
   machineId: string;
   sourceSessionId: string;
   destinationSessionId: string;
-  sourceDataEncryptionKey: Uint8Array;
+  sourceDataEncryptionKey: Uint8Array | null;
   serverUrl?: string;
   signal?: AbortSignal;
   externalAction?: Readonly<{
@@ -30,11 +30,12 @@ export async function prepareSessionFollowSourceKey(input: Readonly<{
     privateKey: ExternalActionMachineRequestSigningKey;
   }>;
 }>): Promise<SessionFollowSourceKeyPreparationResultV1> {
-  const { authorization, request } = buildSessionFollowSourceKeyPrepareRequestV1({
+  const material = input.sourceDataEncryptionKey ? buildSessionFollowSourceKeyPrepareRequestV1({
     sourceSessionId: input.sourceSessionId,
     destinationSessionId: input.destinationSessionId,
     sourceDataEncryptionKeyBase64: encodeBase64(input.sourceDataEncryptionKey),
-  });
+  }) : null;
+  const sourceKeyUnavailable = new Error('Standalone source Session key is unavailable');
   const expectedRunnerMachineContentKeyBinding = resolveExpectedRunnerMachineContentKeyBindingScope({
     credentials: input.credentials,
     homeServerIdentityId: input.homeServerIdentityId,
@@ -45,8 +46,7 @@ export async function prepareSessionFollowSourceKey(input: Readonly<{
       credentials: input.credentials,
       machineId: input.machineId,
       method: RPC_METHODS.DAEMON_SESSION_FOLLOW_SOURCE_KEY_PREPARE,
-      request,
-      authorization,
+      ...(material ?? { prepareRequest: () => { throw sourceKeyUnavailable; } }),
       expectedEncryptionMode: 'e2ee',
       ...(expectedRunnerMachineContentKeyBinding
         ? { expectedRunnerMachineContentKeyBinding }
@@ -60,6 +60,7 @@ export async function prepareSessionFollowSourceKey(input: Readonly<{
     SessionFollowSourceKeyPrepareResponseV1Schema.parse(response);
     return { kind: 'prepared' };
   } catch (error) {
+    if (error === sourceKeyUnavailable) return { kind: 'waiting', reason: 'source_key_unavailable' };
     // One classification for both DEK-sending hosts; the UI leaf calls the same
     // Protocol owner after its own store-backed pre-checks.
     return resolveSessionFollowSourceKeyPreparationFailureV1(error);

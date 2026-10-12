@@ -351,7 +351,7 @@ function projectOpenedSessionFollowRow(row: SessionFollowOpenedTranscriptRow): R
       seq: row.seq,
       text: semanticText,
       ...(authorLabel ? { authorLabel } : {}),
-      provenance: readSessionMessageProvenanceV1(row.meta),
+      provenance: readSessionMessageProvenanceV1(row.meta, 'stored'),
     },
     userMessage: decoded?.semanticRole === 'user',
   };

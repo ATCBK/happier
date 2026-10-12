@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
+import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalogForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
+import { formatProcessOwnerTag, PROCESS_OWNER_ENV_KEY } from '@/processes/ownerTag';
+import { joinCurrentWindowsSessionProcessCustody } from '@/subprocess/supervision/processCustody';
+import { buildToolIdleTimeoutEnvironmentOverlay } from '@/processes/toolIdleTimeouts';
+import { readMachineResourcesPolicySnapshot } from '@/api/machine/machineResourcesPolicy';
 
 import type {
   AccountSettings,
@@ -39,6 +46,7 @@ import { SessionModelTransitionRequestV1Schema, SessionModelTransitionResultV1Sc
 import { renderWorkerUpdatePromptBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
+import type { SessionModelMutationScopeV1 } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
 import { WORKFLOW_STEP_INPUT_EVENT_MESSAGE, isSessionContextOnlyHostInput } from '@/session/shared/sessionTurnLifecycle';
 import { createWorkflowOriginContextInputPort } from '@/agent/runtime/session/contextOnly/workflowOriginInput';
 import { createWorkflowRunStorageClient } from '@/daemon/workflows/workflowRunStorageClient';
@@ -54,7 +62,7 @@ import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/libra
 import { clearInitialGoalFromEnv, readInitialGoalFromEnv } from '@/daemon/spawn/initialGoal';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import type { ApiClient } from '@/api/api';
+import { ApiClient } from '@/api/api';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type {
   ApiSessionClient,
@@ -168,6 +176,9 @@ import {
   type HostProviderInputOutcomeEvidence,
 } from '@/agent/runtime/session/input/providerInputOutcome';
 import { registerSessionProviderInputAdmissionRpc } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import { clearSessionGuardStateOnRunnerStart, type SessionGuardNoticeOwner } from '@/agent/runtime/session/input/sessionGuardNoticeRpc';
+import { dispatchActivityNotificationAsync } from '@/notifications/activity/dispatchActivityNotification';
+import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { notifyDaemonSessionActivityChanged } from '@/daemon/controlClient';
 import { createSessionProviderInputConsumerSessionAdapter } from '@/agent/runtime/waitForNextPermissionModeMessage';
 import { commitRuntimeSessionEvent } from '@/agent/runtime/session/transcripts/publishRuntimeSessionEvent';
@@ -518,7 +529,7 @@ export type HostSessionRuntimeFactoryParams = Readonly<{
   messageBuffer: MessageBuffer;
   mcpServers: Record<string, McpServerConfig>;
   accountSettings?: AccountSettings | null;
-  resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; signal?: AbortSignal }>) => Promise<import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null>;
+  resolveAccountSettingsSnapshot?: (input?: Readonly<{ mcpServerCatalog?: boolean; savedSecretReferences?: readonly import('@/settings/secrets/hydrateSavedSecretCatalog').SavedSecretOperationReferenceV1[]; signal?: AbortSignal }>) => Promise<import('@/settings/accountSettings/activeAccountSettingsSnapshot').ActiveAccountSettingsSnapshot | null>;
   /** Explicit scope for Account-settings consumers; Session scope is fail-closed. */
   accountSettingsAuthority?: HostSessionRuntimeAuthority['scope'];
   /** Explicit runtime credential reader for scoped compositions; ordinary hosts use their existing persistence reader. */
@@ -790,7 +801,6 @@ export type HostSessionRuntimeConfig = {
   agentMessageType: ACPProvider;
   providerSessionMetadataKey?: string | null;
   checkpointToolProtocol?: RuntimeCheckpointToolProtocolV1;
-  supportsMcpServers?: boolean;
   mcpBindingIdentities?: Readonly<Record<string, import('@happier-dev/protocol/usage/coach/usageMcpBindingUsage').UsageMcpBindingIdentity>>;
   runtimeActivityApplicability: RuntimeActivityApplicability;
   /** Scoped source DEKs for restricted runtimes; ordinary runtimes omit this. */
@@ -1160,6 +1170,7 @@ export async function runHostSessionRuntime(
   let modelTransitionCoordinator: ReturnType<
     typeof createSessionModelTransitionCoordinator
   > | null = null;
+  let modelMutationScope: SessionModelMutationScopeV1 | undefined;
   let modelTransitionOwnerCurrent = true;
   let modelTransitionAdmissionFenced = false;
   let latestSessionContextUsage: SessionContextUsageSnapshotV1 | null = null;
@@ -1315,6 +1326,8 @@ export async function runHostSessionRuntime(
     }
     await newSession.activateDurableMutationDelivery();
     session = newSession;
+    process.env[PROCESS_OWNER_ENV_KEY] = formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir,
+      owner: { kind: 'session', sessionId: newSession.sessionId } });
     if (previousSession && previousSession !== newSession) {
       await previousSession.close();
     }
@@ -1360,6 +1373,11 @@ export async function runHostSessionRuntime(
         );
       }
       await runtimeActivityProjection.reofferCurrentSnapshot();
+    }
+    if (modelMutationScope) {
+      // Replace the current scope so receipts already issued keep their exact
+      // Session identity while the existing model owner follows this binding.
+      modelMutationScope = { ...modelMutationScope, sessionId: newSession.sessionId };
     }
     currentControlRpcRegistrar?.rebindTo(newSession.rpcHandlerManager);
     permissionHandler?.updateSession(newSession);
@@ -1596,8 +1614,32 @@ export async function runHostSessionRuntime(
       attachedToExistingSession: initializedSession.attachedToExistingSession,
     };
   }
-
   recordStartupPhase('session_construction');
+
+  process.env[PROCESS_OWNER_ENV_KEY] = formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir,
+    owner: { kind: 'session', sessionId: session.sessionId } });
+  const startupCustody = await joinCurrentWindowsSessionProcessCustody();
+  if (startupCustody?.state === 'unavailable') logger.debug('[session] Windows process custody unavailable');
+
+  // Daemon launches already captured this policy in their admitted environment.
+  // A manual launch reads opened Machine metadata once before starting its Agent.
+  if (runtimeOpts.startedBy !== 'daemon' && runtimeAuthority.scope === 'account') {
+    const initialPolicySession = session;
+    const policy = await readMachineResourcesPolicySnapshot({
+      machineId,
+      readMachine: async () => (await ApiClient.create(runtimeAuthority.accountCredentials)).getMachine(machineId),
+      isCurrent: () => session === initialPolicySession,
+    });
+    Object.assign(process.env, buildToolIdleTimeoutEnvironmentOverlay({
+      environment: buildScopedProcessEnv({
+        baseEnv: process.env,
+        explicitEnv: runtimeOpts.environmentVariables,
+        unsetEnvKeys: runtimeOpts.unsetEnvironmentVariables,
+      }),
+      policy,
+      unsetEnvKeys: runtimeOpts.unsetEnvironmentVariables,
+    }));
+  }
 
   let claimedSessionForAuthorityPreparation: ApiSessionClient | null = null;
   let claimedSessionAuthorityPreparation:
@@ -2369,9 +2411,29 @@ export async function runHostSessionRuntime(
     });
   });
   unsubscribeSessionLiveWorkForConstructionCleanup = unsubscribeSessionLiveWork;
+  const guardNotice: SessionGuardNoticeOwner = {
+    get session() { return currentLifecycleSession; },
+    machineId,
+    agentId: config.agentMessageType,
+    notify: async event => {
+      const accountSnapshot = readRoleAccountSnapshot();
+      if (!accountSnapshot) throw new Error('Guard notification Account scope is unavailable');
+      const isCurrent = () => readRoleAccountSnapshot() === accountSnapshot;
+      await dispatchActivityNotificationAsync({
+        settings: accountSnapshot.settings,
+        notificationChannelCatalog: accountSnapshot.notificationChannelCatalog,
+        savedSecretMaterializer: createSavedSecretMaterializerFromSnapshotV1(accountSnapshot, { isCurrent }),
+        isCurrent,
+        expoPushSender: activityPushSender,
+        event,
+      });
+    },
+  };
+  await clearSessionGuardStateOnRunnerStart(guardNotice);
   recordStartupPhase('host_input_setup');
   registerSessionProviderInputAdmissionRpc({
     consumer: inputConsumer,
+    guardNotice,
     rpcHandlerRegistrar: currentControlRpcRegistrar.registrar,
     onApplicationSettled: async (request) => {
       await connectedServiceApplicationSettledHandler?.(request);
@@ -2411,7 +2473,7 @@ export async function runHostSessionRuntime(
     policyAgentId,
     config.pluginRuntimeRegistryLease?.registry.contributes,
   );
-  const supportsMcpServers = (config.supportsMcpServers ?? true) && agentToolsDelivery === 'native_mcp';
+  const receivesUserMcpServers = agentReceivesUserMcpServersV1(agentToolsDelivery);
   const mcpAccountLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const mcpAccountScopeKey = runtimeAuthority.accountCredentials ? resolveAccountSettingsScopeKey(runtimeAuthority.accountCredentials) : null;
   const resolveMcpAccountSettingsSnapshot: NonNullable<HostSessionRuntimeFactoryParams['resolveAccountSettingsSnapshot']> = async input => {
@@ -2421,9 +2483,22 @@ export async function runHostSessionRuntime(
     if (!current()) return null;
     await prepareActiveMcpServerCatalog({ credentials: runtimeAuthority.accountCredentials, scopeKey: mcpAccountScopeKey,
       lifetimeToken: mcpAccountLifetimeToken, signal: input?.signal });
+    if (input?.savedSecretReferences?.length) {
+      const snapshot = getActiveAccountSettingsSnapshot();
+      if (!current() || !snapshot) return null;
+      const serverHttpBaseUrl = session.getServerBinding().serverUrl;
+      return await runWithServerHttpBaseUrl(serverHttpBaseUrl, async () => {
+        const operationContext = createInvocationSavedSecretOperationContextV1({
+          credentials: runtimeAuthority.accountCredentials!, snapshot, serverHttpBaseUrl, isCurrent: async () => current(),
+        });
+        const admitted = await refreshSavedSecretCatalogForOperation({ expectedScopeKey: mcpAccountScopeKey,
+          references: input.savedSecretReferences, operationContext, signal: input.signal });
+        return current() ? admitted : null;
+      });
+    }
     return current() ? getActiveAccountSettingsSnapshot() : null;
   };
-  const activeRunnerMcpAccountSnapshot = supportsMcpServers ? await resolveMcpAccountSettingsSnapshot() : null;
+  const activeRunnerMcpAccountSnapshot = receivesUserMcpServers ? await resolveMcpAccountSettingsSnapshot() : null;
   const runnerMcpSavedSecretResources = activeRunnerMcpAccountSnapshot?.savedSecretResources;
   let activeAgentCompositionToolSelection: AgentCompositionToolSelection | null = null;
   const runnerMcpSession = applyRunnerMcpSessionContext(currentLifecycleSession, {
@@ -2481,7 +2556,8 @@ export async function runHostSessionRuntime(
         : {}),
     });
   }
-  const { happierMcpServer, mcpServers, mcpBindingIdentities } = supportsMcpServers
+  currentLifecycleSession.bindMcpRequestAuthPort(daemonTurnContributionsBridge?.mcpRequestAuth);
+  const { happierMcpServer, mcpServers, mcpBindingIdentities } = receivesUserMcpServers
     ? await resolveRunnerMcpServersFn({
       session: runnerMcpSession,
       credentials: runtimeAuthority.sessionCredentials,
@@ -2499,6 +2575,9 @@ export async function runHostSessionRuntime(
         : {}),
       machineId,
       directory: runtimeDirectory,
+      agentId: policyAgentId,
+      agentAcceptsUserMcp: receivesUserMcpServers,
+      includeHappierMcpServer: agentToolsDelivery === 'native_mcp',
       sessionMetadata: runtimeSessionMetadataSnapshot ?? runtimeMetadata,
       ...(config.resolvedMcpServers ? { resolvedMcpServers: config.resolvedMcpServers } : {}),
     })
@@ -2785,7 +2864,7 @@ export async function runHostSessionRuntime(
   // An Agent that contributes no bundled model config keeps the live policy.
   const policyAgentModelConfig = getAgentModelConfig(policyAgentId);
   const authorizeModelTransition = createSessionModelTransitionAuthorizer({
-    sessionId: session.sessionId,
+    get sessionId() { return session.sessionId; },
     machineId,
     agentId: policyAgentId,
     agentTargetKey: modelTargetKey,
@@ -2818,7 +2897,7 @@ export async function runHostSessionRuntime(
       : null;
   const modelMutationAccountCredentials = runtimeAuthority.scope === 'account' ? runtimeAuthority.accountCredentials : null;
   const modelMutationAccountId = modelMutationAccountCredentials ? readAccountIdFromToken(modelMutationAccountCredentials.token) : null;
-  const modelMutationScope = modelMutationAccountId ? {
+  modelMutationScope = modelMutationAccountId ? {
     serverId: modelMutationAccountCredentials?.requesterSessionCredentialScope?.serverId ?? configuration.activeServerId,
     accountId: modelMutationAccountId,
     sessionId: session.sessionId,
@@ -2826,7 +2905,7 @@ export async function runHostSessionRuntime(
   modelTransitionCoordinator = createSessionModelTransitionCoordinator({
     runId: sessionTag,
     agentTargetKey: modelTargetKey,
-    ...(modelMutationScope ? { ownerScope: modelMutationScope } : {}),
+    get ownerScope() { return modelMutationScope; },
     initialActiveTarget,
     isCurrentRun: () => modelTransitionOwnerCurrent,
     checkCurrentPublisherAuthority:
@@ -3037,8 +3116,10 @@ export async function runHostSessionRuntime(
         );
       }
       return SessionModelTransitionResultV1Schema.parse(
-        await modelTransitionCoordinator!.submit(request.selection, {
+        'unarm' in request ? await modelTransitionCoordinator!.unarm(rpcContext?.callerInputConstraints)
+        : await modelTransitionCoordinator!.submit(request.selection, {
           source: 'command',
+          ...(request.applyTiming ? { applyTiming: request.applyTiming } : {}),
           ...(request.captureBefore !== undefined ? { captureBefore: request.captureBefore } : {}),
           ...(request.expected ? { expected: request.expected } : {}),
           ...(rpcContext?.callerInputConstraints ? { callerInputConstraints: rpcContext.callerInputConstraints } : {}),

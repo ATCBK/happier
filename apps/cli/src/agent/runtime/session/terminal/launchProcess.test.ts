@@ -25,7 +25,7 @@ describe('createTerminalRuntimeProcessService', () => {
         const service = createTerminalRuntimeProcessService({
             spawn,
             createManagedChildProcess: vi.fn(),
-            killProcessTree: vi.fn(),
+            terminateProcessTree: vi.fn(),
         });
 
         await expect(service.launch({
@@ -45,7 +45,7 @@ describe('createTerminalRuntimeProcessService', () => {
         const service = createTerminalRuntimeProcessService({
             spawn,
             createManagedChildProcess: vi.fn(),
-            killProcessTree: vi.fn(),
+            terminateProcessTree: vi.fn(),
         });
 
         await expect(service.launch({
@@ -63,7 +63,7 @@ describe('createTerminalRuntimeProcessService', () => {
         const service = createTerminalRuntimeProcessService({
             spawn,
             createManagedChildProcess: vi.fn(),
-            killProcessTree: vi.fn(),
+            terminateProcessTree: vi.fn(),
         });
 
         await expect(service.launch({
@@ -84,7 +84,7 @@ describe('createTerminalRuntimeProcessService', () => {
         const service = createTerminalRuntimeProcessService({
             spawn,
             createManagedChildProcess: vi.fn(),
-            killProcessTree: vi.fn(),
+            terminateProcessTree: vi.fn(),
             verifyExecutableGrant,
         });
 
@@ -117,7 +117,7 @@ describe('createTerminalRuntimeProcessService', () => {
         const service = createTerminalRuntimeProcessService({
             spawn,
             createManagedChildProcess: vi.fn(),
-            killProcessTree: vi.fn(),
+            terminateProcessTree: vi.fn(),
             verifyExecutableGrant: grantStore.verifyGrant,
         });
 
@@ -144,7 +144,7 @@ describe('createTerminalRuntimeProcessService', () => {
                 pid: child.pid ?? null,
                 waitForTermination: vi.fn(async () => ({ type: 'exited' as const, code: 0 })),
             })),
-            killProcessTree: vi.fn(),
+            terminateProcessTree: vi.fn(),
             verifyExecutableGrant,
         });
 
@@ -160,6 +160,7 @@ describe('createTerminalRuntimeProcessService', () => {
             cwd: '/repo',
             env: {
                 CODEX_HOME: '/tmp/codex-home',
+                CLAUDE_CODE_ENTRYPOINT: 'happier',
                 CLAUDECODE: '1',
                 HAPPIER_DAEMON_RUNTIME_ID: 'runtime-parent',
             },
@@ -178,6 +179,7 @@ describe('createTerminalRuntimeProcessService', () => {
         }));
         // Boundary fixture: Vitest cannot infer the injected SpawnLike call tuple from the fake child factory.
         const launchedEnv = (spawn.mock.calls[0] as unknown as [string, readonly string[], { env?: NodeJS.ProcessEnv }])?.[2]?.env;
+        expect(launchedEnv?.CLAUDE_CODE_ENTRYPOINT).toBe('happier');
         expect(launchedEnv?.CLAUDECODE).toBeUndefined();
         expect(launchedEnv?.HAPPIER_DAEMON_RUNTIME_ID).toBeUndefined();
         await expect(handle.waitForTermination()).resolves.toEqual({ type: 'exited', code: 0 });
@@ -185,11 +187,13 @@ describe('createTerminalRuntimeProcessService', () => {
 
     it('does not inherit or accept spoofed session-control metadata at the final launch boundary', async () => {
         const envScope = createEnvKeyScope([
+            'HAPPIER_PROCESS_OWNER',
             'HAPPIER_SESSION_PROFILE_ID',
             'HAPPIER_SESSION_ATTACH_FILE',
             'HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON',
         ]);
         envScope.patch({
+            HAPPIER_PROCESS_OWNER: 'v1.0123456789ab.session.session-terminal',
             HAPPIER_SESSION_PROFILE_ID: 'ambient-profile',
             HAPPIER_SESSION_ATTACH_FILE: '/tmp/ambient-attach.json',
             HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: 'ambient-selections',
@@ -203,7 +207,7 @@ describe('createTerminalRuntimeProcessService', () => {
                     pid: child.pid ?? null,
                     waitForTermination: vi.fn(async () => ({ type: 'exited' as const, code: 0 })),
                 })),
-                killProcessTree: vi.fn(),
+                terminateProcessTree: vi.fn(),
                 verifyExecutableGrant: vi.fn(() => true),
             });
 
@@ -214,10 +218,12 @@ describe('createTerminalRuntimeProcessService', () => {
                 },
                 cwd: '/repo',
                 env: {
+                    HAPPIER_PROCESS_OWNER: 'plugin-forged-owner',
                     HAPPIER_SESSION_PROFILE_ID: 'plugin-spoof',
                     HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: 'plugin-spoof',
                     SAFE_VALUE: 'kept',
                 },
+                unsetEnvKeys: ['HAPPIER_PROCESS_OWNER'],
             });
 
             const launchedEnv = (spawn.mock.calls[0] as unknown as [string, readonly string[], { env?: NodeJS.ProcessEnv }])?.[2]?.env;
@@ -225,6 +231,7 @@ describe('createTerminalRuntimeProcessService', () => {
             expect(launchedEnv?.HAPPIER_SESSION_ATTACH_FILE).toBeUndefined();
             expect(launchedEnv?.HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON).toBeUndefined();
             expect(launchedEnv?.SAFE_VALUE).toBe('kept');
+            expect(launchedEnv?.HAPPIER_PROCESS_OWNER).toBe('v1.0123456789ab.session.session-terminal');
             await handle.stop();
         } finally {
             envScope.restore();
@@ -242,7 +249,7 @@ describe('createTerminalRuntimeProcessService', () => {
         const service = createTerminalRuntimeProcessService({
             spawn: vi.fn(),
             createManagedChildProcess: vi.fn(),
-            killProcessTree: vi.fn(),
+            terminateProcessTree: vi.fn(),
             registerExecutableGrant,
             resolveAgentCliLaunch,
             now: () => 1000,
@@ -293,7 +300,7 @@ describe('createTerminalRuntimeProcessService', () => {
         const service = createTerminalRuntimeProcessService({
             spawn,
             createManagedChildProcess: vi.fn(() => managed),
-            killProcessTree: vi.fn(),
+            terminateProcessTree: vi.fn(),
             verifyExecutableGrant,
         });
 
@@ -328,13 +335,13 @@ describe('createTerminalRuntimeProcessService', () => {
         // Test boundary fixture: the process service only reads pid/stderr from the child directly.
         const child = new FakeChildProcess() as unknown as ChildProcess;
         const setupError = new Error('supervision setup failed');
-        const killProcessTree = vi.fn(async () => {});
+        const terminateProcessTree = vi.fn(async () => {});
         const service = createTerminalRuntimeProcessService({
             spawn: vi.fn(() => child),
             createManagedChildProcess: vi.fn(() => {
                 throw setupError;
             }),
-            killProcessTree,
+            terminateProcessTree,
             verifyExecutableGrant: vi.fn(() => true),
         });
 
@@ -347,14 +354,14 @@ describe('createTerminalRuntimeProcessService', () => {
             cwd: '/repo',
         })).rejects.toThrow('supervision setup failed');
 
-        expect(killProcessTree).toHaveBeenCalledWith(child, undefined);
+        expect(terminateProcessTree).toHaveBeenCalledWith(child, undefined);
     });
 
     it('kills the spawned child when launch aborts after spawn but before the handle is returned', async () => {
         // Test boundary fixture: the process service only reads pid/stderr from the child directly.
         const child = new FakeChildProcess() as unknown as ChildProcess;
         const controller = new AbortController();
-        const killProcessTree = vi.fn(async () => {});
+        const terminateProcessTree = vi.fn(async () => {});
         const service = createTerminalRuntimeProcessService({
             spawn: vi.fn(() => child),
             createManagedChildProcess: vi.fn(() => {
@@ -364,7 +371,7 @@ describe('createTerminalRuntimeProcessService', () => {
                     waitForTermination: vi.fn(async () => ({ type: 'exited' as const, code: 0 })),
                 };
             }),
-            killProcessTree,
+            terminateProcessTree,
             verifyExecutableGrant: vi.fn(() => true),
         });
 
@@ -380,8 +387,8 @@ describe('createTerminalRuntimeProcessService', () => {
             name: 'AbortError',
         });
 
-        expect(killProcessTree).toHaveBeenCalledTimes(1);
-        expect(killProcessTree).toHaveBeenCalledWith(child, undefined);
+        expect(terminateProcessTree).toHaveBeenCalledTimes(1);
+        expect(terminateProcessTree).toHaveBeenCalledWith(child, undefined);
     });
 
     it('removes abort listeners when the launched process is stopped before waiting', async () => {
@@ -389,14 +396,14 @@ describe('createTerminalRuntimeProcessService', () => {
         const child = new FakeChildProcess() as unknown as ChildProcess;
         const controller = new AbortController();
         const removeAbortListener = vi.spyOn(controller.signal, 'removeEventListener');
-        const killProcessTree = vi.fn(async () => {});
+        const terminateProcessTree = vi.fn(async () => {});
         const service = createTerminalRuntimeProcessService({
             spawn: vi.fn(() => child),
             createManagedChildProcess: vi.fn(() => ({
                 pid: child.pid ?? null,
                 waitForTermination: vi.fn(async () => ({ type: 'exited' as const, code: 0 })),
             })),
-            killProcessTree,
+            terminateProcessTree,
             verifyExecutableGrant: vi.fn(() => true),
         });
 
@@ -412,7 +419,7 @@ describe('createTerminalRuntimeProcessService', () => {
 
         await handle.stop();
 
-        expect(killProcessTree).toHaveBeenCalledWith(child, undefined);
+        expect(terminateProcessTree).toHaveBeenCalledWith(child, undefined);
         expect(removeAbortListener).toHaveBeenCalled();
     });
 });

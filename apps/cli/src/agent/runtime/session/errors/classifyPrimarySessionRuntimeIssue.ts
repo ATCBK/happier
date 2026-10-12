@@ -11,7 +11,7 @@ import { ProviderBrokerAdmissionFailureCodeV1Schema } from '@happier-dev/protoco
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
-import { SessionRuntimeIssueSourceV1Schema, SessionRuntimeTeamCredentialDenialDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { AGENT_STARTUP_FAILURE_PREVIEWS, readAgentStartupFailureCode, SessionRuntimeIssueSourceV1Schema, SessionRuntimeTeamCredentialDenialDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 import { hasConnectedServiceRuntimeAuthRecoveryContext } from './connectedServiceRuntimeAuthRecoveryContext';
 import { AGENT_CLI_MISSING_PREVIEW } from '@/packagedRuntime/managedTools/agentCliNotFoundError';
@@ -446,6 +446,8 @@ export function classifyPrimarySessionRuntimeIssue(
   // act on, so it outranks the Agent-shaped cause that carried it.
   const teamCredentialDenial = readTeamCredentialDenial(input.error);
   const teamCredential = teamCredentialDenial?.details ?? null;
+  const startupFailureCode = !teamCredentialDenial && input.cause === 'session_error'
+    && errorCode.kind === 'string' ? readAgentStartupFailureCode(errorCode.value) : null;
   const missingCli = !teamCredentialDenial
     && errorCode.kind === 'string'
     && errorCode.value === SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING;
@@ -491,7 +493,7 @@ export function classifyPrimarySessionRuntimeIssue(
     status: 'failed',
     code: missingCli ? SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING
       : catalogUnavailable ? DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
-      : promptPreparationCode ?? (temporaryThrottle ? 'provider_temporary_throttle' : source),
+      : promptPreparationCode ?? startupFailureCode ?? (temporaryThrottle ? 'provider_temporary_throttle' : source),
     source,
     occurredAt,
     ...(sessionSeq === null ? {} : { sessionSeq }),
@@ -500,6 +502,7 @@ export function classifyPrimarySessionRuntimeIssue(
     sanitizedPreview: (missingCli ? AGENT_CLI_MISSING_PREVIEW : null)
       ?? (catalogUnavailable ? DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_PREVIEW : null)
       ?? (promptPreparationCode ? 'Prompt context could not be prepared. Check the selected documents and Home connection, then retry the Session.' : null)
+      ?? (startupFailureCode ? AGENT_STARTUP_FAILURE_PREVIEWS[startupFailureCode] : null)
       ?? buildSafeModelNotFoundPreview(input.error)
       ?? (temporaryThrottle ? 'Provider is temporarily limiting requests' : sanitizedPreviewBySource[source]),
     ...(usageLimit === null ? {} : { usageLimit }),

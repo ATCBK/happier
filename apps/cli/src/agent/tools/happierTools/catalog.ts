@@ -19,6 +19,7 @@ function buildActionBackedTools(): readonly HappierBuiltInToolDefinition[] {
       description: spec.description ?? spec.title,
       actionId: spec.id,
       inputSchema: spec.inputSchema,
+      ...(spec.examples ? { examples: spec.examples } : {}),
       ...(spec.contextualDefaults ? { contextualDefaults: spec.contextualDefaults } : {}),
       ...(spec.outputSchema === undefined ? {} : { outputSchema: spec.outputSchema }),
       annotations: {

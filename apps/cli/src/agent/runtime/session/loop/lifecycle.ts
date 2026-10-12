@@ -57,6 +57,10 @@ import { readAgentSessionCapabilities } from '@/plugins/projection/registry/agen
 import { NormalizedToolTurnChangeTracker } from '@/agent/tools/diff/normalizedToolTurnChangeTracker';
 import { createRepositoryCheckpointPromptLifecycle } from '@/agent/runtime/checkpoints/repositoryCheckpointPromptLifecycle';
 import { notifyDaemonConnectedServiceTurnLifecycle } from '@/daemon/controlClient';
+import { hasConnectedServiceRuntimeAuthRecoveryContext } from '@/agent/runtime/session/errors/connectedServiceRuntimeAuthRecoveryContext';
+import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
+import { reportConnectedServiceRuntimeAuthFailureToDaemon } from '@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAuthFailureToDaemon';
+import { projectConnectedServiceRuntimeAuthRecoveryReport } from '@/daemon/connectedServices/runtimeAuth/projection/connectedServiceRuntimeAuthRecoverySessionEvent';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import type {
@@ -475,6 +479,13 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
   const runtimeForPromptLoop: PermissionModePromptLoopTurnOperations =
     Object.freeze({
       ...hookRuntimeForCallbacks,
+      beginTurnLifecycle: hookRuntimeForCallbacks.beginTurnLifecycle.bind(hookRuntimeForCallbacks),
+      waitForTurnCompletion: hookRuntimeForCallbacks.waitForTurnCompletion.bind(hookRuntimeForCallbacks),
+      subscribeRuntimeEvents: hookRuntimeForCallbacks.subscribeRuntimeEvents.bind(hookRuntimeForCallbacks),
+      cancelTurn: hookRuntimeForCallbacks.cancelTurn.bind(hookRuntimeForCallbacks),
+      readSessionIdentity: hookRuntimeForCallbacks.readSessionIdentity.bind(hookRuntimeForCallbacks),
+      updateSessionRuntimeConfig: hookRuntimeForCallbacks.updateSessionRuntimeConfig.bind(hookRuntimeForCallbacks),
+      resetOrDisposeRuntime: hookRuntimeForCallbacks.resetOrDisposeRuntime.bind(hookRuntimeForCallbacks),
       sendTurnPrompt: (prompt, meta) => {
         const starterDepth = params.session.getWorkDepth?.();
         const turnDepth = preparedTurnFacts?.workDepth;
@@ -656,6 +667,27 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
     onTurnFactsChanged: (input) => {
       params.session.observeHostTurnFacts?.(input);
       if (input.facts === null) preparedTurnFacts = null;
+    },
+    onAcceptedTurnFailure: async (event) => {
+      const classification = sanitizeConnectedServiceRuntimeFailureClassification(
+        event.diagnostic.details?.runtimeAuthClassification,
+      );
+      if (!classification || !hasConnectedServiceRuntimeAuthRecoveryContext(classification)) return;
+      try {
+        const report = await reportConnectedServiceRuntimeAuthFailureToDaemon({
+          sessionId: params.session.sessionId,
+          classification,
+        });
+        if (report.report === null) {
+          logger.warn('[connected-services] Failed-turn recovery report was not accepted by the daemon');
+        }
+        const projection = projectConnectedServiceRuntimeAuthRecoveryReport({ report, classification });
+        if (projection.requiresFallback && report.statusMessage) {
+          await params.session.enqueueSessionEventCommitted({ type: 'message', message: report.statusMessage });
+        }
+      } catch {
+        logger.warn('[connected-services] Failed-turn recovery reporting could not complete');
+      }
     },
     ...(params.opts.startedBy === 'daemon'
       ? {

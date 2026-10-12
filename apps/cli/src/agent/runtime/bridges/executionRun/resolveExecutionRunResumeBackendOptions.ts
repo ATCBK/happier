@@ -53,7 +53,9 @@ export function resolveExecutionRunResumeBackendOptions(args: Readonly<{
       : {}),
     start: {
       ...(launch?.cwd ? { cwd: launch.cwd } : {}),
-      ...(launch?.mcpSelection ? { mcpSelection: launch.mcpSelection } : {}),
+      ...(launch?.capabilitySelection ? { capabilitySelection: launch.capabilitySelection } : {}),
+      ...(launch?.allowedTools !== undefined ? { allowedTools: launch.allowedTools } : {}),
+      ...(launch?.unlistedTools !== undefined ? { unlistedTools: launch.unlistedTools } : {}),
       ...(launch?.acpSessionModeId ? { acpSessionModeId: launch.acpSessionModeId } : {}),
       ...(launch?.runtimeDescriptorV1 ? { runtimeDescriptorV1: launch.runtimeDescriptorV1 } : {}),
       intent: run.intent,

@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { PluginInvocableActionId } from '@happier-dev/plugin-sdk/actions';
 
 import {
+    RunnerDaemonAgentCliReadinessResultV1Schema,
     RunnerDaemonExternalSessionsAttachResultV1Schema,
     RunnerDaemonExternalSessionsCapabilitiesResultV1Schema,
     RunnerDaemonExternalSessionsFollowEventV1Schema,
@@ -139,6 +140,18 @@ const retainedRunnerOperationClassification = [
 }>[];
 
 describe('runner daemon PluginServices v1 protocol', () => {
+    it('preserves optional CLI version facts and rejects malformed readiness projections', () => {
+        expect(RunnerDaemonAgentCliReadinessResultV1Schema.parse({
+            launchable: [{ agentId: 'happier.agent.claude/claude', version: '2.1.71' }],
+        })).toEqual({ launchable: [{ agentId: 'happier.agent.claude/claude', version: '2.1.71' }] });
+        expect(RunnerDaemonAgentCliReadinessResultV1Schema.safeParse({
+            launchable: [{ agentId: 'claude', version: 2171 }],
+        }).success).toBe(false);
+        expect(RunnerDaemonAgentCliReadinessResultV1Schema.safeParse({
+            launchable: [{ agentId: 'claude', executablePath: '/unadmitted/path' }],
+        }).success).toBe(false);
+    });
+
     it('keeps generic Action execution aligned with the public Plugin Action projection', () => {
         expectTypeOf<RunnerPluginActionExecuteOperationV1['actionId']>()
             .toEqualTypeOf<PluginInvocableActionId>();
@@ -416,7 +429,7 @@ describe('runner daemon PluginServices v1 protocol', () => {
             { kind: 'plugin_connected_accounts.watch.next_v1', requestId: 'request-35aa', invocationId: 'invocation-1', subscriptionId: 'subscription-1' },
             { kind: 'plugin_services.subscription.next_v1', requestId: 'request-35ab', invocationId: 'invocation-1', subscriptionId: 'subscription-1', acknowledgement: 'settled' },
             { kind: 'plugin_services.subscription.close_v1', requestId: 'request-35b', invocationId: 'invocation-1', subscriptionId: 'subscription-1' },
-            { kind: 'plugin_exec.agent_cli.check_readiness_v1', requestId: 'request-36', invocationId: 'invocation-1', request: { candidates: ['codex'], requirement: 'any' } },
+            { kind: 'plugin_exec.agent_cli.check_readiness_v1', requestId: 'request-36', invocationId: 'invocation-1', request: { candidates: ['codex'], requirement: 'any', includeVersion: true } },
             { kind: 'plugin_exec.system_tools.resolve_v1', requestId: 'request-37', invocationId: 'invocation-1', request: { toolId: 'codex', purpose: 'session' } },
             { kind: 'plugin_exec.launch.authorize_v1', requestId: 'request-38', invocationId: 'invocation-1', request: { executable: { kind: 'systemTool', id: 'codex' }, args: ['--version'] } },
             { kind: 'plugin_exec.launch.release_v1', requestId: 'request-38a', invocationId: 'invocation-1', authorizationId: 'authorization-1' },

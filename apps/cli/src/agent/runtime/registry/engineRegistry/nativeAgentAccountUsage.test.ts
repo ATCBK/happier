@@ -10,7 +10,7 @@ import type {
     ProviderAccountUsageAdoptionV1,
 } from '@/daemon/connectedServices/accountUsage/adoption';
 
-import { createNativeAgentAccountUsageService } from './nativeAgentAccountUsage';
+import { canonicalizeAgentAccountUsageSnapshot, createNativeAgentAccountUsageService } from './nativeAgentAccountUsage';
 
 const {
     notifyAdoption,
@@ -74,6 +74,19 @@ function createAdoption(): ProviderAccountUsageAdoptionV1 {
 }
 
 describe('native Agent account-usage host owner', () => {
+    it('preserves recovery presentation while retaining action inventory and rejecting malformed details', () => {
+        const recoveryCreditDetails = { grant: { remainingCount: 2, appliesToProviderLimitIds: ['weekly'], unavailableReason: 'cooldown' as const } };
+        const recoveryCredits = { availableCount: 0, credits: [{ id: 'grant', kind: 'usage_limit_reset' as const, status: 'unknown' as const }] };
+        const input = { ...createSnapshot(), recoveryCredits, recoveryCreditDetails };
+        const canonical = canonicalizeAgentAccountUsageSnapshot(input);
+        expect(canonical?.recoveryCreditDetails).toEqual(recoveryCreditDetails);
+        expect(canonical?.recoveryCredits).toEqual(recoveryCredits);
+        expect(canonical?.recordId).toBe(buildProviderAccountUsageRecordId(input.recordKey));
+        expect(canonicalizeAgentAccountUsageSnapshot({ ...input,
+            recoveryCreditDetails: { grant: { ...recoveryCreditDetails.grant, remainingCount: -1 } },
+        })).toBeNull();
+    });
+
     beforeEach(() => {
         notifySnapshot.mockReset();
         notifyAdoption.mockReset();
@@ -240,7 +253,7 @@ describe('native Agent account-usage host owner', () => {
                 groupId: 'team',
                 groupGeneration: 8,
             }),
-        }));
+        }), expect.objectContaining({ timeoutMs: null }));
         expect(notifySnapshot.mock.calls[0]?.[0].source).not.toHaveProperty('env');
         expect(notifySnapshot.mock.calls[1]?.[0].source).not.toHaveProperty('env');
     });

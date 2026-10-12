@@ -20,7 +20,8 @@ import {
     resolveExecutionRunConnectedServicesEnv,
 } from './connectedServicesEnv';
 import type { ConnectedServiceRunRejectedStartRequest, ConnectedServiceRunRejectedStartResult } from '@/daemon/connectedServices/runs/materializeContract';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { projectActionWorkflowSelectionInputV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { resolveSessionSpawnConnectedServicesDefaultsPayload } from '@/session/services/spawnConnectedServicesDefaults';
@@ -121,6 +122,7 @@ describe('resolveExecutionRunConnectedServicesEnv', () => {
         // receiver schema, selection/default owner and environment composer remain real.
         const deps = { ...createDeps(), resolveSessionSpawnDefaults: resolveSessionSpawnConnectedServicesDefaultsPayload };
         const executor = createActionExecutor({
+            ...createUnavailableActionTransportDeps(),
             reviewEnginesList: async () => ({ items: [{ value: 'codex', label: 'Codex' }] }),
             executionRunStart: async (_sessionId, raw) => {
                 const input = ExecutionRunStartRequestSchema.parse(raw);
@@ -132,7 +134,7 @@ describe('resolveExecutionRunConnectedServicesEnv', () => {
                 });
                 return { runId: 'run_1', callId: 'call_1', sidechainId: 'call_1' };
             },
-        } as ActionExecutorDeps);
+        });
         const input = projectActionWorkflowSelectionInputV1('review.start', {
             sessionId: 's1', engineIds: ['codex'], instructions: 'Review.',
         }, { connectedServices: selection });

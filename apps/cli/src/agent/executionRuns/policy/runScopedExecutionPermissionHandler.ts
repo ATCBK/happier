@@ -1,5 +1,6 @@
 import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
 import type { ExecutionRunPermissionInteractionMode } from './executionRunPermissionInteractionPolicy';
+import { createExecutionRunPermissionHandler } from './executionRunPermissionDecision';
 
 function requestIdPrefix(runId: string): string {
   return `execution-run:${encodeURIComponent(runId)}:`;
@@ -43,6 +44,7 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
   runId: string;
   controllerOccurrenceId: string;
   handler: AcpPermissionHandler;
+  toolPolicy?: Omit<Parameters<typeof createExecutionRunPermissionHandler>[0], 'publishPendingRequest'>;
   onPendingRequestAborted?: (request: Readonly<{
     requestId: string;
     reason: string;
@@ -62,6 +64,7 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
     throw new Error('Execution-run permission scope requires exact permission cancellation support');
   }
   const pendingRequestIds = new Set<string>();
+  const toolPolicy = params.toolPolicy ? createExecutionRunPermissionHandler(params.toolPolicy) : null;
   const cleanupRequestIds = new Set<string>();
   const abortingRequestIds = new Set<string>();
   const scopedRequestId = (requestId: string) => buildRunScopedExecutionPermissionRequestId({
@@ -69,6 +72,11 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
     controllerOccurrenceId,
     providerRequestId: requestId,
   });
+  const readImmediate: NonNullable<AcpPermissionHandler['getImmediateDecision']> = (toolCallId, toolName, input, context) => {
+    const inherited = params.handler.getImmediateDecision?.(toolCallId, toolName, input, context) ?? null;
+    if (inherited?.decision === 'denied' || inherited?.decision === 'abort') return inherited;
+    return toolPolicy?.getImmediateDecision(toolCallId, toolName, input, context) ?? inherited;
+  };
 
   const abortExact = async (requestId: string, reason: string): Promise<void> => {
     if (!pendingRequestIds.has(requestId) && !cleanupRequestIds.has(requestId)) return;
@@ -89,18 +97,19 @@ export function createRunScopedExecutionPermissionHandler(params: Readonly<{
       ...(params.handler.resolvePrePromptDecision
         ? {
             resolvePrePromptDecision: async (toolCallId, toolName, input) =>
-              await params.handler.resolvePrePromptDecision!(scopedRequestId(toolCallId), toolName, input),
+              readImmediate(scopedRequestId(toolCallId), toolName, input)
+              ?? await params.handler.resolvePrePromptDecision!(scopedRequestId(toolCallId), toolName, input),
           }
         : {}),
-      ...(params.handler.getImmediateDecision
+      ...(params.handler.getImmediateDecision || params.toolPolicy
         ? {
             getImmediateDecision: (toolCallId, toolName, input, context) =>
-              params.handler.getImmediateDecision!(scopedRequestId(toolCallId), toolName, input, context),
+              readImmediate(scopedRequestId(toolCallId), toolName, input, context),
           }
         : {}),
       async handleToolCall(toolCallId, toolName, input, context) {
         const requestId = scopedRequestId(toolCallId);
-        const immediate = params.handler.getImmediateDecision?.(requestId, toolName, input, context);
+        const immediate = readImmediate(requestId, toolName, input, context);
         if (immediate) return immediate;
         const interactionMode = params.readInteractionMode?.();
         if (interactionMode === 'deterministic' || interactionMode === 'fail_closed') {

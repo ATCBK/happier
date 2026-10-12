@@ -5,11 +5,16 @@ import {
   resolveModelSelectionIntentFromSessionMetadata,
   resolvePermissionIntentFromSessionMetadata,
 } from '@happier-dev/agents';
-import type { SessionModelSelectionIntentV1 } from '@happier-dev/protocol';
+import type { SessionModelSelectionIntentV1, SessionOwnerModeCatalogV2 } from '@happier-dev/protocol';
 import { readSessionModesMetadata } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
-function metadataHasConcreteDefaultSessionMode(metadata: Metadata | null | undefined): boolean {
-  return readSessionModesMetadata(metadata)?.availableModes.some((mode) => mode.id === 'default') ?? false;
+/** "default" clears an override unless the Agent advertises that concrete mode. */
+export function resolveSessionModeOverrideValue(
+  modeId: string | null | undefined,
+  modes: Pick<SessionOwnerModeCatalogV2, 'availableModes'> | null | undefined,
+): string {
+  return modeId === 'default' && !modes?.availableModes.some(mode => mode.id === 'default')
+    ? '' : modeId ?? '';
 }
 
 export function resolvePermissionIntentFromMetadataSnapshot(opts: {
@@ -30,10 +35,10 @@ export function resolveSessionModeOverrideFromMetadataSnapshot(opts: {
     ? { value: resolvedIntent.modeId ?? '', updatedAt: resolvedIntent.updatedAt }
     : null;
   if (!resolved) return null;
-  if (resolved.value === 'default' && !metadataHasConcreteDefaultSessionMode(opts.metadata)) {
-    return { modeId: '', updatedAt: resolved.updatedAt };
-  }
-  return { modeId: resolved.value, updatedAt: resolved.updatedAt };
+  return {
+    modeId: resolveSessionModeOverrideValue(resolved.value, readSessionModesMetadata(opts.metadata)),
+    updatedAt: resolved.updatedAt,
+  };
 }
 
 export function computePendingSessionModeOverrideApplication(opts: {

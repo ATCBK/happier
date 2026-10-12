@@ -17,6 +17,23 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
     expect(published).toMatchObject({ code: issue.code, source: issue.source, sanitizedPreview: issue.sanitizedPreview });
     expect(JSON.stringify([issue, published])).not.toMatch(/private/iu);
   });
+  it('retains closed startup failure codes in the Session issue without exposing provider payloads', () => {
+    for (const code of ['agent_startup_rpc_rejected', 'agent_startup_transport_failed', 'agent_startup_invalid_state', 'agent_startup_failed', 'AGENT_RESUME_PROVIDER_STATE_MISSING', 'codex_refresh_free_auth_unsupported']) {
+      const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error',
+        error: Object.assign(new Error('Bearer private-startup-token /private/config'), { code }),
+      });
+      expect(issue.code).toBe(code);
+      expect(JSON.stringify(issue)).not.toContain('private-startup-token');
+      expect(JSON.stringify(issue)).not.toContain('/private/config');
+      const published = classifyPrimarySessionRuntimeIssue({ cause: 'session_error',
+        error: { code: issue.code, details: { v: 1, source: issue.source } },
+      });
+      expect(published).toMatchObject({ code, source: issue.source, sanitizedPreview: issue.sanitizedPreview });
+    }
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error',
+      error: { code: 'agent_startup_private-token' },
+    }).code).toBe('agent_session_error');
+  });
   it.each(['unavailable', 'locked', 'not_found', 'malformed', 'wrong_kind'] as const)(
     'classifies prompt preparation %s with static recovery and no private references', (reason) => {
       const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error',

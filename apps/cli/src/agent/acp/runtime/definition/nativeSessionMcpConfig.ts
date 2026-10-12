@@ -1,12 +1,12 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import type { PluginAgentAcpNativeSessionMcpConfigV2 } from '@happier-dev/protocol';
 import type { AgentSessionMcpLaunchConfig } from '@happier-dev/plugin-sdk/agents/runtime';
 import {
-  createAbsolutePathSymlink,
   createSecureTempDirectorySync,
   expandHomePath,
+  linkDirectoryChildren,
   resolveHomeDirFromEnvironment,
 } from '@happier-dev/plugin-sdk/fs';
 
@@ -92,54 +92,6 @@ async function pathExists(path: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw error;
   }
-}
-
-async function linkOptionalEntry(params: Readonly<{
-  source: string;
-  destination: string;
-}>): Promise<void> {
-  let sourceStat;
-  try {
-    sourceStat = await stat(params.source);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  await mkdir(dirname(params.destination), { recursive: true, mode: 0o700 });
-  await createAbsolutePathSymlink({
-    sourcePath: params.source,
-    destinationPath: params.destination,
-    sourceKind: sourceStat.isDirectory() ? 'directory' : 'file',
-  });
-}
-
-/**
- * Links every entry of the user's provider directory into the session-private
- * root except the MCP config file the host rewrites, so the Agent keeps its
- * real credentials, history, and settings while reading one session's servers.
- */
-async function linkDirectoryEntries(params: Readonly<{
-  source: string;
-  destination: string;
-  excludedSourcePath: string;
-}>): Promise<void> {
-  const excluded = resolve(params.excludedSourcePath);
-  let entryNames: readonly string[];
-  try {
-    entryNames = await readdir(params.source);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  await mkdir(params.destination, { recursive: true, mode: 0o700 });
-  await Promise.all(entryNames.map(async (entryName) => {
-    const source = join(params.source, entryName);
-    if (resolve(source) === excluded) return;
-    await linkOptionalEntry({
-      source,
-      destination: join(params.destination, entryName),
-    });
-  }));
 }
 
 /**
@@ -282,16 +234,15 @@ export async function prepareNativeSessionMcpConfig(params: Readonly<{
   try {
     const sessionDirectoryPath = join(sessionRoot.path, declaration.directory);
     await Promise.all([
-      linkDirectoryEntries({
+      linkDirectoryChildren({
         source: source.directoryPath,
         destination: sessionDirectoryPath,
-        excludedSourcePath: source.configPath,
+        exclude: [declaration.fileName],
       }),
-      ...(declaration.linkedConfigRootEntries ?? []).map(async (entryName) => {
-        await linkOptionalEntry({
-          source: join(source.configRoot, entryName),
-          destination: join(sessionRoot.path, entryName),
-        });
+      linkDirectoryChildren({
+        source: source.configRoot,
+        destination: sessionRoot.path,
+        exclude: [declaration.directory],
       }),
     ]);
     await mkdir(sessionDirectoryPath, { recursive: true, mode: 0o700 });

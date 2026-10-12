@@ -13,6 +13,7 @@ import {
   type PermissionModeOverride as MergePermissionModeOverride,
 } from './mergeSessionMetadataForStartup';
 import { normalizeLegacySessionModeMetadataCompat } from './startup/normalizeLegacySessionModeMetadataCompat';
+import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 export type PermissionModeOverride = MergePermissionModeOverride | null;
 
@@ -60,6 +61,7 @@ export function applyStartupMetadataUpdateToSession(opts: {
   modelOverride?: ModelOverride;
   metadataKeysToUnsetOnAttach?: readonly string[] | null;
   attachMetadataIdentityPolicy?: SessionAttachMetadataIdentityPolicy | null;
+  appliedCapabilitySelection?: SessionCapabilitySelectionV1 | 'preserved_process';
   mode?: 'start' | 'attach';
 }): Promise<void> {
   const nowMs = typeof opts.nowMs === 'number' ? opts.nowMs : Date.now();
@@ -75,6 +77,7 @@ export function applyStartupMetadataUpdateToSession(opts: {
         modelOverride: opts.modelOverride ?? null,
         metadataKeysToUnsetOnAttach: opts.metadataKeysToUnsetOnAttach ?? null,
         attachMetadataIdentityPolicy: opts.attachMetadataIdentityPolicy ?? null,
+        appliedCapabilitySelection: opts.appliedCapabilitySelection,
         mode: opts.mode ?? 'start',
       }),
     );

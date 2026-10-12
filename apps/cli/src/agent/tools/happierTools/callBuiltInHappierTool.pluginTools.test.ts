@@ -1,11 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 
 const daemonBoundary = vi.hoisted(() => ({
   readCatalog: vi.fn(),
   executeAction: vi.fn(),
 }));
 
-vi.mock('@/daemon/controlClient', () => ({
+vi.mock('@/daemon/controlClient', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/daemon/controlClient')>()),
   readDaemonPluginCatalog: daemonBoundary.readCatalog,
   requestDaemonPluginActionExecution: daemonBoundary.executeAction,
 }));
@@ -30,14 +32,18 @@ vi.mock('@/session/transport/rpc/sessionRpc', () => ({
 import { callBuiltInHappierTool } from './callBuiltInHappierTool';
 
 describe('callBuiltInHappierTool plugin tools', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
   beforeEach(() => {
     vi.clearAllMocks();
+    // Home HTTP is the boundary; retain real policy bootstrap's documented
+    // unavailable-service cache/default behavior instead of mocking policy.
+    vi.spyOn(axios, 'get').mockRejectedValue(new Error('fixture_home_unavailable'));
     daemonBoundary.readCatalog.mockResolvedValue({
       kind: 'available',
       plugins: [],
       tools: [{
         toolId: 'acme.review.plugin/review-tool',
-        actionId: 'acme.review.plugin/review-start',
+        actionId: 'acme.review.plugin/actions/review-start',
         name: 'acme_review_start',
         title: 'Acme Review Start',
         description: 'Start a plugin-defined review workflow',
@@ -82,7 +88,6 @@ describe('callBuiltInHappierTool plugin tools', () => {
       actionId: 'acme.review.plugin/review-start',
       input: { scope: 'diff' },
       surface: 'cli',
-      authority: 'account_automation',
       defaultSessionId: 'sess-1',
     });
   });

@@ -17,8 +17,7 @@ function backend(secretId: string): ResolvedConfiguredAcpBackend {
     source: { kind: 'account_configured' },
     name: 'plain-acp',
     title: 'Plain ACP',
-    command: 'plain-acp',
-    args: [],
+    launch: { kind: 'command', command: 'plain-acp', args: [] },
     env: {
       ACP_TOKEN: { t: 'savedSecret', secretId },
     },

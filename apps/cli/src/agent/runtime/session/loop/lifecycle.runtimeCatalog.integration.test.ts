@@ -37,9 +37,19 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
 import { projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '../process/agentRuntimeDaemonServiceTurnWitness';
 
-const { loggerDebugMock } = vi.hoisted(() => ({
+const { loggerDebugMock, recoveryNotify, recoveryBoundary } = vi.hoisted(() => ({
   loggerDebugMock: vi.fn(),
+  recoveryNotify: vi.fn(),
+  recoveryBoundary: { outboxRoot: '' },
 }));
+vi.mock('@/configuration', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configuration')>();
+  return { ...actual, configuration: Object.create(actual.configuration, { activeServerDir: { configurable: true, get: () => recoveryBoundary.outboxRoot || actual.configuration.activeServerDir } }) };
+});
+vi.mock('@/daemon/controlClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/daemon/controlClient')>();
+  return { ...actual, notifyDaemonConnectedServiceRuntimeAuthFailure: recoveryNotify };
+});
 
 vi.mock('@/ui/logger', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/ui/logger')>();
@@ -2624,6 +2634,97 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     expect(JSON.stringify(session.enqueueAgentMessageCommitted.mock.calls)).not.toContain(spoofedAgentTurnId);
   });
 
+  it.each([{ connected: true, acceptsFailure: true }, { connected: true, acceptsFailure: false }, { connected: false, acceptsFailure: true }])('reports attributed quota failure only after the host accepts its failed turn (%j)', async ({ connected, acceptsFailure }) => {
+    const outboxRoot = await mkdtemp(join(tmpdir(), 'agy-host-recovery-'));
+    recoveryBoundary.outboxRoot = outboxRoot;
+    try {
+      const lease = await pluginReloadController.acquireRuntimeRegistry({
+        resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
+          contributes: getResolvedContributionRegistry(), pluginIds: [],
+        }),
+      });
+      try {
+        const base = createLifecycleParams({
+          policyAgentId: 'happier.agent.antigravity/antigravity',
+          runPermissionModePromptLoopFn: runPermissionModePromptLoop,
+        });
+        const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+          (mode) => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts },
+        );
+        queue.push({ text: 'Continue', localId: 'quota-input', userMessageSeq: 1 }, { permissionMode: 'default' });
+        let failedTurnAccepted = false;
+        vi.mocked(base.session.enqueueSessionTurnMutation!).mockImplementation(async (mutation) => {
+          if (mutation.action === 'fail') {
+            await Promise.resolve();
+            if (!acceptsFailure) throw new Error('Synthetic terminal persistence rejection');
+            failedTurnAccepted = true;
+          }
+        });
+        let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+        // The native Agent SDK session is the provider boundary; host composition stays real.
+        const provider: AgentSessionRuntime = {
+          async send(request) {
+            for (const event of [
+              { kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery },
+              { kind: 'turn-start', turnId: request.delivery.turnId, startedBy: 'host' },
+              { kind: 'turn-failed', turnId: request.delivery.turnId, diagnostic: {
+                code: 'provider_usage_limit', severity: 'error', message: 'Usage Limit Reached',
+                details: { v: 1, source: 'usage_limit', runtimeAuthClassification: {
+                  kind: 'usage_limit', limitCategory: 'usage_limit', serviceId: 'happier.agent.antigravity/antigravity-account',
+                  profileId: connected ? 'selected-profile' : null, groupId: connected ? 'selected-pool' : null,
+                  ...(connected ? { groupGeneration: 7, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv' } : {}),
+                  source: 'stable_provider_message', resetsAtMs: null, retryAfterMs: null, quotaScope: 'account', rateLimits: null,
+                } },
+              } },
+              { kind: 'runtime-ended', cause: 'providerEnded', retryable: false },
+            ]) listener?.(canonicalRuntimeEvent({ ...event, sessionId: 'session-1', emittedAtMs: 1 }));
+            return { status: 'admitted' };
+          },
+          watch(value) { listener = value; return { dispose() { listener = undefined; } }; },
+          dispose() {},
+        };
+        const runtime = createNativeAgentSessionOperations(
+          provider, 'session-1', undefined, undefined, undefined, undefined, undefined,
+          {
+            context: { signal: new AbortController().signal } as AgentSessionRuntimeContext,
+            cwd: '/workspace', connectedAccounts: [],
+            capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+            cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
+          }, undefined, [], undefined, undefined, async () => ({ status: 'admitted' }),
+        );
+        const reports: unknown[] = [];
+        recoveryNotify.mockImplementation(async (body: unknown) => {
+          expect(vi.mocked(base.session.enqueueAgentMessageCommitted!).mock.calls.some(([, value]) => value.type === 'turn_failed')).toBe(true);
+          expect(failedTurnAccepted).toBe(true);
+          reports.push(body);
+          return { ok: true, result: { status: 'recovery_superseded', reason: 'source_tuple_mismatch', serviceId: 'happier.agent.antigravity/antigravity-account' } };
+        });
+        let terminate: ((event: RunnerTerminationEvent) => void) | undefined;
+        const run = runSessionLoopLifecycle({
+          ...base, runtime, hookRuntime: runtime,
+          permissionModeState: { ...base.permissionModeState, messageQueue: queue },
+          deps: { ...base.deps, registerRunnerTerminationHandlersFn: (registration) => {
+            const handlers = registerRunnerTerminationHandlers({
+              process: registration.process, exit: registration.exit, onTerminate: registration.onTerminate,
+              processLifecycleOwnership: 'caller',
+            });
+            terminate = handlers.requestTermination;
+            return handlers;
+          } },
+        });
+        try { await run; } finally { terminate?.({ kind: 'killSession' }); await run; }
+        expect(vi.mocked(base.session.enqueueSessionTurnMutation!).mock.calls.some(([mutation]) => mutation.action === 'fail')).toBe(true);
+        expect(failedTurnAccepted).toBe(acceptsFailure);
+        expect(reports).toEqual(connected && acceptsFailure ? [expect.objectContaining({ sessionId: 'session-1', classification: expect.objectContaining({
+          serviceId: 'happier.agent.antigravity/antigravity-account', profileId: 'selected-profile', groupId: 'selected-pool', groupGeneration: 7, expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv',
+        }) })] : []);
+      } finally { await lease.release(); }
+    } finally {
+      recoveryNotify.mockReset(); recoveryBoundary.outboxRoot = '';
+      await rm(outboxRoot, { recursive: true, force: true });
+    }
+  });
+
   it('flushes streamed assistant text before publishing a turn-failed marker', async () => {
     const baseParams = createLifecycleParams({ policyAgentId: 'cursor' });
     let runtimeEventHandler: RuntimeTurnMessageHandler | null = null;
@@ -3389,7 +3490,9 @@ describe('runSessionLoopLifecycle required transcript admission', () => {
     const fixtureDir = await mkdtemp(join(tmpdir(), 'happier-transcript-drain-owner-'));
     const serverDirDescriptor = Object.getOwnPropertyDescriptor(configuration, 'activeServerDir')!;
     // The isolated filesystem location and the socket are environment/OS/network boundaries.
-    Object.defineProperty(configuration, 'activeServerDir', { ...serverDirDescriptor, value: fixtureDir });
+    Object.defineProperty(configuration, 'activeServerDir', {
+      configurable: serverDirDescriptor.configurable, enumerable: serverDirDescriptor.enumerable, get: () => fixtureDir,
+    });
     vi.stubEnv('HAPPIER_SESSION_SOCKET_ACK_TIMEOUT_MS', '10000');
     let acknowledge!: () => void;
     const acknowledgement = new Promise<void>((resolve) => { acknowledge = resolve; });

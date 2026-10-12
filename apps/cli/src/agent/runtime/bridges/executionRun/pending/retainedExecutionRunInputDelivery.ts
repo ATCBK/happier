@@ -266,7 +266,7 @@ export function createRetainedExecutionRunInputDelivery(
             };
         }
 
-        const causalPermissionAuthority = readSessionInputCausalPermissionAuthorityV1(input.meta);
+        const causalPermissionAuthority = readSessionInputCausalPermissionAuthorityV1(input.meta, 'stored');
         const provenance = resolveSessionInputPromptProvenanceV1(input.meta);
         const sessionRunContext = !contextInitialized ? options.sessionRunContext : undefined;
         const profileContext = !contextInitialized ? options.readInitialProfileContext?.() : undefined;

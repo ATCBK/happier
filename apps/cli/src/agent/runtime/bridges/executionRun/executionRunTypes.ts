@@ -14,7 +14,7 @@ import type {
   ProviderBoundModelRef,
   PortableRuntimeDescriptorV1,
   SessionInputCausalPermissionAuthorityV1,
-  SessionMcpSelectionV1,
+  SessionCapabilitySelectionV1,
   SecretReferenceOverlayV1,
   TeamCredentialProviderModelSelectionV1,
 } from '@happier-dev/protocol';
@@ -50,6 +50,7 @@ export type ExecutionRunManagerStartParams = Readonly<{
   promptCredentials?: import('@/persistence').StoredCredentials;
   backendTarget: BackendTargetRefV1;
   accountSettings?: Readonly<Record<string, unknown>> | null;
+  childSelection?: 'agentDefault';
   instructions?: string;
   /** Explicit attached-run creation without an initial turn. */
   initialInput?: ExecutionRunInitialInputV1;
@@ -71,7 +72,9 @@ export type ExecutionRunManagerStartParams = Readonly<{
   /** Per-Run cwd selected by the workspace owner. */
   cwd?: string;
   /** Canonical managed MCP selection for this Run. */
-  mcpSelection?: SessionMcpSelectionV1;
+  capabilitySelection?: SessionCapabilitySelectionV1;
+  allowedTools?: import('@happier-dev/protocol/runtime/agentSessionV1').AgentSessionConfigurationSnapshotV1['allowedTools'];
+  unlistedTools?: import('@happier-dev/protocol/runtime/agentSessionV1').AgentSessionConfigurationSnapshotV1['unlistedTools'];
   acpSessionModeId?: string;
   runtimeDescriptorV1?: PortableRuntimeDescriptorV1;
   display?: ExecutionRunDisplay;
@@ -196,7 +199,9 @@ export type ExecutionRunState = Readonly<{
   launch?: Readonly<{
     selectionSource?: 'explicit' | 'inherited' | 'independent' | 'retained';
     cwd?: string;
-    mcpSelection?: SessionMcpSelectionV1;
+    capabilitySelection?: SessionCapabilitySelectionV1;
+    allowedTools?: ExecutionRunManagerStartParams['allowedTools'];
+    unlistedTools?: ExecutionRunManagerStartParams['unlistedTools'];
     acpSessionModeId?: string;
     runtimeDescriptorV1?: PortableRuntimeDescriptorV1;
     launchOrigin?: ExecutionRunLaunchOrigin;

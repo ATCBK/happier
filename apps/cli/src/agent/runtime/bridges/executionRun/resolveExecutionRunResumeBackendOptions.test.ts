@@ -8,6 +8,7 @@ import {
 
 import type { ExecutionRunState } from './executionRunTypes';
 import { resolveExecutionRunResumeBackendOptions } from './resolveExecutionRunResumeBackendOptions';
+import { projectRetainedExecutionRunState } from './retainedState';
 
 const CONNECTED_SELECTION: ConnectedServiceBindingsV2 = {
   v: 2,
@@ -50,6 +51,17 @@ function baseRun(launch: ExecutionRunState['launch']): ExecutionRunState {
 }
 
 describe('resolveExecutionRunResumeBackendOptions', () => {
+  it('rehydrates the immutable Run tool policy without inheriting parent grants', () => {
+    const run = baseRun({
+      allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny',
+    });
+    expect(projectRetainedExecutionRunState(run).launch).toMatchObject({
+      allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny',
+    });
+    expect(resolveExecutionRunResumeBackendOptions({ run }).start)
+      .toMatchObject({ allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' });
+  });
+
   it('retains the admitted hands-off ceiling when the backend is recreated', () => {
     expect(resolveExecutionRunResumeBackendOptions({
       run: { ...baseRun(undefined), workspaceWrites: 'deny', permissionMode: 'yolo' },

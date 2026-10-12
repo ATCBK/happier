@@ -15,7 +15,6 @@ const DECLARATION: PluginAgentAcpNativeSessionMcpConfigV2 = {
   fileName: 'mcp_config.json',
   serversKey: 'mcpServers',
   serverEntryConstants: { transport: 'stdio' },
-  linkedConfigRootEntries: ['cognition'],
   projectShadowPaths: ['.devin/mcp_config.json'],
 };
 

@@ -1,5 +1,6 @@
 import type { Metadata } from '@/api/types';
 import { AgentNativeResumeIdentityV1Schema } from '@happier-dev/protocol/agents/nativeResumeIdentityV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
 import type { AgentNativeResumeIdentityV1, RuntimeDescriptorV1 } from '@happier-dev/protocol';
 
@@ -54,7 +55,7 @@ export function pickSessionRuntimeLocalMetadata(
   }
 
   const runtimeDescriptorV1 = readRuntimeDescriptorV1FromMetadata(metadata);
-  const nativeResumeIdentity = AgentNativeResumeIdentityV1Schema.safeParse(
+  const nativeResumeIdentity = createStoredReadSchema(AgentNativeResumeIdentityV1Schema).safeParse(
     metadata.nativeResumeIdentityV1,
   );
   const picked: SessionRuntimeLocalMetadata = {

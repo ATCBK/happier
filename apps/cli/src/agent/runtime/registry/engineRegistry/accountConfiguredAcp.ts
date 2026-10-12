@@ -2,7 +2,8 @@ import { isCustomAcpAgentContributionIdentityV1, type AgentExecutionTargetV1 } f
 import { agentRoutingIdAddressesContributionIdentityV1, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
 
-import { readStoredCredentials } from '@/persistence';
+import { readSettings, readStoredCredentials } from '@/persistence';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -17,7 +18,8 @@ import { refreshActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
 import { materializeConfiguredAcpEnvironment } from '@/agent/acp/catalog/configured/materializeEnvironment';
 import { AcpCatalogUnavailableError, requireReadyAcpCatalog, resolveConfiguredAcpBackendFromAccountSettings } from '@/agent/acp/catalog/configured/resolveBackend';
 import { buildConfiguredAcpBackendSessionMetadata } from '@/agent/acp/catalog/configured/sessionMetadata';
-import { normalizeConfiguredAcpDefinition } from '@/agent/acp/runtime/definition/configured';
+import { configuredAcpRuntimeConfiguration, normalizeConfiguredAcpDefinition } from '@/agent/acp/runtime/definition/configured';
+import { ensureAcpLaunchForSession } from '@/agent/acp/catalog/configured/resolveAcpLaunch';
 import { resolveAcpRuntimeLaunch } from '@/agent/acp/runtime/definition/launch';
 import type { AgentAcpRuntimeDefinition } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { AgentSessionCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
@@ -53,11 +55,7 @@ export async function resolveAccountConfiguredAcpLaunch(
   const catalog = requireReadyAcpCatalog(accountSnapshot.acpCatalog);
   const configuredBackend = resolveConfiguredAcpBackendFromAccountSettings(accountSnapshot.settings, definitionId, catalog);
   if (!configuredBackend) throw new AcpCatalogUnavailableError('definition-not-found');
-  const definition = normalizeConfiguredAcpDefinition({ backend: configuredBackend });
-  const runtimeDefinition: AgentAcpRuntimeDefinition = Object.freeze({
-    mcp: definition.mcp,
-    ...(definition.stderrRules ? { stderrRules: definition.stderrRules } : {}),
-  });
+  const runtimeDefinition: AgentAcpRuntimeDefinition = Object.freeze(configuredAcpRuntimeConfiguration(configuredBackend));
   const sessionCapabilities: AgentSessionCapabilities = {
     open: ['create', ...(configuredBackend.capabilities.supportsLoadSession ? ['resume' as const] : [])],
     delivery: ['newTurn', 'steer', 'followUp'], cancel: true, configuration: true,
@@ -79,6 +77,14 @@ export async function resolveAccountConfiguredAcpLaunch(
   const resolveHostLaunch: PublicAcpHostLaunchResolver = async (request) => {
     await assertAccountCurrent();
     if (readSnapshot()?.acpCatalog !== catalog) throw new AcpCatalogUnavailableError('catalog-stale');
+    if (configuredBackend.launch.kind !== 'command') {
+      const admission = savedSecretOperationContext?.machineAdmission;
+      if (savedSecretOperationContext
+        ? !admission?.actorAccountId
+        : credentials.requesterSessionCredentialScope || process.env.HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE !== undefined) {
+        throw new AcpCatalogUnavailableError('managed-install-account-unavailable');
+      }
+    }
     const references = Object.values(configuredBackend.env)
       .flatMap(value => value.t === 'savedSecret' ? [{ ref: value.secretId }] : []);
     if (references.length > 0) {
@@ -102,12 +108,20 @@ export async function resolveAccountConfiguredAcpLaunch(
     await assertAccountCurrent();
     const launchSnapshot = readSnapshot();
     if (launchSnapshot?.acpCatalog !== catalog) throw new AcpCatalogUnavailableError('catalog-stale');
-    const launchDefinition = normalizeConfiguredAcpDefinition({
-      backend: configuredBackend,
-      launchEnv: materializeConfiguredAcpEnvironment({
+    const launchEnv = materializeConfiguredAcpEnvironment({
         backend: configuredBackend, accountSettings: launchSnapshot.settings, credentials,
         savedSecretResources: launchSnapshot.savedSecretResources,
-      }),
+    });
+    const resolved = await ensureAcpLaunchForSession({
+      accountId: savedSecretOperationContext?.machineAdmission?.actorAccountId ?? readAccountIdFromToken(credentials.token) ?? undefined,
+      definition: { id: configuredBackend.backendId, title: configuredBackend.title, launch: configuredBackend.launch },
+      platform: process.platform, arch: process.arch, env: process.env,
+      settings: launchSnapshot.settings, machineId: (await readSettings()).machineId ?? '',
+    });
+    await assertAccountCurrent();
+    if (readSnapshot()?.acpCatalog !== catalog) throw new AcpCatalogUnavailableError('catalog-stale');
+    const launchDefinition = normalizeConfiguredAcpDefinition({
+      backend: configuredBackend, launch: resolved, launchEnv,
     });
     const launch = await resolveAcpRuntimeLaunch({ definition: launchDefinition, cwd: request.cwd });
     await assertAccountCurrent();
@@ -115,11 +129,7 @@ export async function resolveAccountConfiguredAcpLaunch(
     return Object.freeze({
       command: launch.command, args: Object.freeze([...launch.args]), env: Object.freeze({ ...launch.env }),
       unsetEnv: Object.freeze([]),
-      timeouts: Object.freeze({
-        ...(typeof definition.timeouts?.initMs === 'number' ? { initializeMs: definition.timeouts.initMs } : {}),
-        ...(typeof definition.timeouts?.idleMs === 'number' ? { idleMs: definition.timeouts.idleMs } : {}),
-        ...(typeof definition.timeouts?.toolCallMs === 'number' ? { toolCallMs: definition.timeouts.toolCallMs } : {}),
-      }),
+      timeouts: Object.freeze({}),
     });
   };
   await assertAccountCurrent();

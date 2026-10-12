@@ -3,6 +3,8 @@ import { RuntimeActionIdV1Schema } from '@happier-dev/protocol/actions/actionIds
 import { resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
 import type { ActionContextualDefaults } from '@happier-dev/protocol';
 import { z } from 'zod';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
@@ -48,18 +50,22 @@ export function resolveActionToolContextualDefaults(params: Readonly<{
   const projected = params.pluginToolCatalog?.find((tool) => tool.actionId === params.actionId);
   if (projected?.contextualDefaults) return projected.contextualDefaults;
 
-  return params.registry?.actionsById?.get(params.actionId)?.definition.contextualDefaults ?? null;
+  const identity = parseQualifiedPluginActionId(params.actionId);
+  return identity
+    ? params.registry?.actionsById?.get(buildQualifiedPluginContributionKey(identity))?.definition.contextualDefaults ?? null
+    : null;
 }
 
 export function bindContextualActionToolInput(params: Readonly<{
   actionId: string;
   input: unknown;
+  contextualDefaults?: ActionContextualDefaults | null;
   context: SessionBoundActionToolContext;
   registry?: ResolvedContributionRegistry;
   pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
 }>): unknown {
   if (!params.input || typeof params.input !== 'object' || Array.isArray(params.input)) return params.input;
-  const defaults = resolveActionToolContextualDefaults(params);
+  const defaults = params.contextualDefaults ?? resolveActionToolContextualDefaults(params);
   const browserSessionId = contextualBrowserSessionId(params.actionId, params.context);
   if (!defaults && !browserSessionId) return params.input;
 
@@ -102,6 +108,17 @@ export function projectSessionBoundActionToolInputSchema(params: Readonly<{
   if (defaults?.machineId && normalizeContextValue(params.context.defaultSessionMachineId)) optionalFields.add('machineId');
   if (browserSessionId) optionalFields.add('browserSessionId');
   if (optionalFields.size === 0) return params.inputSchema;
+
+  // Each declared union arm owns its scope and refinements. Project only the
+  // host-supplied fields in those existing arms, rather than flattening them.
+  if (params.inputSchema instanceof z.ZodUnion) {
+    const options = params.inputSchema.options.map((inputSchema: unknown) => (
+      projectSessionBoundActionToolInputSchema({ ...params, inputSchema })
+    ));
+    return options.every((option): option is z.ZodType => option instanceof z.ZodType)
+      ? z.union(options)
+      : params.inputSchema;
+  }
 
   // Browser automation combines the strict request with its action-kind refinement. Project
   // both sides so host defaults are accepted without dropping either validation contract.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ProviderBoundModelRefSchema, buildBackendTargetKeyV2 } from '@happier-dev/protocol';
+import { ProviderBoundModelRefSchema, buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol';
 
 import { buildExecutionRunConfiguration, resolveExecutionRunChildSelection } from './openInputs';
 import type { ExecutionRunAppliedParentSelection } from './openInputs';
@@ -24,6 +24,26 @@ const appliedParent: ExecutionRunAppliedParentSelection = {
 };
 
 describe('resolveExecutionRunChildSelection', () => {
+    it('uses the child Agent Account default only after an explicit choice, without inheriting parent credentials', () => {
+        const childDefault = { agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(claudeTarget)),
+            providerConnectionId: 'pc_child_default', modelId: 'default-model' };
+        const result = resolveExecutionRunChildSelection({ backendTarget: claudeTarget, lifecycle: 'attached', parent: appliedParent,
+            childSelection: 'agentDefault', agentDefaultSelection: childDefault });
+        expect(result).toMatchObject({ modelSelection: childDefault, modelId: 'default-model', selectionSource: 'explicit' });
+        expect(result.connectedServices).toBeUndefined();
+    });
+    it('returns actionable default/explicit choices when another Agent cannot inherit native routing', () => {
+        try {
+            resolveExecutionRunChildSelection({ backendTarget: claudeTarget, lifecycle: 'attached',
+                parent: { ...appliedParent, modelSelection: { ...providerSelection, providerConnectionId: null } } });
+            expect.fail('Expected choice-required refusal');
+        } catch (error) {
+            expect(error).toMatchObject({ code: 'execution_run_child_choice_required', details: { childChoice: {
+                v: 1, agentTargetKey: buildBackendTargetKeyV2(readBackendTargetRefV2(claudeTarget)), parentRouteCompatibility: 'incompatible',
+                options: ['agentDefault', 'explicitModel'],
+            } } });
+        }
+    });
     it('inherits applied route and pool identity, never the selected pool member', () => {
         expect(resolveExecutionRunChildSelection({
             backendTarget: codexTarget, lifecycle: 'attached', parent: appliedParent,
@@ -175,6 +195,13 @@ describe('resolveExecutionRunChildSelection', () => {
 });
 
 describe('buildExecutionRunConfiguration', () => {
+    it('retains the Run recipe exclusive tool policy in native configuration', () => {
+        expect(buildExecutionRunConfiguration({
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read-only',
+            allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny', updatedAtMs: 1,
+        }).configuration).toMatchObject({ allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' });
+    });
+
     it('keeps hands-off independent of the delegation permission ceiling', () => {
         expect(buildExecutionRunConfiguration({
             backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'yolo',

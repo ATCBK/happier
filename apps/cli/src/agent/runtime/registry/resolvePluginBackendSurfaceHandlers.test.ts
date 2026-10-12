@@ -46,6 +46,7 @@ function createRuntimeRegistry(
   agent: ResolvedAgentContribution,
 ): ResolvedExecutablePluginRuntimeRegistry {
   return {
+    claimReleaseLessDeclarations: async () => undefined,
     contributes: createResolvedContributionRegistry({
       agents: [agent],
     }),

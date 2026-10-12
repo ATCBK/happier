@@ -15,3 +15,4 @@ process.on('message', (input: unknown) => {
     process.disconnect?.();
   });
 });
+process.send?.('ready');

@@ -74,7 +74,6 @@ export function createPublicAcpRuntimeProtocols(params: Readonly<{
   modes?: AgentSessionHostServices['modes'];
   resumeHistorySession?: AcpReplayHistorySessionClient;
   sidechainSession?: AcpReplaySidechainSessionClient;
-  mcpServers?: AgentSessionOpenRequest['mcpServers'];
   transformAgentChildLaunchEnvironment?: (
     environment: Readonly<Record<string, string>>,
   ) => Readonly<Record<string, string>>;
@@ -104,7 +103,6 @@ export function createPublicAcpRuntimeProtocols(params: Readonly<{
     ...(scope === 'session' && params.resumeHistorySession
       ? { resumeHistorySession: params.resumeHistorySession }
       : {}),
-    ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
     ...(params.transformAgentChildLaunchEnvironment
       ? { transformAgentChildLaunchEnvironment: params.transformAgentChildLaunchEnvironment }
       : {}),

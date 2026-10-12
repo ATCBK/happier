@@ -15,6 +15,7 @@ import {
     type CliRuntimeCore,
     type EngineResolutionAgent,
     type EngineResolutionBackend,
+    type CreateCliExecutionRunBackendParams,
 } from '../engineRegistryTypes';
 import type {
     BackendRuntimeOwnerResolution,
@@ -26,6 +27,7 @@ import {
     createNativeAgentRuntimeSessionPlan,
     createNativeAgentSessionHostServices,
     resolveNativeAgentSessionNativeHomeService,
+    resolveAgentSessionMcpLaunchConfigs,
 } from './nativeAgentSession';
 import { createNativeAgentSessionHostServiceOwners } from './nativeAgentSessionHostServiceOwners';
 import { createNativeAgentSessionPublications } from './nativeAgentSessionPublications';
@@ -65,6 +67,24 @@ import { resolveExecutionRunPermissionInteractionMode } from '@/agent/executionR
 import { createExecutionRunCodedError } from '@/agent/runtime/bridges/executionRun/errors';
 import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
 import type { PublicAcpHostLaunchResolver } from '@/agent/acp/runtime/publicSession/createPublicAcpSession';
+import { readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
+
+export function resolveSessionOwnedRunToolPolicy(params: Readonly<{
+    options: Pick<CreateCliExecutionRunBackendParams, 'permissionMode' | 'workspaceWrites' | 'start' | 'causalPermissionAuthority'>;
+    parentMetadata: Parameters<typeof readSessionWorkspaceWritesV1>[0];
+    agentId: string;
+}>): Parameters<typeof createRunScopedExecutionPermissionHandler>[0]['toolPolicy'] {
+    const { options } = params;
+    if (options.start?.allowedTools === undefined && options.start?.unlistedTools === undefined) return undefined;
+    return {
+        permissionMode: options.permissionMode,
+        backendId: params.agentId,
+        workspaceWrites: readSessionWorkspaceWritesV1(params.parentMetadata) === 'deny' ? 'deny' : options.workspaceWrites,
+        allowedTools: options.start.allowedTools,
+        unlistedTools: options.start.unlistedTools,
+        ...(Object.hasOwn(options, 'causalPermissionAuthority') ? { causalPermissionAuthority: options.causalPermissionAuthority } : {}),
+    };
+}
 
 export function shouldNormalizeManifestOnlyAcpBackend(backend: ResolvedAgentRuntimeContribution): boolean {
     return backend.runtimeKind === 'acp';
@@ -485,6 +505,17 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 { code: 'execution_run_interaction_unavailable' },
                             );
                         }
+                        const parentToolPolicy = host?.session.getMetadataSnapshot();
+                        if (parentToolPolicy?.unlistedTools === 'deny') {
+                            const parentTools = new Set(parentToolPolicy.allowedTools ?? []);
+                            const runTools = new Set(options.start?.allowedTools ?? []);
+                            if (options.start?.unlistedTools !== 'deny'
+                                || parentTools.size !== runTools.size
+                                || [...parentTools].some((tool) => !runTools.has(tool))) {
+                                throw createExecutionRunCodedError('execution_run_not_allowed',
+                                    'Execution Run tool policy does not match its confined parent Session');
+                            }
+                        }
                         const hasDetachedInteractionIdentity = options.scope === 'detached'
                             && Boolean(
                                 runId
@@ -503,6 +534,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 agentId: engineEntry.agentId,
                                 occurrenceId: engineEntry.occurrenceId,
                                 correlationId: runId,
+                                processOwner: { kind: 'run', runId },
                                 cwd: options.cwd,
                                 ...(options.isolation?.env ? { environment: options.isolation.env } : {}),
                                 signal: engineEntry.retirementSignal,
@@ -568,6 +600,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 runId: options.runId,
                                 controllerOccurrenceId: options.controllerOccurrenceId ?? '',
                                 handler: host.permissionHandler,
+                                toolPolicy: resolveSessionOwnedRunToolPolicy({ options, parentMetadata: parentToolPolicy, agentId: nativeIdentity.agentId }),
                                 readInteractionMode: () => {
                                     const { intent, runClass, ioMode, retentionPolicy } = options.start ?? {};
                                     if (!intent || !runClass || !ioMode || !retentionPolicy) {
@@ -645,6 +678,11 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 readCurrentRunOccurrence: runScope.readCurrentRunOccurrence,
                                             })
                                             : null;
+                                        if (runToolBinding?.mcpServers) {
+                                            runToolBinding = { ...runToolBinding, mcpServers: await resolveAgentSessionMcpLaunchConfigs(
+                                                runToolBinding.mcpServers, options.start ?? {}, signal,
+                                            ) };
+                                        }
                                         if (runToolBinding) {
                                             runScope?.publishSupportedSessionReadActions(
                                                 runToolBinding.supportedSessionReadActions,
@@ -682,6 +720,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 agentId: engineEntry.agentId,
                                                 occurrenceId: engineEntry.occurrenceId,
                                                 correlationId: runId,
+                                                processOwner: { kind: 'run', runId, sessionId },
                                                 cwd: options.cwd,
                                                 ...(options.isolation?.env ? { environment: options.isolation.env } : {}),
                                                 signal,
@@ -737,11 +776,6 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                                 : {}),
                                             ...(params.nativeAgentAcpRuntimeDefinition
                                                 ? { runtimeDefinition: params.nativeAgentAcpRuntimeDefinition }
-                                                : {}),
-                                            // The Run's own tool profile reaches the generic ACP composer
-                                            // exactly as the main-Session path hands it `hostRuntimeParams.mcpServers`.
-                                            ...(runToolBinding?.mcpServers
-                                                ? { mcpServers: runToolBinding.mcpServers }
                                                 : {}),
                                         });
                                         const context = composeNativeAgentSessionRuntimeContext({
@@ -831,8 +865,8 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                 ...(options.causalPermissionAuthority
                                     ? { causalPermissionAuthority: options.causalPermissionAuthority }
                                     : {}),
-                                ...(options.start?.mcpSelection
-                                    ? { mcpSelection: options.start.mcpSelection }
+                                ...(options.start?.capabilitySelection
+                                    ? { capabilitySelection: options.start.capabilitySelection }
                                     : {}),
                                 ...(params.happyHomeDir ? { happyHomeDir: params.happyHomeDir } : {}),
                                 transformAgentRequest: transformNativeAgentRequest,
@@ -854,6 +888,7 @@ export async function resolveBackendRuntimeCore(params: Readonly<{
                                             agentId: engineEntry.agentId,
                                             occurrenceId: engineEntry.occurrenceId,
                                             correlationId: options.runId!,
+                                            processOwner: { kind: 'run', runId: options.runId! },
                                             cwd: options.cwd,
                                             ...(options.isolation?.env
                                                 ? { environment: options.isolation.env }

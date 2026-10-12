@@ -74,6 +74,7 @@ type MaterializationDeps = Readonly<{
 
 export type ResolvedExecutionRunConnectedServicesEnv = Readonly<{
     env: Readonly<Record<string, string>>;
+    unsetEnvKeys?: readonly string[];
     connectedServicesBindings: unknown;
     registration: ExecutionRunConnectedServicesRegistrationV1;
     cleanup: () => Promise<void>;
@@ -358,6 +359,7 @@ export async function resolveExecutionRunConnectedServicesEnv(params: Readonly<{
 
     return {
         env: { ...response.result.env },
+        ...(response.result.unsetEnvKeys?.length ? { unsetEnvKeys: response.result.unsetEnvKeys } : {}),
         connectedServicesBindings: response.result.connectedServicesBindings,
         registration: response.result.registration,
         cleanup,

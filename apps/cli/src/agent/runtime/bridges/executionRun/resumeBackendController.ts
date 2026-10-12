@@ -1,7 +1,7 @@
 import type { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { randomUUID } from 'node:crypto';
 import { convertBackendTargetRefV2ToV1, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import type { BackendTargetRefV1, SessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol';
+import type { BackendTargetRefV1, ExecutionRunConnectedServicesLaunchV1, SessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol';
 
 import type { AttachRetainedRunSessionInput, ExecutionRunState } from './executionRunTypes';
 import type { ExecutionRunBackendController, ExecutionRunController } from '@/agent/executionRuns/controllers/types';
@@ -21,6 +21,76 @@ import type { ExecutionRunHostRuntime } from './executionRunHostRuntime';
 import type { ExecutionRunPermissionRequestStoreProvider } from './executionRunPermissionResponseTarget';
 import { isExecutionRunControllerCurrent, settleExecutionRunController } from './settleExecutionRunController';
 import type { ExecutionRunEnsureResult } from './ensureExecutionRun';
+import type { ExecutionRunConnectedServicesSelectionReport } from './runtime/create';
+
+export type ExecutionRunResumeMaterializationHooks = Readonly<{
+  onConnectedServicesSelection?: (selection: ExecutionRunConnectedServicesSelectionReport) => void | Promise<void>;
+  onConnectedServicesRegistration?: (registration: ExecutionRunConnectedServicesLaunchV1) => void | Promise<void>;
+}>;
+
+/** One admission/held-registration owner for each genuinely claimed resume. */
+export function createExecutionRunResumeMaterialization(args: Readonly<{
+  runId: string;
+  run: ExecutionRunState;
+  runs: Map<string, ExecutionRunState>;
+  isCurrentOccurrence: () => boolean;
+}>): Readonly<{
+  hooks: Required<ExecutionRunResumeMaterializationHooks>;
+  publishProvisioning(): void;
+  isCurrent(): boolean;
+  rollback(): ExecutionRunState | null;
+  readRegistration(): ExecutionRunConnectedServicesLaunchV1 | undefined;
+}> {
+  let preparedRegistration: ExecutionRunConnectedServicesLaunchV1 | undefined;
+  let preparedSelection: ExecutionRunConnectedServicesSelectionReport | undefined;
+  const isCurrent = () => args.runs.get(args.runId)?.status === 'running' && args.isCurrentOccurrence();
+  return {
+    hooks: {
+      onConnectedServicesSelection(selection) {
+        if (!isCurrent()) throw new Error('Execution-run resume selection is no longer current');
+        const current = args.runs.get(args.runId)!;
+        preparedSelection = selection;
+        args.runs.set(args.runId, { ...current, launch: {
+          ...(current.launch ?? {}),
+          connectedServicesSelection: selection.connectedServicesBindings,
+          ...(selection.agentContribution ? { connectedServicesSelectionAgent: selection.agentContribution } : {}),
+        } });
+      },
+      onConnectedServicesRegistration(registration) {
+        if (registration.runKey !== args.runId || !isCurrent()) {
+          throw new Error('Execution-run resume registration is no longer current');
+        }
+        preparedRegistration = registration;
+      },
+    },
+    publishProvisioning() {
+      const current = args.runs.get(args.runId);
+      if (!current || !args.isCurrentOccurrence()) throw new Error('Execution-run resume occurrence is no longer current');
+      // This is a real provider provisioning attempt. The existing running
+      // phase admits its selection; registration/marker wait for successful load.
+      args.runs.set(args.runId, { ...current, status: 'running' });
+    },
+    isCurrent,
+    rollback() {
+      if (!isCurrent()) return null;
+      const current = args.runs.get(args.runId)!;
+      const retainedRun = {
+        ...current,
+        status: args.run.status,
+        ...(preparedSelection ? { launch: {
+          ...(current.launch ?? {}),
+          ...(current.launch?.connectedServicesSelection === preparedSelection.connectedServicesBindings
+            ? { connectedServicesSelection: args.run.launch?.connectedServicesSelection } : {}),
+          ...(current.launch?.connectedServicesSelectionAgent === preparedSelection.agentContribution
+            ? { connectedServicesSelectionAgent: args.run.launch?.connectedServicesSelectionAgent } : {}),
+        } } : {}),
+      };
+      args.runs.set(args.runId, retainedRun);
+      return retainedRun;
+    },
+    readRegistration: () => preparedRegistration,
+  };
+}
 
 export async function resumeBackendControllerForResumableRun(args: Readonly<{
   runId: string;
@@ -28,7 +98,7 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
   runs: Map<string, ExecutionRunState>;
   controllers: Map<string, ExecutionRunController>;
   budgetRegistry: ExecutionBudgetRegistry | null;
-  createRuntime: (opts: {
+  createRuntime: (opts: ExecutionRunResumeMaterializationHooks & {
     runId?: string;
     controllerOccurrenceId: string;
     backendId: string;
@@ -41,7 +111,7 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
   parentProvider: ACPProvider;
   streamedTranscriptSession: StreamedTranscriptWriterSession | null;
   getPermissionRequestStore?: ExecutionRunPermissionRequestStoreProvider | null;
-  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean }>) => Promise<void>;
+  writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean; resumed?: boolean }>) => Promise<void>;
   getNowMs: () => number;
   onPublicStateUpdated?: (runId: string) => void;
   onModelOutput?: () => void;
@@ -72,6 +142,13 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
   }
 
   const controllerOccurrenceId = randomUUID();
+  let retainedRun = args.run;
+  const materialization = createExecutionRunResumeMaterialization({
+    runId: args.runId, run: args.run, runs: args.runs,
+    isCurrentOccurrence: () => isExecutionRunControllerCurrent({
+      runId: args.runId, controller: resumeCtrl, controllers: args.controllers,
+    }),
+  });
   const resumeFailure = (error: unknown): ExecutionRunEnsureResult => {
     const missing = error instanceof Error && 'code' in error && error.code === 'AGENT_RESUME_PROVIDER_STATE_MISSING';
     const errorCode = missing ? 'execution_run_provider_state_missing' : 'execution_run_failed';
@@ -79,8 +156,8 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
     // Only the exact retained occurrence may publish this definitive result.
     // Keep its provider identity for inspection; an unavailable handle never
     // authorizes substitution of a new provider thread.
-    if (missing && args.runs.get(args.runId) === args.run && !args.controllers.has(args.runId)) {
-      args.runs.set(args.runId, { ...args.run, error: { code: errorCode, message } });
+    if (missing && args.runs.get(args.runId) === retainedRun && !args.controllers.has(args.runId)) {
+      args.runs.set(args.runId, { ...retainedRun, error: { code: errorCode, message } });
       args.onPublicStateUpdated?.(args.runId);
     }
     return { ok: false, errorCode, error: message, resumeFailureKind: missing ? 'permanent' : 'indeterminate' };
@@ -97,6 +174,7 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
         ? { causalPermissionAuthority: args.causalPermissionAuthority }
         : {}),
       accountSettings: args.run.runtimeSettings?.accountSettings ?? null,
+      ...materialization.hooks,
     });
   } catch (error: unknown) {
     args.budgetRegistry?.releaseExecutionRun(args.runId);
@@ -152,15 +230,13 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
     resolveTerminal,
   };
   args.controllers.set(args.runId, resumeCtrl);
+  materialization.publishProvisioning();
+  const isCurrentResumeOccurrence = materialization.isCurrent;
 
-  const isCurrentResumeOccurrence = (): boolean => (
-    args.runs.get(args.runId) === args.run
-    && isExecutionRunControllerCurrent({
-      runId: args.runId,
-      controller: resumeCtrl,
-      controllers: args.controllers,
-    })
-  );
+  const rollbackProvisionalResume = (): void => {
+    if (resumeCtrl.runtimeId !== null) return;
+    retainedRun = materialization.rollback() ?? retainedRun;
+  };
 
   const retireResumeOccurrence = async (): Promise<boolean> => {
     const owned = isExecutionRunControllerCurrent({
@@ -190,6 +266,7 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
       return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Resume was superseded', resumeFailureKind: 'indeterminate' };
     }
     if (!canResume) {
+      rollbackProvisionalResume();
       await retireResumeOccurrence();
       return {
         ok: false,
@@ -250,16 +327,26 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
       });
       resumeCtrl.releaseSessionInputAttachment = attachment?.release;
     }
+    const current = args.runs.get(args.runId)!;
+    const preparedRegistration = materialization.readRegistration();
     args.runs.set(args.runId, {
-      ...args.run,
+      ...current,
       status: 'running',
       finishedAtMs: undefined,
       error: undefined,
       resumeHandle: { kind: 'provider_session.v1', backendTarget: readBackendTargetRefV2(args.run.backendTarget), providerSessionId },
+      ...(preparedRegistration ? { launch: {
+        ...(current.launch ?? {}), connectedServicesRegistration: preparedRegistration,
+      } } : {}),
     });
+    await args.writeActivityMarker(args.runId, args.getNowMs(), { force: true, resumed: true });
+    if (!isCurrentResumeOccurrence()) {
+      return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Resume was superseded', resumeFailureKind: 'indeterminate' };
+    }
     args.onPublicStateUpdated?.(args.runId);
     return { ok: true };
   } catch (error: unknown) {
+    rollbackProvisionalResume();
     await retireResumeOccurrence();
     return resumeFailure(error);
   }

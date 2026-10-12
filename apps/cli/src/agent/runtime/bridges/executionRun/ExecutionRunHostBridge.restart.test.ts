@@ -82,20 +82,22 @@ describe('execution lifecycle restart recovery', () => {
     const observer = bridge();
     await observer.recoverRetainedRuns();
     const child = fork(fileURLToPath(new URL('./testkit/retainedRunHost.fixture.ts', import.meta.url)), {
-      execArgv: ['--import', 'tsx'],
-      env: { ...process.env, TSX_TSCONFIG_PATH: join(process.cwd(), 'tsconfig.json') },
+      execArgv: ['--import', fileURLToPath(new URL('../../../../../../../packages/cli-common/registerSourceRuntime.mjs', import.meta.url))],
+      env: { ...process.env, TSX_TSCONFIG_PATH: fileURLToPath(new URL('../../../../../tsconfig.json', import.meta.url)) },
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
     let stderr = '';
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
     try {
-      const ready = new Promise<void>((resolve, reject) => {
-        child.once('message', () => resolve());
+      const waitForHostMessage = (phase: string) => new Promise<unknown>((resolve, reject) => {
+        child.once('message', resolve);
         child.once('error', reject);
-        child.once('exit', (code) => reject(new Error(`Retained host exited before readiness (${code}): ${stderr}`)));
+        child.once('exit', (code) => reject(new Error(`Retained host exited before ${phase} (${code}): ${stderr}`)));
       });
+      expect(await waitForHostMessage('readiness')).toBe('ready');
+      const retained = waitForHostMessage('retaining state');
       child.send(state('parent-session', retentionPolicy));
-      await ready;
+      expect(await retained).toBe('retained');
       // The daemon's boolean process-recognition adapter collapses an
       // unreadable process to false. It is not proof of owner death/reuse.
       await gcExecutionRunMarkers({

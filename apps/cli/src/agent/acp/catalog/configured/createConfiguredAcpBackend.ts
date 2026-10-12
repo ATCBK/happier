@@ -8,8 +8,10 @@ import {
 } from '@/agent/acp/runtime/definition';
 
 import type { ResolvedConfiguredAcpBackend } from './resolveBackend';
+import { resolveAcpLaunch } from './resolveAcpLaunch';
 
 export type ConfiguredAcpBackendOptions = AgentFactoryOptions & Readonly<{
+  accountId?: string;
   backend: ResolvedConfiguredAcpBackend;
   launchEnv: Readonly<Record<string, string>>;
   mcpServers?: Record<string, McpServerConfig>;
@@ -20,8 +22,15 @@ export type ConfiguredAcpBackendOptions = AgentFactoryOptions & Readonly<{
 export async function createConfiguredAcpBackend(
   options: ConfiguredAcpBackendOptions,
 ): Promise<AcpBackend> {
+  const launch = await resolveAcpLaunch({
+    accountId: options.accountId,
+    definition: { id: options.backend.backendId, title: options.backend.title, launch: options.backend.launch },
+    platform: process.platform, arch: process.arch, env: { ...process.env, ...options.env },
+  });
+  if (launch.kind !== 'ready') throw new Error('Configured ACP launch is not installed or cannot run on this machine');
   const definition = normalizeConfiguredAcpDefinition({
     backend: options.backend,
+    launch,
     launchEnv: options.launchEnv,
   });
 

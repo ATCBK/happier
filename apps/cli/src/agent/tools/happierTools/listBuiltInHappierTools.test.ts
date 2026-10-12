@@ -52,6 +52,7 @@ function createRegistryWithPluginTool(params?: Readonly<{
         provenance,
         source: { kind: 'path' },
         pluginId: 'acme.review.plugin',
+        identity: { pluginId: 'acme.review.plugin', localId: 'review-start' },
         manifestPath: '/plugins/acme/review/.happier-plugin/plugin.json',
         daemonEntryPath: '/plugins/acme/review/daemon.mjs',
         sourceSpec: {
@@ -263,7 +264,7 @@ describe('listBuiltInHappierTools', () => {
     }));
 
     expect(resolveActionToolCatalogAvailability({
-      actionId: 'acme.review.plugin/review-start',
+      actionId: 'acme.review.plugin/actions/review-start',
       surface: 'agent',
       registry,
     })).toEqual(expect.objectContaining({
@@ -273,7 +274,7 @@ describe('listBuiltInHappierTools', () => {
     }));
 
     expect(resolveActionToolCatalogAvailability({
-      actionId: 'acme.review.plugin/review-start',
+      actionId: 'acme.review.plugin/actions/review-start',
       surface: 'agent',
       registry: useActiveRegistryWithPluginTool({ trustPolicy: 'prompt' }, 'denied'),
     })).toEqual(expect.objectContaining({
@@ -299,7 +300,7 @@ describe('listBuiltInHappierTools', () => {
     // is the one that decides visibility, so provenance must not change the
     // answer for an Action with no declared tool binding.
     expect(resolveActionToolCatalogAvailability({
-      actionId: 'acme.review.plugin/review-start',
+      actionId: 'acme.review.plugin/actions/review-start',
       surface: 'agent',
       registry: useActiveRegistryWithPluginTool({ toolName: null, provenance: 'external' }),
     })).toEqual(expect.objectContaining({
@@ -309,7 +310,7 @@ describe('listBuiltInHappierTools', () => {
     }));
 
     expect(resolveActionToolCatalogAvailability({
-      actionId: 'acme.review.plugin/review-start',
+      actionId: 'acme.review.plugin/actions/review-start',
       surface: 'agent',
       registry: useActiveRegistryWithPluginTool({ toolName: null, provenance: 'first_party' }),
     })).toEqual(expect.objectContaining({
@@ -324,7 +325,7 @@ describe('listBuiltInHappierTools', () => {
     const registry = useActiveRegistryWithPluginTool();
 
     expect(resolveActionToolCatalogAvailability({
-      actionId: 'acme.review.plugin/review-start',
+      actionId: 'acme.review.plugin/actions/review-start',
       surface: 'agent',
       registry,
       // The caller supplied an admitted turn catalog. An omitted external
@@ -343,7 +344,7 @@ describe('listBuiltInHappierTools', () => {
     activeRuntimeRegistryState.current = false;
 
     expect(resolveActionToolCatalogAvailability({
-      actionId: 'acme.review.plugin/review-start',
+      actionId: 'acme.review.plugin/actions/review-start',
       surface: 'agent',
       registry,
     })).toEqual(expect.objectContaining({

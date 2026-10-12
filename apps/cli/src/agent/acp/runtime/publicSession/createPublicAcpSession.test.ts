@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -6,18 +6,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { RequestError } from '@agentclientprotocol/sdk';
 import { WebSocketServer } from 'ws';
-
-const psListState = vi.hoisted(() => ({
-  actual: null as null | (() => Promise<unknown[]>),
-  mock: vi.fn<() => Promise<unknown[]>>(),
-}));
-
-vi.mock('ps-list', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('ps-list')>();
-  psListState.actual = actual.default;
-  psListState.mock.mockImplementation(actual.default);
-  return { default: psListState.mock };
-});
 
 import type {
   AgentAcpModel,
@@ -53,6 +41,7 @@ import type {
 } from '@/agent/runtime/state/currentSessionUiTypes';
 
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
+import { createAcpRequestFailureLogRecord } from '@/agent/acp/withRetry';
 import { requestAcpHistoryExtension } from '@/agent/acp/history/acpHistoryExtensionMethods';
 import { createAcpToolIdentity } from '@/agent/acp/toolCalls';
 import { createNativeAgentSessionPublications } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications';
@@ -73,10 +62,6 @@ import {
 } from './createPublicAcpSession';
 
 const OPAQUE_HISTORY_FORK_PROVIDER_SESSION_ID = '  provider\nses/AB+cd==  ';
-
-afterEach(() => {
-  if (psListState.actual) psListState.mock.mockImplementation(psListState.actual);
-});
 
 type ApprovalRequester = (
   request: PluginSessionApprovalRequest,
@@ -117,6 +102,13 @@ function writePublicComposerAgent(dir: string): string {
       const decoder = new TextDecoder();
       let buffer = '';
       const scenario = process.env.PUBLIC_ACP_SCENARIO || 'completed';
+      if (process.env.PUBLIC_ACP_ENV_CAPTURE) {
+        writeFileSync(process.env.PUBLIC_ACP_ENV_CAPTURE, JSON.stringify({
+          baseUrl: process.env.AGY_ACP_CCPA_BASE_URL ?? null,
+          project: process.env.agy_acp_ccpa_project ?? null,
+          toolValue: process.env.PUBLIC_ACP_USER_TOOL_VALUE ?? null,
+        }));
+      }
       if (scenario === 'launch-argv') {
         writeFileSync(process.env.PUBLIC_ACP_MEDIA_PATH, JSON.stringify(process.argv.slice(2)));
       }
@@ -293,7 +285,7 @@ function writePublicComposerAgent(dir: string): string {
                 : scenario === 'auth-dynamic-large'
                   ? { payload: 'x'.repeat(17_000) }
                   : undefined,
-              authMethods: scenario.startsWith('agy-quota-')
+              authMethods: scenario.startsWith('agy-quota-') || scenario.startsWith('agy-auth-')
                 ? [{ id: 'oauth-personal', name: 'Google OAuth' }]
                 : scenario === 'grok-interject'
                 ? [{ id: 'cached_token', name: 'Grok cached token' }]
@@ -307,7 +299,7 @@ function writePublicComposerAgent(dir: string): string {
             lifecycleMethods.push('authenticate');
             authenticated = request.params.methodId === 'cursor_login'
               || (scenario === 'grok-interject' && request.params.methodId === 'cached_token')
-              || (scenario.startsWith('agy-quota-') && request.params.methodId === 'oauth-personal');
+              || ((scenario.startsWith('agy-quota-') || scenario.startsWith('agy-auth-')) && request.params.methodId === 'oauth-personal');
             if (scenario === 'auth-dynamic') {
               initializeMetadata = {
                 client: initializeMetadata,
@@ -316,6 +308,16 @@ function writePublicComposerAgent(dir: string): string {
             }
             ok(request.id, {});
           } else if (request.method === 'session/new') {
+            if (scenario.startsWith('agy-auth-')) {
+              send({ jsonrpc: '2.0', id: request.id, error: {
+                code: scenario === 'agy-auth-wrong-code' ? -32603 : -32000,
+                message: 'token=provider-secret-value',
+                data: { reason: scenario === 'agy-auth-required' ? null : 'onboarding_failed',
+                  token: 'provider-secret-value', nested: { authorization: 'Bearer nested-secret-value' } },
+              } });
+              continue;
+            }
+
             lifecycleMethods.push('session/new');
             newSessionMetadata = request.params._meta ?? null;
             if ((scenario === 'auth' || scenario === 'grok-interject' || scenario.startsWith('agy-quota-')) && !authenticated) {
@@ -1167,6 +1169,29 @@ function createHistoryDefinition(): AgentAcpRuntimeDefinition {
 }
 
 describe('createPublicAcpSession', () => {
+  it.each(['agy-auth-setup', 'agy-auth-required', 'agy-auth-wrong-code'])('retains the declared authentication setup category through the real composer (%s)', async scenario => {
+    await withTempDir('public-acp-auth-diagnostic-', async dir => {
+      const fixture = createFixture(dir, scenario);
+      const declaration = PluginAgentContributionV2Schema.parse(ANTIGRAVITY_PLUGIN_MANIFEST.contributes.agents[0]);
+      if (!('runtime' in declaration) || declaration.runtime.kind !== 'acp') throw new Error('Expected declared ACP runtime');
+      const { definition } = normalizePluginDeclarativeAcpRuntime(declaration.runtime);
+      const failure = await createPublicAcpSession({ kind: 'create', sessionId: 'auth-diagnostic', cwd: dir },
+        { ...fixture.options, definition }, { ...fixture.dependencies, agentId: 'antigravity' })
+        .catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      const record = createAcpRequestFailureLogRecord({ operation: 'NewSession', error: failure });
+      expect(record).toEqual({ operation: 'NewSession', failureKind: 'provider_rejection',
+        requestErrorCode: scenario === 'agy-auth-wrong-code' ? -32603 : -32000,
+        ...(scenario === 'agy-auth-setup' ? { authenticationSetupFailure: true } : {}),
+      });
+      expect((failure as Error & { data?: unknown }).data).toEqual({});
+      const safeOutput = JSON.stringify({ record, message: (failure as Error).message, data: (failure as Error & { data?: unknown }).data });
+      expect(safeOutput).not.toContain('onboarding_failed');
+      expect(safeOutput).not.toContain('provider-secret-value');
+      expect(safeOutput).not.toContain('nested-secret-value');
+    });
+  });
+
   it.each(['agy-quota-chunked', 'agy-quota-prior-text', 'agy-quota-quoted', 'agy-quota-refused'])('classifies declared provider quota diagnostics through actual ACP delivery (%s)', async scenario => {
     await withTempDir('happier-public-quota-diagnostic-', async dir => {
       const fixture = createFixture(dir, scenario);
@@ -1237,6 +1262,50 @@ describe('createPublicAcpSession', () => {
       } finally {
         subscription.dispose();
         await run.dispose();
+      }
+    });
+  });
+
+  it.each([false, true])('removes selected-purpose mixed-case keys after ACP launch overlays while native launches retain them (host resolved=%s)', async (hostResolved) => {
+    await withTempDir('happier-public-acp-environment-unset-', async (dir) => {
+      const fixture = createFixture(dir, 'completed');
+      const nativeValues = Object.freeze({
+        AGY_ACP_CCPA_BASE_URL: 'https://native.example',
+        agy_acp_ccpa_project: 'native-project',
+        PUBLIC_ACP_USER_TOOL_VALUE: 'user-tool',
+      });
+      fixture.resolve.mockResolvedValue({
+        toolId: 'fixture-acp',
+        launch: {
+          kind: 'binary', executablePath: process.execPath,
+          args: [path.join(dir, 'public-composer-agent.mjs')], env: nativeValues,
+        },
+      });
+      for (const connected of [true, false]) {
+        const capturePath = path.join(dir, `environment-${connected}.json`);
+        const session = await createPublicAcpSession({
+          kind: 'create', sessionId: `environment-${connected}`, cwd: dir,
+          launchEnvironment: {
+            values: { PUBLIC_ACP_ENV_CAPTURE: capturePath },
+            unset: connected ? ['AGY_ACP_CCPA_BASE_URL', 'AGY_ACP_CCPA_PROJECT'] : [],
+          },
+        }, fixture.options, {
+          ...fixture.dependencies,
+          ...(hostResolved ? { resolveHostLaunch: async () => ({
+            command: process.execPath,
+            args: [path.join(dir, 'public-composer-agent.mjs')],
+            env: nativeValues, unsetEnv: [], timeouts: {},
+          }) } : {}),
+        });
+        try {
+          expect(JSON.parse(readFileSync(capturePath, 'utf8'))).toEqual({
+            baseUrl: connected ? null : nativeValues.AGY_ACP_CCPA_BASE_URL,
+            project: connected ? null : nativeValues.agy_acp_ccpa_project,
+            toolValue: nativeValues.PUBLIC_ACP_USER_TOOL_VALUE,
+          });
+        } finally {
+          await session.dispose();
+        }
       }
     });
   });
@@ -1480,16 +1549,14 @@ describe('createPublicAcpSession', () => {
     });
   });
 
-  it('settles real non-detached ACP disposal when descendant discovery stalls', async () => {
-    await withTempDir('happier-public-acp-stalled-process-census-', async (dir) => {
+  it('settles real non-detached ACP disposal through native descendant discovery', async () => {
+    await withTempDir('happier-public-acp-process-census-', async (dir) => {
       const fixture = createFixture(dir, 'completed');
       const session = await createPublicAcpSession({
         kind: 'create',
-        sessionId: 'host-stalled-process-census',
+        sessionId: 'host-process-census',
         cwd: dir,
       }, fixture.options, fixture.dependencies);
-      psListState.mock.mockImplementation(() => new Promise<unknown[]>(() => {}));
-
       const outcome = await Promise.race([
         Promise.resolve(session.dispose()).then(() => 'disposed' as const),
         new Promise<'timedOut'>((resolve) => {
@@ -2427,6 +2494,7 @@ describe('createPublicAcpSession', () => {
         kind: 'create',
         sessionId: 'native-mcp-overlay',
         cwd: dir,
+        mcpServers: { happier: { command: '/opt/happier-mcp', args: ['bridge'] } },
         launchEnvironment: {
           values: {
             HOME: sourceHome,
@@ -2435,10 +2503,7 @@ describe('createPublicAcpSession', () => {
           },
           unset: ['DROP_ME'],
         },
-      }, options, {
-        ...fixture.dependencies,
-        mcpServers: { happier: { command: '/opt/happier-mcp', args: ['bridge'] } },
-      });
+      }, options, fixture.dependencies);
 
       const readCapture = () => JSON.parse(readFileSync(capturePath, 'utf8')) as Readonly<{
         configRoot: string | null;
@@ -2597,14 +2662,12 @@ describe('createPublicAcpSession', () => {
       } as const satisfies AgentAcpRuntimeOptions;
       const dependencies = {
         ...fixture.dependencies,
-        mcpServers: {
-          happier: { command: 'happier-mcp', args: ['serve'] },
-        },
       };
       const session = await createPublicAcpSession({
         kind: 'create',
         sessionId: 'host-vb4',
         cwd: dir,
+        mcpServers: { happier: { command: 'happier-mcp', args: ['serve'] } },
         launchEnvironment: {
           values: {
             AUGMENT_SESSION_AUTH: 'host-authorized-auth',
@@ -2683,13 +2746,11 @@ describe('createPublicAcpSession', () => {
         kind: 'create',
         sessionId: 'host-antigravity-mcp',
         cwd: dir,
+        mcpServers: { happier: { command: 'happier-mcp', args: ['serve'] } },
       }, runtimeOptions, {
         ...fixture.dependencies,
         pluginId: parsedManifest.manifest.id,
         agentId: agent.id,
-        mcpServers: {
-          happier: { command: 'happier-mcp', args: ['serve'] },
-        },
         managedDependencies: { resolve: resolveManagedDependency },
       });
       const subscription = session.watch((event) => { events.push(event); });

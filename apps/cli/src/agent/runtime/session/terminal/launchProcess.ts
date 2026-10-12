@@ -20,7 +20,7 @@ import {
 } from '@/packagedRuntime/managedTools/requireAgentCliLaunchSpec';
 import type { PluginExecAgentCliGrantRecord } from '@/plugins/runtime/exec/system/tools/definitions';
 import { isDeniedPathOnlyRuntimeName } from '@/plugins/runtime/exec/system/tools/runtimeDeny';
-import { killProcessTree as defaultKillProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree as defaultKillProcessTree } from '@/processes/terminate/terminateProcessTree';
 import {
     createManagedChildProcess as defaultCreateManagedChildProcess,
     type ManagedChildProcess,
@@ -28,6 +28,7 @@ import {
 import type { TerminationEvent } from '@/subprocess/supervision/types';
 import { finalizeSessionChildEnvironment } from '@/session/runtime/control/finalizeSessionChildEnvironment';
 import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
+import { withHostProcessOwnerEnvironment } from '@/processes/ownerTag';
 
 type SpawnLike = (
     command: string,
@@ -151,7 +152,7 @@ function createAgentCliGrantId(params: Readonly<{
 export function createTerminalRuntimeProcessService(deps?: Readonly<{
     spawn?: SpawnLike;
     createManagedChildProcess?: (child: ChildProcess) => ManagedChildProcess;
-    killProcessTree?: (child: ChildProcess, options?: Readonly<{ graceMs?: number }>) => Promise<void>;
+    terminateProcessTree?: (child: ChildProcess, options?: Readonly<{ graceMs?: number }>) => Promise<void>;
     verifyExecutableGrant?: TerminalRuntimeExecutableGrantVerifier;
     registerExecutableGrant?: TerminalRuntimeExecutableGrantRegistrar;
     resolveAgentCliLaunch?: TerminalRuntimeAgentCliLaunchResolver;
@@ -159,7 +160,7 @@ export function createTerminalRuntimeProcessService(deps?: Readonly<{
 }>): HostTerminalProcessService {
     const spawn = deps?.spawn ?? nodeSpawn;
     const createManagedChildProcess = deps?.createManagedChildProcess ?? defaultCreateManagedChildProcess;
-    const killProcessTree = deps?.killProcessTree ?? defaultKillProcessTree;
+    const terminateProcessTree = deps?.terminateProcessTree ?? defaultKillProcessTree;
     const verifyExecutableGrant = deps?.verifyExecutableGrant;
     const registerExecutableGrant = deps?.registerExecutableGrant;
     const resolveAgentCliLaunch = deps?.resolveAgentCliLaunch ?? resolveDefaultAgentCliLaunch;
@@ -217,12 +218,13 @@ export function createTerminalRuntimeProcessService(deps?: Readonly<{
                     explicitEnv: request.env,
                     unsetEnvKeys: request.unsetEnvKeys,
                 }),
+                explicitEnvironment: request.env,
                 enableCgroupSelfMigration: false,
                 stackProcessKind: null,
             });
             const child = spawn(request.executable.path, [...(request.args ?? [])], {
                 cwd: request.cwd,
-                env: childEnvironment,
+                env: withHostProcessOwnerEnvironment(childEnvironment),
                 stdio: request.stdio ?? 'pipe',
                 windowsHide: request.windowsHide,
                 windowsVerbatimArguments: request.windowsVerbatimArguments,
@@ -234,7 +236,7 @@ export function createTerminalRuntimeProcessService(deps?: Readonly<{
                 }
                 stopped = true;
                 request.signal?.removeEventListener('abort', abortListener);
-                await killProcessTree(child, options);
+                await terminateProcessTree(child, options);
             };
             const abortListener = (): void => {
                 void stop();

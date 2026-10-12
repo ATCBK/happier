@@ -4,10 +4,16 @@ import type {
   RuntimeActivitySnapshotTail,
 } from '@/api/session/sessionClientPort';
 import type { PendingQueueState } from '@/api/session/pendingQueueState';
+import type { AgentState } from '@/api/types';
 
 export type SessionInputLiveWork = Readonly<{
   session: 'active' | 'settled' | 'unknown';
   input: 'active' | 'settled' | 'unknown';
+  /** Older runners omit these fields; omission cannot prove settlement. */
+  agents?: 'active' | 'settled' | 'unknown';
+  attention?: 'active' | 'settled' | 'unknown';
+  agentsActiveCount?: number;
+  settledAt?: number;
 }>;
 
 export type MessageBatch<Mode, Message> = {
@@ -22,6 +28,9 @@ export type PendingMaterializationReconcileWhenEmpty = 'force' | 'throttled' | '
 export type SessionProviderInputConsumerSession = Readonly<{
   waitForMetadataUpdate: (abortSignal?: AbortSignal) => Promise<boolean>;
   getMetadataSnapshot?: () => unknown;
+  getAgentStateSnapshot?: () => AgentState | null;
+  readSubagentLiveWork?: () => Readonly<{ state: 'active' | 'settled' | 'unknown'; activeCount: number }>;
+  subscribeSubagentLiveWork?: (listener: () => void) => () => void;
   readRuntimeActivitySnapshotTail?: () => RuntimeActivitySnapshotTail;
   waitForRuntimeActivitySnapshotTailChange?: (
     sequence: number,

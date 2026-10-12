@@ -1,4 +1,5 @@
 import type { ResolvedConfiguredAcpBackend } from '@/agent/acp/catalog/configured/resolveBackend';
+import type { AcpLaunchResolution } from '@/agent/acp/catalog/configured/resolveAcpLaunch';
 
 import type {
   AcpRuntimeDefinitionInit,
@@ -7,6 +8,13 @@ import type {
 import { createAcpRuntimeDefinition } from './create';
 
 type ConfiguredSupportFlag = boolean | 'yes' | 'no' | 'unknown';
+
+export function configuredAcpRuntimeConfiguration(backend: ResolvedConfiguredAcpBackend) {
+  return {
+    mcp: { policy: 'pass_through' as const },
+    ...(backend.runtime?.stderrRules ? { stderrRules: backend.runtime.stderrRules } : {}),
+  };
+}
 
 function normalizeSupportFlag(value: ConfiguredSupportFlag | undefined): boolean | 'unknown' | undefined {
   if (value === true || value === 'yes') {
@@ -20,6 +28,7 @@ function normalizeSupportFlag(value: ConfiguredSupportFlag | undefined): boolean
 
 function buildConfiguredDefinitionInit(params: Readonly<{
   backend: ResolvedConfiguredAcpBackend;
+  launch: Extract<AcpLaunchResolution, { kind: 'ready' }>;
   launchEnv?: Readonly<Record<string, string>>;
 }>): AcpRuntimeDefinitionInit {
   const capabilities = params.backend.capabilities;
@@ -40,12 +49,11 @@ function buildConfiguredDefinitionInit(params: Readonly<{
       kind: 'stdio',
       launch: {
         kind: 'executable',
-        command: params.backend.command,
-        args: [...params.backend.args],
+        command: params.launch.command,
+        args: [...params.launch.args],
       },
     },
-    launchEnv: params.launchEnv ?? {},
-    ...(params.backend.runtime?.stderrRules ? { stderrRules: params.backend.runtime.stderrRules } : {}),
+    launchEnv: { ...params.launch.env, ...params.launchEnv },
     capabilities: {
       supportsResume: capabilities.supportsLoadSession,
       supportsModes: normalizeSupportFlag(capabilities.supportsModes),
@@ -56,14 +64,13 @@ function buildConfiguredDefinitionInit(params: Readonly<{
       supportsToolUse: true,
       supportsPermissionRequests: true,
     },
-    mcp: {
-      policy: 'pass_through',
-    },
+    ...configuredAcpRuntimeConfiguration(params.backend),
   };
 }
 
 export function normalizeConfiguredAcpDefinition(params: Readonly<{
   backend: ResolvedConfiguredAcpBackend;
+  launch: Extract<AcpLaunchResolution, { kind: 'ready' }>;
   launchEnv?: Readonly<Record<string, string>>;
 }>): AcpRuntimeDefinition {
   return createAcpRuntimeDefinition(buildConfiguredDefinitionInit(params));

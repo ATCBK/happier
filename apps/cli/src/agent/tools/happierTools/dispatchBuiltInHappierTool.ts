@@ -20,6 +20,7 @@ import {
   changeTitleToolInputSchema,
   normalizeExecutionRunStartToolInput,
 } from './manualToolContracts';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 
 type DispatchDeps = Readonly<{
   changeTitle: (
@@ -267,9 +268,11 @@ export async function dispatchBuiltInHappierTool(params: Readonly<{
   if (params.toolName === 'action_execute') {
     const parsed = actionExecuteToolInputSchema.safeParse(params.args ?? {});
     if (!parsed.success) return err('invalid_action_input', 'Invalid action execute request');
-    const availability = resolveAvailability(parsed.data.actionId);
-    if (!availability.available) {
-      return actionDisabled(availability);
+    // Qualified Actions are admitted by the bridge's current Action discovery
+    // owner, independently of whether they declare a named Tool.
+    if (!parseQualifiedPluginActionId(parsed.data.actionId)) {
+      const availability = resolveAvailability(parsed.data.actionId);
+      if (!availability.available) return actionDisabled(availability);
     }
     return await params.deps.executeActionByToolName(
       'action_execute',

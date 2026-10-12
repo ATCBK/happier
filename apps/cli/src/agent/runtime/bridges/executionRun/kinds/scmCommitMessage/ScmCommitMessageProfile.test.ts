@@ -1,9 +1,10 @@
 import { writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 import type { AgentExecutionRunOpenRequest, AgentExecutionRunRuntimeContextV1, AgentRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
 import { ExecutionRunScmCommitMessageResultV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
-import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
+import { isScmPatchBoundToPath } from '@happier-dev/protocol/scm';
+import { createLocalScmRepositoryFixture, runScmExecutable } from '@/scm/contracts/scmBackendContractFixtures';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import type { ExecutionRunManagerStartParams, ExecutionRunState } from '../../executionRunTypes';
@@ -12,8 +13,22 @@ import { startExecutionRun } from '../../startExecutionRun';
 import { executeBoundedBackendRun } from '../../bounded/loop';
 import { createNativeAgentExecutionRunContextLeaseFactory, createNativeAgentExecutionRunHostRuntime } from '../../nativeAgentExecutionRun';
 import { ScmCommitMessageProfile } from './ScmCommitMessageProfile';
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
-it.each(['no_tools', 'yolo'])('prepares repository evidence and completes a detached no-tools native Run from %s input', async (permissionMode) => {
+beforeAll(async () => {
+  const lease = await pluginReloadController.acquireRuntimeRegistry({
+    resolveRuntimeRegistry: () => resolveExecutablePluginRuntimeRegistry({ pluginIds: ['happier.scm.backend.git'] }),
+  });
+  await lease.release();
+});
+afterAll(async () => { await pluginReloadController.shutdown(); });
+
+async function verifyNativeCommitMessageRun({ permissionMode, include, literalPaths = false }: {
+  permissionMode: string;
+  include?: string[];
+  literalPaths?: boolean;
+}) {
   const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-commit-native-' });
   const runs = new Map<string, ExecutionRunState>();
   const controllers = new Map<string, ExecutionRunController>();
@@ -24,6 +39,9 @@ it.each(['no_tools', 'yolo'])('prepares repository evidence and completes a deta
   const runtime: AgentRuntime = { executionRuns: { async open(request, context) {
     if (!('executionRun' in context)) throw new Error('Expected a detached execution context');
     opens.push({ request, context });
+    expect(await context.services.interactions.requestApproval({
+      kind: 'approval', title: 'Read a repository file', subject: { kind: 'tool', name: 'Read', input: { file_path: join(fixture.rootPath, fixture.trackedPath) } },
+    })).toMatchObject({ status: 'rejected' });
     return {
       async send() { return { status: 'admitted' as const }; },
       async stop() { return { status: 'requested' as const }; },
@@ -46,11 +64,19 @@ it.each(['no_tools', 'yolo'])('prepares repository evidence and completes a deta
   };
   const sendAcp: Parameters<typeof startExecutionRun>[0]['sendAcp'] = async () => { throw new Error('Detached Runs must not publish to a Session transcript'); };
   try {
+    if (literalPaths) {
+      for (const path of ['file', 'file ', ' ']) await writeFile(join(fixture.rootPath, path), 'base\n');
+      runScmExecutable(fixture.rootPath, 'git', ['add', '--', 'file', 'file ', ' ']);
+      runScmExecutable(fixture.rootPath, 'git', ['commit', '-m', 'literal filenames']);
+      await writeFile(join(fixture.rootPath, 'file'), 'unselected-plain-file-evidence\n');
+      await writeFile(join(fixture.rootPath, 'file '), 'selected-trailing-space-evidence\n');
+      await writeFile(join(fixture.rootPath, ' '), 'selected-whitespace-only-evidence\n');
+    }
     await writeFile(join(fixture.rootPath, fixture.trackedPath), 'native-commit-evidence\n');
     const request = {
       kind: 'scm_commit_message.v1' as const,
       intent: 'scm_commit_message' as const, backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' },
-      instructions: '', intentInput: { instructions: 'Keep the title concise' }, permissionMode,
+      instructions: '', intentInput: { instructions: 'Keep the title concise', ...(include ? { scope: { kind: 'paths' as const, include } } : {}) }, permissionMode,
       retentionPolicy: 'ephemeral' as const, runClass: 'bounded' as const, ioMode: 'request_response' as const,
     };
     const prepared = await ScmCommitMessageProfile.prepareStartParams!({ sessionId: null, request, cwd: fixture.rootPath });
@@ -78,18 +104,45 @@ it.each(['no_tools', 'yolo'])('prepares repository evidence and completes a deta
       },
     });
     expect(ExecutionRunScmCommitMessageResultV1Schema.parse(await completion)).toEqual(result);
-    expect(runs.get(started.runId)).toMatchObject({ sessionId: null, scope: 'detached', status: 'succeeded', permissionMode: 'no_tools' });
+    expect(runs.get(started.runId)).toMatchObject({ sessionId: null, status: 'succeeded', permissionMode: 'no_tools' });
     expect(opens).toHaveLength(1);
-    expect(opens[0]?.request).toMatchObject({ kind: 'create', cwd: fixture.rootPath, profile: { pluginId: 'acme.commit', localId: 'scm_commit_message' } });
+    expect(opens[0]?.request).toMatchObject({ kind: 'create', cwd: fixture.rootPath, profile: { pluginId: 'acme.commit', localId: 'scm-commit-message' } });
     if (opens[0]?.request.kind !== 'create') throw new Error('Expected native create');
-    expect(opens[0].request.input.text).toContain('native-commit-evidence');
-    expect(opens[0].request.input.text).toContain(fixture.trackedPath);
+    const prompt = opens[0].request.input.text;
+    if (!literalPaths) {
+      expect(prompt).toContain('native-commit-evidence');
+      expect(prompt).toContain(fixture.trackedPath);
+    } else if (!include) {
+      expect(prompt).toContain('native-commit-evidence');
+      expect(prompt).toContain('selected-trailing-space-evidence');
+      expect(prompt).toContain('selected-whitespace-only-evidence');
+      expect(prompt).toContain('-   (');
+    } else {
+      expect(prompt).toContain(include[0] === 'file ' ? 'selected-trailing-space-evidence' : 'selected-whitespace-only-evidence');
+      expect(prompt).not.toContain('unselected-plain-file-evidence');
+      expect(prompt).not.toContain('native-commit-evidence');
+    }
     expect(opens[0].request.input.text).toContain('Keep the title concise');
     expect(opens[0].context).toMatchObject({ scope: { kind: 'execution_run', executionRunId: started.runId } });
     expect(opens[0].context).not.toHaveProperty('session');
+    for (const path of literalPaths ? ['file', 'file ', ' '] : [fixture.trackedPath]) {
+      const patch = runScmExecutable(fixture.rootPath, 'git', ['diff', '--', path]);
+      expect(isScmPatchBoundToPath(path, patch), patch).toBe(true);
+      if (literalPaths && path !== 'file') expect(isScmPatchBoundToPath('file', patch), patch).toBe(false);
+    }
   } finally {
     await Promise.all([...controllers.values()].filter(controller => controller.kind === 'backend').map(controller => controller.backend.dispose()));
     await voiceAgentManager.dispose();
     await rm(fixture.rootPath, { recursive: true, force: true });
   }
-});
+}
+
+it.each(['no_tools', 'yolo'])('prepares repository evidence and completes a detached no-tools native Run from %s input',
+  permissionMode => verifyNativeCommitMessageRun({ permissionMode }));
+
+it.skipIf(process.platform === 'win32').each([
+  { permissionMode: 'no_tools', include: undefined },
+  { permissionMode: 'yolo', include: ['file '] },
+  { permissionMode: 'no_tools', include: [' '] },
+])('prepares literal repository evidence for a detached native Run: %j',
+  params => verifyNativeCommitMessageRun({ ...params, literalPaths: true }));

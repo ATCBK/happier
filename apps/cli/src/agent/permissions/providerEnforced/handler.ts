@@ -30,6 +30,7 @@ import { shouldDenyAgentSessionTitleToolCall } from '../codingPromptTitlePermiss
 import { normalizePermissionRequestOwner, type PermissionRequestOwner } from '../permissionRequestOwner';
 import { resolveAgentRequestKind } from '../requestKind';
 import { resolveCausalPermissionMode } from '../causalPermissionMode';
+import { isWorkspaceWriteDeniedByRole } from '../workspaceWritePolicy';
 import type { PermissionRequestCoordinatorContext } from '../permissionRequestCoordinator';
 
 export type { PermissionResult, PendingRequest };
@@ -196,6 +197,7 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     input: unknown,
     context?: AcpPermissionCallContext,
   ): PermissionResult | null {
+    if (this.isUnlistedToolDenied(toolName, input)) return { decision: 'denied' };
     const workspaceDecision = this.resolveWorkspaceWriteDecision(toolName, input);
     if (workspaceDecision) return workspaceDecision;
     const effective = resolveCausalPermissionMode({
@@ -234,6 +236,14 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
       // effective permission-mode ceiling before delegating to that owner.
       return { decision: happierActionPermission.decision };
     }
+    if (deniesHostMediatedFsWrites(permissionMode)
+      && this.isAllowedBySessionToolPolicy(toolName, input)
+      && !toolName.toLowerCase().startsWith('mcp__')
+      && isWorkspaceWriteDeniedByRole({ workspaceWrites: 'deny', toolName, toolInput: input })) {
+      // A birth seed cannot widen the admitted builtin workspace ceiling.
+      // Explicit external MCP grants and Action decisions remain with their owners.
+      return { decision: 'denied' };
+    }
     if (isFullAccessPermissionMode(permissionMode) && resolveAgentRequestKind(toolName) === 'permission') {
       return { decision: 'approved' };
     }
@@ -258,6 +268,11 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
       context,
     });
     if (!effective.ok) return null;
+    if (effective.sourceAuthority && this.isAllowedBySessionToolPolicy(toolName, input)) {
+      // The immutable birth seed is preapproved independently of interactive
+      // grants. The request's causal and workspace ceilings remain in force.
+      return { decision: 'approved' };
+    }
     if (!effective.sourceAuthority && this.isAllowedForSessionForOwner(toolName, input, owner)) {
       return { decision: context?.source === NATIVE_TOOL_APPROVAL_ONCE_REQUEST_SOURCE ? 'approved' : 'approved_for_session' };
     }

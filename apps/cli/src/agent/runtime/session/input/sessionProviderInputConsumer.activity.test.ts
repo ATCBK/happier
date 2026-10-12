@@ -4,6 +4,10 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import type { RuntimeActivitySnapshotTail } from '@/api/session/sessionClientPort';
 import { createDeferred } from '@/testkit/async/deferred';
 import { createSessionProviderInputConsumer } from './sessionProviderInputConsumer';
+import { buildSessionAgentActivityHeadline } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityHeadlineBuild';
+import { createHostSubagentStore } from '@/session/subagents/hostSubagentStore';
+import type { AgentState } from '@/api/types';
+import type { SessionAgentActivityEntryV1 } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityEntryV1';
 
 function idleTail(): RuntimeActivitySnapshotTail {
   return { sequence: 1, custody: null, settlement: {
@@ -14,6 +18,77 @@ function idleTail(): RuntimeActivitySnapshotTail {
 }
 
 describe('Session input live-work observation', () => {
+  it('counts workflow agents without counting their containing run as another subagent', async () => {
+    const entries: SessionAgentActivityEntryV1[] = [
+      { entryId: 'run', kind: 'workflow_run', title: 'Run', status: 'running', updatedAt: 1 },
+      { entryId: 'a', parentId: 'run', kind: 'workflow_agent', title: 'A', status: 'running', updatedAt: 1 },
+      { entryId: 'b', parentId: 'run', kind: 'workflow_agent', title: 'B', status: 'running', updatedAt: 1 },
+    ];
+    const consumer = createSessionProviderInputConsumer({ messageQueue: new MessageQueue2<string>(() => 'mode'), session: {
+      waitForMetadataUpdate: async () => false, getAgentStateSnapshot: () => ({}),
+      getMetadataSnapshot: () => ({ sessionAgentActivityHeadlineV1: buildSessionAgentActivityHeadline({ backendId: 'test', updatedAt: 1, entries }) }),
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }), readRuntimeActivitySnapshotTail: idleTail,
+      readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+    } });
+    expect(await consumer.readLiveWork()).toMatchObject({ agents: 'active', agentsActiveCount: 2 });
+    entries.splice(1);
+    expect(await consumer.readLiveWork()).toMatchObject({ agents: 'active', agentsActiveCount: 0 });
+  });
+  it('keeps unavailable Agent state unknown and derives pending requests despite nullable capabilities', async () => {
+    let agentState: AgentState | null = null;
+    const consumer = createSessionProviderInputConsumer({ messageQueue: new MessageQueue2<string>(() => 'mode'), session: {
+      waitForMetadataUpdate: async () => false, getMetadataSnapshot: () => ({}),
+      getAgentStateSnapshot: () => agentState,
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }), readRuntimeActivitySnapshotTail: idleTail,
+      readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+    } });
+    expect(await consumer.readLiveWork()).toMatchObject({ attention: 'unknown' });
+    expect((await consumer.readLiveWork()).settledAt).toBeUndefined();
+    agentState = { capabilities: { inFlightSteer: null, askUserQuestionAnswersInPermission: null } };
+    expect(await consumer.readLiveWork()).toMatchObject({ attention: 'settled', settledAt: expect.any(Number) });
+    agentState = { ...agentState, requests: {
+      question: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 1 },
+    } };
+    expect(await consumer.readLiveWork()).toMatchObject({ attention: 'active' });
+    agentState = { ...agentState, completedRequests: {
+      question: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 1, completedAt: 2, status: 'approved' },
+    } };
+    expect(await consumer.readLiveWork()).toMatchObject({ attention: 'settled', settledAt: expect.any(Number) });
+  });
+  it('does not retain a settlement anchor through a malformed idle observation', async () => {
+    let tail = idleTail();
+    const consumer = createSessionProviderInputConsumer({ messageQueue: new MessageQueue2<string>(() => 'mode'), session: {
+      waitForMetadataUpdate: async () => false, getMetadataSnapshot: () => ({}), getAgentStateSnapshot: () => ({}),
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }), readRuntimeActivitySnapshotTail: () => tail,
+      readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+    } });
+    expect((await consumer.readLiveWork()).settledAt).toBe(1);
+    tail = { ...tail, settlement: { ...tail.settlement!, committedProjection: { ...tail.settlement!.committedProjection, observedAt: NaN } } };
+    expect((await consumer.readLiveWork()).settledAt).toBeUndefined();
+  });
+  it('observes live host subagents, fails closed on malformed headlines, and releases the host subscription', async () => {
+    const store = createHostSubagentStore({ maxListResults: 1 });
+    let metadata: unknown = {};
+    const consumer = createSessionProviderInputConsumer({ messageQueue: new MessageQueue2<string>(() => 'mode'), session: {
+      waitForMetadataUpdate: async () => false, getMetadataSnapshot: () => metadata, getAgentStateSnapshot: () => ({}),
+      readSubagentLiveWork: () => store.readLiveWork('parent'), subscribeSubagentLiveWork: listener => store.subscribeLiveWork('parent', listener),
+      readRuntimeActivitySnapshotTail: idleTail,
+      getPendingQueueState: () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+      readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+    } });
+    const reads: Array<ReturnType<typeof consumer.readLiveWork>> = [];
+    const unsubscribe = consumer.subscribeLiveWork(() => reads.push(consumer.readLiveWork()));
+    await store.upsert({ actor: { kind: 'host' }, input: { id: 'child', parentSessionId: 'parent', origin: 'agent', kind: 'native' } });
+    expect(await reads.at(-1)).toMatchObject({ agents: 'active', agentsActiveCount: 1 });
+    await store.complete({ actor: { kind: 'host' }, id: 'child', parentSessionId: 'parent' });
+    expect(await reads.at(-1)).toMatchObject({ agents: 'settled', settledAt: expect.any(Number) });
+    metadata = { sessionAgentActivityHeadlineV1: { v: 1, backendId: 'test', updatedAt: 1, activeEntries: [{}] } };
+    expect(await consumer.readLiveWork()).toMatchObject({ agents: 'unknown' });
+    unsubscribe();
+    const length = reads.length;
+    await store.upsert({ actor: { kind: 'host' }, input: { id: 'next', parentSessionId: 'parent', origin: 'agent', kind: 'native' } });
+    expect(reads).toHaveLength(length);
+  });
   it('requires fresh known Pending state and an exact committed idle tail', async () => {
     let tail = idleTail();
     let pendingCount = 0;
@@ -28,17 +103,17 @@ describe('Session input live-work observation', () => {
           : { known: false },
       },
     });
-    await expect(consumer.readLiveWork()).resolves.toEqual({ session: 'settled', input: 'unknown' });
+    await expect(consumer.readLiveWork()).resolves.toMatchObject({ session: 'settled', input: 'unknown', agents: 'unknown', attention: 'unknown' });
     known = true;
     pendingCount = 1;
-    await expect(consumer.readLiveWork()).resolves.toEqual({ session: 'settled', input: 'active' });
+    await expect(consumer.readLiveWork()).resolves.toMatchObject({ session: 'settled', input: 'active' });
     pendingCount = 0;
-    await expect(consumer.readLiveWork()).resolves.toEqual({ session: 'settled', input: 'settled' });
+    await expect(consumer.readLiveWork()).resolves.toMatchObject({ session: 'settled', input: 'settled' });
     tail = { ...tail, custody: { identity: { mutationKey: 'runtime-activity:s1', admissionOrder: 2 },
       value: { state: 'idle', activeCount: 0 } } };
-    await expect(consumer.readLiveWork()).resolves.toEqual({ session: 'unknown', input: 'settled' });
+    await expect(consumer.readLiveWork()).resolves.toMatchObject({ session: 'unknown', input: 'settled' });
     tail = { ...idleTail(), settlement: { ...idleTail().settlement!, committedRevision: 3 } };
-    await expect(consumer.readLiveWork()).resolves.toEqual({ session: 'unknown', input: 'settled' });
+    await expect(consumer.readLiveWork()).resolves.toMatchObject({ session: 'unknown', input: 'settled' });
   });
 
   it('keeps preparation and held input busy through real dispatch settlement', async () => {

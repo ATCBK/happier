@@ -16,6 +16,7 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 import { TeamCredentialRouteV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
+import { McpRequestAuthOpenV1Schema, McpRequestAuthCloseV1Schema, McpRequestAuthResultV1Schema, McpRequestAuthClosedV1Schema } from '@/mcp/runtime/mcpRequestAuth';
 
 import {
   AgentRuntimeDaemonModelTransitionAuthorizationResultV1Schema,
@@ -134,6 +135,8 @@ export const AgentRuntimeDaemonServiceRequestV1Schema = z.object({
     sessionId: asHostProtocolZod(SessionIdSchema),
   }).strict(),
   operation: z.discriminatedUnion('kind', [
+    McpRequestAuthOpenV1Schema,
+    McpRequestAuthCloseV1Schema,
     ...RUNNER_AGENT_DAEMON_FACET_OPERATION_SCHEMAS,
     ...RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS,
     z.object({
@@ -292,6 +295,8 @@ export const AgentRuntimeDaemonServiceResponseV1Schema =
     z.object({
       ok: z.literal(true),
       result: z.union([
+        McpRequestAuthResultV1Schema,
+        McpRequestAuthClosedV1Schema,
         z.object({
           kind: z.literal('action.execution'),
           requestId: OpaqueIdSchema,

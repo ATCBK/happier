@@ -6,6 +6,8 @@ import { getAgentStaticModels } from '@happier-dev/agents';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
+import type { RpcHandlerContext } from '@/api/rpc/types';
+import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import {
   createTestExecutionRunHostRuntime,
@@ -32,6 +34,18 @@ import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } 
 import { reloadConfiguration } from '@/configuration';
 import { listExecutionRunMarkers } from '@/daemon/executionRunRegistry';
 import { finishExecutionRun } from './finishExecutionRun';
+import axios from 'axios';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { registerExecutionRunRpcHandlers } from '@/rpc/handlers/executionRuns/registerExecutionRunRpcHandlers';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { buildExecutionRunProfileCatalog } from '@/agent/executionRuns/profiles/intentRegistry';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { bindRequesterSessionCredentialScope, readStoredCredentials, writeCredentialsTokenOnly } from '@/persistence';
+import { configuration } from '@/configuration';
+import * as daemonControlHttp from '@/daemon/controlHttp';
+import type { ExecutionRunHostBridge } from './ExecutionRunHostBridge';
+import { prepareSessionMemoryInheritance } from '@/agent/prompting/coding/sessionPromptStack';
 
 const TEST_BACKEND_ID = `${'summary'}.${'backend'}` as never;
 
@@ -78,6 +92,12 @@ vi.mock('node:fs', async (importOriginal) => {
   const { createBundledPluginPublicationFsFixture } = await import('@/plugins/projection/registry/builtIn/locators.testkit');
   return createBundledPluginPublicationFsFixture(actual);
 });
+
+// The native Agent adapter is an external execution boundary; RPC admission,
+// host preparation, Context reads and prompt composition remain real.
+vi.mock('./createExecutionRunBridgeRuntime', () => ({
+  createExecutionRunBridgeRuntime: () => createProvisioningRuntime(),
+}));
 
 type AcpCommittedMessage = {
   body: Extract<ACPMessageData, { type: 'message' }>;
@@ -136,6 +156,144 @@ describe('startExecutionRun', () => {
     vi.stubEnv('HAPPIER_CLAUDE_DYNAMIC_MODEL_PROBE_ENABLED', '0');
   });
   afterEach(() => vi.unstubAllEnvs());
+  it.each(['builder'])('inherits Session memory for a delegate with role %s without copying lead instructions', async roleId => {
+    const runs = new Map<string, ExecutionRunState>();
+    const controllers = new Map<string, ExecutionRunController>();
+    const createRuntime = () => createProvisioningRuntime();
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime });
+    const selection = roleId ? resolveRoleSelectionV1({ roleId, defaultEngine: { agentTargetKey: 'agent:happier.agent.codex/codex' } }) : null;
+    if (selection && !selection.ok) throw new Error('Fixture role must resolve');
+    const read = vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (new URL(String(url)).pathname === '/v1/artifacts') return { status: 200, data: [
+        ['lead-memory', 'memory_doc.v1'], ['lead-instructions', 'prompt_doc.v2'],
+      ].map(([id, kind]) => ({ id, ownerAccountId: 'context-owner', access: 'owner', encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind, title: id }), body: null,
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 })) };
+      if (String(url).endsWith('/v1/artifacts/lead-memory')) return { status: 200, data: {
+        id: 'lead-memory', ownerAccountId: 'context-owner', access: 'owner', encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind: 'memory_doc.v1', title: 'Memory' }),
+        body: encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, index: [{ id: 'fact', text: 'Use the canonical Context owner.', createdAtMs: 1, sourceSessionRef: null }], topics: [] }) }),
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+      } };
+      throw new Error(`Unexpected delegate Context read: ${url}`);
+    });
+    try {
+      const started = await startExecutionRun({
+        params: { sessionId: 'parent_session_1', intent: 'delegate',
+          ...(roleId && selection?.ok ? { roleId, resolvedRole: selection.selection } : {}),
+          promptCredentials: bindRequesterSessionCredentialScope({
+            token: `header.${Buffer.from(JSON.stringify({ sub: 'context-owner' })).toString('base64url')}.signature`, encryption: null,
+          }, { serverId: configuration.activeServerId, serverHttpBaseUrl: configuration.apiServerUrl }),
+          roleSessionMetadata: { work: { memoryEnabled: true, promptStack: [
+            { id: 'session.instructions', ref: { kind: 'doc', artifactId: 'lead-instructions' }, enabled: true, placement: 'system_append' },
+            { id: 'session.memory', ref: { kind: 'doc', artifactId: 'lead-memory' }, enabled: true, placement: 'system_append' },
+          ] } },
+          backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID }, instructions: 'Implement the requested change.',
+          accountSettings: {}, permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'bounded', ioMode: 'request_response' },
+        parentProvider: TEST_BACKEND_ID, sendAcp: async () => {}, streamedTranscriptSession: null,
+        createRuntime, getNowMs: () => 1, budgetRegistry: null, runs, controllers,
+        enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {}, finishRun: async () => {},
+        executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
+      });
+      expect(runs.get(started.runId)?.instructions).toContain('Use the canonical Context owner.');
+      expect(runs.get(started.runId)?.instructions).not.toContain('lead-instructions');
+    } finally {
+      read.mockRestore();
+      await Promise.all([...controllers.values()].flatMap(controller => controller.kind === 'backend' ? [controller.backend.dispose()] : []));
+      await voiceAgentManager.dispose();
+    }
+  });
+  it.each(['absent', 'different', 'unqualified_owner', 'owner_unavailable', 'reader_unavailable', 'home_unavailable'] as const)(
+    'binds no-role delegate Context to the Session owner through registered RPC (%s ambient/owner)', async scenario => {
+      const taskHome = await mkdtemp(join(tmpdir(), 'happier-delegate-context-'));
+      vi.stubEnv('HAPPIER_HOME_DIR', taskHome);
+      vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
+      reloadConfiguration();
+      const tokenFor = (accountId: string) => `header.${Buffer.from(JSON.stringify({ sub: accountId, session: 'context-terminal' })).toString('base64url')}.signature`;
+      const ownerUnavailable = scenario === 'owner_unavailable' || scenario === 'reader_unavailable' || scenario === 'home_unavailable';
+      const ownerToken = tokenFor('context-owner');
+      const ownerHome = ownerUnavailable ? configuration.activeServerId : 'captured-session-home';
+      const ownerUrl = ownerUnavailable ? normalizeServerHttpBaseUrl(configuration.apiServerUrl) : 'http://captured-session-home.test';
+      const credentials = scenario === 'unqualified_owner' || scenario === 'home_unavailable' ? { token: ownerToken, encryption: null }
+        : bindRequesterSessionCredentialScope({ token: ownerToken, encryption: null }, {
+          serverId: ownerHome, serverHttpBaseUrl: ownerUrl,
+        });
+      if (scenario !== 'absent') await writeCredentialsTokenOnly({ token: scenario === 'different' ? tokenFor('ambient-account') : ownerToken });
+      expect((await readStoredCredentials())?.token ?? null).toBe(scenario === 'absent' ? null : scenario === 'different' ? tokenFor('ambient-account') : ownerToken);
+      const memoryEntry = { id: 'session.memory', ref: { kind: 'doc' as const, artifactId: 'lead-memory', serverId: ownerHome },
+        enabled: true, placement: 'system_append' as const };
+      const metadata = createTestMetadata({ work: { memoryEnabled: true, promptStack: [
+        { ...memoryEntry, id: 'session.instructions', ref: { kind: 'doc', artifactId: 'lead-instructions', serverId: ownerHome } },
+        memoryEntry,
+      ] } });
+      const captured: { manager?: ExecutionRunHostBridge } = {};
+      const handlers = new Map<string, (request: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
+      const admission = vi.spyOn(daemonControlHttp, 'daemonPost').mockImplementation(async path => {
+        if (path !== '/execution-run/admission') throw new Error(`Unexpected daemon effect: ${path}`);
+        return { admitted: true };
+      });
+      const read = vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+        const address = new URL(String(url));
+        expect(address.origin).toBe(new URL(ownerUrl).origin);
+        expect(options?.headers?.Authorization).toBe(`Bearer ${ownerToken}`);
+        const document = (id: string, kind: string, body: string | null) => ({ id, ownerAccountId: 'context-owner', access: 'owner',
+          encryptionMode: 'plain', header: encodePlainArtifactStoredContent({ v: 1, kind, title: id }), body,
+          dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+        if (address.pathname === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (address.pathname === '/v1/artifacts') return { status: 200, data: [
+          document('lead-memory', 'memory_doc.v1', null), document('lead-instructions', 'prompt_doc.v2', null),
+        ] };
+        if (address.pathname === '/v1/artifacts/lead-memory') return { status: 200, data: document('lead-memory', 'memory_doc.v1',
+          encodePlainArtifactStoredContent({ body: JSON.stringify({ v: 1, index: [
+            { id: 'fact', text: 'Use the canonical Context owner.', createdAtMs: 1, sourceSessionRef: null },
+          ], topics: [] }) })) };
+        throw new Error(`Unexpected delegate Context read: ${address.pathname}`);
+      });
+      try {
+        registerExecutionRunRpcHandlers({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, {
+          sessionId: 'parent_session_1', cwd: taskHome, parentProvider: TEST_BACKEND_ID,
+          ...(scenario === 'home_unavailable' ? {} : { serverId: ownerHome, serverUrl: ownerUrl }),
+          resolveAccountSettings: () => ({}), sendAcp: async () => {},
+          ...(scenario === 'reader_unavailable' ? {} : { readPromptCredentials: async () => scenario === 'owner_unavailable' ? null : credentials }),
+          executionRunProfileCatalog: buildExecutionRunProfileCatalog(), onManagerCreated: manager => { captured.manager = manager; },
+          sessionInteractionHost: { session: {
+            sessionId: 'parent_session_1', getMetadataSnapshot: () => metadata, updateMetadata: () => {}, updateAgentState: () => {},
+            enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: false }),
+          }, machineId: 'context-machine', permissionHandler: { handleToolCall: async () => { throw new Error('Unexpected tool permission request'); } } },
+        });
+        const start = handlers.get(SESSION_RPC_METHODS.EXECUTION_RUN_START);
+        if (!start || !captured.manager) throw new Error('Execution Run RPC was not registered');
+        const response = await start({ intent: 'delegate',
+          backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID }, instructions: 'Implement the requested change.',
+          modelId: 'context-model', modelSelection: null,
+          permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'bounded', ioMode: 'request_response' },
+          { signal: new AbortController().signal, callerAuthority: 'present_user' });
+        if (ownerUnavailable) {
+          expect(read.mock.calls).toEqual([]);
+          expect(response).toMatchObject({ ok: false, error: 'context_source_unavailable', details: { executionRunStart: { runCreation: 'noRunCreated' } } });
+          expect(captured.manager.listPublic()).toEqual([]);
+          await expect(prepareSessionMemoryInheritance({ metadata })).rejects.toMatchObject({ code: 'context_source_unavailable' });
+        } else {
+          expect(response).toMatchObject({ runId: expect.any(String) });
+          const result = ExecutionRunStartResponseSchema.parse(response);
+          const run = captured.manager.get(result.runId);
+          expect(run?.instructions).toContain('Use the canonical Context owner.');
+          expect(run?.instructions).not.toContain('lead-instructions');
+          expect(read.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/artifacts/lead-memory')).toBe(true);
+        }
+        // Birth preparation still returns references only; owner material is
+        // unnecessary when there are no candidate inherited documents.
+        await expect(prepareSessionMemoryInheritance({ metadata: { work: { memoryEnabled: false, promptStack: [
+          { ...memoryEntry, id: 'session.instructions' },
+        ] } } }))
+          .resolves.toEqual({ memoryEnabled: false, promptStack: [] });
+      } finally {
+        await captured.manager?.dispose();
+        read.mockRestore(); admission.mockRestore();
+        vi.unstubAllEnvs(); reloadConfiguration();
+        await removeTempDir(taskHome);
+      }
+    },
+  );
   it('refuses unsupported inherited Team Voice custody before publishing a Run', async () => {
     const runs = new Map<string, ExecutionRunState>();
     const controllers = new Map<string, ExecutionRunController>();
@@ -448,7 +606,7 @@ describe('startExecutionRun', () => {
     const runs = new Map<string, ExecutionRunState>();
     const controllers = new Map<string, ExecutionRunController>();
     const runtime = createProvisioningRuntime();
-    const createRuntime = vi.fn(() => runtime);
+    const createRuntime = vi.fn<StartExecutionRunArgs['createRuntime']>(() => runtime);
     const enqueueMarkerWrite = vi.fn(async () => {});
     const sendAcp = vi.fn(async () => {});
     const send = vi.fn(async () => ({ ok: true as const }));
@@ -461,6 +619,8 @@ describe('startExecutionRun', () => {
       params: {
         sessionId: null,
         actionRequestId: 'workflow-input-v2:stable:execution-run-start',
+        allowedTools: ['mcp__wilson-brief__*'],
+        unlistedTools: 'deny' as const,
         intent: 'agent' as const,
         backendTarget: { kind: 'builtInAgent' as const, agentId: TEST_BACKEND_ID },
         instructions: 'Implement once.',
@@ -495,6 +655,11 @@ describe('startExecutionRun', () => {
       expect(second).toEqual(first);
       expect(first.runId).toMatch(/^run_request_/);
       expect(runs.size).toBe(1);
+      expect(projectRetainedExecutionRunState(runs.get(first.runId)!).launch)
+        .toMatchObject({ allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' });
+      expect(createRuntime.mock.calls[0]?.[0]).toMatchObject({ start: {
+        allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny',
+      } });
       expect(createRuntime).toHaveBeenCalledTimes(1);
       expect(enqueueMarkerWrite).toHaveBeenCalledTimes(1);
       expect(sendAcp).not.toHaveBeenCalled();

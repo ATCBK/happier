@@ -20,7 +20,6 @@ import {
 } from '@/daemon/executionRunRegistry';
 import { composeExecutionRunWorkerUpdate } from './executionRunWorkerUpdate';
 import { AGENT_SESSION_RUNTIME_LIMITS_CANDIDATE_V1 } from '@happier-dev/protocol/runtime/agentSessionLimitsV1';
-import { projectExecutionRunRequestedConfiguration } from '@happier-dev/protocol/execution/runs/requestedConfiguration';
 import { readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { ExecutionRunResumeHandle } from '@happier-dev/protocol';
 import type { ExecutionRunTranscriptPublisher } from './executionRunTranscriptPublisher';
@@ -31,6 +30,7 @@ import {
 import { buildExecutionRunConnectedServicesCleanupReceipt } from './connectedServicesCleanupReceipt';
 import type { ReviewRunCommentService } from '@/agent/executionRuns/profiles/review/reviewComments';
 import { materializeReviewFindings } from './materializeReviewFindings';
+import { projectExecutionRunPublicState } from './publicState';
 
 // The same running state claims terminalization without exposing a terminal fact
 // before its required ReviewComment writes. This replaces the old early status claim.
@@ -219,10 +219,7 @@ export async function finishExecutionRun(args: Readonly<{
   const cleanupReceipt = buildExecutionRunConnectedServicesCleanupReceipt(
     updated.launch?.connectedServicesRegistration,
   );
-  const requestedConfiguration = projectExecutionRunRequestedConfiguration({
-    modelId: updated.launch?.modelSelection?.modelId ?? updated.launch?.modelId,
-    sessionConfigOptionOverrides: updated.launch?.sessionConfigOptionOverrides,
-  });
+  const { requestedConfiguration, resolvedSelection } = projectExecutionRunPublicState(updated);
   const parentWorkerUpdate = composeExecutionRunWorkerUpdate(updated, terminalEventId);
   const markerPayload = {
     pid: process.pid,
@@ -235,6 +232,7 @@ export async function finishExecutionRun(args: Readonly<{
     backendTarget: readBackendTargetRefV2(updated.backendTarget),
     ...(updated.launch?.launchOrigin ? { launchOrigin: updated.launch.launchOrigin } : {}),
     ...(requestedConfiguration ? { requestedConfiguration } : {}),
+    ...(resolvedSelection ? { resolvedSelection } : {}),
     permissionMode: updated.permissionMode,
     retentionPolicy: updated.retentionPolicy,
     runClass: updated.runClass,

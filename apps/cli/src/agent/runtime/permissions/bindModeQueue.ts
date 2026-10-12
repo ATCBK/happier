@@ -236,8 +236,8 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     // It must not rerun ingress local-path trust; alias-only legacy metadata is
     // the sole path that still reaches the compatibility reader below.
     const admittedStructuredInput = readAdmittedHappierStructuredInputV1FromMeta(message.meta);
-    const causalPermissionAuthority = readSessionInputCausalPermissionAuthorityV1(message.meta);
-    const inputProvenance = readSessionMessageProvenance(message.meta) ?? undefined;
+    const causalPermissionAuthority = readSessionInputCausalPermissionAuthorityV1(message.meta, 'stored');
+    const inputProvenance = readSessionMessageProvenance(message.meta, 'stored') ?? undefined;
     const inputContextBlock = renderSessionInputContextBlockV1({
       provenance: resolveSessionInputPromptProvenanceV1(message.meta),
     });

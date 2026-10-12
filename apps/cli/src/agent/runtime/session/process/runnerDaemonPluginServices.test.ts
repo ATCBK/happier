@@ -185,6 +185,41 @@ function managedProviderBootstrap(
 }
 
 describe('runner daemon PluginServices proxy', () => {
+    it('returns daemon CLI version facts only for the explicit readiness query', async () => {
+        const unavailable = createUnavailablePluginServices();
+        const services = await prepareRunnerDaemonPluginServices({
+            invocationId: 'invocation-cli-version',
+            signal: new AbortController().signal,
+            dispatch: async (operation) => {
+                if (operation.kind === 'plugin_services.prepare_v1') return preparedSnapshot();
+                if (operation.kind === 'plugin_exec.agent_cli.check_readiness_v1') {
+                    return { launchable: [{
+                        agentId: operation.request.candidates[0],
+                        ...(operation.request.includeVersion ? { version: '2.1.71' } : {}),
+                    }] };
+                }
+                throw new Error(`Unexpected ${operation.kind}`);
+            },
+            local: {
+                availability: unavailable.availability,
+                logger: unavailable.logger,
+                sessions: unavailable.sessions,
+                managedServices: unavailable.managedServices,
+                exec: unavailable.exec,
+                composerContent: unavailable.composerContent,
+                interactions: unavailable.interactions,
+                targetedContributions: unavailable.targetedContributions,
+            },
+        });
+        const candidates = ['happier.agent.claude/claude'];
+        expect(await services.exec.agentCli.checkReadiness({
+            candidates, requirement: 'any', includeVersion: true,
+        })).toEqual({ launchable: [{ agentId: candidates[0], version: '2.1.71' }] });
+        expect(await services.exec.agentCli.checkReadiness({
+            candidates, requirement: 'any',
+        })).toEqual({ launchable: [{ agentId: candidates[0] }] });
+    });
+
     it('preserves runner-local composer content services', async () => {
         const unavailable = createUnavailablePluginServices();
         const services = await prepareRunnerDaemonPluginServices({

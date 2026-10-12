@@ -124,12 +124,6 @@ export type PublicAcpComposerDependencies = Readonly<{
   modes: AgentSessionHostServices['modes'];
   resumeHistorySession?: AcpReplayHistorySessionClient;
   sidechainSession?: AcpReplaySidechainSessionClient;
-  /**
-   * MCP servers this Session launches with, in the SDK's published launch
-   * shape. The composer only enumerates the record, so a Run's tool binding
-   * (`NativeAgentSessionRunToolBinding.mcpServers`) reaches it as-is.
-   */
-  mcpServers?: AgentSessionOpenRequest['mcpServers'];
   transformAgentChildLaunchEnvironment?: (
     environment: Readonly<Record<string, string>>,
   ) => Readonly<Record<string, string>>;
@@ -619,7 +613,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
           explicitEnv: resolvedLaunch.env,
           unsetEnvKeys: resolvedLaunch.unsetEnv,
         }),
-        mcpServers: dependencies.mcpServers,
+        mcpServers: request.mcpServers,
       });
       assertComposerCurrent(dependencies);
       launch = Object.freeze({
@@ -1193,6 +1187,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
     || modelControls?.projectModelId
     || modelControls?.resolveModelUpdate,
   );
+  const authenticationSetupFailure = options.definition?.auth?.setupFailure;
   const backendOptions: CreateAcpBackendOptions = {
     agentName: dependencies.agentId,
     cwd: request.cwd,
@@ -1239,12 +1234,16 @@ async function createPublicAcpConversationFromAwaitableAdapter(
           },
         }
       : {}),
-    ...(options.definition?.mcp.policy === 'pass_through' && dependencies.mcpServers
-      ? { mcpServers: dependencies.mcpServers }
+    ...(options.definition?.mcp.policy === 'pass_through' && request.mcpServers
+      ? { mcpServers: request.mcpServers }
       : {}),
     transportHandler,
     permissionHandler,
     ...(authMethodId ? { authMethodId } : {}),
+    ...(authenticationSetupFailure ? {
+      isAuthenticationSetupFailure: ({ code, data }) => code === authenticationSetupFailure.requestErrorCode
+        && isRecord(data) && data.reason === authenticationSetupFailure.dataReason,
+    } : {}),
     ...(authSelector || awaitableAdapter.selectAuthMethod
       ? {
           authSelector: async (context: Parameters<NonNullable<AcpBackendOptions['authSelector']>>[0]) => (

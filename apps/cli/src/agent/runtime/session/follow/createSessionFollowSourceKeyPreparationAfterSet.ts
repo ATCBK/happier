@@ -100,7 +100,10 @@ export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<
         credential: input.credentials,
         encryptedDataEncryptionKeyBase64: source.rawSession.dataEncryptionKey,
       });
-      if (!sourceDataEncryptionKey) return { kind: 'waiting', reason: 'source_key_unavailable' };
+      // An Account-backed persistent daemon already reads Session content
+      // through its ordinary credentials. Only the exact Runner class needs
+      // this standalone key; the Machine RPC owner decides that before it
+      // constructs any private key-transfer request.
       try {
         if (!homeServerIdentityId) {
           return { kind: 'waiting', reason: 'runner_unreachable' };
@@ -142,7 +145,7 @@ export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<
         // The preparer encodes the original bytes before its RPC and retains no
         // reference; caller-owned and receiver-owned key material is never
         // cleared here.
-        sourceDataEncryptionKey.fill(0);
+        sourceDataEncryptionKey?.fill(0);
       }
     },
   );

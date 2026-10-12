@@ -1,14 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ChildProcess, spawn } from 'node:child_process';
 import { createTerminalLauncherFixture } from '@/testkit/process/terminalLauncher';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createJiti } from 'jiti';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import { createSessionRoleContext } from '@/session/roles/sessionRoleContext';
+import { toAgentSessionMcpLaunchConfigs } from './nativeAgentSession';
 import * as processIdentity from '@/daemon/processIdentity';
+
+it('restricts native MCP catalogs through the session matcher without confusing server prefixes', () => {
+    const servers = { wilson: { command: 'fixture' }, 'wilson-other': { command: 'fixture' } };
+    const result = toAgentSessionMcpLaunchConfigs(servers, {
+        allowedTools: ['mcp__wilson__save_brief'], unlistedTools: 'deny',
+        toolNamesByServer: { wilson: ['save_brief', 'send_mail'], 'wilson-other': ['save_brief'] },
+    });
+    expect(result?.wilson?.enabledTools).toEqual(['save_brief']);
+    expect(result?.['wilson-other']?.enabledTools).toEqual([]);
+    expect(() => toAgentSessionMcpLaunchConfigs(servers, { unlistedTools: 'deny' }))
+        .toThrow('mcp_tool_catalog_unavailable');
+});
 import { hashProcessCommand } from '@/daemon/sessionRegistry';
 import { createRunnerAgentSessionBootstrapAuthorization, publishAgentRuntimeDaemonServiceAuthority } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
 import { createRunnerAgentSessionRuntimeBootstrap } from '@/agent/runtime/session/process/runnerAgentSessionRuntimeSource';
@@ -772,7 +785,7 @@ describe('native Agent session host adapter', () => {
                     native.child = spawn(command.command[0]!, command.command.slice(1), { stdio: 'ignore', detached: true });
                 });
                 api.beforeResponse.set('pane.close', async () => {
-                    if (native.child) await killProcessTree(native.child, { ownedProcessGroup: true });
+                    if (native.child) await terminateProcessTree(native.child, { ownedProcessGroup: true });
                 });
                 const baseServices = createUnavailablePluginServices();
                 const runProvider = async (exec: HostPluginServices['exec'], endpoints: readonly string[] = []) => {
@@ -865,7 +878,7 @@ describe('native Agent session host adapter', () => {
                     // exact-host supervisor produces the metadata notification consumed by the mode owner.
                     // Herdr owns the pane's entire process group, not just the launcher root PID.
                     if (!native.child) throw new Error('Herdr did not launch the optional client');
-                    await killProcessTree(native.child, { ownedProcessGroup: true });
+                    await terminateProcessTree(native.child, { ownedProcessGroup: true });
                     api.panes.clear();
                     await expect(superviseDisconnectedTerminalHostCandidate({
                         candidate: { sessionId: session.sessionId, pid: process.pid, happyHomeDir: directory,
@@ -912,7 +925,7 @@ describe('native Agent session host adapter', () => {
                 } finally {
                     try {
                         for (const controller of streams) { try { controller.close(); } catch { /* The real consumer already cancelled the stream. */ } }
-                        if (native.child) await killProcessTree(native.child, { ownedProcessGroup: true });
+                        if (native.child) await terminateProcessTree(native.child, { ownedProcessGroup: true });
                         if (nativePid) { try { process.kill(nativePid, 'SIGKILL'); } catch { /* The exact owned child already exited. */ } }
                     }
                     finally {

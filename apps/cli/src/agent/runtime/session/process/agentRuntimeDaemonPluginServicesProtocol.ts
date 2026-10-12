@@ -1105,6 +1105,7 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
         request: z.object({
             candidates: z.array(BoundedIdSchema).min(1).max(256),
             requirement: z.enum(['any', 'all']),
+            includeVersion: z.boolean().optional(),
             cwd: z.string().max(32_768).optional(),
             projectId: BoundedIdSchema.optional(),
             workspaceId: BoundedIdSchema.optional(),
@@ -1271,6 +1272,13 @@ export const RunnerDaemonPluginServiceSubscriptionEventV1Schema =
 export type RunnerDaemonPluginServiceSubscriptionEventV1 = z.infer<
     typeof RunnerDaemonPluginServiceSubscriptionEventV1Schema
 >;
+
+export const RunnerDaemonAgentCliReadinessResultV1Schema = lazyZodSchema(() => z.object({
+    launchable: z.array(z.object({
+        agentId: BoundedIdSchema,
+        version: z.string().trim().min(1).optional(),
+    }).strict()),
+}).strict());
 
 export const RunnerDaemonPluginServiceResultV1Schema =
     lazyZodSchema(() => z.object({
