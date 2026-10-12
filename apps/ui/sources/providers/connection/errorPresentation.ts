@@ -130,6 +130,10 @@ const PRESENTATIONS = Object.freeze({
         titleKey: 'settingsProviders.errors.genericTitle',
         descriptionKey: 'settingsProviders.errors.genericDescription',
     },
+    provider_catalog_unavailable: {
+        titleKey: 'settingsProviders.errors.genericTitle',
+        descriptionKey: 'settingsProviders.errors.genericDescription',
+    },
     provider_probe_capacity_exhausted: {
         titleKey: 'settingsProviders.errors.probeCapacityTitle',
         descriptionKey: 'settingsProviders.errors.probeCapacityDescription',

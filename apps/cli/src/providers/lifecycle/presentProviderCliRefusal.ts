@@ -28,6 +28,7 @@ const ERROR_SUMMARIES = {
   // packages/protocol/src/providers/errors.ts).
   provider_probe_capacity_exhausted: 'Happier could not start another Provider check on this machine yet.',
   provider_rpc_response_invalid: 'The Provider response could not be read.',
+  provider_catalog_unavailable: 'The Account Provider catalog is unavailable. Try again.',
   provider_rpc_mutation_outcome_unknown: 'The selected machine may have applied the Provider change, but Happier could not confirm the result.',
   provider_endpoint_rate_limited: 'The Provider endpoint is rate limited.',
   provider_endpoint_auth_required: 'The Provider endpoint requires a credential.',
