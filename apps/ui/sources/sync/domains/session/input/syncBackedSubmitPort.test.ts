@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { storage } from '@/sync/domains/state/storageStore';
+import { recordMachineRequestFailed, recordMachineRequestSucceeded, clearMachineRequestReachabilityForTest } from '@/sync/domains/machines/reachability/machineReachability';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const updatePendingRequestedAction = vi.hoisted(() => vi.fn(async () => undefined));
 const isSessionTargetRemoteToActiveServer = vi.hoisted(() => vi.fn(() => true));
@@ -18,6 +21,29 @@ vi.mock('@/sync/sync', () => ({
 }));
 
 describe('createSyncBackedSubmitPort', () => {
+    it('does not admit an online-only wake after the exact Home and Account request failed', async () => {
+        const previousState = storage.getState();
+        const scope = { serverId: 'server-submit', accountId: 'account-submit' };
+        const accountLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const machine = createMachineFixture({ id: 'machine-submit', active: true, activeAt: Date.now() });
+        try {
+            storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [scope.serverId]: [machine] } });
+            recordMachineRequestFailed({ ...scope, machineId: machine.id });
+            const { createSyncBackedSubmitPort } = await import('./syncBackedSubmitPort');
+            const port = createSyncBackedSubmitPort();
+            const otherAccount = { ...accountLifetime, scope: { ...scope, accountId: 'other-account' } };
+            expect(port.isMachineReachable?.(machine.id, { serverId: scope.serverId, accountLifetime: otherAccount })).toBe(true);
+            expect(port.isMachineReachable?.(machine.id, { serverId: scope.serverId, accountLifetime })).toBe(false);
+            recordMachineRequestSucceeded({ ...scope, machineId: machine.id });
+            expect(port.isMachineReachable?.(machine.id, { serverId: scope.serverId, accountLifetime })).toBe(true);
+            expect(port.isMachineReachable?.(machine.id, { serverId: 'another-home', accountLifetime })).toBe(false);
+            expect(port.isMachineReachable?.(machine.id, { serverId: scope.serverId,
+                accountLifetime: { ...accountLifetime, isCurrent: () => false } })).toBe(false);
+        } finally {
+            storage.setState(previousState);
+            clearMachineRequestReachabilityForTest();
+        }
+    });
     it('forwards the canonical Pending row action mutation', async () => {
         const { createSyncBackedSubmitPort } = await import('./syncBackedSubmitPort');
         const port = createSyncBackedSubmitPort();

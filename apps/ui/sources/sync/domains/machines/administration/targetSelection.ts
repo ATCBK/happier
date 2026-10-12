@@ -1,8 +1,12 @@
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import {
     MachineAdministrationTargetV1Schema,
     type MachineAdministrationTargetV1,
 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import type { MachineInventoryStatus } from '../machineInventorySnapshots';
+import { isFleetMemberCurrent } from './fleetUnion';
+import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 
 type MachineAdministrationRouteParamV1 = string | readonly string[] | undefined;
 
@@ -93,7 +97,7 @@ export type MachineAdministrationTargetStateV1 =
 export function isMachineAdministrationCandidateSelectable(
     candidate: MachineAdministrationCandidateV1,
 ): boolean {
-    return candidate.observation === 'live' && candidate.availability === 'online';
+    return isFleetMemberCurrent(candidate);
 }
 
 /**
@@ -134,8 +138,7 @@ export function readMachineAdministrationCandidateName(candidate: MachineAdminis
  * machine and which server it lands on: the same wording against a different
  * selection is a different action. The candidate inventory owns those labels,
  * so callers reuse them instead of inventing a second naming rule. A target
- * that is no longer in the inventory still has its own portable ids, and those
- * are the truthful fallback rather than an omission.
+ * that is no longer in the inventory still resolves its Home through the Home label owner.
  */
 export function resolveMachineAdministrationTargetLabel(params: Readonly<{
     target: MachineAdministrationTargetV1 | null;
@@ -147,8 +150,8 @@ export function resolveMachineAdministrationTargetLabel(params: Readonly<{
         machineAdministrationTargetsEqual(entry.target, target)
     )) ?? null;
     return Object.freeze({
-        machine: candidate?.displayName ?? target.machineId,
-        server: candidate?.serverLabel ?? target.serverIdentityId,
+        machine: candidate?.displayName ?? getMachineDisplayName({ id: target.machineId, absence: 'unlisted' }),
+        server: candidate?.serverLabel ?? resolveHomeDisplayLabel(getServerProfileById(target.serverIdentityId), target.serverIdentityId),
     });
 }
 

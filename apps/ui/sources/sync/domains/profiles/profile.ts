@@ -1,4 +1,5 @@
 import { AccountProfileSchema, type AccountProfile } from '@happier-dev/protocol/account/profile';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 //
 // Types
@@ -13,6 +14,7 @@ export type Profile = AccountProfile;
 export const profileDefaults: Profile = {
     id: '',
     timestamp: 0,
+    name: null,
     firstName: null,
     lastName: null,
     username: null,
@@ -35,7 +37,7 @@ function parseProfile(profile: unknown) {
 }
 
 export function tryParseProfile(profile: unknown): Profile | null {
-    const parsed = parseProfile(profile);
+    const parsed = createStoredReadSchema(AccountProfileSchema).safeParse(profile);
     return parsed.success ? parsed.data : null;
 }
 
@@ -61,17 +63,6 @@ function getPrimaryLinkedProvider(profile: Profile) {
         if (provider.displayName || provider.login || provider.avatarUrl) return provider;
     }
     return normalizeLinkedProviders(profile)[0] ?? null;
-}
-
-export function getDisplayName(profile: Profile): string | null {
-    if (profile.firstName || profile.lastName) {
-        return [profile.firstName, profile.lastName].filter(Boolean).join(' ');
-    }
-    const primary = getPrimaryLinkedProvider(profile);
-    if (primary?.displayName) return primary.displayName;
-    if (primary?.login) return primary.login;
-    if (profile.username) return profile.username;
-    return null;
 }
 
 export function getAvatarUrl(profile: Profile): string | null {

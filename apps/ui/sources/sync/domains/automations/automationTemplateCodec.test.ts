@@ -13,12 +13,12 @@ describe('automationTemplateCodec', () => {
             permissionMode: 'default',
             permissionModeUpdatedAt: 123,
             windowsTerminalWindowName: 'happier-qa',
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['server-portable'],
                 forceExcludeServerIds: [],
-            },
+            } },
         });
 
         const decoded = decodeAutomationTemplate(encoded);
@@ -29,12 +29,12 @@ describe('automationTemplateCodec', () => {
                 prompt: 'Ship it',
                 transcriptStorage: 'direct',
                 windowsTerminalWindowName: 'happier-qa',
-                mcpSelection: {
+                capabilitySelection: { mcp: {
                     v: 1,
                     managedServersEnabled: false,
                     forceIncludeServerIds: ['server-portable'],
                     forceExcludeServerIds: [],
-                },
+                } },
             }),
         );
     });
@@ -150,7 +150,7 @@ describe('automationTemplateCodec', () => {
         expect(decodeAutomationTemplate(encoded)?.checkoutCreationDraft?.branchMode).toBeUndefined();
     });
 
-    it('rejects workspace-linked template payloads', () => {
+    it('keeps an ordinary stored template while dropping retired workspace fields', () => {
         const decoded = decodeAutomationTemplate(JSON.stringify({
             directory: '/tmp/project',
             agent: 'codex',
@@ -159,6 +159,6 @@ describe('automationTemplateCodec', () => {
             workspaceCheckoutId: 'checkout_feature_auth',
         }));
 
-        expect(decoded).toBeNull();
+        expect(decoded).toEqual({ directory: '/tmp/project', agent: 'codex' });
     });
 });

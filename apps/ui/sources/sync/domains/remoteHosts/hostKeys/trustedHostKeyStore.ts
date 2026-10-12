@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 
@@ -36,6 +37,7 @@ const PersistedTrustedHostKeysSchema = z.object({
 }).strict();
 
 type PersistedTrustedHostKeys = z.infer<typeof PersistedTrustedHostKeysSchema>;
+const PersistedTrustedHostKeysReadSchema = createStoredReadSchema(PersistedTrustedHostKeysSchema);
 
 export const REMOTE_HOST_TRUSTED_HOST_KEYS_PERSIST_KEY = 'remote-host-trusted-host-keys-v1';
 
@@ -49,7 +51,7 @@ function parsePersisted(raw: string | null): PersistedTrustedHostKeys | null {
     } catch {
         return null;
     }
-    const result = PersistedTrustedHostKeysSchema.safeParse(parsed);
+    const result = PersistedTrustedHostKeysReadSchema.safeParse(parsed);
     return result.success ? result.data : null;
 }
 

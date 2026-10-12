@@ -18,7 +18,7 @@ export type SessionAuthoringSnapshot = Readonly<{
     modelSelection: SessionAuthoringValueV1['modelSelection'];
     modelId: SessionAuthoringValueV1['modelId'];
     modelUpdatedAt: SessionAuthoringValueV1['modelUpdatedAt'];
-    mcpSelection: SessionAuthoringValueV1['mcpSelection'];
+    capabilitySelection: SessionAuthoringValueV1['capabilitySelection'];
     connectedServices: SessionAuthoringValueV1['connectedServices'];
     terminal: SessionAuthoringTerminalV1 | null;
     runtimeDescriptorV1: RuntimeDescriptorV1 | null;

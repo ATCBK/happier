@@ -5,10 +5,10 @@ import { formatOSPlatform } from '@/utils/sessions/sessionUtils';
 /** Actual custodian and safely published platform facts, shared by all Machine row presentations. */
 export function describeMachineSharedOwnership(machine: Pick<MachineDisplayRenderable, 'isShared' | 'access' | 'metadata'>): string | null {
     if (!machine.isShared || !machine.access?.custodian) return null;
-    return t('machines.destinations.owner', {
-        owner: machine.access.custodian.displayName,
-        platform: formatOSPlatform(machine.metadata?.platform),
-    });
+    const platform = formatOSPlatform(machine.metadata?.platform);
+    // Like the group title: an owner without a public name is left out, never drawn as a bare "'s".
+    const owner = machine.access.custodian.displayName?.trim();
+    return owner ? t('machines.destinations.owner', { owner, platform }) : platform;
 }
 
 export type MachineOwnershipGroup<T extends MachineDisplayRenderable> = Readonly<{

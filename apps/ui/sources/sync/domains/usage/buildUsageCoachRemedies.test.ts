@@ -13,11 +13,8 @@ const composition = UsagePromptCompositionSchema.parse({ v: 1, evidenceId: 'comp
         byteLength: 200, tokenCount: null, tokenizerId: null, cacheClass: 'unknown', overlap: 'none' })),
     nativePrefix: null, contextWindowTokens: null });
 // The builder consumes the evaluator's strict finding contract; detector behavior has its own source tests.
-const findings = [UsageCoachFindingSchema.parse({ detectorId: 'duplicated_instructions', evidenceKey: 'finding',
-    queryKey: 'query', period: { startMs: 100, endMs: 200 }, asOfMs: 200, currentness: 'current', coverage: 'partial',
-    severity: 'info', summaryCode: 'duplicate_injection_observed', evidence: [{ kind: 'composition', id: 'composition', observedAtMs: 150 }],
-    measurements: [{ metric: 'duplicate_injections', value: 1, unit: 'count' }], remedy: null, action: null,
-    state: { dismissed: false, snoozedUntilMs: null, applied: null } })];
+const findings = evaluateUsageCoach({ queryKey: 'query', period: { startMs: 100, endMs: 200 }, asOfMs: 200,
+    currentness: 'current', composition: [composition] }).findings;
 const session = createSessionFixture({ id: 'session', serverId: 'home', metadata: { path: '/workspace/project', host: 'host',
     machineId: 'machine', agent: 'codex', agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } } });
 
@@ -35,7 +32,13 @@ describe('Coach repository remedy preparation', () => {
         const read = (mcpCatalog: McpServerCatalogSnapshotV1) => buildUsageCoachRemedies({ findings: evaluation.findings,
             composition: [], mcpUsage: [usage], mcpCatalog, sessions: [session], serverId: 'home' });
         expect(read(current)).toEqual([{ detectorId: 'mcp_overhead', evidenceIds: ['mcp-window'],
-            remedy: { kind: 'mcp_binding', bindingId: 'binding', enabled: false, expectedRevision: 40 } }]);
+            remedy: { kind: 'mcp_binding', bindingId: 'binding', serverId: 'server', target: { t: 'allMachines' }, enabled: false, expectedRevision: 40 } }]);
+        const retainedUsage = { ...usage, retiredUsageField: true,
+            window: { ...usage.window, retiredWindowField: true },
+            bindings: [{ ...usage.bindings[0]!, retiredBindingField: true }] };
+        expect(buildUsageCoachRemedies({ findings: evaluation.findings, composition: [],
+            mcpUsage: [retainedUsage], mcpCatalog: current, sessions: [session], serverId: 'home' }))
+            .toEqual(read(current));
         expect(read({ ...current, authority: 'inactive' })).toEqual([]);
         expect(read({ ...current, status: 'partial' })).toEqual([]);
         expect(read({ ...current, catalog: { ...current.catalog, bindings: [{ ...current.catalog.bindings[0]!, updatedAt: 21 }] } })).toEqual([]);
@@ -54,6 +57,7 @@ describe('Coach repository remedy preparation', () => {
     it('proposes the observed cheaper completed-request model only against exact current inactive intent', () => {
         const selection = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'heavy' };
         const finding = UsageCoachFindingSchema.parse({ ...findings[0], detectorId: 'model_misfit',
+            evidenceSeries: undefined,
             summaryCode: 'comparable_completed_request_cost_difference', evidence: [
                 { kind: 'model_comparison', id: 'heavy-request', observedAtMs: 150 },
                 { kind: 'model_comparison', id: 'light-request', observedAtMs: 160 },
@@ -69,6 +73,11 @@ describe('Coach repository remedy preparation', () => {
             remedy: { kind: 'model', sessionId: 'session', modelId: 'light', providerConnectionId: null,
                 expected: { owner: 'inactive', scope: { serverId: 'home', accountId: 'account', sessionId: 'session' },
                     selection, updatedAt: 140 } } }]);
+        const retainedTarget = { ...target, metadata: { ...target.metadata, modelSelectionIntentV1: {
+            ...target.metadata.modelSelectionIntentV1, retiredIntentField: true,
+            selection: { ...selection, retiredSelectionField: true },
+        } } };
+        expect(read(retainedTarget)).toEqual(read());
         expect(read({ ...target, active: true })).toEqual([]);
         expect(read({ ...target, metadata: { ...target.metadata, modelSelectionIntentV1: {
             ...target.metadata.modelSelectionIntentV1, selection: { ...selection, modelId: 'intervening' } } } })).toEqual([]);

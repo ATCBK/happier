@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MMKV } from 'react-native-mmkv';
+import * as React from 'react';
+import { renderHook, standardCleanup } from '@/dev/testkit';
 
 import { scopedStorageId } from '@/utils/system/storageScope';
 
@@ -91,6 +93,7 @@ describe('serverProfiles', () => {
     const previousBuildFeaturesDeny = process.env.EXPO_PUBLIC_HAPPIER_BUILD_FEATURES_DENY;
 
     afterEach(() => {
+        standardCleanup();
         vi.unstubAllGlobals();
         if (previousScope === undefined) delete process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
         else process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = previousScope;
@@ -435,6 +438,28 @@ describe('serverProfiles', () => {
             accountServiceEndpoint: { url: 'https://accounts.example.test', source: 'user' },
         };
     }
+
+    it('mounts Home selection while a read-only canonicalization is pending without an update loop', async () => {
+        const scope = randomScope();
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;
+        const storage = seedServerState(scope, {
+            ...homeAState(),
+            homeViewState: {
+                version: 1, groups: [], activeTargetKind: 'server', activeTargetId: 'home-a',
+            },
+        });
+        const original = storage.getString('server-state-v1');
+        const profiles = await importFresh();
+        const hook = await renderHook(() => React.useSyncExternalStore(
+            profiles.subscribeHomeViewState, profiles.loadHomeViewState, profiles.loadHomeViewState,
+        ));
+        expect(hook.getCurrent()).toMatchObject({ activeTargetId: 'srv_home_a_marker_1' });
+        const settled = hook.getCurrent();
+        await hook.rerender();
+        expect(hook.getCurrent()).toBe(settled);
+        expect(storage.getString('server-state-v1')).toBe(original);
+        await hook.unmount();
+    });
 
     it('retains an initialized v1 group target whose members are not adopted yet', async () => {
         const scope = randomScope();
@@ -2479,6 +2504,17 @@ describe('serverProfiles', () => {
 
         expect(second).toBe(first);
 
+        const NativeURL = URL;
+        let urlParses = 0;
+        vi.stubGlobal('URL', class extends NativeURL {
+            constructor(input: string | URL, base?: string | URL) {
+                urlParses++;
+                super(input, base);
+            }
+        });
+        for (let i = 0; i < 100; i++) expect(profiles.getActiveServerSnapshot()).toBe(first);
+        expect(urlParses).toBe(0);
+
         const next = await profiles.upsertServerProfile({
             serverUrl: 'https://next.example.test',
             name: 'Next',
@@ -3151,6 +3187,16 @@ describe('serverProfiles', () => {
         expect(profiles.resolveServerProfileScopeIdForIdentifier('srv_identity_123')).toBe('srv_identity_123');
         expect(profiles.areServerProfileIdentifiersEquivalent(created.id, 'srv_identity_123')).toBe(true);
         expect(profiles.areServerProfileIdentifiersEquivalent(created.id, 'missing-server')).toBe(false);
+        const { resolveTranscriptSessionBoardItemReference } = await import('@/components/sessions/transcript/references/transcriptSessionBoardItemReference');
+        const address = { serverId: created.id, sessionId: 'session' };
+        const visual = { toolName: 'session_board_item_upsert', state: 'completed', address,
+            input: { itemId: 'note', expectedItemRevision: null,
+                item: { v: 1, title: 'Note', frame: 'frameless', height: { mode: 'auto', fallback: 'regular' },
+                    source: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'Note' } } } } },
+            result: { v: 1, serverId: 'srv_identity_123', sessionId: 'session', itemDestination: 'transcript', destination: null,
+                result: { operation: 'upsert_item', itemId: 'note', itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ', outcome: 'created' } } };
+        expect(resolveTranscriptSessionBoardItemReference(visual)).toMatchObject({ address, itemId: 'note' });
+        expect(resolveTranscriptSessionBoardItemReference({ ...visual, result: { ...visual.result, serverId: 'srv_foreign_home' } })).toBeNull();
         expect(profiles.getServerProfileById('srv_identity_123')?.id).toBe(created.id);
         expect(profiles.getServerProfileLegacyServerIds('srv_identity_123')).toContain(created.id);
     });

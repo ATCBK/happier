@@ -49,6 +49,20 @@ function favorite(modelId: string, updatedAt: number, modelLabel?: string) {
 }
 
 describe('session authoring selection persistence', () => {
+    it('projects current and predecessor favorites with extras and removes only the edited retained identity', () => {
+        const canonical = favorite('gpt-5.4', 123);
+        const rawCurrent = { ...canonical, retired: true, selection: {
+            ...canonical.selection, retired: true, ref: { ...canonical.selection.ref, retired: true },
+        } };
+        const rawLegacy = { backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5.5', addedAtMs: 456, retired: true };
+        const raw = { favoriteModelSelectionsV1: [rawCurrent, rawLegacy] };
+        const projected = attachFavoriteProjection(raw);
+        expect(projected.currentFavoriteModelSelectionsV1).toEqual([canonical, favorite('gpt-5.5', 456)]);
+        expect(replayFavoriteModelSelectionReplacementIntent({ raw, base: projected.currentFavoriteModelSelectionsV1, proposed: [canonical] }))
+            .toEqual({ favoriteModelSelectionsV1: [rawCurrent] });
+        expect(raw.favoriteModelSelectionsV1).toEqual([rawCurrent, rawLegacy]);
+    });
+
     it('replays typed edits on a version-conflict winner without dropping remote opaque additions', () => {
         const initialFavorite = {
             backendTargetKey: 'agent:happier.agent.codex/codex',

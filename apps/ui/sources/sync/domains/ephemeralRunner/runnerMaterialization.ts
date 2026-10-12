@@ -1,3 +1,4 @@
+import { createStoredReadSchema } from '@happier-dev/protocol';
 import {
     RunnerActivationBindingV1Schema,
     type RunnerActivationBindingV1,
@@ -195,7 +196,7 @@ function openEndpointFacts(input: Readonly<{
     const opened = decryptBox(decodeBase64(content.c, 'base64url'), input.encryption.getContentPrivateKey());
     if (!opened) throw new RunnerMaterializationPreparationError('runner_endpoint_facts_unavailable');
     try {
-        return RunnerEndpointFactsContentV1Schema.parse(JSON.parse(new TextDecoder().decode(opened)));
+        return createStoredReadSchema(RunnerEndpointFactsContentV1Schema).parse(JSON.parse(new TextDecoder().decode(opened)));
     } catch {
         throw new RunnerMaterializationPreparationError('runner_endpoint_facts_unavailable');
     }

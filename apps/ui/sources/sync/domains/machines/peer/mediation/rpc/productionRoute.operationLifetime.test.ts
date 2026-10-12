@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { PEER_MEDIATION_RECEIPTS, type PeerMachineRpcDirectRequestV2 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { postProductionMachineRpcDirect } from './productionRoute';
 
 // The real direct HTTP adapter receives a typed wire request; only fetch and
@@ -53,8 +54,8 @@ it('keeps direct plugin work alive beyond its former HTTP cutoff and preserves c
 
     const cancelled = postProductionMachineRpcDirect({
         url: 'http://127.0.0.1:1234/rpc', request, operationTimeoutMs: null, signal: controller.signal,
-    });
+    }).catch((error: unknown) => error);
     controller.abort();
-    await expect(cancelled).resolves.toMatchObject({ ok: false, reasonCode: 'topology_unavailable' });
+    expect(readRpcRequestDisposition(await cancelled)).toBe('outcomeUnknown');
     expect(issuedSignal?.aborted).toBe(true);
 });

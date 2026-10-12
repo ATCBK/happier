@@ -34,7 +34,7 @@ import type {
     PluginArtifactDaemonProjectionSelectionInput,
     PluginArtifactDaemonTransport,
 } from '@/sync/domains/plugins/availability/artifactLease';
-import { readPluginUiContributionOrigin } from './projectionUnion';
+import { readPluginUiContributionOrigin, readPluginUiContributionSupplies } from './projectionUnion';
 import type { PluginReactNativeBundleCacheIdentity } from './reactNativeRuntime';
 
 type PluginUiArtifactDisposableHandle = Readonly<{
@@ -317,7 +317,8 @@ export class PluginUiArtifactAdoptionOwner {
                             daemon,
                         }
                         : {}),
-                    isCurrent: () => this.isActive(),
+                    signal,
+                    isCurrent: () => !signal.aborted && this.isActive(),
                 });
                 if (acquired.kind !== 'available') return acquired;
                 return Object.freeze({ kind: 'available' as const, handle: acquired });
@@ -417,19 +418,32 @@ export type PluginUiDaemonProjectionSelection = Omit<PluginArtifactDaemonProject
 
 /**
  * Reads the daemon projection's semantic-selection stamp, carrying the
- * projecting daemon (the app-union origin stamp) as its byte route. A direct
- * single-machine projection has no stamp; its mount machine is that daemon.
+ * projecting daemon as its byte route. Compatible app-union replicas retain
+ * these facts in their renderer supplies without binding machine execution.
+ * A direct single-machine projection uses its mount machine as that daemon.
  * Account-selected artifacts return null and continue through Availability.
  */
 export function readPluginUiDaemonProjectionSelection(
     contribution: Readonly<Record<string, unknown>> | null,
 ): PluginUiDaemonProjectionSelection | null {
     if (contribution?.artifactSelectionOwner !== 'daemonProjection') return null;
-    const occurrenceId = readOptionalString(contribution.occurrenceId);
     const contributionId = readOptionalString(contribution.contributionId);
-    const releaseVersion = readOptionalString(contribution.pluginVersion);
-    if (!occurrenceId || !contributionId || !releaseVersion) return null;
-    const origin = readPluginUiContributionOrigin(contribution);
+    if (!contributionId) return null;
+    const directOccurrenceId = readOptionalString(contribution.occurrenceId);
+    const directReleaseVersion = readOptionalString(contribution.pluginVersion);
+    const supply = (!directOccurrenceId || !directReleaseVersion) && contribution.hostCompatibility === 'compatible'
+        ? readPluginUiContributionSupplies(contribution).find((candidate) => (
+            candidate.phase === 'current'
+            && candidate.interactionEnabled
+            && candidate.serverId
+            && candidate.occurrenceId
+            && candidate.pluginVersion
+        ))
+        : undefined;
+    const occurrenceId = supply?.occurrenceId ?? directOccurrenceId;
+    const releaseVersion = supply?.pluginVersion ?? directReleaseVersion;
+    if (!occurrenceId || !releaseVersion) return null;
+    const origin = supply ?? readPluginUiContributionOrigin(contribution);
     return Object.freeze({
         occurrenceId,
         contributionId,

@@ -12,7 +12,7 @@ import {
 import { buildSessionServerStartSpawnDraftV1FromAuthoringDraft, resolveSessionAuthoringDirectoryIntent } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
 import type { SessionAuthoringDraft } from '@/components/sessions/authoring/draft/sessionAuthoringDraft';
 import type { NewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
-import { getTempData, storeTempData } from '@/utils/sessions/tempDataStore';
+import { readWorkflowEditorDraftSeed, storeWorkflowEditorDraftSeed } from './workflowEditorDraftSeed';
 
 import { projectLegacyAutomationRecipeToEditorDraft } from './automationRecipeWorkflowDraft';
 import { createWorkflowEditorDraft, type WorkflowEditorDraft } from './workflowEditorDraft';
@@ -185,22 +185,15 @@ export function buildNewSessionAutomationHandoffSeed(params: Readonly<{
 
 const NEW_SESSION_AUTOMATION_HANDOFF_KIND = 'happier.new-session-automation-handoff.v1' as const;
 
-type StoredHandoffSeed = Readonly<{
-    kind: typeof NEW_SESSION_AUTOMATION_HANDOFF_KIND;
-    seed: NewSessionAutomationHandoffSeed;
-}>;
-
 /** Returns the opaque route parameter carrying the composed draft. */
 export function storeNewSessionAutomationHandoffSeed(seed: NewSessionAutomationHandoffSeed): string {
-    return storeTempData({ kind: NEW_SESSION_AUTOMATION_HANDOFF_KIND, seed } satisfies StoredHandoffSeed);
+    return storeWorkflowEditorDraftSeed(NEW_SESSION_AUTOMATION_HANDOFF_KIND, seed);
 }
 
 /**
- * Reads the handoff exactly once. Returning through history therefore cannot
- * silently reseed a stale composed draft over edited work.
+ * Render retries may read the handoff until the destination commits intake.
+ * The editor then consumes it, so history cannot reseed stale composed work.
  */
 export function readNewSessionAutomationHandoffSeed(dataId: string): NewSessionAutomationHandoffSeed | null {
-    const stored = getTempData<StoredHandoffSeed>(dataId);
-    if (stored === null || stored.kind !== NEW_SESSION_AUTOMATION_HANDOFF_KIND) return null;
-    return stored.seed;
+    return readWorkflowEditorDraftSeed(NEW_SESSION_AUTOMATION_HANDOFF_KIND, dataId);
 }

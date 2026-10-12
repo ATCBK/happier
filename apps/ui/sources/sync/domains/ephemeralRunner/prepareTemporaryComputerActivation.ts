@@ -257,7 +257,7 @@ export async function prepareTemporaryComputerActivation(input: Readonly<{
             transcriptStorage: input.authoring.transcriptStorage,
             profileId: input.authoring.profileId,
             environmentVariables: input.authoring.environmentVariables,
-            mcpSelection: input.authoring.mcpSelection,
+            capabilitySelection: input.authoring.capabilitySelection,
             connectedServices: input.authoring.connectedServices,
             checkoutCreationDraft: input.authoring.checkoutCreationDraft,
             resumeSessionId: input.authoring.resumeSessionId,

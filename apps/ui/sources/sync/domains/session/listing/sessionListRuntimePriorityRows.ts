@@ -1,5 +1,4 @@
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
-import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import {
     projectUiSessionRuntimeAwareness,
     readSessionRuntimePresentationFreshnessExpirations,
@@ -60,7 +59,6 @@ function buildSessionListRuntimePriorityPresentationInput(
         hasPendingPermissionRequests: row.hasPendingPermissionRequests,
         hasPendingUserActionRequests: row.hasPendingUserActionRequests,
         pendingRequestObservedAt: row.pendingRequestObservedAt,
-        lastRuntimeIssue: SessionRuntimeIssueV1Schema.nullable().catch(null).parse(row.lastRuntimeIssue ?? null),
         nowMs,
     };
 }

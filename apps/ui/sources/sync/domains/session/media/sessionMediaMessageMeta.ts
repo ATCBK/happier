@@ -1,4 +1,5 @@
 import { SessionMediaFailureV1Schema, SessionMediaItemV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMediaV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { SessionAttachmentHandleV1 } from '@happier-dev/protocol/transfers/sessions/sessionAttachmentHandleV1';
 
 export type SessionMediaInlineImageAvailableSummary = Readonly<{
@@ -89,7 +90,7 @@ export function parseSessionMediaMessageMeta(value: unknown): ParsedSessionMedia
     const inlineMedia: SessionMediaInlineMediaSummary[] = [];
     for (const rawItem of value.payload.media) {
         if (!isRecord(rawItem)) continue;
-        const parsedItem = SessionMediaItemV1Schema.safeParse(sanitizeAdvisoryDimensions(rawItem));
+        const parsedItem = createStoredReadSchema(SessionMediaItemV1Schema).safeParse(sanitizeAdvisoryDimensions(rawItem));
         if (!parsedItem.success) continue;
         const item = parsedItem.data;
         if (!isSafeSessionMediaPath(item.path)) continue;
@@ -129,7 +130,7 @@ export function parseSessionMediaMessageMeta(value: unknown): ParsedSessionMedia
         inlineMedia.push({ ...imageSummary, mediaKind: 'image' });
     }
     for (const rawFailure of Array.isArray(value.payload.failures) ? value.payload.failures : []) {
-        const parsedFailure = SessionMediaFailureV1Schema.safeParse(rawFailure);
+        const parsedFailure = createStoredReadSchema(SessionMediaFailureV1Schema).safeParse(rawFailure);
         if (!parsedFailure.success) continue;
         const failure = parsedFailure.data;
         if (failure.mediaKind !== 'image') continue;

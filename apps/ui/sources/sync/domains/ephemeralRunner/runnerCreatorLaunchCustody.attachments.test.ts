@@ -61,7 +61,7 @@ const preparedAuthoring: RunnerPreparedAuthoringV1 = {
         transcriptStorage: 'persisted',
         profileId: null,
         environmentVariables: null,
-        mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+        capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
         connectedServices: null,
         checkoutCreationDraft: null,
         resumeSessionId: null,
@@ -100,6 +100,22 @@ describe('Runner creator attachment launch custody', () => {
         state.read.mockImplementation(async (key: string) => state.values.get(key) ?? null);
         state.removeFile.mockReset();
         state.removeFile.mockImplementation(async (value: unknown) => { state.removedFiles.push(value); });
+    });
+
+    it('restores prepared custody with retired fields without changing canonical writes', async () => {
+        await writePreparedRunnerCreatorLaunchCustody({ scope, activationId, preparedAuthoring, attachmentUpload: {
+            attachmentMessageLocalId: 'attachment-message-a', firstTurnLocalId: 'first-turn-a', maxFileBytes: 1024,
+            files: [{ id: 'file-a', name: 'notes.txt', mimeType: 'text/plain', sizeBytes: 8,
+                custody: { kind: 'native_cache_file', fileUri: 'file:///runner-stage/notes.txt' } }],
+        } });
+        for (const [key, raw] of state.values) {
+            const value: unknown = JSON.parse(raw);
+            if (value && typeof value === 'object' && 'preparedAuthoring' in value) {
+                state.values.set(key, JSON.stringify({ ...value, preparedAuthoring: { ...preparedAuthoring,
+                    retired: true, composer: { ...preparedAuthoring.composer, retired: true } } }));
+            }
+        }
+        await expect(readPreparedRunnerCreatorLaunchCustody(scope, activationId)).resolves.toEqual(preparedAuthoring);
     });
 
     it('discovers crash-stranded staged bytes from the existing Account custody index', async () => {
@@ -158,6 +174,10 @@ describe('Runner creator attachment launch custody', () => {
         });
         const custodyFile = { id: 'file-a', name: 'notes.txt', mimeType: 'text/plain', sizeBytes: 8, custody } as const;
         await recordRunnerCreatorStagingCustodyHandle({ scope, activationId: exact.activationId, custodyFile });
+        const retiredReviewedFile = { ...preparedAuthoring.files[0]!, retired: true };
+        await expect(recordRunnerCreatorStagedAttachmentCustody({ scope, activationId: exact.activationId,
+            reviewedFile: retiredReviewedFile, custodyFile,
+        })).rejects.toThrow();
         await recordRunnerCreatorStagedAttachmentCustody({
             scope,
             activationId: exact.activationId,

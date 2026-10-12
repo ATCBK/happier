@@ -1,7 +1,10 @@
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
-import { ParticipantExecutionRunRecipientRoutingIdentityV1Schema, type ParticipantRecipientRoutingIdentityV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
+import { ParticipantExecutionRunRecipientRoutingIdentityV1Schema } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 import { SessionExecutionRunPendingEnqueueRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { z } from 'zod';
 import { Platform } from 'react-native';
 import {
     assertValidPendingMessageId,
@@ -12,11 +15,13 @@ import { getPersistenceStorage } from './persistenceStorage';
 import { scopedSessionLocalStateKey } from './sessionLocalStateKeys';
 import { updateBrowserRecord } from './browserRecordStorage';
 
-export type PersistedPendingEnqueueRequestV1 = Readonly<{
-    v: 1;
-    body: string;
-    recipient?: Extract<ParticipantRecipientRoutingIdentityV1, { kind: 'execution_run' }>;
-}>;
+const PendingEnqueueRequestEnvelopeSchema = z.object({
+    v: z.literal(1),
+    body: z.string(),
+    recipient: ParticipantExecutionRunRecipientRoutingIdentityV1Schema.optional(),
+}).strict();
+export type PersistedPendingEnqueueRequestV1 = Readonly<z.infer<typeof PendingEnqueueRequestEnvelopeSchema>>;
+const StoredPendingEnqueueRequestEnvelopeSchema = createStoredReadSchema(PendingEnqueueRequestEnvelopeSchema);
 
 export type PendingOutboxQuarantineReason =
     | 'unsupported_persisted_operation'
@@ -64,20 +69,21 @@ function isValidPendingEnqueueBody(body: string, localId: string): boolean {
     }
 }
 
-function parsePendingEnqueueRequest(value: unknown, localId: string): PersistedPendingEnqueueRequestV1 | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const input = value as Record<string, unknown>;
-    if (input.v !== 1 || typeof input.body !== 'string'
-        || !Object.keys(input).every((key) => key === 'v' || key === 'body' || key === 'recipient')) return null;
-    if (!Object.prototype.hasOwnProperty.call(input, 'recipient')) {
+function parsePendingEnqueueRequest(value: unknown, localId: string, stored = false): PersistedPendingEnqueueRequestV1 | null {
+    const envelope = (stored ? StoredPendingEnqueueRequestEnvelopeSchema : PendingEnqueueRequestEnvelopeSchema).safeParse(value);
+    if (!envelope.success) return null;
+    const input = envelope.data;
+    if (input.recipient === undefined) {
+        if (Object.prototype.hasOwnProperty.call(input, 'recipient')) return null;
         return isValidPendingEnqueueBody(input.body, localId) ? { v: 1, body: input.body } : null;
     }
-    const recipient = ParticipantExecutionRunRecipientRoutingIdentityV1Schema.safeParse(input.recipient);
-    if (!recipient.success) return null;
     try {
-        const body = SessionExecutionRunPendingEnqueueRequestV1Schema.safeParse(JSON.parse(input.body));
+        const rawBody: unknown = JSON.parse(input.body);
+        const body = (stored ? createStoredReadSchema(SessionExecutionRunPendingEnqueueRequestV1Schema)
+            : SessionExecutionRunPendingEnqueueRequestV1Schema).safeParse(rawBody);
         if (!body.success || body.data.localId !== localId || body.data.messageRole !== 'user') return null;
-        return { v: 1, body: input.body, recipient: recipient.data };
+        return { v: 1, body: stored && !pluginJsonValuesEqual(rawBody, body.data)
+            ? JSON.stringify(body.data) : input.body, recipient: input.recipient };
     } catch {
         return null;
     }
@@ -97,8 +103,8 @@ function parseRow(sessionId: string, value: unknown): PersistedPendingOutboxMess
         ? requestInput as Record<string, unknown>
         : null;
     const requestBody = typeof request?.body === 'string' ? request.body : '';
-    const validatedRequest = parsePendingEnqueueRequest(request, localId);
-    const quarantinedRecipient = ParticipantExecutionRunRecipientRoutingIdentityV1Schema.safeParse(request?.recipient);
+    const validatedRequest = parsePendingEnqueueRequest(request, localId, true);
+    const quarantinedRecipient = createStoredReadSchema(ParticipantExecutionRunRecipientRoutingIdentityV1Schema).safeParse(request?.recipient);
     const requestEnvelopeValid = validatedRequest !== null;
     const persistedQuarantineReason = input.quarantineReason === 'unsupported_persisted_operation'
         || input.quarantineReason === 'invalid_persisted_local_id'

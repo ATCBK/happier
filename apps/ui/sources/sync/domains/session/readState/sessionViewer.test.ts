@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
     hasUnreadActivityForSessionViewer,
     isSessionPersonallyTrackedForViewer,
+    normalizeSessionViewerCompatibility,
+    resolveSessionViewerProjectionUpdate,
 } from './sessionViewer';
 
 import type { NormalizedSessionAccessProjection } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
@@ -48,6 +50,22 @@ function trackedViewerWithReasons(
 }
 
 describe('isSessionPersonallyTrackedForViewer', () => {
+    it('projects additive retained viewer facts without treating them as malformed or relaxing fresh updates', () => {
+        const viewer = trackedViewerWithReasons(['unread']);
+        const retained = {
+            ...viewer,
+            retiredViewerField: true,
+            follow: { ...viewer.follow, retiredFollowField: true },
+            attention: { ...viewer.attention, retiredAttentionField: true },
+        };
+        expect(normalizeSessionViewerCompatibility({ viewer: retained, access: accessFor('owner') }))
+            .toEqual({ kind: 'current', viewer });
+        expect(resolveSessionViewerProjectionUpdate(retained, undefined)).toBeUndefined();
+        expect(normalizeSessionViewerCompatibility({
+            viewer: { ...retained, follow: { follows: 'yes', notificationLevel: null } },
+        })).toEqual({ kind: 'untracked' });
+    });
+
     it('keeps the released owner/access-level fallback only when normalized access is absent', () => {
         expect(isSessionPersonallyTrackedForViewer({})).toBe(true);
         expect(isSessionPersonallyTrackedForViewer({ accessLevel: 'view' })).toBe(false);

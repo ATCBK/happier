@@ -1,4 +1,6 @@
-import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
+import { resolveHomeDisplayLabel, resolveHomeDisplayNameForRelayUrl } from '@/components/settings/server/homeDisplayName';
+import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { t } from '@/text';
 
 import {
     classifyRelayDrift,
@@ -35,17 +37,6 @@ export type ThisComputerConnection = Readonly<{
     daemonAccountLabel: string | null;
 }>;
 
-const SHORT_ACCOUNT_ID_LENGTH = 8;
-
-/** A readable account name, or a short id when the account has none (never a full opaque id). */
-export function formatAccountLabel(label: string | null | undefined, accountId: string | null | undefined): string | null {
-    const readable = String(label ?? '').trim();
-    if (readable) return readable;
-    const id = String(accountId ?? '').trim();
-    if (!id) return null;
-    return id.length > SHORT_ACCOUNT_ID_LENGTH ? `${id.slice(0, SHORT_ACCOUNT_ID_LENGTH)}…` : id;
-}
-
 /**
  * `null` when there is nothing to say about this computer: no status read yet (or no local bridge,
  * as on web), or no daemon at all — nothing installed and nothing running is the ordinary first-run
@@ -80,12 +71,20 @@ export function resolveThisComputerConnection(params: Readonly<{
     });
 
     const daemonServerUrl = String(daemon.daemonServerUrl ?? '').trim();
+    const appAccountLabel = resolveViewerAccountDisplayName(params.appAccountLabel);
+    const daemonName = formatAccountDisplayName({ name: daemon.daemonAccountLabel });
+    const daemonIsViewer = isDaemonOnActiveRelay({
+        activeRelayUrl,
+        activeLocalRelayUrl: params.activeLocalRelayUrl,
+        daemonRelayUrl: daemonServerUrl,
+        daemonAlternateRelayUrls: daemon.daemonAlternateRelayUrls,
+    }) === true && Boolean(daemon.daemonAccountId?.trim()) && daemon.daemonAccountId?.trim() === params.appAccountId?.trim();
     return {
         status: classification.status,
-        homeLabel: toServerUrlDisplay(activeRelayUrl),
-        daemonHomeLabel: daemonServerUrl ? toServerUrlDisplay(daemonServerUrl) : null,
-        appAccountLabel: formatAccountLabel(params.appAccountLabel, params.appAccountId) ?? '',
-        daemonAccountLabel: formatAccountLabel(daemon.daemonAccountLabel, daemon.daemonAccountId),
+        homeLabel: resolveHomeDisplayNameForRelayUrl(activeRelayUrl) ?? resolveHomeDisplayLabel(null, ''),
+        daemonHomeLabel: daemonServerUrl ? resolveHomeDisplayNameForRelayUrl(daemonServerUrl) ?? resolveHomeDisplayLabel(null, '') : null,
+        appAccountLabel,
+        daemonAccountLabel: daemonName ?? (daemonIsViewer ? appAccountLabel : daemon.daemonAccountId?.trim() ? t('accountDisplay.unnamed') : null),
     };
 }
 

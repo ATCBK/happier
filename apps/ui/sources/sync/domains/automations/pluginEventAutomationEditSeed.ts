@@ -8,6 +8,7 @@ import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/a
 import type { AutomationDefinitionDetail } from '@happier-dev/protocol/automations/automationApiV3';
 import type { AutomationEventFilterV1 } from '@happier-dev/protocol/automations/automationEventFilterV1';
 import type { AutomationPluginEventDefinitionTrigger } from '@happier-dev/protocol/automations/automationTriggerDefinition';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { AutomationDefinition } from './automationTypes';
 
@@ -123,7 +124,7 @@ export function readPluginEventAutomationPrivateDetail(
         envelope,
     });
     if (opened.kind !== 'available') return null;
-    const storedDefinition = AutomationEventTriggerDefinitionStoredPayloadV1Schema.safeParse(opened.definition);
+    const storedDefinition = createStoredReadSchema(AutomationEventTriggerDefinitionStoredPayloadV1Schema).safeParse(opened.definition);
     if (!storedDefinition.success) return null;
     return Object.freeze({ trigger, storedDefinition: storedDefinition.data });
 }

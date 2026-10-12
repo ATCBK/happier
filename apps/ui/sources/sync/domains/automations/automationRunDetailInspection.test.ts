@@ -174,6 +174,23 @@ function createPlainResultEnvelope(): string {
 }
 
 describe('inspectAutomationRunDetailPrivateContent', () => {
+    it('projects persisted trigger evidence with retired fields instead of hiding the run', () => {
+        const detail = createDetail({ recipe: createPlainRecipe() });
+        const evidence = { t: 'plain', v: { ...EVENT_EVIDENCE, retired: true } };
+        const recipe = { ...createPlainRecipe(), triggerEvidence: evidence };
+        const inspection = inspectAutomationRunDetailPrivateContent({
+            detail: { ...detail, executionInputEnvelope: createCanonicalJsonSigningInput(recipe), triggerEvidenceEnvelope: createCanonicalJsonSigningInput(evidence) },
+            accountCurrentness: ACCOUNT_CURRENTNESS_PLAIN,
+        });
+        expect(inspection.recipe).toMatchObject({ kind: 'available', evidence: EVENT_EVIDENCE });
+        if (inspection.recipe.kind === 'available') expect(inspection.recipe.evidence).not.toHaveProperty('retired');
+        expect(inspectAutomationRunDetailPrivateContent({
+            detail: { ...detail, executionInputEnvelope: createCanonicalJsonSigningInput(recipe),
+                triggerEvidenceEnvelope: createCanonicalJsonSigningInput({ ...evidence,
+                    v: { ...evidence.v, occurrenceId: 'different-occurrence' } }) },
+            accountCurrentness: ACCOUNT_CURRENTNESS_PLAIN,
+        }).recipe).toMatchObject({ kind: 'invalid' });
+    });
     it('opens the admitted plain recipe, evidence, and result without retaining transport envelopes', () => {
         const detail = createDetail({
             recipe: createPlainRecipe(),

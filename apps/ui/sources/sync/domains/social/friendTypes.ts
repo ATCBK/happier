@@ -1,4 +1,4 @@
-import type { RelationshipStatus, UserProfile } from '@happier-dev/protocol';
+import type { RelationshipStatus } from '@happier-dev/protocol';
 
 export {
     RelationshipStatusSchema,
@@ -18,11 +18,6 @@ export {
 //
 // Utility functions
 //
-
-export function getDisplayName(profile: UserProfile): string {
-    const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
-    return fullName || profile.username;
-}
 
 export function isFriend(status: RelationshipStatus): boolean {
     return status === 'friend';

@@ -98,6 +98,14 @@ function unavailable(reason: 'transport' | 'scope-mismatch' | 'target-mismatch')
     return { status: 'unavailable' as const, reason };
 }
 
+function isWriteIntentCurrent(input: ScopedPluginSettingsWriteInput): boolean {
+    try {
+        return !input.isCurrent || input.isCurrent();
+    } catch {
+        return false;
+    }
+}
+
 function isAccountSecretInput(input: ScopedPluginSettingsReadInput): input is ScopedPluginSettingsReadInput & Readonly<{
     scope: Readonly<{ kind: 'account' }>;
     target: ScopedPluginSettingsAccountTarget;
@@ -193,6 +201,7 @@ export function createAccountPluginSecretSettingsAdapter(
                 return unavailable('scope-mismatch');
             }
 
+            if (!isWriteIntentCurrent(input)) return unavailable('transport');
             const before = boundary.readSnapshot({ target: input.target });
             if (!before) return unavailable('transport');
             if (before.revision !== input.expectedRevision.value) {
@@ -218,10 +227,12 @@ export function createAccountPluginSecretSettingsAdapter(
                 if ((input.mutation.kind === 'delete' || input.mutation.kind === 'unbind') && !existingBinding) {
                     return projectSecretSnapshot(input, before);
                 }
+                if (!isWriteIntentCurrent(input)) return unavailable('transport');
                 const result = await boundary.writeOnce({
                     target: input.target,
                     expectedRevision: before.revision,
                     mutate: (settings) => {
+                        if (!isWriteIntentCurrent(input)) throw new Error('plugin_settings_target_not_current');
                         const binding = resolveAccountSettingsPluginSecretBinding(settings, {
                             pluginId: input.pluginId,
                             localId: input.fieldId,
@@ -279,6 +290,12 @@ export function createAccountPluginSecretSettingsAdapter(
                         return applyAccountSettingsSavedSecretMutation(settings, mutation).settings;
                     },
                 });
+                if (!isWriteIntentCurrent(input)) {
+                    if (result.status === 'applied') return { status: 'applied', revision: { kind: 'account-secret', value: result.revision } };
+                    if (result.status === 'outcomeUnknown') return { status: 'outcomeUnknown' };
+                    if (result.status === 'conflict') return { status: 'conflict' };
+                    return unavailable('transport');
+                }
                 if (result.status === 'unavailable') return unavailable('transport');
                 if (result.status === 'conflict') {
                     return result.snapshot

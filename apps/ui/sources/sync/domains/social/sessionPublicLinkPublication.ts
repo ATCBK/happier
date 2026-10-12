@@ -10,7 +10,7 @@ import type { SessionPublicLinkSettingsV1 } from '@happier-dev/protocol';
  */
 export type SessionPublicLinkPublication = SessionPublicLinkSettingsV1 & Readonly<{
     token: string | null;
-    /** Current isolated link, kept solely by the generating host. */
+    /** Current viewer link, kept solely by the generating host. */
     publicUrl?: string | null;
 }>;
 
@@ -45,7 +45,7 @@ export function mergeSessionPublicLinkWithCachedBearer(params: Readonly<{
         && previous.isConsentRequired === refreshed.isConsentRequired
         && (previous.networkOff ?? false) === (refreshed.networkOff ?? false)
         && previous.keyDerivation === refreshed.keyDerivation
-        && previous.isolatedOrigin === refreshed.isolatedOrigin
+        && previous.viewerOrigin === refreshed.viewerOrigin
         && previous.updatedAt === refreshed.updatedAt;
     if (settingsAreIdentical) {
         return {

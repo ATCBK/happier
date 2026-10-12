@@ -8,12 +8,26 @@ import {
     resolveNewSessionServerTarget,
 } from './serverSelectionResolver';
 import { ALL_HOMES_SELECTION_TARGET_ID } from './allHomesSelectionTarget';
+import { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
 afterEach(() => {
     delete process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
 });
 
 describe('serverSelectionResolver', () => {
+    it('uses the Home name for a selection whose saved label is its host', () => {
+        const profile = { id: 'named-home', name: 'localhost:52753', serverUrl: 'http://localhost:52753' };
+        primeServerFeaturesSnapshot({ serverId: profile.id, snapshot: {
+            status: 'ready', features: { ...createRootLayoutFeaturesResponse(), homePresentation: { v: 1, displayName: 'Studio Home' } },
+        } });
+        try {
+            expect(listServerSelectionTargets({ serverProfiles: [profile], groupProfiles: [] }))
+                .toMatchObject([{ kind: 'server', name: 'Studio Home' }]);
+        } finally {
+            deleteServerFeaturesSnapshot({ serverId: profile.id });
+        }
+    });
     const serverProfiles = [
         { id: 'server-a', name: 'Server A', serverUrl: 'https://a.example.test' },
         { id: 'server-b', name: 'Server B', serverUrl: 'https://b.example.test' },

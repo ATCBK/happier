@@ -19,24 +19,61 @@ const grant: PluginPermissionGrant = { v: 1, id: 'grant', accountId: 'alice', pl
     status: 'active', requestId: 'request', authoritySource: { kind: 'bundled' }, grantedByUserId: 'alice', grantedAt: 2,
     createdAt: 2, updatedAt: 2, subject: { kind: 'general' } };
 
-async function mount(request: typeof import('@/sync/http/client').serverFetch, enabled = true) {
+async function mount(request: typeof import('@/sync/http/client').serverFetch, enabled = true, scopeMode: 'explicit' | 'omitted' | 'null' = 'explicit') {
     fixture = await createSessionFilesViewFixture();
     const { createPluginPermissionGrantHttpActionExecutor } = await import('./api');
     const { createPluginPermissionGrantActions } = await import('./actions');
     const { usePluginPermissionGrants } = await import('./usePluginPermissionGrants');
     const actions = createPluginPermissionGrantActions({ execute: createPluginPermissionGrantHttpActionExecutor({ request }) });
     let current: ReturnType<typeof usePluginPermissionGrants> | null = null;
-    function Host(props: { scope: ServerAccountScope; enabled?: boolean }) {
-        current = usePluginPermissionGrants({ actions, scope: props.scope, enabled: props.enabled ?? enabled,
+    function Host(props: { scope?: ServerAccountScope | null; enabled?: boolean }) {
+        current = usePluginPermissionGrants({ actions, ...('scope' in props ? { scope: props.scope } : {}), enabled: props.enabled ?? enabled,
             listInput: { capability, targetScope } });
         return null;
     }
     const scope = { serverId: fixture.home.id, accountId: 'alice' };
-    const screen = await fixture.render(<Host scope={scope} />);
+    const screen = await fixture.render(scopeMode === 'omitted' ? <Host /> : <Host scope={scopeMode === 'null' ? null : scope} />);
     return { screen, Host, scope, current: () => { if (!current) throw new Error('Not mounted'); return current; } };
 }
 
 describe('permission grants through real schemas/actions/store beneath Account HTTP', () => {
+    it('admits the active Account for omitted scope and retires callbacks when that Account leaves', async () => {
+        const requests: string[] = [];
+        const owner = await mount(async path => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); }, true, 'omitted');
+        expect(owner.current().hasGrant({ capability, targetScope })).toBe(true);
+        const old = owner.current();
+        const { storage } = await import('@/sync/domains/state/storage');
+        await act(async () => { storage.setState({ profileScope: null }); });
+        expect(owner.current().state.grantIds).toEqual([]);
+        expect(owner.current().pendingRequests).toEqual([]);
+        await act(async () => { await old.refresh(); await old.grant({ requestId: pending.id }); });
+        expect(requests).toEqual(['/v1/plugins/permissions/grants/list']);
+    });
+
+    it('does not use the active Account when an explicit null scope denies authority', async () => {
+        const requests: string[] = [];
+        const owner = await mount(async path => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); }, true, 'null');
+        await act(async () => { await owner.current().refresh(); await owner.current().grant({ requestId: pending.id }); });
+        expect(owner.current().state.grantIds).toEqual([]);
+        expect(requests).toEqual([]);
+    });
+
+    it('withdraws omitted-scope authority synchronously when the applied runtime stops serving its retained Profile', async () => {
+        const requests: string[] = [];
+        const owner = await mount(async path => { requests.push(String(path)); return Response.json({ grants: [grant], pendingRequests: [pending] }); }, true, 'omitted');
+        expect(owner.current().hasGrant({ capability, targetScope })).toBe(true);
+        const old = owner.current();
+        const { publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        await act(async () => {
+            publishAppliedActiveServerRuntimeAvailability(false);
+            // This callback races the subscriber render; retirement must fence dispatch itself.
+            await old.grant({ requestId: pending.id });
+            await old.refresh();
+        });
+        expect(owner.current().state.grantIds).toEqual([]);
+        expect(owner.current().pendingRequests).toEqual([]);
+        expect(requests).toEqual(['/v1/plugins/permissions/grants/list']);
+    });
     it('publishes admitted approval, revocation and dismissal through the same owner', async () => {
         const owner = await mount(async path => {
             if (String(path).endsWith('/grant')) return Response.json({ grant,

@@ -1,4 +1,3 @@
-import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -11,8 +10,6 @@ import { renderHook, standardCleanup } from '@/dev/testkit';
 const fixture = vi.hoisted(() => ({
     selections: null as MachineAdministrationSelectionsV1 | null,
     settingsScope: { serverId: 'server-a', accountId: 'account-a' },
-    canonicalRaw: {} as Record<string, unknown>,
-    setSelections: vi.fn(),
     mutateAccountSettingsOnce: vi.fn(),
 }));
 
@@ -83,7 +80,6 @@ vi.mock('@/sync/domains/machines/useMachineInventorySnapshots', () => ({
 }));
 
 vi.mock('@/sync/store/hooks', () => ({
-    useSettingMutable: () => [fixture.selections, fixture.setSelections],
     useSetting: () => fixture.selections,
     useSettingsVersion: () => 7,
 }));
@@ -110,35 +106,7 @@ describe('usePluginMachineExecutionOriginSelection', () => {
             v: 1,
             pluginExecutionOriginsByPluginId: { 'acme.plugin': selectedOrigin },
         };
-        fixture.canonicalRaw = {
-            unrelatedRoot: { preserved: true },
-            machineAdministrationSelectionsV1: {
-                v: 1,
-                pluginExecutionOriginsByPluginId: {
-                    'other.plugin': {
-                        serverIdentityId: 'srv_two',
-                        materializationRef: {
-                            machineId: 'machine-b',
-                            materializationId: 'mat-b',
-                            pluginId: 'other.plugin',
-                        },
-                    },
-                },
-            },
-        };
-        fixture.setSelections.mockReset();
         fixture.mutateAccountSettingsOnce.mockReset();
-        fixture.mutateAccountSettingsOnce.mockImplementation(async (params: Readonly<{
-            expectedSettingsVersion: number;
-            mutate: (raw: Readonly<Record<string, unknown>>) => Readonly<{
-                settings: Record<string, unknown>;
-                value: undefined;
-            }>;
-        }>) => {
-            const mutation = params.mutate(fixture.canonicalRaw);
-            fixture.canonicalRaw = mutation.settings;
-            return { status: 'applied', settingsVersion: 8, value: undefined };
-        });
     });
 
     it('advances its local revision monotonically across A-to-B-to-A', async () => {
@@ -180,61 +148,6 @@ describe('usePluginMachineExecutionOriginSelection', () => {
         expect(hook.getCurrent().resolveExecutionOrigin()?.origin).toEqual(selectedOrigin);
         await hook.rerender();
         expect(fixture.mutateAccountSettingsOnce).not.toHaveBeenCalled();
-    });
-
-    it('replays one exact origin mutation against the canonical Account Settings winner', async () => {
-        const { usePluginMachineExecutionOriginSelection } = await import('./usePluginExecutionOriginSelection');
-        const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({
-            pluginId: 'acme.plugin',
-            classifyRelease: () => ({ releaseContent: 'matched', validation: { kind: 'admitted' } }),
-        }));
-
-        await act(async () => {
-            await hook.getCurrent().selectOrigin(selectedOrigin);
-        });
-
-        expect(fixture.mutateAccountSettingsOnce).toHaveBeenCalledOnce();
-        expect(fixture.mutateAccountSettingsOnce.mock.calls[0]?.[0]?.expectedSettingsScope).toEqual({
-            serverId: 'server-a',
-            accountId: 'account-a',
-        });
-        expect(fixture.setSelections).not.toHaveBeenCalled();
-        expect(fixture.canonicalRaw).toEqual({
-            unrelatedRoot: { preserved: true },
-            machineAdministrationSelectionsV1: {
-                v: 1,
-                pluginExecutionOriginsByPluginId: {
-                    'other.plugin': {
-                        serverIdentityId: 'srv_two',
-                        materializationRef: {
-                            machineId: 'machine-b',
-                            materializationId: 'mat-b',
-                            pluginId: 'other.plugin',
-                        },
-                    },
-                    'acme.plugin': selectedOrigin,
-                },
-            },
-        });
-        await hook.unmount();
-    });
-
-    it('returns the canonical conflict instead of hiding command settlement', async () => {
-        fixture.mutateAccountSettingsOnce.mockResolvedValueOnce({
-            status: 'conflict',
-            currentSettingsVersion: 9,
-        });
-        const { usePluginMachineExecutionOriginSelection } = await import('./usePluginExecutionOriginSelection');
-        const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({
-            pluginId: 'acme.plugin',
-            classifyRelease: () => ({ releaseContent: 'matched', validation: { kind: 'admitted' } }),
-        }));
-
-        await expect(hook.getCurrent().selectOrigin(selectedOrigin)).resolves.toEqual({
-            status: 'conflict',
-            currentSettingsVersion: 9,
-        });
-        await hook.unmount();
     });
 
     it('re-reads the execution-origin preference when the callback is invoked', async () => {

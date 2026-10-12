@@ -102,6 +102,18 @@ describe('resolveServerScopedMachines', () => {
         })).toMatchObject({ kind: containsMachine ? 'resolved' : 'missingMachine' });
     });
 
+    it('retains canonical presence while refreshing instead of switching to an older settled alias', () => {
+        const fresh = createMachine('machine-live', 200);
+        const stale = createMachine(fresh.id, 100);
+        for (const serverId of [identity, profile.id]) {
+            const context = { serverId, activeServerId: 'foreign-home', activeMachines: [],
+                machineListByServerId: { [identity]: [fresh], [profile.id]: [stale] },
+                machineListStatusByServerId: { [identity]: 'loading' as const, [profile.id]: 'idle' as const } };
+            expect(resolveServerScopedMachines(context)).toEqual([fresh]);
+            expect(resolveExactServerScopedMachine({ ...context, machineId: fresh.id })).toBe(fresh);
+        }
+    });
+
     it('keeps canonical priority without list-status evidence instead of selecting a nonempty alias', () => {
         const machine = createMachine('machine-stale', 100);
         for (const serverId of [identity, profile.id]) {

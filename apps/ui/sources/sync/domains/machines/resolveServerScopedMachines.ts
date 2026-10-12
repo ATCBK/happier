@@ -44,6 +44,23 @@ export type PortableMachineAdministrationTargetResolution<T extends MachineWithI
         profile: ServerProfile;
     }>;
 
+/** Raw inventory qualification shared by presentation facts and fresh invocation admission. */
+export function readLiveMachineInventoryRows<T extends MachineWithId>(params: Readonly<{
+    activeServerId: string;
+    activeMachines: readonly T[];
+    machineListByServerId: Readonly<Record<string, readonly T[] | null | undefined>>;
+    machineListStatusByServerId: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
+    profile: ServerProfile;
+    serverIdentityId: string;
+}>): ReadonlySet<T> {
+    const inventory = resolveServerScopedMachineInventory({
+        ...params,
+        serverId: params.serverIdentityId,
+        serverIdAliases: [params.profile.id, ...(params.profile.legacyServerIds ?? [])],
+    });
+    return new Set(inventory.status === 'idle' ? inventory.machines ?? [] : []);
+}
+
 /** The same ordered Home keys drive inventory reads and their subscription signatures. */
 export function resolveServerScopedMachineInventoryKeys(params: Readonly<{
     serverId: string;
@@ -64,30 +81,39 @@ export function resolveServerScopedMachineInventoryKeys(params: Readonly<{
     ])].filter(Boolean);
 }
 
-export function resolveServerScopedMachines<T extends MachineLike>(params: Readonly<{
+export function resolveServerScopedMachineInventory<T extends MachineLike>(params: Readonly<{
     serverId: string;
     activeServerId: string;
     serverIdAliases?: readonly string[];
     activeMachines: ReadonlyArray<T>;
     machineListByServerId: Readonly<Record<string, ReadonlyArray<T> | null | undefined>>;
     machineListStatusByServerId?: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
-}>): ReadonlyArray<T> | null {
+}>): Readonly<{
+    machines: ReadonlyArray<T> | null;
+    status: 'idle' | 'loading' | 'signedOut' | 'error' | undefined;
+}> {
     const activeServerId = String(params.activeServerId ?? '').trim();
     const serverIds = resolveServerScopedMachineInventoryKeys(params);
-    const settledServerId = serverIds.find((serverId) => (
-        params.machineListStatusByServerId?.[serverId] === 'idle'
-        && Array.isArray(params.machineListByServerId[serverId])
-    ));
-    if (settledServerId) return params.machineListByServerId[settledServerId] ?? null;
+    const statusServerId = serverIds.find((serverId) => params.machineListStatusByServerId?.[serverId] !== undefined);
+    const status = statusServerId ? params.machineListStatusByServerId?.[statusServerId] : undefined;
+    // A refresh does not surrender the canonical Home's retained answer to an
+    // older profile-alias snapshot. Rows and readiness resolve the same ordered keys.
     const scopedServerId = serverIds.find((serverId) => Array.isArray(params.machineListByServerId[serverId]));
     const scopedMachines = scopedServerId ? params.machineListByServerId[scopedServerId] : null;
+    if (scopedServerId && params.machineListStatusByServerId?.[scopedServerId] === 'idle') {
+        return { machines: scopedMachines ?? null, status };
+    }
     const targetsActiveServer = activeServerId.length > 0
         && serverIds.some((serverId) => areServerProfileIdentifiersEquivalent(serverId, activeServerId));
-    if (targetsActiveServer && params.activeMachines.length > 0) {
-        return params.activeMachines;
+    if (targetsActiveServer && (params.activeMachines.length > 0 || status === 'idle')) {
+        return { machines: params.activeMachines, status };
     }
 
-    return scopedMachines ?? null;
+    return { machines: scopedMachines ?? null, status };
+}
+
+export function resolveServerScopedMachines<T extends MachineLike>(params: Parameters<typeof resolveServerScopedMachineInventory<T>>[0]): ReadonlyArray<T> | null {
+    return resolveServerScopedMachineInventory(params).machines;
 }
 
 /**

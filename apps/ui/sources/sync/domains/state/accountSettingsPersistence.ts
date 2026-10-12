@@ -20,7 +20,7 @@ import {
 import { hydrateAccountSettingsFromLocalPersistence } from '@/sync/domains/settings/accountSettingsNormalization';
 import { assertNoUnsealedSettingsSecretValues } from '@/sync/encryption/secretSettings';
 
-import { loadPendingSettings, parsePendingSettings } from './persistence';
+import { loadPendingSettings, parseStoredPendingSettings } from './persistence';
 import { getPersistenceStorage } from './persistenceStorage';
 import { loadSettings } from './settingsPersistence';
 import { loadHomeViewState, migrateHomeViewStateFromSettings } from '@/sync/domains/server/serverProfiles';
@@ -440,7 +440,7 @@ export function loadPendingAccountSettings(scope: AccountSettingsScope): Partial
     }
     const hydrated = hydrateAccountSettingsFromLocalPersistence(parsed);
     return stripMigratedSessionOrganizationSettings(
-        parsePendingSettings(hydrated) as Record<string, unknown>,
+        parseStoredPendingSettings(hydrated) as Record<string, unknown>,
     ) as Partial<Settings>;
 }
 

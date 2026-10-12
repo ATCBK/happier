@@ -96,6 +96,21 @@ describe('gauge tone boundaries derive from the canonical resolveQuotaTone owner
         expect(computeConnectedServiceQuotaGaugeViewModel({ ...params, quotaLimitSelection: null })).toBeNull();
     });
 
+    it('shows unavailable provider detail meters neutrally despite reported zero remaining', () => {
+        const params = { snapshot: snapshot([
+            meter({ meterId: 'healthy', label: 'Healthy', remainingPct: 80, utilizationPct: 20 }),
+            meter({ meterId: 'disabled', label: 'Disabled', status: 'unavailable', remainingPct: 0,
+                utilizationPct: 100, used: 100, limit: 100, resetsAt: 62_000 }),
+        ]), windowMode: 'most_constrained' as const, nowMs: 2_000, formatter };
+        const vm = computeConnectedServiceQuotaGaugeViewModel(params);
+        expect(vm?.remainingPct).toBe(80);
+        expect(vm?.allMeterRows.find(row => row.meterId === 'disabled')).toMatchObject({
+            remainingPct: null, usedPct: null, usedLimitLabel: null, usedLimitSemantics: null,
+            resetLabel: '1m', tone: 'neutral',
+        });
+        expect(computeConnectedServiceQuotaGaugeViewModel({ ...params,
+            snapshot: snapshot([params.snapshot.meters[1]!]) })).toBeNull();
+    });
     it('omits an unavailable globally selected period instead of showing another period', () => {
         const params = {
             snapshot: snapshot([meter({ meterId: 'weekly', label: 'Weekly', utilizationPct: 70 })]),
@@ -117,6 +132,28 @@ describe('gauge tone boundaries derive from the canonical resolveQuotaTone owner
 });
 
 describe('computeConnectedServiceQuotaGaugeViewModel', () => {
+    it('projects Antigravity quota onto the exact active model without borrowing another version', () => {
+        const { serviceId: _serviceId, profileId: _profileId, ...usage } = snapshot([
+            meter({ meterId: 'model:gemini-2.5-flash', modelId: 'gemini-2.5-flash', utilizationPct: 80, label: 'Gemini 2.5 Flash' }),
+            meter({ meterId: 'model:gemini-3-flash', modelId: 'gemini-3-flash', utilizationPct: 20, label: 'Gemini 3 Flash' }),
+        ]);
+        const params = { snapshot: usage, windowMode: 'most_constrained' as const, activeModelId: 'gemini-3-flash', nowMs: 2000, formatter };
+        expect(computeConnectedServiceQuotaGaugeViewModel(params)?.remainingPct).toBe(80);
+        expect(computeConnectedServiceQuotaGaugeViewModel({ ...params, activeModelId: 'gemini-4-flash' })).toBeNull();
+        expect(computeConnectedServiceQuotaGaugeViewModel({ ...params, activeModelId: null })).toBeNull();
+        expect(usage.meters).toHaveLength(2);
+    });
+    it('retains shared account windows without inferring their membership from model names', () => {
+        const { serviceId: _serviceId, profileId: _profileId, ...usage } = snapshot([
+            meter({ meterId: 'gemini-5h', providerLimitId: 'gemini-5h', utilizationPct: 20, label: 'Gemini' }),
+            meter({ meterId: '3p-5h', providerLimitId: '3p-5h', utilizationPct: 99, label: 'Other models' }),
+        ]);
+        const params = { snapshot: usage, windowMode: 'most_constrained' as const, activeModelId: 'gemini-3-flash', nowMs: 2000, formatter };
+        expect(computeConnectedServiceQuotaGaugeViewModel(params)?.allMeterRows.map(row => row.meterId)).toEqual(['gemini-5h', '3p-5h']);
+        expect(computeConnectedServiceQuotaGaugeViewModel({ ...params, activeModelId: 'unknown-provider-model' })?.allMeterRows.map(row => row.meterId))
+            .toEqual(['gemini-5h', '3p-5h']);
+    });
+
     it('uses readable stored window labels for composer rows and rings without changing raw snapshots', () => {
         const ids = ['five_hour', 'seven_day', 'seven_day_all', 'seven_day_fable', 'spend', 'future_api_window', 'base_model_inference:primary'];
         const usage = snapshot(ids.map((meterId) => meter({ meterId, label: meterId, utilizationPct: 20 })));

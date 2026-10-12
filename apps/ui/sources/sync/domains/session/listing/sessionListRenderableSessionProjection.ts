@@ -4,6 +4,7 @@ import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePl
 import { isSessionAccessOwner, isSessionAccessRecipient } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 import { classifySessionTupleApplyCurrentness } from '@/sync/store/domains/sessionTupleApplyCurrentness';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
+import { reconcileSessionLifecycleProjection } from '../sessionLifecycleProjection';
 
 import type { SessionListRenderableSession } from './sessionListRenderable';
 
@@ -61,7 +62,7 @@ function mergeRenderableMetadata(
     baseMetadata: Metadata | null | undefined,
     renderableMetadata: SessionListRenderableSession['metadata'],
 ): Metadata | null {
-    return baseMetadata ?? renderableMetadata as Metadata | null;
+    return renderableMetadata === null ? null : { ...baseMetadata, ...renderableMetadata } as Metadata;
 }
 
 export function buildSessionFromListRenderable(
@@ -95,10 +96,26 @@ export function buildSessionFromListRenderable(
     const agentStateVersion = hasCurrentCanonicalAgentState
         ? options.baseSession!.agentStateVersion
         : renderable.agentStateVersion;
-    const metadataLayoutVersion = readSessionMetadataLayoutVersion(
+    const metadataCurrent = classifySessionTupleApplyCurrentness(options.baseSession, renderable).metadataCurrent;
+    const rowMetadataLayoutVersion = readSessionMetadataLayoutVersion(
         renderable.metadataLayoutVersion ?? options.baseSession?.metadataLayoutVersion,
     );
-    const ownerMetadataView = renderable.metadataUnavailable === true
+    const baseMetadataLayoutVersion = readSessionMetadataLayoutVersion(options.baseSession?.metadataLayoutVersion);
+    const metadataLayoutVersion = metadataCurrent || !options.baseSession
+        ? rowMetadataLayoutVersion : baseMetadataLayoutVersion;
+    const rowMetadata = renderable.metadata === null ? null : {
+        ...renderable.metadata,
+        sessionWorkStateV1: renderable.workState ?? null,
+        sessionAgentActivityHeadlineV1: renderable.agentActivityHeadline ?? null,
+        sessionWorkflowActivityHeadlineV1: renderable.workflowHeadline ?? null,
+        ...(renderable.metadata.terminalControlServiceabilityV1
+            ? { terminal: { controlServiceabilityV1: renderable.metadata.terminalControlServiceabilityV1 } }
+            : {}),
+    };
+    // Explicit unreadability contracts privacy even while an older opened tuple remains cached.
+    const metadataUnavailable = renderable.metadataUnavailable === true || rowMetadata === null;
+    const sameMetadataLayout = rowMetadataLayoutVersion === baseMetadataLayoutVersion;
+    const ownerMetadataView = metadataUnavailable
         ? null
         : metadataLayoutVersion === 0
             ? undefined
@@ -107,10 +124,21 @@ export function buildSessionFromListRenderable(
                 access: renderable.access,
                 accessLevel: renderable.accessLevel,
             })
-                ? renderable.metadata as Metadata | null
+                ? metadataCurrent
+                    ? mergeRenderableMetadata(sameMetadataLayout ? options.baseSession?.ownerMetadataView : null, rowMetadata)
+                    : options.baseSession?.ownerMetadataView ?? null
                 : null;
+    const projectedMetadata = metadataUnavailable ? null : metadataCurrent
+        ? mergeRenderableMetadata(sameMetadataLayout ? options.baseSession?.metadata : null, rowMetadata)
+        : options.baseSession?.metadata ?? null;
+    // The list's layout-1 flavor is already the public Agent presentation. Restore its
+    // envelope so all Session presentation readers use the same declared identity.
+    const metadata = metadataCurrent && metadataLayoutVersion === 1 && projectedMetadata !== null
+        ? { ...projectedMetadata, v: 1,
+            agentPresentation: renderable.metadata?.flavor ? { agentId: renderable.metadata.flavor } : undefined }
+        : projectedMetadata;
 
-    return {
+    return reconcileSessionLifecycleProjection(options.baseSession, {
         ...baseSessionWithoutResponsibility,
         id: renderable.id,
         viewer: renderable.viewer,
@@ -147,6 +175,8 @@ export function buildSessionFromListRenderable(
         latestReadyEventSeq: renderable.hasUnreadMessages === true
             ? Math.max(1, seq)
             : renderable.latestReadyEventSeq,
+        latestReadyEventAt: renderable.latestReadyEventAt ?? null,
+        latestTurnId: renderable.latestTurnId ?? null,
         latestTurnStatus: renderable.latestTurnStatus ?? null,
         latestTurnStatusObservedAt: renderable.latestTurnStatusObservedAt ?? null,
         runtimeActivityState: renderable.runtimeActivityState ?? 'unknown',
@@ -159,7 +189,7 @@ export function buildSessionFromListRenderable(
         origin: renderable.origin ?? options.baseSession?.origin,
         workDepth: renderable.workDepth ?? options.baseSession?.workDepth,
         reports: renderable.reports ?? options.baseSession?.reports ?? null,
-        metadata: mergeRenderableMetadata(options.baseSession?.metadata, renderable.metadata),
+        metadata,
         // The row owns this ephemeral projection; a stale base must not revive a retired title.
         lockedDisplayTitle: metadataLayoutVersion === 1
             && renderable.metadata === null
@@ -168,7 +198,8 @@ export function buildSessionFromListRenderable(
             : null,
         metadataLayoutVersion: metadataLayoutVersion || undefined,
         ownerMetadataView,
-        metadataVersion: renderable.metadataVersion,
+        metadataVersion: metadataCurrent || !options.baseSession
+            ? renderable.metadataVersion : options.baseSession.metadataVersion,
         agentState,
         agentStateVersion,
         thinking: renderable.thinking,
@@ -187,5 +218,5 @@ export function buildSessionFromListRenderable(
             : {}),
         accessLevel: renderable.accessLevel,
         canApprovePermissions: renderable.canApprovePermissions,
-    };
+    });
 }

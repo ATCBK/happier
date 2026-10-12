@@ -14,7 +14,7 @@ function createEmptySettings(): McpServersSettingsV1 {
 }
 
 describe('materializeImportedMcpServerDrafts', () => {
-    it('creates saved secrets for mapped input values and binds stdio servers to the selected machine', () => {
+    it('creates saved secrets for mapped input values and defaults stdio reach to Everywhere', () => {
         const result = materializeImportedMcpServerDrafts({
             settings: createEmptySettings(),
             secrets: [],
@@ -62,7 +62,7 @@ describe('materializeImportedMcpServerDrafts', () => {
                 id: 'id-3',
                 serverId: 'id-1',
                 enabled: true,
-                target: { t: 'machine', machineId: 'machine-1' },
+                target: { t: 'allMachines' },
                 createdAt: 123,
                 updatedAt: 123,
             },

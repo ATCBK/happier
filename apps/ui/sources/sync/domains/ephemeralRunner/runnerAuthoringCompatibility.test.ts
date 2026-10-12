@@ -13,12 +13,12 @@ describe('Runner ordinary-authoring compatibility', () => {
             profileId: null,
             environmentVariables: null,
             resumeSessionId: null,
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: true,
                 forceIncludeServerIds: [],
                 forceExcludeServerIds: [],
-            },
+            } },
             connectedServices: {
                 v: 2,
                 bindingsByServiceId: {
@@ -60,7 +60,7 @@ describe('Runner ordinary-authoring compatibility', () => {
 
     it('allows explicit MCP selection for canonical portable materialization', () => {
         expect(findRunnerUnsupportedAuthoringField({
-            mcpSelection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['server-a'], forceExcludeServerIds: [] },
+            capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['server-a'], forceExcludeServerIds: [] } },
         })).toBeNull();
     });
 

@@ -17,6 +17,21 @@ const slice: UsageQueryResultSlice = { key: getUsageQueryKey(query), requestedQu
     accounting: { v: 1, totals: { eventCount: 1, tokens, cost: contribution.cost }, contributions: [contribution] } };
 
 describe('Usage model price editor projection', () => {
+    it('offers one Haiku identity and edits or resets both existing alias overrides together', () => {
+        const alias = 'claude-haiku-4-5';
+        const dated = 'claude-haiku-4-5-20251001';
+        const rates = { kind: 'rates' as const, inputUsdPerMillion: 20, outputUsdPerMillion: 40 };
+        const haikuSlice = { ...slice, accounting: { ...slice.accounting!, contributions: [alias, dated].map(modelId => ({ ...contribution, modelId })) } };
+        const model = buildUsagePriceEditorModel(haikuSlice, { [dated]: rates });
+        expect(model.rows).toEqual([expect.objectContaining({ modelId: alias, override: rates,
+            effectivePrice: expect.objectContaining({ source: 'override', rates }), unpricedContributions: [] })]);
+        expect(model.mappingTargets).toContain(alias);
+        expect(model.mappingTargets).not.toContain(dated);
+        const current = { [alias]: rates, [dated]: rates, other: { kind: 'map' as const, modelId: 'reference' } };
+        expect(createUsageModelPriceSettingsIntent(current, { modelId: dated, override: null }).input.value).toEqual({ other: current.other });
+        expect(createUsageModelPriceSettingsIntent(current, { modelId: dated, override: { kind: 'map', modelId: 'gpt-5.4' } }).input.value)
+            .toEqual({ [alias]: { kind: 'map', modelId: 'gpt-5.4' }, other: current.other });
+    });
     it('exposes catalog provenance and exact unpriced populations and resolves mappings through the canonical price owner', () => {
         const unpriced = buildUsagePriceEditorModel(slice, {}, catalog);
         expect(unpriced.provenance).toEqual(catalog.provenance);

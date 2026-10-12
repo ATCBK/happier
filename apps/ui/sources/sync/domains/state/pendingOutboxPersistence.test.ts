@@ -34,6 +34,31 @@ function plainRequest(localId: string): { v: 1; body: string } {
 describe('pending outbox persistence', () => {
     beforeEach(() => store.clear());
 
+    it('restores retired stored envelope and recipient fields while keeping new requests strict', async () => {
+        const request = { v: 1 as const, recipient: { kind: 'execution_run' as const, runId: 'run-a' },
+            body: JSON.stringify({ v: 1, localId: 'stored-run', targetMachineId: 'machine-a',
+                content: { t: 'plain', v: { role: 'user' } }, messageRole: 'user', requestedAction: { v: 1, kind: 'enqueue' } }) };
+        const message = { sessionId: 's1', localId: 'stored-run', createdAt: 1, text: 'input', rawRecord: {}, request };
+        await savePendingOutboxMessage(message, scope);
+        const [key, serialized] = [...store.entries()][0]!;
+        const stored = JSON.parse(serialized);
+        stored.s1[0].request.retired = true;
+        stored.s1[0].request.recipient.retired = true;
+        const storedBody = JSON.parse(request.body);
+        storedBody.retired = true;
+        storedBody.requestedAction.retired = true;
+        stored.s1[0].request.body = JSON.stringify(storedBody);
+        store.set(key, JSON.stringify(stored));
+        expect(await loadPendingOutboxForSession('s1', scope)).toEqual([
+            expect.objectContaining({ operation: 'enqueue', request }),
+        ]);
+        const newRequestWithRetiredField = { ...request, retired: true };
+        await expect(savePendingOutboxMessage({ ...message, request: newRequestWithRetiredField }, scope))
+            .rejects.toThrow();
+        await expect(savePendingOutboxMessage({ ...message, request: { ...request, body: JSON.stringify(storedBody) } }, scope))
+            .rejects.toThrow();
+    });
+
     it('quarantines a malformed persisted target instead of replaying it as main', async () => {
         await savePendingOutboxMessage({
             sessionId: 's1', localId: 'target', createdAt: 1, text: 'private run input',

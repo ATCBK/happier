@@ -53,6 +53,12 @@ const VIEWER_SHARED_DIRECTLY: SessionViewerProjectionV1 = {
 };
 
 describe('sessionContextPresentation', () => {
+    it('uses the canonical Home label rather than a relay-derived profile or caller name', () => {
+        const host = 'happier-agent-qa-orc.localhost:3017';
+        const facts = buildSessionContextFacts({ address: { serverId: 'home-a', sessionId: 'session-1' }, homeName: host,
+            serverProfile: { id: 'home-a', name: host, serverUrl: `http://${host}`, createdAt: 1, updatedAt: 1, lastUsedAt: 1, source: 'manual' } });
+        expect(facts.home?.name).toBe('This Home');
+    });
     afterEach(resetTeamsSnapshotsForTests);
 
     it('uses the exact Home and viewer Account directory for the server-selected Group', () => {

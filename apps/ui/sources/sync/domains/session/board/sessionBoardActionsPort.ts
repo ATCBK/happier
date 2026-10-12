@@ -3,10 +3,11 @@ import type {
     SessionBoardErrorV1,
     SessionBoardItemPlacementV1,
     SessionBoardItemRemoveInputV1,
-    SessionBoardItemUpsertInputV1,
+    SessionBoardActionInputV1ById,
     SessionBoardLayoutUpdateInputV1,
     SessionBoardMutationActionResultV1,
     SessionBoardActionRecoveryEvidenceV1,
+    SessionSurfaceItemV1,
 } from '@happier-dev/protocol/sessions/board';
 import {
     parseSessionBoardActionExecuteOutcomeV1,
@@ -14,6 +15,7 @@ import {
 import type { ActionExecuteResult, ActionExecutorContext, ActionId } from '@happier-dev/protocol';
 
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 /**
  * The Board mutation seam this human vertical CONSUMES.
@@ -61,7 +63,11 @@ export type SessionBoardActionOutcome<TValue> =
     | Readonly<{ status: 'outcome_unknown'; recovery: SessionBoardActionRecoveryEvidenceV1 }>;
 
 export type SessionBoardItemPlacementInput = SessionBoardItemPlacementV1;
-export type SessionBoardItemUpsertInput = SessionBoardItemUpsertInputV1;
+/** Mounted editors carry parsed items, not CLI workspace-publication or cross-Session acquisition intents. */
+export type SessionBoardItemUpsertInput = Readonly<
+    Omit<Extract<SessionBoardActionInputV1ById['session.board.item.upsert'], { item: unknown }>, 'item'>
+    & { item: SessionSurfaceItemV1 }
+>;
 export type SessionBoardItemRemoveInput = SessionBoardItemRemoveInputV1;
 export type SessionBoardLayoutUpdateInput = SessionBoardLayoutUpdateInputV1;
 export type SessionBoardMutationResult = SessionBoardMutationActionResultV1;
@@ -154,6 +160,7 @@ export function createSessionBoardActionsPort(input: Readonly<{
         const parsed = parseSessionBoardActionExecuteOutcomeV1(actionId, actionInput, result, {
             expectedServerId: serverId,
             expectedSessionId: sessionId,
+            resolveServerScopeId: resolveServerProfileScopeIdForIdentifier,
         });
         if (!parsed.success) {
             return { status: 'unavailable', reason: 'board_actions_unavailable' };

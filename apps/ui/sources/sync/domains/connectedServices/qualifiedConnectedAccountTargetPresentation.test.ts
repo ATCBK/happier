@@ -31,6 +31,36 @@ const group = Object.freeze({
 });
 
 describe('presentQualifiedConnectedAccountTarget', () => {
+  it('summarizes a pool by the accounts it rotates and the one in use, never by an id', () => {
+    const second = { ref: { service, accountId: 'account_opaque_789' }, displayName: 'Bot account' };
+    const member = (connectedAccountId: string, enabled = true) => ({ connectedAccountId, enabled });
+    const present = (pool: Record<string, unknown>) => presentQualifiedConnectedAccountTarget({
+      target: { kind: 'group', service, groupId: group.ref.groupId },
+      accounts: [account, second], groups: [{ ...group, ...pool }], labelsByKey: {}, serviceTitle: 'External Gateway',
+    });
+    const inUse = present({ members: [member(account.ref.accountId), member(second.ref.accountId), member('gone', false)],
+      activeConnectedAccountId: second.ref.accountId });
+    expect(inUse.summaryLabel).toBe('2 accounts · using Bot account');
+    expect(inUse.secondaryLabel).toContain('2 accounts · using Bot account');
+    expect(present({ members: [member(account.ref.accountId)], activeConnectedAccountId: null }).summaryLabel).toBe('1 account');
+    // An empty pool says nothing here: the eligibility owner's repair reason speaks for it.
+    expect(present({ members: [], activeConnectedAccountId: null }).summaryLabel).toBeUndefined();
+    expect(present({}).summaryLabel).toBeUndefined();
+  });
+
+  it('uses every resolved personal label when numbering unnamed siblings', () => {
+    const accounts = ['a', 'b', 'c'].map(accountId => ({ ref: { service, accountId } }));
+    const input = {
+      accounts, groups: [], labelsByKey: {}, serviceTitle: 'Claude',
+      accountLabelsByAccountId: { a: 'Primary' },
+    };
+    for (const order of [accounts, [...accounts].reverse()]) {
+      const names = accounts.map(account => presentQualifiedConnectedAccountTarget({
+        ...input, accounts: order, target: { kind: 'account', account: account.ref },
+      }).primaryLabel);
+      expect(names).toEqual(['Primary', 'Claude account', 'Claude account 2']);
+    }
+  });
   it('uses the Account-assigned pool label and returns to the definition label after reset', () => {
     const target = { kind: 'group' as const, service, groupId: group.ref.groupId };
     const input = { target, accounts: [account], groups: [group], serviceTitle: 'External Gateway' };
@@ -44,7 +74,8 @@ describe('presentQualifiedConnectedAccountTarget', () => {
     const present = (accountLabel?: string) => {
       const target = presentQualifiedConnectedAccountTarget({
         target: { kind: 'account', account: account.ref },
-        accounts: [idOnlyAccount], groups: [], labelsByKey: {}, accountLabel,
+        accounts: [idOnlyAccount], groups: [], labelsByKey: {},
+        accountLabelsByAccountId: { [account.ref.accountId]: accountLabel },
         serviceTitle: 'External Gateway',
       });
       return presentConnectedAccountIdentity({

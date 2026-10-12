@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import type { SessionListQueryHomeState } from './sessionListQueryController';
 import * as presentationModule from './sessionListIndexPresentation';
+import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import {
     applySessionListIndexPresentation,
     resolveSessionListSourceIndex,
@@ -292,6 +295,22 @@ describe('resolveSessionListQueryPresentation', () => {
 });
 
 describe('applySessionListIndexPresentation', () => {
+    it('replaces a retained raw Home host with the currently published name', async () => {
+        const profile = await upsertServerProfile({ serverUrl: 'http://localhost:52753', name: 'localhost:52753' });
+        primeServerFeaturesSnapshot({ serverId: profile.id, snapshot: {
+            status: 'ready', features: { ...createRootLayoutFeaturesResponse(), homePresentation: { v: 1, displayName: 'Studio Home' } },
+        } });
+        try {
+            const result = applySessionListIndexPresentation([
+                makeSession('s1', profile.id, 'localhost:52753'), makeSession('s2', 'other-home', 'Work Home'),
+            ], {
+                enabled: true, presentation: 'grouped',
+            });
+            expect(result[0]).toMatchObject({ type: 'header', title: 'Studio Home', serverName: 'Studio Home' });
+        } finally {
+            deleteServerFeaturesSnapshot({ serverId: profile.id });
+        }
+    });
     it('groups by server when concurrent grouped presentation is enabled', () => {
         const data: SessionListIndexItem[] = [
             makeHeader('Today', { headerKind: 'date' }),

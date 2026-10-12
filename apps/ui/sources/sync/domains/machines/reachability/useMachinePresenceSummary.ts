@@ -2,9 +2,13 @@ import * as React from 'react';
 
 import { getStorage } from '@/sync/domains/state/storage';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import {
-    readMachineRequestReachabilityObservation,
-    resolveMachineReachable,
+    isMachineReachable,
     subscribeMachineRequestReachability,
 } from '@/sync/domains/machines/reachability/machineReachability';
 import { getMachineDisplayName, isMachineOnline, readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
@@ -46,23 +50,23 @@ export function useMachinePresenceSummaries(
     machineIds: readonly string[],
 ): readonly MachinePresenceSummary[] {
     const store = getStorage();
+    const targetServerId = serverId?.trim() || getActiveServerSnapshot().serverId;
+    const { binding } = useServerCredentialAccountScopeBinding(targetServerId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const cached = React.useRef<readonly MachinePresenceSummary[]>([]);
     const idsKey = JSON.stringify(machineIds);
     const ids = React.useMemo(() => JSON.parse(idsKey) as string[], [idsKey]);
     const readMachines = React.useCallback(() => ids.map(machineId => machineId
-        ? resolveServerScopedMachine(store.getState() as MachinePresenceStorageState, serverId, machineId) : null),
-    [store, serverId, ids]);
+        ? resolveServerScopedMachine(store.getState() as MachinePresenceStorageState, targetServerId, machineId) : null),
+    [store, targetServerId, ids]);
     const getSnapshot = React.useCallback((): readonly MachinePresenceSummary[] => {
         const next = readMachines().map((machine, index): MachinePresenceSummary => {
             const name = machine ? getMachineDisplayName(machine).trim() || null : null;
             const homeDir = machine?.metadata?.homeDir?.trim() || null;
             const reachability = resolveSessionMachineReachabilityState({
-                machineIsKnown: Boolean(machine),
-                machineIsOnline: machine ? resolveMachineReachable({
-                    presenceReachable: isMachineOnline(machine),
-                    presenceObservedAtMs: typeof machine.activeAt === 'number' && machine.activeAt > 0 ? machine.activeAt : null,
-                    requestObservation: readMachineRequestReachabilityObservation(serverId, ids[index]),
-                }) : false,
+                // Missing credential identity is unknown, not a transport-offline verdict.
+                machineIsKnown: Boolean(machine && scope),
+                machineIsOnline: machine ? isMachineReachable(scope, machine) : false,
             });
             const lastSeenAt = reachability === 'unreachable' && typeof machine?.activeAt === 'number' && machine.activeAt > 0
                 ? machine.activeAt : null;
@@ -72,8 +76,61 @@ export function useMachinePresenceSummaries(
         });
         if (next.length !== cached.current.length || next.some((value, index) => value !== cached.current[index])) cached.current = next;
         return cached.current;
-    }, [readMachines, serverId, ids]);
-    const subscribe = React.useCallback((listener: () => void) => {
+    }, [readMachines, scope, ids]);
+    const subscribe = useMachinePresenceSubscription(readMachines);
+    return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+export type MachinePresenceMembership = Readonly<{
+    onlineMachineIds: readonly string[];
+    selectableMachineIds: readonly string[];
+}>;
+
+/** App-wide consumers need membership, not heartbeat timestamps or machine presentation. */
+export function useMachinePresenceMembership(serverId: string | null): MachinePresenceMembership {
+    const store = getStorage();
+    const targetServerId = serverId?.trim() || getActiveServerSnapshot().serverId;
+    const { binding } = useServerCredentialAccountScopeBinding(targetServerId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
+    const cached = React.useRef<MachinePresenceMembership>({ onlineMachineIds: [], selectableMachineIds: [] });
+    const readMachines = React.useCallback(() => {
+        const state = store.getState();
+        const activeMachines = Object.values(state.machines);
+        const machines = targetServerId ? resolveServerScopedMachines({
+            serverId: targetServerId,
+            activeServerId: getActiveServerSnapshot().serverId,
+            activeMachines,
+            machineListByServerId: state.machineListByServerId,
+            machineListStatusByServerId: state.machineListStatusByServerId,
+        }) ?? [] : activeMachines;
+        return machines.filter(isMachineVisibleForSelection);
+    }, [store, targetServerId]);
+    const getSnapshot = React.useCallback(() => {
+        const nowMs = Date.now();
+        const machines = readMachines();
+        const onlineMachineIds = machines.filter(machine => isMachineReachable(scope, machine, nowMs))
+            .map(machine => machine.id).sort((left, right) => left.localeCompare(right));
+        const selectableMachineIds = machines.filter(machine => isMachineSelectableForFleet(scope, machine, nowMs))
+            .map(machine => machine.id).sort((left, right) => left.localeCompare(right));
+        const previous = cached.current;
+        if (onlineMachineIds.length !== previous.onlineMachineIds.length
+            || onlineMachineIds.some((id, index) => id !== previous.onlineMachineIds[index])
+            || selectableMachineIds.length !== previous.selectableMachineIds.length
+            || selectableMachineIds.some((id, index) => id !== previous.selectableMachineIds[index])) {
+            cached.current = { onlineMachineIds, selectableMachineIds };
+        }
+        return cached.current;
+    }, [readMachines, scope]);
+    const subscribe = useMachinePresenceSubscription(readMachines);
+    return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/** Detail summaries and membership age through the same existing lease deadline. */
+function useMachinePresenceSubscription(
+    readMachines: () => readonly (Parameters<typeof isMachineOnline>[0] | null)[],
+): (listener: () => void) => () => void {
+    const store = getStorage();
+    return React.useCallback((listener: () => void) => {
         const token = {};
         const refresh = () => {
             let next: number | null = null;
@@ -91,5 +148,4 @@ export function useMachinePresenceSummaries(
         refresh();
         return () => { stopStore(); stopClock(); stopRequests(); sessionListRuntimeClock.clearWake(token); };
     }, [store, readMachines]);
-    return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

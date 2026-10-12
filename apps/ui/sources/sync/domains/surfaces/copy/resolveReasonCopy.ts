@@ -17,7 +17,8 @@ export type ReasonCopyKind =
     | 'localServiceAction' // daemon LocalServiceActionResultV1 refusal/failure reason codes
     | 'simulatorPreview' // simulator preview availability reason codes
     | 'streamPlayer' // live-stream player error/diagnostic reason codes
-    | 'pluginRuntime'; // plugin runtime load/fallback diagnostic codes
+    | 'pluginRuntime' // plugin runtime load/fallback diagnostic codes
+    | 'widget'; // native/authored widget host admission, not plugin-runtime availability
 
 export type ResolvedReasonCopy = Readonly<{
     /** Localized card title for terminal-state surfaces. */
@@ -322,10 +323,13 @@ const PLUGIN_RUNTIME_KEYS = {
     missing_native_capability: 'pluginRuntime.missingRequirement',
     required_permission_missing: 'pluginRuntime.missingRequirement',
     entry_missing: 'pluginRuntime.missingRequirement',
+    plugin_machine_unreachable: 'pluginSurfaces.state.offline.reason',
     runtime_mismatch: 'pluginRuntime.missingRequirement',
     artifact_source_integrity_invalid: 'pluginRuntime.integrityFailed',
     artifact_integrity_invalid: 'pluginRuntime.integrityFailed',
     integrity_failed: 'pluginRuntime.integrityFailed',
+    // The page's machines carry different plugin versions and none is chosen yet.
+    installationConflict: 'pluginRuntime.installationConflict',
     artifact_incompatible: 'pluginRuntime.incompatible',
     update_required: 'pluginRuntime.incompatible',
     host_ui_api_incompatible: 'pluginRuntime.incompatible',
@@ -353,7 +357,9 @@ type StreamPlayerMessageKey =
     | 'streamPlayer.status.decoderUnavailable';
 
 type PluginRuntimeMessageKey =
+    | 'pluginSurfaces.state.offline.reason'
     | 'pluginRuntime.crashLoop'
+    | 'pluginRuntime.installationConflict'
     | 'pluginRuntime.disabledByPolicy'
     | 'pluginRuntime.hostedWebPolicyDenied'
     | 'pluginRuntime.hostedWebSandboxUnavailable'
@@ -461,6 +467,8 @@ function resolveGenericMessage(kind: ReasonCopyKind): string {
             return t('streamPlayer.status.errorGeneric');
         case 'pluginRuntime':
             return t('pluginRuntime.unavailableGeneric');
+        case 'widget':
+            return t('common.unavailable');
         case 'browserFrame':
         case 'browserStatus':
         case 'browserSurface':
@@ -470,6 +478,8 @@ function resolveGenericMessage(kind: ReasonCopyKind): string {
 
 function resolveTitle(kind: ReasonCopyKind): string {
     switch (kind) {
+        case 'widget':
+            return t('widgetAdd.areaUnavailableTitle');
         case 'localServiceInventory':
             return t('localServices.inventory.errorTitle');
         case 'localServiceAction':
@@ -491,6 +501,8 @@ function resolveTitle(kind: ReasonCopyKind): string {
 
 function resolveKnownMessage(kind: ReasonCopyKind, reasonCode: string): string | null {
     switch (kind) {
+        case 'widget':
+            return null;
         case 'browserFrame':
         case 'browserStatus': {
             const key = BROWSER_REASON_KEYS[reasonCode as keyof typeof BROWSER_REASON_KEYS];
@@ -572,6 +584,8 @@ export function resolveReasonCopy(input: Readonly<{
  */
 export function resolvePluginSurfaceStatePresentation(input: Readonly<{
     state: PluginSurfacePresentationState;
+    /** Native host admissions must not borrow plugin-runtime terminal vocabulary. */
+    reasonKind?: 'pluginRuntime' | 'widget';
     reasonCode?: string | null;
     /** A renderer may retain its established localized title without owning copy selection. */
     title?: string;
@@ -580,7 +594,7 @@ export function resolvePluginSurfaceStatePresentation(input: Readonly<{
 }>): PluginSurfaceStatePresentation {
     const reason = resolveReasonCopy({
         reasonCode: input.reasonCode,
-        kind: 'pluginRuntime',
+        kind: input.reasonKind ?? 'pluginRuntime',
     });
     const copy = resolvePluginSurfacePresentationCopy({
         state: input.state,

@@ -72,6 +72,19 @@ describe('warmCachePersistence', () => {
         expect(loadUsageSummaryWarmCache('server-a', 'account-b')).toBeNull();
     });
 
+    it('restores nested stored runtime facts with retired fields without deleting the cache', () => {
+        // Open the native encrypted cache and finish legacy plaintext retirement before seeding its bytes.
+        loadSessionListWarmCacheEntries('server-a', 'account-a');
+        const key = 'session-list-warm-cache-v1:server-a:account-a';
+        store.set(key, JSON.stringify({ s1: { sessionId: 's1', metadataVersion: 1, agentStateVersion: 1,
+            updatedAt: 20, createdAt: 10, active: true, activeAt: 20, archivedAt: null, path: '/repo',
+            pendingActivationAuthorization: { status: 'waiting', requestId: 'request-a', requestedAt: 10, retired: true },
+        } }));
+        expect(loadSessionListWarmCacheEntries('server-a', 'account-a').s1?.pendingActivationAuthorization)
+            .toEqual({ status: 'waiting', requestId: 'request-a', requestedAt: 10 });
+        expect(store.has(key)).toBe(true);
+    });
+
     it('roundtrips session list entries by server and account scope', () => {
         saveSessionListWarmCacheEntries('server-a', 'account-a', {
             s1: {

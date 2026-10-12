@@ -24,6 +24,17 @@ function withMetadata(overrides: Partial<Metadata>): Metadata {
 }
 
 describe('modelOptions', () => {
+    it('reads an unresolved configured Agent container without assigning its retained model intent', () => {
+        const metadata = withMetadata({
+            modelSelectionIntentV1: { v: 1, updatedAt: 5, selection: {
+                agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'foreign',
+            } },
+        });
+        const context = { preflight: { availableModels: [{ id: 'native', name: 'Native' }], supportsFreeform: false } };
+        expect(getModelOptionsForSession('custom-acp', metadata, context).map(option => option.value))
+            .toEqual(['default', 'native']);
+    });
+
     it('builds the model picker for a session whose stored selection targets another Agent key', () => {
         // The engine popover rebuilt this list and a stale `backend:codex`
         // selection threw into the React tree. It is read as absent instead.

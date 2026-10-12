@@ -17,6 +17,24 @@ const DAY = 24 * 60 * 60 * 1000;
 const NOW = 100 * DAY;
 
 describe('buildQuotaResetRows', () => {
+    it('keeps identified saved grants informational while attaching typed facts without action authority', () => {
+        const details = {
+            saved: { remainingCount: 2, appliesToProviderLimitIds: ['five_hour', 'seven_day'], unavailableReason: 'paused' as const },
+            live: { remainingCount: 0, appliesToProviderLimitIds: [], unavailableReason: 'cooldown' as const },
+        };
+        const rows = buildQuotaResetRows(ConnectedServiceQuotaRecoveryCreditsV1Schema.parse({
+            availableCount: 1, credits: [
+                { id: 'saved', kind: 'usage_limit_reset', status: 'unknown', title: 'Provider grant', description: 'Provider metadata', expiresAtMs: NOW + DAY },
+                { id: 'expired', kind: 'usage_limit_reset', status: 'unknown', expiresAtMs: NOW },
+                { id: 'live', kind: 'usage_limit_reset', status: 'available' },
+            ],
+        }), NOW, formatter, details);
+        expect(rows).toEqual([
+            expect.objectContaining({ key: 'live', canUse: true, consumableCreditId: 'live', details: details.live }),
+            expect.objectContaining({ key: 'saved', canUse: false, consumableCreditId: null, title: 'Provider grant', description: 'Provider metadata', details: details.saved, countdownLabel: 'in 1d' }),
+        ]);
+    });
+
     it('returns no rows when there are no available credits', () => {
         expect(buildQuotaResetRows(null, NOW, formatter)).toEqual([]);
         expect(buildQuotaResetRows(undefined, NOW, formatter)).toEqual([]);
@@ -32,10 +50,11 @@ describe('buildQuotaResetRows', () => {
         ).toEqual([]);
     });
 
-    it('builds one aggregate placeholder row when credits are empty but the count is positive', () => {
+    it('builds one aggregate placeholder row when credits are empty but the count is positive, retaining summary expiry', () => {
         const rows = buildQuotaResetRows(
             ConnectedServiceQuotaRecoveryCreditsV1Schema.parse({
                 availableCount: 2,
+                nextExpiresAtMs: NOW + DAY,
                 credits: [],
             }),
             NOW,
@@ -46,8 +65,8 @@ describe('buildQuotaResetRows', () => {
             consumableCreditId: null,
             canUse: true,
             isAggregate: true,
-            expiresAtMs: null,
-            countdownLabel: null,
+            expiresAtMs: NOW + DAY,
+            countdownLabel: 'in 1d',
         });
         expect(rows[0]?.key).toBeTruthy();
     });

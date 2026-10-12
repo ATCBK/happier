@@ -142,7 +142,7 @@ describe('Runner activation custody retirement', () => {
                     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
                     permissionMode: 'default', modelSelection: null, transcriptStorage: 'persisted',
                     profileId: null, environmentVariables: null,
-                    mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+                    capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
                     connectedServices: null, checkoutCreationDraft: null, resumeSessionId: null, terminal: null,
                     windowsRemoteSessionLaunchMode: null, windowsRemoteSessionConsole: null, windowsTerminalWindowName: null,
                     acpSessionModeId: null, sessionConfigOptionOverrides: null, access: null, primaryTeamId: null,

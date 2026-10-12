@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { t } from '@/text';
 
 import {
     buildMachineAdministrationTargetRouteParams,
@@ -72,11 +73,11 @@ describe('resolveMachineAdministrationTargetLabel', () => {
         })).toEqual({ machine: 'Laptop', server: 'Server One' });
     });
 
-    it('falls back to the portable target ids rather than omitting the target', () => {
+    it('keeps the machine target identity and uses a human label for an unknown Home', () => {
         expect(resolveMachineAdministrationTargetLabel({
             target: { serverIdentityId: 'srv_gone', machineId: 'machine-gone' },
             candidates: [candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a' })],
-        })).toEqual({ machine: 'machine-gone', server: 'srv_gone' });
+        })).toEqual({ machine: t('machine.unlistedMachine'), server: t('settingsAccount.thisHomeTitle') });
         expect(resolveMachineAdministrationTargetLabel({
             target: null,
             candidates: [candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a' })],

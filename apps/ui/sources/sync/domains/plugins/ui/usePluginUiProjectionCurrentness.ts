@@ -110,6 +110,8 @@ export type PluginUiProjectionCurrentness = Readonly<{
     pluginUiProjection: PluginUiProjectionModel | null;
     pluginBrowserProjection: PluginBrowserProjectionModel | null;
     phase: PluginUiProjectionPhase;
+    /** Owner-provided cause; consumers do not infer reachability from an empty catalog. */
+    unavailableReasonCode?: string;
     interactionEnabled: boolean;
     machineId: string | null;
     serverId: string | null;
@@ -427,13 +429,14 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
 
         const scheduleRetry = (): void => {
             if (!isRequestCurrent() || retryTimer !== null) return;
-            setLoadedProjection((previous) => (
-                previous.targetKey !== targetKey
+            setLoadedProjection((previous) => {
+                if (previous.targetKey !== targetKey
                     || previous.accountLifetime !== accountLifetime
-                    || previous.connectedAccountProjection === CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR
-                    ? previous
-                    : { ...previous, connectedAccountProjection: CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR }
-            ));
+                    || previous.connectedAccountProjection === CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR) return previous;
+                const retained = previous.phase === 'current' ? previous : restoreRetained();
+                return { ...retained, phase: retained.phase === 'current' ? 'current' : 'unavailable',
+                    connectedAccountProjection: CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR };
+            });
             const delayMs = PLUGIN_UI_PROJECTION_RETRY_BACKOFF_MS[
                 Math.min(retryAttempts, PLUGIN_UI_PROJECTION_RETRY_BACKOFF_MS.length - 1)
             ]!;
@@ -552,14 +555,21 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
             ? 'establishing'
             : loadedProjection.phase === 'unavailable'
                 ? 'unavailable'
+                : loadedProjection.phase === 'current'
+                    && loadedProjection.connectedAccountProjection === CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR
+                    ? 'retainedOffline'
                 : !authorityKey
                     ? loadedProjection.phase === 'current'
                         ? 'retainedOffline'
-                        : 'establishing'
+                        : 'unavailable'
                     : loadedProjection.phase === 'current' && loadedProjection.authorityKey === authorityKey
                         ? 'current'
                         : 'establishing';
     const interactionEnabled = phase === 'current';
+    const unavailableReasonCode = (phase === 'unavailable' || phase === 'retainedOffline') && targetKey && accountLifetimeCurrent
+        && loadedProjection.connectedAccountProjection !== CONNECTED_ACCOUNT_PROJECTION_UNSUPPORTED
+        && (!authorityKey || loadedProjection.connectedAccountProjection === CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR)
+        ? 'plugin_machine_unreachable' : undefined;
     const pluginBrowserProjection = interactionEnabled
         ? loadedProjection.pluginBrowserProjection
         : null;
@@ -602,6 +612,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
         pluginUiProjection: currentPluginUiProjection,
         pluginBrowserProjection,
         phase,
+        unavailableReasonCode,
         interactionEnabled,
         machineId,
         serverId,
@@ -613,6 +624,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
         connectedAccountProjection,
         machineId,
         phase,
+        unavailableReasonCode,
         platform,
         accountLifetime,
         pluginBrowserProjection,

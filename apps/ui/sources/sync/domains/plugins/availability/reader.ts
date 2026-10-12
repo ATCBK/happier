@@ -16,6 +16,7 @@ import {
 import type { PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginCollectionContractRefV1 } from '@happier-dev/protocol';
 import { PluginDeclaredUiEntriesV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import { normalizePluginInstalledUiDeclarations, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 
 import {
@@ -701,15 +702,17 @@ function readInstalledPluginsAdmission(
         const uniqueReleases = new Map(releases.map(release => [release.archiveDigestSha256, release]));
         const release = uniqueReleases.size === 1 ? [...uniqueReleases.values()][0]! : null;
         const declaration = release?.normalizedManifest ?? materialization.declaredManifest ?? null;
+        const declaredUiEntries = materialization.declaredUiEntries
+            ?? (release ? projectPluginPortableUiDeclarationsV1(release.normalizedManifest) : undefined);
         const installations = byPluginId.get(materialization.pluginId) ?? [];
         installations.push(Object.freeze({
             materialization,
             declaration,
             declarationState: declaration ? 'known' : 'preparing',
-            uiDeclarationState: materialization.declaredUiEntries !== undefined ? 'known' : 'preparing',
+            uiDeclarationState: declaredUiEntries !== undefined ? 'known' : 'preparing',
             release,
             execution: classifyMaterializationRelease(state, scope, materialization),
-            uiModel: normalizePluginInstalledUiDeclarations(materialization.declaredUiEntries ?? {}, undefined, {
+            uiModel: normalizePluginInstalledUiDeclarations(declaredUiEntries ?? {}, undefined, {
                 id: materialization.pluginId,
                 displayName: typeof declaration?.displayName === 'string'
                     ? declaration.displayName : declaration?.displayName.fallback ?? materialization.pluginId,
@@ -1267,6 +1270,22 @@ function createBoundReader(input: Readonly<{
     readState: () => AvailabilityProjectionState | null;
     subscribe: (listener: () => void) => () => void;
 }>): PluginAccountAvailabilityReader {
+    // Both projections are derived from the owner-snapshotted immutable state.
+    // Fresh imperative admission still reads that state on every access; only
+    // unchanged-state derivation is retained. Clear, retirement, partial refresh
+    // and Account replacement all replace the state identity below.
+    let derivedState: AvailabilityProjectionState | null | undefined;
+    let materializations: PluginMachineMaterializationAdmission | undefined;
+    let installed: ReturnType<typeof readInstalledPluginsAdmission> | undefined;
+    const readDerivedState = () => {
+        const state = input.readState();
+        if (state !== derivedState) {
+            derivedState = state;
+            materializations = undefined;
+            installed = undefined;
+        }
+        return state;
+    };
     return Object.freeze({
         readCurrentArtifact: (slot) => readCurrentArtifactAdmission(
             input.readState(),
@@ -1323,8 +1342,14 @@ function createBoundReader(input: Readonly<{
             input.scope,
             materialization,
         ),
-        readMaterializations: () => readMaterializationAdmission(input.readState(), input.scope),
-        readInstalledPlugins: () => readInstalledPluginsAdmission(input.readState(), input.scope),
+        readMaterializations: () => {
+            const state = readDerivedState();
+            return materializations ??= readMaterializationAdmission(state, input.scope);
+        },
+        readInstalledPlugins: () => {
+            const state = readDerivedState();
+            return installed ??= readInstalledPluginsAdmission(state, input.scope);
+        },
         subscribe: input.subscribe,
     });
 }

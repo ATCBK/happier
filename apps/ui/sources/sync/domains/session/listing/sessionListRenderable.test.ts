@@ -1738,6 +1738,22 @@ describe('buildSessionListRenderableFromSession with transcript aggregate', () =
         expect(fromMessages.metadata?.summaryText).toBe('run it');
     });
 
+    it('retains the first-prompt title when metadata hydration precedes the transcript', () => {
+        const { session, messages } = buildTranscriptFixture();
+        const previous = buildSessionListRenderableFromSession(session, undefined, messages);
+        const hydrated = buildSessionListRenderableFromSession({ ...session, metadataVersion: session.metadataVersion + 1 }, previous, []);
+        expect(hydrated.metadata?.summaryText).toBe('run it');
+        const named = buildSessionListRenderableFromSession({ ...session,
+            metadata: { ...session.metadata!, name: 'Explicit title' },
+        }, previous, []);
+        expect(named.metadata?.name).toBe('Explicit title');
+        expect(named.metadata?.summaryText).toBeFalsy();
+        const locked = buildSessionListRenderableFromSession({ ...session, metadata: null,
+            metadataLayoutVersion: 1, ownerMetadataView: null,
+        }, previous, []);
+        expect(locked.metadata?.summaryText).toBeFalsy();
+    });
+
     it('does not fall back to stored-transcript reads when an aggregate is provided', async () => {
         const { buildTranscriptRenderableAggregate } = await import('./transcriptRenderableAggregate');
         const { session, messages } = buildTranscriptFixture();

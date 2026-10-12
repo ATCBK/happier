@@ -8,7 +8,7 @@ import { resolveBundledAgentIdFromContributionIdentity } from '@/agents/catalog/
 import type {
     AcpConfigOptionOverridesV1,
     RuntimeDescriptorV1,
-    SessionMcpSelectionV1,
+    SessionCapabilitySelectionV1,
     SessionModelSelectionV1,
     WindowsRemoteSessionLaunchMode,
 } from '@happier-dev/protocol';
@@ -61,7 +61,7 @@ export interface SpawnSessionOptions {
      * and decrypt/materialize them locally for the provider runtime.
      */
     connectedServices?: unknown;
-    mcpSelection?: SessionMcpSelectionV1;
+    capabilitySelection?: SessionCapabilitySelectionV1;
     /**
      * Internal daemon freshness barrier. Callers should normally omit this and let
      * `machineSpawnNewSession` capture a freshly flushed account-settings version.
@@ -93,7 +93,7 @@ export type SpawnHappySessionRpcParams = {
     windowsRemoteSessionConsole?: 'hidden' | 'visible'
     windowsTerminalWindowName?: string
     connectedServices?: unknown
-    mcpSelection?: SessionMcpSelectionV1
+    capabilitySelection?: SessionCapabilitySelectionV1
     /**
      * Internal daemon freshness barrier captured immediately before the RPC.
      */
@@ -127,7 +127,7 @@ function buildSpawnHappySessionRpcParamsInternal(
         windowsRemoteSessionConsole,
         windowsTerminalWindowName,
         connectedServices,
-        mcpSelection,
+        capabilitySelection,
         accountSettingsVersionHint,
     } = options;
 
@@ -197,7 +197,7 @@ function buildSpawnHappySessionRpcParamsInternal(
         ...(sessionConfigOptionOverrides ? { sessionConfigOptionOverrides } : {}),
         ...(runtimeDescriptorV1 ? { runtimeDescriptorV1 } : {}),
         connectedServices,
-        ...(mcpSelection ? { mcpSelection } : {}),
+        ...(capabilitySelection ? { capabilitySelection } : {}),
         ...(typeof accountSettingsVersionHint === 'number' && Number.isInteger(accountSettingsVersionHint) && accountSettingsVersionHint >= 0
             ? { accountSettingsVersionHint }
             : {}),

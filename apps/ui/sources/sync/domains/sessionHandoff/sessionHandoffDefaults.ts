@@ -1,4 +1,5 @@
 import { DEFAULT_SESSION_HANDOFF_DEFAULTS_V1, SessionHandoffDefaultsV1Schema, type SessionHandoffDefaultsV1, type SessionHandoffDirectTargetMode } from '@happier-dev/protocol/account/settings/accountSettings';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { computeWorkspaceSyncPolicyDigest, type HandoffWorkspaceActionV1, type WorkspaceContentPolicyV1, type WorkspaceSyncModeV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 
 export {
@@ -118,7 +119,7 @@ function normalizeWorkspaceMode(value: unknown): SessionHandoffWorkspaceMode {
  * operation. This keeps stale clients fail-closed at the daemon boundary.
  */
 export function normalizeSessionHandoffDefaults(raw: unknown): SessionHandoffDefaultsV1 {
-    const parsed = SessionHandoffDefaultsV1Schema.safeParse(raw);
+    const parsed = createStoredReadSchema(SessionHandoffDefaultsV1Schema).safeParse(raw);
     const candidate = parsed.success ? parsed.data : DEFAULT_SESSION_HANDOFF_DEFAULTS_V1;
     return {
         v: 1,

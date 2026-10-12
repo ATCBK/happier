@@ -1,22 +1,16 @@
-import type { AccountDisplayProfileV1 } from '@happier-dev/protocol';
+import { resolveAccountDisplayLabelV1, type AccountDisplayProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 
 import { t } from '@/text';
 
 /**
- * How the app names an Account. `formatAccountDisplayName` is the Account's own name (full name, else
- * `@username`) or `null`; surfaces that name a person on screen use `resolveAccountDisplayName`, which
+ * How the app names an Account. `formatAccountDisplayName` is the Account's own name, else
+ * username, or `null`; surfaces that name a person on screen use `resolveAccountDisplayName`, which
  * never falls back to the raw id: an Account without a name is "Unnamed account", told apart by a hint
  * (a sign-in email the caller already holds, else a short, stable id suffix). Keys and dedupe keep
  * using the id itself.
  */
-export function formatAccountDisplayName(profile: AccountDisplayProfileV1): string | null {
-    const fullName = [profile.firstName, profile.lastName]
-        .map((part) => part?.trim() ?? '')
-        .filter(Boolean)
-        .join(' ');
-    if (fullName) return fullName;
-    const username = profile.username?.trim();
-    return username ? `@${username}` : null;
+export function formatAccountDisplayName(profile: Readonly<{ name?: string | null; username?: string | null }>): string | null {
+    return resolveAccountDisplayLabelV1(profile);
 }
 
 /** Characters of the id kept in the hint: enough to tell a Home's unnamed Accounts apart. */
@@ -62,7 +56,7 @@ export function resolveAccountDisplayName(input: Readonly<{
 
 /**
  * The viewer's own Account, named to its owner: its name, else "Your account" — never "Unnamed
- * account" or an id hint about themselves. `name` comes from the profile owner (`getDisplayName`).
+ * account" or an id hint about themselves. `name` comes from `formatAccountDisplayName`.
  */
 export function resolveViewerAccountDisplayName(name: string | null | undefined): string {
     return name?.trim() || t('accountDisplay.yours');

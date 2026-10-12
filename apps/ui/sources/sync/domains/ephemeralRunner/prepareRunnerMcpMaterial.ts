@@ -1,5 +1,5 @@
 import { resolveRunnerMcpMaterialV1, resolveRunnerMcpSelectionV1 } from '@happier-dev/protocol/ephemeralRunner/runnerMcpMaterial';
-import type { SessionMcpSelectionV1 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import type { RunnerMcpMaterialV1, RunnerMcpMaterializationFailureV1 } from '@happier-dev/protocol/ephemeralRunner/runnerMcpMaterial';
 import { listMcpServerCatalogSavedSecretRefsV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { readMcpServerCatalogInContext, McpServerCatalogOperationError, type McpServerCatalogAccountContext } from '@/sync/api/account/apiMcpServerCatalog';
@@ -17,7 +17,9 @@ export class RunnerMcpMaterializationUnavailableError extends Error {
 /** Resolves only the selected MCP values into creator custody for endpoint sealing. */
 export async function prepareRunnerMcpMaterial(input: Readonly<{
     context: McpServerCatalogAccountContext;
-    selection: SessionMcpSelectionV1 | null;
+    capabilitySelection: SessionCapabilitySelectionV1 | null;
+    agentId: string;
+    agentAcceptsUserMcp: boolean;
     signal?: AbortSignal;
 }>): Promise<RunnerMcpMaterialV1 | null> {
     const { context, signal } = input;
@@ -34,7 +36,8 @@ export async function prepareRunnerMcpMaterial(input: Readonly<{
         request: (path, init) => context.request(path, { ...init, signal }, { retry: 'none' }) });
     context.assertCurrent();
     const selected = resolveRunnerMcpSelectionV1({ settings: { ...catalog.catalog,
-        strictMode: settingsParse(baseline.raw).mcpServersStrictMode === true }, selection: input.selection });
+        strictMode: settingsParse(baseline.raw).mcpServersStrictMode === true }, capabilitySelection: input.capabilitySelection,
+        agentId: input.agentId, agentAcceptsUserMcp: input.agentAcceptsUserMcp });
     if (!selected.ok) throw new RunnerMcpMaterializationUnavailableError(selected);
     const references = [...new Set(listMcpServerCatalogSavedSecretRefsV1({ v: 1,
         servers: selected.selectedServers.map(server => server.config), bindings: [] }).map(reference => reference.secretId))];
@@ -45,7 +48,9 @@ export async function prepareRunnerMcpMaterial(input: Readonly<{
     context.assertCurrent();
     const resolved = resolveRunnerMcpMaterialV1({
         settings: selected.settings,
-        selection: selected.selection,
+        capabilitySelection: selected.capabilitySelection,
+        agentId: input.agentId,
+        agentAcceptsUserMcp: input.agentAcceptsUserMcp,
         resolveSavedSecret: reference => material.get(reference) ?? null,
     });
     if (!resolved.ok) throw new RunnerMcpMaterializationUnavailableError(resolved);

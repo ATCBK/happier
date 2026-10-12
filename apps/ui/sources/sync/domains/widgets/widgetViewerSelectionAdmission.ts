@@ -3,6 +3,7 @@ import { QualifiedConnectedAccountRefSchema, type QualifiedConnectedAccountRef }
 import { isWidgetConnectedAccountSelectionEligibleV1, resolveWidgetViewerPurposeValuesV1, isSameWidgetDefinitionV1, type WidgetDefinitionRefV1, type WidgetInputDescriptorV1, type WidgetInstanceRefV1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 /** Current Account metadata admits personal pins; viewer bindings require the existing purpose selection. */
 export function admitWidgetViewerSelectionMetadataV1(input: Readonly<{
@@ -20,8 +21,8 @@ export function admitWidgetViewerSelectionMetadataV1(input: Readonly<{
     resources?: readonly PluginProjectedResourceV2[];
 }>): ActionExecuteFailure | null {
     const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
-    if ((!areServerAccountScopesEqual(input.viewer, input.ref.surface)
-        && !(input.viewer.serverId === input.ref.surface.serverId && areServerAccountScopesEqual(input.viewer, input.admittedViewer)))
+    if ((!areServerProfileIdentifiersEquivalent(input.viewer.serverId, input.ref.surface.serverId)
+        || input.viewer.accountId !== input.ref.surface.accountId && !areServerAccountScopesEqual(input.viewer, input.admittedViewer))
         || input.profile?.id !== input.viewer.accountId)
         return failure('widgets_viewer_scope_mismatch');
     const definition = input.instance.definition;

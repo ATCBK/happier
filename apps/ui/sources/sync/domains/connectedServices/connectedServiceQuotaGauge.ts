@@ -2,6 +2,7 @@ import type {
     ConnectedServiceQuotaMeterV1,
     ConnectedServiceQuotaLimitSelectionV1,
     ConnectedServiceQuotaRecoveryCreditsV1,
+    ConnectedServiceQuotaRecoveryCreditV1,
     ConnectedServiceQuotaSnapshotV1,
     SessionRuntimeIssueV1,
 } from '@happier-dev/protocol';
@@ -11,7 +12,7 @@ import { readConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol/conne
 import { resolveConnectedServiceQuotaMeterLabel } from '@happier-dev/protocol/connect/connectedServiceQuotaMeterLabel';
 
 import { getAgentCore, resolveAgentIdFromFlavor } from '@happier-dev/agents';
-import { clampQuotaPct, deriveQuotaUtilizationPct } from './deriveQuotaUtilizationPct';
+import { clampQuotaPct, deriveQuotaMeterValues, deriveQuotaUtilizationPct } from './deriveQuotaUtilizationPct';
 import {
     resolveQuotaTone,
 } from './resolveQuotaTone';
@@ -251,6 +252,11 @@ function formatNumber(value: number): string {
     return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(1)));
 }
 
+export function isAvailableRecoveryCredit(credit: ConnectedServiceQuotaRecoveryCreditV1, nowMs: number): boolean {
+    return credit.status === 'available'
+        && !(typeof credit.expiresAtMs === 'number' && Number.isFinite(credit.expiresAtMs) && credit.expiresAtMs <= nowMs);
+}
+
 export function summarizeConnectedServiceQuotaRecoveryCredits(
     recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1 | null | undefined,
     nowMs: number,
@@ -263,11 +269,8 @@ export function summarizeConnectedServiceQuotaRecoveryCredits(
         let nextExpiresAtMs: number | null = null;
         let providerCreditId: string | null = null;
         for (const credit of credits) {
-            if (credit.status !== 'available') continue;
+            if (!isAvailableRecoveryCredit(credit, nowMs)) continue;
             const expiresAtMs = credit.expiresAtMs;
-            if (typeof expiresAtMs === 'number' && Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs) {
-                continue;
-            }
             if (providerCreditId === null && credit.id) {
                 providerCreditId = credit.id;
             }
@@ -296,11 +299,7 @@ function buildMeterRow(
     nowMs: number,
     formatter: ConnectedServiceQuotaGaugeLabelFormatter,
 ): ConnectedServiceQuotaGaugeMeterRow | null {
-    const usedPct = deriveQuotaUtilizationPct(meter);
-
-    const remainingPct = typeof meter.remainingPct === 'number' && Number.isFinite(meter.remainingPct)
-        ? clampQuotaPct(meter.remainingPct)
-        : usedPct === null ? null : clampQuotaPct(100 - usedPct);
+    const { usedPct, remainingPct, used, limit } = deriveQuotaMeterValues(meter);
     const remainingLabel = remainingPct === null ? '—' : `${Math.round(remainingPct)}%`;
     const resetLabel = formatResetCountdown(nowMs, meter.resetAtMs ?? meter.resetsAt, formatter);
     return {
@@ -312,11 +311,11 @@ function buildMeterRow(
         detailRightLabel: resetLabel
             ? formatter.remainingWithReset({ percent: remainingLabel, reset: resetLabel })
             : formatter.remaining({ percent: remainingLabel }),
-        usedLimitSemantics: typeof meter.used === 'number' && typeof meter.limit === 'number'
+        usedLimitSemantics: typeof used === 'number' && typeof limit === 'number'
             ? 'used'
             : null,
-        usedLimitLabel: typeof meter.used === 'number' && typeof meter.limit === 'number'
-            ? formatter.used({ used: formatNumber(meter.used), limit: formatNumber(meter.limit) })
+        usedLimitLabel: typeof used === 'number' && typeof limit === 'number'
+            ? formatter.used({ used: formatNumber(used), limit: formatNumber(limit) })
             : null,
         resetLabel,
         resetsAt: meter.resetAtMs ?? meter.resetsAt ?? null,
@@ -338,6 +337,7 @@ export type ConnectedServiceQuotaGaugeSnapshotInput =
 
 export function computeConnectedServiceQuotaGaugeViewModel(_params: Readonly<{
     snapshot: ConnectedServiceQuotaGaugeSnapshotInput | null;
+    activeModelId?: string | null;
     windowMode: ConnectedServiceQuotaGaugeWindowMode;
     windowModes?: readonly ConnectedServiceQuotaGaugeWindowMode[] | null;
     /** Extra favorites from the account currently used by the session. */
@@ -350,8 +350,16 @@ export function computeConnectedServiceQuotaGaugeViewModel(_params: Readonly<{
     activeAccountDisplayLabel?: string | null;
 }>): ConnectedServiceQuotaGaugeViewModel | null {
     if (_params.quotaLimitSelection === null) return null;
-    const params = { ..._params, snapshot: projectConnectedServiceQuotaSnapshotForLimitSelection(_params.snapshot, _params.quotaLimitSelection) };
-    if (!params.snapshot) return null;
+    const selectedSnapshot = projectConnectedServiceQuotaSnapshotForLimitSelection(_params.snapshot, _params.quotaLimitSelection);
+    if (!selectedSnapshot) return null;
+    const activeModelId = _params.activeModelId?.trim();
+    const snapshot = _params.activeModelId === undefined ? selectedSnapshot : {
+        ...selectedSnapshot,
+        meters: selectedSnapshot.meters.filter(meter => meter.modelId
+            ? meter.modelId === activeModelId
+            : meter.scope !== 'model' && meter.limitScope !== 'model'),
+    };
+    const params = { ..._params, snapshot };
 
     const rankableMeters = selectComparableConnectedServiceQuotaMeters(params.snapshot.meters);
     const allMeterRows = rankableMeters

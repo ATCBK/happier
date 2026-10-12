@@ -1,5 +1,6 @@
 import { AUTOMATION_INT_COLUMN_MAX } from '@happier-dev/protocol/automations/automationColumnBoundsV1';
 import { AutomationTriggerDefinitionInputSchema, type AutomationTriggerDefinitionInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { AutomationAssignmentInput } from '@happier-dev/protocol/automations/automationApiV3';
 import type { AutomationStoredDefinitionExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
 import {
@@ -108,7 +109,7 @@ function sanitizeTriggerRows(input: unknown): ReadonlyArray<NewSessionAutomation
         const record = candidate as Record<string, unknown>;
         const clientId = typeof record.clientId === 'string' ? record.clientId.trim() : '';
         if (!clientId || seen.has(clientId)) continue;
-        const definition = AutomationTriggerDefinitionInputSchema.safeParse(record.definition);
+        const definition = createStoredReadSchema(AutomationTriggerDefinitionInputSchema).safeParse(record.definition);
         if (!definition.success) continue;
         seen.add(clientId);
         rows.push({ clientId, definition: definition.data });

@@ -131,6 +131,14 @@ describe('createQualifiedConnectedAccountGroupsClient', () => {
         expect((await client.list())[0]?.activeSince).toBeNull();
     });
 
+    it('keeps a list-only client readable and refuses edits without Action custody', async () => {
+        network.responses.push({ groups: [qualifiedGroup] });
+        const client = createQualifiedConnectedAccountGroupsClient({ credentials, service, source: { protocol: 'v4' } });
+        expect(await client.list()).toHaveLength(1);
+        await expect(client.create({ groupId: 'new', displayName: 'New' })).rejects.toMatchObject({ code: 'action_authorization_unavailable' });
+        expect(network.requests.every(request => request.method === 'GET')).toBe(true);
+    });
+
     it('retains exact qualified refs and threads only V4 revision semantics', async () => {
         network.responses.push({ groups: [qualifiedGroup] });
         network.responses.push({

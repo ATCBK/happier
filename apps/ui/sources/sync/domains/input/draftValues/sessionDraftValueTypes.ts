@@ -236,6 +236,7 @@ const SessionArmedAgentContinuationSubmissionCurrentnessSourceSchema = z.object(
     mentions: z.array(z.unknown()),
     composerAttachments: z.array(ComposerAttachmentDraftV1Schema).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
     attachmentDraftIds: z.array(z.string().trim().min(1)).max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1),
+    nextPromptPermissionModeMutationId: z.string().min(1).optional(),
 }).strict();
 
 /**

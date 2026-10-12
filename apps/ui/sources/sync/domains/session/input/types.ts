@@ -209,7 +209,10 @@ export interface SessionSubmitPort {
         machineId?: string | null,
     ): Promise<boolean>;
     /** Current reachability of the exact resume target; used only for a user-present one-shot attempt. */
-    isMachineReachable?(machineId: string): boolean;
+    isMachineReachable?(machineId: string, options?: Readonly<{
+        serverId?: string | null;
+        accountLifetime?: ServerAccountScopeLifetime;
+    }>): boolean;
     refreshSessionForSubmit?(
         sessionId: string,
         options?: Readonly<{

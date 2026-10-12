@@ -122,7 +122,7 @@ describe('buildImportedMcpServerFromDetectedV1', () => {
         });
     });
 
-    it('creates a machine binding and carries detected enabled state (defaulting to true)', () => {
+    it('defaults newly adopted MCP servers to Everywhere On independent of native enabled state', () => {
         const settings = createEmptySettings();
         const detected: DetectedMcpServerV1 = {
             provider: 'claude',
@@ -142,12 +142,12 @@ describe('buildImportedMcpServerFromDetectedV1', () => {
             generateId: (() => 'id1') as any,
         });
 
-        expect(out.binding.enabled).toBe(false);
-        expect(out.binding.target).toEqual({ t: 'machine', machineId: 'machine-123' });
+        expect(out.binding.enabled).toBe(true);
+        expect(out.binding.target).toEqual({ t: 'allMachines' });
         expect(out.binding.serverId).toBe(out.entry.id);
     });
 
-    it('creates a workspace binding when the detected config is project-scoped', () => {
+    it('defaults project-scoped discovery to Everywhere without inferring a workspace root', () => {
         const settings = createEmptySettings();
         const detected: DetectedMcpServerV1 = {
             provider: 'opencode',
@@ -167,7 +167,7 @@ describe('buildImportedMcpServerFromDetectedV1', () => {
             generateId: (() => 'id1') as any,
         });
 
-        expect(out.binding.target).toEqual({ t: 'workspace', machineId: 'machine-123', workspaceRoot: '/repo' });
+        expect(out.binding.target).toEqual({ t: 'allMachines' });
     });
 
     it('retains the detected definition while reusing, editing or adding its target binding', () => {
@@ -224,8 +224,8 @@ describe('buildImportedMcpServerFromDetectedV1', () => {
             existingSettings: settings, detected: { ...detected, enabled: false },
             machineId: 'machine-123', nowMs: 123, generateId: () => 'new-id',
         });
-        expect(disabled).toMatchObject({ action: 'updated', bindingAction: 'edit',
-            entry: { id: 'existing-server' }, binding: { id: 'existing-binding', enabled: false } });
+        expect(disabled).toMatchObject({ action: 'reused',
+            entry: { id: 'existing-server' }, binding: { id: 'existing-binding', enabled: true } });
         expect(disabled.nextSettings.servers).toHaveLength(1);
         expect(disabled.nextSettings.bindings).toHaveLength(1);
 
@@ -234,8 +234,23 @@ describe('buildImportedMcpServerFromDetectedV1', () => {
             nowMs: 123, generateId: () => 'new-id',
         });
         expect(otherTarget).toMatchObject({ action: 'updated', bindingAction: 'add',
-            entry: { id: 'existing-server' }, binding: { serverId: 'existing-server', target: { machineId: 'machine-456' } } });
+            entry: { id: 'existing-server' }, binding: { serverId: 'existing-server', target: { t: 'allMachines' } } });
         expect(otherTarget.nextSettings.servers).toHaveLength(1);
         expect(otherTarget.nextSettings.bindings).toHaveLength(2);
+    });
+
+    it('uses the deciding reach rule rather than an earlier broader On rule for import coverage', () => {
+        const server = { id: 'server', name: 'tools', transport: 'stdio' as const,
+            stdio: { command: 'tools', args: [] }, env: {}, createdAt: 1, updatedAt: 1 };
+        const settings: McpServersSettingsV1 = { ...createEmptySettings(), servers: [server], bindings: [
+            { id: 'all', serverId: server.id, target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 },
+            { id: 'folder-off', serverId: server.id, target: { t: 'workspace', machineId: 'machine', workspaceRoot: 'C:\\Repo' },
+                enabled: false, createdAt: 2, updatedAt: 2 },
+        ] };
+        const result = resolveImportedMcpServerFromDetectedV1({ existingSettings: settings, machineId: 'machine', nowMs: 3,
+            generateId: () => 'new', detected: { provider: 'codex', name: 'tools', transport: 'stdio', stdio: server.stdio,
+                envKeys: [], enabled: true, source: { kind: 'project', path: 'c:\\repo\\.codex\\config.toml' } } });
+        expect(result).toMatchObject({ action: 'updated', bindingAction: 'edit', binding: { id: 'folder-off', enabled: true } });
+        expect(result.nextSettings.bindings.find(rule => rule.id === 'all')).toEqual(settings.bindings[0]);
     });
 });

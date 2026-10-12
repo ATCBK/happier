@@ -95,21 +95,54 @@ function referenceMatchesTarget(
     return candidates.size === 1 && candidates.has(sessionAddressKey(target));
 }
 
+/**
+ * An approval body's declaration that its request keeps rendering in the transcript after it is
+ * decided (its receipt, or its declined line). Contributed by the body owner; the projection never
+ * reads Action ids.
+ */
+export type ApprovalSettledPresentation = (approval: ApprovalRequest) => boolean;
+
 export function listOpenApprovalArtifactsForSession(
     artifacts: readonly DecryptedArtifact[],
     target: SessionAddress | string,
     options?: Readonly<{ knownSessionAddresses?: readonly SessionAddress[] }>,
 ): OpenApprovalArtifactForSession[] {
+    return listSessionApprovalArtifacts(artifacts, target, options?.knownSessionAddresses ?? [], null);
+}
+
+/**
+ * The transcript's approvals: every open request, plus settled requests whose body declares a
+ * settled presentation. Counts, badges and the composer keep the open projection above.
+ */
+export function listTranscriptApprovalArtifactsForSession(
+    artifacts: readonly DecryptedArtifact[],
+    target: SessionAddress | string,
+    options?: Readonly<{
+        knownSessionAddresses?: readonly SessionAddress[];
+        settledPresentations?: readonly ApprovalSettledPresentation[];
+    }>,
+): OpenApprovalArtifactForSession[] {
+    const presentations = options?.settledPresentations ?? [];
+    return listSessionApprovalArtifacts(artifacts, target, options?.knownSessionAddresses ?? [],
+        presentations.length > 0 ? (approval) => presentations.some((presents) => presents(approval)) : null);
+}
+
+function listSessionApprovalArtifacts(
+    artifacts: readonly DecryptedArtifact[],
+    target: SessionAddress | string,
+    knownSessionAddresses: readonly SessionAddress[],
+    keepsSettled: ApprovalSettledPresentation | null,
+): OpenApprovalArtifactForSession[] {
     if (typeof target === 'string' && !target.trim()) return [];
 
     return artifacts.flatMap((artifact) => {
         if (artifact.header?.kind !== 'approval_request.v1') return [];
-        if (artifact.header?.approvalStatus !== 'open') return [];
+        if (artifact.header?.approvalStatus !== 'open' && !keepsSettled) return [];
         const approval = parseApprovalRequestArtifact(artifact);
         if (!approval) return [];
-        if (approval.status !== 'open') return [];
+        if (approval.status === 'open' ? artifact.header?.approvalStatus !== 'open' : !keepsSettled?.(approval)) return [];
         if (!collectApprovalLinkedSessionReferences(artifact, approval).some((reference) => (
-            referenceMatchesTarget(reference, target, options?.knownSessionAddresses ?? [])
+            referenceMatchesTarget(reference, target, knownSessionAddresses)
         ))) return [];
 
         return [{ artifact, approval }];

@@ -193,7 +193,7 @@ describe('submitSessionUserMessage Pending action ownership', () => {
             sessionInactiveResumePolicy: 'online_only',
             resumeTargetOverride: { machineId: 'm1', directory: '/tmp/project' },
         })).resolves.toMatchObject({ type: 'success', wake: { attempted: true, state: 'started' } });
-        expect(onlineHarness.isMachineReachable).toHaveBeenCalledWith('m1');
+        expect(onlineHarness.isMachineReachable).toHaveBeenCalledWith('m1', { serverId: undefined, accountLifetime: undefined });
         expect(onlineHarness.shouldDelegatePendingActivationToDaemon).not.toHaveBeenCalled();
         expect(onlineHarness.ensureSessionRuntimeForPendingInput).toHaveBeenCalledTimes(1);
     });

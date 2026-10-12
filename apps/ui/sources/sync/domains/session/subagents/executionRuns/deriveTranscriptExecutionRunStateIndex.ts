@@ -1,3 +1,4 @@
+import { createStoredReadSchema } from '@happier-dev/protocol';
 import { ExecutionRunLaunchOriginSchema, type ExecutionRunLaunchOrigin } from '@happier-dev/protocol/execution/runs/index';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol/backends/targets/backendTargetRef';
 
@@ -71,7 +72,7 @@ function readBackendTargetRef(value: unknown): BackendTargetRefV1 | null {
 }
 
 function readLaunchOrigin(value: unknown): ExecutionRunLaunchOrigin | null {
-    const parsed = ExecutionRunLaunchOriginSchema.safeParse(value);
+    const parsed = createStoredReadSchema(ExecutionRunLaunchOriginSchema).safeParse(value);
     return parsed.success ? parsed.data : null;
 }
 

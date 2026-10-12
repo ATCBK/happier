@@ -5,9 +5,10 @@ import type { MachineDisplayCacheEntryV1 } from '@/sync/domains/state/warmCacheP
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
 import { areServerProfileIdentifiersEquivalent, type ServerProfile } from '@/sync/domains/server/serverProfiles';
-import { readLiveMachineInventoryRows, resolveServerScopedMachines } from './resolveServerScopedMachines';
-import { resolveMachinePickerPresence } from './identity/resolveMachinePickerPresence';
+import { readLiveMachineInventoryRows, resolveServerScopedMachineInventory } from './resolveServerScopedMachines';
+import { isMachineSelectableForFleet } from './administration/fleetUnion';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 import {
     buildMachineDisplayRenderableFromMachine,
@@ -20,6 +21,8 @@ type MachineListStatus = MachineInventoryStatus;
 export type ServerMachineInventorySnapshotV1 =
     | Readonly<{
         kind: 'resolved';
+        /** Credential-proven Account of this Home; absence retains presentation only. */
+        accountId: string | null;
         profileId: string;
         serverIdentityId: string;
         serverName: string;
@@ -113,36 +116,29 @@ function resolveRawMachineList(params: Readonly<{
     profile: ServerProfile;
     serverIdentityId: string;
     activeServerId: string;
-    activeInventoryLoaded: boolean;
     activeMachines: readonly Machine[];
     machineListByServerId: Readonly<Record<string, readonly Machine[] | null | undefined>>;
     machineListStatusByServerId: Readonly<Record<string, MachineListStatus | undefined>>;
-}>): Readonly<{ machines: readonly Machine[]; observation: 'live' | 'stale'; settled: boolean }> | null {
+}>): Readonly<{ machines: readonly Machine[] | null; observation: 'live' | 'stale'; settled: boolean; inventoryStatus: MachineInventoryStatus }> {
     const keys = uniqueNonEmpty([
         params.serverIdentityId,
         params.profile.id,
         ...(params.profile.legacyServerIds ?? []),
     ]);
-    const activeMachines = params.activeInventoryLoaded ? params.activeMachines : [];
-    const machines = resolveServerScopedMachines({
+    const { machines, status } = resolveServerScopedMachineInventory({
         serverId: params.serverIdentityId,
         serverIdAliases: keys,
         activeServerId: params.activeServerId,
-        activeMachines,
+        activeMachines: params.activeMachines,
         machineListByServerId: params.machineListByServerId,
         machineListStatusByServerId: params.machineListStatusByServerId,
     });
-    const usesActiveInventory = params.activeInventoryLoaded && keys.includes(params.activeServerId)
-        && (machines === activeMachines || machines === null);
-    if (machines === null && !usesActiveInventory) return null;
-    // App data readiness can precede the machine list. Only its applied idle
-    // status qualifies the chosen raw rows as a settled inventory.
-    const settled = keys.some((key) => params.machineListStatusByServerId[key] === 'idle'
-        && (usesActiveInventory || params.machineListByServerId[key] === machines));
+    const settled = status === 'idle' && machines !== null;
     return {
-        machines: machines ?? activeMachines,
-        observation: settled || usesActiveInventory ? 'live' : 'stale',
+        machines,
+        observation: settled ? 'live' : 'stale',
         settled,
+        inventoryStatus: status ?? 'loading',
     };
 }
 
@@ -154,11 +150,11 @@ function resolveRawMachineList(params: Readonly<{
 export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
     profiles: readonly ServerProfile[];
     activeServerId: string;
-    activeInventoryLoaded: boolean;
     activeMachines: readonly Machine[];
     machineListByServerId: Readonly<Record<string, readonly Machine[] | null | undefined>>;
     machineListStatusByServerId: Readonly<Record<string, MachineListStatus | undefined>>;
-    accountId: string;
+    accountScopesByServerId: ReadonlyMap<string, ServerAccountScope>;
+    nowMs?: number;
     loadWarmEntries: (
         serverId: string,
         accountId: string,
@@ -207,20 +203,16 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
             profile,
             serverIdentityId,
             activeServerId: params.activeServerId,
-            activeInventoryLoaded: params.activeInventoryLoaded,
             activeMachines: params.activeMachines,
             machineListByServerId: params.machineListByServerId,
             machineListStatusByServerId: params.machineListStatusByServerId,
         });
-        const inventoryStatuses = uniqueNonEmpty([serverIdentityId, profile.id, ...(profile.legacyServerIds ?? [])])
-            .map((key) => params.machineListStatusByServerId[key]);
-        const inventoryStatus = inventoryStatuses.includes('idle')
-            ? 'idle'
-            : inventoryStatuses.find((status) => status !== undefined) ?? 'loading';
-        if (raw) {
+        const inventoryStatus = raw.inventoryStatus;
+        const scopeCandidate = params.accountScopesByServerId.get(serverIdentityId);
+        const accountScope = scopeCandidate?.serverId === serverIdentityId ? scopeCandidate : null;
+        if (raw.machines !== null) {
             const liveRows = readLiveMachineInventoryRows({
                 activeServerId: params.activeServerId,
-                isDataReady: params.activeInventoryLoaded,
                 activeMachines: params.activeMachines,
                 machineListByServerId: params.machineListByServerId,
                 machineListStatusByServerId: params.machineListStatusByServerId,
@@ -229,15 +221,15 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
             });
             snapshots.push(Object.freeze({
                 kind: 'resolved',
+                accountId: accountScope?.accountId ?? null,
                 profileId: profile.id,
                 serverIdentityId,
                 serverName,
                 observation: raw.observation,
-                inventoryStatus,
+                inventoryStatus: raw.inventoryStatus,
                 ...(raw.settled ? { settled: true as const } : {}),
                 executionEligibleMachineIds: Object.freeze(raw.machines.filter((machine) => (
-                    machine.availability?.kind !== 'locked'
-                    && resolveMachinePickerPresence(machine).status === 'online'
+                    isMachineSelectableForFleet(accountScope, machine, params.nowMs)
                     && liveRows.has(machine)
                 )).map((machine) => machine.id)),
                 machines: Object.freeze(raw.machines
@@ -248,15 +240,16 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
             continue;
         }
 
-        const cached = readWarmMachineDisplays({
+        const cached = accountScope ? readWarmMachineDisplays({
             profile,
             serverIdentityId,
-            accountId: params.accountId,
+            accountId: accountScope.accountId,
             loadWarmEntries: params.loadWarmEntries,
-        });
+        }) : [];
         snapshots.push(cached.length > 0
             ? Object.freeze({
                 kind: 'resolved',
+                accountId: accountScope?.accountId ?? null,
                 profileId: profile.id,
                 serverIdentityId,
                 serverName,

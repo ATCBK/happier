@@ -58,7 +58,9 @@ export function resolveMachineRpcDirectRoutePreflight(input: Readonly<{
 
     if (input.endpoint === undefined) return { kind: 'endpoint_required' };
     const parsedEndpoint = PeerLoopbackEndpointCandidateV1Schema.safeParse(input.endpoint);
-    return parsedEndpoint.success
+    // Presence and a newly minted grant do not renew the daemon's advertisement.
+    // Expired topology must use the existing relay path, not a stale loopback port.
+    return parsedEndpoint.success && parsedEndpoint.data.expiresAt > Date.now()
         ? {
             kind: 'direct_eligible',
             endpoint: parsedEndpoint.data,

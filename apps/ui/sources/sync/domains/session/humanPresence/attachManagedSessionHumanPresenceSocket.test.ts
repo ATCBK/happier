@@ -17,18 +17,18 @@ function managedSocket() {
     const handlers = new Map<string, (payload: unknown) => void>();
     const emitted: Array<[string, unknown]> = [];
     const connectedListeners = new Set<() => void>();
+    const emitWithAck = async (event: string, payload: unknown) => {
+        emitted.push([event, payload]);
+        const { sessionIds } = payload as { sessionIds: string[] };
+        return { v: 1, ok: true, admittedSessionIds: sessionIds };
+    };
     const socket = {
         connected: true,
         emit: (event: string, payload: unknown) => { emitted.push([event, payload]); },
         on: (event: string, handler: (payload: unknown) => void) => { handlers.set(event, handler); },
         off: (event: string) => { handlers.delete(event); },
-        timeout: () => ({
-            emitWithAck: async (event: string, payload: unknown) => {
-                emitted.push([event, payload]);
-                const { sessionIds } = payload as { sessionIds: string[] };
-                return { v: 1, ok: true, admittedSessionIds: sessionIds };
-            },
-        }),
+        emitWithAck,
+        timeout: () => ({ emitWithAck }),
     };
     const transport = {
         isConnected: () => socket.connected,
@@ -52,6 +52,28 @@ afterEach(() => { cleanup.splice(0).reverse().forEach((dispose) => dispose()); }
 async function settle() { for (let index = 0; index < 12; index += 1) await new Promise((resolve) => setTimeout(resolve, 0)); }
 
 describe('managed Home socket presence attachment', () => {
+    it('accepts a delayed visibility declaration beyond the generic ACK deadline', async () => {
+        const serverId = 'slow-home';
+        const sessionId = 'slow-session';
+        markSessionSurfaceVisible(sessionId, serverId);
+        cleanup.push(() => markSessionSurfaceHidden(sessionId, serverId));
+        const boundary = managedSocket();
+        let acknowledge!: (value: unknown) => void;
+        const pending = new Promise<unknown>((resolve) => { acknowledge = resolve; });
+        boundary.socket.emitWithAck = async () => await pending as { v: number; ok: boolean; admittedSessionIds: string[] };
+        boundary.socket.timeout = () => ({ emitWithAck: async () => { throw new Error('operation has timed out'); } });
+        cleanup.push(attachManagedSessionHumanPresenceSocket({
+            serverId, token: token('self'), socket: boundary.socket as never, transport: boundary.transport as never,
+        }));
+        await settle();
+        acknowledge({ v: 1, ok: true, admittedSessionIds: [sessionId] });
+        await settle();
+        boundary.snapshot({
+            v: 1, sessionId, observedAt: 7,
+            viewers: [{ account: { kind: 'account', accountId: 'peer', firstName: 'Peer', lastName: null, username: null, avatarUrl: null }, typing: false }],
+        });
+        expect(sessionHumanPresenceStore.read({ serverId, sessionId })).toMatchObject({ status: 'live', viewers: [{ account: { accountId: 'peer' } }] });
+    });
     it('publishes physical computer focus on every Home, clears hidden focus, and republishes after reconnect', async () => {
         const originalPlatform = Platform.OS;
         Object.defineProperty(Platform, 'OS', { value: 'web', configurable: true });

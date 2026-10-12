@@ -1,0 +1,120 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit';
+import { createMachineGuardViewFixture } from './guardViewFixtures';
+import { createMachineGuardStore } from './machineGuardStore';
+import type { MachineGuardClients, MachineGuardResult } from './machineGuardRpc';
+import type { MachineGuardWatchResultV1 } from '@happier-dev/protocol/machines/guard/guardRpcV1';
+
+async function settle() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
+
+describe('Guard last-good freshness', () => {
+    it('refreshes Activity after one of two consumers releases the same query', async () => {
+        let asOf = 1000;
+        const store = createMachineGuardStore({
+            viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
+            watchClient: async () => new Promise(() => {}),
+            activityClient: async () => ({ ok: true, value: { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf } }),
+        });
+        const key = { machineId: 'machine', serverId: 'home', expectedAccountId: 'owner', range: '7d' as const, filter: 'all' as const };
+        const first = store.demandActivity(key);
+        const second = store.demandActivity(key);
+        try {
+            await settle(); second(); asOf = 2000;
+            store.refreshMachine(key); await settle();
+            expect(store.getActivity(key).list?.asOf).toBe(2000);
+        } finally { first(); store.reset(); }
+    });
+
+    it('marks retained Activity checking on refresh without renewing its asOf on failure', async () => {
+        const reply = createDeferred<MachineGuardResult<{ entries: []; counts: { stopped: number; cleanedUp: number; needsLook: number; others: number }; asOf: number }>>();
+        let reads = 0;
+        const store = createMachineGuardStore({
+            viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
+            watchClient: async () => new Promise(() => {}),
+            activityClient: async () => ++reads === 1
+                ? { ok: true, value: { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 1234 } }
+                : reply.promise,
+        });
+        const key = { machineId: 'machine', serverId: 'home', expectedAccountId: 'owner', range: '7d' as const, filter: 'all' as const };
+        const release = store.demandActivity(key);
+        try {
+            await settle();
+            const list = store.getActivity(key).list;
+            store.retryActivity(key);
+            expect(store.getActivity(key)).toMatchObject({ status: 'loading', list });
+            reply.resolve({ ok: false, reason: 'request_failed' });
+            await settle();
+            expect(store.getActivity(key)).toMatchObject({ status: 'error', list: { asOf: 1234 } });
+        } finally { release(); store.reset(); }
+    });
+
+    it('marks a held refresh as loading without renewing or discarding its last good view', async () => {
+        const replies: Array<ReturnType<typeof createDeferred<MachineGuardResult<ReturnType<typeof createMachineGuardViewFixture>>>>> = [];
+        const watches: Array<ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>>> = [];
+        const store = createMachineGuardStore({
+            viewClient: async () => {
+                const reply = createDeferred<MachineGuardResult<ReturnType<typeof createMachineGuardViewFixture>>>();
+                replies.push(reply);
+                return reply.promise;
+            },
+            watchClient: async () => {
+                const reply = createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>();
+                watches.push(reply); return reply.promise;
+            },
+            activityClient: async () => ({ ok: false, reason: 'request_failed' }),
+        });
+        const key = { machineId: 'machine', serverId: 'home', expectedAccountId: 'owner' };
+        const release = store.demandView(key);
+        try {
+            expect(store.getView(key)).toMatchObject({ status: 'loading', pending: true, view: null, receivedAtMs: null });
+            replies[0]!.resolve({ ok: true, value: createMachineGuardViewFixture() });
+            await settle();
+            const last = store.getView(key);
+            store.retryView(key);
+            expect(store.getView(key)).toMatchObject({ status: 'loading', pending: true, view: last.view, receivedAtMs: last.receivedAtMs });
+            watches[0]!.resolve({ ok: true, value: { changed: true, since: 2, view: createMachineGuardViewFixture({ policyRevision: 2 }) } });
+            await settle();
+            expect(store.getView(key)).toMatchObject({ pending: true, view: { policyRevision: 2 } });
+            const watched = store.getView(key);
+            replies[1]!.resolve({ ok: false, reason: 'request_failed' });
+            await settle();
+            expect(store.getView(key)).toMatchObject({ status: 'error', pending: false, view: watched.view, receivedAtMs: watched.receivedAtMs });
+        } finally { release(); store.reset(); }
+    });
+
+    it('records when a read or changed watch arrives and retains that time after failures, release and Account changes', async () => {
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+        const watches: Array<ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>>> = [];
+        const key = { machineId: 'machine', serverId: 'home', expectedAccountId: 'owner' };
+        const clients: MachineGuardClients = {
+            viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
+            watchClient(input) {
+                const response = createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>();
+                watches.push(response);
+                input.signal?.addEventListener('abort', () => response.resolve({ ok: false, reason: 'request_failed' }), { once: true });
+                return response.promise;
+            },
+            activityClient: async () => ({ ok: false, reason: 'request_failed' }),
+        };
+        const store = createMachineGuardStore(clients);
+        let release = () => {};
+        try {
+            expect(store.getView(key)).toMatchObject({ view: null, receivedAtMs: null });
+            release = store.demandView(key); await settle();
+            expect(store.getView(key)).toMatchObject({ status: 'ready', receivedAtMs: 1000 });
+            clock.mockReturnValue(2000);
+            watches[0]!.resolve({ ok: true, value: { changed: true, since: 2, view: createMachineGuardViewFixture({ policyRevision: 2 }) } });
+            await settle();
+            expect(store.getView(key)).toMatchObject({ receivedAtMs: 2000, view: { policyRevision: 2 } });
+            clock.mockReturnValue(2500);
+            watches[1]!.resolve({ ok: true, value: { changed: false } }); await settle();
+            expect(store.getView(key)).toMatchObject({ receivedAtMs: 2000 });
+            clock.mockReturnValue(3000);
+            watches[2]!.resolve({ ok: false, reason: 'request_failed' }); await settle();
+            expect(store.getView(key)).toMatchObject({ status: 'error', receivedAtMs: 2000, view: { policyRevision: 2 } });
+            release();
+            expect(store.getView(key)).toMatchObject({ receivedAtMs: 2000 });
+            expect(store.getView({ ...key, expectedAccountId: 'other' })).toMatchObject({ view: null, receivedAtMs: null });
+        } finally { release(); store.reset(); clock.mockRestore(); }
+    });
+});

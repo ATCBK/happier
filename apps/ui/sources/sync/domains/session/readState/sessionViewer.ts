@@ -1,3 +1,4 @@
+import { createStoredReadSchema } from '@happier-dev/protocol';
 import { SessionViewerProjectionV1Schema, type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 import { isSessionPersonallyTrackedForViewerV1 } from '@happier-dev/protocol/sessions/personal/tracking';
 import type { SessionPersonalAttentionReasonV1 } from '@happier-dev/protocol/sessions/personal/attention';
@@ -27,7 +28,7 @@ export function normalizeSessionViewerCompatibility(
     session: SessionViewerTrackingInput,
 ): NormalizedSessionViewerCompatibility {
     if (session.viewer !== undefined) {
-        const parsed = SessionViewerProjectionV1Schema.safeParse(session.viewer);
+        const parsed = createStoredReadSchema(SessionViewerProjectionV1Schema).safeParse(session.viewer);
         return parsed.success
             ? { kind: 'current', viewer: parsed.data }
             : { kind: 'untracked' };

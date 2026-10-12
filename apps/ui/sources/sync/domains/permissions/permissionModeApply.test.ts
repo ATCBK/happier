@@ -24,23 +24,6 @@ describe('applyPermissionModeSelection', () => {
         });
     });
 
-    it('does not publish metadata when applyTiming=next_prompt', async () => {
-        const updateSessionPermissionMode = vi.fn();
-        const publishSessionPermissionModeToMetadata = vi.fn(async () => {});
-
-        await applyPermissionModeSelection({
-            sessionId: 's1',
-            mode: 'read-only',
-            applyTiming: 'next_prompt',
-            updateSessionPermissionMode,
-            getSessionPermissionModeUpdatedAt: () => 123,
-            publishSessionPermissionModeToMetadata,
-        });
-
-        expect(updateSessionPermissionMode).toHaveBeenCalledWith('s1', 'read-only');
-        expect(publishSessionPermissionModeToMetadata).not.toHaveBeenCalled();
-    });
-
     it('fails closed when applyTiming=immediate but updatedAt is missing', async () => {
         const updateSessionPermissionMode = vi.fn();
         const publishSessionPermissionModeToMetadata = vi.fn(async () => {});

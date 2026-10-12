@@ -40,6 +40,21 @@ const staleRuntimeState = {
 } as const;
 
 describe('session runner runtime status reader', () => {
+    it('projects additive stored metadata fields without losing actionable runner identity', () => {
+        expect(readStaleSessionRunnerRuntimeState({
+            metadata: {
+                [SESSION_RUNNER_RUNTIME_METADATA_KEY]: {
+                    ...staleRuntimeState,
+                    retiredRuntimeField: true,
+                    runner: { ...staleRuntimeState.runner, retiredRunnerField: true },
+                    plannedRestart: { ...staleRuntimeState.plannedRestart, retiredRestartField: true },
+                },
+            },
+            sessionId: 's1',
+            machineId: 'm1',
+        })).toEqual(staleRuntimeState);
+    });
+
     it('parses the typed runtime.sessionRunner metadata field', () => {
         const parsed = readSessionRunnerRuntimeStateFromMetadata({
             [SESSION_RUNNER_RUNTIME_METADATA_KEY]: staleRuntimeState,

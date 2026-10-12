@@ -4,6 +4,9 @@ import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflow
 import { computeVisibleSessionListIndex } from './computeVisibleSessionListIndex';
 import type { SessionListRenderableSession } from './sessionListRenderable';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
+import { buildSessionListProjectHeaderViewModels } from '@/components/sessions/shell/sessionListProjectHeaderViewModels';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 
 const workspace = { t: 'workspaceScope', serverId: 'home', machineId: 'machine-1', rootPath: '/repo' } as const;
 const source: SessionListIndexItem[] = [
@@ -37,6 +40,58 @@ function compute(show: 'sessions' | 'runs' | 'both' = 'both', startedBy: ('you' 
 }
 
 describe('computeVisibleSessionListIndex workflow Runs', () => {
+    it('distinguishes the same Run project on two machines without any Sessions, and refreshes cached identity', () => {
+        const machines = ['machine-1111', 'machine-2222'].map(id => createMachineFixture({
+            id, metadata: { ...createMachineFixture().metadata!, displayName: 'Dev box', host: 'dev.local', homeDir: '/home' },
+        }));
+        const rows = computeVisibleSessionListIndex({ source: [], resolveSessionRow: () => null,
+            hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
+            sessionListLayoutChoice: 'projects', presentation: { enabled: false, presentation: 'grouped' },
+            workFilter: normalizeSessionListFilterV1({ show: 'runs', homeServerIds: ['home'] }),
+            workflowRuns: machines.map(machine => ({ serverId: 'home', summary: {
+                ...summary(machine.id, 'user'), where: { machineId: machine.id, directory: '/home/happier' },
+            } })),
+        })!;
+        const input = { listItems: rows, workspaceLabels: undefined, workspaceRefs: [],
+            machinesById: new Map(machines.map(machine => [machine.id, machine])) };
+        const projected = buildSessionListProjectHeaderViewModels(input);
+        const models = projected.projectHeaderViewModelByGroupKey;
+        const headers = rows.filter(item => item.type === 'header');
+        const names = resolveMachineDisplayNames(machines);
+        expect(headers.map(header => models.get(header.groupKey!)?.machineSubtitle))
+            .toEqual(machines.map(machine => names.get(machine.id)));
+        expect(new Set([...models.values()].map(model => model.machineSubtitle)).size).toBe(2);
+        expect(buildSessionListProjectHeaderViewModels({ ...input,
+            machinesById: new Map(machines.map(machine => [machine.id, { ...machine, activeAt: 200 }])),
+        })).toBe(projected);
+        const renamed = { ...machines[0]!, metadata: { ...machines[0]!.metadata!, displayName: 'Laptop' } };
+        const refreshed = buildSessionListProjectHeaderViewModels({ ...input,
+            machinesById: new Map([[renamed.id, renamed], [machines[1]!.id, machines[1]!]]),
+        });
+        expect(refreshed.projectHeaderViewModelByGroupKey.get(headers[0]!.groupKey!)?.machineSubtitle).toBe('Laptop');
+
+    });
+    it('groups Runs without a Session corpus by their accepted project and uses its canonical workspace name', () => {
+        const runs = [
+            { ...summary('release', 'user'), where: { machineId: 'machine-1', directory: '/repo/happier', workspaceRefId: 'project-happier' } },
+            { ...summary('payments-review', 'user'), where: { machineId: 'machine-1', directory: '/repo/payments' } },
+        ];
+        const rows = computeVisibleSessionListIndex({ source: [], resolveSessionRow,
+            hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
+            sessionListLayoutChoice: 'projects', presentation: { enabled: false, presentation: 'grouped' },
+            workFilter: normalizeSessionListFilterV1({ show: 'runs', homeServerIds: ['home'] }),
+            workflowRuns: runs.map(run => ({ serverId: 'home', summary: run })),
+        })!;
+        const headers = rows.filter(item => item.type === 'header' && item.headerKind === 'project');
+        expect(headers).toHaveLength(2);
+        const models = buildSessionListProjectHeaderViewModels({ listItems: rows, workspaceLabels: undefined, workspaceRefs: [{
+            id: 'project-happier', serverId: 'home', machineId: 'machine-1', rootPath: '/repo/happier',
+            label: 'Happier workspace', createdAtMs: 1, lastOpenedAtMs: null,
+        }] }).projectHeaderViewModelByGroupKey;
+        expect(headers.map(header => models.get(header.groupKey!)?.displayTitle)).toEqual(['Happier workspace', 'payments']);
+        expect(rows.filter(item => item.type === 'workflow_run').map(item => item.groupKey))
+            .toEqual(headers.map(header => header.groupKey));
+    });
     it('projects Bots from authorized metadata independently of pin, title, Run and locked neighbors', () => {
         const rows: Record<string, SessionListRenderableSession> = {
             lead: { ...resolveSessionRow('home', 'lead'), metadata: { path: '/repo', bot: { kind: 'bot' } } },
@@ -140,6 +195,51 @@ describe('computeVisibleSessionListIndex workflow Runs', () => {
         const rows = compute('runs').filter((item) => item.type !== 'header');
         expect(rows.map((item) => item.type === 'session' ? item.sessionId : item.runId)).toEqual(['manual', 'step', 'needs-you']);
         expect(compute('runs', []).filter((item) => item.type !== 'header').map((item) => item.type)).toEqual(['workflow_run']);
+    });
+
+    it('Runs-only drops Session folders and projects that hold no Run (Workflows › Runs is not the Sessions tree)', () => {
+        const rows = computeVisibleSessionListIndex({
+            source: [
+                ...source,
+                { type: 'header', headerKind: 'project', title: 'scratch', groupKey: 'scratch', serverId: 'home' },
+                { type: 'header', headerKind: 'folder', title: 'Notes', groupKey: 'scratch', folderId: 'notes', serverId: 'home' },
+                { type: 'header', headerKind: 'folder', title: 'No folder', groupKey: 'scratch', folderId: 'none', serverId: 'home' },
+            ],
+            resolveSessionRow, hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
+            presentation: { enabled: false, presentation: 'grouped' },
+            workFilter: normalizeSessionListFilterV1({ show: 'runs', homeServerIds: ['home'] }),
+            workflowRuns: [{ serverId: 'home', summary: summary('manual', 'user') }],
+        })!;
+        expect(rows.filter((item) => item.type === 'header').map((item) => item.type === 'header' ? item.title : null)).toEqual(['repo']);
+    });
+
+    it('Runs-only drops a project that holds no Run even when a project with Runs follows it', () => {
+        const rows = computeVisibleSessionListIndex({
+            source: [
+                { type: 'header', headerKind: 'project', title: 'scratch', groupKey: 'scratch', serverId: 'home' },
+                { type: 'header', headerKind: 'project', title: 'notes', groupKey: 'notes', serverId: 'home' },
+                ...source,
+            ],
+            resolveSessionRow, hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
+            presentation: { enabled: false, presentation: 'grouped' },
+            workFilter: normalizeSessionListFilterV1({ show: 'runs', homeServerIds: ['home'] }),
+            workflowRuns: [{ serverId: 'home', summary: summary('manual', 'user') }],
+        })!;
+        expect(rows.filter((item) => item.type === 'header').map((item) => item.type === 'header' ? item.title : null)).toEqual(['repo']);
+    });
+
+    it('Runs-only drops the single-section "Sessions" label, which Sessions and Both keep', () => {
+        const sessionsHeader: SessionListIndexItem = { type: 'header', headerKind: 'sessions', title: 'Sessions', groupKey: 'sessions' };
+        const headerKinds = (show: 'sessions' | 'runs' | 'both') => computeVisibleSessionListIndex({
+            source: [sessionsHeader, ...source],
+            resolveSessionRow, hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
+            presentation: { enabled: false, presentation: 'grouped' },
+            workFilter: normalizeSessionListFilterV1({ show, homeServerIds: ['home'] }),
+            workflowRuns: [{ serverId: 'home', summary: summary('manual', 'user') }],
+        })!.filter((item) => item.type === 'header').map((item) => item.type === 'header' ? item.headerKind : null);
+        expect(headerKinds('runs')).toEqual(['project']);
+        expect(headerKinds('both')).toEqual(['sessions', 'project']);
+        expect(headerKinds('sessions')).toEqual(['sessions', 'project']);
     });
 
     it('Sessions-only removes Runs and their step Sessions rather than leaving the steps at top level', () => {

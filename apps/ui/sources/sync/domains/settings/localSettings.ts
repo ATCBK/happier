@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import {
     AttentionDeviceOverridesV1Schema,
     deriveAttentionDeviceOverridesV1FromLegacyLocalSettings,
@@ -17,7 +18,7 @@ export const LocalSettingsSchema = z.object(LOCAL_SETTING_ARTIFACTS.shape);
 // These are preferences that make sense to be different on each device.
 //
 
-const LocalSettingsSchemaPartial = LocalSettingsSchema.passthrough().partial();
+const LocalSettingsSchemaPartial = createStoredReadSchema(LocalSettingsSchema).passthrough().partial();
 type LocalSettingsParseInput = z.infer<typeof LocalSettingsSchemaPartial>;
 
 export type LocalSettings = z.infer<typeof LocalSettingsSchema>;
@@ -36,6 +37,7 @@ Object.freeze(localSettingsDefaults);
 
 const deprecatedLocalSettingKeys = [
     'widgetViewerInputSelectionsV1',
+    'uiSurfaceExecutableApprovalsV1',
     'editorFocusModeEnabled',
     'commandPaletteEnabled',
     'keyboardShortcutsV2Enabled',

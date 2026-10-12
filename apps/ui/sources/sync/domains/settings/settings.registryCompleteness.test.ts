@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 describe('settings registry completeness', () => {
+    it('owns the default Home atmosphere in the account catalog', async () => {
+        const { ACCOUNT_SETTING_ARTIFACTS } = await import('./settings');
+        expect(ACCOUNT_SETTING_ARTIFACTS.defaults).toHaveProperty('homeAtmosphere.source', 'planet');
+        expect(ACCOUNT_SETTING_ARTIFACTS.definitions).toHaveProperty('homeAtmosphere.storageScope', 'account');
+    });
     it('builds the account settings schema entirely from schema metadata and canonical account artifacts', async () => {
         const { ACCOUNT_SETTING_ARTIFACTS, SettingsSchema } = await import('./settings');
         const { LOCAL_ACCOUNT_SETTING_ARTIFACTS } = await import('./registry/local/localAccountSettingDefinitions');

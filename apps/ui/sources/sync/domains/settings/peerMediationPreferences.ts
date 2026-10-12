@@ -1,4 +1,5 @@
 import {
+    type PeerDirectPreferenceV1,
     type PeerMediationFlowKindV1,
 } from '@happier-dev/protocol/account/settings/peerMediationPreferencesV1';
 

@@ -19,11 +19,16 @@ export function resolveServerScopedMachine(
     const activeServerId = getActiveServerSnapshot().serverId;
     const normalizedServerId = (typeof serverId === 'string' ? serverId.trim() : '') || activeServerId;
     if (normalizedServerId.length > 0) {
+        let activeMachines: Machine[] | undefined;
         return resolveExactServerScopedMachine({
             serverId: normalizedServerId,
             machineId: normalizedMachineId,
             activeServerId,
-            activeMachines: Object.values(state.machines).filter((machine): machine is Machine => Boolean(machine)),
+            // Settled scoped inventories are authoritative. Only project the active map if
+            // the canonical inventory resolver actually needs its loading-state fallback.
+            get activeMachines() {
+                return activeMachines ??= Object.values(state.machines).filter((machine): machine is Machine => Boolean(machine));
+            },
             machineListByServerId: state.machineListByServerId ?? {},
             machineListStatusByServerId: state.machineListStatusByServerId,
         });

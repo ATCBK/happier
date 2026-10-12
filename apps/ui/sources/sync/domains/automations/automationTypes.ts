@@ -5,7 +5,7 @@ import type {
     AutomationDefinitionListItem,
     AutomationV3RunListItem,
     BackendTargetRefV2,
-    SessionMcpSelectionV1,
+    SessionCapabilitySelectionV1,
     SessionModelSelectionV1,
     RuntimeDescriptorV1,
     SessionExecutionTargetV1,
@@ -119,7 +119,7 @@ export type AutomationTemplate = Readonly<{
     modelId?: string;
     modelUpdatedAt?: number;
     sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1;
-    mcpSelection?: SessionMcpSelectionV1;
+    capabilitySelection?: SessionCapabilitySelectionV1;
     terminal?: unknown;
     windowsRemoteSessionLaunchMode?: WindowsRemoteSessionLaunchMode;
     windowsRemoteSessionConsole?: 'hidden' | 'visible';

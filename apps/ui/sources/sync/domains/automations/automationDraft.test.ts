@@ -14,6 +14,11 @@ const schedule = {
 };
 
 describe('automationDraft', () => {
+    it('restores retained trigger definitions while dropping unknown fields recursively', () => {
+        expect(sanitizeNewSessionAutomationDraft({ enabled: true, triggers: [{ clientId: 'saved', definition: {
+            ...schedule, retired: true, schedule: { ...schedule.schedule, retired: true },
+        } }] }).triggers).toEqual([{ clientId: 'saved', definition: schedule }]);
+    });
     it('keeps zero or multiple strict trigger rows with stable client identities', () => {
         expect(DEFAULT_NEW_SESSION_AUTOMATION_DRAFT.triggers).toEqual([]);
         expect(sanitizeNewSessionAutomationDraft({

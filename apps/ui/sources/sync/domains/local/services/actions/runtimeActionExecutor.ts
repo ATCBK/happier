@@ -309,8 +309,9 @@ function resolveMachineId(input: Readonly<{
 function routeFailureResult(
     kind: LocalServicesRouteKind,
     reason: LocalServicesRouteFailureReason,
+    reasonCode?: string,
 ) {
-    return disabledResult(`local_services_${kind}_${reason}`);
+    return { ...disabledResult(`local_services_${kind}_${reason}`), ...(reasonCode ? { details: { reasonCode } } : {}) };
 }
 
 export function createLocalServicesRuntimeActionExecutor(
@@ -414,7 +415,7 @@ export function createLocalServicesRuntimeActionExecutor(
                 refresh: args.actionId === 'localServices.inventory.refresh',
                 request: input.request,
             });
-            if (!result.ok) return routeFailureResult('inventory', result.reason);
+            if (!result.ok) return routeFailureResult('inventory', result.reason, result.reasonCode);
             onInventorySnapshot({ machineId, serverId, sessionId, snapshot: result.snapshot });
             return result.snapshot;
         }

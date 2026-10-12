@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import {
     normalizePluginUiDestinationBindingV1,
     type PluginUiDestinationBindingInputV1,
@@ -9,6 +10,7 @@ import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugi
 
 import { normalizePluginUiProjection, EMPTY_PLUGIN_UI_PROJECTION } from './projection';
 import { selectPluginSurfacePlacementsForBinding } from './surfacePlacementSelectors';
+import { readPluginUiDaemonProjectionSelection } from './artifactAdoption';
 import {
     arePluginUiProjectionUnionMembersEquivalent,
     readPluginUiContributionOrigin,
@@ -45,8 +47,22 @@ it('reuses the live occurrence for the same declared root without confusing runt
     } } };
     const declared = { ...machineProjection({ generation: 1, entriesById: { [String(entry.id)]: declaredEntry } }), generation: null };
     const runtime = machineProjection({ generation: 7, entriesById: { [String(entry.id)]: runtimeEntry } });
-    expect(mergeInstalledPluginUiProjections([declared], runtime)?.surfacePlacementsById[String(entry.id)])
+    const installed = [declared];
+    const merged = mergeInstalledPluginUiProjections(installed, runtime);
+    expect(merged?.surfacePlacementsById[String(entry.id)])
         .toBe(runtime.surfacePlacementsById[String(entry.id)]);
+    // Observe real serialization rather than replacing the declaration comparator.
+    const serialize = vi.spyOn(JSON, 'stringify');
+    try {
+        const repeated = Array.from({ length: 100 }, () => mergeInstalledPluginUiProjections(installed, runtime));
+        expect(serialize).toHaveBeenCalledTimes(0);
+        expect(repeated.every(value => value === merged)).toBe(true);
+    } finally {
+        serialize.mockRestore();
+    }
+    const replacementRuntime = { ...runtime, generation: 8 };
+    expect(mergeInstalledPluginUiProjections(installed, replacementRuntime)).not.toBe(merged);
+    expect(mergeInstalledPluginUiProjections(installed, null)?.generation).toBeNull();
     const changed = { ...declared, surfacePlacementsById: { ...declared.surfacePlacementsById,
         [String(entry.id)]: { ...declared.surfacePlacementsById[String(entry.id)]!, renderer: { ...declaredEntry.renderer,
             model: { ...declarative, root: { ...declarative.root, text: 'New content' } } } } } };
@@ -80,6 +96,48 @@ it('projects only a real current source occurrence for execution and retains its
     const read = (member: PluginUiProjectionUnionMember) => readPluginUiExecutionOriginCandidates({
         projection: unionPluginUiProjections([member]).pluginUiProjection, pluginId,
     });
+    const retainedProjection = unionPluginUiProjections([source]).pluginUiProjection;
+    const retainedCandidates = readPluginUiExecutionOriginCandidates({ projection: retainedProjection, pluginId });
+    const entries = Object.fromEntries(Array.from({ length: 100 }, (_, index) => {
+        const contribution = placementEntry({ pluginId, localId: `page-${index}`, container: 'appPage' });
+        return [contribution.id, { ...contribution, occurrenceId }];
+    }));
+    const manySource = { ...source, projection: machineProjection({
+        generation: 7, entriesById: entries, installedPackagesById: source.projection!.installedPackagesById,
+    }) };
+    // Forward both schema readers: this observes real admission work, not a mock decision.
+    const originParse = vi.spyOn(PluginMachineExecutionOriginV1Schema, 'safeParse');
+    const custodyParse = vi.spyOn(PluginSourceCustodyV1Schema, 'safeParse');
+    try {
+        const many = unionPluginUiProjections([manySource]).pluginUiProjection;
+        expect(Object.keys(many!.surfacePlacementsById)).toHaveLength(100);
+        expect(readPluginUiExecutionOriginCandidates({ projection: many, pluginId })).toEqual(retainedCandidates);
+        // All declarations share one producer occurrence. Revalidating that
+        // same origin and custody per declaration is fleet-wide repeated work.
+        expect(originParse).toHaveBeenCalledTimes(2);
+        expect(custodyParse).toHaveBeenCalledTimes(1);
+        originParse.mockClear();
+        custodyParse.mockClear();
+        for (let index = 0; index < 100; index++) {
+            expect(readPluginUiExecutionOriginCandidates({ projection: retainedProjection, pluginId })).toEqual(retainedCandidates);
+        }
+        expect(originParse).toHaveBeenCalledTimes(0);
+        expect(custodyParse).toHaveBeenCalledTimes(0);
+    } finally {
+        originParse.mockRestore();
+        custodyParse.mockRestore();
+    }
+    // Unknown/mutable in-memory stamps still pass through the actual parsers on every read.
+    const mutableSupply = { ...readPluginUiContributionSupplies(retainedProjection?.surfacePlacementsById[entry.id])[0]!,
+        sourceCustody: { kind: 'development', registeredRootId: 'original-root' } };
+    const mutableEntry = { hostSupplies: [mutableSupply] };
+    expect(readPluginUiContributionSupplies(mutableEntry)[0]?.sourceCustody)
+        .toEqual({ kind: 'development', registeredRootId: 'original-root' });
+    mutableSupply.sourceCustody.registeredRootId = 'replacement-root';
+    expect(readPluginUiContributionSupplies(mutableEntry)[0]?.sourceCustody)
+        .toEqual({ kind: 'development', registeredRootId: 'replacement-root' });
+    mutableSupply.sourceCustody.kind = 'invalid';
+    expect(readPluginUiContributionSupplies(mutableEntry)[0]?.sourceCustody).toBeNull();
     expect(read(source).sourceCandidates).toEqual([expect.objectContaining({ source: {
         origin: { serverIdentityId: 'srv_test', sourceRef: { machineId: 'machine-a', pluginId, sourceCustody } },
         version: '1.0.0', occurrenceId, serverId: 'server-1', generation: 7,
@@ -119,6 +177,52 @@ function machineProjection(input: Readonly<{
         diagnostics: [],
     } as never);
 }
+
+it('keeps machine-local source candidates selectable across different web artifact supplies', () => {
+    const pluginId = 'acme.local';
+    const entry = placementEntry({ pluginId, localId: 'settings', container: 'appPage' });
+    const rendererId = `hostedWeb:${pluginId}:settings`;
+    const sourceCustody = { kind: 'development' as const, registeredRootId: 'local-root' };
+    const replica = (machineId: string, digest: string): PluginUiProjectionUnionMember => ({
+        machineId, serverId: 'server-1', serverIdentityId: 'srv_test', phase: 'current', interactionEnabled: true,
+        projection: machineProjection({ generation: 7, entriesById: { [entry.id]: entry,
+            [rendererId]: { id: rendererId, pluginId, occurrenceId: entry.occurrenceId, contributionKind: 'hostedWeb',
+                contributionId: 'settings', artifactSelectionOwner: 'daemonProjection', artifactDigest: `sha256:${digest.repeat(64)}` },
+        }, installedPackagesById: {
+            [pluginId]: { id: pluginId, displayName: 'Local', version: '1.0.0', enabled: true, source: { kind: 'localPath' },
+                occurrenceId: entry.occurrenceId, sourceCustody },
+        } }),
+        materializationsByPluginId: { [pluginId]: { serverIdentityId: 'srv_test', machineId, pluginId,
+            materializationId: machineId, version: '1.0.0', sourceClass: 'localPath', portableRelease: false,
+            enabled: true, trustState: 'trusted', observedAt: 1,
+            uiArtifacts: [{ contributionId: 'settings', artifactId: 'web', tier: 'hostedWeb', platform: 'web',
+                artifactDigest: `sha256:${digest.repeat(64)}`, hostUiApiRange: '^1.0.0' }],
+        } },
+    });
+    const members = [replica('machine-b', 'b'), replica('machine-a', 'a')];
+    const unselected = unionPluginUiProjections(members).pluginUiProjection;
+    const candidates = readPluginUiExecutionOriginCandidates({ projection: unselected, pluginId }).sourceCandidates;
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every(candidate => candidate.validation.kind === 'admitted')).toBe(true);
+    const selected = candidates.find(candidate => candidate.source.origin.sourceRef.machineId === 'machine-b')!.source.origin;
+    const project = (input: readonly PluginUiProjectionUnionMember[]) => unionPluginUiProjections(input, selectedOrigins(selected)).pluginUiProjection;
+    const projected = project(members);
+    const placement = projected?.surfacePlacementsById[entry.id];
+    expect(placement).toMatchObject({ hostCompatibility: 'compatible', availability: { state: 'available' } });
+    expect(readPluginUiContributionOrigin(placement)).toMatchObject({ machineId: 'machine-b', executionOrigin: selected });
+    const renderer = projected?.hostedWebById[rendererId] ?? null;
+    expect(renderer?.artifactDigest).toBe(`sha256:${'b'.repeat(64)}`);
+    expect(readPluginUiDaemonProjectionSelection(renderer)).toMatchObject({
+        occurrenceId: entry.occurrenceId, releaseVersion: '1.0.0',
+        transport: { machineId: 'machine-b', serverId: 'server-1' },
+    });
+    expect(project([...members].reverse())).toEqual(projected);
+    const revoked = { ...members[0]!, materializationsByPluginId: { [pluginId]: {
+        ...members[0]!.materializationsByPluginId![pluginId]!, trustState: 'revoked' as const,
+    } } };
+    expect(readPluginUiExecutionOriginCandidates({ projection: project([revoked, members[1]!]), pluginId }).sourceCandidates
+        .find(candidate => candidate.source.origin.sourceRef.machineId === 'machine-b')?.validation.kind).toBe('rejected');
+});
 
 function placementEntry(input: Readonly<{
     pluginId: string;
@@ -220,6 +324,14 @@ function member(input: Readonly<{
         }),
         phase: input.phase ?? (input.interactionEnabled === false ? 'retainedOffline' : 'current'),
         interactionEnabled: input.interactionEnabled ?? true,
+        // Administration eligibility is an input fact of this union fixture;
+        // runtime currentness alone does not grant exact-origin selectability.
+        selectableExecutionOrigins: input.interactionEnabled !== false && (!input.phase || input.phase === 'current')
+            ? [...new Set(Object.values(input.entriesById ?? input.actionsById ?? {}).flatMap(entry => {
+                const pluginId = (entry as Readonly<Record<string, unknown>>).pluginId;
+                return typeof pluginId === 'string' ? [pluginId] : [];
+            }))].map(pluginId => input.producerOriginsByPluginId?.[pluginId] ?? selectedOrigin(pluginId, input.machineId))
+            : [],
         materializationsByPluginId: Object.fromEntries(Object.values(input.entriesById ?? input.actionsById ?? {})
             .flatMap(entry => {
                 const value = entry as Readonly<Record<string, unknown>>;
@@ -288,7 +400,7 @@ describe('unionPluginUiProjections', () => {
                 artifactDigest: `sha256:${'c'.repeat(64)}`, hostUiApiRange: '^2.0.0' }] });
         for (const b of [differingContent, differingAbi]) {
             const placement = unionPluginUiProjections([a, b]).pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.notes:notes'];
-            expect(placement).toMatchObject({ hostCompatibility: 'conflict', availability: { state: 'blocked' } });
+            expect(placement).toMatchObject({ hostCompatibility: 'conflict', availability: { state: 'resolving' } });
             expect(readPluginUiContributionOrigin(placement)).toBeNull();
             expect(readPluginUiProjectionEntryExecutionOrigin(placement)).toBeNull();
         }
@@ -304,6 +416,49 @@ describe('unionPluginUiProjections', () => {
         expect(readPluginUiContributionOrigin(placement)).toMatchObject({ phase: 'retainedOffline', interactionEnabled: false });
     });
 
+    it('does not let retained offline or establishing versions conflict with a current selectable supply', () => {
+        const pluginId = 'acme.notes';
+        const entries = { panel: placementEntry({ pluginId, localId: 'notes', container: 'appPage' }) };
+        const current = member({ machineId: 'machine-z', generation: 2, entriesById: entries });
+        for (const phase of ['retainedOffline', 'establishing'] as const) {
+            const retained = member({ machineId: 'machine-a', generation: 1, entriesById: { ...entries,
+                old: placementEntry({ pluginId, localId: 'old-page', container: 'appPage' }) },
+                phase, interactionEnabled: false, archiveDigest: `sha256:${'b'.repeat(64)}` });
+            const union = unionPluginUiProjections([retained, current]);
+            const placement = union.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.notes:notes'];
+            expect(placement).toMatchObject({ hostCompatibility: 'compatible', availability: { state: 'available' } });
+            expect(placement?.hostSupplies).toHaveLength(2);
+            expect(readPluginUiContributionOrigin(placement)).toBeNull();
+            const selected = unionPluginUiProjections([retained, current], selectedOrigins(selectedOrigin(pluginId, 'machine-z')));
+            expect(readPluginUiContributionOrigin(selected.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.notes:notes']))
+                .toMatchObject({ machineId: 'machine-z', interactionEnabled: true });
+            expect(selected.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.notes:old-page']).toBeUndefined();
+        }
+    });
+
+    it('keeps an unresolved execution choice loading while retaining genuine selectable content conflicts', () => {
+        const entries = { panel: placementEntry({ pluginId: 'acme.notes', localId: 'notes', container: 'appPage' }) };
+        const union = unionPluginUiProjections([
+            member({ machineId: 'machine-a', generation: 1, entriesById: entries }),
+            member({ machineId: 'machine-b', generation: 2, entriesById: entries, archiveDigest: `sha256:${'b'.repeat(64)}` }),
+        ]);
+        const placement = union.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.notes:notes'];
+        expect(placement).toMatchObject({ hostCompatibility: 'conflict', availability: { state: 'resolving' } });
+        expect(readPluginUiContributionOrigin(placement)).toBeNull();
+    });
+
+    it('does not count a current projection whose exact supply Administration rejects as selectable', () => {
+        const pluginId = 'acme.notes';
+        const entries = { panel: placementEntry({ pluginId, localId: 'notes', container: 'appPage' }) };
+        const current = { ...member({ machineId: 'machine-z', generation: 2, entriesById: entries }),
+            selectableExecutionOrigins: [selectedOrigin(pluginId, 'machine-z')] };
+        const rejected = { ...member({ machineId: 'machine-a', generation: 1, entriesById: entries,
+            archiveDigest: `sha256:${'b'.repeat(64)}` }), selectableExecutionOrigins: [] };
+        const union = unionPluginUiProjections([rejected, current]);
+        expect(union.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.notes:notes'])
+            .toMatchObject({ hostCompatibility: 'compatible' });
+    });
+
     it('lists divergent installed versions as a conflict instead of hiding or selecting one', () => {
         const pluginId = 'acme.notes';
         const replica = (machineId: string, version: string) => member({ machineId, generation: 1,
@@ -313,7 +468,7 @@ describe('unionPluginUiProjections', () => {
         });
         const union = unionPluginUiProjections([replica('machine-a', '1.0.0'), replica('machine-b', '2.0.0')], new Map());
         const placement = union.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.notes:notes'];
-        expect(placement).toMatchObject({ hostCompatibility: 'conflict', availability: { state: 'blocked' } });
+        expect(placement).toMatchObject({ hostCompatibility: 'conflict', availability: { state: 'resolving' } });
         expect(placement?.hostSupplies).toHaveLength(2);
         expect(readPluginUiContributionOrigin(placement)).toBeNull();
     });
@@ -466,7 +621,8 @@ describe('unionPluginUiProjections', () => {
         })], selectedOrigins(selected));
 
         expect(union.pluginUiProjection?.resourcesById['acme.inspector/report']).toMatchObject(resource);
-        expect(readPluginUiContributionOrigin(union.pluginUiProjection?.resourcesById['acme.inspector/report'])).toBeNull();
+        expect(readPluginUiContributionOrigin(union.pluginUiProjection?.resourcesById['acme.inspector/report']))
+            .toMatchObject({ machineId: 'machine-a', executionOrigin: selected });
         expect(Object.isFrozen(union.pluginUiProjection?.resourcesById)).toBe(true);
         expect(union.pluginUiProjection?.surfacePlacementsById).not.toEqual({});
         const unavailableChoice = unionPluginUiProjections([source], selectedOrigins(selectedOrigin('acme.inspector', 'machine-b')));
@@ -482,18 +638,27 @@ describe('unionPluginUiProjections', () => {
             .toMatchObject({ machineId: 'machine-a', executionOrigin: null });
     });
 
-    it('does not appoint a package brand or serving occurrence when installations conflict', () => {
+    it('uses the exact selected installation despite another installation having different content', () => {
         const pluginId = 'acme.inspector';
         const entries = { placement: placementEntry({ pluginId, localId: 'panel' }) };
-        const union = unionPluginUiProjections(['machine-a', 'machine-b'].map((machineId, index) => member({
+        const replicas = ['machine-a', 'machine-b'].map((machineId, index) => member({
             machineId, generation: 3, entriesById: entries,
             installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Inspector', version: String(index),
                 enabled: true, source: { kind: 'bundled', locator: pluginId }, occurrenceId: machineId } },
-        })), selectedOrigins(selectedOrigin(pluginId, 'machine-a')));
-        expect(union.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.inspector:panel'])
-            .toMatchObject({ hostCompatibility: 'conflict' });
-        expect(union.pluginUiProjection?.installedPackagesById[pluginId]?.occurrenceId).toBeUndefined();
-        expect(union.pluginUiProjection?.installedPackagesById[pluginId]?.enabled).toBe(false);
+        }));
+        const union = unionPluginUiProjections(replicas, selectedOrigins(selectedOrigin(pluginId, 'machine-a')));
+        const placement = union.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.inspector:panel'];
+        expect(placement).toMatchObject({ hostCompatibility: 'compatible', availability: { state: 'available' } });
+        expect(readPluginUiContributionOrigin(placement)).toMatchObject({ machineId: 'machine-a' });
+        expect(union.pluginUiProjection?.installedPackagesById[pluginId]?.occurrenceId).toBe('machine-a');
+        expect(union.pluginUiProjection?.installedPackagesById[pluginId]?.enabled).toBe(true);
+        const origin = selectedOrigin(pluginId, 'machine-a');
+        const replaced = unionPluginUiProjections(replicas, selectedOrigins({ ...origin,
+            materializationRef: { ...origin.materializationRef, materializationId: 'replaced' },
+        })).pluginUiProjection;
+        expect(replaced?.surfacePlacementsById['surfacePlacement:acme.inspector:panel'])
+            .toMatchObject({ hostCompatibility: 'conflict', availability: { state: 'resolving' } });
+        expect(readPluginUiContributionOrigin(replaced?.surfacePlacementsById['surfacePlacement:acme.inspector:panel'])).toBeNull();
     });
 
     it('keeps nonidentical replicated declarations as a visible conflict before selection', () => {
@@ -517,7 +682,7 @@ describe('unionPluginUiProjections', () => {
         ], new Map());
 
         expect(union.pluginUiProjection?.surfacePlacementsById['surfacePlacement:acme.inspector:panel'])
-            .toMatchObject({ hostCompatibility: 'conflict', availability: { state: 'blocked' } });
+            .toMatchObject({ hostCompatibility: 'conflict', availability: { state: 'resolving' } });
     });
 
     it('retains a same-machine declaration without binding a replaced materialization', () => {
@@ -617,7 +782,7 @@ describe('unionPluginUiProjections', () => {
         expect(union.machineId).toBeNull();
     });
 
-    it('retains differing replica entries as conflict without choosing the selected producer', () => {
+    it('projects the selected producer as a whole instead of mixing in another replica\'s entries', () => {
         const replicaEntries = {
             placement: placementEntry({ pluginId: 'acme.inspector', localId: 'panel' }),
             reactNativeBundle: reactNativeBundleEntry('acme.inspector'),
@@ -640,9 +805,9 @@ describe('unionPluginUiProjections', () => {
                 targetKind: 'app',
             })
             : [];
-        expect(placements).toHaveLength(2);
-        expect(placements.every(placement => placement.hostCompatibility === 'conflict')).toBe(true);
-        expect(placements.every(placement => readPluginUiContributionOrigin(placement) === null)).toBe(true);
+        expect(placements).toHaveLength(1);
+        expect(placements[0]?.hostCompatibility).toBe('compatible');
+        expect(readPluginUiContributionOrigin(placements[0])).toMatchObject({ machineId: 'machine-a', generation: 2 });
 
     });
 
@@ -746,8 +911,8 @@ describe('unionPluginUiProjections', () => {
             })
             : [];
         expect(placements.map((entry) => entry.id)).toEqual(['surfacePlacement:acme.inspector:panel']);
-        expect(placements[0]?.hostCompatibility).toBe('conflict');
-        expect(readPluginUiContributionOrigin(placements[0])).toBeNull();
+        expect(placements[0]?.hostCompatibility).toBe('compatible');
+        expect(readPluginUiContributionOrigin(placements[0])).toMatchObject({ machineId: 'machine-b', generation: 9 });
 
     });
 
@@ -974,8 +1139,13 @@ describe('unionPluginUiProjections', () => {
     });
 
     it('treats an authority flip as a member change and an unchanged snapshot as none', () => {
-        const alpha = member({ machineId: 'machine-a', generation: 3 });
+        const alpha = member({ machineId: 'machine-a', generation: 3,
+            entriesById: { panel: placementEntry({ pluginId: 'acme.alpha', localId: 'panel' }) } });
         expect(arePluginUiProjectionUnionMembersEquivalent([alpha], [{ ...alpha }])).toBe(true);
+        expect(arePluginUiProjectionUnionMembersEquivalent([alpha], [{ ...alpha,
+            selectableExecutionOrigins: [selectedOrigin('acme.alpha', 'machine-a')] }])).toBe(true);
+        expect(arePluginUiProjectionUnionMembersEquivalent([alpha], [{ ...alpha,
+            selectableExecutionOrigins: [] }])).toBe(false);
         expect(arePluginUiProjectionUnionMembersEquivalent([alpha], [{ ...alpha, interactionEnabled: false }])).toBe(false);
         expect(arePluginUiProjectionUnionMembersEquivalent(
             [alpha],

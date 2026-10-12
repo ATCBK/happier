@@ -1,5 +1,5 @@
 import { t } from '@/text';
-import { resolveUsageCalendarDateStart, resolveUsageBucketBounds } from '@happier-dev/protocol';
+import { resolveUsageCalendarDateStart, resolveUsageBucketBounds } from '@happier-dev/protocol/usage/usageCalendar';
 import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import type {
     UsageAnalyticsSummaryViewModel,
@@ -12,8 +12,9 @@ import { getUsagePeriodDefinition } from '@/sync/api/account/usagePeriods';
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
 
 import { buildUsageCurrentStreakSubtitle } from './buildUsageCurrentStreakSubtitle';
-import { resolveUsageCostModeLabel } from '../resolveUsageCostModeLabel';
+import { usageCostKindPhrase } from '../resolveUsageCostModeLabel';
 import { formatUsageCalendarPeriod } from '../usageCalendarPresentation';
+import { usageAgentTitle, usageDimensionLabel } from '../usageLabels';
 
 export type UsageRecapCardId = 'streak' | 'usage' | 'model' | 'rhythm';
 export type UsageRecapCardValueTone = 'numeric' | 'compact';
@@ -64,28 +65,32 @@ function isKnownUsageLabel(label: string | null | undefined): label is string {
 }
 
 function formatPeriodUsageValue(viewModel: UsageAnalyticsViewModel, filters: UsageFilterState): string {
-    const currency = viewModel.costPresentation.currency || 'USD';
-
     if (filters.metric === 'cost') {
-        return formatUsageCost(viewModel.overview.totalCost, currency);
+        return formatUsageRecapCost(viewModel);
     }
 
     return formatTokenCount(viewModel.overview.totalTokens);
 }
 
-function buildPeriodUsageSubtitle(viewModel: UsageAnalyticsViewModel, filters: UsageFilterState): string {
-    const currency = viewModel.costPresentation.currency || 'USD';
+function formatUsageRecapCost(viewModel: UsageAnalyticsViewModel): string {
+    if (viewModel.pageCost) {
+        return viewModel.pageCost.amountUsd === null || !viewModel.pageCost.selection
+            ? t('common.unavailable')
+            : formatUsageCost(viewModel.pageCost.amountUsd, viewModel.pageCost.selection.currency);
+    }
+    // Legacy report views retain their witnessed presentation; 'none' is never a priced zero.
+    return viewModel.costPresentation.source === 'none' ? t('common.unavailable')
+        : formatUsageCost(viewModel.costPresentation.effectiveUsd, viewModel.costPresentation.currency);
+}
 
+function buildPeriodUsageSubtitle(viewModel: UsageAnalyticsViewModel, filters: UsageFilterState): string {
     if (filters.metric === 'cost') {
         return `${formatTokenCount(viewModel.overview.totalTokens)} ${t('usage.tokens')}`;
     }
 
-    const costModeLabel = resolveUsageCostModeLabel({
-        availableCostModes: viewModel.availableCostModes,
-        mode: viewModel.costPresentation.mode,
-    });
-
-    return `${formatUsageCost(viewModel.overview.totalCost, currency)} · ${costModeLabel}`;
+    const amount = formatUsageRecapCost(viewModel);
+    if (viewModel.pageCost ? viewModel.pageCost.amountUsd === null : viewModel.costPresentation.source === 'none') return amount;
+    return `${amount} · ${usageCostKindPhrase(viewModel.pageCost?.selection?.kind ?? viewModel.costPresentation.source)}`;
 }
 
 function buildRecentActivity(viewModel: UsageAnalyticsViewModel, timeZoneOffsetMinutes: number): UsageSummaryActivityPoint[] {
@@ -134,15 +139,17 @@ function buildSummaryViewModel(viewModel: UsageAnalyticsViewModel, timeZoneOffse
 
 function resolveTopEngineLabel(viewModel: UsageAnalyticsViewModel, summary: UsageAnalyticsSummaryViewModel): string {
     if (isKnownUsageLabel(viewModel.leaders.engines[0]?.label)) {
-        return viewModel.leaders.engines[0].label;
+        const engine = viewModel.leaders.engines[0];
+        return usageDimensionLabel('backendMode', engine.key, engine.label);
     }
     if (isKnownUsageLabel(summary.topEngine?.label)) {
-        return summary.topEngine.label;
+        return usageDimensionLabel('backendMode', summary.topEngine.key, summary.topEngine.label);
     }
     if (isKnownUsageLabel(viewModel.leaders.agents[0]?.label)) {
-        return viewModel.leaders.agents[0].label;
+        const agent = viewModel.leaders.agents[0];
+        return usageAgentTitle(agent.key, agent.label);
     }
-    return t('usage.noData.title');
+    return t('common.unavailable');
 }
 
 export function buildUsageRecapCardModels(input: Readonly<{
@@ -162,10 +169,11 @@ export function buildUsageRecapCardModels(input: Readonly<{
         return [];
     }
 
-    const topModel = summary.topModel;
+    const topModel = viewModel.leaders.models[0] ?? viewModel.insights.favoriteModel ?? summary.topModel;
+    const modelBreakdown = viewModel.breakdowns.models.find(row => row.key === topModel?.key);
     const topEngineLabel = resolveTopEngineLabel(viewModel, summary);
-    const modelShare = topModel && viewModel.overview.totalTokens > 0
-        ? topModel.totalTokens / viewModel.overview.totalTokens
+    const modelShare = modelBreakdown && viewModel.overview.totalTokens > 0
+        ? modelBreakdown.totalTokens / viewModel.overview.totalTokens
         : 0;
     const selectedPeriod = input.query ? formatUsageCalendarPeriod({ ...input.query.period, timeZoneOffsetMinutes: offset }) : resolvePeriodLabel(filters.period);
     const rangeDayCount = input.query
@@ -220,10 +228,10 @@ export function buildUsageRecapCardModels(input: Readonly<{
             testID: 'usage-recap-model-card',
             shareTestID: 'usage-recap-share-model',
             label: t('usage.summary.topModel'),
-            value: input.shareFields?.names === false ? '—' : topModel?.label ?? '—',
+            value: input.shareFields?.names === false ? '—' : topModel ? usageDimensionLabel('model', topModel.key, topModel.label) : t('usage.board.page.unattributed'),
             subtitle: topModel
                 ? `${formatTokenCount(viewModel.insights.favoriteModelChangeCount)} ${t('usage.favoriteModelChanges')}${input.shareFields?.names === false ? '' : ` · ${topEngineLabel}`}`
-                : t('usage.noData.title'),
+                : t('common.unavailable'),
             valueTone: 'compact',
             accentTone: 'purple',
             visual: {
@@ -237,7 +245,7 @@ export function buildUsageRecapCardModels(input: Readonly<{
             shareTestID: 'usage-recap-share-rhythm',
             label: t('usage.busiestWindow'),
             value: summary.busiestWindowLabel ?? '—',
-            subtitle: viewModel.insights.busiestHour?.label ?? t('usage.noData.title'),
+            subtitle: rhythmRows[0] ? `${formatTokenCount(rhythmRows[0].value)} ${t('usage.events')}` : t('common.unavailable'),
             valueTone: 'compact',
             accentTone: 'green',
             visual: {

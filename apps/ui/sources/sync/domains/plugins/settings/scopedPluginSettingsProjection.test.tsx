@@ -12,6 +12,7 @@ import type {
     ScopedPluginSettingsReadResult,
     ScopedPluginSettingsWriteResult,
 } from './scopedPluginSettingsAdapter';
+import { createAccountScopedPluginSettingsTransport, createScopedPluginSettingsAdapter } from './scopedPluginSettingsAdapter';
 import {
     commitScopedPluginSettingsField,
     type ScopedPluginSettingsProjection,
@@ -579,6 +580,45 @@ describe('useScopedPluginSettingsProjection', () => {
             values: { endpoint: 'https://changed.example.test' },
             revision: { kind: 'daemon', value: '1' },
         });
+    });
+
+    it('refuses the captured declaration source before Account CAS when the same record is replaced during its read', async () => {
+        const target = { kind: 'account' as const, serverIdentityId: 'srv_projection_source' };
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        let reads = 0;
+        let writes = 0;
+        let values: Readonly<Record<string, unknown>> = { endpoint: 'https://before.example' };
+        const transport = createAccountScopedPluginSettingsTransport({
+            async readRecord() {
+                reads += 1;
+                if (reads === 2) { entered.resolve(); await release.promise; }
+                return { status: 'present', revision: 1, values };
+            },
+            async writeRecord(input) { writes += 1; values = input.values; return { status: 'updated', revision: 2 }; },
+        });
+        const adapter = createScopedPluginSettingsAdapter({ accountRead: transport.read, accountWrite: transport.write,
+            daemonGet: async () => { throw new Error('Wrong scope'); }, daemonSet: async () => { throw new Error('Wrong scope'); } });
+        let projection: ScopedPluginSettingsProjection | null = projectionSlot();
+        function AccountSource(props: Readonly<{ source: string }>) {
+            projection = useScopedPluginSettingsProjection({ pluginId: 'acme.settings', scope: { kind: 'account' }, target,
+                accountLifetime: CURRENT_TEST_ACCOUNT_LIFETIME, fields: GENERIC_FIELDS, declaredFields: DECLARED_GENERIC_FIELDS,
+                sourceLifetimeIdentity: props.source, perActiveServerIdentityId: null, enabled: true, adapter });
+            return null;
+        }
+        const screen = await renderScreen(<AccountSource source="source-a" />);
+        await flush();
+        let pending!: Promise<ScopedPluginSettingsWriteResult | null>;
+        act(() => { pending = projection!.commit({ fieldId: 'endpoint', mutation: { kind: 'set', value: 'https://old-intent.example' } }); });
+        await entered.promise;
+        await act(async () => { screen.tree.update(<AccountSource source="source-b" />); });
+        await flush();
+        await act(async () => { release.resolve(); await pending; });
+        expect(writes).toBe(0);
+        expect(values).toEqual({ endpoint: 'https://before.example' });
+        await act(async () => { await projection!.commit({ fieldId: 'endpoint', mutation: { kind: 'set', value: 'https://new-intent.example' } }); });
+        expect(writes).toBe(1);
+        expect(values).toEqual({ endpoint: 'https://new-intent.example' });
     });
 
     it('keeps an ordinary draft visible but inert after its declaration source is replaced', async () => {

@@ -1,8 +1,9 @@
 import type { AgentType } from '@/sync/domains/models/modelOptions';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
-import { buildAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
+import { readAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
 import { hasDynamicModelListForSession, getSelectableModelIdsForSession, supportsFreeformModelSelectionForSession } from '@/sync/domains/models/modelOptions';
 import { readSessionModelsState, readSessionModesState } from '@/sync/domains/sessionControl/readSessionControlMetadata';
 import {
@@ -11,6 +12,7 @@ import {
 } from '@happier-dev/protocol/providers/model-selection';
 
 export type ModelApplyScope = 'live' | 'next_prompt' | 'spawn_only';
+const StoredSessionAppliedModelV1Schema = createStoredReadSchema(SessionAppliedModelV1Schema);
 
 export type EffectiveModelModeDescription = Readonly<{
     /** Requested model. This owns picker selection and model-specific controls. */
@@ -32,7 +34,7 @@ export function readAppliedModelSelection(params: Readonly<{
     agentTargetKey: string;
     metadata: Metadata | null | undefined;
 }>): ProviderBoundModelRef | null {
-    const parsed = SessionAppliedModelV1Schema.safeParse(params.metadata?.sessionAppliedModelV1);
+    const parsed = StoredSessionAppliedModelV1Schema.safeParse(params.metadata?.sessionAppliedModelV1);
     if (!parsed.success || parsed.data.provider !== params.agentId) return null;
     const structured = parsed.data.selection;
     if (structured) {
@@ -61,9 +63,10 @@ export function describeEffectiveModelMode(params: {
     const hasExplicitSelection = selectedModelId.length > 0;
     const defaultModelId = normalizeModelId(core?.model?.defaultMode) || 'default';
     const effectiveModelId = hasExplicitSelection ? selectedModelId : defaultModelId;
-    const appliedModelId = readAppliedModelSelection({
+    const agentTargetKey = readAgentUniverseBackendTargetKey(agentId);
+    const appliedModelId = agentTargetKey === null ? null : readAppliedModelSelection({
         agentId,
-        agentTargetKey: buildAgentUniverseBackendTargetKey(agentId),
+        agentTargetKey,
         metadata: params.metadata,
     })?.modelId ?? null;
 

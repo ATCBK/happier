@@ -1,3 +1,4 @@
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import * as React from 'react';
 import { featureRequiresServerSnapshot, type FeatureId } from '@happier-dev/protocol/features/catalog';
 import type { SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
@@ -736,7 +737,7 @@ export function useSessionListQuerySourceState(input: SessionListQueryInput): Se
                 inactiveGroupingV1,
                 sectionModeV1,
                 serverId: home.serverId,
-                serverName: getServerProfileById(home.serverId)?.name ?? null,
+                serverName: resolveHomeDisplayLabel(getServerProfileById(home.serverId), home.serverId),
                 previousIndex: Array.isArray(previousIndex) ? previousIndex : null,
             });
         }

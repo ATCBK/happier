@@ -152,4 +152,56 @@ describe('resolveSessionComposerSendDestination', () => {
             resolveSessionComposerSendDestination(armed),
         ).toMatchObject({ localId: 'armed-local-1' });
     });
+
+    describe('an armed route or model change for the same Agent (D15)', () => {
+        const ROUTE_IDLE = { turnActive: false } as const;
+
+        it('applies the armed route on the next send, then sends to the same Agent', () => {
+            // Same Agent, so no transition and nothing carried over as text: the
+            // Session resumes on the new route and this message is its first input.
+            expect(resolveSessionComposerSendDestination({
+                route: 'sessionAgent',
+                armedContinuation: null,
+                armedContinuationLocalId: null,
+                armedRoute: ROUTE_IDLE,
+                machineId: 'machine-1',
+                pendingTransitionOutcome: 'settled',
+            })).toEqual({ kind: 'armedRouteContinuation', machineId: 'machine-1' });
+        });
+
+        it('lets an armed Agent switch win, because it carries its own model selection', () => {
+            expect(resolveSessionComposerSendDestination({
+                route: 'sessionAgent',
+                armedContinuation: ARMED,
+                armedRoute: ROUTE_IDLE,
+                ...REACHABLE,
+            }).kind).toBe('armedAgentContinuation');
+        });
+
+        it('refuses while the Agent is mid-turn, since applying the route restarts it', () => {
+            expect(resolveSessionComposerSendDestination({
+                route: 'sessionAgent',
+                armedContinuation: null,
+                armedContinuationLocalId: null,
+                armedRoute: { turnActive: true },
+                machineId: 'machine-1',
+                pendingTransitionOutcome: 'settled',
+            })).toEqual({ kind: 'refused', reason: 'sourceNotIdle' });
+        });
+
+        it('refuses a send addressed elsewhere or with no machine to restart on', () => {
+            const base = {
+                armedContinuation: null,
+                armedContinuationLocalId: null,
+                armedRoute: ROUTE_IDLE,
+                pendingTransitionOutcome: 'settled',
+            } as const;
+            expect(resolveSessionComposerSendDestination({ ...base, route: 'voiceAdapter', machineId: 'machine-1' }))
+                .toEqual({ kind: 'refused', reason: 'conflictingDestination' });
+            expect(resolveSessionComposerSendDestination({ ...base, route: 'executionRun', machineId: 'machine-1' }))
+                .toEqual({ kind: 'refused', reason: 'conflictingDestination' });
+            expect(resolveSessionComposerSendDestination({ ...base, route: 'sessionAgent', machineId: null }))
+                .toEqual({ kind: 'refused', reason: 'armedTargetUnreachable' });
+        });
+    });
 });

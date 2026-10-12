@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { SessionTriggerAddRequestV1Schema, SessionTriggerListRequestV1Schema, SessionTriggerListResultV1Schema, SessionTriggerRemoveRequestV1Schema, SessionTriggerUpdateRequestV1Schema, WorkflowTriggerAddRequestV1Schema, WorkflowTriggerListRequestV1Schema, WorkflowTriggerListResultV1Schema, WorkflowTriggerRemoveRequestV1Schema, WorkflowTriggerUpdateRequestV1Schema, WorkflowTriggerWriteResultV1Schema, type WorkflowTriggerSetV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
+import { SessionTriggerAddRequestV1Schema, SessionTriggerListRequestV1Schema, SessionTriggerListResultV1Schema, SessionTriggerRemoveRequestV1Schema, SessionTriggerUpdateRequestV1Schema, WorkflowTriggerAddRequestV1Schema, WorkflowTriggerListRequestV1Schema, WorkflowTriggerListResultV1Schema, WorkflowTriggerRemoveRequestV1Schema, WorkflowTriggerRemoveResultV1Schema, WorkflowTriggerUpdateRequestV1Schema, WorkflowTriggerWriteResultV1Schema, type WorkflowTriggerSetV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 
@@ -32,7 +32,7 @@ type CallOptions = Readonly<{
     accountLifetime?: ServerAccountScopeLifetime | null;
     execute?: WorkflowActionExecute;
     /** Host-owned target facts, used only when the Action needs native host observations. */
-    context?: Omit<ActionExecutorContext, 'surface' | 'signal'>;
+    context?: Omit<ActionExecutorContext, 'signal'>;
 }>;
 
 async function callTriggerAction<TResult>(
@@ -73,6 +73,9 @@ async function callTriggerAction<TResult>(
             typeof result === 'object' && result !== null && 'sets' in result ? result.sets : undefined,
         );
         getStorage().getState().applyWorkflowTriggerSetPage({ queryKey, sets: page });
+    } else if (actionId === 'workflow.trigger.remove' && typeof result === 'object' && result !== null && 'deleted' in result) {
+        const removed = WorkflowTriggerRemoveResultV1Schema.parse(result);
+        if ('deleted' in removed) getStorage().getState().removeAutomation(removed.automationId, removed.removedRevision);
     } else {
         const written = WorkflowTriggerWriteResultV1Schema.parse(result).set;
         // A missing-source result has no readable target. Keep its known
@@ -157,11 +160,11 @@ export async function updateWorkflowTrigger(request: z.input<typeof WorkflowTrig
     );
 }
 
-export async function removeWorkflowTrigger(request: z.input<typeof WorkflowTriggerRemoveRequestV1Schema>, options: CallOptions = {}): Promise<WorkflowTriggerWriteResult> {
+export async function removeWorkflowTrigger(request: z.input<typeof WorkflowTriggerRemoveRequestV1Schema>, options: CallOptions = {}): Promise<z.output<typeof WorkflowTriggerRemoveResultV1Schema>> {
     return callTriggerAction(
         'workflow.trigger.remove',
         WorkflowTriggerRemoveRequestV1Schema.parse(request),
-        (value) => WorkflowTriggerWriteResultV1Schema.parse(value),
+        (value) => WorkflowTriggerRemoveResultV1Schema.parse(value),
         options,
     );
 }

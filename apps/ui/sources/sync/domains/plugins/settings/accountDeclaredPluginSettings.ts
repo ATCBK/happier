@@ -1,5 +1,5 @@
 import { projectPluginSettingsContributionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import type { PluginPortableReleaseManifestV1 } from '@happier-dev/protocol/plugins/availability';
+import type { PluginSettingsContributionV2 } from '@happier-dev/protocol/plugins/contributions/publicTypes';
 import { qualifyPluginContributionReferenceV1, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import {
@@ -29,7 +29,7 @@ export function projectAccountDeclaredPluginSettingsGroups(params: Readonly<{
     pluginId: string;
     declaration: Readonly<{
         id: string;
-        contributes: Pick<PluginPortableReleaseManifestV1['contributes'], 'settings'>;
+        contributes: Readonly<{ settings?: readonly PluginSettingsContributionV2[] }>;
     }> | null | undefined;
     targetAgent?: PluginContributionIdentityV1;
 }>): readonly PluginProjectionEditableSettingsGroup[] {

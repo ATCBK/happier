@@ -23,7 +23,7 @@ function readRuntimeLocalMachineId(metadata: RuntimeLocalMetadataShape): unknown
         return metadata.machineId;
     }
 
-    const linkedSessionResolution = resolveLinkedExternalSessionMetadataV1(metadata);
+    const linkedSessionResolution = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
     return linkedSessionResolution.ok
         ? linkedSessionResolution.linkedSession.machineId
         : undefined;

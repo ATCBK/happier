@@ -1,97 +1,11 @@
 import { z } from 'zod';
 import { ProviderConnectionDisplaySnapshotV1Schema, type ProviderConnectionDisplaySnapshotV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
-import { ProviderBoundModelRefSchema, SessionModelSelectionV1Schema, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
+import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
+import { FavoriteModelSelectionV1Schema } from '@happier-dev/protocol/providers/modelFavoritesV1';
 
 import type { ModelOption, PreflightModelList } from '@/sync/domains/models/modelOptions';
 
-const CanonicalFavoriteModelSelectionV1Schema = z.object({
-    selection: SessionModelSelectionV1Schema,
-    catalogAgentId: z.string().optional(),
-    builtInAgentId: z.string().nullable().optional(),
-    configuredBackendId: z.string().nullable().optional(),
-    backendLabel: z.string().optional(),
-    modelLabel: z.string().optional(),
-    providerDisplaySnapshot: ProviderConnectionDisplaySnapshotV1Schema.optional(),
-    addedAtMs: z.number().int().nonnegative().optional(),
-}).strict().superRefine((value, context) => {
-    const ref = value.selection.ref;
-    if (ref.providerConnectionId === null && ref.modelId.trim() === 'default') {
-        context.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['selection', 'ref', 'modelId'],
-            message: 'Agent default is represented by the absence of a favorite selection',
-        });
-    }
-});
-
-const LegacyFavoriteModelSelectionV1Keys = new Set([
-    'backendTargetKey',
-    'modelId',
-    'catalogAgentId',
-    'providerAgentId',
-    'builtInAgentId',
-    'configuredBackendId',
-    'backendLabel',
-    'modelLabel',
-    'providerDisplaySnapshot',
-    'addedAtMs',
-]);
-
-function hasOnlyLegacyFavoriteModelSelectionKeys(record: Readonly<Record<string, unknown>>): boolean {
-    return Object.keys(record).every((key) => LegacyFavoriteModelSelectionV1Keys.has(key));
-}
-
-function copyLegacyFavoritePresentation(
-    record: Readonly<Record<string, unknown>>,
-): Record<string, unknown> | null {
-    if (!hasOnlyLegacyFavoriteModelSelectionKeys(record)) return null;
-
-    const catalogAgentId = record.catalogAgentId;
-    const providerAgentId = record.providerAgentId;
-    if (catalogAgentId !== undefined && providerAgentId !== undefined && catalogAgentId !== providerAgentId) {
-        return null;
-    }
-
-    return {
-        ...(catalogAgentId !== undefined || providerAgentId !== undefined
-            ? { catalogAgentId: catalogAgentId ?? providerAgentId }
-            : {}),
-        ...(record.builtInAgentId !== undefined ? { builtInAgentId: record.builtInAgentId } : {}),
-        ...(record.configuredBackendId !== undefined ? { configuredBackendId: record.configuredBackendId } : {}),
-        ...(record.backendLabel !== undefined ? { backendLabel: record.backendLabel } : {}),
-        ...(record.modelLabel !== undefined ? { modelLabel: record.modelLabel } : {}),
-        ...(record.providerDisplaySnapshot !== undefined
-            ? { providerDisplaySnapshot: record.providerDisplaySnapshot }
-            : {}),
-        ...(record.addedAtMs !== undefined ? { addedAtMs: record.addedAtMs } : {}),
-    };
-}
-
-export const FavoriteModelSelectionV1Schema = z.preprocess((value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
-    const record = value as Record<string, unknown>;
-    if (record.selection !== undefined) return value;
-    const backendTargetKey = record.backendTargetKey;
-    const modelId = record.modelId;
-    if (typeof backendTargetKey !== 'string' || typeof modelId !== 'string') return value;
-    const presentation = copyLegacyFavoritePresentation(record);
-    if (!presentation) return value;
-    const addedAtMs = typeof record.addedAtMs === 'number' && Number.isFinite(record.addedAtMs)
-        ? Math.max(0, Math.trunc(record.addedAtMs))
-        : 0;
-    return {
-        ...presentation,
-        selection: {
-            v: 1,
-            updatedAt: addedAtMs,
-            ref: {
-                agentTargetKey: backendTargetKey,
-                providerConnectionId: null,
-                modelId,
-            },
-        },
-    };
-}, CanonicalFavoriteModelSelectionV1Schema);
+export { FavoriteModelSelectionV1Schema, StoredFavoriteModelSelectionV1Schema } from '@happier-dev/protocol/providers/modelFavoritesV1';
 
 export type FavoriteModelSelectionV1 = z.infer<typeof FavoriteModelSelectionV1Schema>;
 export type FavoriteProviderDisplaySnapshot = ProviderConnectionDisplaySnapshotV1;

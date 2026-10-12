@@ -1,16 +1,18 @@
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { MachineAdministrationTargetV1Schema } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 
-import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
+import { resolveFleetMachineAvailability } from './fleetUnion';
 import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
-import { readMachineName } from '@/utils/sessions/machineDisplayNames';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import type {
     ServerMachineInventorySnapshotV1,
 } from '@/sync/domains/machines/machineInventorySnapshots';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 
 import type { MachineAdministrationCandidateV1 } from './targetSelection';
+import { createServerAccountScope, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 /**
  * One Administration candidate together with the device-local routing row
@@ -61,22 +63,20 @@ export function buildMachineAdministrationCandidateInventoryRowsFromSnapshots(pa
     const rows: MachineAdministrationCandidateInventoryRowV1<MachineDisplayRenderable>[] = [];
     for (const snapshot of params.snapshots) {
         if (snapshot.kind !== 'resolved') continue;
+        const displayNames = resolveMachineDisplayNames(snapshot.machines);
         for (const machine of snapshot.machines) {
             const parsedTarget = MachineAdministrationTargetV1Schema.safeParse({
                 serverIdentityId: snapshot.serverIdentityId,
                 machineId: machine.id,
             });
             if (!parsedTarget.success) continue;
-            const presence = resolveMachinePickerPresence(machine, params.nowMs, snapshot.profileId);
-            const availability = machine.availability?.kind === 'locked'
-                ? 'locked' as const
-                : presence.status;
+            const availability = resolveFleetMachineAvailability(createServerAccountScope(snapshot.serverIdentityId, snapshot.accountId), machine, params.nowMs);
             const replacementTarget = availability === 'replaced'
                 ? buildReplacementTarget(snapshot.serverIdentityId, machine)
                 : undefined;
             const candidate: MachineAdministrationCandidateV1 = Object.freeze({
                 target: Object.freeze(parsedTarget.data),
-                displayName: readMachineName(machine) ?? machine.id,
+                displayName: displayNames.get(machine.id)!,
                 serverLabel: snapshot.serverName,
                 availability,
                 observation: snapshot.observation,
@@ -108,6 +108,7 @@ export function buildMachineAdministrationCandidateInventoryRows(params: Readonl
     activeMachineRecords: readonly Machine[];
     machineRecordListsByServerId: Readonly<Record<string, readonly Machine[] | null | undefined>>;
     machineListStatusByServerId?: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
+    accountScopesByServerId?: ReadonlyMap<string, ServerAccountScope>;
     nowMs?: number;
 }>): readonly MachineAdministrationCandidateInventoryRowV1<Machine>[] {
     const rowsByTarget = new Map<string, MachineAdministrationCandidateInventoryRowV1<Machine>>();
@@ -140,22 +141,20 @@ export function buildMachineAdministrationCandidateInventoryRows(params: Readonl
             machineListStatusByServerId: params.machineListStatusByServerId,
         }) ?? [];
 
+        const displayNames = resolveMachineDisplayNames(machines);
         for (const machine of machines) {
             const target = MachineAdministrationTargetV1Schema.parse({
                 serverIdentityId,
                 machineId: machine.id,
             });
-            const presence = resolveMachinePickerPresence(machine, params.nowMs, profile.id);
-            const availability = machine.availability?.kind === 'locked'
-                ? 'locked' as const
-                : presence.status;
+            const availability = resolveFleetMachineAvailability(params.accountScopesByServerId?.get(serverIdentityId), machine, params.nowMs);
             const replacementTarget = availability === 'replaced'
                 ? buildReplacementTarget(serverIdentityId, machine)
                 : undefined;
             const candidate: MachineAdministrationCandidateV1 = Object.freeze({
                 target: Object.freeze(target),
-                displayName: readMachineName(machine) ?? machine.id,
-                serverLabel: profile.name || profile.serverUrl || profile.id,
+                displayName: displayNames.get(machine.id)!,
+                serverLabel: resolveHomeDisplayLabel(profile, profile.id),
                 availability,
                 observation: 'live',
                 observedAt: Number.isFinite(machine.updatedAt) ? machine.updatedAt : null,
@@ -182,6 +181,7 @@ export function buildMachineAdministrationCandidates(params: Readonly<{
     activeMachineRecords: readonly Machine[];
     machineRecordListsByServerId: Readonly<Record<string, readonly Machine[] | null | undefined>>;
     machineListStatusByServerId?: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
+    accountScopesByServerId?: ReadonlyMap<string, ServerAccountScope>;
     nowMs?: number;
 }>): readonly MachineAdministrationCandidateV1[] {
     return Object.freeze(buildMachineAdministrationCandidateInventoryRows(params).map((row) => row.candidate));

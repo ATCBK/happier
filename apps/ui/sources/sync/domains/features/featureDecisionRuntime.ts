@@ -43,6 +43,7 @@ export function useServerFeaturesRuntimeSnapshot(options?: Readonly<{ enabled?: 
         }
 
         let cancelled = false;
+        const observer = new AbortController();
         let requestToken = 0;
         let requestGeneration = 0;
         let lastRequestedServerId = '\u0000';
@@ -53,6 +54,7 @@ export function useServerFeaturesRuntimeSnapshot(options?: Readonly<{ enabled?: 
             requestToken = token;
             const next = await getServerFeaturesSnapshot({
                 serverId,
+                signal: observer.signal,
             });
             if (!cancelled && token === requestToken && generation === requestGeneration) {
                 setSnapshot(next);
@@ -130,6 +132,7 @@ export function useServerFeaturesRuntimeSnapshot(options?: Readonly<{ enabled?: 
 
         return () => {
             cancelled = true;
+            observer.abort();
             if (retryTimer) clearTimeout(retryTimer);
             unsubscribe();
             unsubscribeSnapshot();
@@ -159,6 +162,7 @@ export function useServerFeaturesSnapshotForServerId(
         }
 
         let cancelled = false;
+        const observer = new AbortController();
         let requestToken = 0;
         let retryTimer: ReturnType<typeof setTimeout> | null = null;
         const unsubscribeSnapshot = subscribeServerFeaturesSnapshot(() => {
@@ -182,7 +186,7 @@ export function useServerFeaturesSnapshotForServerId(
         const load = async (serverId: string) => {
             const token = requestToken + 1;
             requestToken = token;
-            const next = await getServerFeaturesSnapshot({ serverId });
+            const next = await getServerFeaturesSnapshot({ serverId, signal: observer.signal });
             if (!cancelled && token === requestToken) {
                 setSnapshot(next);
                 const retryDelayMs = getServerFeaturesSnapshotRetryDelayMs({ serverId, snapshot: next });
@@ -202,6 +206,7 @@ export function useServerFeaturesSnapshotForServerId(
             setSnapshot(LOADING_SERVER_FEATURES_SNAPSHOT);
             return () => {
                 cancelled = true;
+                observer.abort();
                 if (retryTimer) clearTimeout(retryTimer);
                 unsubscribeSnapshot();
             };
@@ -213,6 +218,7 @@ export function useServerFeaturesSnapshotForServerId(
 
         return () => {
             cancelled = true;
+            observer.abort();
             if (retryTimer) clearTimeout(retryTimer);
             unsubscribeSnapshot();
         };
@@ -302,6 +308,7 @@ export function useServerFeaturesMainSelectionSnapshot(
         }
 
         let cancelled = false;
+        const observer = new AbortController();
         let requestToken = 0;
         let retryTimer: ReturnType<typeof setTimeout> | null = null;
         const unsubscribeSnapshot = subscribeServerFeaturesSnapshot(() => {
@@ -317,6 +324,7 @@ export function useServerFeaturesMainSelectionSnapshot(
 
         const cleanup = () => {
             cancelled = true;
+            observer.abort();
             if (retryTimer) clearTimeout(retryTimer);
             unsubscribeSnapshot();
         };
@@ -326,7 +334,7 @@ export function useServerFeaturesMainSelectionSnapshot(
             requestToken = token;
 
             const results = await Promise.all(
-                serverIds.map(async (serverId) => [serverId, await getServerFeaturesSnapshot({ serverId })] as const),
+                serverIds.map(async (serverId) => [serverId, await getServerFeaturesSnapshot({ serverId, signal: observer.signal })] as const),
             );
 
             if (cancelled || token !== requestToken) return;

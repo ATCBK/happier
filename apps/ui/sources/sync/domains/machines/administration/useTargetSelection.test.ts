@@ -121,7 +121,7 @@ describe('resolveFreshMachineAdministrationExecutionTarget', () => {
         const result = resolveFreshMachineAdministrationExecutionTarget({
             serverIdentityId: 'srv_server_b',
             machineId: 'machine-b',
-        });
+        }, { accountScope: { serverId: profileB.id, accountId: 'account-b' } });
 
         expect(result).toEqual(expect.objectContaining({
             kind: 'resolved',
@@ -135,18 +135,18 @@ describe('resolveFreshMachineAdministrationExecutionTarget', () => {
         const target = { serverIdentityId: 'srv_server_b', machineId: 'machine-b' };
 
         runtime.state.machineListStatusByServerId['srv_server_b'] = 'error';
-        expect(resolveFreshMachineAdministrationExecutionTarget(target)).toBeNull();
+        expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).toBeNull();
 
         runtime.state.machineListStatusByServerId['srv_server_b'] = 'idle';
         runtime.state.machineListByServerId['srv_server_b'][0].active = false;
         runtime.state.machineListByServerId['srv_server_b'][0].activeAt = 0;
-        expect(resolveFreshMachineAdministrationExecutionTarget(target)).toBeNull();
+        expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).toBeNull();
 
         runtime.state.machineListByServerId['srv_server_b'][0] = {
             ...machine('machine-b', true),
             replacedByMachineId: 'machine-c',
         };
-        expect(resolveFreshMachineAdministrationExecutionTarget(target)).toBeNull();
+        expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).toBeNull();
     });
 
     it('does not revive a stale scoped row when the active inventory is authoritatively empty', async () => {
@@ -159,7 +159,7 @@ describe('resolveFreshMachineAdministrationExecutionTarget', () => {
         expect(resolveFreshMachineAdministrationExecutionTarget({
             serverIdentityId: 'srv_server_b',
             machineId: 'machine-b',
-        })).toBeNull();
+        }, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).toBeNull();
     });
 });
 

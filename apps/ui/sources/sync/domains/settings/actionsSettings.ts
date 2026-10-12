@@ -4,6 +4,7 @@ import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actio
 
 import { isExecutionRunsFeatureAction } from '@/sync/domains/actions/isExecutionRunsFeatureAction';
 import { resolveLocalFeaturePolicyEnabled } from '@/sync/domains/features/featureLocalPolicy';
+import { storage } from '@/sync/domains/state/storage';
 
 export function resolveActionsSettingsV1FromState(state: Readonly<{ settings?: unknown }>) {
     return normalizeActionsSettingsV1((state as any)?.settings?.actionsSettingsV1);
@@ -31,4 +32,22 @@ export function isActionApprovalRequiredInState(
     contributedApprovalDefault?: boolean,
 ): boolean {
     return isApprovalRequiredByActionsSettings(actionId, resolveActionsSettingsV1FromState(state), ctx, undefined, contributedApprovalDefault);
+}
+
+/** A scoped control reads the same captured Home settings as the UI Action host. */
+export async function isActionApprovalRequiredForHome(
+    actionId: ActionId,
+    ctx: Parameters<typeof isApprovalRequiredByActionsSettings>[2],
+    serverId?: string | null,
+): Promise<boolean> {
+    if (!serverId) return isActionApprovalRequiredInState(storage.getState(), actionId, ctx);
+    const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+    const account = await captureLazyActionAccountContext(serverId);
+    try {
+        const settings = await account.readSettings();
+        account.assertCurrent();
+        return isActionApprovalRequiredInState({ settings }, actionId, ctx);
+    } finally {
+        account.dispose();
+    }
 }

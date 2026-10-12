@@ -1,6 +1,9 @@
-import type { DetectedMcpServerV1, McpServerBindingTargetV1, McpServerBindingV1, McpServerCatalogEntryV1, McpValueRefV1, McpServersSettingsV1 } from '@happier-dev/protocol';
+import type { DetectedMcpServerV1, McpServerRuleV1, McpServerCatalogEntryV1, McpValueRefV1, McpServersSettingsV1 } from '@happier-dev/protocol';
+import { resolveCreateReachV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
+import { resolveReachV1 } from '@happier-dev/protocol/reach/resolveReachV1';
+import { applyMcpServerCatalogMutationV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 
-import { upsertMcpServerWithBindingsV1 } from './mcpServerCrud';
+import { addMcpServerCatalogEntryV1 } from './mcpServerCrud';
 import {
     createUniqueMcpServerName,
     normalizeMcpServerNameCandidate,
@@ -28,34 +31,6 @@ function buildRemoteHeadersFromDetectedHeaders(params: Readonly<{ headerNames: r
         out[k] = { t: 'literal', v: `\${${envVarName}}` };
     }
     return out;
-}
-
-function inferWorkspaceRootFromDetectedProjectPath(sourcePath: string): string | null {
-    const normalized = String(sourcePath ?? '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
-    if (!normalized.includes('/')) return null;
-
-    const parts = normalized.split('/');
-    if (parts.length < 2) return null;
-
-    const parent = parts[parts.length - 2] ?? '';
-    const rootParts = parent.startsWith('.') ? parts.slice(0, -2) : parts.slice(0, -1);
-    if (rootParts.length === 0) return normalized.startsWith('/') ? '/' : null;
-
-    const workspaceRoot = rootParts.join('/');
-    return workspaceRoot || (normalized.startsWith('/') ? '/' : null);
-}
-
-function buildBindingTargetFromDetected(params: Readonly<{
-    detected: DetectedMcpServerV1;
-    machineId: string;
-}>): McpServerBindingTargetV1 {
-    if (params.detected.source.kind === 'project') {
-        const workspaceRoot = inferWorkspaceRootFromDetectedProjectPath(params.detected.source.path);
-        if (workspaceRoot) {
-            return { t: 'workspace', machineId: params.machineId, workspaceRoot };
-        }
-    }
-    return { t: 'machine', machineId: params.machineId };
 }
 
 function normalizeRecordKeys(value: Record<string, unknown> | null | undefined): string[] {
@@ -97,22 +72,12 @@ function doesExistingEntryMatchDetected(entry: McpServerCatalogEntryV1, detected
     return entry.remote.url === detected.remote.url && areStringArraysEqual(entryHeaderKeys, detectedHeaderKeys);
 }
 
-function doesBindingCoverImportTarget(binding: McpServerBindingV1, target: McpServerBindingTargetV1): boolean {
-    if (binding.target.t === 'allMachines') return true;
-    if (target.t === 'allMachines') return false;
-    if (binding.target.t === 'machine') {
-        return binding.target.machineId === target.machineId;
-    }
-    if (target.t === 'machine') return false;
-    return binding.target.machineId === target.machineId && binding.target.workspaceRoot === target.workspaceRoot;
-}
-
 export type ResolveImportedMcpServerFromDetectedV1Result = Readonly<{
     entry: McpServerCatalogEntryV1;
     nextSettings: McpServersSettingsV1;
 }> & Readonly<
-    { action: 'created' | 'reused'; binding: McpServerBindingV1 }
-    | { action: 'updated'; bindingAction: 'add' | 'edit'; binding: McpServerBindingV1 }
+    { action: 'created' | 'reused'; binding: McpServerRuleV1 }
+    | { action: 'updated'; bindingAction: 'add' | 'edit'; binding: McpServerRuleV1 }
 >;
 
 export function buildImportedMcpServerFromDetectedV1(params: Readonly<{
@@ -121,7 +86,7 @@ export function buildImportedMcpServerFromDetectedV1(params: Readonly<{
     machineId: string;
     nowMs: number;
     generateId: () => string;
-}>): Readonly<{ entry: McpServerCatalogEntryV1; binding: McpServerBindingV1 }> {
+}>): Readonly<{ entry: McpServerCatalogEntryV1; binding: McpServerRuleV1 }> {
     const baseName = normalizeMcpServerNameCandidate(params.detected.name);
     const name = createUniqueMcpServerName({ base: baseName, settings: params.existingSettings });
 
@@ -157,14 +122,10 @@ export function buildImportedMcpServerFromDetectedV1(params: Readonly<{
             },
         };
 
-    const binding: McpServerBindingV1 = {
-        id: params.generateId(),
-        serverId: id,
-        enabled: params.detected.enabled ?? true,
-        target: buildBindingTargetFromDetected({ detected: params.detected, machineId: params.machineId }),
-        createdAt: nowMs,
-        updatedAt: nowMs,
-    };
+    const reach = resolveCreateReachV1({ kind: 'mcp_server', caller: { surface: 'ui' },
+        ctx: { nowMs, newId: params.generateId } });
+    if (!reach.ok) throw new Error(reach.code);
+    const binding: McpServerRuleV1 = { ...reach.rules[0]!, serverId: id };
 
     return { entry, binding };
 }
@@ -183,7 +144,7 @@ export function resolveImportedMcpServerFromDetectedV1(params: Readonly<{
             action: 'created',
             entry: created.entry,
             binding: created.binding,
-            nextSettings: upsertMcpServerWithBindingsV1(params.existingSettings, created.entry, [created.binding]),
+            nextSettings: addMcpServerCatalogEntryV1(params.existingSettings, created.entry, [created.binding]),
         };
     }
 
@@ -192,7 +153,10 @@ export function resolveImportedMcpServerFromDetectedV1(params: Readonly<{
         ...params,
         existingSettings: { ...params.existingSettings, servers: [] },
     }).binding;
-    const coveredBinding = existingBindings.find((binding) => doesBindingCoverImportTarget(binding, desiredBinding.target)) ?? null;
+    const decision = resolveReachV1(existingBindings, { machineId: params.machineId, machinePlatform: null,
+        directory: params.detected.source.kind === 'project' ? params.detected.source.path : null,
+        projectKey: null, agentId: params.detected.provider });
+    const coveredBinding = existingBindings.find(binding => binding.id === decision.decidedBy?.ruleId) ?? null;
 
     if (coveredBinding) {
         if (coveredBinding.enabled === desiredBinding.enabled) {
@@ -204,26 +168,30 @@ export function resolveImportedMcpServerFromDetectedV1(params: Readonly<{
             };
         }
 
-        const nextBindings = existingBindings.map((binding) => {
-            if (binding.id !== coveredBinding.id) return binding;
-            return { ...binding, enabled: desiredBinding.enabled, updatedAt: params.nowMs };
-        });
+        const change = { kind: 'write' as const, write: { place: coveredBinding.target,
+            ...(coveredBinding.agentId ? { agentId: coveredBinding.agentId } : {}), state: 'on' as const } };
+        const next = applyMcpServerCatalogMutationV1({ v: 1, servers: params.existingSettings.servers, bindings: params.existingSettings.bindings },
+            { kind: 'rules-change', serverIds: [existingEntry.id], change },
+            { nowMs: params.nowMs, newId: params.generateId });
         return {
             action: 'updated',
             bindingAction: 'edit',
             entry: existingEntry,
             binding: { ...coveredBinding, enabled: desiredBinding.enabled, updatedAt: params.nowMs },
-            nextSettings: upsertMcpServerWithBindingsV1(params.existingSettings, existingEntry, nextBindings),
+            nextSettings: { ...params.existingSettings, ...next },
         };
     }
 
-    const appendedBinding: McpServerBindingV1 = { ...desiredBinding, serverId: existingEntry.id };
-    const nextBindings = [...existingBindings, appendedBinding];
+    const appendedBinding: McpServerRuleV1 = { ...desiredBinding, serverId: existingEntry.id };
+    const next = applyMcpServerCatalogMutationV1({ v: 1, servers: params.existingSettings.servers, bindings: params.existingSettings.bindings },
+        { kind: 'rules-change', serverIds: [existingEntry.id], change: { kind: 'write', write: {
+            place: appendedBinding.target, state: 'on' } } },
+        { nowMs: params.nowMs, newId: () => appendedBinding.id });
     return {
         action: 'updated',
         bindingAction: 'add',
         entry: existingEntry,
         binding: appendedBinding,
-        nextSettings: upsertMcpServerWithBindingsV1(params.existingSettings, existingEntry, nextBindings),
+        nextSettings: { ...params.existingSettings, ...next },
     };
 }

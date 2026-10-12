@@ -106,7 +106,8 @@ export type PluginUiReactNativeBundleProjection = UnknownRecord & Readonly<{
 }>;
 
 export type PluginUiSurfaceAvailabilityProjection = Readonly<{
-    state: 'available' | 'fallback' | 'blocked' | 'disabled';
+    /** `resolving` is host-derived execution selection, never a daemon wire state. */
+    state: 'available' | 'fallback' | 'blocked' | 'disabled' | 'resolving';
     reason: string;
     diagnostics: readonly string[];
     when?: PluginPolicyExpressionV2;

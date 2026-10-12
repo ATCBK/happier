@@ -1,7 +1,7 @@
 import { resolvePermissionIntentFromSessionMetadata } from '@happier-dev/agents';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
-import { readSessionMcpSelectionV1FromMetadata } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 
 import { getModelOverrideForSpawn } from '@/sync/domains/models/modelOverride';
 import { getPermissionModeOverrideForSpawn } from '@/sync/domains/permissions/permissionModeOverride';
@@ -49,7 +49,7 @@ export function deriveSessionAuthoringSnapshot(params: Readonly<{
     const modelSelection = agentTargetKey
         ? getModelOverrideForSpawn(params.session as Session, agentTargetKey)?.modelSelection ?? null
         : null;
-    const mcpSelection = readSessionMcpSelectionV1FromMetadata(metadata);
+    const capabilitySelection = readSessionCapabilitySelectionFromMetadataV1(metadata);
 
     return {
         directory: normalizeRequiredString(
@@ -67,7 +67,7 @@ export function deriveSessionAuthoringSnapshot(params: Readonly<{
         modelSelection,
         modelId: modelSelection?.ref.modelId ?? null,
         modelUpdatedAt: modelSelection?.updatedAt ?? metadataModelIntent?.updatedAt ?? null,
-        mcpSelection,
+        capabilitySelection,
         connectedServices: normalizeSessionAuthoringConnectedServices(
             metadata && Object.prototype.hasOwnProperty.call(metadata, 'connectedServices')
                 ? (metadata as Record<string, unknown>).connectedServices

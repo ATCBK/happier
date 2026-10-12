@@ -5,6 +5,19 @@ import { ACTIVITY_SURFACE_LOCAL_SETTING_DEFINITIONS } from './registry/local/loc
 import { applyLocalSettings, localSettingsDefaults, localSettingsParse } from './localSettings';
 
 describe('localSettingsParse', () => {
+    it('retains nested local settings despite extras without replacing unrelated preferences with defaults', () => {
+        const placement = { side: 'right', y: 0.7, tucked: true };
+        expect(localSettingsParse({
+            uiItemDensity: 'compact',
+            terminalArrowPadPlacement: { portrait: { ...placement, retired: true }, landscape: null, retired: true },
+            terminalNativeRendererQuarantine: { renderer: 'ios-ghosttykit', expiresAtMs: 1000, retired: true },
+        })).toMatchObject({
+            uiItemDensity: 'compact',
+            terminalArrowPadPlacement: { portrait: placement, landscape: null },
+            terminalNativeRendererQuarantine: { renderer: 'ios-ghosttykit', expiresAtMs: 1000 },
+        });
+    });
+
     it('retains canonical Project page preferences and every predecessor companion value in the existing map', () => {
         const values = { overview: 'overview', code: 'code', changes: 'changes', scripts: 'scripts', services: 'services', context: 'context',
             browse: 'browse', git: 'git', tabs: 'tabs', terminal: 'terminal', browser: 'browser' };
@@ -827,12 +840,13 @@ describe('localSettingsParse', () => {
         expect(applied.homeScreenWidgetsShowMachinePath).toBe(false);
     });
 
-    it('drops the deprecated persisted editor focus mode flag while parsing and applying settings', () => {
-        const parsed = localSettingsParse({ editorFocusModeEnabled: true });
-        expect(parsed).not.toHaveProperty('editorFocusModeEnabled');
+    it.each(['editorFocusModeEnabled', 'uiSurfaceExecutableApprovalsV1'])(
+        'drops the retired local setting %s while parsing and applying settings', (key) => {
+        const parsed = localSettingsParse({ [key]: true });
+        expect(parsed).not.toHaveProperty(key);
 
-        const staleDelta: Record<'editorFocusModeEnabled', boolean> = { editorFocusModeEnabled: true };
+        const staleDelta: Record<string, unknown> = { [key]: true };
         const applied = applyLocalSettings(localSettingsDefaults, staleDelta);
-        expect(applied).not.toHaveProperty('editorFocusModeEnabled');
+        expect(applied).not.toHaveProperty(key);
     });
 });

@@ -22,8 +22,13 @@ import {
 
 import {
     normalizePluginUiProjection,
+    resolvePluginUiProjectionPlatform,
     type PluginUiProjectionModel,
 } from './projection';
+
+// The persistence owner replaces an entry when its admitted bytes change.
+// Retain only its platform-specific presentation, never execution authority.
+const restoredAdmissionModels = new WeakMap<PluginUiProjectionCacheEntryV1, Map<PluginUiPlatformV1, PluginUiProjectionModel | null>>();
 
 /**
  * The Account-qualified last-confirmed plugin UI admission snapshot.
@@ -246,8 +251,17 @@ export function readPluginUiProjectionAdmissionSnapshot(input: Readonly<{
         input.scope.accountId,
     )[input.targetKey];
     if (!entry || entry.machineId !== input.machineId) return null;
-    const model = normalizePluginUiProjection(entry.projection, input.platform);
-    return hasAnyProjectionEntries(model) ? model : null;
+    const platform = input.platform ?? resolvePluginUiProjectionPlatform();
+    let models = restoredAdmissionModels.get(entry);
+    if (models?.has(platform)) return models.get(platform) ?? null;
+    const model = normalizePluginUiProjection(entry.projection, platform);
+    const admitted = hasAnyProjectionEntries(model) ? model : null;
+    if (!models) {
+        models = new Map();
+        restoredAdmissionModels.set(entry, models);
+    }
+    models.set(platform, admitted);
+    return admitted;
 }
 
 /**

@@ -24,6 +24,15 @@ function values(profile: string | null = 'profile-a') {
 
 describe('authoring-memory local projection', () => {
     beforeEach(() => getPersistenceStorage().clearAll());
+    it('reloads a personal Workflow target for the same Account/Home while old projections remain readable', () => {
+        const id = '00000000-0000-4000-8000-000000000005';
+        const project = { machineId: 'machine', directory: '/project', workspaceRefId: 'workspace' };
+        saveAuthoringMemoryProjection(scope, { ...values(), workflowProjectTargetsByDefinitionId: { [id]: project } });
+        expect(loadAuthoringMemoryProjection(scope)?.workflowProjectTargetsByDefinitionId).toEqual({ [id]: project });
+        expect(loadAuthoringMemoryProjection({ ...scope, accountId: 'other' })).toBeNull();
+        getPersistenceStorage().set(persistedKey(scope), JSON.stringify(values()));
+        expect(loadAuthoringMemoryProjection(scope)).toEqual(values());
+    });
 
     it('reloads the persisted snapshot with opaque selections after the caller discards or changes its in-memory values', () => {
         const initial = values();

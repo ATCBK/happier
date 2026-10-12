@@ -23,6 +23,32 @@ function createSessionMediaEnvelope(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseSessionMediaMessageMeta', () => {
+    it('reads retained media while dropping unknown source payload fields before security guards', async () => {
+        const { parseSessionMediaMessageMeta } = await import('./sessionMediaMessageMeta');
+        const raw = createSessionMediaEnvelope({
+            data: 'retired-inline-data',
+            retired: { sourcePath: '/private/retired.png' },
+            origin: { source: 'provider-generated', retired: { url: 'https://retired.example/image.png' } },
+        });
+        const parsed = parseSessionMediaMessageMeta({
+            ...raw,
+            payload: { ...raw.payload, failures: [{
+                index: 1, code: 'invalid_source_file', role: 'output', category: 'generated', mediaKind: 'image',
+                name: 'unavailable.png', origin: { source: 'provider-generated', retired: true }, retired: { data: 'old' },
+            }] },
+        });
+
+        expect(parsed?.inlineImages).toEqual([
+            { id: 'media-1', status: 'available', name: 'generated.png',
+                path: '.happier/uploads/generated/session-1/message-1/generated.png', mimeType: 'image/png',
+                sizeBytes: 42, width: 1600, height: 900, category: 'generated', role: 'output' },
+            { id: 'failure-1', status: 'unavailable', name: 'unavailable.png', category: 'generated', role: 'output',
+                failureCode: 'invalid_source_file' },
+        ]);
+        expect(raw.payload.media[0]).toHaveProperty('data', 'retired-inline-data');
+        expect(parseSessionMediaMessageMeta(createSessionMediaEnvelope({ name: '/private/image.png' }))).toBeNull();
+        expect(parseSessionMediaMessageMeta(createSessionMediaEnvelope({ mimeType: 'text/plain' }))).toBeNull();
+    });
     it('keeps failure-only image rows renderable as unavailable media', async () => {
         const { parseSessionMediaMessageMeta } = await import('./sessionMediaMessageMeta');
 

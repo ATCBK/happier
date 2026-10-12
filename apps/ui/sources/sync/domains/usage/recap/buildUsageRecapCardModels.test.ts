@@ -5,6 +5,8 @@ import type { UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 
 import { buildUsageRecapCardModels } from './buildUsageRecapCardModels';
+import { t } from '@/text';
+import { usageAgentTitle, usageDimensionLabel } from '../usageLabels';
 
 const response: UsageAnalyticsQueryResponse = {
     v: 1,
@@ -85,6 +87,51 @@ const response: UsageAnalyticsQueryResponse = {
 };
 
 describe('buildUsageRecapCardModels', () => {
+    it('uses canonical leaders when the query omits model breakdowns and keeps missing money unavailable', () => {
+        const filters = { period: '30days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
+        const viewModel = buildUsageAnalyticsViewModel({
+            ...response,
+            totals: { ...response.totals, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } },
+            breakdowns: { ...response.breakdowns, model: [] },
+            costPresentation: undefined,
+        }, filters);
+        const cards = buildUsageRecapCardModels({ viewModel, filters });
+        expect(cards.find(card => card.id === 'model')?.value).toBe(usageDimensionLabel('model', 'gpt-5.4', 'GPT-5.4'));
+        expect(cards.find(card => card.id === 'model')?.subtitle).not.toContain(t('usage.noData.title'));
+        expect(cards.find(card => card.id === 'usage')?.subtitle).toBe(t('common.unavailable'));
+        const costCard = buildUsageRecapCardModels({ viewModel, filters: { ...filters, metric: 'cost' } }).find(card => card.id === 'usage');
+        expect(costCard?.value).toBe(t('common.unavailable'));
+    });
+
+    it('keeps a witnessed zero cost distinct from unavailable and names its actual basis', () => {
+        const filters = { period: '30days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
+        const viewModel = buildUsageAnalyticsViewModel({ ...response,
+            totals: { ...response.totals, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported' } },
+            costPresentation: undefined,
+        }, filters);
+        expect(buildUsageRecapCardModels({ viewModel, filters }).find(card => card.id === 'usage')?.subtitle)
+            .toBe(`$0.00 · ${t('usage.board.page.kindReported')}`);
+    });
+
+    it('does not render missing monetary evidence as zero in either metric', () => {
+        const filters = { period: '30days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
+        const viewModel = buildUsageAnalyticsViewModel({ ...response,
+            totals: { ...response.totals, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } },
+            costPresentation: undefined,
+        }, filters);
+        expect(buildUsageRecapCardModels({ viewModel, filters }).find(card => card.id === 'usage')?.subtitle)
+            .toBe(t('common.unavailable'));
+        expect(buildUsageRecapCardModels({ viewModel, filters: { ...filters, metric: 'cost' } }).find(card => card.id === 'usage')?.value)
+            .toBe(t('common.unavailable'));
+    });
+
+    it('shows busiest-window evidence rather than repeating its hour label', () => {
+        const filters = { period: '30days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
+        const viewModel = buildUsageAnalyticsViewModel(response, filters);
+        expect(buildUsageRecapCardModels({ viewModel, filters }).find(card => card.id === 'rhythm')?.subtitle)
+            .toBe(`12 ${t('usage.events')}`);
+    });
+
     it('labels a custom historical query with its exact offset calendar rather than the legacy preset', () => {
         const filters = { period: '7days', metric: 'tokens', focus: null, costMode: 'auto' } as const;
         const viewModel = buildUsageAnalyticsViewModel(response, filters);
@@ -215,7 +262,7 @@ describe('buildUsageRecapCardModels', () => {
             filters: { period: '30days', metric: 'tokens', focus: null, costMode: 'auto' },
         }).find((card) => card.id === 'model');
 
-        expect(modelCard?.subtitle).toContain('opencode');
+        expect(modelCard?.subtitle).toContain(usageAgentTitle('opencode'));
         expect(modelCard?.subtitle).not.toContain('unknown');
     });
 });

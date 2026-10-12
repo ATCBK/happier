@@ -109,6 +109,34 @@ beforeEach(() => {
 });
 
 describe('scopedPluginSettingsAdapter Account currentness', () => {
+    it('rechecks the captured Settings intent after the final encryption-mode read before issuing a write', async () => {
+        let intentCurrent = true;
+        let encryptionReads = 0;
+        const entered = deferred<void>();
+        const released = deferred<void>();
+        const writes: unknown[] = [];
+        runtime.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+            if (path === '/v1/account/encryption') {
+                encryptionReads += 1;
+                if (encryptionReads === 2) { entered.resolve(); await released.promise; }
+                return jsonResponse(async () => ({ mode: 'plain', updatedAt: 1 }));
+            }
+            if (init?.method === 'POST') {
+                writes.push(init.body);
+                return jsonResponse(async () => ({ status: 'updated', revision: 5 }));
+            }
+            return jsonResponse(async () => ({ status: 'present', revision: 4,
+                content: { t: 'plain', v: { v: 1, values: { endpoint: 'old' } } } }));
+        });
+        const pending = scopedPluginSettingsAdapter.write({ pluginId: 'acme.settings', scope: { kind: 'account' }, target: ACCOUNT_TARGET,
+            fields: ACCOUNT_FIELDS, fieldId: 'endpoint', mutation: { kind: 'set', value: 'new' },
+            expectedRevision: { kind: 'account', value: 4 }, isCurrent: () => intentCurrent });
+        await entered.promise;
+        intentCurrent = false;
+        released.resolve();
+        expect(await pending).toEqual({ status: 'unavailable', reason: 'transport' });
+        expect(writes).toEqual([]);
+    });
     it('never retargets an Account A read-modify-write to Account B', async () => {
         const writes: string[] = [];
         runtime.serverFetch.mockImplementation(async (path: string, init?: RequestInit) => {

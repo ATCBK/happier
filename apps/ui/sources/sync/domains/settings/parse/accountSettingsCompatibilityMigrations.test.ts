@@ -10,6 +10,56 @@ import { settingsDefaults, settingsParse } from '@/sync/domains/settings/setting
 import { applyAccountSettingsCompatibilityMigrations } from './accountSettingsCompatibilityMigrations';
 
 describe('applyAccountSettingsCompatibilityMigrations', () => {
+    it('projects retained legacy tmux overrides without losing known preferences or carrying retired fields', () => {
+        const override = { useTmux: true, sessionName: 'retained', isolated: false, tmpDir: null };
+        const migrated = applyAccountSettingsCompatibilityMigrations({
+            input: { terminalTmuxByMachineId: { 'machine-1': { ...override, retired: { enabled: true } } } },
+            settings: { ...settingsDefaults },
+            inputSchemaVersion: 2,
+            supportedSchemaVersion: settingsDefaults.schemaVersion,
+        });
+
+        expect(migrated.sessionTmuxByMachineId).toEqual({ 'machine-1': override });
+    });
+
+    it('keeps predecessor voice credential references when retained binding objects contain retired fields', () => {
+        const binding = {
+            providerId: 'realtime_elevenlabs',
+            credentialBindings: {
+                account: { api_key: 'personal-secret' },
+                byMachineId: { 'machine-1': { api_key: 'machine-secret' } },
+            },
+        };
+        const input = { voice: {
+            providerId: 'realtime_elevenlabs',
+            adapters: {},
+            credentialBindings: [{ ...binding, retired: true,
+                credentialBindings: { ...binding.credentialBindings, retired: { enabled: true } } }],
+        } };
+        const migrated = applyAccountSettingsCompatibilityMigrations({
+            input,
+            settings: { voice: {}, secrets: [] },
+            inputSchemaVersion: 2,
+            supportedSchemaVersion: settingsDefaults.schemaVersion,
+        });
+
+        expect(migrated.voice).toEqual({ credentialBindings: [binding] });
+        expect(migrated.secrets).toEqual([]);
+    });
+
+    it('normalizes stored target maps without retaining an abstract configured Agent as executable', () => {
+        const stored = {
+            'backend:custom-acp': true,
+            'agent:happier.agent.custom-acp/custom-acp': true,
+            'agent:claude': false,
+            'acpBackend:review-agent': true,
+        };
+        expect(settingsParse({ backendEnabledByTargetKey: stored }).backendEnabledByTargetKey).toEqual({
+            'agent:happier.agent.claude/claude': false,
+            'agent:happier.agent.custom-acp/custom-acp:definition:review-agent': true,
+        });
+    });
+
     it('migrates legacy permission intent only to executable Agent targets', () => {
         const migrated = settingsParse({ lastUsedPermissionMode: 'read-only' });
         expect(migrated.sessionDefaultPermissionModeByTargetKey['agent:happier.agent.claude/claude']).toBe('read-only');

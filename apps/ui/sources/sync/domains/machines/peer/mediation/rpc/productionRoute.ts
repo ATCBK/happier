@@ -5,6 +5,7 @@ import { PeerMachineRpcDirectResponseV2Schema, type PeerMachineRpcDirectRequestV
 import { SignedDirectRouteGrantV2Schema, type SignedDirectRouteGrantV2 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantV2';
 import { createEphemeralPeerRouteProofHandleV2 } from '@happier-dev/protocol/machines/peer/mediation/ephemeralPeerRouteProofV2';
 import type { PeerMachineRpcDirectFallbackReasonCodeV1 } from '@happier-dev/protocol/machines/peer/mediation/rpc/directV1';
+import { markRpcRequestDisposition } from '@happier-dev/sync-client';
 
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { getRandomBytes } from '@/platform/cryptoRandom';
@@ -88,6 +89,7 @@ async function fetchJson(params: Readonly<{
     operationTimeoutMs?: null;
     signal?: AbortSignal;
     onDispatched?: () => void;
+    onResponse?: () => void;
 }>): Promise<Readonly<{ ok: boolean; status: number; body: unknown }>> {
     const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0
         ? params.timeoutMs
@@ -110,6 +112,7 @@ async function fetchJson(params: Readonly<{
         });
         params.onDispatched?.();
         const response = await pending;
+        params.onResponse?.();
         return {
             ok: response.ok,
             status: response.status,
@@ -199,6 +202,8 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
     machineId: string;
     method: string;
     timeoutMs?: number;
+    /** Remaining setup budget from the machine RPC caller's deadline owner. */
+    resolveRemainingTimeoutMs?: () => number;
 }>): Promise<MachineRpcDirectRouteResolution> {
     const server = resolveTargetServer(input.serverId);
     if (!server) return fallback('topology_unavailable');
@@ -219,9 +224,11 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
         if (credentialAccountId !== expectedAccountId) return fallback('grant_missing');
     }
 
+    const featuresTimeoutMs = input.resolveRemainingTimeoutMs?.() ?? input.timeoutMs ?? MACHINE_RPC_DIRECT_FETCH_TIMEOUT_MS;
+    if (featuresTimeoutMs <= 0) return fallback('topology_unavailable');
     const serverFeatures = await getReadyServerFeatures({
         serverId: server.serverId,
-        timeoutMs: input.timeoutMs ?? MACHINE_RPC_DIRECT_FETCH_TIMEOUT_MS,
+        timeoutMs: featuresTimeoutMs,
     }).catch(() => null);
     const policyPreflight = resolveMachineRpcDirectRoutePreflight({
         method: input.method,
@@ -268,6 +275,8 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
     {
         const proofHandle = createEphemeralPeerRouteProofHandleV2({ randomBytes: getRandomBytes });
         try {
+            const grantTimeoutMs = input.resolveRemainingTimeoutMs?.() ?? input.timeoutMs;
+            if (grantTimeoutMs !== undefined && grantTimeoutMs <= 0) return fallback('topology_unavailable');
             const grant = await requestMachineRpcRouteGrantV2({
                 server,
                 credentials,
@@ -275,7 +284,7 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
                 method: input.method,
                 endpointFingerprint: endpoint.endpointFingerprint,
                 ephemeralPublicKeyBase64Url: proofHandle.publicKeyBase64Url,
-                timeoutMs: input.timeoutMs,
+                timeoutMs: grantTimeoutMs,
             });
             if (!grant.ok) return fallback(grant.reasonCode);
             const proof = proofHandle.sign(grant.value);
@@ -305,14 +314,18 @@ export async function postProductionMachineRpcDirect(input: Readonly<{
     operationTimeoutMs?: null;
     signal?: AbortSignal;
     onDispatched?: () => void;
+    /** Witnesses HTTP arrival before asynchronous reply decoding. */
+    onResponse?: () => void;
 }>): Promise<PeerMachineRpcDirectResponseV2> {
+    let dispatched = false;
     try {
         const response = await fetchJson({
             url: input.url,
             timeoutMs: input.timeoutMs,
             operationTimeoutMs: input.operationTimeoutMs,
             signal: input.signal,
-            onDispatched: input.onDispatched,
+            onResponse: input.onResponse,
+            onDispatched: () => { dispatched = true; input.onDispatched?.(); },
             init: {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -320,11 +333,15 @@ export async function postProductionMachineRpcDirect(input: Readonly<{
             },
         });
         if (!response.ok) {
-            return fallbackDirectResponse(input.request, 'topology_unavailable');
+            throw new Error('Machine RPC direct HTTP response failed');
         }
         const parsed = PeerMachineRpcDirectResponseV2Schema.safeParse(response.body);
-        return parsed.success ? parsed.data : fallbackDirectResponse(input.request, 'invalid_request');
-    } catch {
+        if (!parsed.success) throw new Error('Machine RPC direct response is invalid');
+        return parsed.data;
+    } catch (error) {
+        // HTTP loss/status/decoding failure is not a daemon refusal. Once fetch
+        // was issued, synthesizing one would authorize a second effect on relay.
+        if (dispatched) throw markRpcRequestDisposition(error, 'outcomeUnknown');
         return fallbackDirectResponse(input.request, 'topology_unavailable');
     }
 }

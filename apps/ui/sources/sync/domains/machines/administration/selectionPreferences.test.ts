@@ -1,13 +1,47 @@
 import { describe, expect, it } from 'vitest';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 
 import {
     applyMachineAdministrationSelectionMutationToAccountSettings,
     clearMachineAdministrationTargetPreference,
+    clearPluginMachineExecutionOriginPreference,
     setMachineAdministrationTargetPreference,
     setPluginMachineExecutionOriginPreference,
 } from './selectionPreferences';
 
 describe('machine administration selection preferences', () => {
+    it('edits a named source preference over retained stored fields without erasing sibling carriers', () => {
+        const sibling = { serverIdentityId: 'srv_one', materializationRef: {
+            machineId: 'other-machine', materializationId: 'other-installation', pluginId: 'other.plugin',
+        }, futurePresentation: { keep: true } };
+        const retained = { v: 1, targetsByKey: { agents: { serverIdentityId: 'srv_one', machineId: 'machine-a' } },
+            futureField: { keep: true }, pluginExecutionOriginsByPluginId: { 'other.plugin': sibling } };
+        const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine-a', pluginId: 'acme.plugin',
+            sourceCustody: { kind: 'development' as const, registeredRootId: '/registered/source' } } };
+        const raw = { machineAdministrationSelectionsV1: retained, unrelatedRoot: { keep: true } };
+        const selected = applyMachineAdministrationSelectionMutationToAccountSettings(raw, current => (
+            setPluginMachineExecutionOriginPreference(current, 'acme.plugin', origin)
+        ));
+        expect(selected).toEqual({ ...raw, machineAdministrationSelectionsV1: { ...retained,
+            pluginExecutionOriginsByPluginId: { 'other.plugin': sibling, 'acme.plugin': origin },
+        } });
+        expect(accountSettingsParse(selected).machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId['acme.plugin'])
+            .toEqual(origin);
+        expect(applyMachineAdministrationSelectionMutationToAccountSettings(selected, current => (
+            clearPluginMachineExecutionOriginPreference(current, 'acme.plugin')
+        ))).toEqual(raw);
+        const invalidNewOrigin = { ...origin, unexpectedAuthority: true };
+        expect(() => setPluginMachineExecutionOriginPreference({ v: 1, pluginExecutionOriginsByPluginId: {} },
+            'acme.plugin', invalidNewOrigin)).toThrow();
+    });
+
+    it('refuses malformed known stored authority rather than resetting sibling selections', () => {
+        expect(() => applyMachineAdministrationSelectionMutationToAccountSettings({
+            machineAdministrationSelectionsV1: { v: 1, targetsByKey: {}, pluginExecutionOriginsByPluginId: {
+                'other.plugin': { serverIdentityId: 'local-profile' },
+            } },
+        }, current => clearPluginMachineExecutionOriginPreference(current, 'acme.plugin'))).toThrow();
+    });
     it('updates one device-local target entry without dropping another target', () => {
         const current = {
             agents: { serverIdentityId: 'srv_one', machineId: 'machine-a' },

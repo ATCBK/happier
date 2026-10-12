@@ -1,0 +1,93 @@
+import { act } from 'react-test-renderer';
+import { afterEach, expect, it, vi } from 'vitest';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
+
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createMachineGuardViewFixture } from './guardViewFixtures';
+
+installDisconnectedServerSocketBoundary();
+const network = vi.hoisted(() => ({ rpc: vi.fn() }));
+// Only the authenticated machine connection is replaced; Actions, credentials, hook and store stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(network.rpc);
+});
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+// Scoped HTTP transports must bind after their genuine Home boundaries are installed.
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { machineGuardStore } = await import('./machineGuardStore');
+const { useMachineGuardView } = await import('./useMachineGuardView');
+const before = storage.getState();
+afterEach(async () => {
+    standardCleanup(); machineGuardStore.reset(); network.rpc.mockReset(); storage.setState(before); await home.reset();
+});
+
+it('distinguishes an empty or held pending read, failure and offline without losing the last good answer', async () => {
+    const serverId = await home.addHome({ name: 'Guard pending', serverUrl: 'https://guard-pending.test', serverIdentityId: 'srv_guard_pending', accountId: 'owner' });
+    home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
+    storage.setState({ machines: {}, machineListByServerId: { [serverId]: [createMachineFixture({
+        id: 'machine', activeAt: Date.now(), storageMode: 'plain', isShared: false,
+        metadata: { host: 'Guard machine', platform: 'linux', happyCliVersion: '0.3.0', happyHomeDir: '/home/test/.happier', homeDir: '/home/test' },
+        access: { role: 'manage', custodian: { accountId: 'owner', displayName: 'Owner' }, resourceMode: 'plain', accessState: 'ready' },
+    })] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+    const replies: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    network.rpc.mockImplementation(async ({ method }: { method: string }) => {
+        if (method === RPC_METHODS.DAEMON_GUARD_WATCH) return new Promise(() => {});
+        if (method !== RPC_METHODS.MACHINES_GUARD_GET) throw new Error(`unexpected ${method}`);
+        const reply = createDeferred<unknown>(); replies.push(reply); return reply.promise;
+    });
+    const hook = await renderHook(({ online }: { online: boolean }) => useMachineGuardView({ serverId, machineId: 'machine', online }), { initialProps: { online: true } });
+    await act(async () => { await vi.waitFor(() => expect({ reads: replies.length, status: hook.getCurrent().status }).toEqual({ reads: 1, status: 'loading' })); });
+    expect(hook.getCurrent()).toMatchObject({ status: 'loading', pending: true, offline: false, view: null, receivedAtMs: null,
+        on: null, settings: { policy: { guard: { memoryGuard: { enabled: false } } } } });
+    await act(async () => { replies[0]!.resolve(createMachineGuardViewFixture()); });
+    await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready')); });
+    const last = hook.getCurrent();
+    expect(last.on).toBe(false);
+    // A newer setting is intent, not proof that the retained daemon execution view applied it.
+    await act(async () => {
+        const machine = storage.getState().machineListByServerId[serverId]![0]!;
+        storage.setState({ machineListByServerId: { [serverId]: [{ ...machine, metadataVersion: 2,
+            metadata: { ...machine.metadata!, resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { memoryGuard: { enabled: true } } }) } }] } });
+    });
+    expect(hook.getCurrent()).toMatchObject({ on: false, settings: { revision: 2, policy: { guard: { memoryGuard: { enabled: true } } } } });
+    await act(async () => { last.retry(); });
+    await act(async () => { await vi.waitFor(() => expect(replies).toHaveLength(2)); });
+    expect(hook.getCurrent()).toMatchObject({ status: 'loading', pending: true, on: false, receivedAtMs: last.receivedAtMs });
+    expect(hook.getCurrent().view).toBe(last.view);
+    await act(async () => { replies[1]!.reject(new Error('Machine unavailable')); });
+    await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().status).toBe('error')); });
+    expect(hook.getCurrent()).toMatchObject({ pending: false, on: false, receivedAtMs: last.receivedAtMs });
+    expect(hook.getCurrent().view).toBe(last.view);
+    await act(async () => { hook.getCurrent().retry(); });
+    await act(async () => { await vi.waitFor(() => expect(replies).toHaveLength(3)); });
+    await hook.rerender({ online: false });
+    expect(hook.getCurrent()).toMatchObject({ offline: true, pending: false, on: false, receivedAtMs: last.receivedAtMs });
+    expect(hook.getCurrent().view).toBe(last.view);
+    await act(async () => { replies[2]!.resolve(createMachineGuardViewFixture({ policyRevision: 2 })); });
+    expect(hook.getCurrent().view).toBe(last.view);
+    await hook.unmount();
+});
+
+it('keeps a failed initial daemon view unknown even when the synced rule is enabled', async () => {
+    const serverId = await home.addHome({ name: 'Guard failed', serverUrl: 'https://guard-failed.test', serverIdentityId: 'srv_guard_failed', accountId: 'owner' });
+    home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
+    storage.setState({ machines: {}, machineListByServerId: { [serverId]: [createMachineFixture({
+        id: 'machine', activeAt: Date.now(), storageMode: 'plain', isShared: false,
+        metadata: { host: 'Guard machine', platform: 'linux', happyCliVersion: '0.3.0', happyHomeDir: '/home/test/.happier', homeDir: '/home/test',
+            resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { memoryGuard: { enabled: true } } }) },
+    })] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+    network.rpc.mockRejectedValue(new Error('Request failed'));
+    const hook = await renderHook(() => useMachineGuardView({ serverId, machineId: 'machine' }));
+    await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().status).toBe('error')); });
+    expect(hook.getCurrent()).toMatchObject({ view: null, on: null, pending: false, receivedAtMs: null,
+        settings: { policy: { guard: { memoryGuard: { enabled: true } } } } });
+    await hook.unmount();
+});

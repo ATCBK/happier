@@ -1,13 +1,14 @@
-import { resolveExactServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 
 import type { WorkspaceScopeBase } from './workspaceScope';
 
 type WorkspaceMachineInventoryState = Readonly<{
-    isDataReady?: boolean;
     machines?: Record<string, Machine | undefined>;
     machineListByServerId?: Record<string, Machine[] | null | undefined>;
     machineListStatusByServerId?: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
@@ -22,24 +23,25 @@ export function isWorkspaceScopeReachableFromState(
     state: WorkspaceMachineInventoryState,
     scope: WorkspaceScopeBase,
     activeServerId: string,
+    accountScope: ServerAccountScope | null,
 ): boolean {
-    const machine = resolveExactServerScopedMachine<Machine>({
-        machineId: scope.machineId,
+    const inventory = resolveServerScopedMachineInventory<Machine>({
         serverId: scope.serverId,
         activeServerId,
-        activeMachines: state.isDataReady
-            ? Object.values(state.machines ?? {}).filter((candidate): candidate is Machine => candidate !== undefined)
-            : [],
+        activeMachines: Object.values(state.machines ?? {}).filter((candidate): candidate is Machine => candidate !== undefined),
         machineListByServerId: state.machineListByServerId ?? {},
         machineListStatusByServerId: state.machineListStatusByServerId,
     });
-    return machine ? isMachineReachable(scope.serverId, machine) : false;
+    if (inventory.status !== 'idle') return false;
+    const machine = inventory.machines?.find(candidate => candidate.id === scope.machineId);
+    return machine ? isMachineReachable(selectActiveServerAccountScopeForServer(accountScope, scope.serverId), machine) : false;
 }
 
-export function isWorkspaceScopeReachable(scope: WorkspaceScopeBase): boolean {
+export function isWorkspaceScopeReachable(scope: WorkspaceScopeBase, accountScope: ServerAccountScope | null = getActiveServerAccountScope()): boolean {
     return isWorkspaceScopeReachableFromState(
         storage.getState(),
         scope,
         String(getActiveServerSnapshot().serverId ?? '').trim(),
+        accountScope,
     );
 }

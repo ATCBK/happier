@@ -13,7 +13,7 @@ import type { ConnectedAccountUiNegotiation } from './resolveConnectedAccountUiN
 import type { ConnectedAccountIdentityPresenter } from './maskAccountEmail';
 
 import {
-  resolveConnectedAccountPurposeTargetEligibility,
+  describeConnectedAccountPurposeTargetEligibility,
   resolveConnectedAccountPurposeTeamResourceEligibility,
   type ConnectedAccountPurposeTargetEligibility,
 } from './connectedAccountPurposeTargetEligibility';
@@ -26,6 +26,16 @@ import {
   presentQualifiedConnectedAccountTarget,
   type QualifiedConnectedAccountTargetPresentation,
 } from './qualifiedConnectedAccountTargetPresentation';
+
+function withEligibilityReason(presentation: QualifiedConnectedAccountTargetPresentation,
+  result: ReturnType<typeof describeConnectedAccountPurposeTargetEligibility>): QualifiedConnectedAccountTargetPresentation {
+  if (result.reason === null) return presentation;
+  const reason = t(`connectedServices.purposeTargets.${result.reason}`);
+  return { ...presentation,
+    unavailableReason: reason,
+    secondaryLabel: [presentation.secondaryLabel, reason].filter(Boolean).join(' · '),
+    accessibilityLabel: `${presentation.accessibilityLabel} · ${reason}` };
+}
 
 function sameService(
   left: PluginContributionIdentityV1,
@@ -118,6 +128,11 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
   selectedTarget: QualifiedConnectedAccountPurposeBindingTargetV1 | null;
   /** The purpose's current Team resource default, when that is its selection. */
   selectedTeamResource?: AgentConnectedAccountPurposeTeamResourceDefault | null;
+  /**
+   * What an optional purpose with no target means where it is chosen (an Agent's own sign-in, an
+   * unused gateway slot). Defaults to "Not set".
+   */
+  noneLabel?: string;
   accounts: readonly QualifiedConnectedAccountProfileV4[];
   groups: readonly QualifiedConnectedAccountGroupV4[];
   /** The incumbent Connected Accounts user-label preference projection. */
@@ -142,13 +157,14 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
   const candidates: ConnectedAccountPurposeTargetChoice[] = [];
   const selectedTeamResource = input.selectedTeamResource ?? null;
   if (!input.declaration.required) {
+    const noneLabel = input.noneLabel ?? t('connectedServices.purposeTargets.notSet');
     candidates.push({
       id: connectedAccountPurposeTargetChoiceId(null),
       target: null,
       teamResource: null,
       presentation: {
-        primaryLabel: t('common.none'),
-        accessibilityLabel: t('common.none'),
+        primaryLabel: noneLabel,
+        accessibilityLabel: noneLabel,
       },
       kind: 'none',
       eligibility: 'none',
@@ -165,7 +181,7 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
       kind: 'account',
       account: account.ref,
     };
-    const eligibility = resolveConnectedAccountPurposeTargetEligibility({
+    const result = describeConnectedAccountPurposeTargetEligibility({
       target,
       declaredServices,
       accounts: input.accounts,
@@ -176,17 +192,17 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
       id: connectedAccountPurposeTargetChoiceId(target),
       target,
       teamResource: null,
-      presentation: presentQualifiedConnectedAccountTarget({
+      presentation: withEligibilityReason(presentQualifiedConnectedAccountTarget({
         target,
         accounts: input.accounts,
         groups: input.groups,
         labelsByKey: input.labelsByKey,
         serviceTitle: input.serviceTitle,
         presentIdentity: input.presentIdentity,
-      }),
+      }), result),
       kind: 'account',
-      eligibility,
-      selectable: eligibility === 'usable',
+      eligibility: result.eligibility,
+      selectable: result.eligibility === 'usable',
       current: sameTarget(target, input.selectedTarget),
     } satisfies ConnectedAccountPurposeTargetChoice;
   })
@@ -201,7 +217,7 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
       service: group.ref.service,
       groupId: group.ref.groupId,
     };
-    const eligibility = resolveConnectedAccountPurposeTargetEligibility({
+    const result = describeConnectedAccountPurposeTargetEligibility({
       target,
       declaredServices,
       accounts: input.accounts,
@@ -212,17 +228,17 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
       id: connectedAccountPurposeTargetChoiceId(target),
       target,
       teamResource: null,
-      presentation: presentQualifiedConnectedAccountTarget({
+      presentation: withEligibilityReason(presentQualifiedConnectedAccountTarget({
         target,
         accounts: input.accounts,
         groups: input.groups,
         labelsByKey: input.labelsByKey,
         serviceTitle: input.serviceTitle,
         presentIdentity: input.presentIdentity,
-      }),
+      }), result),
       kind: 'group',
-      eligibility,
-      selectable: eligibility === 'usable',
+      eligibility: result.eligibility,
+      selectable: result.eligibility === 'usable',
       current: sameTarget(target, input.selectedTarget),
     } satisfies ConnectedAccountPurposeTargetChoice;
   })
@@ -304,7 +320,11 @@ export function buildConnectedAccountPurposeTargetChoices(input: Readonly<{
       id: connectedAccountPurposeTargetChoiceId(input.selectedTarget),
       target: input.selectedTarget,
       teamResource: null,
-      presentation,
+      presentation: input.sourceNegotiation === 'indeterminate' || input.sourceNegotiation === 'legacy'
+        ? presentation : withEligibilityReason(presentation, describeConnectedAccountPurposeTargetEligibility({
+          target: input.selectedTarget, declaredServices, accounts: input.accounts, groups: input.groups,
+          resolveAuthentication: input.resolveAuthentication,
+        })),
       kind: input.sourceNegotiation === 'indeterminate'
         ? 'hydrating'
         : input.sourceNegotiation === 'legacy'

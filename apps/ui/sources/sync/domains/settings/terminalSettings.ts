@@ -12,6 +12,7 @@ export type TerminalSpawnOptions = {
 export type TerminalHost = 'none' | 'tmux' | 'zellij' | 'herdr';
 
 import { resolveTerminalHost } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
+import { buildMachineTerminalSettingsPatch as buildCanonicalMachineTerminalSettingsPatch } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 export { resolveTerminalHost };
 
 export function buildMachineTerminalSettingsPatch(params: {
@@ -19,24 +20,8 @@ export function buildMachineTerminalSettingsPatch(params: {
     machineId: string;
     host: TerminalHost | null;
 }): Pick<Settings, 'sessionTmuxByMachineId' | 'sessionTerminalHostByMachineId'> {
-    const { settings, machineId, host } = params;
-    const tmuxByMachineId = { ...settings.sessionTmuxByMachineId };
-    const hostByMachineId = { ...settings.sessionTerminalHostByMachineId };
-    delete hostByMachineId[machineId];
-    if (host === null) {
-        delete tmuxByMachineId[machineId];
-    } else {
-        tmuxByMachineId[machineId] = {
-            ...(tmuxByMachineId[machineId] ?? {
-                sessionName: settings.sessionTmuxSessionName,
-                isolated: settings.sessionTmuxIsolated,
-                tmpDir: settings.sessionTmuxTmpDir,
-            }),
-            useTmux: host === 'tmux',
-        };
-        if (host === 'herdr' || host === 'zellij') hostByMachineId[machineId] = host;
-    }
-    return { sessionTmuxByMachineId: tmuxByMachineId, sessionTerminalHostByMachineId: hostByMachineId };
+    return buildCanonicalMachineTerminalSettingsPatch({ settings: params.settings, machineId: params.machineId,
+        change: { host: params.host } });
 }
 
 function normalizeTmuxSessionName(value: unknown): string | null {

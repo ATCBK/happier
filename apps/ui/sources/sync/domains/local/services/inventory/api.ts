@@ -21,7 +21,7 @@ export type LocalServiceInventorySnapshotClientInput = Readonly<{
 
 export type LocalServiceInventorySnapshotClientResult =
     | Readonly<{ ok: true; snapshot: LocalServiceInventorySnapshot }>
-    | Readonly<{ ok: false; reason: 'unavailable' | 'request_failed' | 'invalid_response' }>;
+    | Readonly<{ ok: false; reason: 'unavailable' | 'request_failed' | 'invalid_response'; reasonCode?: string }>;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);

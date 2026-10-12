@@ -1,3 +1,4 @@
+import { createStoredReadSchema } from '@happier-dev/protocol';
 import {
     SESSION_RUNNER_RUNTIME_METADATA_KEY,
     SessionRunnerRuntimeStateV1Schema,
@@ -30,7 +31,7 @@ export function readSessionRunnerRuntimeStateFromMetadata(metadata: unknown): Se
     const record = readRecord(metadata);
     if (!record) return null;
 
-    const parsed = SessionRunnerRuntimeStateV1Schema.safeParse(record[SESSION_RUNNER_RUNTIME_METADATA_KEY]);
+    const parsed = createStoredReadSchema(SessionRunnerRuntimeStateV1Schema).safeParse(record[SESSION_RUNNER_RUNTIME_METADATA_KEY]);
     return parsed.success ? parsed.data : null;
 }
 

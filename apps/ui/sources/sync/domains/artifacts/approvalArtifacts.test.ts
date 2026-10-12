@@ -6,6 +6,7 @@ import {
     collectOpenApprovalSessionReferences,
     isOpenApprovalInboxArtifact,
     listOpenApprovalArtifactsForSession,
+    listTranscriptApprovalArtifactsForSession,
     resolveOpenApprovalSessionKeys,
 } from './approvalArtifacts';
 import { buildSessionListServerScopedRowKey } from '@/sync/domains/session/listing/sessionListKeyNormalization';
@@ -260,5 +261,31 @@ describe('collectOpenApprovalSessionReferences', () => {
             { serverId: 'home-a', sessionId: 'same' },
             { serverId: 'home-b', sessionId: 'same' },
         ])]).toEqual([]);
+    });
+});
+
+describe('listTranscriptApprovalArtifactsForSession', () => {
+    const settled = (status: 'rejected' | 'executed') => ApprovalRequestV2Schema.parse({
+        ...durableApprovalBody('s1'), status, updatedAtMs: 2,
+        decision: { kind: status === 'rejected' ? 'reject' : 'approve', decidedAtMs: 2 },
+        ...(status === 'executed' ? { execution: { executedAtMs: 3, ok: true, result: {} } } : {}),
+    });
+    const target = buildSessionListServerScopedRowKey('server-a', 's1')!;
+
+    it('keeps a settled approval in the transcript only when its body declares a settled presentation', () => {
+        const declined = settled('rejected');
+        const executed = settled('executed');
+        const artifacts = [
+            artifact('declined', buildApprovalRequestArtifactHeaderV1(declined), declined),
+            artifact('executed', buildApprovalRequestArtifactHeaderV1(executed), executed),
+            artifact('open', buildApprovalRequestArtifactHeaderV1(ApprovalRequestV2Schema.parse(durableApprovalBody('s1'))), durableApprovalBody('s1')),
+        ];
+        const presents = [(approval: { status: string }) => approval.status === 'executed'];
+
+        expect(listTranscriptApprovalArtifactsForSession(artifacts, target, { settledPresentations: presents })
+            .map((entry) => entry.artifact.id).sort()).toEqual(['executed', 'open']);
+        // Without a declaring body nothing settled is kept, and the open projection is unchanged.
+        expect(listTranscriptApprovalArtifactsForSession(artifacts, target).map((entry) => entry.artifact.id)).toEqual(['open']);
+        expect(listOpenApprovalArtifactsForSession(artifacts, target).map((entry) => entry.artifact.id)).toEqual(['open']);
     });
 });

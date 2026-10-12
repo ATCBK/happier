@@ -7,8 +7,10 @@ import {
   getConnectedServiceRegistrySnapshot,
   getAccountConnectedServiceConfigurationMode,
   installConnectedAccountDescriptorProjection,
+  canExecuteConnectedServiceAction,
 } from './connectedServiceRegistry';
-import type { ConnectedAccountDescriptorProjectionState } from './connectedAccountDescriptorProjection';
+import { advanceConnectedAccountDescriptorProjectionState, createConnectedAccountDescriptorProjectionLoadingState,
+  mergeConnectedAccountDescriptorProjections, type ConnectedAccountDescriptorProjectionState } from './connectedAccountDescriptorProjection';
 
 function manualAuthentication(fields: Array<Readonly<{
   id: string;
@@ -63,6 +65,38 @@ describe('connectedServiceRegistry', () => {
     expect(getAccountConnectedServiceConfigurationMode(target, lifetime.scope)).toBeNull();
   });
 
+  it('admits healthy token, OAuth and service configuration while an unsupported Machine leaves the Account census stale', () => {
+    const service = { pluginId: 'acme.multi', localId: 'cloud' };
+    const manual = { ...manualAuthentication([{ id: 'token', title: 'Token', secret: true }]).modes[0]!,
+      configuration: { scope: 'service' as const, changeBehavior: 'reconnect' as const, fields: [] } };
+    const descriptor: ConnectedAccountDescriptorProjectionState['descriptors'][number] = {
+      id: service.localId, pluginId: service.pluginId, serviceId: 'cloud', title: 'Cloud', provenance: 'external',
+      sourceKind: 'installed', authentication: { defaultModeId: 'manual', modes: [manual,
+        { id: 'browser', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'none' }] },
+      capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
+    };
+    const scope = { serverId: 'server-a', accountId: 'account-a' };
+    const lifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+    const partial = advanceConnectedAccountDescriptorProjectionState(
+      createConnectedAccountDescriptorProjectionLoadingState('server-a'),
+      mergeConnectedAccountDescriptorProjections([
+        { kind: 'ready', descriptors: [descriptor] }, { kind: 'error', reason: 'unsupported' },
+      ]),
+    );
+    installConnectedAccountDescriptorProjection(partial, lifetime);
+    const entry = getQualifiedConnectedServiceRegistryEntry(service)!;
+    expect(getConnectedServiceRegistrySnapshot()).toMatchObject({ status: 'stale', errorReason: 'partial_machine_failure' });
+    expect(entry).toMatchObject({ executable: true, supportsToken: true, supportsOauth: true, projectionStatus: 'ready' });
+    expect(canExecuteConnectedServiceAction(entry, 'advertised-v4')).toBe(true);
+    expect(getAccountConnectedServiceConfigurationMode({ service, modeId: 'manual' }, scope)).toEqual(manual);
+
+    const noSupplier = advanceConnectedAccountDescriptorProjectionState(partial,
+      mergeConnectedAccountDescriptorProjections([{ kind: 'error', reason: 'unsupported' }]));
+    installConnectedAccountDescriptorProjection(noSupplier, lifetime);
+    expect(getQualifiedConnectedServiceRegistryEntry(service)).toMatchObject({ executable: false });
+    expect(getAccountConnectedServiceConfigurationMode({ service, modeId: 'manual' }, scope)).toBeNull();
+  });
+
   it('projects every declared authentication mode and preserves the default mode', () => {
     install([{
       id: 'multi-account',
@@ -86,6 +120,7 @@ describe('connectedServiceRegistry', () => {
         }, {
           id: 'browser',
           kind: 'oauthAuthorizationCode',
+          callbackUrl: 'http://127.0.0.1:4000/auth/callback',
           pkce: 'required',
           outcomeReconciliation: 'providerCheck',
         }, {

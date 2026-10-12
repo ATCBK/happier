@@ -1,6 +1,6 @@
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
-import { isMachineReplaced, type MachineWithReplacement } from './machineIdentityTypes';
+import { isMachineReplaced } from './machineIdentityTypes';
 
 export type MachineSpawnReadiness =
     | { status: 'ready'; machineId: string }
@@ -22,20 +22,22 @@ export type MachineSpawnReadinessMachine = Readonly<{
     activeAt?: number | null;
     revokedAt?: number | null;
     replacedByMachineId?: string | null;
+    availability?: Readonly<{ kind: 'available' | 'locked' }> | null;
 }>;
 
 export function resolveMachineSpawnReadiness(params: Readonly<{
     selectedMachineId?: string | null;
     machine?: MachineSpawnReadinessMachine | null;
+    scope?: MachineReachabilityScope | null;
     rpcAvailable?: MachineReadinessProbeState;
     keyAvailable?: MachineReadinessProbeState;
     requireExactSpawnReadiness?: boolean;
-    /** Server-scoped canonical reachability when the caller has that scope. */
+    /** A restrictive caller veto; true never overrides current scoped reachability. */
     machineReachable?: boolean;
     nowMs?: number;
 }>): MachineSpawnReadiness {
     const selectedMachineId = typeof params.selectedMachineId === 'string' ? params.selectedMachineId.trim() : '';
-    const machine = params.machine as MachineWithReplacement | null | undefined;
+    const machine = params.machine;
     if (!selectedMachineId || !machine) return { status: 'missing' };
 
     const revokedAt = typeof machine.revokedAt === 'number' ? machine.revokedAt : 0;
@@ -51,8 +53,12 @@ export function resolveMachineSpawnReadiness(params: Readonly<{
         };
     }
 
-    if (!(params.machineReachable ?? isMachineOnline(machine, params.nowMs))) {
+    if (params.machineReachable === false || !isMachineReachable(params.scope, machine, params.nowMs)) {
         return { status: 'offline', machineId: selectedMachineId };
+    }
+
+    if (machine.availability?.kind === 'locked') {
+        return { status: 'keyUnavailable', machineId: selectedMachineId };
     }
 
     if (params.requireExactSpawnReadiness === true && (
@@ -89,21 +95,20 @@ export function resolveMachineSpawnReadiness(params: Readonly<{
 export function canAttemptMachineSpawn(params: Readonly<{
     selectedMachineId?: string | null;
     machine?: Parameters<typeof resolveMachineSpawnReadiness>[0]['machine'];
+    scope?: MachineReachabilityScope | null;
     spawnReadiness?: MachineSpawnReadiness | null;
     machineReachable?: boolean;
     nowMs?: number;
 }>): boolean {
-    const readiness = params.spawnReadiness ?? resolveMachineSpawnReadiness({
+    const currentReadiness = resolveMachineSpawnReadiness({
         selectedMachineId: params.selectedMachineId,
         machine: params.machine,
+        scope: params.scope,
         requireExactSpawnReadiness: true,
         machineReachable: params.machineReachable,
         nowMs: params.nowMs,
     });
-
-    if (readiness.status === 'ready') return true;
-    if (readiness.status === 'unknown' || readiness.status === 'probing') {
-        return Boolean(params.machine && (params.machineReachable ?? isMachineOnline(params.machine, params.nowMs)));
-    }
-    return false;
+    if (currentReadiness.status !== 'ready' && currentReadiness.status !== 'unknown' && currentReadiness.status !== 'probing') return false;
+    const readiness = params.spawnReadiness ?? currentReadiness;
+    return readiness.status === 'ready' || readiness.status === 'unknown' || readiness.status === 'probing';
 }

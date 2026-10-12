@@ -9,7 +9,7 @@ export type { ExternalSessionFollowPolicy } from '@happier-dev/protocol';
 
 export function readExternalSessionFollowPolicy(metadata: unknown): ExternalSessionFollowPolicy {
     const externalSession = readExternalSessionLink(metadata);
-    return readExternalSessionFollowPolicyV1(externalSession?.followPolicyV1)?.policy ?? 'attached_only';
+    return readExternalSessionFollowPolicyV1(externalSession?.followPolicyV1, 'stored')?.policy ?? 'attached_only';
 }
 
 export function updateMetadataWithExternalSessionFollowPolicy(
@@ -22,7 +22,7 @@ export function updateMetadataWithExternalSessionFollowPolicy(
     const externalSession = readExternalSessionLink(metadata);
     if (!externalSession) return metadata;
 
-    const current = readExternalSessionFollowPolicyV1(externalSession.followPolicyV1) ?? null;
+    const current = readExternalSessionFollowPolicyV1(externalSession.followPolicyV1, 'stored') ?? null;
     const nextUpdatedAtMs = typeof params.updatedAtMs === 'number' && Number.isFinite(params.updatedAtMs)
         ? Math.max(0, Math.trunc(params.updatedAtMs))
         : undefined;

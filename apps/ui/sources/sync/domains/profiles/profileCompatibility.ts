@@ -1,7 +1,7 @@
 import { convertBackendTargetRefV2ToV1, parseBackendTargetKeyV2, readBackendTargetRefV2, type BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { getProfileEnvironmentVariables as getProfileEnvironmentVariablesProtocol } from '@happier-dev/protocol/profiles/backendProfileSchema';
-import { isProfileCompatibleWithBackendTarget as isProfileCompatibleWithBackendTargetProtocol, isProfileCompatibleWithAgent as isProfileCompatibleWithAgentProtocol } from '@happier-dev/protocol/profiles/profileCompatibility';
-import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
+import { isProfileCompatibleWithBackendTarget as isProfileCompatibleWithBackendTargetProtocol } from '@happier-dev/protocol/profiles/profileCompatibility';
+import { readBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { resolveBundledAgentIdFromContributionIdentity } from '@/agents/catalog/catalog';
 import type { AgentId } from '@/agents/registry/registryCore';
 
@@ -28,7 +28,9 @@ export function isProfileCompatibleWithBackendTarget(
     profile: ProfileCompatibilitySummary,
     target: BackendTargetRefV2Input,
 ): boolean {
-    const canonicalTargetKey = resolveBackendTargetKeyV2(target);
+    const canonicalTargetKey = readBackendTargetKeyV2(target);
+    if (canonicalTargetKey === null) return false;
+    const canonicalTarget = parseBackendTargetKeyV2(canonicalTargetKey);
     const explicitCanonical = profile.compatibilityByTargetKey?.[canonicalTargetKey];
     if (typeof explicitCanonical === 'boolean') return explicitCanonical;
     // Read the qualified identity from the canonical key rather than from the
@@ -36,7 +38,6 @@ export function isProfileCompatibleWithBackendTarget(
     // all name the same Agent, and only the canonical key owner knows which.
     // Deriving it here also keeps an installed Agent off the V1 conversion,
     // which can only represent identities the Protocol reader already knows.
-    const canonicalTarget = parseBackendTargetKeyV2(canonicalTargetKey);
     if (canonicalTarget.kind === 'agent') {
         if (canonicalTarget.definitionId !== undefined) {
             return isProfileCompatibleWithBackendTargetProtocol(
@@ -65,7 +66,7 @@ export function isProfileCompatibleWithAgent(
     profile: ProfileCompatibilitySummary,
     agentId: AgentId,
 ): boolean {
-    return isProfileCompatibleWithAgentProtocol(normalizeCompatibilityProfile(profile), agentId);
+    return isProfileCompatibleWithBackendTarget(profile, { kind: 'builtInAgent', agentId });
 }
 
 export function getProfileEnvironmentVariables(profile: AIBackendProfile): Record<string, string> {

@@ -5,7 +5,10 @@ import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeature
 
 import type { SessionSubmitPort } from './types';
 import { shouldDelegatePendingActivationToDaemon } from './pendingActivationWakeDecision';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 type SyncSubmitRuntime = Pick<
     typeof defaultSync,
@@ -17,6 +20,15 @@ type SyncSubmitRuntime = Pick<
     | 'isSessionTargetRemoteToActiveServer'
     | 'encryption'
 >;
+
+/** Admission shared by standalone and Sync-owned submit ports. */
+export const isSessionSubmitMachineReachable: NonNullable<SessionSubmitPort['isMachineReachable']> = (machineId, options) => {
+    const lifetime = options?.accountLifetime ?? captureActiveServerAccountScopeLifetime();
+    if (!lifetime?.isCurrent()
+        || (options?.serverId && !areServerProfileIdentifiersEquivalent(options.serverId, lifetime.scope.serverId))) return false;
+    const machine = resolveServerScopedMachine(storage.getState(), lifetime.scope.serverId, machineId);
+    return machine !== null && isMachineReachable(lifetime.scope, machine);
+};
 
 export function createSyncBackedSubmitPort(syncRuntime: SyncSubmitRuntime = defaultSync): SessionSubmitPort {
     return {
@@ -37,10 +49,7 @@ export function createSyncBackedSubmitPort(syncRuntime: SyncSubmitRuntime = defa
                 getServerFeaturesSnapshot,
                 getMachine: (targetMachineId) => storage.getState().machines[targetMachineId],
             }),
-        isMachineReachable: (machineId) => {
-            const machine = storage.getState().machines[machineId];
-            return Boolean(machine && isMachineOnline(machine));
-        },
+        isMachineReachable: isSessionSubmitMachineReachable,
         refreshSessionForSubmit: (sessionId, options) =>
             syncRuntime.refreshSessionForSubmit(sessionId, options),
         isSessionTargetRemoteToActiveServer: (sessionId) =>

@@ -5,6 +5,7 @@ import { SessionDraftAddressV1Schema } from '@happier-dev/protocol/drafts/sessio
 import { buildSettingArtifacts } from '@happier-dev/protocol/settings/registry/buildSettingArtifacts';
 import { defineSettingDefinitions } from '@happier-dev/protocol/settings/registry/settingDefinition';
 import { z } from 'zod';
+import { createStoredReadSchema, defineStoredReadProjection } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { normalizeAccountSettingsServerSelection } from '@/sync/domains/settings/parse/accountSettingsServerSelectionNormalization';
 import { SessionSplitCanvasLayoutsSchema } from '@/sync/domains/session/sessionSplitCanvasPersistence';
@@ -41,17 +42,17 @@ export const NewSessionOrdinaryEntryDraftIdSchema = z.string().refine(
     'Expected a canonical new-session draft UUID',
 );
 
-const LastUsedBackendTargetSchema = z.preprocess((value) => {
+function normalizeLastUsedBackendTarget(value: unknown, storedRead = false) {
     if (value === null || value === undefined) return null;
 
     // Installed Agents persist their exact contribution identity. Resolving
     // that identity into the legacy flat backend id belongs to the current
     // projected catalog, not this projection-independent local-settings
     // reader. Preserve it until that owner can resolve or retire it.
-    const persistedAgent = PersistedAgentTargetRefV1Schema.safeParse(value);
+    const persistedAgent = (storedRead ? createStoredReadSchema(PersistedAgentTargetRefV1Schema) : PersistedAgentTargetRefV1Schema).safeParse(value);
     if (persistedAgent.success) return persistedAgent.data;
 
-    const backendInput = BackendTargetRefV2InputSchema.safeParse(value);
+    const backendInput = (storedRead ? createStoredReadSchema(BackendTargetRefV2InputSchema) : BackendTargetRefV2InputSchema).safeParse(value);
     if (!backendInput.success) return null;
     try {
         return writePersistedBackendTargetRefV2(
@@ -60,7 +61,12 @@ const LastUsedBackendTargetSchema = z.preprocess((value) => {
     } catch {
         return null;
     }
-}, PersistedBackendTargetRefV2Schema.nullable());
+}
+
+const LastUsedBackendTargetSchema = defineStoredReadProjection(
+    z.preprocess((value) => normalizeLastUsedBackendTarget(value), PersistedBackendTargetRefV2Schema.nullable()),
+    () => z.preprocess((value) => normalizeLastUsedBackendTarget(value, true), createStoredReadSchema(PersistedBackendTargetRefV2Schema).nullable()),
+);
 
 export const ServerSelectionGroupSchema = z.object({
     id: z.string().min(1),
@@ -168,7 +174,7 @@ function parseLocalSetting<TSchema extends z.ZodTypeAny>(
     definition: Readonly<{ schema: TSchema; default: z.input<TSchema> }>,
     value: unknown,
 ): z.output<TSchema> {
-    const parsed = definition.schema.safeParse(value);
+    const parsed = createStoredReadSchema(definition.schema).safeParse(value);
     return parsed.success ? parsed.data : definition.schema.parse(definition.default);
 }
 

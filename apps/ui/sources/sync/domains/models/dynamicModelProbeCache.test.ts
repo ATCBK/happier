@@ -148,4 +148,36 @@ describe('dynamic model probe cache', () => {
         expect(reloaded.readDynamicModelProbeCache('malformed-catalog')).toBeNull();
     });
 
+    it('hydrates known capabilities from retained catalogs with unknown nested fields', async () => {
+        resetDynamicModelProbeCacheForTests();
+        persistedValues.set('dynamic-model-probe-cache-v1', JSON.stringify({
+            version: 7,
+            retired: true,
+            entries: {
+                'retained-catalog': {
+                    updatedAt: Date.now(),
+                    value: {
+                        retired: { enabled: true },
+                        availableModels: [{
+                            id: 'retained-model', name: 'Retained', retired: true,
+                            capabilities: { structuredOutput: 'supported', toolRoundTrips: 'unsupported', retired: true },
+                        }],
+                        supportsFreeform: false,
+                    },
+                },
+            },
+        }));
+
+        vi.resetModules();
+        const reloaded = await import('./dynamicModelProbeCache');
+        expect(reloaded.readDynamicModelProbeCache('retained-catalog')).toMatchObject({
+            kind: 'success',
+            value: { availableModels: [{ id: 'retained-model', name: 'Retained',
+                capabilities: { structuredOutput: 'supported', toolRoundTrips: 'unsupported' } }], supportsFreeform: false },
+        });
+        const entry = reloaded.readDynamicModelProbeCache('retained-catalog');
+        if (entry?.kind !== 'success') throw new Error('Expected the retained catalog to remain readable');
+        expect(entry.value.availableModels[0]?.capabilities).not.toHaveProperty('retired');
+    });
+
 });

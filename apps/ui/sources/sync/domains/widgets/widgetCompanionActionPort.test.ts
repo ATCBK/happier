@@ -1,8 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeSessionCompanionPreference, setSessionCompanionInstanceInputs, removeSessionCompanionItem, addSessionCompanionItem, moveSessionCompanionItem } from '@/components/sessions/companion/state/sessionCompanionPreference';
+import { normalizeSessionCompanionPreference, setSessionCompanionInstanceInputs, setSessionCompanionInstanceNetwork, removeSessionCompanionItem, addSessionCompanionItem, moveSessionCompanionItem } from '@/components/sessions/companion/state/sessionCompanionPreference';
+import { CurrentSessionPresentationActionInputV1Schema } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import { createWidgetCompanionActionPortV1 } from './widgetCompanionActionPort';
 
 describe('Companion widget Action adapter', () => {
+    it('persists guest egress through the current Companion owner, not the public presentation Action', async () => {
+        const instance = { v: 1 as const, id: 'copy', definition: { kind: 'builtin' as const, id: 'session_summary' }, bindings: {} };
+        let preference = normalizeSessionCompanionPreference({ v: 1, visible: true, collapsed: false, density: 'compact', edge: 'trailing', items: [{ kind: 'instance', instance }] });
+        const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'companion' as const, sessionId: 'session' } };
+        const port = createWidgetCompanionActionPortV1({
+            lifetime: { scope: surface, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            readPreference: () => preference,
+            // The current-client transport is the boundary; the persisted reducer remains real.
+            applyPresentation: async (_surface, intent) => {
+                if (!intent || intent.kind !== 'companion.instance.network.set') return { ok: false, errorCode: 'network_intent_missing', error: 'network_intent_missing' };
+                preference = setSessionCompanionInstanceNetwork(preference, intent.instanceId, intent.network);
+                return { ok: true, result: { status: 'applied' } };
+            },
+        });
+        expect(await port.apply(surface, { kind: 'network', instanceId: 'copy', network: { network: 'none' } }, {}))
+            .toMatchObject({ ok: true, result: { instance: { ...instance, networkOverride: { network: 'none' } } } });
+        expect(CurrentSessionPresentationActionInputV1Schema.safeParse({ intent: { kind: 'companion.instance.network.set', instanceId: 'copy', network: { network: 'open' } } }).success).toBe(false);
+    });
     it('refuses group and width mutations without dispatching personal presentation changes', async () => {
         const instance = { v: 1 as const, id: 'copy', definition: { kind: 'builtin' as const, id: 'session_summary' }, bindings: {} };
         const preference = normalizeSessionCompanionPreference({ v: 1, visible: true, collapsed: false, density: 'compact', edge: 'trailing', items: [{ kind: 'instance', instance }] });

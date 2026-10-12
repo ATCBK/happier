@@ -3,7 +3,7 @@ import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { WorkflowArtifactRevisionV1, WorkflowDefinitionMetadataV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
-import { callWorkflowAction } from './callWorkflowAction';
+import { callWorkflowAction, type WorkflowActionCallerContext } from './callWorkflowAction';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { WorkflowDefinitionExportResultV1Schema, type WorkflowDefinitionExportResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
@@ -42,6 +42,7 @@ async function callDefinitionAction<TResult>(params: Readonly<{
     parseResult: (value: unknown) => TResult;
     signal?: AbortSignal;
     deletedArtifactId?: string;
+    context?: WorkflowActionCallerContext;
 }>): Promise<TResult> {
     const lifetime = captureActiveServerAccountScopeLifetime();
     const result = await callWorkflowAction({
@@ -106,6 +107,7 @@ export async function createWorkflowDefinition(params: Readonly<{
     definition: unknown;
     metadata: WorkflowDefinitionMetadataV1;
     signal?: AbortSignal;
+    context?: WorkflowActionCallerContext;
 }>): Promise<WorkflowDefinitionCreateResultV1> {
     const input = WorkflowDefinitionCreateRequestV1Schema.parse({
         definitionId: params.definitionId,
@@ -116,6 +118,7 @@ export async function createWorkflowDefinition(params: Readonly<{
         actionId: 'workflow.definition.create',
         input,
         parseResult: (value) => WorkflowDefinitionCreateResultV1Schema.parse(value),
+        ...(params.context === undefined ? {} : { context: params.context }),
         ...signalOption(params.signal),
     });
 }
@@ -133,6 +136,7 @@ export async function updateWorkflowDefinition(params: Readonly<{
     definition: unknown;
     metadata: WorkflowDefinitionMetadataV1;
     signal?: AbortSignal;
+    context?: WorkflowActionCallerContext;
 }>): Promise<WorkflowDefinitionUpdateResultV1> {
     const input = WorkflowDefinitionUpdateRequestV1Schema.parse({
         definitionId: params.definitionId,
@@ -144,6 +148,7 @@ export async function updateWorkflowDefinition(params: Readonly<{
         actionId: 'workflow.definition.update',
         input,
         parseResult: (value) => WorkflowDefinitionUpdateResultV1Schema.parse(value),
+        ...(params.context === undefined ? {} : { context: params.context }),
         ...signalOption(params.signal),
     });
 }

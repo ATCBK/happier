@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { adoptHomeProfile, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { t } from '@/text';
 import {
     clearMachineRequestReachabilityForTest,
     recordMachineRequestFailed,
@@ -48,13 +51,33 @@ beforeEach(async () => {
 });
 
 describe('buildMachineAdministrationCandidates', () => {
+    it('uses the canonical inventory names in both raw and snapshot candidate projections', () => {
+        const machines = [
+            { ...machine({ id: 'aaaa-machine' }), metadata: { ...machine({ id: 'aaaa-machine' }).metadata!, displayName: 'Studio' } },
+            { ...machine({ id: 'bbbb-machine' }), metadata: { ...machine({ id: 'bbbb-machine' }).metadata!, displayName: 'Studio' } },
+            machine({ id: 'locked-machine', locked: true }),
+            { ...machine({ id: 'unnamed-machine' }), metadata: null, availability: { kind: 'available' as const } },
+        ];
+        const raw = buildMachineAdministrationCandidateInventoryRows({ profiles: [profile], activeServerId: profile.id,
+            activeMachineRecords: machines, machineRecordListsByServerId: {}, nowMs: 100 });
+        const snapshots = buildMachineAdministrationCandidateInventoryRowsFromSnapshots({ snapshots: [{
+            kind: 'resolved', profileId: profile.id, accountId: 'account-b', serverIdentityId: profile.serverIdentityId!, serverName: 'Server B',
+            observation: 'live', machines,
+        }], nowMs: 100 });
+        for (const rows of [raw, snapshots]) {
+            expect(rows.map(row => row.candidate.displayName)).toEqual([
+                'Studio · aaaa', 'Studio · bbbb', t('machine.lockedMachine'), t('machine.unnamedMachine'),
+            ]);
+        }
+    });
     it('projects a failed server-scoped request as unreachable despite fresh pushed presence', () => {
-        recordMachineRequestFailed({ serverId: 'local-profile-b', machineId: 'machine-b', observedAtMs: 100 });
+        recordMachineRequestFailed({ serverId: 'srv_server_b', accountId: 'account-b', machineId: 'machine-b', observedAtMs: 100 });
 
         const rows = buildMachineAdministrationCandidateInventoryRowsFromSnapshots({
             snapshots: [{
                 kind: 'resolved',
                 profileId: 'local-profile-b',
+                accountId: 'account-b',
                 serverIdentityId: 'srv_server_b',
                 serverName: 'Server B',
                 observation: 'live',
@@ -64,6 +87,19 @@ describe('buildMachineAdministrationCandidates', () => {
         });
 
         expect(rows[0]?.candidate.availability).toBe('offline');
+    });
+    it('carries the published Home name into administration targets', () => {
+        primeServerFeaturesSnapshot({ serverId: 'srv_server_b', snapshot: {
+            status: 'ready', features: { ...createRootLayoutFeaturesResponse(), homePresentation: { v: 1, displayName: 'Studio Home' } },
+        } });
+        try {
+            expect(buildMachineAdministrationCandidateInventoryRows({
+                profiles: [{ ...profile, name: 'localhost:52753' }], activeServerId: profile.id,
+                activeMachineRecords: [machine({ id: 'machine-b' })], machineRecordListsByServerId: {}, nowMs: 100,
+            })[0]).toMatchObject({ serverName: 'Studio Home', candidate: { serverLabel: 'Studio Home' } });
+        } finally {
+            deleteServerFeaturesSnapshot({ serverId: 'srv_server_b' });
+        }
     });
     it('keeps the device-local routing row attached to its portable candidate without exposing it as preference data', () => {
         const rawMachine = machine({ id: 'machine-b', active: true });
@@ -92,6 +128,7 @@ describe('buildMachineAdministrationCandidates', () => {
     it('uses raw canonical-scope inventory and retains revoked, replaced, offline, and locked facts', () => {
         const candidates = buildMachineAdministrationCandidates({
             profiles: [profile],
+            accountScopesByServerId: new Map([[profile.serverIdentityId!, { serverId: profile.serverIdentityId!, accountId: 'account-b' }]]),
             activeServerId: 'local-profile-a',
             activeMachineRecords: [],
             machineRecordListsByServerId: {

@@ -1,0 +1,80 @@
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReachRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
+import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { applyMcpServerCatalogSnapshot, resetMcpServerCatalogSnapshotsForTests } from '@/sync/store/settings/mcpServerCatalogSnapshot';
+import { resetMcpServerCatalogEngineForTests } from '@/sync/engine/settings/mcpServerCatalogEngine';
+
+installSettingsViewCommonModuleMocks({ storage: 'real' });
+const boundary = vi.hoisted(() => ({ execute: vi.fn() }));
+// The mounted public Action endpoint is the system boundary; catalog subscriptions stay real.
+vi.mock('@/components/approvals/useMountedActionExecution', () => ({ useMountedActionExecution: () => ({
+    execute: boundary.execute, ready: true, isCurrent: () => true, approval: {},
+}) }));
+const { useReachRules } = await import('./useReachRules');
+const scope = { serverId: 'reach-home', accountId: 'reach-account' };
+const initial: ReachRuleV1 = { id: 'everywhere', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 };
+beforeEach(() => {
+    boundary.execute.mockReset();
+    getStorage().setState({ settingsScope: scope, profileScope: scope, settings: settingsParse({}) });
+    applyMcpServerCatalogSnapshot(scope, { status: 'ready', revision: 1, authority: 'active', diagnostics: [], catalog: {
+        v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio', stdio: { command: 'server', args: [] },
+            env: {}, createdAt: 1, updatedAt: 1 }], bindings: [{ ...initial, serverId: 'server' }],
+    } }, true);
+});
+afterEach(async () => {
+    await standardCleanup();
+    resetMcpServerCatalogEngineForTests();
+    resetMcpServerCatalogSnapshotsForTests();
+});
+describe('MCP reach rules authoring', () => {
+    it('projects a replace immediately and restores the last acknowledged rules on typed refusal', async () => {
+        const pending = createDeferred<unknown>();
+        boundary.execute.mockReturnValueOnce(pending.promise);
+        const hook = await renderHook(() => useReachRules('mcp_server', 'server'));
+        let write!: ReturnType<ReturnType<typeof useReachRules>['change']>;
+        act(() => { write = hook.getCurrent().change({ kind: 'replace', rules: [{ target: { t: 'allMachines' }, enabled: false }] }); });
+        expect(hook.getCurrent().rules[0]?.enabled).toBe(false);
+        await act(async () => { pending.resolve({ ok: true, result: { ok: false, code: 'conflict' } }); await write; });
+        expect(await write).toEqual({ ok: false, message: 'conflict' });
+        expect(hook.getCurrent().rules).toEqual([initial]);
+    });
+    it('serializes rapid writes from the last written value and Undo resends the returned previous rules', async () => {
+        const first = createDeferred<unknown>();
+        boundary.execute.mockReturnValueOnce(first.promise);
+        const hook = await renderHook(() => useReachRules('mcp_server', 'server'));
+        const off = { ...initial, enabled: false, updatedAt: 2 };
+        const machine = { id: 'machine', target: { t: 'machine' as const, machineId: 'm1' }, enabled: true, createdAt: 3, updatedAt: 3 };
+        boundary.execute.mockResolvedValueOnce({ ok: true, result: { ok: true, revision: 3,
+            items: [{ serverId: 'server', rules: [off, machine], previous: [off] }] } });
+        let one!: Promise<unknown>; let two!: Promise<unknown>;
+        act(() => {
+            one = hook.getCurrent().change({ kind: 'write', write: { place: { t: 'allMachines' }, state: 'off' } });
+            two = hook.getCurrent().change({ kind: 'write', write: { place: { t: 'machine', machineId: 'm1' }, state: 'on' } });
+        });
+        await vi.waitFor(() => expect(boundary.execute).toHaveBeenCalledTimes(1));
+        expect(hook.getCurrent().rules.find(rule => rule.target.t === 'allMachines')?.enabled).toBe(false);
+        expect(hook.getCurrent().rules.find(rule => rule.target.t === 'machine')?.enabled).toBe(true);
+        await act(async () => { first.resolve({ ok: true, result: { ok: true, revision: 2,
+            items: [{ serverId: 'server', rules: [off], previous: [initial] }] } }); await one; await two; });
+        expect(hook.getCurrent().rules).toEqual([off, machine]);
+        boundary.execute.mockResolvedValueOnce({ ok: true, result: { ok: true, revision: 4,
+            items: [{ serverId: 'server', rules: [off], previous: [off, machine] }] } });
+        await act(async () => { await hook.getCurrent().undoLast(); });
+        expect(boundary.execute.mock.calls.at(-1)).toEqual(['mcp.rules.set', { items: [{ serverId: 'server' }],
+            change: { kind: 'replace', rules: [{ target: off.target, enabled: false }] } }]);
+        expect(hook.getCurrent().rules).toEqual([off]);
+    });
+    it('keeps an unreadable catalog unavailable rather than presenting an empty ready value', async () => {
+        const hook = await renderHook(() => useReachRules('mcp_server', 'server'));
+        await act(async () => {
+            applyMcpServerCatalogSnapshot(scope, { status: 'unavailable', reason: 'invalid-stored-content' }, true);
+        });
+        expect(hook.getCurrent().status).toBe('unavailable');
+        expect(await hook.getCurrent().change({ kind: 'replace', rules: [] })).toEqual({ ok: false, message: 'catalog_unavailable' });
+        expect(boundary.execute).not.toHaveBeenCalled();
+    });
+});

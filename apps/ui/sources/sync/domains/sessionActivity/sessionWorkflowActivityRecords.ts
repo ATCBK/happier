@@ -1,4 +1,5 @@
 import { SESSION_WORKFLOW_RUN_SNAPSHOT_PROJECTION_VERSION, SessionWorkflowRunSnapshotV1Schema, type SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol/sessions/work/workflow/sessionWorkflowRunSnapshotV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { buildWorkflowRunSystemRecordLocalId } from '@happier-dev/protocol/sessions/system/records/activity/activitySystemRecordKinds';
 import {
     openSessionSystemRecord,
@@ -13,7 +14,7 @@ function decodeWorkflowSnapshot(runId: string, value: unknown): SessionSystemRec
         if ('v' in value && typeof value.v === 'number' && Number.isInteger(value.v) && value.v !== 1) return { status: 'unsupported_version', version: value.v };
         if ('projectionVersion' in value && typeof value.projectionVersion === 'number' && Number.isInteger(value.projectionVersion) && value.projectionVersion !== SESSION_WORKFLOW_RUN_SNAPSHOT_PROJECTION_VERSION) return { status: 'unsupported_version', version: value.projectionVersion };
     }
-    const parsed = SessionWorkflowRunSnapshotV1Schema.safeParse(value);
+    const parsed = createStoredReadSchema(SessionWorkflowRunSnapshotV1Schema).safeParse(value);
     return parsed.success && parsed.data.runId === runId ? { status: 'ready', value: parsed.data } : { status: 'malformed' };
 }
 

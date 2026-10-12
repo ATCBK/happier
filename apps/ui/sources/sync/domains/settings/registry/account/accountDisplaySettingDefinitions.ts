@@ -17,6 +17,7 @@ function bucketBytes(value: number, smallMax: number, mediumMax: number): 'small
 }
 
 export const ACCOUNT_DISPLAY_SETTING_ANALYTICS = defineAccountSettingAnalytics({
+    homeAtmosphere: { trackCurrentState: false, trackChanges: false, valueKind: 'presence', privacy: 'forbidden', identityScope: 'person' },
     sessionThinkingDisplayMode: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     sessionThinkingInlinePresentation: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     sessionThinkingInlineChrome: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
@@ -82,5 +83,6 @@ export const ACCOUNT_DISPLAY_SETTING_ANALYTICS = defineAccountSettingAnalytics({
     tabBarSize: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     glassBlurEnabled: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
     glassBlurIntensity: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    glassTintIntensity: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     composerSurfaceStyle: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
 });

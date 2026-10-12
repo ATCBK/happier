@@ -6,6 +6,7 @@ import {
     ConnectedServiceBindingsV2IngressSchema,
     type ConnectedServiceBindingsV2,
 } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { resolveQualifiedConnectedAccountServiceKey } from './connectedServiceRegistry';
 
@@ -37,12 +38,12 @@ export function readSessionConnectedServiceBindings(params: Readonly<{
     agentId: string;
 }>): ConnectedServiceBindingsV2 | null {
     const metadata = readRecord(params.metadata);
-    const explicit = ConnectedServiceBindingsV2IngressSchema.safeParse(
+    const explicit = createStoredReadSchema(ConnectedServiceBindingsV2IngressSchema).safeParse(
         metadata?.connectedServices,
     );
     if (explicit.success) return explicit.data;
 
-    const legacyIngress = BuiltInLegacyConnectedServiceBindingsV1IngressSchema.safeParse(
+    const legacyIngress = createStoredReadSchema(BuiltInLegacyConnectedServiceBindingsV1IngressSchema).safeParse(
         metadata?.connectedServices,
     );
     if (legacyIngress.success) {

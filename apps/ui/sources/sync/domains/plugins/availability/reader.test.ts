@@ -111,6 +111,23 @@ function snapshot(overrides: Partial<PluginAccountAvailabilitySnapshot> = {}): P
 }
 
 describe('Plugin Account Availability reader', () => {
+    it('retains one derived catalog per snapshot without retaining authority after clear', () => {
+        const store = createPluginAccountAvailabilityReaderStore();
+        const reader = store.bind(scope);
+        store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: 'com.acme.fixture', response: intentRead() }] }) });
+        const installed = reader.readInstalledPlugins();
+        const materializations = reader.readMaterializations();
+        const catalogs = new Set(Array.from({ length: 100 }, () => reader.readInstalledPlugins()));
+        expect(catalogs.size).toBe(1);
+        expect(reader.readInstalledPlugins()).toBe(installed);
+        expect(reader.readMaterializations()).toBe(materializations);
+        store.clear();
+        expect(reader.readInstalledPlugins()).toMatchObject({ kind: 'unavailable' });
+        expect(reader.readMaterializations()).toMatchObject({ kind: 'unavailable' });
+        store.replace({ scope, snapshot: snapshot({ availabilityCursor: 43 }) });
+        expect(reader.readInstalledPlugins()).not.toBe(installed);
+        expect(reader.readMaterializations()).toMatchObject({ kind: 'available', availabilityCursor: 43 });
+    });
     it('projects cold portable app and settings destinations from the exact release without reported descriptors or execution authority', () => {
         const release = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
             ...intentRead(),

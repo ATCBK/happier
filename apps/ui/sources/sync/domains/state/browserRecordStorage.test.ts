@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { forceCloseDatabase } from 'fake-indexeddb';
+import { forceCloseDatabase, IDBFactory } from 'fake-indexeddb';
 import { clearBrowserRecords, deleteBrowserRecord, listBrowserRecords, readBrowserRecord, updateBrowserRecord, writeBrowserRecord } from './browserRecordStorage';
 
 describe('browser large-record transactions', () => {
@@ -53,5 +53,39 @@ describe('browser large-record transactions', () => {
         await writeBrowserRecord('failed:scope', 'valuable');
         await expect(updateBrowserRecord('failed:scope', () => { throw new Error('cannot encode'); })).rejects.toThrow('cannot encode');
         expect(await readBrowserRecord('failed:scope')).toBe('valuable');
+    });
+    it('keeps predecessor string records readable while adding durable picture bytes', async () => {
+        vi.stubGlobal('indexedDB', new IDBFactory());
+        try {
+            const legacy = await new Promise<IDBDatabase>((resolve, reject) => {
+                const request = indexedDB.open('happier-local-records', 1);
+                request.onupgradeneeded = () => request.result.createObjectStore('records');
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            await new Promise<void>((resolve, reject) => {
+                const transaction = legacy.transaction('records', 'readwrite');
+                transaction.objectStore('records').put('valuable draft', 'retained:draft');
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => reject(transaction.error);
+            });
+            legacy.close();
+            vi.resetModules();
+            const records = await import('./browserRecordStorage');
+            const { pictureStore } = await import('@/components/atmosphere/pictureStore.web');
+            expect(await records.readBrowserRecord('retained:draft')).toBe('valuable draft');
+            await pictureStore.put({ localId: 'after-upgrade', kind: 'user', data: new Blob(['photo']) });
+            expect(await (await pictureStore.get('after-upgrade'))?.data.text()).toBe('photo');
+            expect(await records.readBrowserRecord('retained:draft')).toBe('valuable draft');
+            const predecessor = await new Promise<IDBDatabase>((resolve, reject) => {
+                // 0.2's real opener requests version 1; a second tab must still be able to read.
+                const request = indexedDB.open('happier-local-records', 1);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            predecessor.close();
+            (await records.openBrowserRecordDatabase()).close();
+            (await records.openBrowserRecordDatabase('pictures')).close();
+        } finally { vi.unstubAllGlobals(); }
     });
 });

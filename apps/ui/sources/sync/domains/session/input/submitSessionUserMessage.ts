@@ -592,7 +592,10 @@ async function enqueuePending(
         };
     }
 
-    if (inactiveResumePolicy === 'online_only' && port.isMachineReachable?.(wakeOpts.machineId) !== true) {
+    if (inactiveResumePolicy === 'online_only' && port.isMachineReachable?.(wakeOpts.machineId, {
+        serverId: opts.serverId,
+        accountLifetime: opts.accountLifetime,
+    }) !== true) {
         if (!reportHandoffIfCurrent()) return accountScopeRetiredResult('send_failed', 'pending', localId);
         return {
             type: 'wake_pending',

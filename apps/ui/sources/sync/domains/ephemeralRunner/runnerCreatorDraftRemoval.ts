@@ -1,3 +1,4 @@
+import { createStoredReadSchema } from '@happier-dev/protocol';
 import { TemporaryComputerActivationRefV1Schema } from '@happier-dev/protocol/sessions/authoring/fieldCatalog';
 import type { SessionDraftDocumentV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 
@@ -75,7 +76,7 @@ export async function removeRunnerCreatorCustodyForRemovedDraft(input: Readonly<
     // the released V1 vocabulary has no such field to remove custody for.
     const document = input.document;
     if (document.v !== 2 || document.target.kind !== 'newSession') return;
-    const parsed = TemporaryComputerActivationRefV1Schema.safeParse(
+    const parsed = createStoredReadSchema(TemporaryComputerActivationRefV1Schema).safeParse(
         document.target.authoring.temporaryComputerActivationRef?.value,
     );
     if (!parsed.success) return;

@@ -5,7 +5,7 @@ import { resolveConnectedServiceQuotaMeterLabel } from '@happier-dev/protocol/co
 
 import { isConnectedServiceQuotaMeterVisible } from './connectedServiceQuotaMeterVisibility';
 
-import { clampQuotaPct, deriveQuotaUtilizationPct } from './deriveQuotaUtilizationPct';
+import { deriveQuotaMeterValues } from './deriveQuotaUtilizationPct';
 import { selectComparableConnectedServiceQuotaMeters } from './connectedServiceQuotaGauge';
 
 export type ConnectedServiceQuotaSelectedMeter = Readonly<{
@@ -57,10 +57,9 @@ export function selectConnectedServiceQuotaSummaryMeters(params: Readonly<{
 
   const selected = selectedMeterIds.map((meterId, index) => {
     const meter = params.meters.find((candidate) => candidate.meterId === meterId) ?? null;
-    const utilizationPct = meter ? deriveQuotaUtilizationPct(meter) : null;
-    const remainingPct = typeof meter?.remainingPct === 'number' && Number.isFinite(meter.remainingPct)
-      ? clampQuotaPct(meter.remainingPct)
-      : utilizationPct === null ? null : clampQuotaPct(100 - utilizationPct);
+    const values = meter ? deriveQuotaMeterValues(meter) : null;
+    const utilizationPct = values?.usedPct ?? null;
+    const remainingPct = values?.remainingPct ?? null;
     return {
       selection: {
         meterId,

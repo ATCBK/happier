@@ -52,6 +52,23 @@ function deriveStatus(messages: readonly Message[], runId: string): string | und
 }
 
 describe('deriveExecutionRunSubagents status derivation', () => {
+    it('projects additive launch-origin fields from retained transcript tool payloads', () => {
+        const launchOrigin = {
+            kind: 'session_discussion',
+            sessionId: 'session-1',
+            discussionId: 'discussion-1',
+            messageIds: ['message-1'],
+        };
+        const messages = [createRunToolMessage({
+            id: 'msg-stored-origin',
+            runId: 'run_storedorigin1',
+            state: 'running',
+            input: { launchOrigin: { ...launchOrigin, retiredOriginField: true } },
+        })];
+
+        expect(deriveExecutionRunSubagents({ messages })[0]?.runRef?.launchOrigin).toEqual(launchOrigin);
+    });
+
     it('carries the canonical parsed launch origin into the execution-run roster row', () => {
         const messages = [createRunToolMessage({
             id: 'msg-origin',

@@ -40,7 +40,7 @@ describe('projectSyncedSessionAuthoringFields', () => {
             modelSelection: null,
             modelId: 'gpt-5',
             modelUpdatedAt: 124,
-            mcpSelection: null,
+            capabilitySelection: null,
             connectedServices: null,
             connectedServicesUpdatedAt: 125,
             terminal: null,

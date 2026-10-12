@@ -7,7 +7,59 @@ import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/
 import { resolveUsageHowYouWork } from '@happier-dev/protocol/usage/resolveUsageHowYouWork';
 
 describe('opened Session usage work evidence', () => {
-    it.each([{ projects: ['project'] }, { sources: ['runtime'] }, { modelIds: ['model'] },
+    it('projects additive saved Action confirmations without losing witnessed waiting evidence', () => {
+        const request = {
+            tool: 'Happier Action confirmation' as const, kind: 'user_action' as const,
+            arguments: { actionId: 'session.activity.get', preview: {}, sessionId: 'session-1', turnId: 'turn-1' },
+            createdAt: 100, turnId: 'turn-1', source: 'happier_action' as const,
+            responseTarget: { kind: 'happier_action_confirmation_v1' as const, requestId: 'action:1',
+                actionId: 'session.activity.get', inputDigestV1: `sha256:${'0'.repeat(64)}`,
+                runtimeAccountId: 'account-runtime', sessionId: 'session-1', turnId: 'turn-1' },
+        };
+        const project = (confirmation: unknown) => projectSessionUsageWorkEvidence(createSessionFixture({
+            id: 'session-1', agentState: null,
+            metadata: { path: '', host: '', actionConfirmationsV1: confirmation },
+        }));
+        const known = { v: 1, requests: { 'action:1': request }, completedRequests: {} };
+        const result = project({ ...known, retiredCarrierField: true,
+            requests: { 'action:1': { ...request, retiredRequestField: true,
+                responseTarget: { ...request.responseTarget, retiredTargetField: true } } } });
+        expect(result.permissions).toEqual(project(known).permissions);
+        expect(result.permissions).toEqual([expect.objectContaining({ requestId: 'action:1', requestedAtMs: 100 })]);
+        expect(project({ ...known, requests: { 'action:1': { ...request, turnId: 'wrong-turn' } } }).permissions).toBeUndefined();
+    });
+
+    it('projects content-free tool phase points and completed compactions from the admitted opened page', () => {
+        const session = createSessionFixture({ id: 'session', encryptionMode: 'plain', metadata: null, agentState: null });
+        const tool = (id: string, name: string, createdAt: number) => ({ id, localId: null, createdAt,
+            content: { role: 'agent', content: { type: 'codex', data: { type: 'tool-call', callId: id, name,
+                input: { command: 'private command', path: '/private/file' } } } } });
+        const compaction = { id: 'compact', localId: null, createdAt: 150, content: { role: 'agent', content: {
+            type: 'event', id: 'compact', data: { type: 'context-compaction', phase: 'completed', source: 'runtime', turnId: 'turn' },
+        } } };
+        const claude = { id: 'claude-read', localId: null, createdAt: 110, content: { role: 'agent', content: {
+            type: 'output', data: { type: 'assistant', message: { role: 'assistant', content: [
+                { type: 'tool_use', id: 'claude-read', name: 'Read', input: { path: '/private/file' } },
+            ] } },
+        } } };
+        const detail = projectSessionUsageWorkEvidence(session, [tool('read', 'Read', 100), claude, tool('edit', 'Edit', 120),
+            tool('shell', 'Bash', 130), tool('future', 'UnknownTool', 140), compaction]);
+        const result = resolveUsageHowYouWork({ detail, period: { startMs: 0, endMs: 1000 }, timeZoneOffsetMinutes: 0 });
+        expect(result.autopsy).toEqual({ coverage: 'partial', events: [
+            { evidenceId: 'read', sessionId: 'session', turnId: null, observedAtMs: 100, kind: 'read', method: 'tool_classification' },
+            { evidenceId: 'claude-read', sessionId: 'session', turnId: null, observedAtMs: 110, kind: 'read', method: 'tool_classification' },
+            { evidenceId: 'edit', sessionId: 'session', turnId: null, observedAtMs: 120, kind: 'change', method: 'tool_classification' },
+            { evidenceId: 'shell', sessionId: 'session', turnId: null, observedAtMs: 130, kind: 'execute', method: 'tool_classification' },
+            { evidenceId: 'future', sessionId: 'session', turnId: null, observedAtMs: 140, kind: 'unknown', method: 'tool_classification' },
+            { evidenceId: JSON.stringify(['session', 'compact']), sessionId: 'session', turnId: 'turn', observedAtMs: 150,
+                kind: 'compaction', method: 'native_event' },
+        ] });
+        expect(JSON.stringify(result)).not.toMatch(/private command|private\/file/);
+        const scope = { serverId: 'home', accountId: 'account' };
+        expect(projectUsageQueryWorkEvidence({ query: normalizeUsageQuery({ session: 'session' }), scope, currentScope: scope,
+            isCurrent: false, sessions: [session], openedMessages: new Map([['session', [compaction]]]) })).toEqual({ status: 'unknown' });
+    });
+    it.each([{ projects: ['project'] }, { sources: ['runtime'] }, { modelIds: ['model'] }, { modelIds: ['claude-haiku-4-5'] },
         { workspaceIds: ['workspace'] }, { backendModes: ['agent'] }])('admits exact accounting turns for private evidence scope %j', filters => {
         const scope = { serverId: 'home', accountId: 'account' };
         const session = createSessionFixture({ id: 'session', serverId: 'home', encryptionMode: 'plain', metadata: null,
@@ -15,7 +67,7 @@ describe('opened Session usage work evidence', () => {
                 turnId, agentId: 'codex', status: 'completed' as const, startedAt: 100, terminalAt: 900, updatedAt: 900,
             })) } });
         const contributions = [{ id: 'selected', observedAtMs: 500, sessionId: 'session', turnId: 'selected',
-            agentId: 'codex', machineId: null, projectKey: 'project', source: 'runtime', modelId: 'model',
+            agentId: 'codex', machineId: null, projectKey: 'project', source: 'runtime', modelId: filters.modelIds?.[0] === 'claude-haiku-4-5' ? 'claude-haiku-4-5-20251001' : 'model',
             workspaceId: 'workspace', backendMode: 'agent', tokens: { input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 15 },
             cost: { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' } }];
         contributions.push({ ...contributions[0]!, id: 'foreign', turnId: 'foreign', projectKey: 'foreign', source: 'foreign',

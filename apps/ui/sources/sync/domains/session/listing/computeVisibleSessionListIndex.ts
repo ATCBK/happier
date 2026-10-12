@@ -869,8 +869,9 @@ function pendingHeadersContainFolder(headers: ReadonlyArray<Extract<SessionListI
 function flushPendingFolderHeaders(params: Readonly<{
     out: SessionListIndexItem[];
     headerState: VisibleSessionListHeaderState;
+    keepEmptyFolders?: boolean;
 }>): boolean {
-    if (!pendingHeadersContainFolder(params.headerState.pendingGroupHeaders)) return false;
+    if (params.keepEmptyFolders === false || !pendingHeadersContainFolder(params.headerState.pendingGroupHeaders)) return false;
     if (params.headerState.pendingSectionHeader) {
         params.out.push(params.headerState.pendingSectionHeader);
     }
@@ -880,17 +881,31 @@ function flushPendingFolderHeaders(params: Readonly<{
     return true;
 }
 
-export function pruneOrphanHeaders(items: ReadonlyArray<SessionListIndexItem>): SessionListIndexItem[] {
+/**
+ * Drops headers with nothing under them. A Session folder is the Sessions tree's own structure, so it stays
+ * while empty, except where the list shows Runs only (`keepEmptyFolders: false`): that view is not the tree.
+ */
+export function pruneOrphanHeaders(
+    items: ReadonlyArray<SessionListIndexItem>,
+    options: Readonly<{ keepEmptyFolders?: boolean }> = {},
+): SessionListIndexItem[] {
     const out: SessionListIndexItem[] = [];
     const headerState = createVisibleSessionListHeaderState();
+    const keepEmptyFolders = options.keepEmptyFolders;
 
     for (const item of items) {
         if (item.type === 'header') {
-            flushPendingFolderHeaders({ out, headerState });
+            // The single-section "Sessions" label would sit over Runs it does not hold.
+            if (keepEmptyFolders === false && item.headerKind === 'sessions') continue;
+            flushPendingFolderHeaders({ out, headerState, keepEmptyFolders });
             if (isPrimarySessionListSectionHeader(item)) {
                 headerState.pendingSectionHeader = item;
                 headerState.pendingGroupHeaders = [];
             } else {
+                // A Runs-only list is flat: a group header directly followed by another holds nothing.
+                if (keepEmptyFolders === false) {
+                    headerState.pendingGroupHeaders = headerState.pendingGroupHeaders.filter((pending) => pending.headerKind === 'server');
+                }
                 headerState.pendingGroupHeaders.push(item);
             }
             continue;
@@ -906,7 +921,7 @@ export function pruneOrphanHeaders(items: ReadonlyArray<SessionListIndexItem>): 
         out.push(item);
     }
 
-    flushPendingFolderHeaders({ out, headerState });
+    flushPendingFolderHeaders({ out, headerState, keepEmptyFolders });
     return out;
 }
 
@@ -1436,7 +1451,9 @@ function projectWorkflowRunRows(
         for (let i = 0; i < output.length; i += 1) if (output[i]?.groupKey === groupKey) insertAt = i + 1;
         if (insertAt >= 0) output.splice(insertAt, 0, row);
         else output.push({ type: 'header', headerKind: 'project', groupKey, serverId,
-            title: where?.directory ?? t('workflows.title'), ...(workspace ? { workspace } : {}) }, row);
+            title: where?.directory ?? t('workflows.title'), ...(workspace ? { workspace } : {}),
+            ...(where ? { workspaceScopeHint: { serverId, machineId: where.machineId, rootPath: where.directory } } : {}),
+        }, row);
     }
     // Placement has already assigned these bands through the canonical Session
     // owner. Adding Runs must not reclassify those rows into ordinary sections.
@@ -1487,7 +1504,7 @@ function projectWorkflowRunRows(
         const summary = summaryByKey.get(JSON.stringify([serverId, runId]));
         return resolveWorkflowRunParentSessionId(summary);
     });
-    return pruneOrphanHeaders(nested);
+    return pruneOrphanHeaders(nested, { keepEmptyFolders: filter.show !== 'runs' });
 }
 
 export function computeVisibleSessionListIndex(

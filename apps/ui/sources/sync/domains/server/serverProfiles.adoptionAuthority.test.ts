@@ -38,6 +38,8 @@ describe('serverProfiles adoption authority', () => {
         const profiles = await importFresh();
         const saved = profiles.getServerProfileById('saved');
         expect(saved?.homeConnectionDescriptor).toEqual(descriptor);
+        expect(saved && profiles.buildHomeConnectionDescriptorForProfile({ ...saved,
+            homeConnectionDescriptor: additiveDescriptor })).toEqual(descriptor);
         await expect(profiles.adoptHomeProfile({ descriptor: additiveDescriptor, source: 'qr' }))
             .rejects.toThrow('Invalid Home connection descriptor');
         expect(profiles.getServerProfileById('saved')).toEqual(saved);

@@ -130,6 +130,7 @@ export type ScopedPluginSettingsProjection = Readonly<{
         mutation: ScopedPluginSettingsMutation;
         /** Renderer field whose local draft should clear on this success. */
         draftFieldId?: string;
+        bindingServerIdentityId?: string | null;
         isCurrent?: ScopedPluginSettingsWriteCurrentness;
     }>): Promise<ScopedPluginSettingsWriteResult | null>;
     refresh(): Promise<void>;
@@ -178,6 +179,7 @@ export type CommitScopedPluginSettingsFieldInput = Readonly<{
     fieldId: string;
     mutation: ScopedPluginSettingsMutation;
     isCurrent?: ScopedPluginSettingsWriteCurrentness;
+    bindingServerIdentityId?: string | null;
 }>;
 
 type SharedRecordState = Readonly<{
@@ -204,6 +206,7 @@ type ScopedPluginSettingsRecordStore = Readonly<{
         fieldId: string;
         mutation: ScopedPluginSettingsMutation;
         isCurrent?: ScopedPluginSettingsWriteCurrentness;
+        bindingServerIdentityId?: string | null;
     }>): Promise<ScopedPluginSettingsWriteResult | null>;
     refresh(): Promise<void>;
 }>;
@@ -930,6 +933,9 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
                     fieldId: input.fieldId,
                     mutation: input.mutation,
                     expectedRevision: snapshot.revision,
+                    ...(input.bindingServerIdentityId !== undefined ? { bindingServerIdentityId: input.bindingServerIdentityId } : {}),
+                    isCurrent: () => isRecordCurrent() && lifetime === lifetimeGeneration
+                        && inventory.generation === inventoryGeneration && isWriteCurrent(input.isCurrent),
                 });
             } catch {
                 result = { status: 'unavailable', reason: 'transport' };
@@ -1090,6 +1096,7 @@ export async function commitScopedPluginSettingsField(
             fieldId: input.fieldId,
             mutation: input.mutation,
             ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
+            ...(input.bindingServerIdentityId !== undefined ? { bindingServerIdentityId: input.bindingServerIdentityId } : {}),
         });
     } finally {
         subscription.unsubscribe();
@@ -1387,6 +1394,8 @@ function useScopedPluginSettingsFieldModels(
             fieldId: storageMutation.fieldId,
             mutation,
             draftFieldId: field.key,
+            ...(projectScopedPluginSettingsField(field).binding?.kind === 'perActiveServer'
+                ? { bindingServerIdentityId: current.perActiveServerIdentityId } : {}),
             isCurrent: remainsCurrent,
         });
         const latest = currentRef.current;
@@ -1638,6 +1647,7 @@ export function useScopedPluginSettingsProjection(
         fieldId: string;
         mutation: ScopedPluginSettingsMutation;
         draftFieldId?: string;
+        bindingServerIdentityId?: string | null;
         isCurrent?: ScopedPluginSettingsWriteCurrentness;
     }>): Promise<ScopedPluginSettingsWriteResult | null> => {
         if (!store || !params.enabled || !params.target) return null;

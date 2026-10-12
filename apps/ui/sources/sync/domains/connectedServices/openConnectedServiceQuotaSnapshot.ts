@@ -1,5 +1,6 @@
-import { ConnectedServiceQuotaSnapshotV1Schema, type ConnectedServiceQuotaSnapshotV1, type SealedConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import type { ConnectedServiceQuotaSnapshotV1, SealedConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { openConnectedServiceQuotaSnapshotCiphertext } from '@happier-dev/protocol/connect/connectedServiceCipher';
+import { BuiltInLegacyConnectedServiceCompatibilityError, parseBuiltInLegacyConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from './resolveAccountScopedCryptoMaterialFromCredentials';
@@ -13,6 +14,10 @@ export function openConnectedServiceQuotaSnapshot(
   const opened = openConnectedServiceQuotaSnapshotCiphertext({ material, ciphertext: sealed.ciphertext });
   if (!opened || !opened.value) return null;
 
-  const parsed = ConnectedServiceQuotaSnapshotV1Schema.safeParse(opened.value);
-  return parsed.success ? parsed.data : null;
+  try {
+    return parseBuiltInLegacyConnectedServiceQuotaSnapshotV1(opened.value);
+  } catch (error) {
+    if (error instanceof BuiltInLegacyConnectedServiceCompatibilityError) return null;
+    throw error;
+  }
 }

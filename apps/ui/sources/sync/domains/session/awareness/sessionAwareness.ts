@@ -17,6 +17,8 @@ import { readSessionContentAvailability } from '../encryptedContentAvailability'
 export type UiSessionAwarenessOptions = Readonly<{
     /** Status/count consumers need the same classification without constructing the display title. */
     includeTitle?: boolean;
+    /** Summary consumers do not display or reuse the private folder. */
+    includeWorkspace?: boolean;
     hasPendingUserMessages?: boolean;
     optimisticPendingUserMessageAt?: number | null;
     hasPendingPermissionRequests?: boolean;
@@ -97,7 +99,7 @@ export function createUiSessionAwarenessInput(
         work: hydrated ? metadata ? readSessionWorkStateV1FromMetadata(metadata) : null : session.workState,
         workflowHeadline: hydrated ? workflow?.success ? workflow.data : null : session.workflowHeadline,
         // A no-folder session's private folder is not a workspace to show or reuse.
-        workspace: metadata && readSessionDirectoryKind(metadata) !== 'managed'
+        workspace: options.includeWorkspace !== false && metadata && readSessionDirectoryKind(metadata) !== 'managed'
             ? { path: metadata.path, machineId: metadata.machineId ?? undefined }
             : null,
         lineage: fork ? { relation: 'fork', sourceSessionId: fork.parentSessionId } : null,

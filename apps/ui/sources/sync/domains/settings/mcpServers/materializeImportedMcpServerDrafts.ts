@@ -1,14 +1,14 @@
 import type {
-    McpServerBindingTargetV1,
-    McpServerBindingV1,
+    McpServerRuleV1,
     McpServerCatalogEntryV1,
     McpValueRefV1,
     McpServersSettingsV1,
 } from '@happier-dev/protocol';
+import { resolveCreateReachV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 
-import { upsertMcpServerWithBindingsV1 } from './mcpServerCrud';
+import { addMcpServerCatalogEntryV1 } from './mcpServerCrud';
 import {
     createUniqueMcpServerName,
     createUniqueSavedSecretName,
@@ -34,14 +34,8 @@ export type MaterializeImportedMcpServerDraftsResult = Readonly<{
     nextSettings: McpServersSettingsV1;
     nextSecrets: SavedSecret[];
     warnings: string[];
-    createdEntries: Array<Readonly<{ entry: McpServerCatalogEntryV1; bindings: McpServerBindingV1[] }>>;
+    createdEntries: Array<Readonly<{ entry: McpServerCatalogEntryV1; bindings: McpServerRuleV1[] }>>;
 }>;
-
-function resolveBindingTarget(draft: ImportedMcpServerDraftV1, defaultMachineId: string): McpServerBindingTargetV1 {
-    return draft.transport === 'stdio'
-        ? { t: 'machine', machineId: defaultMachineId }
-        : { t: 'allMachines' };
-}
 
 function resolveInputValueRef(params: Readonly<{
     draftName: string;
@@ -189,16 +183,12 @@ export function materializeImportedMcpServerDrafts(params: Readonly<{
                 },
             };
 
-        const binding: McpServerBindingV1 = {
-            id: params.generateId(),
-            serverId: entryId,
-            enabled: draft.enabled,
-            target: resolveBindingTarget(draft, params.defaultMachineId),
-            createdAt: params.nowMs,
-            updatedAt: params.nowMs,
-        };
+        const reach = resolveCreateReachV1({ kind: 'mcp_server', caller: { surface: 'ui' },
+            ctx: { nowMs: params.nowMs, newId: params.generateId } });
+        if (!reach.ok) throw new Error(reach.code);
+        const binding: McpServerRuleV1 = { ...reach.rules[0]!, serverId: entryId };
 
-        nextSettings = upsertMcpServerWithBindingsV1(nextSettings, entry, [binding]);
+        nextSettings = addMcpServerCatalogEntryV1(nextSettings, entry, [binding]);
         createdEntries.push({ entry, bindings: [binding] });
     }
 

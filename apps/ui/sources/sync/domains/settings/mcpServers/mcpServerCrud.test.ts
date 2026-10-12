@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { McpServerBindingV1, McpServerCatalogEntryV1, McpServersSettingsV1 } from '@happier-dev/protocol';
+import type { McpServerRuleV1, McpServerCatalogEntryV1, McpServersSettingsV1 } from '@happier-dev/protocol';
 
 import {
-    addMcpServerBindingV1,
     addMcpServerCatalogEntryV1,
     deleteMcpServerCatalogEntryV1,
-    upsertMcpServerWithBindingsV1,
+    updateMcpServerCatalogEntryV1,
 } from './mcpServerCrud';
 
 function baseSettings(): McpServersSettingsV1 {
@@ -26,7 +25,7 @@ function makeStdioServer(params: { id: string; name: string; now?: number }): Mc
     };
 }
 
-function makeAllMachinesBinding(params: { id: string; serverId: string; now?: number }): McpServerBindingV1 {
+function makeAllMachinesBinding(params: { id: string; serverId: string; now?: number }): McpServerRuleV1 {
     const now = params.now ?? 1_700_000_000_000;
     return {
         id: params.id,
@@ -42,19 +41,19 @@ describe('mcpServerCrud', () => {
     it('adds servers to the catalog', () => {
         const settings = baseSettings();
         const server = makeStdioServer({ id: 's1', name: 'foo' });
-        const next = addMcpServerCatalogEntryV1(settings, server);
+        const next = addMcpServerCatalogEntryV1(settings, server, []);
         expect(next.servers.map((s) => s.id)).toEqual(['s1']);
     });
 
     it('rejects duplicate server names', () => {
-        const settings = addMcpServerCatalogEntryV1(baseSettings(), makeStdioServer({ id: 's1', name: 'foo' }));
-        expect(() => addMcpServerCatalogEntryV1(settings, makeStdioServer({ id: 's2', name: 'foo' }))).toThrow(/duplicate server name/i);
+        const settings = addMcpServerCatalogEntryV1(baseSettings(), makeStdioServer({ id: 's1', name: 'foo' }), []);
+        expect(() => addMcpServerCatalogEntryV1(settings, makeStdioServer({ id: 's2', name: 'foo' }), [])).toThrow(/duplicate server name/i);
     });
 
     it('adds bindings and deletes bindings when the server is deleted', () => {
         const server = makeStdioServer({ id: 's1', name: 'foo' });
         const binding = makeAllMachinesBinding({ id: 'b1', serverId: 's1' });
-        const settings = addMcpServerBindingV1(addMcpServerCatalogEntryV1(baseSettings(), server), binding);
+        const settings = addMcpServerCatalogEntryV1(baseSettings(), server, [binding]);
         expect(settings.bindings.map((b) => b.id)).toEqual(['b1']);
 
         const deleted = deleteMcpServerCatalogEntryV1(settings, 's1', true);
@@ -64,41 +63,39 @@ describe('mcpServerCrud', () => {
 
     it('refuses unconfirmed removal of a server with a live binding', () => {
         const server = makeStdioServer({ id: 's1', name: 'foo' });
-        const settings = addMcpServerBindingV1(addMcpServerCatalogEntryV1(baseSettings(), server),
-            makeAllMachinesBinding({ id: 'b1', serverId: 's1' }));
+        const settings = addMcpServerCatalogEntryV1(baseSettings(), server,
+            [makeAllMachinesBinding({ id: 'b1', serverId: 's1' })]);
         expect(() => deleteMcpServerCatalogEntryV1(settings, 's1')).toThrow(/binding/i);
         expect(settings.servers[0]?.id).toBe('s1');
         expect(settings.bindings[0]?.id).toBe('b1');
     });
 
     it('returns the original settings when deleting a missing server', () => {
-        const settings = addMcpServerCatalogEntryV1(baseSettings(), makeStdioServer({ id: 's1', name: 'foo' }));
+        const settings = addMcpServerCatalogEntryV1(baseSettings(), makeStdioServer({ id: 's1', name: 'foo' }), []);
 
         expect(deleteMcpServerCatalogEntryV1(settings, 'missing')).toBe(settings);
     });
 
     it('rejects bindings for missing serverId', () => {
         const binding = makeAllMachinesBinding({ id: 'b1', serverId: 'missing' });
-        expect(() => addMcpServerBindingV1(baseSettings(), binding)).toThrow(/server not found/i);
+        expect(() => addMcpServerCatalogEntryV1(baseSettings(), makeStdioServer({ id: 's1', name: 'foo' }), [binding])).toThrow();
     });
 
-    it('upserts a server and replaces its bindings', () => {
+    it('updates configuration without replacing its reach rules', () => {
         const server = makeStdioServer({ id: 's1', name: 'foo', now: 10 });
         const binding1 = makeAllMachinesBinding({ id: 'b1', serverId: 's1', now: 10 });
-        const initial = addMcpServerBindingV1(addMcpServerCatalogEntryV1(baseSettings(), server), binding1);
+        const initial = addMcpServerCatalogEntryV1(baseSettings(), server, [binding1]);
 
         const updatedServer: McpServerCatalogEntryV1 = { ...server, title: 'Foo', updatedAt: 20 };
-        const binding2: McpServerBindingV1 = { ...binding1, id: 'b2', updatedAt: 20 };
-
-        const next = upsertMcpServerWithBindingsV1(initial, updatedServer, [binding2]);
+        const next = updateMcpServerCatalogEntryV1(initial, updatedServer);
         expect(next.servers[0]?.title).toBe('Foo');
-        expect(next.bindings.map((b) => b.id)).toEqual(['b2']);
+        expect(next.bindings).toEqual([binding1]);
     });
 
     it('rejects upserting a server name that collides with another server', () => {
         const s1 = makeStdioServer({ id: 's1', name: 'one' });
         const s2 = makeStdioServer({ id: 's2', name: 'two' });
-        const initial = addMcpServerCatalogEntryV1(addMcpServerCatalogEntryV1(baseSettings(), s1), s2);
-        expect(() => upsertMcpServerWithBindingsV1(initial, { ...s2, name: 'one' }, [])).toThrow(/duplicate server name/i);
+        const initial = addMcpServerCatalogEntryV1(addMcpServerCatalogEntryV1(baseSettings(), s1, []), s2, []);
+        expect(() => updateMcpServerCatalogEntryV1(initial, { ...s2, name: 'one' })).toThrow(/duplicate server name/i);
     });
 });

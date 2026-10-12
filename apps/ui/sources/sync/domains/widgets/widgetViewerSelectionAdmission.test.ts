@@ -2,8 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { AccountProfileSchema, QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol';
 import { type WidgetInstanceRefV1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 import { admitWidgetViewerSelectionMetadataV1 } from './widgetViewerSelectionAdmission';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import '@/sync/syncEngine';
 
 describe('Widget viewer selection metadata admission', () => {
+    it('admits portable layout identity for its current local viewer without borrowing another Home or Account', async () => {
+        const serverIdentityId = 'srv_0123456789abcdefghijklmnopqrstuv';
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-viewer-alias.test', serverIdentityId, accountId: 'viewer' });
+        try {
+            const viewer = { serverId: connection.home.id, accountId: 'viewer' };
+            const instance: WidgetInstanceV1 = { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'project_about' }, bindings: {} };
+            const ref: WidgetInstanceRefV1 = { surface: { serverId: serverIdentityId, accountId: 'owner',
+                owner: { kind: 'project', projectId: 'project' }, artifactId: 'attached-layout' }, instanceId: instance.id };
+            const input = { viewer, admittedViewer: viewer, ref, instance, descriptor: { definition: instance.definition },
+                profile: AccountProfileSchema.parse({ id: viewer.accountId }), values: {}, now: 1 };
+            expect(admitWidgetViewerSelectionMetadataV1(input)).toBeNull();
+            expect(admitWidgetViewerSelectionMetadataV1({ ...input, admittedViewer: { ...viewer, accountId: 'other' } }))
+                .toMatchObject({ ok: false, errorCode: 'widgets_viewer_scope_mismatch' });
+            expect(admitWidgetViewerSelectionMetadataV1({ ...input, ref: { ...ref, surface: { ...ref.surface, serverId: 'other-home' } } }))
+                .toMatchObject({ ok: false, errorCode: 'widgets_viewer_scope_mismatch' });
+            expect(admitWidgetViewerSelectionMetadataV1({ ...input, admittedViewer: undefined,
+                ref: { ...ref, surface: { ...ref.surface, accountId: viewer.accountId } } })).toBeNull();
+        } finally { await connection.dispose(); }
+    });
     it('admits existing Resource purpose selections and current personal pins', async () => {
         const viewer = { serverId: 'home', accountId: 'viewer' };
         const surface = { pluginId: 'com.acme.metrics', localId: 'widget' };
@@ -34,6 +55,13 @@ describe('Widget viewer selection metadata admission', () => {
         expect(admitWidgetViewerSelectionMetadataV1({ ...admitted, resources: [], values: { connection: value } })).not.toBeNull();
         const pinned = { ...instance, bindings: { connection: { kind: 'value' as const, value } } };
         expect(admitWidgetViewerSelectionMetadataV1({ ...admitted, instance: pinned, purposeBindings: { v: 1, bindings: [] }, values: { connection: value } })).toBeNull();
+        const retainedPinValue = { ...value, retired: true, service: { ...value.service, retired: true } };
+        const retainedPin = { ...pinned, bindings: { connection: { kind: 'value' as const, value: retainedPinValue } } };
+        expect(admitWidgetViewerSelectionMetadataV1({ ...admitted, instance: retainedPin,
+            purposeBindings: { v: 1, bindings: [] }, values: { connection: value } })).toBeNull();
+        expect(admitWidgetViewerSelectionMetadataV1({ ...admitted, instance: retainedPin,
+            purposeBindings: { v: 1, bindings: [] }, values: { connection: retainedPinValue } }))
+            .toMatchObject({ ok: false, errorCode: 'widgets_viewer_selection_unavailable' });
         expect(admitWidgetViewerSelectionMetadataV1({ ...admitted, instance: pinned,
             values: { connection: { ...value, accountId: 'foreign' } } })).not.toBeNull();
         expect(admitWidgetViewerSelectionMetadataV1({ ...admitted, instance: pinned,

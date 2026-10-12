@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ReviewStartInputSchema } from '@happier-dev/protocol/reviews/reviewStart';
 
 import { buildReviewStartWithWalkthroughInput, resolveReviewWalkthroughPlan, type ReviewWalkthroughEngine } from './reviewWalkthroughPlan';
 
@@ -49,6 +50,14 @@ describe('resolveReviewWalkthroughPlan', () => {
 });
 
 describe('buildReviewStartWithWalkthroughInput', () => {
+    it('builds a schema-valid detached review without a Session field', () => {
+        const plan = resolveReviewWalkthroughPlan({ engines: [CLAUDE], selectedEngineIds: ['claude'], walkthrough: false, narratorEngineId: null });
+        const input = buildReviewStartWithWalkthroughInput({ sessionId: null, machineId: 'm1', cwd: '/repo',
+            plan, instructions: 'Review.', comparisonId: 'cmp-1', pending: true });
+        expect(ReviewStartInputSchema.safeParse(input).success).toBe(true);
+        expect(input).not.toHaveProperty('sessionId');
+    });
+
     it('sends the captured comparison, the requested walkthrough and the narrator a several-engine review needs', () => {
         const plan = resolveReviewWalkthroughPlan({ engines: ENGINES, selectedEngineIds: ['claude', 'codex'], walkthrough: true, narratorEngineId: null });
         expect(buildReviewStartWithWalkthroughInput({ sessionId: 's1', plan, instructions: '  Look at the keys. ', comparisonId: 'cmp-1', pending: true })).toEqual({

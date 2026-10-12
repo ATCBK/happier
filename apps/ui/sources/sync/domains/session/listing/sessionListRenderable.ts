@@ -12,6 +12,7 @@ import { StoredSessionSharedMetadataV1Schema } from '@happier-dev/protocol/sessi
 import { readSessionWorkStateV1FromMetadata, type SessionWorkStateV1 } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
 import { parseSessionAgentActivityHeadlineV1, type SessionAgentActivityHeadlineV1 } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityHeadlineV1';
 import { SessionWorkflowActivityHeadlineV1Schema, type SessionWorkflowActivityHeadlineV1 } from '@happier-dev/protocol/sessions/work/workflow/sessionWorkflowActivityHeadlineV1';
+import { SessionGuardStateV1StoredSchema } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
 import type { ExternalAgentObservationSnapshotV1 } from '@happier-dev/protocol/sessions/external/externalAgentObservationV1';
 import type { PendingActivationAuthorizationV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import type { PrimaryTurnStatusV1, SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
@@ -62,6 +63,8 @@ import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 export { derivePendingRequestFlagsFromAgentState } from '@/sync/domains/session/pending/listPendingSessionRequests';
 
 export interface SessionListRenderableMetadata {
+    projectId?: string | null;
+    workspaceId?: string | null;
     bot?: SessionBotV1;
     name?: string;
     summaryText?: string | null;
@@ -89,6 +92,28 @@ export interface SessionListRenderableMetadata {
     } | null;
 }
 
+export type SessionListGuardState =
+    | Readonly<{ kind: 'stopping'; stopAt: number; rule: 'idle_sessions' | 'memory_guard' }>
+    | Readonly<{ kind: 'stopped'; at: number; rule: 'idle_sessions' | 'memory_guard' | 'ceiling'; idleMs?: number; freedBytes?: number }>;
+
+/**
+ * The guard's word for a Session from its content-free guard presentation (plan 50 G3): a stop is
+ * coming, or the guard stopped it. A configured ceiling says nothing here. One reader for the list row,
+ * the composer status and the wake copy.
+ */
+export function readSessionListGuardState(raw: unknown): SessionListGuardState | null {
+    if (raw === undefined || raw === null) return null;
+    const parsed = SessionGuardStateV1StoredSchema.safeParse(raw);
+    if (!parsed.success) return null;
+    if (parsed.data.kind === 'stopping') return { kind: 'stopping', stopAt: parsed.data.stopAt, rule: parsed.data.rule };
+    if (parsed.data.kind === 'stopped') {
+        return { kind: 'stopped', at: parsed.data.at, rule: parsed.data.rule,
+            ...(parsed.data.idleMs === undefined ? {} : { idleMs: parsed.data.idleMs }),
+            ...(parsed.data.freedBytes === undefined ? {} : { freedBytes: parsed.data.freedBytes }) };
+    }
+    return null;
+}
+
 export interface SessionListRenderableSession {
     forkV1?: Metadata['forkV1'];
     /**
@@ -100,6 +125,8 @@ export interface SessionListRenderableSession {
     agentActivityHeadline?: SessionAgentActivityHeadlineV1 | null;
     workState?: SessionWorkStateV1 | null;
     workflowHeadline?: SessionWorkflowActivityHeadlineV1 | null;
+    /** The guard's word for this row (plan 50 G3-2): a stop is coming, or the guard stopped it. */
+    guardState?: SessionListGuardState | null;
     encryptionMode?: Session["encryptionMode"];
     encryptedContentAvailability?: Session['encryptedContentAvailability'];
     /** Store-produced recipient-safe title; memory only, never metadata or a wire/cache field. */
@@ -305,7 +332,12 @@ export function readSessionListRenderableSourceMetadata(
             ...(presentationAgentId ? { flavor: presentationAgentId } : {}),
         } as unknown as Metadata;
     }
-    return readSessionOwnerMetadataView(session);
+    const ownerMetadata = readSessionOwnerMetadataView(session);
+    if (!ownerMetadata) return null;
+    const sharedMetadata = StoredSessionSharedMetadataV1Schema.safeParse(session.metadata);
+    // In layout 1 the compact row's Agent identity comes from the public presentation,
+    // even when the owner's runtime configuration names a different Agent.
+    return { ...ownerMetadata, flavor: sharedMetadata.success ? sharedMetadata.data.agentPresentation?.agentId : undefined };
 }
 
 export function deriveSessionListRenderableHasUnreadMessagesFromSession(
@@ -414,49 +446,6 @@ function shouldPreserveSessionListRenderablePendingBlockedCount(
     );
 }
 
-function normalizeTransientTitleText(value: unknown): string | null {
-    if (typeof value !== 'string') return null;
-    const normalized = value.trim().replace(/\s+/g, ' ');
-    return normalized.length > 0 ? normalized : null;
-}
-
-function readFirstUserMessageTitleFallback(
-    messages: ReadonlyArray<Message> | undefined,
-): string | null {
-    if (!messages) return null;
-    for (const message of messages) {
-        if (message.kind !== 'user-text') continue;
-        return normalizeTransientTitleText(message.displayText) ?? normalizeTransientTitleText(message.text);
-    }
-    return null;
-}
-
-function hasRenderableDisplayTitle(metadata: SessionListRenderableMetadata | null): boolean {
-    return Boolean(
-        normalizeTransientTitleText(metadata?.summaryText)
-        || normalizeTransientTitleText(metadata?.name),
-    );
-}
-
-function applyTransientUserMessageTitleFallback(
-    metadata: SessionListRenderableMetadata | null,
-    previousMetadata: SessionListRenderableMetadata | null,
-    messages: ReadonlyArray<Message> | undefined,
-): SessionListRenderableMetadata | null {
-    if (!metadata || hasRenderableDisplayTitle(metadata)) return metadata;
-
-    const previousFallback = hasRenderableDisplayTitle(previousMetadata)
-        ? null
-        : normalizeTransientTitleText(previousMetadata?.summaryText);
-    const summaryText = readFirstUserMessageTitleFallback(messages) ?? previousFallback;
-    if (!summaryText) return metadata;
-
-    return {
-        ...metadata,
-        summaryText,
-    };
-}
-
 /**
  * The input of the one row projector. `metadataUndecided` is set only by a list refresh that
  * opened no key: its Session carries no decrypted projection, so an owner view is undecided rather
@@ -537,11 +526,19 @@ export function buildSessionListRenderableFromSession(
         && isSessionAccessRecipient(session.access, session.accessLevel)
         ? readSessionDisplayTitleField({ lockedDisplayTitle: session.lockedDisplayTitle }).value
         : null;
-    const projectedMetadata = applyTransientUserMessageTitleFallback(
-        nextMetadata,
-        previousMetadata,
-        titleFallbackMessages,
-    );
+    const displayTitle = readSessionDisplayTitleField({ metadata: nextMetadata }, {
+        messages: titleFallbackMessages,
+        // A metadata-only hydration can precede the transcript. Keep the
+        // already projected title without reviving unreadable metadata.
+        fallbackTitle: previous?.id === session.id
+            && readSessionMetadataLayoutVersion(previous.metadataLayoutVersion)
+                === readSessionMetadataLayoutVersion(session.metadataLayoutVersion)
+            ? readSessionDisplayTitleField(previous).value
+            : null,
+    }).value;
+    const projectedMetadata = nextMetadata && displayTitle && displayTitle !== nextMetadata.summaryText
+        ? { ...nextMetadata, summaryText: displayTitle }
+        : nextMetadata;
     const readableActivity: SessionListReadableActivitySummary | undefined = aggregate
         ? {
             latestCommittedMessageSeq: aggregate.latestCommittedMessageSeq,
@@ -574,6 +571,7 @@ export function buildSessionListRenderableFromSession(
     const parsedWorkflow = SessionWorkflowActivityHeadlineV1Schema.safeParse(renderableSourceMetadata?.sessionWorkflowActivityHeadlineV1);
     const workState = renderableSourceMetadata ? readSessionWorkStateV1FromMetadata(renderableSourceMetadata) : null;
     const workflowHeadline = parsedWorkflow.success ? parsedWorkflow.data : null;
+    const guardState = readSessionListGuardState(renderableSourceMetadata?.sessionGuardStateV1);
     const next: SessionListRenderableSession = {
         forkV1: renderableSourceMetadata?.forkV1,
         agentActivityHeadline: JSON.stringify(previous?.agentActivityHeadline ?? null) === JSON.stringify(agentActivityHeadline)
@@ -581,6 +579,7 @@ export function buildSessionListRenderableFromSession(
             : agentActivityHeadline,
         workState: JSON.stringify(previous?.workState ?? null) === JSON.stringify(workState) ? previous?.workState ?? null : workState,
         workflowHeadline: JSON.stringify(previous?.workflowHeadline ?? null) === JSON.stringify(workflowHeadline) ? previous?.workflowHeadline ?? null : workflowHeadline,
+        guardState: JSON.stringify(previous?.guardState ?? null) === JSON.stringify(guardState) ? previous?.guardState ?? null : guardState,
         id: session.id,
         seq: session.seq,
         encryptionMode: session.encryptionMode,
@@ -877,6 +876,7 @@ export function areSessionListRenderablesEqual(
     if (JSON.stringify(previous.forkV1 ?? null) !== JSON.stringify(next.forkV1 ?? null)) return false;
     if (previous.workState !== next.workState && JSON.stringify(previous.workState ?? null) !== JSON.stringify(next.workState ?? null)) return false;
     if (previous.workflowHeadline !== next.workflowHeadline && JSON.stringify(previous.workflowHeadline ?? null) !== JSON.stringify(next.workflowHeadline ?? null)) return false;
+    if (JSON.stringify(previous.guardState ?? null) !== JSON.stringify(next.guardState ?? null)) return false;
     const previousMetadata = readSessionListRenderableMetadataComparisonFromRenderable(previous.metadata);
     const nextMetadata = readSessionListRenderableMetadataComparisonFromRenderable(next.metadata);
 
@@ -1147,6 +1147,7 @@ export function isSessionListRenderableWarmCacheProgressOnlyChange(
     if (JSON.stringify(previous.forkV1 ?? null) !== JSON.stringify(next.forkV1 ?? null)) return false;
     if (previous.workState !== next.workState) return false;
     if (previous.workflowHeadline !== next.workflowHeadline) return false;
+    if (JSON.stringify(previous.guardState ?? null) !== JSON.stringify(next.guardState ?? null)) return false;
     if (!areSessionListRenderableMetadataComparisonsEqual(
         readSessionListRenderableMetadataComparisonFromRenderable(previous.metadata),
         readSessionListRenderableMetadataComparisonFromRenderable(next.metadata),

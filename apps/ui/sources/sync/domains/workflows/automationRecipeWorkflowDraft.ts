@@ -58,7 +58,7 @@ function oneShotExecutionSelection(
             agentTargetKey: buildBackendTargetKeyV2(request.backendTarget), providerConnectionId: null, modelId: request.modelId,
         }, updatedAt: 0 } } : {}),
         ...(request.sessionConfigOptionOverrides === undefined ? {} : { sessionConfigOptionOverrides: request.sessionConfigOptionOverrides }),
-        ...(request.mcpSelection === undefined ? {} : { mcpSelection: request.mcpSelection }),
+        ...(request.capabilitySelection === undefined ? {} : { capabilitySelection: request.capabilitySelection }),
         ...(request.connectedServices === undefined ? {} : { connectedServices: request.connectedServices }),
         ...(request.profileId === undefined ? {} : { profileId: request.profileId }),
         conversation: { kind: 'fresh' },

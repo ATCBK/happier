@@ -8,6 +8,7 @@ import {
     type PeerMachineRpcDirectRequestV2,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 
 const getReadyServerFeaturesSpy = vi.hoisted(() => vi.fn());
 const TOKEN_A = 'header.eyJzdWIiOiJhY2NvdW50LTEifQ.signature';
@@ -302,6 +303,31 @@ describe('production peer mediation machine RPC route adapter', () => {
     });
 
 
+    it('rejects an expired advertisement before minting a grant, even with fresh Machine presence', async () => {
+        storageSnapshot.state = {
+            machines: {
+                machine_1: {
+                    id: 'machine_1', active: true, activeAt: Date.now(),
+                    daemonState: { peerMediation: { loopback: { endpoint: {
+                        v: 1, routeKind: 'loopback_direct', url: 'http://127.0.0.1:46011',
+                        endpointFingerprint: 'expired_endpoint', expiresAt: Date.now() - 1,
+                    } } } },
+                },
+            },
+            machineListByServerId: {},
+        };
+        // HTTP is the boundary; no route-grant request may be admitted for this topology.
+        const fetchSpy = vi.fn(async () => { throw new Error('Unexpected grant request'); });
+        vi.stubGlobal('fetch', fetchSpy);
+        const module = await importProductionRoute();
+        if ('importError' in module) throw module.importError;
+
+        await expect(module.resolveProductionMachineRpcDirectRoute({
+            serverId: 'server-a', machineId: 'machine_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS,
+        })).resolves.toMatchObject({ kind: 'fallback', reasonCode: 'topology_unavailable' });
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
     it('reports absent current daemon topology without attempting authentication', async () => {
         storageSnapshot.state = { machines: {}, machineListByServerId: {} };
         getCredentialsForServerUrlSpy.mockResolvedValue({
@@ -435,12 +461,11 @@ describe('production peer mediation machine RPC route adapter', () => {
             url: 'http://127.0.0.1:46021/peer-mediation/v1/machine-rpc',
             request: createDirectRequest(),
             signal: controller.signal,
-        });
+        }).catch((error: unknown) => error);
 
         // The caller signal must reach the actual request transport.
         expect(capturedSignal?.aborted).toBe(true);
-        // An aborted direct request degrades to a server-fallback response.
-        expect(result).toMatchObject({ ok: false, requestId: 'request_1' });
+        expect(readRpcRequestDisposition(result)).toBe('outcomeUnknown');
     });
 
     it('aborts the direct loopback request when its timeout elapses', async () => {
@@ -464,11 +489,11 @@ describe('production peer mediation machine RPC route adapter', () => {
                 url: 'http://127.0.0.1:46021/peer-mediation/v1/machine-rpc',
                 request: createDirectRequest(),
                 timeoutMs: 5,
-            });
+            }).catch((error: unknown) => error);
             await vi.advanceTimersByTimeAsync(5);
 
             expect(capturedSignal?.aborted).toBe(true);
-            await expect(resultPromise).resolves.toMatchObject({ ok: false, requestId: 'request_1' });
+            expect(readRpcRequestDisposition(await resultPromise)).toBe('outcomeUnknown');
         } finally {
             vi.useRealTimers();
         }

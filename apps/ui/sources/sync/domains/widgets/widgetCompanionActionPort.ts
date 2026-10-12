@@ -5,6 +5,7 @@ import { setWidgetInputBindingsV1, resetWidgetInputBindingsV1 } from '@happier-d
 import type { SessionCompanionPreferenceV1 } from '@/components/sessions/companion/state/sessionCompanionPreference';
 import type { SessionCompanionMutationObserver } from '@/components/sessions/companion/presentation/sessionCompanionPresentationAdapter';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 export function createWidgetCompanionActionPortV1(input: Readonly<{
     lifetime: ServerAccountScopeLifetime;
@@ -13,7 +14,7 @@ export function createWidgetCompanionActionPortV1(input: Readonly<{
 }>): WidgetActionSurfacePortV1 {
     const unavailable = { ok: false as const, errorCode: 'widgets_surface_unavailable', error: 'widgets_surface_unavailable' };
     const readPreference = (surface: WidgetSurfaceRefV1, signal?: AbortSignal) => input.lifetime.isCurrent() && !signal?.aborted
-        && surface.owner.kind === 'companion' && surface.serverId === input.lifetime.scope.serverId && surface.accountId === input.lifetime.scope.accountId
+        && surface.owner.kind === 'companion' && areServerProfileIdentifiersEquivalent(surface.serverId, input.lifetime.scope.serverId) && surface.accountId === input.lifetime.scope.accountId
         ? input.readPreference(surface) : null;
     const capture = (preference: SessionCompanionPreferenceV1, instanceId: string): WidgetMoveCaptureV1 | null => {
         const nativeIndex = preference.items.findIndex(item => item.kind === 'instance' && item.instance.id === instanceId);
@@ -69,6 +70,7 @@ export function createWidgetCompanionActionPortV1(input: Readonly<{
                     ? mutation.nativeIndex : insertionIndex(mutation.toIndex, mutation.instanceId) }; break;
                 case 'frame': intent = { kind: 'companion.item.frameStyle.set', item, frameStyle: mutation.frameStyle }; break;
                 case 'rename': intent = { kind: 'companion.instance.rename', instanceId: mutation.instanceId, displayName: mutation.displayName }; break;
+                case 'network': intent = { kind: 'companion.instance.network.set', instanceId: mutation.instanceId, network: mutation.network }; break;
                 case 'inputs': intent = { kind: 'companion.instance.inputs.set', instanceId: mutation.instanceId,
                     bindings: setWidgetInputBindingsV1(item.instance.bindings, mutation.bindings, mutation.paths) }; break;
                 case 'inputs_reset': intent = { kind: 'companion.instance.inputs.set', instanceId: mutation.instanceId,

@@ -9,6 +9,8 @@ export interface MachineDisplayMetadata {
 
 export interface MachineDisplayRenderable {
     id: string;
+    /** An identity-only choice has no Machine record; its inert fields are not presence facts. */
+    presence?: null;
     isShared?: Machine['isShared'];
     access?: Machine['access'];
     kind?: Machine['kind'];

@@ -20,6 +20,22 @@ function createMemoryStorage(): Readonly<{
 }
 
 describe('remote host trusted host-key store', () => {
+    it('retains trust across unknown stored fields and emits canonical records on update', async () => {
+        const { createRemoteHostTrustedHostKeyStore } = await import('./trustedHostKeyStore');
+        const { storage, readRaw } = createMemoryStorage();
+        const lookup = { host: 'example.test', port: 22, algorithm: 'ssh-ed25519' };
+        const store = createRemoteHostTrustedHostKeyStore({ storage, persistKey: 'test' });
+        const record = store.trust({ ...lookup, fingerprintSha256: 'SHA256:abc', nowMs: 100 });
+        const saved = JSON.parse(readRaw('test')!) as { version: number; recordsByKey: Record<string, unknown> };
+        const key = Object.keys(saved.recordsByKey)[0]!;
+        storage.set('test', JSON.stringify({ ...saved, retired: true, recordsByKey: { [key]: { ...record, retired: true } } }));
+        expect(store.get(lookup)).toEqual(record);
+        store.markSeen({ ...lookup, nowMs: 200 });
+        expect(JSON.parse(readRaw('test')!)).toEqual({ version: 1, recordsByKey: { [key]: { ...record, lastSeenAtMs: 200 } } });
+        storage.set('test', JSON.stringify({ version: 1, recordsByKey: { [key]: { ...record, port: '22', retired: true } } }));
+        expect(store.get(lookup)).toBeNull();
+    });
+
     it('stores trust pins by normalized host, port, and algorithm', async () => {
         const loaded = await import('./trustedHostKeyStore').catch(() => null);
         expect(loaded).not.toBeNull();

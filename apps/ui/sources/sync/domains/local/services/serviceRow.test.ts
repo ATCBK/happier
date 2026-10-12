@@ -139,7 +139,9 @@ describe('buildLocalServiceRows', () => {
         expect(rows[0]?.primaryAction).toEqual(canStart ? { kind: 'start', target } : null);
         expect(rows[0]?.status).toBe(status);
         expect(groupLocalServiceRowsBySection(rows)[0]?.section).toBe(section);
-        expect(selectLocalServiceRunningCount(rows)).toBe(0);
+        // The header's count and the "Running" group are one fact: a supervised worker with no
+        // listener is running (the pane never says "Nothing running" above a Running list).
+        expect(selectLocalServiceRunningCount(rows)).toBe(status === 'running' ? 1 : 0);
     });
     it('projects the declaring file, a truthful address note and no placeholder refusal beside Start', () => {
         const workspace = { serverId: 'home-a', machineId: 'machine-a', workspaceId: 'accepted', rootPath: '/repo' };

@@ -70,9 +70,27 @@ function sessionMessagesRow(params: Readonly<{
 }
 
 describe('getForkedTranscriptSnapshotCached', () => {
-  it('makes imported visuals reachable to a child-only reader without owner lineage or parent messages', () => {
+  it('reads retained child visual copies and origins without granting parent transcript access', () => {
+    const origin = { v: 1 as const, serverId: 'home', sessionId: 'parent', sourceMessageId: 'original', sourceSeq: 3 };
+    const copies = [{ originServerId: 'home', originSessionId: 'parent', originItemId: 'chart',
+      status: 'copied' as const, itemId: 'child-chart' }];
+    const imported = { ...userMessage('retained-imported', 20, 'visual'),
+      meta: { forkVisualOriginV1: { ...origin, retired: true } } };
+    const state = createState({ sessions: { 'retained-child': sessionRow('retained-child', { path: '', host: '',
+      forkVisualsV1: { v: 1, copies: copies.map(copy => ({ ...copy, retired: { enabled: true } })), retired: true },
+    }) }, sessionMessages: { 'retained-child': sessionMessagesRow({ idsOldestFirst: ['retained-imported'],
+      messagesById: { 'retained-imported': imported }, messagesVersion: 1, isLoaded: true }) } });
+
+    const snapshot = getForkedTranscriptSnapshotCached(state, 'retained-child');
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.segments.map(segment => segment.sessionId)).toEqual(['retained-child']);
+    expect(snapshot?.visualCopies).toEqual(copies);
+    expect(snapshot?.messageOriginById['retained-imported']).toEqual({ sessionId: 'retained-child', isReadOnlyContext: true });
+    expect(snapshot?.combinedMessageIdsOldestFirst).toEqual(['retained-imported']);
+  });
+  it('makes retained imported visuals reachable to a child-only reader without owner lineage or parent messages', () => {
     const imported = { ...userMessage('imported', 20, 'visual'), meta: { forkVisualOriginV1: {
-      v: 1 as const, serverId: 'home', sessionId: 'parent', sourceMessageId: 'original', sourceSeq: 3,
+      v: 1 as const, serverId: 'home', sessionId: 'parent', sourceMessageId: 'original', sourceSeq: 3, retired: true,
     } } };
     const state = createState({ sessions: { child: sessionRow('child', { path: '', host: '', forkVisualsV1: { v: 1, copies: [] } }) },
       sessionMessages: { child: sessionMessagesRow({ idsOldestFirst: ['imported'], messagesById: { imported }, messagesVersion: 1, isLoaded: true }) } });
@@ -83,7 +101,8 @@ describe('getForkedTranscriptSnapshotCached', () => {
   });
   it('prefers the independent imported visual over its cached ancestor row', () => {
     const original = visualToolMessage('original-block', 3);
-    const imported = { ...visualToolMessage('imported-block', 20), meta: { forkVisualOriginV1: {
+    const importedTool = visualToolMessage('imported-block', 20);
+    const imported = { ...importedTool, tool: { ...importedTool.tool, id: 'scoped-tool-projection', sourceToolId: importedTool.tool.id }, meta: { forkVisualOriginV1: {
       v: 1 as const, serverId: 'home', sessionId: 'parent', sourceMessageId: 'original-result-raw', sourceSeq: 3,
     } } };
     const state = createState({ sessions: {

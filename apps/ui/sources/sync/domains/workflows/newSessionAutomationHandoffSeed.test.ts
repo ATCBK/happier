@@ -6,6 +6,9 @@ import { composerStructuredMentionsFromReferences } from '@/components/sessions/
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import { useNewSessionComposerDocument } from '@/components/sessions/new/hooks/screenModel/useNewSessionComposerDocument';
 import { renderHook, standardCleanup } from '@/dev/testkit';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { consumeWorkflowEditorDraftSeed } from './workflowEditorDraftSeed';
 
 import {
     buildNewSessionAutomationHandoffSeed,
@@ -36,7 +39,7 @@ function authoringDraft(overrides?: Partial<SessionAuthoringDraft>): SessionAuth
         permissionMode: 'default',
         permissionModeUpdatedAt: 42,
         modelSelection: null,
-        mcpSelection: null,
+        capabilitySelection: null,
         connectedServices: null,
         terminal: null,
         windowsRemoteSessionLaunchMode: null,
@@ -278,15 +281,27 @@ describe('New Session → Automation handoff', () => {
         await hook.unmount();
     });
 
-    it('is read exactly once, so history cannot reseed a stale composed draft', () => {
-        const seedId = storeNewSessionAutomationHandoffSeed(buildNewSessionAutomationHandoffSeed({
-            draftId: 'handoff-once',
-            authoring: authoringDraft(),
-            automation: automationDraft,
-        }));
+    it('retains a handoff until committed intake, then refuses history reuse', () => {
+        const profileScope = getStorage().getState().profileScope;
+        const snapshot = getAppliedActiveServerSnapshot();
+        const available = isAppliedActiveServerRuntimeAvailable();
+        getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' } });
+        publishAppliedActiveServerSnapshot({ ...snapshot, serverId: 'server-a' });
+        try {
+            const seedId = storeNewSessionAutomationHandoffSeed(buildNewSessionAutomationHandoffSeed({
+                draftId: 'handoff-once',
+                authoring: authoringDraft(),
+                automation: automationDraft,
+            }));
 
-        expect(readNewSessionAutomationHandoffSeed(seedId)?.name).toBe('Nightly notes');
-        expect(readNewSessionAutomationHandoffSeed(seedId)).toBeNull();
+            expect(readNewSessionAutomationHandoffSeed(seedId)?.name).toBe('Nightly notes');
+            expect(readNewSessionAutomationHandoffSeed(seedId)?.name).toBe('Nightly notes');
+            consumeWorkflowEditorDraftSeed(seedId);
+            expect(readNewSessionAutomationHandoffSeed(seedId)).toBeNull();
+        } finally {
+            getStorage().setState({ profileScope });
+            publishAppliedActiveServerSnapshot(snapshot, available);
+        }
     });
 
     it('still transfers the authored prompt when no placement is resolved yet', () => {

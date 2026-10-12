@@ -24,7 +24,7 @@ function sameService(
  */
 export type ConnectedAccountPurposeTargetEligibility = 'usable' | 'unusable' | 'unknown';
 
-export function resolveConnectedAccountPurposeTargetEligibility(input: Readonly<{
+type TargetEligibilityInput = Readonly<{
   target: QualifiedConnectedAccountPurposeBindingTargetV1;
   declaredServices: readonly PluginContributionIdentityV1[];
   accounts: readonly QualifiedConnectedAccountProfileV4[];
@@ -32,7 +32,21 @@ export function resolveConnectedAccountPurposeTargetEligibility(input: Readonly<
   resolveAuthentication: (
     service: PluginContributionIdentityV1,
   ) => PluginConnectedAccountAuthenticationV2 | null;
-}>): ConnectedAccountPurposeTargetEligibility {
+}>;
+
+export type ConnectedAccountPurposeTargetEligibilityReason =
+  | 'serviceUnavailable' | 'targetMissing' | 'accountReconnect' | 'accountUnavailable'
+  | 'poolEmpty' | 'poolNeedsActiveAccount';
+type TargetEligibilityDescription =
+  | Readonly<{ eligibility: 'usable'; reason: null }>
+  | Readonly<{ eligibility: 'unusable' | 'unknown'; reason: ConnectedAccountPurposeTargetEligibilityReason }>;
+
+export function resolveConnectedAccountPurposeTargetEligibility(input: TargetEligibilityInput): ConnectedAccountPurposeTargetEligibility {
+  return describeConnectedAccountPurposeTargetEligibility(input).eligibility;
+}
+
+/** The passive decision and its repair reason are one fact for rows and choosers. */
+export function describeConnectedAccountPurposeTargetEligibility(input: TargetEligibilityInput): TargetEligibilityDescription {
   const target = input.target;
   const now = Date.now();
   // One descriptor-aware Protocol rule serves both target kinds. The UI retains
@@ -40,40 +54,41 @@ export function resolveConnectedAccountPurposeTargetEligibility(input: Readonly<
   // configuration policy from a local projection.
   const resolveAccountEligibility = (
     account: QualifiedConnectedAccountProfileV4,
-  ): ConnectedAccountPurposeTargetEligibility => {
+  ): TargetEligibilityDescription => {
     if (!isQualifiedConnectedAccountProfileActiveV4(account, now)) {
-      return 'unusable';
+      return { eligibility: 'unusable', reason: account.status === 'needs_reauth' || (typeof account.expiresAt === 'number' && account.expiresAt <= now)
+        ? 'accountReconnect' : 'accountUnavailable' };
     }
     const authentication = input.resolveAuthentication(account.ref.service);
-    if (!authentication) return 'unknown';
+    if (!authentication) return { eligibility: 'unknown', reason: 'serviceUnavailable' };
     return isQualifiedConnectedAccountProfileUsableV4({
       profile: account,
       authentication,
       now,
-    }) ? 'usable' : 'unusable';
+    }) ? { eligibility: 'usable', reason: null } : { eligibility: 'unusable', reason: 'accountUnavailable' };
   };
   if (target.kind === 'account') {
     const accountTarget = target.account;
     if (!input.declaredServices.some((candidate) => sameService(candidate, accountTarget.service))) {
-      return 'unusable';
+      return { eligibility: 'unusable', reason: 'serviceUnavailable' };
     }
     const account = input.accounts.find((candidate) => sameQualifiedConnectedAccountRef(
       candidate.ref,
       accountTarget,
     ));
-    if (!account) return 'unusable';
+    if (!account) return { eligibility: 'unusable', reason: 'targetMissing' };
     return resolveAccountEligibility(account);
   }
   const service = target.service;
   const groupId = target.groupId;
-  if (!input.declaredServices.some((candidate) => sameService(candidate, service))) return 'unusable';
+  if (!input.declaredServices.some((candidate) => sameService(candidate, service))) return { eligibility: 'unusable', reason: 'serviceUnavailable' };
   const group = input.groups.find((candidate) => (
     sameService(candidate.ref.service, service)
     && candidate.ref.groupId === groupId
   ));
-  if (!group) return 'unusable';
+  if (!group) return { eligibility: 'unusable', reason: 'targetMissing' };
   const authentication = input.resolveAuthentication(service);
-  if (!authentication) return 'unknown';
+  if (!authentication) return { eligibility: 'unknown', reason: 'serviceUnavailable' };
   // The Protocol resolver stays the sole owner of member, active, expiry, and
   // descriptor configuration policy for a group.
   const activeAccount = resolveQualifiedConnectedAccountGroupActiveAccountV4({
@@ -82,7 +97,8 @@ export function resolveConnectedAccountPurposeTargetEligibility(input: Readonly<
     authentication,
     now,
   });
-  return activeAccount ? 'usable' : 'unusable';
+  return activeAccount ? { eligibility: 'usable', reason: null }
+    : { eligibility: 'unusable', reason: group.members.length === 0 ? 'poolEmpty' : 'poolNeedsActiveAccount' };
 }
 
 /**

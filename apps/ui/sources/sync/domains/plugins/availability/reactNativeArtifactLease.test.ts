@@ -348,6 +348,7 @@ describe('React Native Artifact lease acquisition', () => {
             },
             family: 'reactNative',
             digest: current.cacheIdentity.artifactDigest,
+            signal: expect.any(AbortSignal),
         });
         if (corrupt) {
             expect(acquired.kind).toBe('unavailable');
@@ -381,6 +382,7 @@ describe('React Native Artifact lease acquisition', () => {
             transport: { machineId: 'projecting-machine', serverId: scope.serverId },
             family: 'reactNative',
             digest: current.cacheIdentity.artifactDigest,
+            signal: expect.any(AbortSignal),
         });
         if (acquired.kind === 'available') acquired.lease.dispose();
     });
@@ -447,6 +449,7 @@ describe('React Native Artifact lease acquisition', () => {
             transport: { machineId: current.origin.materializationRef.machineId, serverId: scope.serverId },
             family: 'reactNative',
             digest: current.cacheIdentity.artifactDigest,
+            signal: expect.any(AbortSignal),
         });
         if (acquired.kind !== 'available') throw new Error('Fixture Availability handle was unavailable.');
         expect(acquired.cacheKey).toEqual(expect.any(String));
@@ -603,6 +606,7 @@ describe('React Native Artifact lease acquisition', () => {
             transport: { machineId: current.origin.materializationRef.machineId, serverId: scope.serverId },
             family: 'reactNative',
             digest: current.cacheIdentity.artifactDigest,
+            signal: expect.any(AbortSignal),
         });
     });
 
@@ -839,6 +843,7 @@ describe('React Native Artifact lease acquisition', () => {
             transport: { machineId: 'machine-without-materialization', serverId: scope.serverId },
             family: 'reactNative',
             digest: current.cacheIdentity.artifactDigest,
+            signal: expect.any(AbortSignal),
         });
         if (acquired.kind === 'available') acquired.lease.dispose();
     });

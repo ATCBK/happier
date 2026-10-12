@@ -373,6 +373,7 @@ describe('hosted-web Artifact lease acquisition', () => {
             },
             family: 'hostedWeb',
             digest: current.cacheIdentity.artifactDigest,
+            signal: expect.any(AbortSignal),
         });
         if (acquired.kind === 'available') acquired.lease.dispose();
     });
@@ -409,6 +410,7 @@ describe('hosted-web Artifact lease acquisition', () => {
             transport: { machineId: current.origin.materializationRef.machineId, serverId: scope.serverId },
             family: 'hostedWeb',
             digest: current.cacheIdentity.artifactDigest,
+            signal: expect.any(AbortSignal),
         });
     });
 

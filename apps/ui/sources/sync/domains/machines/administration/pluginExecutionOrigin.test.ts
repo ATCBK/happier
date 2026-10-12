@@ -1,11 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
     buildPluginMachineExecutionOriginCandidates,
+    buildPluginMachineSourceExecutionOriginCandidates,
     combinePluginMachineExecutionOriginCandidates,
     resolvePluginMachineExecutionOriginState,
     type PluginMachineExecutionOriginCandidateV1,
 } from './pluginExecutionOrigin';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { parseToken } from '@/utils/auth/parseToken';
+
+const accountId = parseToken(createAccountTokenForTests('plugin-owner'));
+afterEach(clearMachineRequestReachabilityForTest);
 
 function candidate(input: Readonly<{
     serverIdentityId: string;
@@ -37,6 +44,63 @@ function candidate(input: Readonly<{
 }
 
 describe('resolvePluginMachineExecutionOriginState', () => {
+    it('defaults a contextual Session panel to its exact machine rather than an unrelated saved offline origin', () => {
+        const own = candidate({ serverIdentityId: 'srv_one', machineId: 'session-machine', materializationId: 'own' });
+        const other = candidate({ serverIdentityId: 'srv_one', machineId: 'unrelated-machine', materializationId: 'other',
+            validation: { kind: 'rejected', reason: 'offline' } });
+        const saved = { serverIdentityId: 'srv_one', materializationRef: { pluginId: 'acme.plugin', machineId: 'unrelated-machine', materializationId: 'other' } };
+        const sameIdElsewhere = candidate({ serverIdentityId: 'srv_two', machineId: 'session-machine', materializationId: 'elsewhere' });
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: saved, candidates: [own, other, sameIdElsewhere],
+            contextualTarget: { serverIdentityId: 'srv_one', machineId: 'session-machine' } })).toMatchObject({
+            kind: 'selected', origin: { materializationRef: { machineId: 'session-machine' } },
+        });
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: saved, candidates: [other],
+            contextualTarget: { serverIdentityId: 'srv_one', machineId: 'session-machine' } })).toMatchObject({ kind: 'unavailable' });
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null, candidates: [own],
+            contextualTarget: null })).toMatchObject({ kind: 'unavailable' });
+        expect(resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: saved, candidates: [own, other] }))
+            .toMatchObject({ kind: 'unavailable', storedOrigin: saved });
+    });
+    it('does not count a nonselectable machine-local census as a fleet version disagreement', () => {
+        const current = candidate({ serverIdentityId: 'srv_one', machineId: 'current-machine', materializationId: 'current', version: '2.0.0' });
+        const local = candidate({ serverIdentityId: 'srv_one', machineId: 'local-machine', materializationId: 'local',
+            version: '1.0.0', sourceClass: 'localPath' });
+        const state = resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin', storedOrigin: null,
+            candidates: [current, local] });
+        // The Artifact/source-custody refusal remains diagnostic; it is not a
+        // disagreement between two selectable execution origins.
+        expect(state).toMatchObject({ kind: 'conflict', reasons: ['machine_local'] });
+    });
+    it('keeps source and release selection aligned with server-scoped reachability and retry recovery', () => {
+        const machineId = 'plugin-reachability-machine';
+        const serverId = 'plugin-reachability-home';
+        const materialization = candidate({ serverIdentityId: 'srv_reachability', machineId, materializationId: 'reachability-mat' }).materialization;
+        const source = { source: { origin: { serverIdentityId: 'srv_reachability', sourceRef: { machineId,
+            pluginId: 'acme.plugin', sourceCustody: { kind: 'development', registeredRootId: 'reachability-root' } } },
+            version: '1.0.0', occurrenceId: 'reachability-occurrence', serverId, generation: 1 },
+            releaseContent: 'matched', validation: { kind: 'admitted' } } as const;
+        const machineSnapshots = [{ kind: 'resolved', accountId, profileId: serverId, serverIdentityId: 'srv_reachability',
+            serverName: 'Studio', observation: 'live', machines: [{ id: machineId, updatedAt: 1, active: true,
+                activeAt: Date.now(), revokedAt: null, metadataVersion: 1, metadata: null }] }] as const;
+        const readCandidates = () => [
+            ...buildPluginMachineExecutionOriginCandidates({ pluginId: 'acme.plugin', materializations: [materialization],
+                machineSnapshots, classifyRelease: () => ({ releaseContent: 'matched', validation: { kind: 'admitted' } }) }),
+            ...buildPluginMachineSourceExecutionOriginCandidates({ pluginId: 'acme.plugin', sources: [source], machineSnapshots }),
+        ];
+        const readSelection = () => resolvePluginMachineExecutionOriginState({ pluginId: 'acme.plugin',
+            storedOrigin: source.source.origin, candidates: readCandidates() });
+        const scope = { serverId: 'srv_reachability', accountId };
+        recordMachineRequestFailed({ serverId: 'another-home', accountId, machineId, observedAtMs: 1 });
+        recordMachineRequestFailed({ ...scope, accountId: 'another-account', machineId, observedAtMs: 1 });
+        expect(readSelection()).toMatchObject({ kind: 'selected', origin: source.source.origin });
+        recordMachineRequestFailed({ ...scope, machineId, observedAtMs: 2 });
+        expect(readCandidates().map(entry => entry.validation)).toEqual([
+            { kind: 'rejected', reason: 'offline' }, { kind: 'rejected', reason: 'offline' },
+        ]);
+        expect(readSelection()).toMatchObject({ kind: 'unavailable', storedOrigin: source.source.origin, reasons: ['offline'] });
+        recordMachineRequestSucceeded({ ...scope, machineId, observedAtMs: 3 });
+        expect(readSelection()).toMatchObject({ kind: 'selected', origin: source.source.origin });
+    });
     it('coalesces only a machine-local census with its supplying source, not other Homes or exact sources', () => {
         const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine-a', pluginId: 'acme.plugin',
             sourceCustody: { kind: 'development', registeredRootId: 'source-a' } } } as const;
@@ -95,6 +159,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
             materializations: [materialization],
             machineSnapshots: [{
                 kind: 'resolved',
+                accountId,
                 profileId: 'local-one',
                 serverIdentityId: 'srv_one',
                 serverName: 'Server One',
@@ -139,6 +204,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
             materializations: [foreign, own],
             machineSnapshots: [{
                 kind: 'resolved' as const,
+                accountId,
                 profileId: 'local-one',
                 serverIdentityId: 'srv_one',
                 serverName: 'Server One',
@@ -178,6 +244,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
             revokedAt?: number;
         }>, observation: 'live' | 'stale' = 'live') => [{
             kind: 'resolved' as const,
+            accountId,
             profileId: 'local-one',
             serverIdentityId: 'srv_one',
             serverName: 'Server One',
@@ -237,7 +304,7 @@ describe('resolvePluginMachineExecutionOriginState', () => {
             classifyRelease,
         })[0]?.validation).toEqual({ kind: 'rejected', reason: 'unknown' });
         // A read list that lacks the machine: now it has really left.
-        const read = [{ kind: 'resolved' as const, profileId: 'local-one', serverIdentityId: 'srv_one', serverName: 'Server One', observation: 'live' as const, settled: true as const, machines: [] }];
+        const read = [{ kind: 'resolved' as const, accountId, profileId: 'local-one', serverIdentityId: 'srv_one', serverName: 'Server One', observation: 'live' as const, settled: true as const, machines: [] }];
         expect(buildPluginMachineExecutionOriginCandidates({
             pluginId: 'acme.plugin',
             materializations: [base],

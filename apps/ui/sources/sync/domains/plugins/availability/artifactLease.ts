@@ -266,6 +266,7 @@ export type PluginArtifactVerifiedSourceResult =
     | Readonly<{ kind: 'unavailable'; integrityFailed: boolean }>;
 
 type InFlightArtifactMaterializationParticipant = Readonly<{
+    artifact: PluginSelectedArtifactIdentity;
     sources: readonly PluginArtifactSourceCandidate[];
     isCurrent: () => boolean;
     signal: AbortSignal;
@@ -706,7 +707,6 @@ function isInFlightArtifactParticipantCurrent(
 }
 
 async function materializeInFlightVerifiedPluginArtifactSource(input: Readonly<{
-    artifact: PluginSelectedArtifactIdentity;
     graph: PluginUiArtifactsManifestEntryV2;
     participants: ReadonlySet<InFlightArtifactMaterializationParticipant>;
 }>): Promise<PluginArtifactVerifiedSourceResult> {
@@ -752,7 +752,7 @@ async function materializeInFlightVerifiedPluginArtifactSource(input: Readonly<{
         }
         attempted.add(next.source);
         const materialized = await materializeVerifiedPluginArtifactSource({
-            artifact: input.artifact,
+            artifact: next.participant.artifact,
             graph: input.graph,
             sources: [next.source],
             isCurrent: next.participant.isCurrent,
@@ -792,6 +792,7 @@ function materializeSharedVerifiedPluginArtifactSource(input: Readonly<{
         });
     }
     const participant: InFlightArtifactMaterializationParticipant = Object.freeze({
+        artifact: input.artifact,
         sources: input.sources,
         isCurrent: input.isCurrent,
         signal: input.signal,
@@ -807,7 +808,6 @@ function materializeSharedVerifiedPluginArtifactSource(input: Readonly<{
 
     const participants = new Set([participant]);
     const promise = materializeInFlightVerifiedPluginArtifactSource({
-        artifact: input.artifact,
         graph: input.graph,
         participants,
     }).finally(() => {

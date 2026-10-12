@@ -114,6 +114,19 @@ describe('describeEffectiveModelMode', () => {
         expect(out.appliedModelId).toBe('gpt-5.6-terra');
     });
 
+    it('reads known applied model facts despite retired nested stored fields', () => {
+        const out = describeEffectiveModelMode({
+            agentType: 'codex', selectedModelId: 'gpt-5.6-sol', metadata: buildMetadata({
+                sessionAppliedModelV1: {
+                    v: 1, provider: 'codex', updatedAt: 10, modelId: 'gpt-5.6-terra', retired: true,
+                    selection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null,
+                        modelId: 'gpt-5.6-terra', retired: true },
+                },
+            }),
+        });
+        expect(out.appliedModelId).toBe('gpt-5.6-terra');
+    });
+
     it('adds a restart note for ACP providers that restart sessions on model change (Gemini)', () => {
         const out = describeEffectiveModelMode({
             agentType: 'gemini',

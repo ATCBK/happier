@@ -1,6 +1,7 @@
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { SYNCED_SESSION_AUTHORING_FIELD_IDS_V2, SyncedSessionAuthoringValueV2Schema, type SyncedSessionAuthoringFieldIdV2, type SyncedSessionAuthoringValueV2 } from '@happier-dev/protocol/sessions/authoring/index';
 import { SyncedSessionAuthoringValueV1Schema } from '@happier-dev/protocol/sessions/authoring/syncedSessionAuthoringV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { resolveAgentExecutionTargetForPersistedSelection } from '@/agents/backendCatalog/resolveAgentExecutionTargetForBackendTarget';
 import type { NewSessionDraft } from '@/sync/domains/state/persistence';
@@ -15,12 +16,22 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
  * discard otherwise recoverable authoring intent.
  */
 export function projectSyncedSessionAuthoringFields(value: unknown): Partial<SyncedSessionAuthoringValueV2> {
+    return projectSessionAuthoringFields(value, false);
+}
+
+/** Reads retained fields independently while keeping new authoring input strict. */
+export function readSyncedSessionAuthoringFields(value: unknown): Partial<SyncedSessionAuthoringValueV2> {
+    return projectSessionAuthoringFields(value, true);
+}
+
+function projectSessionAuthoringFields(value: unknown, stored: boolean): Partial<SyncedSessionAuthoringValueV2> {
     if (!isRecord(value)) return {};
 
     const projected: Partial<Record<SyncedSessionAuthoringFieldIdV2, unknown>> = {};
     for (const fieldId of SYNCED_SESSION_AUTHORING_FIELD_IDS_V2) {
         if (!Object.prototype.hasOwnProperty.call(value, fieldId)) continue;
-        const parsed = SyncedSessionAuthoringValueV2Schema.shape[fieldId].safeParse(value[fieldId]);
+        const schema = SyncedSessionAuthoringValueV2Schema.shape[fieldId];
+        const parsed = (stored ? createStoredReadSchema(schema) : schema).safeParse(value[fieldId]);
         if (parsed.success) {
             projected[fieldId] = parsed.data;
         }
@@ -124,7 +135,7 @@ export function projectNewSessionDraftSyncedAuthoringFields(params: Readonly<{
         ...(draft.resumeSessionId ? { resumeSessionId: draft.resumeSessionId } : {}),
         permissionMode: draft.permissionMode,
         ...(draft.modelSelection !== undefined ? { modelSelection: draft.modelSelection } : {}),
-        ...(draft.mcpSelection !== undefined ? { mcpSelection: draft.mcpSelection } : {}),
+        ...(draft.capabilitySelection !== undefined ? { capabilitySelection: draft.capabilitySelection } : {}),
         ...(draft.runtimeDescriptorV1 !== undefined ? { runtimeDescriptorV1: draft.runtimeDescriptorV1 } : {}),
         acpSessionModeId: draft.acpSessionModeId,
         ...(draft.automationDraft ? { automation: draft.automationDraft } : {}),

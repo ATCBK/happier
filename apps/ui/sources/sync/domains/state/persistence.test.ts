@@ -3,6 +3,8 @@ import { settingsDefaults, settingsParse } from '../settings/settings';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import type { ServerAccountScope } from '../scope/serverAccountScope';
 import { sessionDraftValuesStorageKey } from './sessionLocalStateKeys';
+import { localSettingsDefaults, localSettingsParse } from '../settings/localSettings';
+import { getPersistenceStorage } from './persistenceStorage';
 import type { ManagedConfigurationFactsV1 } from '@happier-dev/protocol/machines/managed/managedConfigurationV1';
 
 const store = vi.hoisted(() => new Map<string, string>());
@@ -52,6 +54,7 @@ import {
     prepareSessionLocalStateScopeForActivation,
     loadPendingSettings,
     savePendingSettings,
+    parsePendingSettings,
     loadSettings,
     loadSessionModelModes,
     saveSessionModelModes,
@@ -75,6 +78,8 @@ import {
     loadLocalPetSourcesBySourceKey,
     saveLocalPetSourcesBySourceKey,
     loadThemeRuntimeLocalState,
+    loadLocalSettings,
+    saveLocalSettings,
     type ChangesCursorScope,
 } from './persistence';
 
@@ -93,6 +98,47 @@ const sessionLocalScopeB: ServerAccountScope = { serverId: 'server-a', accountId
 describe('persistence', () => {
     beforeEach(async () => {
         await clearPersistence();
+    });
+
+    it('recovers known pending preferences with retired fields while admitting new deltas strictly', () => {
+        const canonical = { v: 1, pluginExecutionOriginsByPluginId: {} };
+        const retained = { ...canonical, targetsByKey: { plugins: { machineId: 'old' } } };
+        store.set('pending-settings', JSON.stringify({ machineAdministrationSelectionsV1: retained }));
+        expect(loadPendingSettings()).toEqual({ machineAdministrationSelectionsV1: canonical });
+        expect(parsePendingSettings({ machineAdministrationSelectionsV1: retained })).toEqual({});
+    });
+
+    it('ignores retained keys inherited from Object without discarding known pending intent', () => {
+        store.set('pending-settings', '{"analyticsOptOut":true,"constructor":{},"toString":{}}');
+        expect(loadPendingSettings()).toEqual({ analyticsOptOut: true });
+    });
+
+    it('restores review and addressed action drafts with retired stored fields', () => {
+        const review = { id: 'c1', filePath: 'src/a.ts', source: 'file',
+            anchor: { kind: 'fileLine', startLine: 1 },
+            snapshot: { selectedLines: ['x'], beforeContext: [], afterContext: [] }, body: 'nit', createdAt: 1 };
+        const storedReview = { ...review, retired: true, anchor: { ...review.anchor, retired: true },
+            snapshot: { ...review.snapshot, retired: true } };
+        store.set('session-review-comments-draft-v1', JSON.stringify({ s1: [storedReview] }));
+        store.set('workspace-review-comments-draft-v1', JSON.stringify({ workspace: [storedReview] }));
+        expect(loadSessionReviewCommentsDrafts()).toEqual({ s1: [review] });
+        expect(loadWorkspaceReviewCommentsDrafts()).toEqual({ workspace: [review] });
+        const action = { id: 'd1', address: { serverId: 'server-a', sessionId: 's1' }, accountId: 'account-a',
+            actionId: 'review.start', createdAt: 1, status: 'editing', input: {}, error: null };
+        store.set('session-action-drafts-v1:scope:v2:8:server-a9:account-a', JSON.stringify({
+            current: [{ ...action, retired: true, address: { ...action.address, retired: true } }],
+            s1: [{ id: 'legacy', sessionId: 's1', actionId: 'review.start', createdAt: 1,
+                status: 'editing', input: {}, error: null, retired: true }],
+        }));
+        expect(loadSessionActionDrafts(sessionLocalScopeA)).toEqual({ '["server-a","s1"]': [action, { ...action, id: 'legacy' }] });
+    });
+
+    it('does not treat malformed current authority as a legacy draft with retired stored fields', () => {
+        store.set('session-action-drafts-v1:scope:v2:8:server-a9:account-a', JSON.stringify({ s1: [{
+            id: 'd1', sessionId: 's1', address: { serverId: 'other-home', sessionId: '' }, accountId: 'other-account',
+            actionId: 'review.start', createdAt: 1, status: 'editing', input: {}, retired: true,
+        }] }));
+        expect(loadSessionActionDrafts(sessionLocalScopeA)).toEqual({});
     });
 
     it('clears all persisted settings scopes and legacy settings state', async () => {
@@ -247,17 +293,51 @@ describe('persistence', () => {
     });
 
     describe('theme runtime local state', () => {
+        const defaultThemeState = {
+            themePreference: localSettingsDefaults.themePreference,
+            themeProfiles: localSettingsDefaults.themeProfiles,
+            uiSurfaceFinish: localSettingsDefaults.uiSurfaceFinish,
+            uiSurfaceFinishOverrides: localSettingsDefaults.uiSurfaceFinishOverrides,
+        };
+
+        it.each([true, false])('restores a persisted plugin selection with its pane open=%s before theme bootstrap', (isOpen) => {
+            const selectedDestination = {
+                kind: 'plugin',
+                destination: { pluginId: 'happier.inspector', localId: 'inspector' },
+                instanceKey: 'inspector:one',
+            };
+            const settings = localSettingsParse({
+                themePreference: 'dark',
+                appPaneScopesV1: {
+                    'session:one': {
+                        right: { isOpen, activeTabId: 'git', selectedDestination, tabState: { git: { branch: 'main' } } },
+                        details: { isOpen: false, tabs: [], activeTabKey: null, tabState: {} },
+                        bottom: { isOpen: false, activeTabId: null, tabState: {} },
+                    },
+                },
+            });
+            saveLocalSettings(settings);
+
+            expect(loadThemeRuntimeLocalState()).toEqual({ ...defaultThemeState, themePreference: 'dark' });
+            expect(loadLocalSettings().appPaneScopesV1['session:one']?.right).toMatchObject({ isOpen, selectedDestination });
+        });
+
+        it('returns defaults when the stored local-settings record cannot be read', () => {
+            const read = vi.spyOn(getPersistenceStorage(), 'getString').mockImplementation(() => { throw new Error('Storage unavailable'); });
+            const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+            try {
+                expect(loadThemeRuntimeLocalState()).toEqual(defaultThemeState);
+            } finally {
+                read.mockRestore();
+                consoleError.mockRestore();
+            }
+        });
+
         it('returns default theme runtime state when local settings JSON is malformed', () => {
             store.set('local-settings', '{not json');
             const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-            expect(loadThemeRuntimeLocalState()).toEqual({
-                themePreference: 'adaptive',
-                themeProfiles: {
-                    profiles: [],
-                    activeProfileIds: { light: null, dark: null },
-                },
-            });
+            expect(loadThemeRuntimeLocalState()).toEqual(defaultThemeState);
             consoleError.mockRestore();
         });
 
@@ -268,11 +348,8 @@ describe('persistence', () => {
             }));
 
             expect(loadThemeRuntimeLocalState()).toEqual({
+                ...defaultThemeState,
                 themePreference: 'dark',
-                themeProfiles: {
-                    profiles: [],
-                    activeProfileIds: { light: null, dark: null },
-                },
             });
         });
 
@@ -577,8 +654,8 @@ describe('persistence', () => {
         });
 
         it('drops unknown keys from pending', () => {
-            store.set('pending-settings', JSON.stringify({ unknownFutureKey: 1, viewInline: true }));
-            expect(loadPendingSettings()).toEqual({ viewInline: true });
+            store.set('pending-settings', JSON.stringify({ unknownFutureKey: 1, analyticsOptOut: true }));
+            expect(loadPendingSettings()).toEqual({ analyticsOptOut: true });
         });
 
         it('drops invalid known keys from pending (type mismatch)', () => {
@@ -640,14 +717,14 @@ describe('persistence', () => {
 
         it('rejects an entire secrets mutation with a malformed sibling while preserving other pending settings', () => {
             store.set('pending-settings', JSON.stringify({
-                viewInline: true,
+                analyticsOptOut: true,
                 secrets: [{
                     id: 'valid-secret', name: 'Valid', kind: 'apiKey',
                     encryptedValue: { _isSecretValue: true, encryptedValue: { t: 'enc-v1', c: 'abc' } },
                     createdAt: 1, updatedAt: 1,
                 }, { id: 'invalid-secret', name: 'Missing value' }],
             }));
-            expect(loadPendingSettings()).toEqual({ viewInline: true });
+            expect(loadPendingSettings()).toEqual({ analyticsOptOut: true });
 
             store.set('pending-settings', JSON.stringify({ secrets: [] }));
             expect(loadPendingSettings()).toEqual({ secrets: [] });
@@ -865,6 +942,34 @@ describe('persistence', () => {
             selectedProfileId: null, selectedSecretId: null, agentType: 'codex' as const,
             permissionMode: 'default' as const, acpSessionModeId: null, updatedAt: 42,
         };
+
+        it('restores both capability kinds and folds the predecessor MCP-only stored draft', () => {
+            const mcp = { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['server-a'], forceExcludeServerIds: [] };
+            const skills = { v: 1, forceIncludeSkillIds: ['skill-a'], forceExcludeSkillIds: [], excludeNativeSkillNames: ['native-a'] };
+            // Provenance: ../0.2 at cd2bb4d853, persistence.ts NewSessionDraft.mcpSelection.
+            store.set('new-session-draft-v1', JSON.stringify({ ...ordinaryDraft, mcpSelection: mcp }));
+            expect(loadNewSessionDraft()).toMatchObject({ capabilitySelection: { mcp } });
+            store.set('new-session-draft-v1', JSON.stringify({ ...ordinaryDraft, capabilitySelection: { mcp, skills, retired: true } }));
+            expect(loadNewSessionDraft()).toMatchObject({ capabilitySelection: { mcp, skills } });
+            expect(loadNewSessionDraft()).not.toHaveProperty('mcpSelection');
+            store.set('new-session-draft-v1', JSON.stringify({ ...ordinaryDraft, capabilitySelection: { skills: { forceIncludeSkillIds: false } }, mcpSelection: mcp }));
+            expect(loadNewSessionDraft()).toBeNull();
+        });
+
+        it('restores nested new-session selections with retired stored fields', () => {
+            const executionTarget = { kind: 'machine', target: { serverId: 'server-a', machineId: 'machine-a' } };
+            const modelSelection = { v: 1, updatedAt: 42, ref: {
+                agentTargetKey: resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }),
+                providerConnectionId: null, modelId: 'gpt-5',
+            } };
+            store.set('new-session-draft-v1', JSON.stringify({ ...ordinaryDraft,
+                executionTarget: { ...executionTarget, retired: true, target: { ...executionTarget.target, retired: true } },
+                organizationPlacement: { folderId: null, tagIds: [], retired: true },
+                modelSelection: { ...modelSelection, retired: true, ref: { ...modelSelection.ref, retired: true } },
+            }));
+            expect(loadNewSessionDraft()).toMatchObject({ executionTarget, modelSelection,
+                organizationPlacement: { folderId: null, tagIds: [] } });
+        });
 
         it.each([
             { kind: 'preset' as const, homeId: 'home-a', id: 'preset-a', revision: 7 },

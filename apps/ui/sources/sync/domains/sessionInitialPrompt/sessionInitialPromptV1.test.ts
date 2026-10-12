@@ -63,8 +63,9 @@ describe('sessionInitialPromptV1', () => {
         expect(readSessionInitialPromptV1(metadata)?.source).not.toHaveProperty('draftCorrelationId');
     });
 
-    it('does not admit a Run draft correlation into the fixed-parent Discussion handoff', () => {
-        const metadata = MetadataSchema.parse({
+    it('reads retained Discussion handoff source fields without restoring unknown draft correlation', () => {
+        const metadata = {
+            ...MetadataSchema.parse({}),
             sessionInitialPromptV1: {
                 v: 1,
                 text: 'selected messages',
@@ -76,11 +77,15 @@ describe('sessionInitialPromptV1', () => {
                     discussionId: 'discussion-a',
                     messageIds: ['message-2'],
                     draftCorrelationId: 'draft-a',
+                    retired: { enabled: true },
                 },
             },
-        });
+        };
 
-        expect(readSessionInitialPromptV1(metadata)?.source).toBeUndefined();
+        expect(readSessionInitialPromptV1(metadata)?.source).toEqual({
+            kind: 'session_discussion', sessionId: 'session-a', discussionId: 'discussion-a', messageIds: ['message-2'],
+        });
+        expect(readSessionInitialPromptV1(metadata)?.source).not.toHaveProperty('draftCorrelationId');
     });
 
     it('preserves metadata when writing blank prompts', () => {

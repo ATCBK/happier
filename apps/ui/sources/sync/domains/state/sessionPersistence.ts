@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { isModelMode, isPermissionMode, type ModelMode, type PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import { ReviewCommentDraftSchema } from '@/sync/domains/input/reviewComments/reviewCommentMeta';
@@ -66,6 +67,8 @@ export function saveSessionDrafts(drafts: Record<string, string>, scope?: Server
 export type SessionReviewCommentDraftsBySessionId = Record<string, z.infer<typeof ReviewCommentDraftSchema>[]>;
 
 export type WorkspaceReviewCommentDraftsByWorkspaceCacheKey = Record<string, z.infer<typeof ReviewCommentDraftSchema>[]>;
+const StoredReviewCommentDraftSchema = createStoredReadSchema(ReviewCommentDraftSchema);
+const StoredSessionActionDraftSchema = createStoredReadSchema(SessionActionDraftSchema);
 
 export function loadSessionReviewCommentsDrafts(scope?: ServerAccountScope | null): SessionReviewCommentDraftsBySessionId {
     const mmkv = getPersistenceStorage();
@@ -82,7 +85,7 @@ export function loadSessionReviewCommentsDrafts(scope?: ServerAccountScope | nul
 
             const drafts: z.infer<typeof ReviewCommentDraftSchema>[] = [];
             for (const entry of rawDrafts) {
-                const entryParsed = ReviewCommentDraftSchema.safeParse(entry);
+                const entryParsed = StoredReviewCommentDraftSchema.safeParse(entry);
                 if (entryParsed.success) drafts.push(entryParsed.data);
             }
             if (drafts.length > 0) out[rawSessionId] = drafts;
@@ -123,7 +126,7 @@ export function loadWorkspaceReviewCommentsDrafts(scope?: ServerAccountScope | n
 
             const drafts: z.infer<typeof ReviewCommentDraftSchema>[] = [];
             for (const entry of rawDrafts) {
-                const entryParsed = ReviewCommentDraftSchema.safeParse(entry);
+                const entryParsed = StoredReviewCommentDraftSchema.safeParse(entry);
                 if (entryParsed.success) drafts.push(entryParsed.data);
             }
             if (drafts.length > 0) out[workspaceCacheKey] = drafts;
@@ -153,6 +156,7 @@ export type SessionActionDraftsByAddressKey = Record<string, z.infer<typeof Sess
 const LegacySessionActionDraftSchema = SessionActionDraftSchema.omit({ address: true, accountId: true }).extend({
     sessionId: z.string().min(1),
 }).strict();
+const StoredLegacySessionActionDraftSchema = createStoredReadSchema(LegacySessionActionDraftSchema);
 
 export function loadSessionActionDrafts(scope?: ServerAccountScope | null): SessionActionDraftsByAddressKey {
     // A bare legacy Session id cannot prove its Home. Only a scoped partition supplies that fact.
@@ -171,14 +175,16 @@ export function loadSessionActionDrafts(scope?: ServerAccountScope | null): Sess
 
             const drafts: z.infer<typeof SessionActionDraftSchema>[] = [];
             for (const entry of rawDrafts) {
-                const entryParsed = SessionActionDraftSchema.safeParse(entry);
+                const entryParsed = StoredSessionActionDraftSchema.safeParse(entry);
                 if (entryParsed.success) {
                     if (entryParsed.data.address.serverId === scope.serverId && entryParsed.data.accountId === scope.accountId) {
                         drafts.push(entryParsed.data);
                     }
                     continue;
                 }
-                const legacyParsed = LegacySessionActionDraftSchema.safeParse(entry);
+                // A malformed addressed draft must never acquire authority from the legacy arm.
+                if (entry && typeof entry === 'object' && ('address' in entry || 'accountId' in entry)) continue;
+                const legacyParsed = StoredLegacySessionActionDraftSchema.safeParse(entry);
                 if (!legacyParsed.success || legacyParsed.data.sessionId !== rawKey.trim()) continue;
                 const { sessionId, ...legacyDraft } = legacyParsed.data;
                 drafts.push({

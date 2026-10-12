@@ -5,9 +5,10 @@ import {
     DaemonLocalServiceInventorySnapshotResponseV1Schema,
     DaemonLocalServiceInventoryWatchRequestV1Schema,
     DaemonLocalServiceInventoryWatchResponseV1Schema,
-    LOCAL_SERVICE_INVENTORY_WATCH_WINDOW_MS,
 } from '@happier-dev/protocol/local/services/inventory/v1';
-import { isRpcMethodNotFoundResult, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { isRpcMethodNotFoundResult, RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
@@ -38,7 +39,7 @@ export async function fetchLocalServiceInventorySnapshotViaMachineRpc(
             payload,
         });
         if (isRpcMethodNotFoundResult(raw)) {
-            return { ok: false, reason: 'unavailable' };
+            return { ok: false, reason: 'unavailable', reasonCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
         }
         const parsed = input.refresh
             ? DaemonLocalServiceInventoryRefreshResponseV1Schema.safeParse(raw)
@@ -47,8 +48,10 @@ export async function fetchLocalServiceInventorySnapshotViaMachineRpc(
             return { ok: false, reason: 'invalid_response' };
         }
         return { ok: true, snapshot: parsed.data.snapshot };
-    } catch {
-        return { ok: false, reason: 'request_failed' };
+    } catch (error) {
+        const reasonCode = readRpcErrorCode(error)
+            ?? (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined);
+        return { ok: false, reason: 'request_failed', ...(reasonCode ? { reasonCode } : {}) };
     }
 }
 
@@ -78,7 +81,7 @@ export async function watchLocalServiceInventorySnapshotViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH,
             payload,
-            timeoutMs: LOCAL_SERVICE_INVENTORY_WATCH_WINDOW_MS + 10_000,
+            timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000,
             ...(input.signal ? { signal: input.signal } : {}),
         });
         if (isRpcMethodNotFoundResult(raw)) {

@@ -21,3 +21,14 @@ export type BundledPluginUiAppArtifact = Readonly<{
 }>;
 
 export type BundledPluginUiAppArtifactInventory = readonly BundledPluginUiAppArtifact[];
+
+/** Manifest-declared packaged marks; descriptive app bytes, never execution authority. */
+export type BundledPluginBrandMark = Readonly<{
+    pluginId: string;
+    displayName: string;
+    resourceId: string;
+    releaseVersion: string;
+    digest: PluginUiArtifactDigestV1;
+    bytes: Uint8Array;
+    monochrome?: boolean;
+}>;

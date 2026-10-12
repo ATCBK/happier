@@ -398,8 +398,8 @@ describe('usePluginUiProjectionCurrentness', () => {
         }));
         await flushHookEffects();
 
-        expect(emptied.getCurrent().phase).toBe('establishing');
-        expect(emptied.getCurrent().pluginUiProjection?.generation).toBeNull();
+        expect(emptied.getCurrent()).toMatchObject({ phase: 'unavailable', unavailableReasonCode: 'plugin_machine_unreachable' });
+        expect(emptied.getCurrent().pluginUiProjection).toBeNull();
         expect(projectionRuntime.describe).not.toHaveBeenCalled();
     });
 
@@ -424,7 +424,7 @@ describe('usePluginUiProjectionCurrentness', () => {
             serverId: serverIdentityId,
         }));
         await flushHookEffects();
-        expect(cold.getCurrent().phase).toBe('establishing');
+        expect(cold.getCurrent()).toMatchObject({ phase: 'retainedOffline', unavailableReasonCode: 'plugin_machine_unreachable', interactionEnabled: false });
 
         setMachine({ active: false });
         await act(async () => {
@@ -490,7 +490,7 @@ describe('usePluginUiProjectionCurrentness', () => {
             serverId: serverIdentityId,
         }));
         await flushHookEffects();
-        expect(transient.getCurrent().phase).toBe('establishing');
+        expect(transient.getCurrent()).toMatchObject({ phase: 'retainedOffline', interactionEnabled: false });
         await transient.unmount();
 
         setMachine({ active: false });
@@ -533,8 +533,8 @@ describe('usePluginUiProjectionCurrentness', () => {
         }));
         await flushHookEffects();
 
-        expect(afterDefinitive.getCurrent().phase).toBe('establishing');
-        expect(afterDefinitive.getCurrent().pluginUiProjection?.generation).toBeNull();
+        expect(afterDefinitive.getCurrent().phase).toBe('unavailable');
+        expect(afterDefinitive.getCurrent().pluginUiProjection).toBeNull();
     });
 
     it('never retains a daemon-backed contribution family in the Account admission snapshot', async () => {
@@ -679,8 +679,8 @@ describe('usePluginUiProjectionCurrentness', () => {
             serverId: serverIdentityId,
         }));
         await flushHookEffects();
-        expect(otherAccount.getCurrent().phase).toBe('establishing');
-        expect(otherAccount.getCurrent().pluginUiProjection?.generation).toBeNull();
+        expect(otherAccount.getCurrent().phase).toBe('unavailable');
+        expect(otherAccount.getCurrent().pluginUiProjection).toBeNull();
         await otherAccount.unmount();
 
         // Back on Account A the retained catalog is reusable, and the moment a
@@ -741,7 +741,7 @@ describe('usePluginUiProjectionCurrentness', () => {
             }))) };
         });
         await waitForHomeGovernance(() => expect(rendered.getCurrent().readers[0]?.phase).toBe('current'));
-        expect(rendered.getCurrent().readers.slice(1).every(reader => reader.phase === 'establishing')).toBe(true);
+        expect(rendered.getCurrent().readers.slice(1).every(reader => reader.phase === 'unavailable')).toBe(true);
         expect(rendered.getCurrent().union).toMatchObject({ phase: 'current', interactionEnabled: true });
         expect(projectionRuntime.describe.mock.calls.map(([machineId]) => machineId)).toEqual(['machine-1']);
         const settledReaders = rendered.getCurrent().readers;
@@ -751,6 +751,101 @@ describe('usePluginUiProjectionCurrentness', () => {
         await flushHookEffects();
         expect(rendered.getCurrent().readers.every((reader, index) => reader === settledReaders[index])).toBe(true);
         await rendered.unmount();
+    });
+
+    it.each(['single', 'plural'] as const)('keeps a settled Machine snapshot stable while a second %s reader binds its Home', async (kind) => {
+        const { useMachineCliDetectionTarget, useMachineCliDetectionTargets } = await import('@/sync/domains/state/storage');
+        const errors = vi.spyOn(console, 'error');
+        let showSecond!: () => void;
+        let firstTarget: ReturnType<typeof useMachineCliDetectionTarget> | null = null;
+        let secondTarget: ReturnType<typeof useMachineCliDetectionTarget> | null = null;
+        function FirstReader() {
+            firstTarget = useMachineCliDetectionTarget('machine-1', serverIdentityId);
+            return null;
+        }
+        function SecondReader() {
+            secondTarget = useMachineCliDetectionTarget('machine-1', serverIdentityId);
+            return null;
+        }
+        function FirstPluralReader() {
+            firstTarget = useMachineCliDetectionTargets(['machine-1'])['machine-1'] ?? null;
+            return null;
+        }
+        function PluralReader() {
+            secondTarget = useMachineCliDetectionTargets(['machine-1'])['machine-1'] ?? null;
+            return null;
+        }
+        function Readers() {
+            const [second, setSecond] = React.useState(false);
+            showSecond = () => setSecond(true);
+            return <>{kind === 'single' ? <FirstReader /> : <FirstPluralReader />}{second ? kind === 'single' ? <SecondReader /> : <PluralReader /> : null}</>;
+        }
+        const rendered = await renderWithAppProviders(<Readers />);
+        try {
+            await waitForHomeGovernance(() => expect(firstTarget?.isOnline).toBe(true));
+            const settled = firstTarget;
+            await act(async () => { showSecond(); });
+            await waitForHomeGovernance(() => expect(secondTarget?.isOnline).toBe(true));
+            expect(firstTarget).toBe(settled);
+            expect(errors.mock.calls.filter(args => String(args[0]).includes('getSnapshot'))).toEqual([]);
+        } finally {
+            await rendered.unmount();
+            errors.mockRestore();
+        }
+    });
+
+    // This existing store contract needs the real Home binding now used by presence.
+    it('projects a stable requested currentness set without subscribing to unrelated machines', async () => {
+        const { useMachineCliDetectionTargets } = await import('@/sync/domains/state/storage');
+        const onlineMachine = createMachineFixture({ id: 'm1', active: true, activeAt: 0, daemonStateVersion: 1 });
+        const offlineMachine = createMachineFixture({ id: 'm3', active: false, activeAt: 0, daemonStateVersion: 3 });
+        await act(async () => {
+            storage.getState().applyMachines([onlineMachine, offlineMachine], true, { sourceServerId: connection!.home.id });
+        });
+        const hook = await renderHook(() => useMachineCliDetectionTargets(['m3', 'm1', 'm3']));
+        try {
+            await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({
+                m1: { daemonStateVersion: 1, isOnline: true },
+                m3: { daemonStateVersion: 3, isOnline: false },
+            }));
+            const firstTargets = hook.getCurrent();
+            await act(async () => {
+                storage.getState().applyMachines([createMachineFixture({ id: 'm2', active: true, activeAt: 0 })], false,
+                    { sourceServerId: connection!.home.id });
+            });
+            expect(hook.getCurrent()).toBe(firstTargets);
+            await act(async () => {
+                storage.getState().applyMachines([{ ...offlineMachine, active: true, daemonStateVersion: 4 }], false,
+                    { sourceServerId: connection!.home.id });
+            });
+            expect(hook.getCurrent()).toEqual({
+                m1: { daemonStateVersion: 1, isOnline: true },
+                m3: { daemonStateVersion: 4, isOnline: true },
+            });
+            expect(hook.getCurrent()).not.toBe(firstTargets);
+            expect(hook.getCurrent().m1).toBe(firstTargets.m1);
+        } finally {
+            await hook.unmount();
+        }
+    });
+
+    it('reports an unreachable AppShell machine as unavailable even while installation declarations are unproven', async () => {
+        const scope = storage.getState().profileScope!;
+        const materialization = { serverIdentityId, machineId: 'machine-1', materializationId: 'preview-install',
+            pluginId: 'acme.preview', version: '1.0.0', sourceClass: 'registryPackage' as const,
+            portableRelease: true, uiArtifacts: [], enabled: true, trustState: 'trusted' as const, observedAt: 1 };
+        replacePluginAccountAvailabilityProjection({ scope, snapshot: { availabilityCursor: 1, intentReads: [],
+            materializations: [materialization], snapshots: [{ serverIdentityId, machineId: 'machine-1', materializations: [materialization] }] } });
+        setMachine({ active: false });
+        const snapshot: { current: ReturnType<typeof useAppShellPluginUiProjection> | null } = { current: null };
+        function Probe() { snapshot.current = useAppShellPluginUiProjection(); return null; }
+        const rendered = await renderWithAppProviders(<AppShellPluginUiProjectionProvider><Probe /></AppShellPluginUiProjectionProvider>);
+        try {
+            await flushHookEffects();
+            expect(snapshot.current?.phase).toBe('unavailable');
+            expect(snapshot.current?.interactionEnabled).toBe(false);
+            expect(projectionRuntime.describe).not.toHaveBeenCalled();
+        } finally { await rendered.unmount(); clearPluginAccountAvailabilityProjection(); }
     });
 
     it('retains the AppShell catalog identity across real Machine presence updates with installed declarations', async () => {
@@ -1190,7 +1285,7 @@ describe('usePluginUiProjectionCurrentness', () => {
         }
     });
 
-    it('recovers a cold projection after repeated transport timeouts outlast the transient retry burst', async () => {
+    it('resolves a cold unreachable projection as unavailable while still recovering after transport timeouts', async () => {
         vi.useFakeTimers();
         try {
             const startedAt = Date.now();
@@ -1214,6 +1309,8 @@ describe('usePluginUiProjectionCurrentness', () => {
             for (const retryDelay of [250, 1_000, 2_500, 5_000, 30_000]) {
                 await flushHookEffects({ advanceTimersMs: 30_000, cycles: 1, turns: 2 });
                 expect(rendered.getCurrent().interactionEnabled).toBe(false);
+                expect(rendered.getCurrent().phase).toBe('unavailable');
+                expect(rendered.getCurrent().connectedAccountProjection).toEqual({ kind: 'error', reason: 'transport' });
                 await flushHookEffects({ advanceTimersMs: retryDelay, cycles: 1, turns: 2 });
             }
             expect(rendered.getCurrent().phase).toBe('current');

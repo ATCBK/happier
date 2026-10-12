@@ -37,12 +37,12 @@ function spawnTarget(overrides?: Record<string, unknown>): AutomationRunExecutio
                 permissionIntent: { value: 'default', updatedAtMs: 10 },
                 options: {},
             },
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['review-tools'],
                 forceExcludeServerIds: [],
-            },
+            } },
             checkoutCreationDraft: null,
             ...overrides,
         }),
@@ -85,12 +85,12 @@ describe('legacy Automation recipe → shared Workflow draft', () => {
 
         expect(projection.draft.defaults.agentTarget).toEqual(AGENT_TARGET);
         expect(projection.draft.defaults.permissionMode).toBe('default');
-        expect(projection.draft.defaults.mcpSelection).toEqual({
+        expect(projection.draft.defaults.capabilitySelection).toEqual({ mcp: {
             v: 1,
             managedServersEnabled: false,
             forceIncludeServerIds: ['review-tools'],
             forceExcludeServerIds: [],
-        });
+        } });
         expect(projection.draft.defaults.conversation).toEqual({ kind: 'fresh' });
     });
 

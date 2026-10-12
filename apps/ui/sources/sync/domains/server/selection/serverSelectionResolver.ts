@@ -19,12 +19,9 @@ import type {
     ServerSelectionTarget,
     ServerSelectionTargetKind,
 } from './serverSelectionTypes';
+import { resolveHomeDisplayLabel, type HomeDisplayProfile } from '@/components/settings/server/homeDisplayName';
 
-type ServerProfileLike = Readonly<{
-    id: string;
-    name: string;
-    serverUrl: string;
-}>;
+type ServerProfileLike = Readonly<HomeDisplayProfile>;
 
 type GroupProfileNormalized = Readonly<{
     id: string;
@@ -175,7 +172,7 @@ export function listServerSelectionTargets(params: Readonly<{
                 kind: 'server' as const,
                 id,
                 serverId: id,
-                name: normalizeId(profile.name) || id,
+                name: resolveHomeDisplayLabel(profile, id),
                 serverUrl: normalizeId(profile.serverUrl),
             };
         }),

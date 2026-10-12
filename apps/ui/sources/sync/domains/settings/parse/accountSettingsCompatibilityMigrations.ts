@@ -5,8 +5,8 @@ import {
 import { SessionTmuxMachineOverrideSchema, TRANSCRIPT_MESSAGE_TIMESTAMP_DISPLAY_MODE_VALUES } from '@happier-dev/protocol/account/settings/accountSettings';
 import { parsePermissionIntentAlias } from '@happier-dev/agents';
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
-import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import {
     buildAgentUniverseBackendTargetKey,
     listExecutableAgentUniverseIds,
@@ -24,27 +24,6 @@ function ownRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
         : null;
-}
-
-function canonicalizeBackendTargetKeyedSettings(value: unknown): Record<string, unknown> {
-    const source = ownRecord(value);
-    if (!source) return {};
-
-    const aliases: Array<readonly [string, unknown]> = [];
-    const canonical: Array<readonly [string, unknown]> = [];
-    for (const [key, entry] of Object.entries(source)) {
-        try {
-            const targetKey = resolveBackendTargetKeyV2(key);
-            (targetKey === key ? canonical : aliases).push([targetKey, entry]);
-        } catch {
-            // The Protocol parser owns validation; an unresolvable compatibility
-            // spelling cannot acquire a catalog identity here.
-        }
-    }
-
-    // Prefer an explicitly persisted canonical entry when both it and an older
-    // spelling address the same Agent.
-    return Object.fromEntries([...aliases, ...canonical]);
 }
 
 function writePath(root: Record<string, unknown>, path: readonly string[], value: unknown): void {
@@ -80,7 +59,7 @@ function migrateLegacyVoiceSavedSecrets(input: Record<string, unknown>, next: Re
     const secrets = Array.isArray(next.secrets) ? [...next.secrets] : [];
     const rawPredecessorBindings = Array.isArray(rawVoice.credentialBindings)
         ? rawVoice.credentialBindings.flatMap((candidate) => {
-            const parsed = PredecessorVoiceCredentialBindingV1Schema.safeParse(candidate);
+            const parsed = createStoredReadSchema(PredecessorVoiceCredentialBindingV1Schema).safeParse(candidate);
             return parsed.success ? [parsed.data] : [];
         })
         : [];
@@ -155,19 +134,6 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
     const { input, inputSchemaVersion, supportedSchemaVersion } = params;
     const next = { ...params.settings } as Record<string, unknown>;
 
-    next.backendEnabledByTargetKey = canonicalizeBackendTargetKeyedSettings(
-        next.backendEnabledByTargetKey,
-    );
-    next.backendCliSourcePreferenceByTargetKey = canonicalizeBackendTargetKeyedSettings(
-        next.backendCliSourcePreferenceByTargetKey,
-    );
-    next.sessionDefaultPermissionModeByTargetKey = canonicalizeBackendTargetKeyedSettings(
-        next.sessionDefaultPermissionModeByTargetKey,
-    );
-    next.newSessionDefaultPersistenceModeByTargetKeyV1 = canonicalizeBackendTargetKeyedSettings(
-        next.newSessionDefaultPersistenceModeByTargetKeyV1,
-    );
-
     migrateLegacyVoiceSavedSecrets(input, next);
 
     if (next.preferredLanguage === 'zh') {
@@ -205,10 +171,12 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
     const hasMachineSearch = 'useMachinePickerSearch' in input;
     const hasPathSearch = 'usePathPickerSearch' in input;
     if (!hasMachineSearch && !hasPathSearch && 'usePickerSearch' in input) {
+        // The 0.2 choice holds both ways: an explicit false keeps search off even where the current
+        // default turns it on (machine pickers).
         const legacy = z.boolean().safeParse(input.usePickerSearch);
-        if (legacy.success && legacy.data === true) {
-            next.useMachinePickerSearch = true;
-            next.usePathPickerSearch = true;
+        if (legacy.success) {
+            next.useMachinePickerSearch = legacy.data;
+            next.usePathPickerSearch = legacy.data;
         }
     }
 
@@ -229,7 +197,7 @@ export function applyAccountSettingsCompatibilityMigrations<TSettings extends Re
         if (parsed.success) next.sessionTmuxTmpDir = parsed.data;
     }
     if (!('sessionTmuxByMachineId' in input) && 'terminalTmuxByMachineId' in input) {
-        const parsed = z.record(z.string(), SessionTmuxMachineOverrideSchema).safeParse(input.terminalTmuxByMachineId);
+        const parsed = z.record(z.string(), createStoredReadSchema(SessionTmuxMachineOverrideSchema)).safeParse(input.terminalTmuxByMachineId);
         if (parsed.success) next.sessionTmuxByMachineId = parsed.data;
     }
     if (!('sessionMessageSendMode' in input) && 'messageSendMode' in input) {

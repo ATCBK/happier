@@ -23,6 +23,24 @@ const policy = {
 };
 
 describe('projectWorkspaceSyncRelationships', () => {
+    it('reads retained relationship fields while enforcing policy digests and provenance endpoints', () => {
+        const relationship = { v: 1, relationshipId: 'retained-link', controllerMachineId: 'machine-a',
+            alphaWorkspaceRefId: 'alpha', betaWorkspaceRefId: 'beta', mode: 'keep_synced', contentPolicy: policy,
+            provenance: { kind: 'worker_clean_copy', sourceWorkspaceRefId: 'alpha', targetWorkspaceRefId: 'beta' },
+            enabled: true, createdAtMs: 1, updatedAtMs: 1 };
+        const retained = { ...relationship, retired: true,
+            contentPolicy: { ...policy, retired: { enabled: true } },
+            provenance: { ...relationship.provenance, retired: true } };
+        const projected = projectWorkspaceSyncRelationships([
+            retained,
+            { ...retained, relationshipId: 'wrong-digest', contentPolicy: { ...retained.contentPolicy, policyDigest: '0'.repeat(64) } },
+            { ...retained, relationshipId: 'wrong-endpoint', provenance: { ...retained.provenance, targetWorkspaceRefId: 'elsewhere' } },
+        ]);
+
+        expect(projected.all).toEqual([relationship]);
+        expect(projected.enabled).toEqual([relationship]);
+        expect(projected.invalidCount).toBe(2);
+    });
     it('does not collapse duplicate endpoint IDs from different Homes', () => {
         const alpha = { id: 'alpha', serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo', createdAtMs: 1 };
         const beta = { id: 'beta', serverId: 'home-a', machineId: 'machine-b', rootPath: '/target', createdAtMs: 1 };

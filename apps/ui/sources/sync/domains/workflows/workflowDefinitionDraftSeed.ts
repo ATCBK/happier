@@ -2,8 +2,7 @@ import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workf
 import type { AutomationTriggerDefinitionInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
 import type { WorkflowStarterSessionTarget } from '@happier-dev/protocol/workflows/builtins/examples';
 
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { getTempData, storeTempData } from '@/utils/sessions/tempDataStore';
+import { readWorkflowEditorDraftSeed, storeWorkflowEditorDraftSeed } from './workflowEditorDraftSeed';
 
 /** Unsaved authoring copy only: no Artifact identity or grants. Source selection is not placement. */
 export type WorkflowDefinitionDraftSeed = Readonly<{
@@ -14,21 +13,12 @@ export type WorkflowDefinitionDraftSeed = Readonly<{
     sessionTarget?: WorkflowStarterSessionTarget;
 }>;
 
-type StoredDefinitionDraftSeed = Readonly<{
-    kind: 'workflow-definition-draft-seed';
-    seed: WorkflowDefinitionDraftSeed;
-    lifetime: ReturnType<typeof captureActiveServerAccountScopeLifetime>;
-}>;
+const WORKFLOW_DEFINITION_DRAFT_SEED_KIND = 'workflow-definition-draft-seed';
 
 export function storeWorkflowDefinitionDraftSeed(seed: WorkflowDefinitionDraftSeed): string {
-    return storeTempData({
-        kind: 'workflow-definition-draft-seed',
-        seed,
-        lifetime: captureActiveServerAccountScopeLifetime(),
-    } satisfies StoredDefinitionDraftSeed);
+    return storeWorkflowEditorDraftSeed(WORKFLOW_DEFINITION_DRAFT_SEED_KIND, seed);
 }
 
 export function readWorkflowDefinitionDraftSeed(id: string): WorkflowDefinitionDraftSeed | null {
-    const stored = getTempData<StoredDefinitionDraftSeed>(id);
-    return stored?.kind === 'workflow-definition-draft-seed' && stored.lifetime?.isCurrent() ? stored.seed : null;
+    return readWorkflowEditorDraftSeed(WORKFLOW_DEFINITION_DRAFT_SEED_KIND, id);
 }

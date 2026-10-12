@@ -1,8 +1,6 @@
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { VoiceTrackedSessionAddressV1Schema } from '@happier-dev/protocol/sessions/follow/voiceTrackedTargetsCompatibilityV1';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { readInputFieldOptionsConstraint, validateInputFieldSchema, validateInputFieldValue } from '@happier-dev/protocol/inputs/runtime';
-import { QualifiedConnectedAccountRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { QualifiedConnectedAccountPurposeBindingsV1 } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
 import { readInputPath, resolveEffectiveInputFields, type InputFieldHint, type InputOption } from '@happier-dev/protocol/inputs';
 import { readWidgetInputTargetV1, composeWidgetGroupContextV1, inheritWidgetGroupViewerBindingsV1, resolveConfiguredWidgetInputs, resolveConfiguredWidgetTargetInputV1, resolveWidgetViewerPurposeValuesV1, isSameWidgetDefinitionV1, widgetCandidateDefinitionV1, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1, type WidgetInputIssueV1 } from '@happier-dev/protocol/widgets';
@@ -15,11 +13,12 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { useActiveServerAccountScope, useProfile, useSession } from '@/sync/domains/state/storage';
 import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 import { normalizeSessionAccessProjection } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
-import { resolveConfiguredWidgetTarget, withWidgetInputRepairOutcome, type ConfiguredWidgetTargetResolution } from './widgetBinding';
+import { resolveConfiguredWidgetTarget, withWidgetInputRepairOutcome, WidgetSessionAddressReadSchema, WidgetConnectedAccountSelectionReadSchema, type ConfiguredWidgetTargetResolution } from './widgetBinding';
 import { admitWidgetViewerSelectionMetadataV1 } from './widgetViewerSelectionAdmission';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import { isSessionRouteHydrationPending } from '@/sync/domains/session/sessionRouteHydrationState';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 const NO_PURPOSE_BINDINGS: QualifiedConnectedAccountPurposeBindingsV1 = { v: 1, bindings: [] };
 
@@ -67,7 +66,7 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): C
             viewerValues: current.values,
             validateValue: (field, value) => {
                 if (input.instance.bindings[field.path]?.kind !== 'viewer' && !field.connectedAccountOptions) return { status: 'valid' };
-                const selected = QualifiedConnectedAccountRefSchema.safeParse(value);
+                const selected = WidgetConnectedAccountSelectionReadSchema.safeParse(value);
                 if (!selected.success) return { status: 'invalid', reasonCode: 'widgets_viewer_selection_invalid' };
                 if (!viewer) return { status: 'denied', reasonCode: 'widgets_viewer_scope_mismatch' };
                 const refusal = admitWidgetViewerSelectionMetadataV1({ viewer,
@@ -88,21 +87,22 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): C
         return resolved;
     };
     const provisional = resolve(input.descriptor);
-    const currentViewer = areServerAccountScopesEqual(viewer, input.scope)
-        || input.scope.serverId === viewer?.serverId && areServerAccountScopesEqual(viewer, input.admittedViewer);
-    const builtin = input.instance.definition.kind === 'builtin';
+    const currentViewer = !!viewer && areServerProfileIdentifiersEquivalent(input.scope.serverId, viewer.serverId)
+        && (input.scope.accountId === viewer.accountId || areServerAccountScopesEqual(viewer, input.admittedViewer));
+    const authored = input.descriptor.authoredDefinition;
+    const builtin = input.instance.definition.kind === 'builtin' || authored?.body.kind === 'builtin';
     const currentDefinition = isSameWidgetDefinitionV1(input.instance.definition, widgetCandidateDefinitionV1(input.descriptor));
     const targetInput = resolveConfiguredWidgetTargetInputV1({ instance: input.instance, descriptor: input.descriptor,
         providedContext, viewerValues: {} });
     const address = currentViewer && currentDefinition && input.enabled !== false && sessionPath && targetInput.status === 'ready'
-        ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(targetInput.input, sessionPath)) : null;
-    const requested = address?.success && address.data.serverId === input.scope.serverId ? address.data : null;
+        ? WidgetSessionAddressReadSchema.safeParse(readInputPath(targetInput.input, sessionPath)) : null;
+    const requested = address?.success && areServerProfileIdentifiersEquivalent(address.data.serverId, input.scope.serverId) ? address.data : null;
     const selectedSession = useSession(requested?.sessionId ?? '', requested?.serverId ?? input.scope.serverId);
     const selectedAccess = selectedSession?.access === undefined && selectedSession
         ? normalizeSessionAccessProjection({ share: selectedSession.accessLevel ? {
             accessLevel: selectedSession.accessLevel, canApprovePermissions: selectedSession.canApprovePermissions === true,
         } : null }, { allowLegacy: true }) : selectedSession?.access;
-    const selectedIdentityMatches = requested !== null && selectedSession?.id === requested.sessionId && selectedSession.serverId === requested.serverId;
+    const selectedIdentityMatches = requested !== null && selectedSession?.id === requested.sessionId && areServerProfileIdentifiersEquivalent(selectedSession.serverId, requested.serverId);
     const selectedCanRead = selectedIdentityMatches && selectedAccess?.capabilities.readTranscript === true;
     // A render-cache miss is not absence. Reuse the exact Session's route owner
     // without waking its transcript; denied cached targets are not hydrated.
@@ -112,9 +112,8 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): C
         hydrateMessages: false,
     });
     const selectedRuntime = useSessionPluginRuntime({ address: !builtin && selectedCanRead ? requested : null });
-    const authored = input.descriptor.authoredDefinition;
     const reference = input.instance.definition;
-    const installed = targetDeclaration.kind === 'session' && !builtin && requested && authored?.body.kind !== 'declarative'
+    const installed = targetDeclaration.kind === 'session' && !builtin && requested && (!authored || authored.body.kind === 'installed')
         ? readWidgetDescriptor(selectedRuntime.pluginUiProjection, input.descriptor.sourceDefinition ?? reference)
         : input.descriptor;
     const candidate = authored && installed && (reference.kind === 'artifact' || reference.kind === 'inline')
@@ -141,7 +140,10 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): C
         refreshKey: JSON.stringify(candidate?.inputs),
         // Exact native refs need discovery only when their consuming field declares it.
         requests: fields.filter(field => readInputFieldOptionsConstraint(field, readInputType(field),
-            input.instance.bindings[field.path]?.kind === 'viewer').kind === 'dynamic').map(field => ({ field, consumer, draftInput })),
+            input.instance.bindings[field.path]?.kind === 'viewer', {
+                contextBound: input.instance.bindings[field.path]?.kind === 'context',
+                value: readInputPath(draftInput, field.path) as JsonValue | undefined,
+            }).kind === 'dynamic').map(field => ({ field, consumer, draftInput })),
     });
     const sessionRefusal = (status: WidgetInputIssueV1['status'], reasonCode: string): ConfiguredWidgetTargetResolution => withWidgetInputRepairOutcome({ status, reasonCode,
         ...(sessionPath ? { fields: [{ path: sessionPath, status, reasonCode }] } : {}) }, {
@@ -182,18 +184,20 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): C
         };
         const schema = validateInputFieldSchema({ field, value: value as JsonValue, type });
         if (schema.status !== 'valid') return refuse(schema);
-        const constraint = readInputFieldOptionsConstraint(field, type, input.instance.bindings[field.path]?.kind === 'viewer');
+        const contextBound = input.instance.bindings[field.path]?.kind === 'context';
+        const constraint = readInputFieldOptionsConstraint(field, type, input.instance.bindings[field.path]?.kind === 'viewer', { contextBound, value: value as JsonValue });
         let options: readonly InputOption[] | undefined;
         if (constraint.kind === 'dynamic') {
             const state = optionReads.state(field, { consumer, draftInput });
             if (state.status !== 'ready') {
+                if (state.status === 'loading') return { status: 'loading', reasonCode: 'widget_input_options_loading' };
                 const reasonCode = state.errorCode ?? 'widget_input_options_loading';
                 return { status: 'unavailable', reasonCode, fields: [{ path: field.path, status: 'unavailable', reasonCode }] };
             }
             options = state.options;
         }
         const admitted = validateInputFieldValue({ field, value: value as JsonValue, type, options,
-            viewerPurpose: input.instance.bindings[field.path]?.kind === 'viewer' });
+            viewerPurpose: input.instance.bindings[field.path]?.kind === 'viewer', contextBound });
         if (admitted.status !== 'valid') return refuse(admitted);
     }
     return resolveConfiguredWidgetTarget({
@@ -206,7 +210,7 @@ function useConfiguredWidgetTargetFacts(input: ConfiguredWidgetTargetOptions): C
         descriptor: candidate ?? input.descriptor,
         providedContext: input.providedContext, appRuntime: input.appRuntime,
         readSession: ref => {
-            if (!requested || requested.serverId !== ref.serverId || requested.sessionId !== ref.sessionId)
+            if (!requested || !areServerProfileIdentifiersEquivalent(requested.serverId, ref.serverId) || requested.sessionId !== ref.sessionId)
                 return { status: 'denied', reasonCode: 'widget_target_identity_mismatch' };
             if (!selectedSession) return { status: 'unavailable', reasonCode: 'widget_session_unavailable' };
             if (!selectedCanRead)

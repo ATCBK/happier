@@ -1,10 +1,9 @@
-import { ACCOUNT_SETTING_DEFINITIONS, type AccountSettingsDefaults } from '@happier-dev/protocol/account/settings/accountSettings';
+import type { AccountSettingsDefaults } from '@happier-dev/protocol/account/settings/accountSettings';
+import { mergeCurrentFavoriteModelSelectionsIntoRaw } from '@happier-dev/protocol/providers/modelFavoritesV1';
 import { LegacyRememberedEngineSelectionsByScopeV1Schema, type RetainedRememberedEngineSelectionsByScopeV1 } from '@happier-dev/protocol/account/settings/legacyAuthoringMemorySettingsV1';
 
 import {
-    FavoriteModelSelectionV1Schema,
-    getFavoriteModelRef,
-    normalizeFavoriteModelId,
+    StoredFavoriteModelSelectionV1Schema,
     type FavoriteModelSelectionV1,
 } from '@/sync/domains/models/favoriteModelSelections';
 import {
@@ -44,7 +43,7 @@ function readCurrentFavoriteModelSelections(
     value: RetainedFavoriteModelSelectionsV1,
 ): readonly FavoriteModelSelectionV1[] {
     return value.flatMap((candidate) => {
-        const parsed = FavoriteModelSelectionV1Schema.safeParse(candidate);
+        const parsed = StoredFavoriteModelSelectionV1Schema.safeParse(candidate);
         return parsed.success ? [parsed.data] : [];
     });
 }
@@ -68,93 +67,7 @@ export function attachCurrentSessionAuthoringSelectionsRuntimeProjection<T exten
     return value as T & CurrentSessionAuthoringSelectionsRuntimeProjection;
 }
 
-function favoriteSelectionKey(value: FavoriteModelSelectionV1): string {
-    return JSON.stringify(value);
-}
-
-function favoriteSelectionIdentityKey(value: FavoriteModelSelectionV1): string {
-    const ref = getFavoriteModelRef(value);
-    return JSON.stringify([
-        ref.agentTargetKey,
-        ref.providerConnectionId,
-        normalizeFavoriteModelId(ref.modelId),
-    ]);
-}
-
-function groupFavoriteSelectionKeysByIdentity(
-    values: readonly FavoriteModelSelectionV1[],
-): ReadonlyMap<string, readonly string[]> {
-    const grouped = new Map<string, string[]>();
-    for (const value of values) {
-        const identityKey = favoriteSelectionIdentityKey(value);
-        const selections = grouped.get(identityKey) ?? [];
-        selections.push(favoriteSelectionKey(value));
-        grouped.set(identityKey, selections);
-    }
-    return grouped;
-}
-
-function favoriteSelectionKeyListsEqual(
-    left: readonly string[] | undefined,
-    right: readonly string[] | undefined,
-): boolean {
-    const leftValues = left ?? [];
-    const rightValues = right ?? [];
-    return leftValues.length === rightValues.length
-        && leftValues.every((value, index) => value === rightValues[index]);
-}
-
-/**
- * Merge identity-local Favorite edits back into the retained array. A changed
- * identity is writable only while the CAS winner still matches the rendered
- * base; entries the typed projection cannot recognize remain opaque.
- */
-export function mergeCurrentFavoriteModelSelectionsIntoRaw(params: Readonly<{
-    rawFavorites: RetainedFavoriteModelSelectionsV1;
-    currentFavorites: readonly FavoriteModelSelectionV1[];
-    nextFavorites: readonly FavoriteModelSelectionV1[];
-}>): RetainedFavoriteModelSelectionsV1 {
-    const baseByIdentity = groupFavoriteSelectionKeysByIdentity(params.currentFavorites);
-    const proposedByIdentity = groupFavoriteSelectionKeysByIdentity(params.nextFavorites);
-    const winnerByIdentity = groupFavoriteSelectionKeysByIdentity(
-        params.rawFavorites.flatMap((candidate) => {
-            const parsed = FavoriteModelSelectionV1Schema.safeParse(candidate);
-            return parsed.success ? [parsed.data] : [];
-        }),
-    );
-    const changedIdentities = new Set([
-        ...baseByIdentity.keys(),
-        ...proposedByIdentity.keys(),
-    ].filter((identityKey) => !favoriteSelectionKeyListsEqual(
-        baseByIdentity.get(identityKey),
-        proposedByIdentity.get(identityKey),
-    )));
-    const writableIdentities = new Set([...changedIdentities].filter((identityKey) => (
-        favoriteSelectionKeyListsEqual(
-            winnerByIdentity.get(identityKey),
-            baseByIdentity.get(identityKey),
-        )
-    )));
-    const retained: Array<RetainedFavoriteModelSelectionsV1[number]> = [];
-
-    for (const candidate of params.rawFavorites) {
-        const parsed = FavoriteModelSelectionV1Schema.safeParse(candidate);
-        if (!parsed.success) {
-            retained.push(candidate);
-            continue;
-        }
-        if (writableIdentities.has(favoriteSelectionIdentityKey(parsed.data))) continue;
-        retained.push(candidate);
-    }
-
-    for (const favorite of params.nextFavorites) {
-        if (writableIdentities.has(favoriteSelectionIdentityKey(favorite))) retained.push(favorite);
-    }
-
-    const bounded = ACCOUNT_SETTING_DEFINITIONS.favoriteModelSelectionsV1.schema.safeParse(retained);
-    if (!bounded.success || bounded.data.length !== retained.length) return params.rawFavorites;
-    return bounded.data;
-}
+export { mergeCurrentFavoriteModelSelectionsIntoRaw } from '@happier-dev/protocol/providers/modelFavoritesV1';
 
 function rememberedSelectionKey(value: RememberedEngineSelectionsByScopeV1[string]): string {
     return JSON.stringify(value);

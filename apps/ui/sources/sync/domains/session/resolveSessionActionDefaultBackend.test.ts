@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { createSessionFixture } from '@/dev/testkit';
+import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 
 import {
   resolveSessionActionDefaultBackend,
@@ -6,6 +8,21 @@ import {
 } from './resolveSessionActionDefaultBackend';
 
 	describe('resolveSessionActionDefaultBackend', () => {
+      it('retains the canonical Agent target from stored birth provenance with retired fields', () => {
+        const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'example.custom', localId: 'agent' } };
+        const correspondence = SessionCreationCorrespondenceV1Schema.parse({ v: 1, sessionCreationTag: `create:v1:${'a'.repeat(43)}`, recipe: {
+            execution: { machineId: 'machine-a', directory: { kind: 'path', path: '/project' } },
+            organization: { folderId: null, tagIds: [] }, agentTarget, modelSelection: null, profileId: null,
+            requestedPermissionMode: null, agentModeId: null, configuration: null, connectedServices: null,
+            capabilitySelection: null, transcriptStorage: 'persisted', terminal: null, agentSessionStartupInstructionsMarkerV1: null,
+            checkout: null,
+        } });
+        const retainedCorrespondence = { ...correspondence, retired: true, recipe: { ...correspondence.recipe, retired: true } };
+        const resolved = resolveSessionActionDefaultBackend({ session: createSessionFixture({
+            metadata: { path: '/project', host: 'machine-a', sessionCreationCorrespondenceV1: retainedCorrespondence },
+        }) });
+        expect(resolved?.agentTarget).toEqual(agentTarget);
+      });
 	  it('returns configured ACP backend targets from session metadata while keeping a built-in fallback id', () => {
 	    const resolved = resolveSessionActionDefaultBackend({
       session: {

@@ -144,7 +144,7 @@ describe('provider account usage selectors', () => {
 
     it('selects native provider-account usage for non-connected sessions', async () => {
         const selectors = await loadSelectors();
-        const snapshot = makeSnapshot();
+        const snapshot = makeSnapshot({ recoveryCreditDetails: { saved: { remainingCount: 2, appliesToProviderLimitIds: ['seven_day'], unavailableReason: 'paused' } } });
 
         expect(selectors.selectProviderUsageDisplaySource({
             providerId: null,
@@ -251,6 +251,19 @@ describe('provider account usage selectors', () => {
         expect(selectors.computeProviderAccountUsageGaugeViewModel({
             ...fresh, state: 'error_last_known_good',
         })?.isStale).toBe(true);
+    });
+
+    it('uses exact model meters through the provider account usage projection', async () => {
+        const selectors = await loadSelectors();
+        const base = makeSnapshot();
+        const snapshot = makeSnapshot({ meters: [
+            { ...base.meters[0]!, meterId: 'model:v1', modelId: 'model-v1', scope: 'model', limitScope: 'model', used: 90, remainingPct: 10 },
+            { ...base.meters[0]!, meterId: 'model:v2', modelId: 'model-v2', scope: 'model', limitScope: 'model', used: 20, remainingPct: 80 },
+        ] });
+        const params = { snapshot, state: 'loaded_data' as const, activeModelId: 'model-v2',
+            windowMode: 'most_constrained' as const, nowMs: 2_000, formatter };
+        expect(selectors.computeProviderAccountUsageGaugeViewModel(params)?.remainingPct).toBe(80);
+        expect(selectors.computeProviderAccountUsageGaugeViewModel({ ...params, activeModelId: 'model-v3' })).toBeNull();
     });
 
     it('normalizes provider-account usage record ids', async () => {

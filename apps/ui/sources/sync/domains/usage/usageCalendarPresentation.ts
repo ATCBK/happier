@@ -1,5 +1,7 @@
-import { resolveUsageBucketBounds, type UsageAnalyticsCoverage, type UsageAnalyticsGranularity } from '@happier-dev/protocol';
-import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { resolveUsageBucketBounds, resolveUsageCalendarDateStart } from '@happier-dev/protocol/usage/usageCalendar';
+import { type UsageAnalyticsCoverage, type UsageAnalyticsGranularity, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { resolveUsageQueryPeriod, type UsageQuery, type UsageRelativePeriod } from '@happier-dev/protocol/inputs/usageQuery';
+import { getUsagePeriodDefinition } from '@/sync/api/account/usagePeriods';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { getPreferredLanguage, t } from '@/text';
 
@@ -12,10 +14,32 @@ export type UsageCalendarRange = Readonly<{
 }>;
 
 /** An open range is drawn only as far as the producer witnessed it, never up to the viewer's clock. */
-export function resolveUsageShownCalendarRange(query: UsageQuery, coverage?: UsageAnalyticsCoverage): UsageCalendarRange | null {
-    const endMs = query.period.endMs ?? coverage?.range.endMs;
+export function resolveUsageShownCalendarRange(query: UsageQuery, coverage?: UsageAnalyticsCoverage,
+    accounting?: UsageAnalyticsQueryResponse): UsageCalendarRange | null {
+    // Older open-ended responses already witness their last observation/day. Source freshness
+    // can be older than those observations and the viewer clock cannot extend retained facts.
+    let firstObserved: number | undefined;
+    let witnessedEnd: number | undefined;
+    const witness = (startMs: number, endMs: number) => {
+        firstObserved = firstObserved === undefined ? startMs : Math.min(firstObserved, startMs);
+        witnessedEnd = witnessedEnd === undefined ? endMs : Math.max(witnessedEnd, endMs);
+    };
+    for (const row of accounting?.contributions ?? []) witness(row.observedAtMs, row.observedAtMs + 1);
+    // Full bucket bounds are only a fallback for older readers without observation timestamps.
+    if (witnessedEnd === undefined) {
+        for (const bucket of accounting?.series ?? []) witness(bucket.bucketStartMs, bucket.bucketEndMs);
+        for (const day of accounting?.activity?.calendarDays ?? []) {
+            const startMs = resolveUsageCalendarDateStart(day.date, query.timeZoneOffsetMinutes);
+            witness(startMs, startMs + 86_400_000);
+        }
+    }
+    const endMs = query.period.endMs ?? coverage?.range.endMs ?? witnessedEnd;
     if (endMs === undefined) return null;
-    const startMs = query.period.startMs ?? coverage?.range.startMs;
+    const relativeName = 'relative' in query.period ? query.period.relative : undefined;
+    const relative = relativeName !== undefined ? resolveUsageQueryPeriod(query, endMs - 1) : null;
+    // All time shows retained history; an explicitly pinned epoch start stays exact.
+    const startMs = relativeName === 'all' ? firstObserved
+        : relative?.startMs ?? query.period.startMs ?? coverage?.range.startMs;
     return { ...(startMs !== undefined ? { startMs } : {}), endMs,
         granularity: query.granularity, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes };
 }
@@ -36,9 +60,19 @@ export function formatUsageCalendarDate(timestampMs: number, timeZoneOffsetMinut
     return formatWithCachedDateTimeFormatter(timestampMs + timeZoneOffsetMinutes * 60_000, locales ?? getPreferredLanguage(), { ...options, timeZone: 'UTC' });
 }
 
+/** Observation clocks use the viewer's local calendar, not the queried accounting bucket offset. */
+export function formatUsageObservedAt(timestampMs: number, nowMs = Date.now(), locales?: Intl.LocalesArgument): string {
+    const observed = new Date(timestampMs);
+    const now = new Date(nowMs);
+    const today = observed.getFullYear() === now.getFullYear() && observed.getMonth() === now.getMonth() && observed.getDate() === now.getDate();
+    return formatWithCachedDateTimeFormatter(timestampMs, locales ?? getPreferredLanguage(), { hour: 'numeric', minute: '2-digit',
+        ...(!today ? { year: 'numeric', month: 'short', day: 'numeric' } as const : {}) });
+}
+
 /** Exact selected dates; a named rolling preset cannot be recovered from a range's duration. */
-export function formatUsageCalendarPeriod(period: Readonly<{ startMs?: number; endMs?: number; timeZoneOffsetMinutes?: number }>,
+export function formatUsageCalendarPeriod(period: Readonly<{ relative?: UsageRelativePeriod; startMs?: number; endMs?: number; timeZoneOffsetMinutes?: number }>,
     locales?: Intl.LocalesArgument): string {
+    if (period.relative !== undefined) return t(getUsagePeriodDefinition(period.relative).translationKey);
     const offset = period.timeZoneOffsetMinutes ?? 0;
     if (period.startMs === undefined) return period.endMs === undefined ? t('usage.allTime')
         : `${t('usage.allTime')} – ${formatUsageCalendarDate(period.endMs - 1, offset, undefined, locales)}`;

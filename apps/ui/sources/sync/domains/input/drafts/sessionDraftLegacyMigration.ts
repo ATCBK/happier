@@ -1,5 +1,6 @@
 import { MENTION_KIND_V1, buildMentionRefForKindV1, type MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { StrictJsonValue } from '@happier-dev/protocol/drafts/sessionDrafts';
 import {
     composerReferencesFromStructuredMentions,
@@ -106,7 +107,7 @@ function buildExistingPatch(
     let fullyProjected = true;
     const routing: NonNullable<typeof patch.routing> = {};
     for (const [fieldId, envelope] of Object.entries(values ?? {})) {
-        if (!(fieldId in SESSION_DRAFT_VALUE_SCHEMAS)) {
+        if (!Object.hasOwn(SESSION_DRAFT_VALUE_SCHEMAS, fieldId)) {
             fullyProjected = false;
             continue;
         }
@@ -121,7 +122,7 @@ function buildExistingPatch(
             if (!mentions.fullyDecoded) fullyProjected = false;
             continue;
         }
-        const parsed = SESSION_DRAFT_VALUE_SCHEMAS[typedFieldId].safeParse(envelope.value);
+        const parsed = createStoredReadSchema(SESSION_DRAFT_VALUE_SCHEMAS[typedFieldId]).safeParse(envelope.value);
         if (!parsed.success) {
             fullyProjected = false;
             continue;

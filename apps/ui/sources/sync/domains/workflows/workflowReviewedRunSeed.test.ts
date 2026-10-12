@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const accountHost = vi.hoisted(() => ({
     scope: { serverId: 'server-a', accountId: 'account-a' },
 }));
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
+vi.mock('@/sync/runtime/orchestration/appliedActiveServerRuntime', () => ({
     getAppliedActiveServerSnapshot: () => ({ serverId: accountHost.scope.serverId }),
     isAppliedActiveServerRuntimeAvailable: () => true,
 }));
@@ -16,6 +16,8 @@ vi.mock('@/sync/domains/state/storageStateReaderBridge', () => ({
 import { WorkflowDefinitionV1Schema } from '@happier-dev/protocol/workflows/workflowV1';
 import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { WorkflowRunAcceptedContextV1 } from '@happier-dev/protocol';
+import { consumeWorkflowEditorDraftSeed } from './workflowEditorDraftSeed';
+import { readWorkflowDefinitionDraftSeed, storeWorkflowDefinitionDraftSeed } from './workflowDefinitionDraftSeed';
 
 import {
     buildWorkflowReviewedRunSeed,
@@ -94,7 +96,7 @@ describe('workflow reviewed-run seed', () => {
         expect(seed.definition).toEqual(definition);
     });
 
-    it('reads the stored copy exactly once so history cannot re-seed the editor', () => {
+    it('keeps the stored copy readable until an editor commits its intake', () => {
         const seed = buildWorkflowReviewedRunSeed({
             run: createWorkflowRunSummaryFixture({ id: 'run-1' }),
             definition: createWorkflowDefinitionFixture(),
@@ -104,11 +106,17 @@ describe('workflow reviewed-run seed', () => {
         const seedId = storeWorkflowReviewedRunSeed(seed);
 
         expect(readWorkflowReviewedRunSeed(seedId)).toEqual(seed);
+        expect(readWorkflowReviewedRunSeed(seedId)).toEqual(seed);
+        consumeWorkflowEditorDraftSeed(seedId);
         expect(readWorkflowReviewedRunSeed(seedId)).toBeNull();
     });
 
     it('refuses a handle that does not name a reviewed-run copy', () => {
         expect(readWorkflowReviewedRunSeed('not-a-stored-seed')).toBeNull();
+        const seed = { name: 'Portable copy', definition: createWorkflowDefinitionFixture() };
+        const id = storeWorkflowDefinitionDraftSeed(seed);
+        expect(readWorkflowReviewedRunSeed(id)).toBeNull();
+        expect(readWorkflowDefinitionDraftSeed(id)).toEqual(seed);
     });
 
     it('refuses a seed after the Account changes before editor intake', () => {
@@ -131,4 +139,5 @@ describe('workflow reviewed-run seed', () => {
         retireActiveServerAccountScopeLifetime();
         expect(readWorkflowReviewedRunSeed(seedId)).toBeNull();
     });
+
 });

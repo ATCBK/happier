@@ -5,6 +5,7 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { readWidgetDefinitionForInstanceV1 } from './widgetDefinitionRead';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 /** Existing per-Artifact invalidation feeds the canonical Action read, never a second byte store. */
 export type MountedWidgetDefinitionV1 = Readonly<{ definition: WidgetDefinitionV1 | null; state: 'loading' | 'available' | 'unavailable'; reasonCode?: string }>;
@@ -14,8 +15,8 @@ export function useWidgetDefinition(scope: WidgetSurfaceRefV1, reference: Widget
     const artifact = useArtifact(artifactId);
     const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer?.serverId, viewer?.accountId]);
     const [opened, setOpened] = React.useState<Readonly<{ artifactId: string; definition: WidgetDefinitionV1 | null; cached: boolean; reasonCode?: string }> | null>(null);
-    const current = enabled && !!lifetime?.isCurrent() && (areServerAccountScopesEqual(viewer, scope)
-        || reference.kind === 'inline' && viewer?.serverId === scope.serverId && areServerAccountScopesEqual(viewer, admittedViewer));
+    const current = enabled && !!lifetime?.isCurrent() && !!viewer && areServerProfileIdentifiersEquivalent(viewer.serverId, scope.serverId)
+        && (viewer.accountId === scope.accountId || reference.kind === 'inline' && areServerAccountScopesEqual(viewer, admittedViewer));
     React.useEffect(() => {
         if (!current || !artifactId || !lifetime) { setOpened(null); return; }
         const controller = new AbortController();

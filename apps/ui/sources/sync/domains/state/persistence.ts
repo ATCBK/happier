@@ -1,5 +1,6 @@
 import type { SessionInitialAccessDraftV1, SessionAuthoringExecutionTargetV2, TemporaryComputerActivationRefV1 } from '@happier-dev/protocol';
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { nullable } from 'zod/mini';
 import type { ZenTaskSource } from '@/sync/domains/todos/todoStoredContent';
 import type { Settings } from '../settings/settings';
@@ -8,7 +9,7 @@ import {
     parseCurrentWriterPredecessorVoiceProjection,
 } from '../settings/voiceSettingsPersistence';
 import { readLegacyVoiceSettingsMigrationSource } from '@/voice/settings/migrations/legacyAdapters';
-import { LocalSettings, localSettingsDefaults, localSettingsParse } from '../settings/localSettings';
+import { type LocalSettings, localSettingsParse } from '../settings/localSettings';
 import {
     migrateThemeProfileLocalStateTokenIds,
     parseThemeProfilesLocalState,
@@ -50,12 +51,12 @@ import { AcpConfigOptionOverridesV1Schema, normalizeCodexBackendMode, type AcpCo
 import { SessionInitialTriggerV1Schema, type SessionInitialTriggerV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 import { SessionIdentityAdditionsV1StoredSchema, type SessionIdentityAdditions } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { SessionPromptStackV1StoredSchema, type SessionPromptStackV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
-import { readSessionInstructionsAuthoringDraft, type SessionInstructionsAuthoringDraft } from '@/sync/ops/promptLibrary/sessionInstructions';
+import { readSessionInstructionsAuthoringDraft, type SessionInstructionsAuthoringDraft } from './sessionInstructionsDraft';
 import { AgentExecutionTargetV1Schema, type AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { ComposerAttachmentDraftV1Schema, type ComposerAttachmentAuthorValueV1, MAX_COMPOSER_ATTACHMENT_INSTANCES_V1, type ComposerAttachmentDraftV1 } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
 import { ExternalSessionRefreshCursorV1Schema } from '@happier-dev/protocol/sessions/external/secureRefreshV1';
 import { SessionModelSelectionV1Schema, type SessionModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
-import { SessionMcpSelectionV1Schema, type SessionMcpSelectionV1 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readCapabilitySelectionCarrierV1, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SessionExecutionTargetV1Schema } from '@happier-dev/protocol/sessions/creation/sessionExecutionTargetV1';
 import { SessionAuthoringExecutionTargetV2Schema, TemporaryComputerActivationRefV1Schema } from '@happier-dev/protocol/sessions/authoring/fieldCatalog';
 import { MachinePoolSelectionOriginV1Schema } from '@happier-dev/protocol/machines/pools/v1';
@@ -68,6 +69,7 @@ import { readRuntimeDescriptorV1, type RuntimeDescriptorV1 } from '@happier-dev/
 import { PluginUiNewSessionSeedOriginV1Schema, StoredPluginUiNewSessionSeedOriginV1Schema, type PluginUiNewSessionSeedOriginV1, type PluginUiSessionPlacementCandidateV1 } from '@happier-dev/protocol/plugins/ui';
 import type { SessionTeamCredentialBindingIntentListV1 } from '@happier-dev/protocol/teams';
 import { getPersistenceStorage } from './persistenceStorage';
+import { loadLocalSettingsSnapshot } from './settingsPersistence';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { log } from '@/log';
 import { prepareSessionPersistenceScopeForActivation } from './sessionPersistence';
@@ -244,7 +246,7 @@ export interface NewSessionDraft {
     acpSessionModeId: string | null;
     sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1 | null;
     runtimeDescriptorV1?: RuntimeDescriptorV1 | null;
-    mcpSelection?: SessionMcpSelectionV1 | null;
+    capabilitySelection?: SessionCapabilitySelectionV1 | null;
     resumeSessionId?: string;
     /**
      * Provider-specific new-session option state keyed by backend target key.
@@ -422,6 +424,14 @@ export function saveDeviceAnalyticsId(value: string): void {
 }
 
 export function parsePendingSettings(raw: unknown): Partial<Settings> {
+    return parsePendingSettingsValue(raw, false);
+}
+
+export function parseStoredPendingSettings(raw: unknown): Partial<Settings> {
+    return parsePendingSettingsValue(raw, true);
+}
+
+function parsePendingSettingsValue(raw: unknown, storedRead: boolean): Partial<Settings> {
     // CRITICAL: Pending settings must represent ONLY user-intended deltas.
     // We must NOT apply schema defaults here (otherwise `{}` becomes a non-empty delta,
     // causing a POST on every startup and potentially overwriting server settings).
@@ -451,7 +461,7 @@ export function parsePendingSettings(raw: unknown): Partial<Settings> {
             continue;
         }
 
-        if (key in ACCOUNT_SETTING_ARTIFACTS.definitions) {
+        if (Object.prototype.hasOwnProperty.call(ACCOUNT_SETTING_ARTIFACTS.definitions, key)) {
             const definition = ACCOUNT_SETTING_ARTIFACTS.definitions[
                 key as keyof typeof ACCOUNT_SETTING_ARTIFACTS.definitions
             ];
@@ -460,23 +470,26 @@ export function parsePendingSettings(raw: unknown): Partial<Settings> {
             // so corrupted pending storage cannot turn into an empty-list deletion.
             if (
                 key === 'secrets'
-                && (!Array.isArray(rawValue) || rawValue.some((value) => !SavedSecretSchema.safeParse(value).success))
+                && (!Array.isArray(rawValue) || rawValue.some((value) => !(storedRead ? createStoredReadSchema(SavedSecretSchema) : SavedSecretSchema).safeParse(value).success))
             ) {
                 continue;
             }
-            const parsed = definition.parseMutationValue(rawValue);
+            const stored = storedRead ? definition.parseStoredValue(rawValue) : null;
+            if (storedRead && !stored?.success) continue;
+            const parsed = definition.parseMutationValue(storedRead ? stored?.data : rawValue);
             if (!parsed.success) continue;
 
             Object.assign(out, { [key]: parsed.data });
             continue;
         }
 
+        if (!Object.prototype.hasOwnProperty.call(LOCAL_ACCOUNT_SETTING_ARTIFACTS.shape, key)) continue;
         const schema = LOCAL_ACCOUNT_SETTING_ARTIFACTS.shape[
             key as keyof typeof LOCAL_ACCOUNT_SETTING_ARTIFACTS.shape
         ];
         if (!schema) continue;
 
-        const parsed = schema.safeParse(rawValue);
+        const parsed = (storedRead ? createStoredReadSchema(schema) : schema).safeParse(rawValue);
         if (!parsed.success) continue;
 
         (out as any)[key] = parsed.data;
@@ -563,7 +576,7 @@ export function loadPendingSettings(): Partial<Settings> {
     if (pending) {
         try {
             const parsed = JSON.parse(pending);
-            const validated = parsePendingSettings(parsed);
+            const validated = parseStoredPendingSettings(parsed);
             return validated;
         } catch (e) {
             console.error('Failed to parse pending settings', e);
@@ -594,42 +607,12 @@ export type ThemeRuntimeLocalState = Readonly<{
     uiSurfaceFinishOverrides: LocalSettings['uiSurfaceFinishOverrides'];
 }>;
 
-function readLocalSettingsJsonForThemeRuntime(raw: string): unknown | null {
-    try {
-        return JSON.parse(raw);
-    } catch (e) {
-        console.error('Failed to parse local settings for theme runtime', e);
-        return null;
-    }
-}
-
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function loadThemeRuntimeLocalState(): ThemeRuntimeLocalState {
-    const mmkv = getPersistenceStorage();
-    const localSettingsRaw = mmkv.getString('local-settings');
-    if (!localSettingsRaw) {
-        return {
-            themePreference: localSettingsDefaults.themePreference,
-            themeProfiles: localSettingsDefaults.themeProfiles,
-            uiSurfaceFinish: localSettingsDefaults.uiSurfaceFinish,
-            uiSurfaceFinishOverrides: localSettingsDefaults.uiSurfaceFinishOverrides,
-        };
-    }
-
-    const parsed = readLocalSettingsJsonForThemeRuntime(localSettingsRaw);
-    if (parsed === null) {
-        return {
-            themePreference: localSettingsDefaults.themePreference,
-            themeProfiles: localSettingsDefaults.themeProfiles,
-            uiSurfaceFinish: localSettingsDefaults.uiSurfaceFinish,
-            uiSurfaceFinishOverrides: localSettingsDefaults.uiSurfaceFinishOverrides,
-        };
-    }
-
-    const settings = localSettingsParse(parsed);
+    const { settings, storedValue: parsed } = loadLocalSettingsSnapshot();
     const parsedProfiles = parseThemeProfilesLocalState(isRecord(parsed) ? parsed.themeProfiles : undefined);
     const migratedProfiles = migrateThemeProfileLocalStateTokenIds(parsedProfiles.state);
     const themeProfiles = migratedProfiles.state;
@@ -639,7 +622,7 @@ export function loadThemeRuntimeLocalState(): ThemeRuntimeLocalState {
             ...(isRecord(parsed) ? parsed : {}),
             themeProfiles,
         });
-        mmkv.set('local-settings', JSON.stringify(healedSettings));
+        getPersistenceStorage().set('local-settings', JSON.stringify(healedSettings));
     }
 
     return {
@@ -663,8 +646,8 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
         }
 
         const input = typeof parsed.input === 'string' ? parsed.input : '';
-        const parsedComposerAttachments = z.array(ComposerAttachmentDraftV1Schema)
-            .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1)
+        const parsedComposerAttachments = createStoredReadSchema(z.array(ComposerAttachmentDraftV1Schema)
+            .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1))
             .safeParse((parsed as Record<string, unknown>).composerAttachments);
         const composerAttachments = parsedComposerAttachments.success
             ? parsedComposerAttachments.data
@@ -674,13 +657,17 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
         const selectedPath = typeof parsed.selectedPath === 'string' ? parsed.selectedPath : null;
         const directoryKind = (parsed as Record<string, unknown>).directoryKind === 'managed' ? 'managed' as const : null;
         const targetServerId = parseDraftTrimmedString((parsed as any).targetServerId);
-        const parsedExecutionTarget = NewSessionDraftExecutionTargetSchema.safeParse((parsed as any).executionTarget);
+        const rawExecutionTarget: unknown = parsed.executionTarget;
+        const parsedExecutionTarget = createStoredReadSchema(NewSessionDraftExecutionTargetSchema).safeParse(
+            rawExecutionTarget && typeof rawExecutionTarget === 'object' && 'kind' in rawExecutionTarget
+                ? undefined : rawExecutionTarget,
+        );
         const legacyExecutionTarget: z.infer<typeof NewSessionDraftExecutionTargetSchema> | null = parsedExecutionTarget.success
             ? parsedExecutionTarget.data
             : targetServerId && selectedMachineId
                 ? SessionExecutionTargetV1Schema.parse({ serverId: targetServerId, machineId: selectedMachineId })
                 : null;
-        const parsedCurrentExecutionTarget = SessionAuthoringExecutionTargetV2Schema.nullable().safeParse(parsed.executionTarget);
+        const parsedCurrentExecutionTarget = createStoredReadSchema(SessionAuthoringExecutionTargetV2Schema).nullable().safeParse(parsed.executionTarget);
         const executionTarget: SessionAuthoringExecutionTargetV2 | null = parsedCurrentExecutionTarget.success
             ? parsedCurrentExecutionTarget.data
             : legacyExecutionTarget
@@ -692,14 +679,14 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
                     : {}),
             }
             : null;
-        const parsedActivationRef = TemporaryComputerActivationRefV1Schema.nullable().safeParse(parsed.temporaryComputerActivationRef);
+        const parsedActivationRef = createStoredReadSchema(TemporaryComputerActivationRefV1Schema).nullable().safeParse(parsed.temporaryComputerActivationRef);
         const managedMachineSelection = nullable(ManagedMachineSelectionDraftReadSchema).safeParse(parsed.managedMachineSelection);
         const managedMachineAcquisition = nullable(ManagedMachineAcquisitionDraftReadSchema).safeParse(parsed.managedMachineAcquisition);
-        const parsedOrganizationPlacement = SessionOrganizationPlacementV1Schema.safeParse((parsed as any).organizationPlacement);
+        const parsedOrganizationPlacement = createStoredReadSchema(SessionOrganizationPlacementV1Schema).safeParse((parsed as any).organizationPlacement);
         const organizationPlacement = parsedOrganizationPlacement.success
             ? parsedOrganizationPlacement.data
             : { folderId: null, tagIds: [] };
-        const parsedAgentTarget = AgentExecutionTargetV1Schema.safeParse((parsed as any).agentTarget);
+        const parsedAgentTarget = createStoredReadSchema(AgentExecutionTargetV1Schema).safeParse((parsed as any).agentTarget);
         const explicitAgentTarget = parsedAgentTarget.success ? parsedAgentTarget.data : null;
         const windowsRemoteSessionLaunchModeOverride = parseWindowsRemoteSessionLaunchModeOverride(
             (parsed as any).windowsRemoteSessionLaunchModeOverride,
@@ -758,7 +745,7 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
             );
             const rawCanonicalSelection = (parsed as any).modelSelection;
             if (rawCanonicalSelection === null) return null;
-            const canonical = SessionModelSelectionV1Schema.safeParse(rawCanonicalSelection);
+            const canonical = createStoredReadSchema(SessionModelSelectionV1Schema).safeParse(rawCanonicalSelection);
             if (canonical.success) {
                 const canonicalSelectionTargetKey = (() => {
                     if (canonical.data.ref.agentTargetKey === targetKey) return targetKey;
@@ -810,8 +797,10 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
             : typeof rawAcpSessionModeId === 'string'
                 ? (rawAcpSessionModeId.trim() || null)
                 : null;
-        const parsedMcpSelection = SessionMcpSelectionV1Schema.safeParse((parsed as any).mcpSelection);
-        const mcpSelection = parsedMcpSelection.success ? parsedMcpSelection.data : undefined;
+        const capabilitySelection = readCapabilitySelectionCarrierV1(parsed);
+        if (capabilitySelection === null && (parsed.capabilitySelection != null || parsed.mcpSelection != null)) {
+            throw new Error('Invalid persisted new-session capability selection');
+        }
         const parsedSessionConfigOptionOverrides = AcpConfigOptionOverridesV1Schema.safeParse((parsed as any).sessionConfigOptionOverrides);
         const sessionConfigOptionOverrides = parsedSessionConfigOptionOverrides.success
             ? parsedSessionConfigOptionOverrides.data
@@ -826,7 +815,7 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
             ? (parsed as any).auggieAllowIndexing
             : undefined;
         const automationDraft = sanitizeNewSessionAutomationDraft((parsed as any).automationDraft);
-        const initialTriggers = SessionInitialTriggerV1Schema.array().safeParse(parsed.initialTriggers);
+        const initialTriggers = createStoredReadSchema(SessionInitialTriggerV1Schema).array().safeParse(parsed.initialTriggers);
         const initialSessionFacts = SessionIdentityAdditionsV1StoredSchema.safeParse(parsed.initialSessionFacts);
         const promptStack = SessionPromptStackV1StoredSchema.safeParse(parsed.promptStack);
         const instructionsDraft = readSessionInstructionsAuthoringDraft(parsed.instructionsDraft);
@@ -886,7 +875,7 @@ export function loadNewSessionDraft(scope?: ServerAccountScope | null): NewSessi
             acpSessionModeId,
             ...(sessionConfigOptionOverrides ? { sessionConfigOptionOverrides } : {}),
             ...(runtimeDescriptorV1 ? { runtimeDescriptorV1 } : {}),
-            ...(mcpSelection ? { mcpSelection } : {}),
+            ...(capabilitySelection ? { capabilitySelection } : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             ...(Object.keys(migratedAgentOptions).length > 0 ? { backendNewSessionOptionStateByTargetKey: migratedAgentOptions } : {}),
             ...(automationDraft.enabled ? { automationDraft } : {}),

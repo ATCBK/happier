@@ -70,6 +70,30 @@ describe('migrateLegacySessionDrafts', () => {
         vi.clearAllMocks();
     });
 
+    it('projects retained legacy draft attachments with unknown nested fields', async () => {
+        const actual = await vi.importActual<typeof import('@/sync/ops/sessionDrafts/sessionDraftRepository')>(
+            '@/sync/ops/sessionDrafts/sessionDraftRepository',
+        );
+        const { createSessionDraftPrivatePayloadV2 } = await import('@happier-dev/protocol');
+        const values = new Map<string, string>();
+        state.repository = actual.createSessionDraftRepository({ scope, syncEnabled: false,
+            storage: { getString: key => values.get(key), set: (key, value) => { values.set(key, value); }, delete: key => { values.delete(key); } },
+            cipher: { seal: async (address, document) => ({ t: 'plain', v: createSessionDraftPrivatePayloadV2(address, document) }),
+                open: async (_address, content) => content.t === 'plain' ? content.v.document : null },
+        });
+        state.sessionDrafts = { 'session-a': 'Keep draft' };
+        const attachment = { v: 1, instanceId: 'issue-42', attachment: { pluginId: 'acme.issues', localId: 'issue' },
+            key: '42', value: { issueId: 42 }, presentation: { label: 'Issue #42', typeLabel: 'Issue' } };
+        state.draftValues = { 'session-a': { 'structuredInput.composerAttachments': { v: 1, lastEditedAt: 1,
+            value: [{ ...attachment, retired: true, attachment: { ...attachment.attachment, retired: true },
+                presentation: { ...attachment.presentation, retired: true } }],
+        } } };
+        Reflect.set(state.draftValues['session-a']!, 'toString', { v: 1, lastEditedAt: 1, value: 'retired field' });
+        await migrateLegacySessionDrafts(scope);
+        expect(state.repository.getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 'session-a' })?.document)
+            .toMatchObject({ composer: { text: { value: 'Keep draft' }, attachments: { value: [attachment] } } });
+    });
+
     it('projects all legacy owners into the repository while preserving local sources until remote acknowledgement', async () => {
         state.sessionDrafts = { 'session-a': '@a legacy text' };
         state.draftValues = {

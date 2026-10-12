@@ -101,19 +101,19 @@ describe('deriveSessionAuthoringSnapshot', () => {
                 v: 1,
                 updatedAt: 456,
                 ref: {
-                    agentTargetKey: 'backend:review-bot:configured:review-bot',
+                    agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
                     providerConnectionId: null,
                     modelId: 'gpt-5',
                 },
             },
             modelId: 'gpt-5',
             modelUpdatedAt: 456,
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: true,
                 forceIncludeServerIds: ['managed-1'],
                 forceExcludeServerIds: [],
-            },
+            }, skills: { v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: [], excludeNativeSkillNames: [] } },
             connectedServices: {
                 v: 1,
                 bindingsByServiceId: {

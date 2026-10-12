@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { RemoteHostId } from '@/sync/domains/remoteHosts/remoteHostModel';
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
@@ -39,6 +40,7 @@ const PersistedRemoteHostLocalOverridesSchema = z.object({
 }).strict();
 
 type PersistedRemoteHostLocalOverrides = z.infer<typeof PersistedRemoteHostLocalOverridesSchema>;
+const PersistedRemoteHostLocalOverridesReadSchema = createStoredReadSchema(PersistedRemoteHostLocalOverridesSchema);
 
 function parsePersisted(raw: string | null): PersistedRemoteHostLocalOverrides | null {
     if (!raw) return null;
@@ -48,7 +50,7 @@ function parsePersisted(raw: string | null): PersistedRemoteHostLocalOverrides |
     } catch {
         return null;
     }
-    const result = PersistedRemoteHostLocalOverridesSchema.safeParse(parsed);
+    const result = PersistedRemoteHostLocalOverridesReadSchema.safeParse(parsed);
     return result.success ? result.data : null;
 }
 

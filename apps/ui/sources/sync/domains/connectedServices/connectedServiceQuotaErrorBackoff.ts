@@ -1,7 +1,7 @@
 /**
- * The ONE retry policy for connected-service quota/usage polling.
+ * The ONE retry policy for failed connected-service quota/usage acquisition.
  *
- * Every quota poller (legacy snapshot store, provider account usage snapshots,
+ * Every quota reader (legacy snapshot store, provider account usage snapshots,
  * qualified V4 snapshot store) backs off through this owner so a persistently
  * failing account cannot be hammered at a flat interval forever, and so the
  * three surfaces cannot drift to different ladders.

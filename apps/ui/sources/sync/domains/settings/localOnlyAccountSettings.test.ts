@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ACCOUNT_SETTING_ARTIFACTS } from '@happier-dev/protocol';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 
 import { settingsParse } from '@/sync/domains/settings/settings';
 import {
@@ -9,10 +10,24 @@ import {
     setNewSessionOrdinaryEntryDraftId,
     stripLocalOnlyAccountSettings,
 } from '@/sync/domains/settings/localOnlyAccountSettings';
-import { LOCAL_ACCOUNT_SETTING_DEFINITIONS } from '@/sync/domains/settings/registry/local/localAccountSettingDefinitions';
+import { LOCAL_ACCOUNT_SETTING_DEFINITIONS, parseLocalAccountSettings } from '@/sync/domains/settings/registry/local/localAccountSettingDefinitions';
 import { normalizeAccountSettingsForLocalStorage } from './accountSettingsNormalization';
 
 describe('localOnlyAccountSettings', () => {
+    it('reads nested device targets with extras through their stored projection and keeps writer schemas strict', () => {
+        const target = { serverIdentityId: 'srv_one', machineId: 'machine-a' };
+        const agent = { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
+        const retainedAgent = { ...agent, retired: true, identity: { ...agent.identity, retired: true } };
+        const retainedTarget = { ...target, retired: true };
+        expect(parseLocalAccountSettings({
+            machineAdministrationTargetsLocalV1: { plugins: retainedTarget }, lastUsedBackendTarget: retainedAgent,
+        })).toMatchObject({ machineAdministrationTargetsLocalV1: { plugins: target }, lastUsedBackendTarget: agent });
+        expect(LOCAL_ACCOUNT_SETTING_DEFINITIONS.machineAdministrationTargetsLocalV1.schema.safeParse({ plugins: retainedTarget }).success)
+            .toBe(false);
+        expect(parseLocalAccountSettings({ machineAdministrationTargetsLocalV1: { plugins: { ...retainedTarget, machineId: null } } })
+            .machineAdministrationTargetsLocalV1).toEqual({});
+    });
+
     it('keeps device layout and Administration memory out of Account writes without changing execution-origin policy', () => {
         const input = JSON.parse(JSON.stringify({
             sessionSplitCanvasLayoutsV1: {},
@@ -84,7 +99,9 @@ describe('localOnlyAccountSettings', () => {
         const picked = pickLocalOnlyAccountSettings(settings);
         expect(picked).toMatchObject({
             lastUsedAgent: 'codex',
-            lastUsedBackendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' },
+            lastUsedBackendTarget: {
+                kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'review-bot',
+            },
             lastNewSessionAgentPickerViewV1: { kind: 'favoriteModels' },
             clientEncryptionRequirementLocalV1: 'require_e2ee',
         });

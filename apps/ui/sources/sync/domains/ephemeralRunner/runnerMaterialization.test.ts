@@ -45,7 +45,7 @@ const preparedAuthoring: RunnerPreparedAuthoringV1 = {
         agentTarget: { kind: 'agent', identity: { pluginId: 'happier.codex', localId: 'codex' } },
         permissionMode: 'default', modelSelection: { v: 1, ref: { agentTargetKey: 'agent:happier.codex/codex', providerConnectionId: null, modelId: 'gpt-5' }, updatedAt: 1 },
         transcriptStorage: 'persisted', profileId: null, environmentVariables: null,
-        mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+        capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
         connectedServices: null, acpSessionModeId: null, sessionConfigOptionOverrides: null,
         checkoutCreationDraft: null, resumeSessionId: null, terminal: null,
         windowsRemoteSessionLaunchMode: null, windowsRemoteSessionConsole: null, windowsTerminalWindowName: null,
@@ -104,6 +104,7 @@ const endpointFactsContent = {
 function claimedFixture(
     recipient: RunnerEndpointFactsRecipientV1 = { mode: 'plain', creatorAccountId: 'creator' },
     creatorActivation?: Readonly<{ activationId: string; key: tweetnacl.SignKeyPair }>,
+    encryptedContent: unknown = endpointFactsContent,
 ) {
     const activationKey = creatorActivation?.key ?? tweetnacl.sign.keyPair();
     const installationKey = tweetnacl.sign.keyPair();
@@ -131,7 +132,7 @@ function claimedFixture(
     const facts = signRunnerEndpointFactsV1({
         payload: { v: 1, purpose: 'happier.ephemeral-session-runner.endpoint-facts', claim: claim.payload, content: recipient.mode === 'plain'
             ? { t: 'plain', v: endpointFactsContent }
-            : { t: 'encrypted', c: encodeBase64(sealBoxBundle({ plaintext: new TextEncoder().encode(JSON.stringify(endpointFactsContent)), recipientPublicKey: decodeBase64(recipient.contentPublicKey, 'base64url'), randomBytes: tweetnacl.randomBytes }), 'base64url') } },
+            : { t: 'encrypted', c: encodeBase64(sealBoxBundle({ plaintext: new TextEncoder().encode(JSON.stringify(encryptedContent)), recipientPublicKey: decodeBase64(recipient.contentPublicKey, 'base64url'), randomBytes: tweetnacl.randomBytes }), 'base64url') } },
         activationSecretKey: activationKey.secretKey, installationSecretKey: installationKey.secretKey,
     });
     return { activationKey, installationKey, runnerBox, binding, claim, projection: {
@@ -180,13 +181,16 @@ const creatorScope = { serverId: 'srv_runner', accountId: 'creator' } as const;
  * binding names. The Machine-content-key proof is signed with it, so no
  * Account signing key is involved for any credential kind.
  */
-async function claimedFixtureWithCreatorCustody(recipient: RunnerEndpointFactsRecipientV1) {
+async function claimedFixtureWithCreatorCustody(
+    recipient: RunnerEndpointFactsRecipientV1,
+    encryptedContent: unknown = endpointFactsContent,
+) {
     const custody = await createRunnerActivationKeyCustody(creatorScope);
     const secretKey = decodeBase64(await readRunnerActivationSigningKey(creatorScope, custody), 'base64url');
     return claimedFixture(recipient, {
         activationId: custody.activationId,
         key: tweetnacl.sign.keyPair.fromSecretKey(secretKey),
-    });
+    }, encryptedContent);
 }
 
 describe('creator Runner review and materialization', () => {
@@ -203,6 +207,34 @@ describe('creator Runner review and materialization', () => {
     afterEach(() => {
         resetRunnerCreatorMachineContentKeyTrustProjectionForTests();
         vi.unstubAllGlobals();
+    });
+    it('projects retired encrypted endpoint content only after authenticating the untouched ciphertext', async () => {
+        const accountSecret = new Uint8Array(32).fill(73);
+        const encryption = await Encryption.create(accountSecret);
+        const signing = tweetnacl.sign.keyPair.fromSeed(accountSecret);
+        const fixture = await claimedFixtureWithCreatorCustody({
+            mode: 'e2ee', creatorAccountId: 'creator',
+            accountSigningPublicKey: encodeBase64(signing.publicKey, 'base64url'),
+            contentPublicKey: encodeBase64(encryption.contentDataKey, 'base64url'),
+            contentPublicKeySignature: encodeBase64(signAccountContentKeyBindingV1({
+                accountSigningSecretKey: signing.secretKey, contentPublicKey: encryption.contentDataKey,
+            }), 'base64url'),
+            contentPublicKeyFingerprint: computeContentPublicKeyFingerprint(encryption.contentDataKey),
+        }, { ...endpointFactsContent, retiredFactsField: true,
+            machine: { ...endpointFactsContent.machine, retiredMachineField: true } });
+        const prepared = await prepareRunnerActivationReviewV1({
+            projection: fixture.projection, expectedBinding: fixture.binding, preparedAuthoring,
+            credentialSelectionBinding, reviewedProviderModel, displayFacts, connectedServiceReviewBindings,
+            credentials: { token: 'token', secret: encodeBase64(accountSecret, 'base64url') }, encryption,
+        });
+        expect(prepared.custody.launchManifest.endpointFacts).toEqual(endpointFactsContent);
+        await expect(prepareRunnerActivationReviewV1({
+            projection: { ...fixture.projection, endpointFacts: { ...fixture.projection.endpointFacts,
+                facts: { ...fixture.projection.endpointFacts.facts, activationSignature: 'A'.repeat(86) } } },
+            expectedBinding: fixture.binding, preparedAuthoring,
+            credentialSelectionBinding, reviewedProviderModel, displayFacts, connectedServiceReviewBindings,
+            credentials: { token: 'token', secret: encodeBase64(accountSecret, 'base64url') }, encryption,
+        })).rejects.toMatchObject({ code: 'runner_endpoint_facts_unavailable' });
     });
     it('rejects a later Home-substituted binding instead of replacing accepted creator custody', async () => {
         const values = new Map<string, string>();

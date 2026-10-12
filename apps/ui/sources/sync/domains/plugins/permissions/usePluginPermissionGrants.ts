@@ -25,6 +25,7 @@ import { pluginPermissionGrantScopeKey } from './types';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { useActiveServerAccountScopeLifetime } from '@/sync/store/hooks';
 
 export type UsePluginPermissionGrantsParams = Readonly<{
     actions: PluginPermissionGrantActions;
@@ -63,17 +64,22 @@ function listInputKey(input: PluginPermissionGrantListInput | null): string {
 }
 
 export function usePluginPermissionGrants(params: UsePluginPermissionGrantsParams): UsePluginPermissionGrantsResult {
-    const binding = useServerCredentialAccountScopeBinding(params.scope?.serverId).binding;
-    const admittedScope = params.scope !== null && binding?.isCurrent()
-        && (!params.scope || (params.scope.accountId === binding.scope.accountId
-            && areServerProfileIdentifiersEquivalent(params.scope.serverId, binding.scope.serverId))) ? binding.scope : null;
+    const activeLifetime = useActiveServerAccountScopeLifetime();
+    const defaultLifetime = params.scope === undefined ? activeLifetime : null;
+    const requestedScope = params.scope === undefined ? defaultLifetime?.scope ?? null : params.scope;
+    const binding = useServerCredentialAccountScopeBinding(requestedScope?.serverId).binding;
+    const admittedScope = requestedScope && binding?.isCurrent()
+        && requestedScope.accountId === binding.scope.accountId
+        && areServerProfileIdentifiersEquivalent(requestedScope.serverId, binding.scope.serverId) ? binding.scope : null;
     const enabled = params.enabled && admittedScope !== null;
     const refreshInputKey = JSON.stringify([admittedScope?.serverId ?? null, admittedScope?.accountId ?? null, listInputKey(params.listInput)]);
     const scopeKey = enabled && params.listInput ? refreshInputKey : `inactive:${refreshInputKey}`;
     const currentScopeKey = React.useRef(scopeKey);
     currentScopeKey.current = scopeKey;
-    const isCurrent = React.useCallback(() => enabled && binding?.isCurrent() === true && currentScopeKey.current === scopeKey,
-        [binding, enabled, scopeKey]);
+    const isCurrent = React.useCallback(() => enabled && binding?.isCurrent() === true
+        && (params.scope !== undefined || defaultLifetime?.isCurrent() === true)
+        && currentScopeKey.current === scopeKey,
+        [defaultLifetime, binding, enabled, params.scope, scopeKey]);
     const emptyState = React.useMemo(createEmptyPluginPermissionGrantState, [scopeKey]);
     const [scopedState, setScopedState] = React.useState<Readonly<{
         scopeKey: string;

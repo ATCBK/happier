@@ -1,10 +1,14 @@
 import { act } from 'react-test-renderer';
 import { createRequire } from 'node:module';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary, type SessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import {
     removeServerProfile,
+    setActiveServerId,
     setServerProfileIdentityForUrl,
     upsertServerProfile,
 } from '@/sync/domains/server/serverProfiles';
@@ -14,8 +18,17 @@ import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from './selectionPreferences
 import { useMachineAdministrationExecutionTargetBinding } from './useExecutionTargetBinding';
 import { useMachineAdministrationTargetSelection } from './useTargetSelection';
 
-afterEach(() => {
+// The transport is the boundary; credential, inventory and target admission stay real.
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+
+let network: SessionOpsNetworkBoundary;
+beforeEach(async () => { network = await installSessionOpsNetworkBoundary(); });
+afterEach(async () => {
     standardCleanup();
+    network.dispose();
+    publishAppliedActiveServerRuntimeAvailability(false);
 });
 
 describe('machine administration target demand', () => {
@@ -31,6 +44,9 @@ describe('machine administration target demand', () => {
         const profile = await setServerProfileIdentityForUrl(serverUrl, 'srv_plugin_initial_target');
         if (!profile) throw new Error('Test profile was not created');
         const scope = { serverId: profile.id, accountId: 'plugin-initial-account' };
+        await network.addHome(serverUrl, scope.accountId);
+        await setActiveServerId(profile.id);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const machine = createMachineFixture({ id: 'online-plugin-machine', activeAt: Date.now() });
         const other = createMachineFixture({ id: 'other-plugin-machine', activeAt: Date.now() });
         const selectionKey = MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.plugins;
@@ -88,10 +104,16 @@ describe('machine administration target demand', () => {
         const targetB = { serverIdentityId: profile.serverIdentityId!, machineId: 'machine-b' };
         const machineA = createMachineFixture({ id: targetA.machineId, activeAt: Date.now(), daemonStateVersion: 1 });
         const machineB = createMachineFixture({ id: targetB.machineId, activeAt: Date.now(), daemonStateVersion: 1 });
+        const scope = { serverId: profile.id, accountId: 'administration-currentness-account' };
+        await network.addHome(serverUrl, scope.accountId);
+        await setActiveServerId(profile.id);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
 
         try {
             storage.setState((state) => ({
                 isDataReady: true,
+                profileScope: scope,
+                settingsScope: scope,
                 machineListByServerId: { [profile.id]: [machineA, machineB] },
                 machineListStatusByServerId: { [profile.id]: 'idle' },
                 settings: {
@@ -172,10 +194,16 @@ describe('machine administration target demand', () => {
         const target = { serverIdentityId: 'srv_memory_demand', machineId: 'memory-machine' };
         const machine = createMachineFixture({ id: target.machineId, activeAt: Date.now() });
         const selectionKey = MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory;
+        const scope = { serverId: profile.id, accountId: 'memory-demand-account' };
+        await network.addHome(serverUrl, scope.accountId);
+        await setActiveServerId(profile.id);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
 
         try {
             storage.setState((state) => ({
                 isDataReady: true,
+                profileScope: scope,
+                settingsScope: scope,
                 machineListByServerId: { [profile.id]: [machine] },
                 machineListStatusByServerId: { [profile.id]: 'idle' },
                 settings: {

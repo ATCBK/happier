@@ -1,31 +1,41 @@
 import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import { parsePermissionIntentAlias } from '@happier-dev/agents';
-import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { requireActionSuccess, type FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { HappyError } from '@/utils/errors/errors';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { captureSessionDraftCurrentness, clearSessionDraftCurrentnessLocal, writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
 export async function applyPermissionModeSelection(params: Readonly<{
     sessionId: string;
     serverId: string | null;
     mode: PermissionMode;
     applyTiming: 'immediate' | 'next_prompt';
+    draftScope?: ServerAccountScope | null;
     executeAction: (...args: Parameters<FrontDoorActionExecute>) => ReturnType<FrontDoorActionExecute>;
 }>): Promise<void> {
+    if (params.applyTiming === 'next_prompt') {
+        if (!params.draftScope) throw new HappyError('Session draft scope is unavailable', false, { code: 'session_account_scope_retired' });
+        writeExistingSessionDraft({ scope: params.draftScope, sessionId: params.sessionId,
+            patch: { nextPromptPermissionMode: params.mode } });
+        return;
+    }
+    const address = { kind: 'session' as const, sessionId: params.sessionId };
+    const currentness = params.draftScope ? captureSessionDraftCurrentness({ scope: params.draftScope, address }) : null;
     const result = await params.executeAction('session.permission_mode.set', {
         sessionId: params.sessionId,
         permissionMode: params.mode,
         applyTiming: params.applyTiming,
     }, { surface: 'ui', defaultSessionId: params.sessionId, ...(params.serverId ? { serverId: params.serverId } : {}) });
-    if (!result.ok) throw new HappyError(result.error, false, { code: result.errorCode, details: result.details });
-    const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
-    if (approval.success) throw new HappyError(approval.data.kind, false, { code: approval.data.kind, details: approval.data });
+    requireActionSuccess(result);
+    if (params.draftScope && currentness) clearSessionDraftCurrentnessLocal({ scope: params.draftScope, address, currentness,
+        fieldIds: ['extensions.happier.nextPromptPermissionModeV1'] });
 }
 
 /** Raw projection/publication effect; only the Action executor supplies these dependencies. */
 export async function applyPermissionModeSelectionEffect(params: {
     sessionId: string;
     mode: PermissionMode;
-    applyTiming: 'immediate' | 'next_prompt';
+    applyTiming: 'immediate';
     updateSessionPermissionMode: (sessionId: string, mode: PermissionMode) => void;
     getSessionPermissionModeUpdatedAt: (sessionId: string) => number | null | undefined;
     publishSessionPermissionModeToMetadata: (params: {
@@ -36,7 +46,6 @@ export async function applyPermissionModeSelectionEffect(params: {
 }): Promise<void> {
     const canonicalMode = (parsePermissionIntentAlias(params.mode) ?? 'default') as PermissionMode;
     params.updateSessionPermissionMode(params.sessionId, canonicalMode);
-    if (params.applyTiming !== 'immediate') return;
 
     const updatedAt = params.getSessionPermissionModeUpdatedAt(params.sessionId);
     if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return;

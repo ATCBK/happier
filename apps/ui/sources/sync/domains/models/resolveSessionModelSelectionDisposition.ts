@@ -103,6 +103,21 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
             : providerFallbackSelection;
     const reportedSelection = exactSelection ?? fallbackSelection;
     const activeSelection = params.sessionActive ? exactSelection : null;
+    // A missing daemon observation is not evidence that the reader armed a
+    // different route. Compare the proposal with the coherent runtime-applied
+    // fact, using its own witness only to validate that historical fact. It
+    // never becomes active/context truth, and an observed replacement runner
+    // must still establish its own selection before it can satisfy a proposal.
+    const appliedSelectionForTransition = exactSelection ?? (
+        params.currentRunnerProcessIdentity === null
+            ? readActiveSessionModelSelectionFromMetadata(
+                params.metadata,
+                params.agentId,
+                params.agentTargetKey,
+                sessionModels?.activeSelectionV1?.runner ?? null,
+            )
+            : null
+    );
     const teamSelectionTransitionPending = proposedSelectionV2?.ref.source === 'team_resource'
         && (
             params.currentRunnerProcessIdentity === null
@@ -114,11 +129,11 @@ export function resolveSessionModelSelectionDisposition(params: Readonly<{
             || (
                 proposedIntent !== null
                 && (
-                    activeSelection === null
+                    appliedSelectionForTransition === null
                     || proposedSelection === null
-                    || activeSelection.agentTargetKey !== proposedSelection.agentTargetKey
-                    || activeSelection.providerConnectionId !== proposedSelection.providerConnectionId
-                    || activeSelection.modelId !== proposedSelection.modelId
+                    || appliedSelectionForTransition.agentTargetKey !== proposedSelection.agentTargetKey
+                    || appliedSelectionForTransition.providerConnectionId !== proposedSelection.providerConnectionId
+                    || appliedSelectionForTransition.modelId !== proposedSelection.modelId
                 )
             )
         );

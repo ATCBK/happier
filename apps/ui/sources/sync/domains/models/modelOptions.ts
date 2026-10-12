@@ -2,7 +2,7 @@ import type { ModelMode } from '../permissions/permissionTypes';
 import type { ProviderModelDescriptorV1 } from '@happier-dev/protocol';
 import { t } from '@/text';
 import { isBundledAgentId } from '@/agents/catalog/catalog';
-import { buildAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
+import { readAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
 import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 import { normalizeAcpConfigOptionsArray, type AcpConfigOption } from '@/sync/domains/sessionControl/configOptionsControl';
 import { readSessionModelsState } from '@/sync/domains/sessionControl/readSessionControlMetadata';
@@ -130,9 +130,11 @@ function appendRequestedModelOption(options: readonly ModelOption[], selectedMod
 }
 
 function readSelectedModelOverrideId(agentType: AgentType, metadata: ComposerOptionsInputV1 | null | undefined): string {
+    const targetKey = readAgentUniverseBackendTargetKey(agentType);
+    if (targetKey === null) return '';
     const intent = readSessionModelSelectionIntentFromMetadata(
         metadata,
-        buildAgentUniverseBackendTargetKey(agentType),
+        targetKey,
     );
     return typeof intent?.selection?.modelId === 'string' ? intent.selection.modelId.trim() : '';
 }

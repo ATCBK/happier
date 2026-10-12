@@ -1,11 +1,11 @@
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineReachable, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { isMachineReplaced } from './machineIdentityTypes';
 
 /**
  * Shared machine presence fact for neutral selection presentations. It does
  * not pick a replacement or make a cached/offline machine executable.
+ * Callers carry the authenticated Home and Account; an unbound scope cannot admit a request.
  */
 export type MachinePickerPresence =
     | { status: 'online'; selectable: true }
@@ -20,8 +20,8 @@ export function resolveMachinePickerPresence(
         replacedByMachineId?: string | null;
         replacedAt?: unknown;
     }>,
-    nowMs?: number,
-    serverId?: string | null,
+    nowMs: number | undefined,
+    scope: MachineReachabilityScope | null | undefined,
 ): MachinePickerPresence {
     const revokedAt = typeof machine.revokedAt === 'number' ? machine.revokedAt : 0;
     if (Number.isFinite(revokedAt) && revokedAt > 0) {
@@ -32,9 +32,7 @@ export function resolveMachinePickerPresence(
         return { status: 'replaced', selectable: false };
     }
 
-    const online = serverId
-        ? isMachineReachable(serverId, machine, nowMs)
-        : isMachineOnline(machine, nowMs);
+    const online = isMachineReachable(scope, machine, nowMs);
     if (!online) {
         return { status: 'offline', selectable: false };
     }

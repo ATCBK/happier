@@ -1,4 +1,5 @@
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
@@ -20,6 +21,13 @@ const snapshot = {
 describe('local service inventory machine RPC client', () => {
     afterEach(() => {
         machineRpcWithServerScopeMock.mockReset();
+    });
+
+    it('preserves the typed RPC refusal so Refresh can explain the actual cause', async () => {
+        machineRpcWithServerScopeMock.mockRejectedValue(new RpcError('private transport detail', RPC_ERROR_CODES.FORBIDDEN));
+        const { fetchLocalServiceInventorySnapshotViaMachineRpc } = await import('./machineRpc');
+        await expect(fetchLocalServiceInventorySnapshotViaMachineRpc({ machineId: 'machine_1', refresh: true }))
+            .resolves.toEqual({ ok: false, reason: 'request_failed', reasonCode: RPC_ERROR_CODES.FORBIDDEN });
     });
 
     it('fetches and refreshes daemon-owned inventory snapshots through machine RPC', async () => {
@@ -65,7 +73,7 @@ describe('local service inventory machine RPC client', () => {
 
         await expect(fetchLocalServiceInventorySnapshotViaMachineRpc({
             machineId: 'machine_1',
-        })).resolves.toEqual({ ok: false, reason: 'unavailable' });
+        })).resolves.toEqual({ ok: false, reason: 'unavailable', reasonCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
         await expect(fetchLocalServiceInventorySnapshotViaMachineRpc({
             machineId: 'machine_1',
         })).resolves.toEqual({ ok: false, reason: 'invalid_response' });

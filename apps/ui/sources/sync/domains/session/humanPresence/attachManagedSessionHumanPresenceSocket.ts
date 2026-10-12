@@ -2,7 +2,7 @@ import { SESSION_HUMAN_PRESENCE_SNAPSHOT_EVENT } from '@happier-dev/protocol/ses
 import type { Socket } from 'socket.io-client';
 import type { ManagedConnectionTransport } from '@happier-dev/connection-supervisor';
 import { parseToken } from '@/utils/auth/parseToken';
-import { loadSyncTuning } from '@/sync/runtime/syncTuning';
+import { emitWithAckCancellable } from '@happier-dev/sync-client';
 
 /** Shares the existing Home socket and its HTTPS/Iroh lifecycle. */
 export function attachManagedSessionHumanPresenceSocket(input: Readonly<{
@@ -14,7 +14,7 @@ export function attachManagedSessionHumanPresenceSocket(input: Readonly<{
     let accountId: string;
     try { accountId = parseToken(input.token); } catch { return () => {}; }
     const { socket, transport } = input;
-    const acknowledgementTimeoutMs = loadSyncTuning().socketAckTimeoutMs;
+    const controller = new AbortController();
     let disposed = false;
     let detach: (() => void) | undefined;
     // Socket construction must not import the UI storage/hook graph. If loading
@@ -31,7 +31,9 @@ export function attachManagedSessionHumanPresenceSocket(input: Readonly<{
                     const offDisconnected = transport.onDisconnected(listener);
                     return () => { offConnected(); offDisconnected(); };
                 },
-                sendWithAck: async (event, payload) => await socket.timeout(acknowledgementTimeoutMs).emitWithAck(event, payload),
+                sendWithAck: async (event, payload) => await emitWithAckCancellable({
+                    socket, event, payload, timeoutMs: null, signal: controller.signal,
+                }),
                 send: (event, payload) => { if (socket.connected) socket.emit(event, payload); },
                 subscribeSnapshot: (listener) => {
                     socket.on(SESSION_HUMAN_PRESENCE_SNAPSHOT_EVENT, listener);
@@ -42,5 +44,5 @@ export function attachManagedSessionHumanPresenceSocket(input: Readonly<{
     }).catch(() => {
         // Presence is additive; a module load failure leaves its view unavailable.
     });
-    return () => { disposed = true; detach?.(); };
+    return () => { disposed = true; controller.abort(); detach?.(); };
 }

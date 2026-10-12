@@ -2,7 +2,7 @@ import { MMKV } from 'react-native-mmkv';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { HomeConnectionDescriptorV1Schema, StoredHomeConnectionDescriptorV1Schema, type HomeConnectionDescriptorV1 } from '@happier-dev/protocol/auth/accountDirectory';
-import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
+import { normalizeServerIdentityIdCapability, areServerProfileIdentifiersEquivalent as areProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { DEFAULT_HAPPIER_CLOUD_SERVER_URL } from '@happier-dev/cli-common/happierCloud';
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
@@ -151,12 +151,24 @@ let activeServerSnapshotCache: ActiveServerSnapshot | null = null;
  * browser Iroh Home is the second case: fabricating a loopback origin for it
  * would put an untrue value into request URLs, reachability keys, and logs.
  */
-let activeRuntimeOriginLease: Readonly<{
+type ActiveRuntimeOriginLease = Readonly<{
     target: ActiveServerRuntimeTarget;
     leaseId: string;
     runtimeOrigin: string | null;
     homeCarrier: HomeCarrier | null;
     carrier: 'https' | 'iroh';
+}>;
+let activeRuntimeOriginLease: ActiveRuntimeOriginLease | null = null;
+let activeServerSnapshotBasis: Readonly<{
+    state: Required<PersistedServerState>;
+    tabId: string | null;
+    webOrigin: string | null;
+    web: boolean;
+    desktop: boolean;
+    stack: boolean;
+    generation: number;
+    runtimeTargetGeneration: number;
+    runtimeOriginLease: ActiveRuntimeOriginLease | null;
 }> | null = null;
 const runtimeOriginListeners = new Set<(snapshot: ActiveServerSnapshot) => void>();
 
@@ -1274,19 +1286,10 @@ function readPersistedState(): Required<PersistedServerState> {
         const parsed = JSON.parse(raw) as PersistedServerState;
         const serversRaw = parsed?.servers && typeof parsed.servers === 'object' ? parsed.servers : {};
         const servers: Record<string, ServerProfile> = {};
-        let needsPersonalHomeBootstrapCompletionMigration = false;
         for (const [id, value] of Object.entries(serversRaw)) {
             const profile = parseProfile(id, value);
             if (!profile) continue;
             servers[profile.id] = profile;
-            if (
-                profile.personalHomeBootstrapCompleted === true
-                && value
-                && typeof value === 'object'
-                && (value as Record<string, unknown>).personalHomeBootstrapCompleted !== true
-            ) {
-                needsPersonalHomeBootstrapCompletionMigration = true;
-            }
         }
         const desiredActive = normalizeServerId(parsed.activeServerId);
         const activeServerIdIsExplicit = parsed.activeServerIdIsExplicit === true;
@@ -1324,8 +1327,6 @@ function readPersistedState(): Required<PersistedServerState> {
         const parsedHomeViewState = rewrittenHomeViewState
             ? normalizeHomeViewStateAgainstProfiles(rewrittenHomeViewState, deduped.servers, activeServerId)
             : null;
-        const needsHomeViewCanonicalizationWrite = rewrittenHomeViewState !== null
-            && JSON.stringify(rewrittenHomeViewState) !== JSON.stringify(parsedHomeViewState);
 
         // The initialization marker separates the legacy pre-marker world (missing/invalid
         // payload still permits the one-time scoped migration) from the initialized world
@@ -1334,19 +1335,16 @@ function readPersistedState(): Required<PersistedServerState> {
         const persistedHomeViewStateInitialized = parsed.homeViewStateInitialized === true;
         let homeViewState = parsedHomeViewState;
         let homeViewStateInitialized = persistedHomeViewStateInitialized;
-        let needsHomeViewInitializationWrite = false;
         if (parsedHomeViewState === null) {
             if (persistedHomeViewStateInitialized) {
                 homeViewState = createRepairedHomeViewState(deduped.servers, activeServerId);
                 homeViewStateInitialized = true;
-                needsHomeViewInitializationWrite = true;
             }
             // No marker: keep the store eligible for the legacy one-time migration.
         } else if (!persistedHomeViewStateInitialized) {
             // A valid pre-marker Home view state is preserved as-is; it acquires the
             // marker through this ordinary canonical read/write path.
             homeViewStateInitialized = true;
-            needsHomeViewInitializationWrite = true;
         }
 
         const state: Required<PersistedServerState> = {
@@ -1358,19 +1356,9 @@ function readPersistedState(): Required<PersistedServerState> {
             homeViewStateInitialized,
         };
 
-        if (
-            dedupedIdentity.changed
-            || deduped.changed
-            || needsHomeViewInitializationWrite
-            || needsHomeViewCanonicalizationWrite
-            || needsPersonalHomeBootstrapCompletionMigration
-        ) {
-            // Snapshot readers stay synchronous and side-effect free. The next
-            // explicit mutation persists this canonical projection from inside
-            // the browser-wide latest-read/mutate/write critical section.
-            return state;
-        }
-
+        // Cache even a not-yet-persisted canonical projection: mounted external-store
+        // readers require stable identity for unchanged bytes. Reads stay side-effect
+        // free; the next explicit mutation persists it under the existing write lock.
         persistedStateParseCache = { raw, state };
         return state;
     } catch (error) {
@@ -1570,8 +1558,10 @@ function getWebSameOriginServerUrl(): string | null {
     }
 }
 
-function buildActiveSnapshotFromState(state: Required<PersistedServerState>): ActiveServerSnapshot {
-    const tabId = readTabActiveServerId();
+function buildActiveSnapshotFromState(
+    state: Required<PersistedServerState>,
+    tabId: string | null,
+): ActiveServerSnapshot {
     const tabProfile = findProfileByServerIdentifier(state.servers, tabId);
     const tabExplicit = Boolean(tabProfile);
     const selectedId = tabProfile
@@ -1865,7 +1855,7 @@ export function setAccountServiceEndpoint(endpoint: AccountServiceEndpointV1): P
  */
 export function buildHomeConnectionDescriptorForProfile(profile: ServerProfile): HomeConnectionDescriptorV1 | null {
     if (profile.descriptorProvenance === 'advisory-only') return null;
-    const parsed = HomeConnectionDescriptorV1Schema.safeParse(profile.homeConnectionDescriptor);
+    const parsed = StoredHomeConnectionDescriptorV1Schema.safeParse(profile.homeConnectionDescriptor);
     return parsed.success ? parsed.data : null;
 }
 
@@ -2319,16 +2309,12 @@ export function areServerProfileIdentifiersEquivalent(
     leftRaw: string | null | undefined,
     rightRaw: string | null | undefined,
 ): boolean {
-    const left = normalizeServerId(leftRaw);
-    const right = normalizeServerId(rightRaw);
-    if (!left || !right) return false;
-    if (left === right) return true;
-
-    const state = readPersistedState();
-    const leftProfile = findProfileByServerIdentifier(state.servers, left);
-    if (!leftProfile) return false;
-    const rightProfile = findProfileByServerIdentifier(state.servers, right);
-    return Boolean(rightProfile && rightProfile.id === leftProfile.id);
+    let state: ReturnType<typeof readPersistedState> | undefined;
+    return areProfileIdentifiersEquivalent(leftRaw, rightRaw, id => {
+        state ??= readPersistedState();
+        const profile = findProfileByServerIdentifier(state.servers, id);
+        return profile ? resolveServerProfileScopeId(profile) : null;
+    });
 }
 
 type UpsertServerProfileParams = Readonly<{
@@ -2692,7 +2678,24 @@ export function getActiveServerUrl(): string {
 
 export function getActiveServerSnapshot(): ActiveServerSnapshot {
     const state = readPersistedState();
-    return getStableActiveServerSnapshot(buildActiveSnapshotFromState(state));
+    const tabId = readTabActiveServerId();
+    const webOrigin = typeof window !== 'undefined' ? window.location?.origin ?? null : null;
+    const web = isWebRuntime();
+    const desktop = isDesktopHost();
+    const stack = isStackContext();
+    const previous = activeServerSnapshotBasis;
+    if (activeServerSnapshotCache && previous?.state === state && previous.tabId === tabId
+        && previous.webOrigin === webOrigin && previous.web === web && previous.desktop === desktop
+        && previous.stack === stack && previous.generation === activeServerGeneration
+        && previous.runtimeTargetGeneration === activeRuntimeTargetGeneration
+        && previous.runtimeOriginLease === activeRuntimeOriginLease) return activeServerSnapshotCache;
+    // Reuse the existing snapshot before URL/profile derivation, not only after
+    // deriving an equal result for every external-store read and notification.
+    const snapshot = getStableActiveServerSnapshot(buildActiveSnapshotFromState(state, tabId));
+    activeServerSnapshotBasis = { state, tabId, webOrigin, web, desktop, stack,
+        generation: activeServerGeneration, runtimeTargetGeneration: activeRuntimeTargetGeneration,
+        runtimeOriginLease: activeRuntimeOriginLease };
+    return snapshot;
 }
 
 export function subscribeActiveServer(listener: (snapshot: ActiveServerSnapshot) => void): () => void {
@@ -2816,6 +2819,7 @@ export function resetServerProfilesRuntimeForTests(): void {
     activeServerGeneration = 0;
     activeRuntimeTargetGeneration = 0;
     activeServerSnapshotCache = null;
+    activeServerSnapshotBasis = null;
     activeRuntimeOriginLease = null;
     serverProfilesGeneration = 0;
     persistedStateStorage = null;

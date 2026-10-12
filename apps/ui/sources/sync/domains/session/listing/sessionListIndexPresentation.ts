@@ -1,7 +1,8 @@
 import type { ServerSelectionPresentation } from '@/sync/domains/server/selection/serverSelectionTypes';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import type { SessionListStorageFilter } from '@/sync/domains/session/sessionStorageKind';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import type { SessionListQueryHomeState } from './sessionListQueryController';
 
 import { normalizeTrimmedStringArrayWithSharedEmpty } from './normalizeTrimmedStringArrayWithSharedEmpty';
@@ -587,9 +588,9 @@ export function applySessionListIndexPresentation(
         const serverName = items.find((item) => item.type === 'session' && normalizeTrimmedString(item.serverName))?.serverName
             ?? items.find((item) => item.type === 'header' && normalizeTrimmedString(item.serverName))?.serverName
             ?? null;
-        const title = serverName
-            ? String(serverName)
-            : (serverId !== unknownServerKey ? serverId : 'Unknown server');
+        const title = resolveHomeDisplayLabel(getServerProfileById(serverId) ?? {
+            id: serverId, name: serverName ?? '', serverUrl: '',
+        }, serverId);
 
         out.push({
             type: 'header',
@@ -597,7 +598,7 @@ export function applySessionListIndexPresentation(
             headerKind: 'server',
             groupKey: `server:${serverId}`,
             serverId,
-            serverName: serverName ? String(serverName) : undefined,
+            serverName: title,
         });
         out.push(...items);
     }

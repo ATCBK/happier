@@ -1,6 +1,7 @@
 import { deriveWorkspaceSyncTopology, resolveWorkspaceSyncTransferRoute } from '@happier-dev/protocol/workspaces/workspaceSyncTopology';
 import { WorkspaceSyncRelationshipV1Schema, type WorkspaceSyncRelationshipV1, type WorkspaceSyncStatusV1 } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import {
     normalizeWorkspaceScopeBase,
@@ -64,7 +65,7 @@ export function projectWorkspaceSyncRelationships(raw: unknown): WorkspaceSyncRe
     let invalidCount = 0;
 
     for (const entry of entries) {
-        const parsed = WorkspaceSyncRelationshipV1Schema.safeParse(entry);
+        const parsed = createStoredReadSchema(WorkspaceSyncRelationshipV1Schema).safeParse(entry);
         if (!parsed.success) {
             invalidCount += 1;
             continue;

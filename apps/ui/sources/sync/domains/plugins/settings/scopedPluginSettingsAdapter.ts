@@ -1,4 +1,8 @@
 import { isBoundedPluginPerActiveServerValueV1 } from '@happier-dev/protocol/plugins/contributions/settings';
+export {
+    readPluginSettingBoundValueV1 as readScopedPluginSettingValue,
+    resolvePluginSettingBoundSetV1 as resolveScopedPluginSettingMutation,
+} from '@happier-dev/protocol/plugins/contributions/settings';
 import type { DaemonPluginSettingsMutation, DaemonPluginSettingsSnapshot } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 import type {
@@ -129,6 +133,11 @@ export type ScopedPluginSettingsRevision =
     /** Account SavedSecret binding revision; it never carries secret material. */
     | Readonly<{ kind: 'account-secret'; value: number }>;
 
+export function formatPluginSettingsAdministrationRevision(revision: ScopedPluginSettingsRevision): string {
+    if (revision.kind === 'account-secret') return `account-secret-r1:${revision.value}`;
+    return revision.value === 'absent' ? '0' : String(revision.value);
+}
+
 export type ScopedPluginSettingsSecretState = 'configured' | 'missing';
 
 export type ScopedPluginSettingsSnapshot = Readonly<{
@@ -218,6 +227,8 @@ export type ScopedPluginSettingsAccountWriteInput = ScopedPluginSettingsAccountR
     fieldId: string;
     mutation: ScopedPluginSettingsMutation;
     expectedRevision: Extract<ScopedPluginSettingsRevision, { kind: 'account' }>;
+    /** Same incumbent field/target intent; never serialized by the storage boundary. */
+    isCurrent?: () => boolean;
 }>;
 
 /**
@@ -254,6 +265,8 @@ export type ScopedPluginSettingsAccountRecordBoundary = Readonly<{
         expectedRevision: number | 'absent';
         /** Complete opaque record: unknown entries are retained by this owner. */
         values: Readonly<Record<string, unknown>>;
+        /** Existing field/inventory intent must still be admitted at HTTP issue. */
+        isCurrent?: () => boolean;
     }>): Promise<ScopedPluginSettingsAccountRecordWriteResult>;
 }>;
 
@@ -330,6 +343,10 @@ export type ScopedPluginSettingsWriteInput = ScopedPluginSettingsReadInput & Rea
     fieldId: string;
     mutation: ScopedPluginSettingsMutation;
     expectedRevision: ScopedPluginSettingsRevision;
+    /** Exact declaration binding selected before Action approval; null selects fallback. */
+    bindingServerIdentityId?: string | null;
+    /** Same incumbent field/target intent retained through Action approval and CAS. */
+    isCurrent?: () => boolean;
 }>;
 
 /**
@@ -611,10 +628,12 @@ export function createAccountScopedPluginSettingsTransport(
                 return { status: 'unavailable', reason: 'scope-mismatch' };
             }
             try {
+                if (input.isCurrent && !input.isCurrent()) return { status: 'unavailable', reason: 'transport' };
                 const current = await boundary.readRecord({
                     pluginId: input.pluginId,
                     target: input.target,
                 });
+                if (input.isCurrent && !input.isCurrent()) return { status: 'unavailable', reason: 'transport' };
                 const expectedRevision = accountRecordExpectedRevision(current);
                 if (expectedRevision === null) return { status: 'unavailable', reason: 'transport' };
                 if (input.expectedRevision.value !== expectedRevision) {
@@ -637,6 +656,7 @@ export function createAccountScopedPluginSettingsTransport(
                     target: input.target,
                     expectedRevision,
                     values,
+                    isCurrent: input.isCurrent,
                 });
                 if (result.status === 'updated') {
                     return {
@@ -671,52 +691,6 @@ export function createAccountScopedPluginSettingsTransport(
             }
         },
     });
-}
-
-/** Resolve a renderer field through the declaration's canonical binding. */
-export function readScopedPluginSettingValue(params: Readonly<{
-    values: Readonly<Record<string, unknown>>;
-    field: ScopedPluginSettingsField;
-    /** The explicit canonical profile identity, never a device-local profile id. */
-    serverIdentityId: string | null;
-}>): unknown {
-    const binding = params.field.binding;
-    if (binding?.kind === 'direct') return params.values[binding.settingId];
-    if (binding?.kind === 'perActiveServer') {
-        const byServer = readRecord(params.values[binding.byServerIdSettingId]);
-        if (params.serverIdentityId && byServer && Object.hasOwn(byServer, params.serverIdentityId)) {
-            return byServer[params.serverIdentityId];
-        }
-        return params.values[binding.fallbackSettingId];
-    }
-    return params.values[params.field.key];
-}
-
-/**
- * Translate one display-field intent into the native record field. The only
- * map update is an explicit `perActiveServer` declaration; no renderer scans
- * or parses an opaque settings record to infer a target.
- */
-export function resolveScopedPluginSettingMutation(params: Readonly<{
-    values: Readonly<Record<string, unknown>>;
-    field: ScopedPluginSettingsField;
-    serverIdentityId: string | null;
-    value: unknown;
-}>): Readonly<{ fieldId: string; value: unknown }> {
-    const binding = params.field.binding;
-    if (binding?.kind === 'direct') return { fieldId: binding.settingId, value: params.value };
-    if (binding?.kind !== 'perActiveServer' || !params.serverIdentityId) {
-        return {
-            fieldId: binding?.kind === 'perActiveServer'
-                ? binding.fallbackSettingId
-                : params.field.key,
-            value: params.value,
-        };
-    }
-    const current = readRecord(params.values[binding.byServerIdSettingId]);
-    const byServer: Record<string, unknown> = current ? { ...current } : {};
-    byServer[params.serverIdentityId] = params.value;
-    return { fieldId: binding.byServerIdSettingId, value: byServer };
 }
 
 function daemonSnapshotToScopedResult(params: Readonly<{
@@ -977,6 +951,7 @@ export function createScopedPluginSettingsAdapter(
                     fieldId: input.fieldId,
                     mutation: input.mutation,
                     expectedRevision: input.expectedRevision,
+                    ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
                 });
             }
             if (input.target.kind !== 'daemon' || input.expectedRevision.kind !== 'daemon') {

@@ -5,7 +5,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { listWorkflowTriggerSets } from './workflowTriggerActions';
+import { listWorkflowTriggerSets, removeWorkflowTrigger, updateWorkflowTrigger } from './workflowTriggerActions';
 import { useWorkflowTriggerSets } from '@/components/workflows/triggers/useWorkflowTriggerSets';
 import { useSessionTriggerLastRuns } from '@/components/workflows/triggers/useSessionTriggerLastRuns';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
@@ -15,6 +15,7 @@ import { useServerCredentialAccountScopeStates } from '@/sync/domains/scope/useS
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { WorkflowTriggerSetV1Schema } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
+import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 
 const execute = vi.hoisted(() => vi.fn());
 // Action transport boundary: schemas, Account lifecycle, selectors and store remain real.
@@ -43,6 +44,39 @@ afterEach(async () => {
 });
 
 describe('Account schedule read ownership', () => {
+    it('retains the delete receipt revision when an unseen update ACK arrives afterwards', async () => {
+        storage.setState({ workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {} });
+        const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'delayed-ack', revision: 10,
+            enabled: true, health: 'available', triggers: [] });
+        storage.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [set] });
+        const pendingUpdate = createDeferred<unknown>();
+        execute.mockReturnValueOnce(pendingUpdate.promise);
+        const updated = updateWorkflowTrigger({ automationId: set.automationId, expectedRevision: 10, patch: { enabled: false } });
+        execute.mockResolvedValueOnce({ ok: true, result: { automationId: set.automationId, deleted: true, removedRevision: 11 } });
+        await removeWorkflowTrigger({ automationId: set.automationId });
+        storage.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [] });
+        pendingUpdate.resolve({ ok: true, result: { set: { ...set, revision: 11, enabled: false } } });
+        await updated;
+        expect(storage.getState().workflowTriggerSetsById[set.automationId]).toBeUndefined();
+        expect(storage.getState().workflowTriggerSetIdsByQuery.account_inline).toEqual([]);
+    });
+    it('removes a deleted Manual set from all cached memberships while preserving other sets and Run history', async () => {
+        const manual = WorkflowTriggerSetV1Schema.parse({ automationId: 'retained-manual', revision: 3,
+            enabled: false, health: 'available', triggers: [] });
+        const other = WorkflowTriggerSetV1Schema.parse({ ...manual, automationId: 'unrelated' });
+        const history = { 'past-run': workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'past-run',
+            state: 'succeeded', origin: { kind: 'automation', automationId: manual.automationId } })) };
+        storage.setState({ workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {}, workflowRunsById: history });
+        storage.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_inline', sets: [manual, other] });
+        storage.getState().applyWorkflowTriggerSetPage({ queryKey: 'account_all', sets: [manual, other] });
+        execute.mockResolvedValue({ ok: true, result: { automationId: manual.automationId, deleted: true } });
+        expect(await removeWorkflowTrigger({ automationId: manual.automationId }))
+            .toEqual({ automationId: manual.automationId, deleted: true });
+        expect(storage.getState().workflowTriggerSetsById).toEqual({ unrelated: other });
+        expect(storage.getState().workflowTriggerSetIdsByQuery)
+            .toEqual({ account_inline: ['unrelated'], account_all: ['unrelated'] });
+        expect(storage.getState().workflowRunsById).toBe(history);
+    });
     it('reads addressed FIN sets without reading or overwriting the focused Home, and keeps its facts after a failed refresh', async () => {
         const targetId = storage.getState().profileScope!.serverId;
         const serverIds = [targetId];

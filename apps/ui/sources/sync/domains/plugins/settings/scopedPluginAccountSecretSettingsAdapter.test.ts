@@ -5,6 +5,7 @@ import {
     resolveAccountSettingsPluginSecret,
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
 import {
     createAccountPluginSecretSettingsAdapter,
@@ -50,6 +51,31 @@ function existingSavedSecretSettings(): Record<string, unknown> {
 }
 
 describe('Account plugin SavedSecret Settings adapter', () => {
+    it('refuses a retired field intent inside the existing Account mutation callback before binding effects', async () => {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        let current = true;
+        let snapshot: AccountPluginSecretSettingsSnapshot = { revision: 5, settings: initialSettings() };
+        const adapter = createAccountPluginSecretSettingsAdapter({ readSnapshot: () => snapshot, async writeOnce(input) {
+            entered.resolve();
+            await release.promise;
+            snapshot = { revision: 6, settings: input.mutate(snapshot.settings) };
+            return { status: 'applied', revision: snapshot.revision, snapshot };
+        } }, { createId: () => 'unused-id', now: () => 1 });
+        const input = { pluginId: PLUGIN_ID, scope: { kind: 'account' as const }, target: TARGET, fields: FIELDS, fieldId: FIELD_ID,
+            mutation: { kind: 'unbind' as const }, expectedRevision: { kind: 'account-secret' as const, value: 5 }, isCurrent: () => current };
+        const pending = adapter.write(input);
+        await entered.promise;
+        current = false;
+        release.resolve();
+        expect(await pending).toMatchObject({ status: 'unavailable' });
+        expect(snapshot.revision).toBe(5);
+        expect(resolveAccountSettingsPluginSecretBinding(snapshot.settings, { pluginId: PLUGIN_ID, localId: FIELD_ID }))
+            .toMatchObject({ savedSecretId: 'existing-secret' });
+        current = true;
+        expect(await adapter.write(input)).toMatchObject({ status: 'ready', snapshot: { revision: { value: 6 } } });
+        expect(resolveAccountSettingsPluginSecretBinding(snapshot.settings, { pluginId: PLUGIN_ID, localId: FIELD_ID })).toBeNull();
+    });
     it('binds, reports, and unbinds a shared ref without requiring a personal row', async () => {
         const sharedRef = formatSharedSavedSecretRefV1('resource-plugin');
         let snapshot: AccountPluginSecretSettingsSnapshot = {

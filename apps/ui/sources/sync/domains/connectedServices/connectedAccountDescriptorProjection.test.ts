@@ -9,6 +9,7 @@ import {
   mergeConnectedAccountDescriptorProjections,
   readConnectedAccountDescriptorProjection,
 } from './connectedAccountDescriptorProjection';
+import { projectConnectedServiceRegistryEntries } from './connectedServiceRegistry';
 
 function descriptor(overrides: Partial<ConnectedAccountUiProjectionEntryV1> = {}): ConnectedAccountUiProjectionEntryV1 {
   return {
@@ -61,6 +62,55 @@ function projection(entries: Record<string, Readonly<{ id: string }> & Record<st
 }
 
 describe('connectedAccountDescriptorProjection', () => {
+  it('publishes answering descriptors while another machine is still resolving without a read failure', () => {
+    const projected = descriptor();
+    const merged = mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [projected] },
+      { kind: 'loading' },
+    ]);
+    const state = advanceConnectedAccountDescriptorProjectionState(
+      createConnectedAccountDescriptorProjectionLoadingState('server-a'), merged,
+    );
+    expect(state).toMatchObject({ status: 'loading', descriptors: [projected], errorReason: null });
+    expect(projectConnectedServiceRegistryEntries(state)[0]).toMatchObject({
+      executable: true, supportsToken: true, projectionStatus: 'ready',
+    });
+  });
+
+  it('treats a retrying transport read beside an answering machine as partial loading', () => {
+    const projected = descriptor();
+    const merged = mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [projected] },
+      { kind: 'error', reason: 'transport' },
+    ]);
+    expect(advanceConnectedAccountDescriptorProjectionState(
+      createConnectedAccountDescriptorProjectionLoadingState('server-a'), merged,
+    )).toMatchObject({ status: 'loading', descriptors: [projected], errorReason: null });
+  });
+
+  it('refreshes answered identities and retains unanswered services until a complete read', () => {
+    const old = descriptor({ title: 'Old details' });
+    const unanswered = descriptor({ id: 'other', serviceId: 'other' });
+    const fresh = descriptor({ title: 'Current details' });
+    const previous = advanceConnectedAccountDescriptorProjectionState(
+      createConnectedAccountDescriptorProjectionLoadingState('server-a'),
+      { kind: 'ready', descriptors: [old, unanswered], conflicts: [] },
+    );
+    const partial = advanceConnectedAccountDescriptorProjectionState(previous, mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [fresh] }, { kind: 'loading' },
+    ]));
+    expect(partial.status).toBe('loading');
+    expect(partial.descriptors).toEqual(expect.arrayContaining([fresh, unanswered]));
+    expect(partial.descriptors).not.toContainEqual(old);
+    expect(projectConnectedServiceRegistryEntries(partial).find(entry => entry.service?.localId === 'account'))
+      .toMatchObject({ executable: true, projectedDescriptor: fresh });
+    expect(projectConnectedServiceRegistryEntries(partial).find(entry => entry.service?.localId === 'other'))
+      .toMatchObject({ executable: false, projectedDescriptor: unanswered });
+    expect(advanceConnectedAccountDescriptorProjectionState(partial, {
+      kind: 'ready', descriptors: [fresh], conflicts: [],
+    }).descriptors).toEqual([fresh]);
+  });
+
   it('distinguishes authoritative empty from malformed and unsupported projections', () => {
     expect(readConnectedAccountDescriptorProjection(projection({}))).toEqual({ kind: 'ready', descriptors: [] });
     expect(readConnectedAccountDescriptorProjection(projection({ broken: { id: 'broken' } }))).toEqual({
@@ -80,6 +130,50 @@ describe('connectedAccountDescriptorProjection', () => {
     expect(merged).toEqual({ kind: 'ready', descriptors: [projected], conflicts: [] });
     if (merged.kind === 'error') throw new Error('expected a ready projection');
     expect(merged.descriptors[0]).toBe(projected);
+  });
+
+  it('keeps equal Account declarations usable across different machine runtime occurrences', () => {
+    const declaration = descriptor();
+    const left = { ...declaration, occurrenceId: 'acme.accounts:41' };
+    const right = { ...declaration, occurrenceId: 'acme.accounts:52' };
+    const resolution = mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [left] },
+      { kind: 'ready', descriptors: [right] },
+    ]);
+    const state = advanceConnectedAccountDescriptorProjectionState(
+      createConnectedAccountDescriptorProjectionLoadingState('server-a'), resolution,
+    );
+    const entries = projectConnectedServiceRegistryEntries(state);
+    expect(state).toMatchObject({ status: 'ready', descriptors: [declaration], conflicts: [] });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ executable: true, supportsToken: true });
+    expect(entries[0]?.projectedDescriptor).not.toHaveProperty('occurrenceId');
+    // The raw machine publication retains its exact admission occurrence.
+    expect(left.occurrenceId).toBe('acme.accounts:41');
+    expect(right.occurrenceId).toBe('acme.accounts:52');
+    expect(advanceConnectedAccountDescriptorProjectionState(state,
+      mergeConnectedAccountDescriptorProjections([
+        { kind: 'ready', descriptors: [{ ...declaration, occurrenceId: 'acme.accounts:53' }] },
+      ]))).toBe(state);
+  });
+
+  it('still refuses divergent authentication declarations across machine occurrences', () => {
+    const left = descriptor({ occurrenceId: 'acme.accounts:41' });
+    const right = descriptor({ occurrenceId: 'acme.accounts:52', authentication: {
+      defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode',
+      callbackUrl: 'http://127.0.0.1:4000/auth/callback',
+        pkce: 'required', outcomeReconciliation: 'none' }],
+    } });
+    const resolution = mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [left] }, { kind: 'ready', descriptors: [right] },
+    ]);
+    const entries = projectConnectedServiceRegistryEntries(advanceConnectedAccountDescriptorProjectionState(
+      createConnectedAccountDescriptorProjectionLoadingState('server-a'), resolution,
+    ));
+    expect(resolution.kind).toBe('conflict');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ executable: false, supportsToken: false, supportsOauth: false });
+    expect(entries[0]?.projectedDescriptorCandidates).toHaveLength(2);
   });
 
   it('keeps divergent identity candidates visible as a fail-closed conflict', () => {
@@ -155,6 +249,49 @@ describe('connectedAccountDescriptorProjection', () => {
       errorReason: 'partial_machine_failure',
       descriptors: [projected],
     });
+    expect(projectConnectedServiceRegistryEntries(state)[0]).toMatchObject({
+      executable: true, supportsToken: true, projectionStatus: 'ready',
+    });
+  });
+
+  it('refreshes current answers on partial failure and refuses divergence or an unanswered retained service', () => {
+    const old = descriptor({ title: 'Old details' });
+    const unanswered = descriptor({ id: 'other', serviceId: 'other' });
+    const fresh = descriptor({ title: 'Current details' });
+    const loading = createConnectedAccountDescriptorProjectionLoadingState('server-a');
+    const ready = advanceConnectedAccountDescriptorProjectionState(loading, {
+      kind: 'ready', descriptors: [old, unanswered], conflicts: [],
+    });
+    const partial = advanceConnectedAccountDescriptorProjectionState(ready, mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [fresh] }, { kind: 'error', reason: 'unsupported' },
+    ]));
+    const entries = projectConnectedServiceRegistryEntries(partial);
+    expect(partial).toMatchObject({ status: 'stale', errorReason: 'partial_machine_failure' });
+    expect(entries.find(entry => entry.service?.localId === 'account'))
+      .toMatchObject({ executable: true, projectedDescriptor: fresh });
+    expect(entries.find(entry => entry.service?.localId === 'other'))
+      .toMatchObject({ executable: false, projectedDescriptor: unanswered });
+
+    const divergent = advanceConnectedAccountDescriptorProjectionState(partial, mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [fresh] }, { kind: 'ready', descriptors: [old] },
+      { kind: 'error', reason: 'unsupported' },
+    ]));
+    expect(divergent.status).toBe('stale');
+    expect(projectConnectedServiceRegistryEntries(divergent).find(entry => entry.service?.localId === 'account'))
+      .toMatchObject({ executable: false, supportsToken: false,
+        projectedDescriptorCandidates: expect.arrayContaining([fresh, old]),
+        projectionConflicts: [expect.objectContaining({ kind: 'identity_divergence' })] });
+
+    const recovered = advanceConnectedAccountDescriptorProjectionState(divergent, mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [fresh] }, { kind: 'error', reason: 'unsupported' },
+    ]));
+    expect(projectConnectedServiceRegistryEntries(recovered).find(entry => entry.service?.localId === 'account'))
+      .toMatchObject({ executable: true, projectedDescriptor: fresh, projectionConflicts: [] });
+    const noSupplier = advanceConnectedAccountDescriptorProjectionState(recovered, mergeConnectedAccountDescriptorProjections([
+      { kind: 'error', reason: 'unsupported' },
+    ]));
+    expect(noSupplier.descriptors).toEqual(recovered.descriptors);
+    expect(projectConnectedServiceRegistryEntries(noSupplier).every(entry => entry.executable === false)).toBe(true);
   });
 
   it('never retracts last-known-good descriptors on a degraded partial read', () => {
@@ -196,6 +333,7 @@ describe('connectedAccountDescriptorProjection', () => {
       scopeKey: 'server-b',
       status: 'loading',
       descriptors: [],
+      answeredDescriptorIdentities: [],
       conflicts: [],
       errorReason: null,
     });

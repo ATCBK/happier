@@ -30,6 +30,19 @@ describe('buildSummaryMeters', () => {
     expect(meters.map((meter) => meter.label)).toEqual(ids);
   });
 
+  it('projects unavailable pinned numbers as unknown in badges and summary meters', () => {
+    const disabled = { meterId: 'disabled', label: 'Disabled', used: 100, limit: 100,
+      remainingPct: 0, utilizationPct: 100, unit: 'count', resetsAt: null,
+      status: 'unavailable', details: {} } satisfies ConnectedServiceQuotaMeterV1;
+    expect(selectConnectedServiceQuotaSummaryMeters({ meters: [disabled], meterIds: ['disabled'] }))
+      .toMatchObject([{ remainingPct: null, utilizationPct: null }]);
+    expect(computeConnectedServiceQuotaSummaryBadges({ snapshot: { meters: [disabled] }, pinnedMeterIds: ['disabled'] }))
+      .toEqual([{ meterId: 'disabled', text: '—' }]);
+    expect(buildSummaryMeters([disabled], [], 'primary', 2_000)).toEqual([]);
+    expect(buildSummaryMeters([disabled], ['disabled'], 'primary', 2_000))
+      .toMatchObject([{ remainingPct: null }]);
+  });
+
   it('hides empty placeholders in summaries and removes them when unpinned', () => {
     const base = { used: null, limit: null, unit: 'unknown', utilizationPct: null, resetsAt: null, status: 'unavailable', details: {} } as const;
     const reported: ConnectedServiceQuotaMeterV1[] = [

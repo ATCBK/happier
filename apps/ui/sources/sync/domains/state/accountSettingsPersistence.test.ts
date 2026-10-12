@@ -94,6 +94,23 @@ describe('accountSettingsPersistence', () => {
         store.clear();
     });
 
+    it('recovers scoped pending preferences without giving retired fields mutation meaning', async () => {
+        const mod = await loadAccountSettingsPersistenceModule();
+        expect(mod).not.toBeNull();
+        if (!mod) return;
+        writeLegacyPendingAccountSettingsCache(scopeA, {
+            machineAdministrationSelectionsV1: {
+                v: 1,
+                pluginExecutionOriginsByPluginId: {},
+                targetsByKey: { plugins: { machineId: 'retired-machine' } },
+            },
+        });
+        expect(mod.loadPendingAccountSettings(scopeA)).toEqual({
+            machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: {} },
+        });
+        expect(mod.loadPendingAccountSettings(sameServerDifferentAccount)).toEqual({});
+    });
+
     it('replaces native preview ceilings with the current settings, including an offline privacy change', async () => {
         const mod = await loadAccountSettingsPersistenceModule();
         expect(mod).not.toBeNull();
@@ -383,10 +400,10 @@ describe('accountSettingsPersistence', () => {
         if (!mod) return;
 
         mod.savePendingAccountSettings(scopeA, { analyticsOptOut: true });
-        mod.savePendingAccountSettings(sameAccountDifferentServer, { viewInline: true });
+        mod.savePendingAccountSettings(sameAccountDifferentServer, { showLineNumbers: true });
 
         expect(mod.loadPendingAccountSettings(scopeA)).toEqual({ analyticsOptOut: true });
-        expect(mod.loadPendingAccountSettings(sameAccountDifferentServer)).toEqual({ viewInline: true });
+        expect(mod.loadPendingAccountSettings(sameAccountDifferentServer)).toEqual({ showLineNumbers: true });
         expect(mod.loadPendingAccountSettings(sameServerDifferentAccount)).toEqual({});
     });
 
@@ -395,11 +412,11 @@ describe('accountSettingsPersistence', () => {
         expect(mod, 'account settings persistence module should exist').not.toBeNull();
         if (!mod) return;
 
-        store.set('pending-settings', JSON.stringify({ analyticsOptOut: true, viewInline: true }));
+        store.set('pending-settings', JSON.stringify({ analyticsOptOut: true, showLineNumbers: true }));
 
         mod.prepareAccountSettingsScopeForActivation(scopeA);
 
-        expect(mod.loadPendingAccountSettings(scopeA)).toEqual({ analyticsOptOut: true, viewInline: true });
+        expect(mod.loadPendingAccountSettings(scopeA)).toEqual({ analyticsOptOut: true, showLineNumbers: true });
         expect(store.has('pending-settings')).toBe(false);
     });
 
@@ -1027,11 +1044,11 @@ describe('accountSettingsPersistence', () => {
         if (!mod) return;
 
         mod.savePendingAccountSettings(scopeA, { analyticsOptOut: true });
-        mod.savePendingAccountSettings(sameAccountDifferentServer, { viewInline: true });
+        mod.savePendingAccountSettings(sameAccountDifferentServer, { showLineNumbers: true });
         mod.savePendingAccountSettings(scopeA, {});
 
         expect(mod.loadPendingAccountSettings(scopeA)).toEqual({});
-        expect(mod.loadPendingAccountSettings(sameAccountDifferentServer)).toEqual({ viewInline: true });
+        expect(mod.loadPendingAccountSettings(sameAccountDifferentServer)).toEqual({ showLineNumbers: true });
     });
 
     it('falls back safely when scoped persisted data is malformed', async () => {

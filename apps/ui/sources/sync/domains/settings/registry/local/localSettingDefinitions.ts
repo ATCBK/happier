@@ -1,15 +1,6 @@
 import { buildSettingArtifacts } from '@happier-dev/protocol/settings/registry/buildSettingArtifacts';
 import { defineSettingDefinitions } from '@happier-dev/protocol/settings/registry/settingDefinition';
 import {
-    buildUiSurfaceExecutableApprovalKeyStringV1,
-    createUiSurfaceRequestedCapabilitiesDigestV1,
-    UiSurfaceExecutableApprovalKeyV1Schema,
-} from '@happier-dev/protocol/plugins/contributions/ui/executableSurfaceApprovalV1';
-import {
-    normalizeUiSurfaceCapabilityRequestV1,
-    UiSurfaceCapabilityRequestV1Schema,
-} from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
-import {
     DEFAULT_HAPPIER_SPINNER_PAUSE_ID,
     DEFAULT_HAPPIER_SPINNER_SPEED_ID,
     DEFAULT_HAPPIER_SPINNER_STYLE_ID,
@@ -26,32 +17,13 @@ import {
     ThemeProfilesLocalStateSchema,
 } from '@/theme/profiles/themeProfilePersistence';
 import { SessionListFocusedFolderV1Schema } from '@/sync/domains/session/folders/types';
+import { MachineStorageViewMapSchema } from './machineStorageViewSetting';
 
 const SessionMruOrderSchema = z.array(z.unknown())
     .transform((values) => values
         .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
         .map((value) => value.trim()))
     .catch([]);
-
-const UiSurfaceExecutableApprovalSchema = z.object({
-    approval: UiSurfaceExecutableApprovalKeyV1Schema,
-    capabilities: UiSurfaceCapabilityRequestV1Schema.transform((request, ctx) => {
-        const normalized = normalizeUiSurfaceCapabilityRequestV1(request);
-        if (normalized) return normalized;
-        ctx.addIssue({ code: 'custom', message: 'Invalid reviewed surface capabilities' });
-        return z.NEVER;
-    }),
-}).strict();
-
-// Historical booleans prove only their exact key. New approvals retain the
-// reviewed request so a strictly narrower request can reuse the same consent.
-const UiSurfaceExecutableApprovalsSchema = z.record(
-    z.string().min(1),
-    z.union([z.literal(true), UiSurfaceExecutableApprovalSchema]),
-).refine((entries) => Object.entries(entries).every(([key, entry]) => entry === true || (
-    key === buildUiSurfaceExecutableApprovalKeyStringV1(entry.approval)
-    && entry.approval.requestedCapabilitiesDigest === createUiSurfaceRequestedCapabilitiesDigestV1(entry.capabilities)
-)), { message: 'Surface approval must match its reviewed scope and capabilities' });
 
 const localSettingInputs = {
     hideConnectedAccountIdentities: {
@@ -95,6 +67,52 @@ const localSettingInputs = {
         schema: z.enum(['list', 'grid']).catch('list'),
         default: 'list',
         description: 'Whether Connected services lists its accounts or shows them as cards on this device',
+        storageScope: 'local',
+    },
+    machinesRailSeenV1: {
+        // What this device has already seen of the machines' "worth a look" reasons and guard actions (R4):
+        // written when the Machines popover opens, so the rail dot returns only for a new or worse reason.
+        schema: z.object({
+            look: z.record(z.string(), z.array(z.string())).catch({}),
+            guardSeenAt: z.number().catch(0),
+        }).catch({ look: {}, guardSeenAt: 0 }),
+        default: { look: {}, guardSeenAt: 0 },
+        description: 'Machine attention reasons and guard actions this device has already seen in the Machines popover',
+        storageScope: 'local',
+    },
+    machinesIndexViewV1: {
+        // List (default, a table of machines) or Grid (one card per machine) for All machines on this device.
+        schema: z.enum(['list', 'grid']).catch('list'),
+        default: 'list',
+        description: 'Whether All machines shows a table of machines or one card per machine on this device',
+        storageScope: 'local',
+    },
+    uiMachineSummaryStyle: {
+        // How the Machine summary draws each machine's instruments (popover, machine list, All machines → List).
+        schema: z.enum(['sparklines', 'bars', 'numbers', 'rings']).catch('sparklines'),
+        default: 'sparklines',
+        description: 'The Machine summary style on this device: sparklines, bars, numbers or rings',
+        storageScope: 'local',
+    },
+    uiMachineSummaryMetrics: {
+        // The shown metrics, in canonical order (`normalizeMachineSummaryMetrics`); none shown is a valid choice.
+        schema: z.array(z.enum(['cpu', 'memory', 'disk', 'network'])).catch(['cpu', 'memory', 'disk']),
+        default: ['cpu', 'memory', 'disk'],
+        description: 'Which metrics the Machine summary shows on this device (none: machine names only)',
+        storageScope: 'local',
+    },
+    machineVitalsRangeV1: {
+        // The history a machine's Overview charts on this device: the last hour (default), day or week.
+        schema: z.enum(['1h', '24h', '7d']).catch('1h'),
+        default: '1h',
+        description: 'How much history a machine Overview charts on this device: 1 hour, 24 hours or 7 days',
+        storageScope: 'local',
+    },
+    machineStorageViewV1: {
+        // Whole disk on this device, per machine (Home + machine id): List (default) · Map · Rings and the list's sort.
+        schema: MachineStorageViewMapSchema,
+        default: {},
+        description: 'How Storage → Whole disk shows a folder on this device, per machine: list, map or rings, and the list sort',
         storageScope: 'local',
     },
     artifactsBrowserViewV1: {
@@ -142,6 +160,14 @@ const localSettingInputs = {
         schema: z.number().nullable().catch(null),
         default: null,
         description: 'Timestamp in ms since epoch when the user first dismissed the mobile brand hero',
+        storageScope: 'local',
+    },
+    homeWelcomeSeenAt: {
+        // Welcome (Home atmosphere R-11): the planet assembles once, on the first arrival at Home after
+        // sign-in on this device. Never Account-synced and never cleared on logout.
+        schema: z.number().nullable().catch(null),
+        default: null,
+        description: 'Timestamp in ms since epoch when Home first played its Welcome planet on this device',
         storageScope: 'local',
     },
     hasCompletedAuthOnce: {
@@ -297,12 +323,6 @@ const localSettingInputs = {
         description: 'Enable multi-pane right/details panels (web/tablet)',
         storageScope: 'local',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'device_user' },
-    },
-    uiSurfaceExecutableApprovalsV1: {
-        schema: UiSurfaceExecutableApprovalsSchema,
-        default: {},
-        description: 'Viewer-local approvals for exact executable UI surface fingerprints',
-        storageScope: 'local',
     },
     sessionsRightPaneDefaultOpen: {
         schema: z.boolean(),

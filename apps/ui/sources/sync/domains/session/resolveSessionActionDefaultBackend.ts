@@ -1,7 +1,5 @@
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
-import { AgentExecutionTargetV1Schema, type AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/executionTargetV1';
-import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
-import { agentRoutingIdAddressesContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
+import { resolveAgentExecutionTargetFromSessionMetadata, resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import type { AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { readAcpConfiguredBackendV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/acpConfiguredBackendV1';
 import { resolveLinkedExternalSessionMetadataV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
 import type { BackendTargetRefV2, PersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -11,7 +9,6 @@ import {
     resolveBundledAgentIdFromContributionIdentity,
     type AgentId,
 } from '@/agents/catalog/catalog';
-import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { isLegacyCompatAgentType } from '@/agents/backendCatalog/legacyCompatAgents';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -91,35 +88,6 @@ function resolveDisplayAgentType(params: Readonly<{
   return params.defaultAgentId;
 }
 
-function readCanonicalAgentTarget(
-  metadata: unknown,
-  resolvedAgentId: string | null,
-): AgentExecutionTargetV1 | null {
-  const record = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
-    ? metadata as Record<string, unknown>
-    : null;
-  if (!record) return null;
-
-  const correspondence = SessionCreationCorrespondenceV1Schema.safeParse(
-    record.sessionCreationCorrespondenceV1,
-  );
-  const linked = resolveLinkedExternalSessionMetadataV1(record);
-  const candidate = correspondence.success
-    ? correspondence.data.recipe.agentTarget
-    : linked.ok && linked.linkedSession.qualifiedIdentity
-      ? { kind: 'agent' as const, identity: linked.linkedSession.qualifiedIdentity.agent }
-      : resolvedAgentId && isBundledAgentId(resolvedAgentId)
-        ? { kind: 'agent' as const, identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[resolvedAgentId] }
-        : null;
-  const parsed = AgentExecutionTargetV1Schema.safeParse(candidate);
-  if (!parsed.success) return null;
-  if (
-    resolvedAgentId
-    && !agentRoutingIdAddressesContributionIdentityV1(resolvedAgentId, parsed.data.identity)
-    && resolveBundledAgentIdFromContributionIdentity(parsed.data.identity) !== resolvedAgentId
-  ) return null;
-  return parsed.data;
-}
 
 export function resolveSessionActionDefaultBackend(params: Readonly<{
   session: Pick<Session, 'metadata' | 'metadataLayoutVersion' | 'ownerMetadataView'> | null | undefined;
@@ -142,11 +110,11 @@ export function resolveSessionActionDefaultBackend(params: Readonly<{
     configuredBackendId: configuredBackend?.backendId ?? null,
   });
   const metadataAgentId = resolveAgentIdFromSessionMetadata(metadata);
-  const linked = resolveLinkedExternalSessionMetadataV1(metadata);
+  const linked = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
   const resolvedAgentId = metadataAgentId
     ?? (linked.ok ? linked.linkedSession.agentId : null)
     ?? defaultBuiltInAgentId;
-  const agentTarget = readCanonicalAgentTarget(metadata, resolvedAgentId);
+  const agentTarget = resolveAgentExecutionTargetFromSessionMetadata(metadata, resolvedAgentId);
   const defaultAgentId = resolvedAgentId
     ?? (agentTarget ? resolveBundledAgentIdFromContributionIdentity(agentTarget.identity) : null);
   const displayAgentType = resolveDisplayAgentType({

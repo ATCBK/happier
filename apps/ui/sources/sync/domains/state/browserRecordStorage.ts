@@ -1,10 +1,10 @@
 /** Device-local large records. A successful write means the IndexedDB transaction committed. */
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 
-const DATABASE = 'happier-local-records';
 const STORE = 'records';
 
-let connection: Promise<IDBDatabase> | undefined;
+type BrowserRecordStore = 'records' | 'pictures';
+const connections = new Map<BrowserRecordStore, Promise<IDBDatabase>>();
 const memoryRecords = new Map<string, string>();
 
 /** Hard embed retirement never opens or clears full-app IndexedDB storage. */
@@ -12,24 +12,28 @@ export function clearEmbedBrowserRecords(): void {
     if (isEmbedWindowContext()) memoryRecords.clear();
 }
 
-function openDatabase(): Promise<IDBDatabase> {
+/** One connection owner, with picture bytes isolated from 0.2's version-one records database. */
+export function openBrowserRecordDatabase(store: BrowserRecordStore = 'records'): Promise<IDBDatabase> {
+    if (isEmbedWindowContext()) return Promise.reject(new Error('Device picture storage is unavailable in an embed.'));
+    let connection = connections.get(store);
     if (connection) return connection;
     connection = new Promise<IDBDatabase>((resolve, reject) => {
         if (typeof indexedDB === 'undefined') {
             reject(new Error('Browser storage is unavailable; local changes cannot be saved.'));
             return;
         }
-        const request = indexedDB.open(DATABASE, 1);
+        // Do not upgrade the records database: 0.2's same-origin opener explicitly requests version 1.
+        const request = indexedDB.open(store === 'records' ? 'happier-local-records' : 'happier-atmosphere-pictures');
         request.onupgradeneeded = () => {
-            request.result.createObjectStore(STORE);
+            request.result.createObjectStore(store);
         };
         request.onerror = () => reject(request.error);
         request.onblocked = () => reject(new Error('Browser storage upgrade is blocked by another tab.'));
         request.onsuccess = () => {
             const database = request.result;
-            const openedConnection = connection;
+            const openedConnection = connections.get(store);
             const invalidateConnection = () => {
-                if (connection === openedConnection) connection = undefined;
+                if (connections.get(store) === openedConnection) connections.delete(store);
             };
             database.onclose = () => {
                 invalidateConnection();
@@ -42,15 +46,16 @@ function openDatabase(): Promise<IDBDatabase> {
             resolve(database);
         };
     }).catch((error: unknown) => {
-        connection = undefined;
+        connections.delete(store);
         throw error;
     });
+    connections.set(store, connection);
     return connection;
 }
 
 export async function readBrowserRecord(key: string): Promise<string | undefined> {
     if (isEmbedWindowContext()) return memoryRecords.get(key);
-    const database = await openDatabase();
+    const database = await openBrowserRecordDatabase();
     return new Promise((resolve, reject) => {
         const transaction = database.transaction(STORE, 'readonly');
         const request = transaction.objectStore(STORE).get(key);
@@ -79,7 +84,7 @@ export async function updateBrowserRecord<T>(
         else memoryRecords.set(key, next.value);
         return next.result;
     }
-    const database = await openDatabase();
+    const database = await openBrowserRecordDatabase();
     return new Promise<T>((resolve, reject) => {
         const transaction = database.transaction(STORE, 'readwrite', { durability: 'strict' });
         const store = transaction.objectStore(STORE);
@@ -115,7 +120,7 @@ export function deleteBrowserRecord(key: string): Promise<void> {
 
 export async function clearBrowserRecords(): Promise<void> {
     if (isEmbedWindowContext()) { memoryRecords.clear(); return; }
-    const database = await openDatabase();
+    const database = await openBrowserRecordDatabase();
     return new Promise((resolve, reject) => {
         const transaction = database.transaction(STORE, 'readwrite', { durability: 'strict' });
         transaction.objectStore(STORE).clear();
@@ -127,7 +132,7 @@ export async function clearBrowserRecords(): Promise<void> {
 
 export async function listBrowserRecords(prefix: string): Promise<Map<string, string>> {
     if (isEmbedWindowContext()) return new Map(Array.from(memoryRecords).filter(([key]) => key.startsWith(prefix)));
-    const database = await openDatabase();
+    const database = await openBrowserRecordDatabase();
     return new Promise((resolve, reject) => {
         const transaction = database.transaction(STORE, 'readonly');
         const request = transaction.objectStore(STORE).openCursor();

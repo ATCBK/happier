@@ -1,3 +1,5 @@
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+
 export type PendingSetupIntentPhase = 'pre_auth' | 'awaiting_auth' | 'post_auth' | 'dismissed';
 
 export type PendingSetupIntent =
@@ -90,7 +92,7 @@ function normalizeMachineId(raw: string | null | undefined): string | null {
     return value ? value : null;
 }
 
-function readAskHappierAuthoringContext(value: Readonly<{ context?: unknown; currentUiContext?: unknown }>): AskHappierAuthoringContext | null {
+function readAskHappierAuthoringContext(value: Readonly<{ context?: unknown; currentUiContext?: unknown }>, stored = false): AskHappierAuthoringContext | null {
     let context: AskHappierContext | undefined;
     if (value.context !== undefined) {
         if (!value.context || typeof value.context !== 'object') return null;
@@ -101,7 +103,8 @@ function readAskHappierAuthoringContext(value: Readonly<{ context?: unknown; cur
             || typeof release.date !== 'string' || typeof release.markdown !== 'string') return null;
         context = { kind: 'release', release: { id: release.id, versionLabel: release.versionLabel, date: release.date, markdown: release.markdown } };
     }
-    const currentUiContext = value.currentUiContext === undefined ? undefined : CurrentUiContextSnapshotV1Schema.safeParse(value.currentUiContext);
+    const contextSchema = stored ? createStoredReadSchema(CurrentUiContextSnapshotV1Schema) : CurrentUiContextSnapshotV1Schema;
+    const currentUiContext = value.currentUiContext === undefined ? undefined : contextSchema.safeParse(value.currentUiContext);
     if (currentUiContext && !currentUiContext.success) return null;
     return { ...(context ? { context } : {}), ...(currentUiContext?.success ? { currentUiContext: currentUiContext.data } : {}) };
 }
@@ -148,7 +151,7 @@ export function fromRecord(value: unknown): PendingSetupIntent | null {
     if (Date.now() - createdAtMs > ttlMs) return null;
     if (record.branch === 'askHappier') {
         if (record.phase !== 'awaiting_auth' && record.phase !== 'post_auth' && record.phase !== 'dismissed') return null;
-        const authored = readAskHappierAuthoringContext({ context: record.context, currentUiContext: record.currentUiContext });
+        const authored = readAskHappierAuthoringContext({ context: record.context, currentUiContext: record.currentUiContext }, true);
         if (!authored) return null;
         return { branch: 'askHappier', phase: record.phase, relayUrl: normalizeRelayUrl(record.relayUrl as string | null | undefined), ...authored };
     }

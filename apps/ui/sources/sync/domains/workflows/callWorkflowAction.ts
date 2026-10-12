@@ -1,5 +1,6 @@
 import type { ActionExecutorContext, ActionId } from '@happier-dev/protocol';
 import { WorkflowActionFailureV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { randomUUID } from '@/platform/randomUUID';
 
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -26,6 +27,15 @@ import { WorkflowActionError } from './workflowActionError';
  */
 
 export type WorkflowActionExecute = ReturnType<typeof createFrontDoorActionExecute>;
+/** Caller facts retained across a mounted operation's child Actions, without parent consent. */
+export type WorkflowActionCallerContext = Pick<ActionExecutorContext,
+    'surface' | 'authority' | 'serverId' | 'serverIdentityId' | 'runtimeAccountId' | 'expectedAccountId'
+    | 'actionCaller' | 'defaultSessionId' | 'defaultSessionMachineId' | 'runtimeRunId' | 'runtimeRunOccurrenceId'
+    | 'workspaceWrites' | 'sessionListAccess' | 'callerPermissionMode' | 'sessionAgentSpawnPolicyV1'
+    | 'causalPermissionAuthority' | 'sessionInputSource' | 'agentStartContext' | 'sessionRoleConfiguration'
+    | 'requesterWorkAttributionV1' | 'actionsSettings' | 'approvalOrigin' | 'externalActionCredential'
+    | 'externalActionTarget' | 'rpcSessionAuthorization' | 'requiredContributedActionDangerLevel'
+    | 'expectedContributedActionOccurrenceId' | 'signal'>;
 
 let sharedExecute: WorkflowActionExecute | null = null;
 
@@ -44,7 +54,7 @@ export async function callWorkflowAction<TResult>(params: Readonly<{
     parseResult: (value: unknown) => TResult;
     signal?: AbortSignal;
     /** Host-owned target facts; never merged into caller-authored Action input. */
-    context?: Omit<ActionExecutorContext, 'surface' | 'signal'>;
+    context?: Omit<ActionExecutorContext, 'signal'>;
     /** Routed fields use their captured Home binding; undefined preserves incumbent workflow scope. */
     accountLifetime?: ServerAccountScopeLifetime | null;
     /** Supplied by tests and by callers that own their executor lifetime. */
@@ -67,7 +77,11 @@ export async function callWorkflowAction<TResult>(params: Readonly<{
             serverId: activeLifetime.scope.serverId,
             runtimeAccountId: activeLifetime.scope.accountId,
         } : {}),
-        surface: 'ui',
+        // Admitted callers retain their attribution; native callers default to UI.
+        surface: params.context && 'surface' in params.context ? params.context.surface : 'ui',
+        // A child has its own approval invocation, never its parent's request
+        // identity or consent. Native UI callers retain the front door's id owner.
+        ...(params.context && 'surface' in params.context ? { actionRequestId: randomUUID() } : {}),
         ...(params.signal === undefined ? {} : { signal: params.signal }),
     });
     if (activeLifetime && !activeLifetime.isCurrent()) {

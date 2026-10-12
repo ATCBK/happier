@@ -17,7 +17,8 @@ let providerAccountUsageCacheState: ProviderAccountUsageCacheState = {
 };
 
 const providerAccountUsageCacheListeners = new Set<() => void>();
-const providerAccountUsageCacheRetainCounts = new Map<string, Map<string, number>>();
+type RetainedUsageEntry = { count: number; observerCount: number; disposeObservation: (() => void) | null };
+const providerAccountUsageCacheRetainCounts = new Map<string, Map<string, RetainedUsageEntry>>();
 
 function publishProviderAccountUsageCacheState(next: ProviderAccountUsageCacheState): void {
     providerAccountUsageCacheState = next;
@@ -43,14 +44,21 @@ export function subscribeProviderAccountUsageCache(listener: () => void): () => 
 export function retainProviderAccountUsageCacheEntries(
     credentialScope: string,
     recordIds: ReadonlyArray<string>,
+    observe?: (recordId: string) => () => void,
 ): () => void {
     if (!credentialScope || recordIds.length === 0) return () => {};
     const uniqueRecordIds = [...new Set(recordIds)];
     const counts = providerAccountUsageCacheRetainCounts.get(credentialScope)
-        ?? new Map<string, number>();
+        ?? new Map<string, RetainedUsageEntry>();
     providerAccountUsageCacheRetainCounts.set(credentialScope, counts);
     for (const recordId of uniqueRecordIds) {
-        counts.set(recordId, (counts.get(recordId) ?? 0) + 1);
+        const retained = counts.get(recordId) ?? { count: 0, observerCount: 0, disposeObservation: null };
+        retained.count += 1;
+        if (observe) {
+            retained.observerCount += 1;
+            if (!retained.disposeObservation) retained.disposeObservation = observe(recordId);
+        }
+        counts.set(recordId, retained);
     }
 
     let released = false;
@@ -58,9 +66,15 @@ export function retainProviderAccountUsageCacheEntries(
         if (released) return;
         released = true;
         for (const recordId of uniqueRecordIds) {
-            const nextCount = (counts.get(recordId) ?? 0) - 1;
-            if (nextCount > 0) counts.set(recordId, nextCount);
-            else counts.delete(recordId);
+            const retained = counts.get(recordId);
+            if (!retained) continue;
+            retained.count -= 1;
+            if (observe) retained.observerCount -= 1;
+            if (retained.observerCount === 0) {
+                retained.disposeObservation?.();
+                retained.disposeObservation = null;
+            }
+            if (retained.count === 0) counts.delete(recordId);
         }
         if (counts.size === 0) providerAccountUsageCacheRetainCounts.delete(credentialScope);
 

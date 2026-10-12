@@ -17,6 +17,13 @@ const readerProjection = {
 } satisfies ConnectedAccountDescriptorProjectionState;
 
 describe('readSessionConnectedServiceBindings', () => {
+    it('keeps stored bindings with unknown retired container and selection fields', () => {
+        expect(readSessionConnectedServiceBindings({ metadata: { connectedServices: { v: 2, retired: true,
+            bindingsByServiceId: { [CLAUDE_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'work', retired: true } },
+        } }, agentId: 'claude' })).toEqual({ v: 2, bindingsByServiceId: {
+            [CLAUDE_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'work' },
+        } });
+    });
     beforeEach(() => {
         installConnectedAccountDescriptorProjection(readerProjection);
     });

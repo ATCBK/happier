@@ -14,6 +14,7 @@ import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/
 import { PendingActivationAuthorizationV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import { PluginUiTargetedContributionsV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { readStorageScopeFromEnv, scopedStorageId } from '@/utils/system/storageScope';
 import { prepareWarmCacheEncryptionKey, readResolvedWarmCacheEncryptionKey } from './warmCacheEncryptionKey';
@@ -281,7 +282,7 @@ export const SessionListCacheEntryV1Schema = z.object({
     machineId: z.string().nullable().optional(),
     flavor: z.string().nullable().optional(),
     externalSessionV1: z.preprocess(
-        (value) => normalizeLinkedExternalSessionMetadataV1({ externalSessionV1: value })
+        (value) => normalizeLinkedExternalSessionMetadataV1({ externalSessionV1: value }, 'stored')
             ?.externalSessionV1 ?? value,
         z.object({
             v: z.literal(1),
@@ -363,7 +364,11 @@ export type MachineDisplayCacheEntryV1 = z.infer<typeof MachineDisplayCacheEntry
  * together; a fresh offline process can therefore never hold one without the
  * other.
  */
-export const PluginUiProjectionCacheEntryV1Schema = z.object({
+export const PluginUiProjectionCacheEntryV1Schema: z.ZodObject<{
+    machineId: z.ZodString;
+    projection: typeof PluginProjectionV2Schema;
+    targetedContributionsByPluginId: z.ZodOptional<z.ZodRecord<z.ZodString, typeof PluginUiTargetedContributionsV1Schema>>;
+}> = z.object({
     machineId: z.string().min(1),
     projection: PluginProjectionV2Schema,
     targetedContributionsByPluginId: z.record(
@@ -490,7 +495,7 @@ function loadScopedRecord<T>(
 
     try {
         const parsedJson = JSON.parse(raw);
-        const parsed = schema.safeParse(parsedJson);
+        const parsed = createStoredReadSchema(schema).safeParse(parsedJson);
         if (!parsed.success) {
             storage.delete(key);
             warmCacheSavedValueByKey.delete(key);

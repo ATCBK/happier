@@ -29,6 +29,7 @@ vi.mock('react-native-mmkv', () => {
 });
 
 import { prepareWarmCacheEncryptionKey } from '@/sync/domains/state/warmCacheEncryptionKey';
+import * as projectionNormalizer from './projection';
 
 import {
     loadPluginUiProjectionWarmCacheEntries,
@@ -39,6 +40,7 @@ import {
     forgetPluginUiProjectionAdmissionSnapshots,
     pluginUiProjectionAdmissionTargetKey,
     readPluginUiProjectionTargetedAdmissionSnapshot,
+    readPluginUiProjectionAdmissionSnapshot,
     savePluginUiProjectionAdmissionSnapshot,
     savePluginUiProjectionTargetedAdmissionSnapshot,
 } from './projectionWarmCache';
@@ -47,6 +49,31 @@ const ACCOUNT_A = { serverId: 'server-a', accountId: 'account-a' } as const;
 const ACCOUNT_B = { serverId: 'server-a', accountId: 'account-b' } as const;
 const MACHINE_ID = 'machine-1';
 const TARGET_KEY = pluginUiProjectionAdmissionTargetKey({ serverId: 'server-1', machineId: MACHINE_ID });
+
+it('normalizes an unchanged retained admission once and observes replacement, platform and retirement', async () => {
+    await prepareWarmCacheEncryptionKey();
+    store.clear();
+    forgetPluginUiProjectionAdmissionSnapshots(ACCOUNT_A);
+    savePluginUiProjectionAdmissionSnapshot({ scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID,
+        projection: projectionAtGeneration('retained-perf-a', 77) });
+    const normalize = vi.spyOn(projectionNormalizer, 'normalizePluginUiProjection');
+    try {
+        const input = { scope: ACCOUNT_A, targetKey: TARGET_KEY, machineId: MACHINE_ID, platform: 'web' as const };
+        const first = readPluginUiProjectionAdmissionSnapshot(input);
+        expect(first).not.toBeNull();
+        const repeated = Array.from({ length: 100 }, () => readPluginUiProjectionAdmissionSnapshot(input));
+        expect(normalize).toHaveBeenCalledTimes(1);
+        expect(repeated.every(value => value === first)).toBe(true);
+        expect(readPluginUiProjectionAdmissionSnapshot({ ...input, platform: 'ios' })).not.toBe(first);
+        expect(readPluginUiProjectionAdmissionSnapshot({ ...input, scope: ACCOUNT_B })).toBeNull();
+        savePluginUiProjectionAdmissionSnapshot({ ...input, projection: projectionAtGeneration('retained-perf-b', 78) });
+        expect(readPluginUiProjectionAdmissionSnapshot(input)).not.toBe(first);
+        forgetPluginUiProjectionAdmissionSnapshots(ACCOUNT_A);
+        expect(readPluginUiProjectionAdmissionSnapshot(input)).toBeNull();
+    } finally {
+        normalize.mockRestore();
+    }
+});
 
 function managedSourceCustody(immutableGenerationId: string): PluginSourceCustodyV1 {
     return { kind: 'managed', immutableGenerationId, installSource: 'archive' };

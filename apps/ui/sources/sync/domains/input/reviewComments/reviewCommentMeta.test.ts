@@ -47,11 +47,20 @@ describe('reviewCommentMeta', () => {
         })).toBeNull();
     });
 
-    it('rejects unknown fields through the canonical strict Protocol schema', () => {
-        expect(parseReviewCommentsV1({
-            sessionId: 's1',
-            comments: [],
-            unexpected: true,
-        })).toBeNull();
+    it('reads retained review comments with unknown nested fields while fresh payloads stay strict', () => {
+        const comment = {
+            id: 'retained-comment', filePath: 'src/a.ts', source: 'file',
+            anchor: { kind: 'fileLine', startLine: 1, lineHash: 'lh1:1234567890abcdef' },
+            snapshot: { selectedLines: ['x'], beforeContext: [], afterContext: [] },
+            body: 'retained review', createdAt: 1,
+        };
+        const payload = { sessionId: 'retained-session', retired: true, comments: [{
+            ...comment, retired: true,
+            anchor: { ...comment.anchor, retired: { enabled: true } },
+            snapshot: { ...comment.snapshot, retired: true },
+        }] };
+
+        expect(ReviewCommentsV1Schema.safeParse(payload).success).toBe(false);
+        expect(parseReviewCommentsV1(payload)).toEqual({ sessionId: 'retained-session', comments: [comment] });
     });
 });

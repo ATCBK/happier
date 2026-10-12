@@ -3,6 +3,7 @@ import {
   type ConnectedAccountUiProjectionEntryV1,
 } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import type { DaemonContributionRegistryProjection } from '@/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
+import { resolveFleetReadState, resolveFleetSupplyAgreement } from '@/sync/domains/machines/administration/fleetUnion';
 
 export type ConnectedAccountDescriptorProjectionErrorReason =
   | 'unsupported'
@@ -11,6 +12,7 @@ export type ConnectedAccountDescriptorProjectionErrorReason =
   | 'partial_machine_failure';
 
 export type ConnectedAccountDescriptorMachineProjection =
+  | Readonly<{ kind: 'loading' }>
   | Readonly<{ kind: 'ready'; descriptors: readonly ConnectedAccountUiProjectionEntryV1[] }>
   | Readonly<{ kind: 'error'; reason: ConnectedAccountDescriptorProjectionErrorReason }>;
 
@@ -33,7 +35,7 @@ export type ConnectedAccountDescriptorProjectionConflict =
 
 export type ConnectedAccountDescriptorProjectionResolution =
   | Readonly<{
-      kind: 'ready' | 'conflict';
+      kind: 'loading' | 'ready' | 'conflict';
       descriptors: readonly ConnectedAccountUiProjectionEntryV1[];
       conflicts: readonly ConnectedAccountDescriptorProjectionConflict[];
     }>
@@ -42,9 +44,8 @@ export type ConnectedAccountDescriptorProjectionResolution =
       reason: ConnectedAccountDescriptorProjectionErrorReason;
       /**
        * Facts the machines that DID answer reported. A degraded read is not
-       * authoritative for absence, so these are adopted only when there is no
-       * last-known-good state to retain: one unrelated machine must never turn
-       * every working Connected Account into "no descriptor".
+       * authoritative for absence: refresh answered identities while retaining
+       * unanswered services for display.
        */
       descriptors?: readonly ConnectedAccountUiProjectionEntryV1[];
       conflicts?: readonly ConnectedAccountDescriptorProjectionConflict[];
@@ -54,6 +55,11 @@ export type ConnectedAccountDescriptorProjectionState = Readonly<{
   scopeKey: string;
   status: 'loading' | 'ready' | 'stale' | 'error' | 'conflict';
   descriptors: readonly ConnectedAccountUiProjectionEntryV1[];
+  /**
+   * Current answering identities, distinct from retained display descriptors.
+   * Complete ready/conflict snapshots may omit this fact: every descriptor is answered.
+   */
+  answeredDescriptorIdentities?: readonly string[];
   conflicts: readonly ConnectedAccountDescriptorProjectionConflict[];
   errorReason: ConnectedAccountDescriptorProjectionErrorReason | null;
 }>;
@@ -90,8 +96,15 @@ function descriptorFingerprint(entry: ConnectedAccountUiProjectionEntryV1): stri
 export function mergeConnectedAccountDescriptorProjections(
   projections: readonly ConnectedAccountDescriptorMachineProjection[],
 ): ConnectedAccountDescriptorProjectionResolution {
-  if (projections.some((projection) => projection.kind === 'error')) {
-    const answering = projections.filter((projection) => projection.kind === 'ready');
+  const answering = projections.filter((projection) => projection.kind === 'ready');
+  // A pending read, or a retrying transport beside an answering machine, is
+  // incomplete knowledge. The per-machine reader owns retry and settlement.
+  const readState = resolveFleetReadState(projections.map((projection) => projection.kind === 'ready' ? 'current'
+    : projection.kind === 'loading' ? 'resolving' : projection.reason === 'transport' ? 'transportFailure' : 'failed'));
+  if (readState === 'resolving') {
+    return { ...unionReadyConnectedAccountDescriptorProjections(answering), kind: 'loading' };
+  }
+  if (readState === 'failed') {
     if (answering.length === 0) {
       return {
         kind: 'error',
@@ -115,18 +128,19 @@ export function mergeConnectedAccountDescriptorProjections(
 
 function unionReadyConnectedAccountDescriptorProjections(
   projections: readonly ConnectedAccountDescriptorMachineProjection[],
-): Extract<ConnectedAccountDescriptorProjectionResolution, { kind: 'ready' | 'conflict' }> {
-  const variantsByIdentity = new Map<string, Map<string, ConnectedAccountUiProjectionEntryV1>>();
-  for (const projection of projections) {
-    if (projection.kind !== 'ready') continue;
-    for (const entry of projection.descriptors) {
-      const identity = connectedAccountDescriptorIdentity(entry);
-      const variants = variantsByIdentity.get(identity) ?? new Map<string, ConnectedAccountUiProjectionEntryV1>();
-      const fingerprint = descriptorFingerprint(entry);
-      if (!variants.has(fingerprint)) variants.set(fingerprint, entry);
-      variantsByIdentity.set(identity, variants);
-    }
-  }
+): Extract<ConnectedAccountDescriptorProjectionResolution, { descriptors: readonly ConnectedAccountUiProjectionEntryV1[] }> {
+  const supplies = projections.flatMap((projection) => projection.kind !== 'ready' ? [] : projection.descriptors.map((entry) => {
+      // Occurrences identify one machine's live runtime slot, not an Account
+      // declaration. Keep them on raw machine publications, never in this union.
+      let descriptor = entry;
+      if (entry.occurrenceId !== undefined) {
+        const { occurrenceId, ...declaration } = entry;
+        descriptor = declaration;
+      }
+      return { value: descriptor, selectable: true };
+  }));
+  const { variantsByIdentity, conflictingIdentities } = resolveFleetSupplyAgreement({ supplies,
+    identity: connectedAccountDescriptorIdentity, content: descriptorFingerprint });
 
   const descriptors = [...variantsByIdentity.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
@@ -135,8 +149,8 @@ function unionReadyConnectedAccountDescriptorProjections(
       .map(([, entry]) => entry));
 
   const conflicts: ConnectedAccountDescriptorProjectionConflict[] = [];
-  for (const [identity, variants] of [...variantsByIdentity.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-    if (variants.size <= 1) continue;
+  for (const identity of [...conflictingIdentities].sort((left, right) => left.localeCompare(right))) {
+    const variants = variantsByIdentity.get(identity)!;
     const serviceIds = [...new Set([...variants.values()].map((entry) => entry.serviceId))]
       .sort((left, right) => left.localeCompare(right));
     conflicts.push({ kind: 'identity_divergence', descriptorIdentity: identity, serviceIds });
@@ -152,7 +166,7 @@ function unionReadyConnectedAccountDescriptorProjections(
 export function createConnectedAccountDescriptorProjectionLoadingState(
   scopeKey: string,
 ): ConnectedAccountDescriptorProjectionState {
-  return { scopeKey, status: 'loading', descriptors: [], conflicts: [], errorReason: null };
+  return { scopeKey, status: 'loading', descriptors: [], answeredDescriptorIdentities: [], conflicts: [], errorReason: null };
 }
 
 function equalFacts(left: readonly unknown[], right: readonly unknown[]): boolean {
@@ -163,34 +177,43 @@ export function advanceConnectedAccountDescriptorProjectionState(
   previous: ConnectedAccountDescriptorProjectionState,
   resolution: ConnectedAccountDescriptorProjectionResolution,
 ): ConnectedAccountDescriptorProjectionState {
-  if (resolution.kind === 'error') {
-    // A degraded read may supply knowledge but must never retract it.
-    const retained = previous.descriptors.length > 0;
-    const descriptors = retained ? previous.descriptors : resolution.descriptors ?? [];
-    const conflicts = retained ? previous.conflicts : resolution.conflicts ?? [];
-    return {
-      ...previous,
-      status: descriptors.length > 0 ? 'stale' : 'error',
-      descriptors,
-      conflicts,
-      errorReason: resolution.reason,
-    };
-  }
-
-  const descriptors = equalFacts(previous.descriptors, resolution.descriptors)
-    ? previous.descriptors
-    : resolution.descriptors;
-  const conflicts = equalFacts(previous.conflicts, resolution.conflicts)
-    ? previous.conflicts
+  // Incomplete coverage refreshes answered facts but cannot prove another
+  // service disappeared. Retained presentation never supplies admission.
+  const answeredDescriptors = resolution.descriptors ?? [];
+  const answeredIdentities = new Set(answeredDescriptors.map(connectedAccountDescriptorIdentity));
+  const nextAnsweredDescriptorIdentities = [...answeredIdentities];
+  const answeredDescriptorIdentities = equalFacts(previous.answeredDescriptorIdentities ?? [], nextAnsweredDescriptorIdentities)
+    ? previous.answeredDescriptorIdentities ?? nextAnsweredDescriptorIdentities
+    : nextAnsweredDescriptorIdentities;
+  const incomplete = resolution.kind === 'loading' || resolution.kind === 'error';
+  const nextDescriptors = incomplete
+    ? [...answeredDescriptors, ...previous.descriptors.filter((descriptor) => (
+      !answeredIdentities.has(connectedAccountDescriptorIdentity(descriptor))
+    ))]
+    : answeredDescriptors;
+  const nextConflicts = incomplete
+    ? [...(resolution.conflicts ?? []), ...previous.conflicts.filter((conflict) => (
+      conflict.kind !== 'identity_divergence' || !answeredIdentities.has(conflict.descriptorIdentity)
+    ))]
     : resolution.conflicts;
-  const status = resolution.kind === 'conflict' ? 'conflict' : 'ready';
+  const descriptors = equalFacts(previous.descriptors, nextDescriptors)
+    ? previous.descriptors
+    : nextDescriptors;
+  const conflicts = equalFacts(previous.conflicts, nextConflicts)
+    ? previous.conflicts
+    : nextConflicts;
+  const status = resolution.kind === 'error'
+    ? descriptors.length > 0 ? 'stale' : 'error'
+    : resolution.kind;
+  const errorReason = resolution.kind === 'error' ? resolution.reason : null;
   if (
     previous.status === status
-    && previous.errorReason === null
+    && previous.errorReason === errorReason
     && previous.descriptors === descriptors
     && previous.conflicts === conflicts
+    && previous.answeredDescriptorIdentities === answeredDescriptorIdentities
   ) {
     return previous;
   }
-  return { ...previous, status, descriptors, conflicts, errorReason: null };
+  return { ...previous, status, descriptors, answeredDescriptorIdentities, conflicts, errorReason };
 }

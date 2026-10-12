@@ -1,24 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/text', () => ({
-    t: (key: string, params?: Record<string, unknown>) => (params ? `${key}:${JSON.stringify(params)}` : key),
-}));
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string, params?: Record<string, unknown>) =>
+        (params ? `${key}:${JSON.stringify(params)}` : key) });
+});
 
 import { formatAccountDisplayName, resolveAccountDisplayName, resolveViewerAccountDisplayName } from './formatAccountDisplayName';
 
-const UNNAMED = { firstName: null, lastName: null, username: null, avatarUrl: null } as const;
+const UNNAMED = { name: null, firstName: null, lastName: null, username: null, avatarUrl: null } as const;
 
 describe('formatAccountDisplayName', () => {
     it('uses trimmed current names before username, with an explicit unnamed result', () => {
-        expect(formatAccountDisplayName({ firstName: ' Alice ', lastName: ' Chen ', username: 'alice', avatarUrl: null })).toBe('Alice Chen');
-        expect(formatAccountDisplayName({ firstName: ' ', lastName: null, username: ' alice ', avatarUrl: null })).toBe('@alice');
-        expect(formatAccountDisplayName({ firstName: null, lastName: null, username: ' ', avatarUrl: null })).toBeNull();
+        expect(formatAccountDisplayName({ ...UNNAMED, name: ' Alice Chen ', firstName: 'Old', lastName: 'Name', username: 'alice' })).toBe('Alice Chen');
+        expect(formatAccountDisplayName({ ...UNNAMED, name: ' ', firstName: 'Old', username: ' alice ' })).toBe('alice');
+        expect(formatAccountDisplayName({ ...UNNAMED, firstName: 'Old', username: ' ' })).toBeNull();
     });
 });
 
 describe('resolveAccountDisplayName', () => {
     it('names a named Account by its name, with no hint', () => {
-        expect(resolveAccountDisplayName({ profile: { ...UNNAMED, firstName: 'Ada' }, accountId: 'cmn0a0oa40001tmj4izjp8qkg' }))
+        expect(resolveAccountDisplayName({ profile: { ...UNNAMED, name: 'Ada' }, accountId: 'cmn0a0oa40001tmj4izjp8qkg' }))
             .toEqual({ name: 'Ada', hint: null, named: true, viewer: false });
     });
 
@@ -50,7 +52,7 @@ describe('resolveAccountDisplayName for the viewer', () => {
     });
 
     it('names a named viewer by their name, and anyone else as before', () => {
-        expect(resolveAccountDisplayName({ profile: { ...UNNAMED, firstName: 'Ada' }, accountId: 'me', viewerAccountId: 'me' }))
+        expect(resolveAccountDisplayName({ profile: { ...UNNAMED, name: 'Ada' }, accountId: 'me', viewerAccountId: 'me' }))
             .toEqual({ name: 'Ada', hint: null, named: true, viewer: true });
         expect(resolveAccountDisplayName({ profile: UNNAMED, accountId: 'someone-else', viewerAccountId: 'me' }).name)
             .toBe('accountDisplay.unnamed');

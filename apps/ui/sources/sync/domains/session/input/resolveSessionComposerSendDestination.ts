@@ -33,15 +33,23 @@ export type SessionComposerSendDestination =
         localId: string;
     }>
     /**
+     * Same Agent, another route or model (D15): restart the Session's runtime on
+     * the route the reader armed, then send this message through the ordinary
+     * path. Nothing is carried over as text — it is the same session, resumed.
+     */
+    | Readonly<{ kind: 'armedRouteContinuation'; machineId: string }>
+    /**
      * The send must not happen. `conflictingDestination` — the send would reach
      * something that is not this Session's Agent. `armedTargetUnreachable` —
      * there is no machine to run the transition on.
      * `unreconciledTransitionOutcome` — a previous transition may already have
      * admitted this input and nothing has established whether it did.
+     * `sourceNotIdle` — applying an armed route restarts the Agent, which would
+     * cut off the turn it is still working on.
      */
     | Readonly<{
         kind: 'refused';
-        reason: 'conflictingDestination' | 'armedTargetUnreachable' | 'unreconciledTransitionOutcome';
+        reason: 'conflictingDestination' | 'armedTargetUnreachable' | 'unreconciledTransitionOutcome' | 'sourceNotIdle';
     }>;
 
 /**
@@ -69,6 +77,12 @@ export function resolveSessionComposerSendDestination(params: Readonly<{
      * until the original transition's custody is resolved.
      */
     armedContinuationLocalId: string | null;
+    /**
+     * Non-null exactly when a route or model change for the SAME Agent waits for
+     * the next message (the Session's pending model selection). `turnActive` says
+     * whether the runtime is still working, since applying it restarts the runtime.
+     */
+    armedRoute?: Readonly<{ turnActive: boolean }> | null;
     /** The machine hosting the Session. The transition only runs there. */
     machineId: string | null;
     /**
@@ -90,7 +104,16 @@ export function resolveSessionComposerSendDestination(params: Readonly<{
         return { kind: 'refused', reason: 'unreconciledTransitionOutcome' };
     }
 
-    if (armedContinuation === null) return { kind: route };
+    if (armedContinuation === null) {
+        const armedRoute = params.armedRoute ?? null;
+        if (armedRoute === null) return { kind: route };
+        // Same rule as an armed Agent: the change is a promise about the next
+        // message to this Session's Agent, so it cannot ride on a send to anything else.
+        if (route !== 'sessionAgent') return { kind: 'refused', reason: 'conflictingDestination' };
+        if (machineId === null || machineId.length === 0) return { kind: 'refused', reason: 'armedTargetUnreachable' };
+        if (armedRoute.turnActive) return { kind: 'refused', reason: 'sourceNotIdle' };
+        return { kind: 'armedRouteContinuation', machineId };
+    }
 
     // A voice adapter or an execution run is not this Session's Agent, so an
     // armed switch cannot ride along on a send addressed to one. Refusing is the

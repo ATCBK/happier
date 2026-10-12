@@ -24,6 +24,7 @@ import {
 } from '@happier-dev/protocol/ephemeralRunner/materialization';
 import { RunnerActivationCreateRequestV1Schema } from '@happier-dev/protocol/ephemeralRunner/activation';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { SessionDraftAddressV1Schema } from '@happier-dev/protocol/drafts/sessionDrafts';
 import {
     TeamCredentialProviderModelSelectionV1Schema,
@@ -346,7 +347,7 @@ function parseAttachmentUploadCustody(
     };
 }
 
-function parseAttachmentStagingCustody(value: unknown): StoredAttachmentStagingCustodyV1 {
+function parseAttachmentStagingCustody(value: unknown, storedRead = false): StoredAttachmentStagingCustodyV1 {
     if (!value || typeof value !== 'object') throw new Error('invalid attachment staging custody');
     const candidate = value as Partial<StoredAttachmentStagingCustodyV1>;
     const maxFileBytes = candidate.maxFileBytes;
@@ -372,7 +373,7 @@ function parseAttachmentStagingCustody(value: unknown): StoredAttachmentStagingC
         }
         const reviewedFile = entry.reviewedFile === undefined
             ? undefined
-            : RunnerReviewedFileV1Schema.parse(entry.reviewedFile);
+            : (storedRead ? createStoredReadSchema(RunnerReviewedFileV1Schema) : RunnerReviewedFileV1Schema).parse(entry.reviewedFile);
         if (reviewedFile && (custodyFile.id !== reviewedFile.id
             || custodyFile.name !== reviewedFile.name
             || custodyFile.mimeType !== reviewedFile.mimeType
@@ -398,19 +399,19 @@ function parseStored(raw: string | null): StoredCreatorLaunchCustodyV1 {
             if (value.binding !== undefined || value.reviewed !== undefined || value.materializationRequest !== undefined) {
                 throw new Error('invalid pre-preparation custody');
             }
-            return { v: 1, attachmentStaging: parseAttachmentStagingCustody(value.attachmentStaging) };
+            return { v: 1, attachmentStaging: parseAttachmentStagingCustody(value.attachmentStaging, true) };
         }
-        const preparedAuthoring = RunnerPreparedAuthoringV1Schema.parse(value.preparedAuthoring);
+        const preparedAuthoring = createStoredReadSchema(RunnerPreparedAuthoringV1Schema).parse(value.preparedAuthoring);
         if (value.attachmentStaging !== undefined) throw new Error('invalid prepared custody');
         const attachmentUpload = parseAttachmentUploadCustody(value.attachmentUpload, preparedAuthoring);
-        const acceptedBinding = value.binding === undefined ? undefined : RunnerActivationBindingV1Schema.parse(value.binding);
+        const acceptedBinding = value.binding === undefined ? undefined : createStoredReadSchema(RunnerActivationBindingV1Schema).parse(value.binding);
         const submittedTeamCredentialModel = value.submittedTeamCredentialModel === undefined
             ? undefined
-            : TeamCredentialProviderModelSelectionV1Schema.parse(value.submittedTeamCredentialModel);
+            : createStoredReadSchema(TeamCredentialProviderModelSelectionV1Schema).parse(value.submittedTeamCredentialModel);
         if (!value.reviewed) return { v: 1, preparedAuthoring, submittedTeamCredentialModel, binding: acceptedBinding, attachmentUpload };
-        const binding = RunnerActivationBindingV1Schema.parse(value.reviewed.binding);
-        const launchManifest = RunnerLaunchManifestV1Schema.parse(value.reviewed.launchManifest);
-        const review = RunnerActivationReviewV1Schema.parse(value.reviewed.review);
+        const binding = createStoredReadSchema(RunnerActivationBindingV1Schema).parse(value.reviewed.binding);
+        const launchManifest = createStoredReadSchema(RunnerLaunchManifestV1Schema).parse(value.reviewed.launchManifest);
+        const review = createStoredReadSchema(RunnerActivationReviewV1Schema).parse(value.reviewed.review);
         const encoded = value.reviewed.machineContentKeyBase64Url;
         if (encoded !== null && (typeof encoded !== 'string' || decodeBase64(encoded, 'base64url').length !== 32)) {
             throw new Error('invalid machine key');
@@ -423,7 +424,7 @@ function parseStored(raw: string | null): StoredCreatorLaunchCustodyV1 {
             || createCanonicalJsonSigningInput(review.displayFacts) !== createCanonicalJsonSigningInput(launchManifest.displayFacts)) throw new Error('binding mismatch');
         const materializationRequest = value.materializationRequest === undefined
             ? undefined
-            : RunnerMaterializationRequestV1Schema.parse(value.materializationRequest);
+            : createStoredReadSchema(RunnerMaterializationRequestV1Schema).parse(value.materializationRequest);
         if (materializationRequest && materializationRequest.activationId !== binding.activationId) throw new Error('materialization binding mismatch');
         return { v: 1, preparedAuthoring, submittedTeamCredentialModel, binding: acceptedBinding, attachmentUpload, reviewed: { binding, launchManifest, review, machineContentKeyBase64Url: encoded }, materializationRequest };
     } catch {

@@ -21,7 +21,7 @@ type SpawnAttemptKeyOptions = Readonly<{
     runtimeDescriptorV1?: unknown;
     resume?: string | null;
     connectedServices?: unknown;
-    mcpSelection?: unknown;
+    capabilitySelection?: unknown;
     transcriptStorage?: 'persisted' | 'direct' | null;
     terminal?: unknown;
     windowsRemoteSessionLaunchMode?: unknown;
@@ -95,7 +95,7 @@ export function createSpawnAttemptKeyForSessionSpawnNewInput(
         agentModeId: parsed.agentModeId ?? null,
         configuration: parsed.configuration ?? null,
         connectedServices: parsed.connectedServices ?? null,
-        mcpSelection: parsed.mcpSelection ?? null,
+        capabilitySelection: parsed.capabilitySelection ?? null,
         transcriptStorage: parsed.transcriptStorage ?? null,
         terminal: parsed.terminal ?? null,
         checkoutCreationDraft: parsed.checkoutCreationDraft ?? null,
@@ -152,7 +152,7 @@ export function createSpawnAttemptKeyForFreshSpawnOptions<T extends SpawnAttempt
         agentModeId: normalizedOptionalString(options.agentModeId),
         configuration: options.configuration ?? null,
         connectedServices: options.connectedServices ?? null,
-        mcpSelection: options.mcpSelection ?? null,
+        capabilitySelection: options.capabilitySelection ?? null,
         transcriptStorage: options.transcriptStorage ?? null,
         terminal: options.terminal ?? null,
         agentSessionStartupInstructionsMarkerV1: null,

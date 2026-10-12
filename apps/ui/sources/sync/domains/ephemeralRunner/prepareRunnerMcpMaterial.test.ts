@@ -16,7 +16,7 @@ import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profil
 import { PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { resetSavedSecretCatalogSnapshotsForTests, getMaterializedSavedSecrets } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import type { McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
-import type { SessionMcpSelectionV1 } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import type { SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 afterEach(() => { resetRuntimeFetch(); resetSavedSecretCatalogSnapshotsForTests(); });
 
@@ -38,7 +38,7 @@ const activeCatalog: McpServerCatalogV1 = { v: 1, servers: [{ ...settings.server
 
 async function prepareAdmittedCatalog(input: Readonly<{
     catalog: McpServerCatalogV1 | null;
-    selection?: SessionMcpSelectionV1;
+    capabilitySelection?: SessionCapabilitySelectionV1;
     availableMaterial?: boolean;
     materialReadUnavailable?: boolean;
     replaceCredentialsOnMaterialRead?: boolean;
@@ -79,7 +79,7 @@ async function prepareAdmittedCatalog(input: Readonly<{
         return Response.json({ error: 'not_found' }, { status: 404 });
     });
     const context = await captureLazyActionAccountContext(home.id);
-    try { return await prepareRunnerMcpMaterial({ context, selection: input.selection ?? null }); }
+    try { return await prepareRunnerMcpMaterial({ context, agentId: 'codex', agentAcceptsUserMcp: true, capabilitySelection: input.capabilitySelection ?? null }); }
     finally { context.dispose(); }
 }
 
@@ -153,8 +153,8 @@ describe('prepareRunnerMcpMaterial', () => {
             // reviewed after this same Account activates its legacy source.
             expect((await context.readSettings()).mcpServersStrictMode).toBe(false);
             expect(getMaterializedSavedSecrets(scope)).toEqual([]);
-            const input = { context, selection: null };
-            const prepared = await prepareRunnerMcpMaterial(input);
+            const input = { context, capabilitySelection: null };
+            const prepared = await prepareRunnerMcpMaterial({ ...input, agentId: 'codex', agentAcceptsUserMcp: true });
             expect(prepared).toMatchObject({ strictMode: true, servers: [{ serverId: 'server-a',
                 savedSecretRevisions: [{ secretId: reference, revision: 4 }],
                 config: { remote: { headers: { Authorization: { t: 'literal', v: 'Bearer fresh-target-material' } } } } }] });
@@ -171,25 +171,23 @@ describe('prepareRunnerMcpMaterial', () => {
         } satisfies Partial<RunnerMcpMaterializationUnavailableError>);
     });
 
-    it('does not gate disabled managed selection on unavailable credential material', async () => {
+    it('does not gate disabled managed capabilitySelection on unavailable credential material', async () => {
         await expect(prepareAdmittedCatalog({ catalog: activeCatalog, materialReadUnavailable: true,
-            selection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+            capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
         })).resolves.toBeNull();
     });
 
-    it('materializes effective selected overrides without requiring excluded or replaced credentials', async () => {
+    it('materializes the selected canonical configuration without requiring excluded credentials', async () => {
         const excluded = { ...activeCatalog.servers[0]!, id: 'excluded-server', name: 'excluded', env: {
             UNAVAILABLE: { t: 'savedSecret' as const, secretId: 'happier:shared-secret:v1:excluded-unavailable' },
         } };
         const catalog: McpServerCatalogV1 = { v: 1, servers: [{ ...activeCatalog.servers[0]!, remote: {
             url: settings.servers[0].remote.url, headers: { Authorization: {
-                t: 'savedSecret', secretId: 'happier:shared-secret:v1:replaced-unavailable' },
+                t: 'savedSecret', secretId: activeReference },
             },
-        } }, excluded], bindings: [{ ...activeCatalog.bindings[0]!, overrides: { remote: {
-            headersPatch: { Authorization: { t: 'savedSecret', secretId: activeReference } },
-        } } }, { ...activeCatalog.bindings[0]!, id: 'excluded-binding', serverId: excluded.id }] };
+        } }, excluded], bindings: [activeCatalog.bindings[0]!, { ...activeCatalog.bindings[0]!, id: 'excluded-binding', serverId: excluded.id }] };
         const prepared = await prepareAdmittedCatalog({ catalog, availableMaterial: true,
-            selection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [excluded.id] },
+            capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [excluded.id] } },
         });
         expect(prepared?.servers).toMatchObject([{ serverId: 'server-a', savedSecretRevisions: [{ secretId: activeReference, revision: 6 }],
             config: { remote: { headers: { Authorization: { t: 'literal', v: 'Bearer selected-material' } } } } }]);

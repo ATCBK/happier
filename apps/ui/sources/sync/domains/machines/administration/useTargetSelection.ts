@@ -7,11 +7,17 @@ import {
     areServerProfileIdentifiersEquivalent,
 } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
+import { isMachineSelectableForFleet } from './fleetUnion';
+import { isMachineReplaced } from '@/sync/domains/machines/identity/machineIdentityTypes';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { getActiveServerAccountScope, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import { readMachineInventoryStatus, type ServerMachineInventorySnapshotV1 } from '@/sync/domains/machines/machineInventorySnapshots';
 import { useAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/useMachineInventorySnapshots';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import {
+    readLiveMachineInventoryRows,
     resolvePortableMachineAdministrationTarget,
     type PortableMachineAdministrationTargetResolution,
 } from '@/sync/domains/machines/resolveServerScopedMachines';
@@ -40,6 +46,11 @@ import {
     buildMachineAdministrationCandidatesFromSnapshots,
     type MachineAdministrationCandidateInventoryRowV1,
 } from './targetState';
+
+export type MachineAdministrationExecutionTargetOptions = Readonly<{
+    intent?: 'retry';
+    accountScope?: MachineReachabilityScope | null;
+}>;
 
 export type FreshMachineAdministrationExecutionTargetV1 = Extract<
     PortableMachineAdministrationTargetResolution<Machine>,
@@ -93,36 +104,6 @@ function areAllProfileInventoriesKnown(snapshots: readonly ServerMachineInventor
     return snapshots.every((snapshot) => snapshot.kind === 'resolved');
 }
 
-/** Whether the Home with this portable identity has answered with its machine list. */
-function hasLiveExactInventoryRow(params: Readonly<{
-    activeServerId: string;
-    isDataReady: boolean;
-    activeMachines: readonly Machine[];
-    machineListByServerId: Readonly<Record<string, readonly Machine[] | null | undefined>>;
-    machineListStatusByServerId: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
-    resolution: FreshMachineAdministrationExecutionTargetV1;
-}>): boolean {
-    const { profile, machine } = params.resolution;
-    if (areServerProfileIdentifiersEquivalent(profile.id, params.activeServerId)) {
-        return params.isDataReady
-            && params.activeMachines.some((candidate) => candidate === machine);
-    }
-    const keys = [
-        params.resolution.target.serverIdentityId,
-        profile.id,
-        profile.serverIdentityId,
-        ...(profile.legacyServerIds ?? []),
-    ].filter((value, index, values): value is string => (
-        typeof value === 'string'
-        && value.trim().length > 0
-        && values.indexOf(value) === index
-    ));
-    return keys.some((serverId) => (
-        params.machineListStatusByServerId[serverId] === 'idle'
-        && params.machineListByServerId[serverId]?.some((candidate) => candidate === machine) === true
-    ));
-}
-
 /**
  * Re-resolves the device preference from current raw owner state.
  * Warm-cache rows never enter this path, and availability is checked again at
@@ -130,12 +111,13 @@ function hasLiveExactInventoryRow(params: Readonly<{
  */
 export function resolveFreshMachineAdministrationExecutionTarget(
     target: MachineAdministrationTargetV1 | null,
+    options: MachineAdministrationExecutionTargetOptions = {},
 ): FreshMachineAdministrationExecutionTargetV1 | null {
     if (!target) return null;
     const state = storage.getState();
     const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim();
     const machineListByServerId = state.machineListByServerId ?? {};
-    const activeMachines = state.isDataReady ? Object.values(state.machines ?? {}) : [];
+    const activeMachines = Object.values(state.machines ?? {});
     const resolution = resolvePortableMachineAdministrationTarget({
         target,
         activeServerId,
@@ -144,21 +126,28 @@ export function resolveFreshMachineAdministrationExecutionTarget(
         machineListStatusByServerId: state.machineListStatusByServerId,
     });
     if (resolution.kind !== 'resolved') return null;
-    if (!hasLiveExactInventoryRow({
+    if (!readLiveMachineInventoryRows({
         activeServerId,
-        isDataReady: state.isDataReady === true,
         activeMachines,
         machineListByServerId,
         machineListStatusByServerId: state.machineListStatusByServerId ?? {},
-        resolution,
-    })) {
+        profile: resolution.profile,
+        serverIdentityId: resolution.target.serverIdentityId,
+    }).has(resolution.machine)) {
         return null;
     }
-    if (resolution.machine.availability?.kind === 'locked') return null;
-    return resolveMachinePickerPresence(resolution.machine).status === 'online' ? resolution : null;
+    const accountScope = 'accountScope' in options ? options.accountScope : selectActiveServerAccountScopeForServer(getActiveServerAccountScope(), resolution.profile.id);
+    if (!accountScope || !areServerProfileIdentifiersEquivalent(accountScope.serverId, resolution.profile.id)) return null;
+    if (resolution.machine.availability?.kind === 'locked'
+        || (typeof resolution.machine.revokedAt === 'number' && resolution.machine.revokedAt > 0)
+        || isMachineReplaced(resolution.machine)) return null;
+    if (options.intent === 'retry') return resolution;
+    return isMachineSelectableForFleet(accountScope, resolution.machine) ? resolution : null;
 }
 
 export type MachineAdministrationTargetSelectionV1 = Readonly<{
+    /** Draft fields stay in their editor; scope changes may leave unsaved work. */
+    changeIntent?: 'scope' | 'draft';
     candidates: readonly MachineAdministrationCandidateV1[];
     pickerRows: readonly MachineAdministrationTargetPickerRowV1[];
     state: MachineAdministrationTargetStateV1;
@@ -172,7 +161,7 @@ export type MachineAdministrationTargetSelectionV1 = Readonly<{
     canExecute: boolean;
     selectTarget: (target: MachineAdministrationTargetV1) => void;
     clearTarget: () => void;
-    resolveExecutionTarget: () => FreshMachineAdministrationExecutionTargetV1 | null;
+    resolveExecutionTarget: (options?: MachineAdministrationExecutionTargetOptions) => FreshMachineAdministrationExecutionTargetV1 | null;
 }>;
 
 export type MachineAdministrationTargetSelectionOptions = Readonly<{
@@ -195,9 +184,10 @@ export type MachineAdministrationTargetSelectionOptions = Readonly<{
 /** Presentation-only canonical Administration rows, without creating a persisted selection. */
 export function useMachineAdministrationTargetPickerRows(): readonly MachineAdministrationTargetPickerRowV1[] {
     const snapshots = useAllProfileMachineInventorySnapshots();
+    const reachabilityRevision = useMachineReachabilityRevision();
     return React.useMemo(
         () => buildMachineAdministrationCandidateInventoryRowsFromSnapshots({ snapshots }),
-        [snapshots],
+        [reachabilityRevision, snapshots],
     );
 }
 
@@ -211,6 +201,7 @@ export function useMachineAdministrationTargetSelection(
     options: MachineAdministrationTargetSelectionOptions = {},
 ): MachineAdministrationTargetSelectionV1 {
     const enabled = options.enabled !== false;
+    const reachabilityRevision = useMachineReachabilityRevision();
     const explicitSelection = options.explicitSelection ?? 'live';
     const selections = useSetting('machineAdministrationTargetsLocalV1');
     const applySettings = useApplySettings();
@@ -232,13 +223,19 @@ export function useMachineAdministrationTargetSelection(
         activeAccountServerId: activeAccountScope?.serverId,
     });
     const snapshots = useAllProfileMachineInventorySnapshots(enabled);
+    const bindings = useServerCredentialAccountScopeBindings(snapshots.flatMap(snapshot => snapshot.kind === 'resolved' ? [snapshot.profileId] : []));
+    const resolveScopedTarget = React.useCallback((target: MachineAdministrationTargetV1 | null, options?: MachineAdministrationExecutionTargetOptions) => {
+        const binding = [...bindings.values()].find(value => value.isCurrent()
+            && target && areServerProfileIdentifiersEquivalent(value.serverId, target.serverIdentityId));
+        return resolveFreshMachineAdministrationExecutionTarget(target, { ...options, accountScope: binding?.scope ?? null });
+    }, [bindings]);
     const candidates = React.useMemo(
         () => buildMachineAdministrationCandidatesFromSnapshots({ snapshots }),
-        [snapshots],
+        [reachabilityRevision, snapshots],
     );
     const pickerRows = React.useMemo(
         () => buildMachineAdministrationCandidateInventoryRowsFromSnapshots({ snapshots }),
-        [snapshots],
+        [reachabilityRevision, snapshots],
     );
     const allowSoleCandidate = enabled && areAllProfileInventoriesKnown(snapshots)
         && options.allowSoleCandidate !== false;
@@ -281,7 +278,7 @@ export function useMachineAdministrationTargetSelection(
         ) });
     }, [applySettings, expectedSettingsScope, selectionKey]);
 
-    const resolveExecutionTarget = React.useCallback(() => {
+    const resolveExecutionTarget = React.useCallback((options?: MachineAdministrationExecutionTargetOptions) => {
         if (!enabled) return null;
         const target = storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey] ?? null;
         selectionRevisionRef.current = advanceMachineAdministrationSelectionRevision(
@@ -289,14 +286,14 @@ export function useMachineAdministrationTargetSelection(
             selectionKey,
             target,
         );
-        const resolved = resolveFreshMachineAdministrationExecutionTarget(target);
+        const resolved = resolveScopedTarget(target, options);
         return resolved === null
             ? null
             : Object.freeze({
                 ...resolved,
                 selectionRevision: selectionRevisionRef.current.revision,
             });
-    }, [enabled, selectionKey]);
+    }, [enabled, selectionKey, resolveScopedTarget]);
 
     return React.useMemo(() => ({
         candidates,
@@ -304,7 +301,7 @@ export function useMachineAdministrationTargetSelection(
         state: targetState,
         selectedTarget: storedTarget,
         selectedTargetServerMatchesActiveAccount,
-        canExecute: enabled && resolveFreshMachineAdministrationExecutionTarget(storedTarget) !== null,
+        canExecute: enabled && resolveScopedTarget(storedTarget) !== null,
         selectTarget,
         clearTarget,
         resolveExecutionTarget,
@@ -318,5 +315,6 @@ export function useMachineAdministrationTargetSelection(
         selectedTargetServerMatchesActiveAccount,
         storedTarget,
         targetState,
+        resolveScopedTarget,
     ]);
 }

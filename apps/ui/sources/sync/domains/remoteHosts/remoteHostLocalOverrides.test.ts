@@ -20,6 +20,24 @@ function createMemoryStorage(): Readonly<{
 }
 
 describe('remoteHostLocalOverrides', () => {
+    it('reads retained fields despite unknown container and entry fields, and patches canonical values', async () => {
+        const { createRemoteHostLocalOverridesStore } = await import('./remoteHostLocalOverrides');
+        const { storage, readRaw } = createMemoryStorage();
+        storage.set('test', JSON.stringify({ version: 1, retired: true, overridesById: {
+            rh1: { identityFilePath: '/device/key', retired: true },
+            rh2: { sshConfigFilePath: '/device/config' },
+        } }));
+        const store = createRemoteHostLocalOverridesStore({ storage, persistKey: 'test' });
+        expect(store.get('rh1')).toEqual({ identityFilePath: '/device/key' });
+        store.patch('rh1', { sshConfigFilePath: '/device/new-config' });
+        expect(JSON.parse(readRaw('test')!)).toEqual({ version: 1, overridesById: {
+            rh1: { identityFilePath: '/device/key', sshConfigFilePath: '/device/new-config' },
+            rh2: { sshConfigFilePath: '/device/config' },
+        } });
+        storage.set('test', JSON.stringify({ version: 1, overridesById: { rh1: { identityFilePath: 42, retired: true } } }));
+        expect(store.get('rh1')).toBeNull();
+    });
+
     const previousWindow = (globalThis as any).window;
     const previousDocument = (globalThis as any).document;
 

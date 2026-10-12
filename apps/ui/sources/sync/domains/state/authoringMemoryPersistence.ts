@@ -12,17 +12,20 @@ import {
 } from '@/sync/domains/settings/scope/accountSettingsScope';
 
 import { getPersistenceStorage } from './persistenceStorage';
+import { WorkflowProjectTargetsByDefinitionIdV1Schema } from '@happier-dev/protocol/account/authoringMemory';
 
 const AuthoringMemoryProjectionSchema: z.ZodObject<{
     recentMachinePaths: z.ZodArray<typeof LegacyRecentMachinePathSchema>;
     lastUsedProfile: typeof LegacyLastUsedProfileSchema;
     lastEngineSelectionsByScopeV1: typeof LegacyRememberedEngineSelectionsByScopeV1Schema;
+    workflowProjectTargetsByDefinitionId: z.ZodOptional<typeof WorkflowProjectTargetsByDefinitionIdV1Schema>;
 }, z.core.$strict> = z.object({
     // A persisted projection is admitted as a whole, unlike legacy import's
     // malformed-sibling recovery.
     recentMachinePaths: z.array(LegacyRecentMachinePathSchema),
     lastUsedProfile: LegacyLastUsedProfileSchema,
     lastEngineSelectionsByScopeV1: LegacyRememberedEngineSelectionsByScopeV1Schema,
+    workflowProjectTargetsByDefinitionId: WorkflowProjectTargetsByDefinitionIdV1Schema.optional(),
 }).strict();
 const StoredAuthoringMemoryProjectionSchema = createStoredReadSchema(AuthoringMemoryProjectionSchema);
 
@@ -49,6 +52,7 @@ export function saveAuthoringMemoryProjection(scope: AccountSettingsScope, value
         recentMachinePaths: values.recentMachinePaths,
         lastUsedProfile: values.lastUsedProfile,
         lastEngineSelectionsByScopeV1: values.lastEngineSelectionsByScopeV1,
+        ...(values.workflowProjectTargetsByDefinitionId === undefined ? {} : { workflowProjectTargetsByDefinitionId: values.workflowProjectTargetsByDefinitionId }),
     });
     getPersistenceStorage().set(projectionKey(scope), JSON.stringify(projection));
 }

@@ -5,6 +5,7 @@ import { createWorkflowEditorDraft } from './workflowEditorDraft';
 // Action admission, dispatch and draft projection all run their real owners.
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+  const { createActionExecutorBoundaryFixture } = await import('@/dev/testkit/fixtures/actionExecutorBoundary');
   const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');
   const { createWorkflowDefinitionActions } = await import('@happier-dev/protocol/actions/executor/workflowDefinitions');
   const { createWorkflowActionExecutor } = await import('@happier-dev/protocol/actions/executor/workflowAccountActions');
@@ -12,10 +13,10 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOrigin
   const definitions = createWorkflowDefinitionActions({ artifactStore: {
     read: unexpected, list: unexpected, create: unexpected, update: unexpected, delete: unexpected,
   }, encodeListCursor: unexpected, assertDefinitionWriteAllowed: unexpected });
-  return { ...original, createFrontDoorActionExecute: () => original.createFrontDoorActionExecute(createActionExecutor({
+  return { ...original, createFrontDoorActionExecute: () => original.createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({
     workflowAction: createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true, definitions,
       runs: { execute: unexpected } }),
-  })) };
+  }))) };
 });
 vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({ captureActiveServerAccountScopeLifetime: () => null }));
 

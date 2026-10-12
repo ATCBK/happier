@@ -207,4 +207,46 @@ describe('buildSessionListViewData (project grouping)', () => {
         expect(JSON.stringify(headers)).not.toContain('session-directories');
         expect(list.filter((item) => item.type === 'session')).toHaveLength(3);
     });
+
+    it('lists home-folder sessions with that machine’s Chats, so “no folder” is one group, never “No folder” beside “Chats” (lab FL3)', () => {
+        const managed = { v: 1, kind: 'managed' } as const;
+        const sessions: Record<string, SessionListRenderableSession> = {
+            chat: makeRenderableSession({
+                id: 'chat',
+                createdAt: 10,
+                metadata: { machineId: 'm1', path: '/home/u/.happier/servers/s/session-directories/aaa', homeDir: '/home/u', sessionDirectoryV1: managed },
+            }),
+            home: makeRenderableSession({
+                id: 'home',
+                createdAt: 11,
+                metadata: { machineId: 'm1', path: '/home/u', homeDir: '/home/u' },
+            }),
+            otherMachineHome: makeRenderableSession({
+                id: 'otherMachineHome',
+                createdAt: 8,
+                metadata: { machineId: 'm2', path: '~', homeDir: '/home/v' },
+            }),
+            repo: makeRenderableSession({
+                id: 'repo',
+                createdAt: 9,
+                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+            }),
+        };
+        const machines: Record<string, MachineDisplayRenderable> = {
+            m1: makeMachineDisplay({ id: 'm1', active: true, metadata: { host: 'mbp', homeDir: '/home/u', displayName: 'MacBook Pro' } }),
+            m2: makeMachineDisplay({ id: 'm2', active: true, metadata: { host: 'box', homeDir: '/home/v', displayName: 'Build box' } }),
+        };
+
+        const list = buildSessionListViewData(sessions, machines, {
+            activeGroupingV1: 'project',
+            inactiveGroupingV1: 'project',
+        });
+
+        const titles = list.filter(isProjectHeader).map((header) => header.title);
+        expect(titles).not.toContain(t('sessions.workspace.noFolder'));
+        // One Chats group per machine: the machine tells them apart, as for other groups.
+        expect(titles.filter((title) => title === t('session.folderless.chats'))).toHaveLength(2);
+        expect(titles).toContain('~/repo');
+        expect(list.filter((item) => item.type === 'session')).toHaveLength(4);
+    });
 });

@@ -95,6 +95,7 @@ export type ConnectedServiceRegistryEntry = Readonly<{
   sourceKind?: string;
   availability?: ConnectedAccountUiProjectionEntryV1['availability'];
   diagnostics?: readonly string[];
+  /** Entry readiness; Account census freshness stays on the registry snapshot. */
   projectionStatus?: ConnectedAccountDescriptorProjectionState['status'];
   projectionConflicts?: readonly ConnectedAccountDescriptorProjectionConflict[];
   executable?: boolean;
@@ -228,6 +229,11 @@ export function installConnectedAccountDescriptorProjection(
 export function projectConnectedServiceRegistryEntries(
   projection: ConnectedAccountDescriptorProjectionState,
 ): readonly ConnectedServiceRegistryEntry[] {
+  const answeredIdentities = new Set(projection.answeredDescriptorIdentities ?? (
+    projection.status === 'ready' || projection.status === 'conflict'
+      ? projection.descriptors.map(descriptorIdentity)
+      : []
+  ));
   const descriptorsByQualifiedService = new Map<string, ConnectedAccountUiProjectionEntryV1[]>();
   for (const descriptor of projection.descriptors) {
     const key = projectedEntryKey(descriptor);
@@ -257,13 +263,17 @@ export function projectConnectedServiceRegistryEntries(
     const defaultManualMode = executableManualModes.find(
       ({ mode }) => mode.id === descriptor.authentication.defaultModeId,
     ) ?? executableManualModes[0];
-    const projectionStatus = projection.status === 'conflict' && projectionConflicts.length === 0
-      ? 'ready'
-      : projection.status;
-    const executable = projectionStatus === 'ready'
+    const entryReady = answeredIdentities.has(descriptorIdentityValue)
       && projectionConflicts.length === 0
-      && candidates.length === 1
-      && descriptor.availability.state === 'available';
+      && candidates.length === 1;
+    const projectionStatus = entryReady
+      ? 'ready'
+      : projectionConflicts.length > 0 || candidates.length > 1
+        ? 'conflict'
+        : projection.status === 'ready' || projection.status === 'conflict'
+          ? 'stale'
+          : projection.status;
+    const executable = entryReady && descriptor.availability.state === 'available';
     const supportsToken = executable && executableManualModes.length > 0;
     const oauthModes = modes.filter((mode) => mode.kind !== 'manual');
     const supportsOauth = executable && oauthModes.length > 0;
@@ -370,8 +380,7 @@ export function getAccountConnectedServiceConfigurationMode(
   if (!connectedServiceRegistryAccountLifetime?.isCurrent()
     || !areServerAccountScopesEqual(connectedServiceRegistryAccountLifetime.scope, scope)) return null;
   const entry = getQualifiedConnectedServiceRegistryEntry(target.service);
-  if (entry?.projectionStatus !== 'ready' || entry.projectedDescriptorCandidates?.length !== 1
-    || entry.projectionConflicts?.length) return null;
+  if (entry?.projectionStatus !== 'ready') return null;
   const mode = entry.authenticationModes?.find(candidate => candidate.id === target.modeId);
   return mode && 'configuration' in mode && mode.configuration?.scope === 'service' ? mode : null;
 }

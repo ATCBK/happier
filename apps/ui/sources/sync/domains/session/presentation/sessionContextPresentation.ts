@@ -14,6 +14,7 @@ import type { SessionListHomeObservation } from '@/sync/domains/session/listing/
 import { formatSessionPath } from '@/utils/sessions/formatPathRelativeToHome';
 import { formatShortRelativeTimeAt } from '@/utils/time/formatShortRelativeTime';
 import { t } from '@/text';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 
 export type SessionAudiencePresentation = Readonly<{
     kind: 'direct' | 'team' | 'group';
@@ -225,7 +226,9 @@ export function buildSessionContextFacts(params: Readonly<{
      */
     nowMs?: number;
 }>): SessionContextFacts {
-    const homeName = normalizeLabel(params.homeName) ?? normalizeLabel(params.serverProfile?.name);
+    const homeName = params.serverProfile
+        ? resolveHomeDisplayLabel(params.serverProfile, params.address.serverId)
+        : normalizeLabel(params.homeName);
     const encryption = params.awareness?.encryption ?? null;
     // Both workspace inputs are already filtered by their canonical owners: Lane 09A omits
     // `awareness.workspace` unless the caller could open the Session's content, and the Session

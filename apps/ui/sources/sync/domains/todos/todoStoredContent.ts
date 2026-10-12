@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { TodoItemV1Schema, TodoSessionLinkInputV1Schema } from '@happier-dev/protocol/todos/todoSessionLinkV1';
+import { TodoItemV1Schema, TodoItemV1StoredSchema, TodoSessionLinkInputV1Schema } from '@happier-dev/protocol/todos/todoSessionLinkV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import {
     AccountStoredJsonContentEncryptionMaterialUnavailableError,
@@ -30,6 +31,7 @@ export const TodoIndexSchema = z.object({
 
 export type TodoItem = z.infer<typeof TodoItemSchema>;
 export type TodoIndex = z.infer<typeof TodoIndexSchema>;
+const TodoIndexStoredSchema = createStoredReadSchema(TodoIndexSchema);
 
 type RawAccountEncryption = Readonly<{
     encryptRaw: (value: unknown) => Promise<string>;
@@ -86,10 +88,11 @@ function resolveTodoKey(key: string):
 function parseTodoStoredContent(
     key: string,
     value: unknown,
+    storedRead = false,
 ): DecodedTodoStoredContent {
     const resolvedKey = resolveTodoKey(key);
     if (resolvedKey.kind === 'index') {
-        const parsed = TodoIndexSchema.safeParse(value);
+        const parsed = (storedRead ? TodoIndexStoredSchema : TodoIndexSchema).safeParse(value);
         if (!parsed.success) {
             throw new TodoStoredContentUnavailableError(
                 key,
@@ -100,7 +103,7 @@ function parseTodoStoredContent(
         return { kind: 'index', value: parsed.data };
     }
 
-    const parsed = TodoItemSchema.safeParse(value);
+    const parsed = (storedRead ? TodoItemV1StoredSchema : TodoItemSchema).safeParse(value);
     if (!parsed.success || parsed.data.id !== resolvedKey.todoId) {
         throw new TodoStoredContentUnavailableError(
             key,
@@ -143,7 +146,7 @@ export async function decodeTodoStoredContent(params: Readonly<{
         );
     }
 
-    return parseTodoStoredContent(params.key, value);
+    return parseTodoStoredContent(params.key, value, true);
 }
 
 export async function encodeTodoStoredContent(params: Readonly<{

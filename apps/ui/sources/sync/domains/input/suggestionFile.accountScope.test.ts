@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createDeferred } from '@/dev/testkit';
-import { searchFiles, fileSearchCache } from './suggestionFile';
 
 const boundary = vi.hoisted(() => ({ rpc: vi.fn() }));
 // The machine network is the boundary; composer, cache, credential binding and DTOs stay real.
@@ -10,6 +9,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 }));
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { searchFiles, fileSearchCache } = await import('./suggestionFile');
 
 beforeEach(async () => {
     await harness.reset();

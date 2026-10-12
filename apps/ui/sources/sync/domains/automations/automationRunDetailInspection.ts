@@ -1,4 +1,5 @@
-import { AutomationRunTriggerEvidenceV1Schema, inspectAutomationRunExecutionRecipeOuterV1, materializeAutomationRunExecutionRecipeV1, parseAutomationRunExecutionRecipeV1, type AutomationRunExecutionRecipeMaterializationResultV1, type AutomationRunTriggerEvidenceV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { AutomationRunTriggerEvidenceEnvelopeV1ReadSchema, AutomationRunTriggerEvidenceV1Schema, inspectAutomationRunExecutionRecipeOuterV1, materializeAutomationRunExecutionRecipeV1, parseAutomationRunExecutionRecipeV1, type AutomationRunExecutionRecipeMaterializationResultV1, type AutomationRunTriggerEvidenceV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { createAccountScopedCryptoMaterialSnapshotV1, openAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
@@ -156,7 +157,17 @@ function inspectRecipe(params: Readonly<{
     const expectedTriggerEvidenceEnvelope = recipe.triggerEvidence === null
         ? null
         : createCanonicalJsonSigningInput(recipe.triggerEvidence);
-    if (params.detail.triggerEvidenceEnvelope !== expectedTriggerEvidenceEnvelope) {
+    let normalizedTriggerEvidenceEnvelope: string | null = null;
+    if (params.detail.triggerEvidenceEnvelope !== null) {
+        try {
+            const sibling = AutomationRunTriggerEvidenceEnvelopeV1ReadSchema.safeParse(JSON.parse(params.detail.triggerEvidenceEnvelope));
+            if (!sibling.success) return contentInvalidRecipe();
+            normalizedTriggerEvidenceEnvelope = createCanonicalJsonSigningInput(sibling.data);
+        } catch {
+            return contentInvalidRecipe();
+        }
+    }
+    if (normalizedTriggerEvidenceEnvelope !== expectedTriggerEvidenceEnvelope) {
         return contentInvalidRecipe();
     }
 
@@ -205,7 +216,7 @@ function inspectRecipe(params: Readonly<{
         : openedContent?.triggerEvidence ?? null;
     const evidence = rawEvidence === null
         ? null
-        : AutomationRunTriggerEvidenceV1Schema.safeParse(rawEvidence);
+        : createStoredReadSchema(AutomationRunTriggerEvidenceV1Schema).safeParse(rawEvidence);
     if (evidence !== null && !evidence.success) return contentInvalidRecipe();
 
     return {

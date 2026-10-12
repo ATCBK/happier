@@ -1,7 +1,7 @@
 import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 import { eraseAccountSettingsPluginSecretBindings } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
-import { PluginAccountSettingsMutationResponseV1Schema, PluginAccountSettingsReadResponseV1Schema, PluginAccountSettingsStorageUnavailableV1Schema, PluginAccountSettingsValuesV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
+import { PluginAccountSettingsMutationResponseV1Schema, PluginAccountSettingsReadResponseV1Schema, PluginAccountSettingsStorageUnavailableV1Schema, PluginAccountSettingsValuesV1Schema, PluginAccountSettingsValuesV1StoredSchema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
 
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { randomUUID } from '@/platform/randomUUID';
@@ -294,7 +294,7 @@ function createRuntimeAccountPluginSecretSettingsAdapter(
  * Settings. It projects only configured/missing state and delegates binding,
  * CAS, encryption, and persistence to the incumbent Account Settings owners.
  */
-export const scopedPluginAccountSecretSettingsAdapter: ScopedPluginSettingsAdapter = Object.freeze({
+const rawScopedPluginAccountSecretSettingsAdapter: ScopedPluginSettingsAdapter = Object.freeze({
     read(input: ScopedPluginSettingsReadInput): Promise<ScopedPluginSettingsReadResult> {
         return createRuntimeAccountPluginSecretSettingsAdapter(input).read(input);
     },
@@ -406,7 +406,7 @@ async function readAccountRecord(
         if (parsed.data.status === 'deleted') return { status: 'deleted', revision: parsed.data.revision };
         if (parsed.data.content.t === 'plain') {
             if (mode !== 'plain') return { status: 'unavailable' };
-            const values = PluginAccountSettingsValuesV1Schema.safeParse(parsed.data.content.v);
+            const values = PluginAccountSettingsValuesV1StoredSchema.safeParse(parsed.data.content.v);
             return values.success
                 ? { status: 'present', revision: parsed.data.revision, values: values.data.values }
                 : { status: 'unavailable' };
@@ -417,7 +417,7 @@ async function readAccountRecord(
             material: { type: 'dataKey', machineKey: context.encryption.getContentPrivateKey() },
             ciphertext: parsed.data.content.c,
         });
-        const values = opened ? PluginAccountSettingsValuesV1Schema.safeParse(opened.value) : null;
+        const values = opened ? PluginAccountSettingsValuesV1StoredSchema.safeParse(opened.value) : null;
         return values?.success
             ? { status: 'present', revision: parsed.data.revision, values: values.data.values }
             : { status: 'unavailable' };
@@ -431,6 +431,7 @@ async function writeAccountRecord(input: Readonly<{
     target: ScopedPluginSettingsAccountTarget;
     expectedRevision: number | 'absent';
     values: Readonly<Record<string, unknown>>;
+    isCurrent?: () => boolean;
 }>, context: ActiveAccountRequestContext | null): Promise<ScopedPluginSettingsAccountRecordWriteResult> {
     if (!context) return { status: 'unavailable' };
     let issued = false;
@@ -452,7 +453,7 @@ async function writeAccountRecord(input: Readonly<{
                 }),
             };
         const body = JSON.stringify({ expectedRevision: input.expectedRevision, content });
-        if (!isCurrent(context)) return { status: 'unavailable' };
+        if (!isCurrent(context) || (input.isCurrent && !input.isCurrent())) return { status: 'unavailable' };
         issued = true;
         const response = await serverFetch(
             `/v1/account/plugin-settings/${encodePluginId(input.pluginId)}`,
@@ -522,7 +523,7 @@ const runtimeScopedPluginSettingsAdapter = createScopedPluginSettingsAdapter({
     accountWrite: (input) => createAccountTransport(input.target).write(input),
 });
 
-export const scopedPluginSettingsAdapter: ScopedPluginSettingsAdapter = Object.freeze({
+const rawScopedPluginSettingsAdapter: ScopedPluginSettingsAdapter = Object.freeze({
     ...runtimeScopedPluginSettingsAdapter,
     watch(input: ScopedPluginSettingsWatchInput): ScopedPluginSettingsWatch {
         if (input.scope.kind === 'daemon' && input.target.kind === 'daemon') {
@@ -546,3 +547,16 @@ export const scopedPluginSettingsAdapter: ScopedPluginSettingsAdapter = Object.f
         });
     },
 });
+
+export const scopedPluginSettingsAdapter = rawScopedPluginSettingsAdapter;
+export const scopedPluginAccountSecretSettingsAdapter = rawScopedPluginAccountSecretSettingsAdapter;
+
+/** Only the admitted Action port reaches the incumbent storage writers directly. */
+export async function executePluginSettingsAdministrationStorageAction(
+    input: Omit<Parameters<typeof import('@/sync/ops/actions/pluginSettingsAdministrationAction').executeScopedPluginSettingsAdministrationAction>[0],
+        'adapter' | 'secretAdapter'>,
+) {
+    const { executeScopedPluginSettingsAdministrationAction } = await import('@/sync/ops/actions/pluginSettingsAdministrationAction');
+    return executeScopedPluginSettingsAdministrationAction({ ...input, adapter: rawScopedPluginSettingsAdapter,
+        secretAdapter: rawScopedPluginAccountSecretSettingsAdapter });
+}

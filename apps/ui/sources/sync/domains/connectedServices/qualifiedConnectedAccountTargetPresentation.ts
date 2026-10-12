@@ -33,6 +33,9 @@ export type QualifiedConnectedAccountPresentationGroup = Readonly<{
     groupId: string;
   }>;
   displayName?: string | null;
+  /** Its accounts; a pool is summarized by the ones it rotates and the one in use. */
+  members?: ReadonlyArray<Readonly<{ connectedAccountId: string; enabled: boolean }>>;
+  activeConnectedAccountId?: string | null;
 }>;
 
 export type QualifiedConnectedAccountTargetPresentation = Readonly<{
@@ -44,6 +47,10 @@ export type QualifiedConnectedAccountTargetPresentation = Readonly<{
   identityLabel?: string;
   /** Supplemental, non-secret facts that distinguish targets with the same name. */
   secondaryLabel?: string;
+  /** A pool's own state ("2 accounts · using Work"); absent for accounts and empty pools. */
+  summaryLabel?: string;
+  /** The canonical passive eligibility owner's repair guidance, when supplied. */
+  unavailableReason?: string;
   /**
    * De-duplicated target identity for assistive technology. It carries the same
    * recognisable facts a sighted user reads, never a canonical id: an assistive
@@ -87,6 +94,7 @@ function createPresentation(input: Readonly<{
   primaryLabelKind?: ConnectedAccountIdentityLabelKind;
   identityLabel?: string | null;
   secondaryParts: ReadonlyArray<string | null>;
+  summaryLabel?: string | null;
 }>): QualifiedConnectedAccountTargetPresentation {
   const secondaryParts = uniqueNonEmpty(input.secondaryParts)
     .filter((part) => part !== input.primaryLabel);
@@ -101,6 +109,7 @@ function createPresentation(input: Readonly<{
     ...(input.primaryLabelKind ? { primaryLabelKind: input.primaryLabelKind } : {}),
     ...(input.identityLabel ? { identityLabel: input.identityLabel } : {}),
     ...(secondaryLabel ? { secondaryLabel } : {}),
+    ...(input.summaryLabel ? { summaryLabel: input.summaryLabel } : {}),
     accessibilityLabel: accessibilityParts.join(' · '),
   };
 }
@@ -211,8 +220,8 @@ export function presentQualifiedConnectedAccountTarget(input: Readonly<{
   accounts: readonly QualifiedConnectedAccountPresentationAccount[];
   groups: readonly QualifiedConnectedAccountPresentationGroup[];
   labelsByKey: Readonly<Record<string, string | undefined>>;
-  /** A user label already resolved by the owning screen's current preferences projection. */
-  accountLabel?: string | null;
+  /** Personal labels resolved for this service's full account list by its preferences projection. */
+  accountLabelsByAccountId?: Readonly<Record<string, string | null | undefined>>;
   serviceTitle: string | null | undefined;
   /** Negotiated source state used only when the exact structured target is absent. */
   sourceNegotiation?: ConnectedAccountUiNegotiation;
@@ -245,7 +254,7 @@ export function presentQualifiedConnectedAccountTarget(input: Readonly<{
       .map((candidate) => ({
         key: candidate.ref.accountId,
         serviceTitle,
-        userLabel: (candidate.ref.accountId === accountRef.accountId ? nonEmptyText(input.accountLabel) : null)
+        userLabel: nonEmptyText(input.accountLabelsByAccountId?.[candidate.ref.accountId])
           ?? resolveQualifiedConnectedAccountLabel({
             labelsByKey: input.labelsByKey,
             service: candidate.ref.service,
@@ -285,12 +294,28 @@ export function presentQualifiedConnectedAccountTarget(input: Readonly<{
   const displayName = nonEmptyText(group.displayName);
   const primaryLabel = resolveQualifiedConnectedAccountGroupLabel({ group: group.ref, labelsByKey: input.labelsByKey })
     ?? displayName ?? serviceTitle;
+  const rotating = (group.members ?? []).filter((member) => member.enabled).length;
+  const active = group.activeConnectedAccountId
+    ? input.accounts.find((candidate) => (
+      sameService(candidate.ref.service, group.ref.service)
+      && candidate.ref.accountId === group.activeConnectedAccountId
+    )) ?? null
+    : null;
+  const accountsLabel = rotating > 0 ? t('connectedServices.purposeTargets.poolAccounts', { count: rotating }) : null;
+  const summaryLabel = accountsLabel && active
+    ? t('connectedServices.purposeTargets.poolAccountsInUse', {
+      accounts: accountsLabel,
+      account: presentQualifiedConnectedAccountTarget({ ...input, target: { kind: 'account', account: active.ref } }).primaryLabel,
+    })
+    : accountsLabel;
   return createPresentation({
     serviceTitle,
     primaryLabel,
     secondaryParts: [
       primaryLabel === serviceTitle ? null : serviceTitle,
+      summaryLabel,
     ],
+    summaryLabel,
   });
 }
 
@@ -301,7 +326,10 @@ export function presentQualifiedConnectedAccountTarget(input: Readonly<{
  * unavailable; no source Account or Pool fact is ever shown.
  */
 export function presentConnectedAccountPurposeTeamResource(input: Readonly<{
-  teamResource: Readonly<{ teamId: string; selection: TeamResourceConnectedServiceSelectionV2 }>;
+  teamResource: Readonly<{
+    teamId: string;
+    selection: Pick<TeamResourceConnectedServiceSelectionV2, 'resourceId' | 'deliveryMode'>;
+  }>;
   teamResources: readonly TeamCredentialResourceCatalogEntryV1[];
   teamNameById?: Readonly<Record<string, string>>;
   serviceTitle: string | null | undefined;

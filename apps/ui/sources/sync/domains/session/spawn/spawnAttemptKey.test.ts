@@ -8,6 +8,22 @@ import {
 } from './spawnAttemptKey';
 
 describe('createSpawnAttemptKeyForFreshSpawnOptions', () => {
+    it('distinguishes fresh spawns that differ only in skill session selection', () => {
+        const base = {
+            machineId: 'machine-1', directory: '/repo',
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+            capabilitySelection: {
+                mcp: { v: 1 as const, managedServersEnabled: true, forceIncludeServerIds: ['server-a'], forceExcludeServerIds: [] },
+                skills: { v: 1 as const, forceIncludeSkillIds: ['skill-a'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
+            },
+        };
+        const first = createSpawnAttemptKeyForFreshSpawnOptions(base, '/home/alice');
+        expect(createSpawnAttemptKeyForFreshSpawnOptions({
+            ...base,
+            capabilitySelection: { ...base.capabilitySelection, skills: { ...base.capabilitySelection.skills, forceIncludeSkillIds: ['skill-b'] } },
+        }, '/home/alice')).not.toBe(first);
+    });
+
     it.each([
         ['Agent', { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.codex', localId: 'codex' } } }],
         ['model', { modelSelection: { v: 1, updatedAt: 99, ref: { agentTargetKey: 'happier.claude:claude', providerConnectionId: null, modelId: 'opus' } } }],

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { AgentModelOptionOverrideRuleSchema } from '@happier-dev/protocol';
 
-import { SessionOptionOverrideRuleSchema } from './schema';
+import { parseSessionModesState, SessionOptionOverrideRuleSchema } from './schema';
 
 /**
  * The UI rule schema is the read side of a fact only the producing agent can author. If it accepts
@@ -25,6 +25,17 @@ const CANDIDATE_RULES: readonly unknown[] = [
 ];
 
 describe('SessionOptionOverrideRuleSchema', () => {
+    it('reads retained V1 and V2 mode catalogs while validating known modes', () => {
+        const mode = { id: 'review', name: 'Review' };
+        const catalog = { agentId: 'codex', updatedAt: 1, availableModes: [{ ...mode, retired: { enabled: true } }], retired: true };
+        expect(parseSessionModesState({ ...catalog, v: 1, currentModeId: 'review' })).toEqual({
+            v: 2, agentId: 'codex', updatedAt: 1, currentModeId: 'review', availableModes: [mode],
+        });
+        expect(parseSessionModesState({ ...catalog, v: 2, currentModeId: null })).toEqual({
+            v: 2, agentId: 'codex', updatedAt: 1, currentModeId: null, availableModes: [mode],
+        });
+        expect(parseSessionModesState({ ...catalog, v: 2, currentModeId: null, availableModes: [{ id: '', name: 'Review' }] })).toBeNull();
+    });
     it('agrees with the canonical producer contract on every candidate rule shape', () => {
         for (const candidate of CANDIDATE_RULES) {
             const canonical = AgentModelOptionOverrideRuleSchema.safeParse(candidate);

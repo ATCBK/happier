@@ -32,7 +32,7 @@ export function buildLocalOutboundAccountActor(scope: ServerAccountScope): Trans
         v: 1,
         serverId: scope.serverId,
         accountId: scope.accountId,
-        profile: { firstName: null, lastName: null, username: null, avatarUrl: null },
+        profile: { name: null, firstName: null, lastName: null, username: null, avatarUrl: null },
     };
 }
 

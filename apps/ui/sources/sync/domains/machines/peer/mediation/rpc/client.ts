@@ -45,6 +45,8 @@ export type MachineRpcWithPeerMediationRouteParams<A> = Readonly<{
      */
     signal?: AbortSignal;
     onDispatched?: () => void;
+    /** A bound direct refusal proves the issued direct attempt had no effect. */
+    onDirectRefused?: () => void;
     resolveDirectRoute: (input: Readonly<{
         serverId?: string | null;
         accountId?: string | null;
@@ -114,6 +116,12 @@ function createRelayFallbackDisabledError(params: Readonly<{
         reasonCode: params.reasonCode,
     });
     return error;
+}
+
+function createDirectOutcomeUnknownError(): unknown {
+    return markRpcRequestDisposition(Object.assign(new Error('Machine RPC direct outcome is unknown'), {
+        code: 'MACHINE_RPC_OUTCOME_UNKNOWN',
+    }), 'outcomeUnknown');
 }
 
 async function useServerFallback<R, A>(
@@ -256,25 +264,23 @@ export async function machineRpcWithPeerMediationRoute<R, A>(
         onDispatched: () => { issued = true; params.onDispatched?.(); },
         request: directRequest,
     });
-    if (confidential) issued = true;
+    // A returned response also witnesses issuance for transport adapters that
+    // do not implement the optional dispatch callback.
+    issued = true;
     const directResponse = PeerMachineRpcDirectResponseV2Schema.parse(rawDirectResponse);
 
     if (directResponse.requestId !== requestId || directResponse.method !== params.method) {
         if (confidential) throw createPrivateContinuationTransportError(null, true);
-        return await useServerFallback<R, A>(
-            params,
-            'invalid_request',
-            requestId,
-            createMachineRpcPeerFallbackReceipt({
-                method: params.method,
-                requestId,
-                reasonCode: 'invalid_request',
-                receipt: PEER_MEDIATION_RECEIPTS.rpcFellBackToServer,
-            }),
-        );
+        throw createDirectOutcomeUnknownError();
     }
     if (!directResponse.ok) {
         if (confidential) throw createPrivateContinuationTransportError(null, true);
+        // The daemon uses this same refusal when invokeLocal throws after it
+        // entered a handler. Neither it nor a direct-only command receipt proves
+        // that replaying the payload on the relay cannot repeat an effect.
+        if (directResponse.reasonCode === 'handler_unavailable') throw createDirectOutcomeUnknownError();
+        issued = false;
+        params.onDirectRefused?.();
         return await useServerFallback<R, A>(
             params,
             directResponse.reasonCode,
@@ -297,6 +303,6 @@ export async function machineRpcWithPeerMediationRoute<R, A>(
     return directResponse.result as R;
     } catch (error) {
         if (confidential) throw createPrivateContinuationTransportError(error, issued);
-        throw error;
+        throw issued ? markRpcRequestDisposition(error, 'outcomeUnknown') : error;
     }
 }

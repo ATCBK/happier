@@ -5,17 +5,18 @@ import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGen
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { loadMachineDisplayWarmCacheEntries } from '@/sync/domains/state/warmCachePersistence';
 import {
-    useIsDataReady,
     useMachineListStatusByServerId,
     useMachineRecordListsByServerId,
     useMachineRecordValues,
-    useProfile,
 } from '@/sync/store/hooks';
 
 import {
     resolveAllProfileMachineInventorySnapshots,
     type ServerMachineInventorySnapshotV1,
 } from './machineInventorySnapshots';
+import { useMachineReachabilityRevision } from './reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 
 const EMPTY_MACHINE_INVENTORY_SNAPSHOTS: readonly ServerMachineInventorySnapshotV1[] = Object.freeze([]);
 
@@ -31,26 +32,33 @@ export function useAllProfileMachineInventorySnapshots(enabled = true): readonly
     const activeMachines = useMachineRecordValues(enabled);
     const machineListByServerId = useMachineRecordListsByServerId(enabled);
     const machineListStatusByServerId = useMachineListStatusByServerId(enabled);
-    const activeInventoryLoaded = useIsDataReady();
-    const profile = useProfile();
+    const bindings = useServerCredentialAccountScopeBindings(enabled ? profiles.map(profile => profile.serverIdentityId) : []);
+    const accountScopesByServerId = React.useMemo(() => new Map([...bindings].flatMap(([serverId, binding]) =>
+        binding.isCurrent() ? [[serverId, binding.scope] as const] : [])), [bindings]);
+    const reachabilityRevision = useMachineReachabilityRevision(enabled);
+    const presenceMachines = React.useMemo(() => enabled
+        ? [...activeMachines, ...Object.values(machineListByServerId).flatMap(machines => machines ?? [])] : [],
+    [enabled, activeMachines, machineListByServerId]);
+    const nowMs = useMachinePresenceNowMs(presenceMachines);
 
     return React.useMemo(() => enabled ? resolveAllProfileMachineInventorySnapshots({
         profiles,
         activeServerId: activeServer.serverId,
-        activeInventoryLoaded,
         activeMachines,
         machineListByServerId,
         machineListStatusByServerId,
-        accountId: profile.id,
+        accountScopesByServerId,
+        nowMs,
         loadWarmEntries: loadMachineDisplayWarmCacheEntries,
     }) : EMPTY_MACHINE_INVENTORY_SNAPSHOTS, [
         enabled,
-        activeInventoryLoaded,
         activeMachines,
         activeServer.serverId,
         machineListByServerId,
         machineListStatusByServerId,
-        profile.id,
+        accountScopesByServerId,
         profiles,
+        reachabilityRevision,
+        nowMs,
     ]);
 }

@@ -1,11 +1,6 @@
 import { AgentModelOptionOverrideRuleReadSchema } from '@happier-dev/protocol/models/descriptor';
-import { SessionOwnerModeCatalogV1Schema, SessionOwnerModeCatalogV2Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { readSessionModesMetadata, type SessionOwnerModeCatalogV2 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { z } from 'zod';
-
-const SessionModesStateSchema = z.union([
-    SessionOwnerModeCatalogV2Schema,
-    SessionOwnerModeCatalogV1Schema.transform((state) => ({ ...state, v: 2 as const })),
-]);
 
 const SessionModelOptionChoiceSchema = z.object({
     value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
@@ -101,15 +96,15 @@ const SessionModeOverrideSchema = z.object({
     modeId: z.string().trim().min(1),
 });
 
-export type SessionModesState = z.infer<typeof SessionModesStateSchema>;
+export type SessionModesState = SessionOwnerModeCatalogV2;
 export type SessionModelsState = z.infer<typeof SessionModelsStateSchema>;
 export type SessionConfigOptionsState = z.infer<typeof SessionConfigOptionsStateSchema>;
 export type SessionConfigOptionOverridesState = z.infer<typeof SessionConfigOptionOverridesSchema>;
 export type SessionModeOverrideState = z.infer<typeof SessionModeOverrideSchema>;
 
 export function parseSessionModesState(raw: unknown): SessionModesState | null {
-    const parsed = SessionModesStateSchema.safeParse(raw);
-    return parsed.success ? parsed.data : null;
+    const isV2 = typeof raw === 'object' && raw !== null && 'v' in raw && raw.v === 2;
+    return readSessionModesMetadata(isV2 ? { sessionModesV2: raw } : { sessionModesV1: raw });
 }
 
 export function parseSessionModelsState(raw: unknown): SessionModelsState | null {

@@ -62,6 +62,13 @@ const LOCAL_SERVICE_LAUNCHER_CODES = [
 ] as const;
 
 describe('resolveReasonCopy', () => {
+    it('keeps host widget failures in widget vocabulary without changing pending state', () => {
+        const unavailable = resolvePluginSurfaceStatePresentation({ state: 'unavailable', reasonKind: 'widget', reasonCode: 'widget_scope_unavailable' });
+        expect(unavailable.card).toMatchObject({ kind: 'unavailable', title: t('widgetAdd.areaUnavailableTitle'), reason: t('common.unavailable') });
+        const pending = resolvePluginSurfaceStatePresentation({ state: 'loading', reasonKind: 'widget', reasonCode: 'widget_input_options_loading' });
+        expect(pending.card).toMatchObject({ kind: 'loading', accessibilitySemantics: 'status' });
+        expect(pending.recoveryAction).toBeNull();
+    });
     it('explains a policy-disabled plugin details destination with the shared reason copy', () => {
         const copy = resolveReasonCopy({ reasonCode: 'details_destination_policy_unavailable', kind: 'pluginRuntime' });
         expect(copy.message).toBe(t('pluginRuntime.disabledByPolicy'));
@@ -254,6 +261,15 @@ const HOSTED_WEB_LOCAL_TERMINAL_CODES = [
 ] as const;
 
 describe('resolveReasonCopy — simulator / stream / plugin-runtime kinds (L0-3)', () => {
+    it('tells the user to choose a machine when installed copies of a plugin disagree', () => {
+        // The projection blocks a page whose machines carry different plugin versions until
+        // one is chosen; the generic "unavailable right now" hides that one press fixes it.
+        const copy = resolveReasonCopy({ reasonCode: 'installationConflict', kind: 'pluginRuntime' });
+        expect(copy.body).not.toBe(t('pluginRuntime.unavailableGeneric'));
+        expect(copy.body).not.toContain('installationConflict');
+        expect(copy.diagnosticCode).toBe('installationConflict');
+    });
+
     it('returns the canonical remediation-copy shape for surface state cards', () => {
         const copy = resolveReasonCopy({ reasonCode: 'no_simulator_devices', kind: 'simulatorPreview' });
         expect(copy.title).toBe(t('streamPlayer.status.unavailable'));

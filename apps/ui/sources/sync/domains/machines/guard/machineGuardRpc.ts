@@ -1,0 +1,85 @@
+import {
+    MachineGuardViewV1Schema, MachineGuardWatchInputV1Schema, MachineGuardWatchResultV1Schema,
+    type MachineGuardViewV1, type MachineGuardWatchResultV1,
+} from '@happier-dev/protocol/machines/guard/guardRpcV1';
+import { MachineGuardActivityListV1Schema, type MachineGuardActivityListV1 } from '@happier-dev/protocol/machines/guard/activityV1';
+import type { MachineGuardActionId } from '@happier-dev/protocol/machines/guard/actionIdsV1';
+import { MachineGuardKeepRunningResultV1Schema } from '@happier-dev/protocol/actions/specs/machineGuard';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+import { createRpcCallError, isRpcMethodNotFoundError, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpcErrors';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+
+import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+
+import type { MachineDaemonReadKey } from '../useMachineDaemonReadTarget';
+
+/**
+ * The Guard's reads and its two person-facing writes, through the published Actions (lane 50a's stable
+ * contract): `machines.guard.get` and the Activity list/Undo/Keep running go through the front door so
+ * approval and audit stay the Actions'; the parked `daemon.guard.watch` is the read transport.
+ */
+
+export type MachineGuardReadInput = MachineDaemonReadKey & Readonly<{ signal?: AbortSignal }>;
+export type MachineGuardActivityQuery = Readonly<{ range: 'today' | '7d' | '30d'; filter: 'all' | 'stopped' | 'cleaned_up' | 'needs_look' }>;
+export type MachineGuardResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; reason: 'older_happier' | 'request_failed' | 'invalid_response' }>;
+export type MachineGuardClients = Readonly<{
+    viewClient: (input: MachineGuardReadInput) => Promise<MachineGuardResult<MachineGuardViewV1>>;
+    watchClient: (input: MachineGuardReadInput & Readonly<{ since?: number }>) => Promise<MachineGuardResult<MachineGuardWatchResultV1>>;
+    activityClient: (input: MachineGuardReadInput & MachineGuardActivityQuery) => Promise<MachineGuardResult<MachineGuardActivityListV1>>;
+}>;
+
+async function result<T>(input: Readonly<{ signal?: AbortSignal }>, request: () => Promise<unknown>,
+    parse: (raw: unknown) => { success: true; data: T } | { success: false }, settledEffect = false): Promise<MachineGuardResult<T>> {
+    if (input.signal?.aborted) return { ok: false, reason: 'request_failed' };
+    try {
+        const raw = await request();
+        // Captured Action reads enforce disclosure custody. The transport owns
+        // cancellation settlement; a received effect acknowledgement stays true.
+        if (!settledEffect && input.signal?.aborted) return { ok: false, reason: 'request_failed' };
+        if (isRpcMethodNotFoundResult(raw)) return { ok: false, reason: 'older_happier' };
+        const parsed = parse(raw);
+        return parsed.success ? { ok: true, value: parsed.data } : { ok: false, reason: 'invalid_response' };
+    } catch (error) {
+        return { ok: false, reason: isRpcMethodNotFoundError(error) ? 'older_happier' : 'request_failed' };
+    }
+}
+
+let actionExecute: FrontDoorActionExecute | undefined;
+async function execute(input: MachineGuardReadInput, actionId: MachineGuardActionId, extra: Readonly<Record<string, unknown>> = {}): Promise<unknown> {
+    if (!actionExecute) actionExecute = (await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')).createFrontDoorActionExecute();
+    const outcome = await actionExecute(actionId, {
+        machineId: input.machineId, ...(input.serverId ? { serverId: input.serverId } : {}), ...extra,
+    }, { surface: 'ui', ...(input.serverId ? { serverId: input.serverId } : {}),
+        ...(input.expectedAccountId ? { expectedAccountId: input.expectedAccountId } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+    if (!outcome.ok) throw createRpcCallError({ error: outcome.error, errorCode: outcome.errorCode });
+    return outcome.result;
+}
+
+export function fetchMachineGuardViewViaAction(input: MachineGuardReadInput): Promise<MachineGuardResult<MachineGuardViewV1>> {
+    return result(input, () => execute(input, 'machines.guard.get'), raw => MachineGuardViewV1Schema.safeParse(raw));
+}
+
+export function watchMachineGuardViaMachineRpc(input: MachineGuardReadInput & Readonly<{ since?: number }>): Promise<MachineGuardResult<MachineGuardWatchResultV1>> {
+    const payload = MachineGuardWatchInputV1Schema.parse({ machineId: input.machineId,
+        ...(input.serverId ? { serverId: input.serverId } : {}), ...(input.since === undefined ? {} : { since: input.since }) });
+    return result(input, () => machineRpcWithServerScope({ machineId: input.machineId, serverId: input.serverId,
+        ...(input.expectedAccountId ? { accountId: input.expectedAccountId } : {}), method: RPC_METHODS.DAEMON_GUARD_WATCH,
+        payload, ...(input.signal ? { signal: input.signal } : {}), timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000 }),
+    raw => MachineGuardWatchResultV1Schema.safeParse(raw));
+}
+
+export function fetchMachineGuardActivityViaAction(input: MachineGuardReadInput & MachineGuardActivityQuery): Promise<MachineGuardResult<MachineGuardActivityListV1>> {
+    return result(input, () => execute(input, 'machines.guard.activity.list', { range: input.range, filter: input.filter }),
+        raw => MachineGuardActivityListV1Schema.safeParse(raw));
+}
+
+/** Undo runs the captured original Action on the machine; its own result (or approval) comes back as is. */
+export async function undoMachineGuardActivityViaAction(input: MachineGuardReadInput & Readonly<{ entryId: string }>): Promise<MachineGuardResult<unknown>> {
+    return result(input, () => execute(input, 'machines.guard.activity.undo', { entryId: input.entryId }), raw => ({ success: true as const, data: raw }), true);
+}
+
+export function keepMachineGuardWorkRunningViaAction(input: MachineGuardReadInput & (Readonly<{ sessionId: string }> | Readonly<{ terminalKey: string }>)) {
+    const target = 'sessionId' in input ? { sessionId: input.sessionId } : { terminalKey: input.terminalKey };
+    return result(input, () => execute(input, 'machines.guard.idleStop.keepRunning', target), raw => MachineGuardKeepRunningResultV1Schema.safeParse(raw), true);
+}

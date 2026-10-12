@@ -3,8 +3,87 @@ import { describe, expect, it } from 'vitest';
 import { MetadataSchema } from '@happier-dev/session-core/state';
 
 import { resolveSessionModelSelectionDisposition } from './resolveSessionModelSelectionDisposition';
+import { resolveSessionComposerSendDestination } from '@/sync/domains/session/input/resolveSessionComposerSendDestination';
+
+function appliedConnectedClaudeMetadata() {
+    return MetadataSchema.parse({
+        path: '/tmp/project', host: 'localhost', permissionMode: 'plan',
+        connectedServices: {
+            v: 2,
+            bindingsByServiceId: {
+                'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'work' },
+            },
+        },
+        modelSelectionIntentV1: {
+            v: 1, updatedAt: 11,
+            selection: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'claude-haiku-4-5' },
+        },
+        sessionModelsV1: {
+            v: 1, agentId: 'claude', updatedAt: 12, currentModelId: 'claude-haiku-4-5',
+            availableModels: [{ id: 'claude-haiku-4-5', name: 'Haiku 4.5' }],
+            activeSelectionV1: {
+                v: 1, source: 'runtime_apply',
+                selection: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'claude-haiku-4-5' },
+                runner: { pid: 42, processStartTimeMs: 10 },
+            },
+        },
+    });
+}
 
 describe('resolveSessionModelSelectionDisposition', () => {
+    it('keeps a connected Claude follow-up on its existing route after Plan → Build when runner observation is unavailable', () => {
+        const metadata = appliedConnectedClaudeMetadata();
+        for (const permissionMode of ['plan', 'default'] as const) {
+            const disposition = resolveSessionModelSelectionDisposition({
+                agentId: 'claude', agentTargetKey: 'agent:happier.agent.claude/claude',
+                metadata: { ...metadata, permissionMode }, sessionActive: true,
+                currentRunnerProcessIdentity: null,
+            });
+            // A previously applied choice is not a new route choice. Missing
+            // observation must not fabricate current runtime/context authority.
+            expect(disposition).toMatchObject({
+                activeSelection: null, contextSelection: null,
+                reportedSelectionStatus: 'last_reported', selectionTransitionPending: false,
+            });
+            expect(resolveSessionComposerSendDestination({
+                route: 'sessionAgent', armedContinuation: null, armedContinuationLocalId: null,
+                armedRoute: disposition.selectionTransitionPending ? { turnActive: false } : null,
+                machineId: 'machine-1', pendingTransitionOutcome: 'settled',
+            })).toEqual({ kind: 'sessionAgent' });
+        }
+    });
+
+    it('still requires transition admission for a different model or Provider connection without runner observation', () => {
+        const metadata = appliedConnectedClaudeMetadata();
+        for (const selection of [
+            { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'claude-sonnet-4-6' },
+            { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: 'pc-new', modelId: 'claude-haiku-4-5' },
+        ]) {
+            expect(resolveSessionModelSelectionDisposition({
+                agentId: 'claude', agentTargetKey: 'agent:happier.agent.claude/claude',
+                metadata: { ...metadata, modelSelectionIntentV1: { v: 1, updatedAt: 13, selection } },
+                sessionActive: true, currentRunnerProcessIdentity: null,
+            }).selectionTransitionPending).toBe(true);
+        }
+    });
+
+    it('does not use a historical applied selection when the observed runner has been replaced', () => {
+        expect(resolveSessionModelSelectionDisposition({
+            agentId: 'claude', agentTargetKey: 'agent:happier.agent.claude/claude',
+            metadata: appliedConnectedClaudeMetadata(), sessionActive: true,
+            currentRunnerProcessIdentity: { pid: 42, processStartTimeMs: 20 },
+        })).toMatchObject({ activeSelection: null, contextSelection: null, selectionTransitionPending: true });
+    });
+
+    it('does not treat an incoherent historical selection as an applied proposal', () => {
+        const metadata = appliedConnectedClaudeMetadata();
+        expect(resolveSessionModelSelectionDisposition({
+            agentId: 'claude', agentTargetKey: 'agent:happier.agent.claude/claude',
+            metadata: { ...metadata, sessionModelsV1: { ...metadata.sessionModelsV1!, availableModels: [] } },
+            sessionActive: true, currentRunnerProcessIdentity: null,
+        }).selectionTransitionPending).toBe(true);
+    });
+
     it('projects exact V2 Team provenance while retaining the Team source', () => {
         const metadata = MetadataSchema.parse({
             path: '/tmp/project', host: 'localhost',

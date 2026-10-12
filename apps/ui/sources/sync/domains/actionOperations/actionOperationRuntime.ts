@@ -14,7 +14,7 @@ import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
 } from '@/sync/domains/scope/activeServerAccountScope';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import type { ActionOperationObservation } from './actionOperationStore';
 import { actionOperationStore, type ActionOperationStore } from './actionOperationStore';
 import {
@@ -198,17 +198,12 @@ export function bindActionOperationRuntimeToAccountLifetime(params: Readonly<{
 
 export function ActionOperationRuntime(): null {
     const accountScope = useActiveServerAccountScope();
+    const membership = useMachinePresenceMembership(accountScope?.serverId ?? null);
     const machines = useAllMachines();
     const socket = useSocketStatus();
     const coordinator = React.useMemo(() => createActionOperationRuntimeCoordinator(), []);
     const accountLifetimeRef = React.useRef<ActiveServerAccountScopeLifetime | null>(null);
-    const onlineMachineIds = React.useMemo(
-        () => machines
-            .filter((machine) => isMachineOnline(machine))
-            .map((machine) => machine.id)
-            .sort(),
-        [machines],
-    );
+    const onlineMachineIds = membership.selectableMachineIds;
     const onlineMachineIdsKey = onlineMachineIds.join('\u0001');
     const accountId = accountScope?.accountId;
     const serverId = accountScope?.serverId;

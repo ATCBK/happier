@@ -95,16 +95,16 @@ export function resolveReviewWalkthroughPlan(params: Readonly<{
  * findings or evidence; the host rereads the captured comparison.
  */
 export function buildReviewStartWithWalkthroughInput(params: Readonly<{
-    sessionId: string | null;
     plan: ReviewWalkthroughPlan;
     instructions: string;
     comparisonId: string;
     /** Pending changes keep the existing uncommitted scope; every other comparison is read whole. */
     pending: boolean;
-}>): Record<string, unknown> {
+}> & (Readonly<{ sessionId: string }> | Readonly<{ sessionId: null; machineId: string; cwd: string }>)): Record<string, unknown> {
     const narratorEngineId = params.plan.narrator?.engineId ?? null;
     return {
-        sessionId: params.sessionId,
+        ...(params.sessionId !== null ? { sessionId: params.sessionId }
+            : { target: { kind: 'detached' }, machineId: params.machineId, cwd: params.cwd }),
         engineIds: params.plan.selected.map((engine) => engine.engineId),
         instructions: params.instructions.trim(),
         comparisonId: params.comparisonId,

@@ -6,8 +6,7 @@ import type {
 } from '@happier-dev/protocol';
 import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows';
 
-import { getTempData, storeTempData } from '@/utils/sessions/tempDataStore';
-import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { readWorkflowEditorDraftSeed, storeWorkflowEditorDraftSeed } from './workflowEditorDraftSeed';
 
 import { workflowDefinitionPromptTitle } from './workflowBlockLabel';
 import { setWorkflowStepExecutionTarget } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
@@ -86,27 +85,15 @@ export function buildWorkflowReviewedRunSeed(params: Readonly<{
 
 const WORKFLOW_REVIEWED_RUN_SEED_KIND = 'happier.workflow-reviewed-run-seed.v1' as const;
 
-type StoredWorkflowReviewedRunSeed = Readonly<{
-    kind: typeof WORKFLOW_REVIEWED_RUN_SEED_KIND;
-    seed: WorkflowReviewedRunSeed;
-    lifetime: ActiveServerAccountScopeLifetime | null;
-}>;
-
 /** Returns the opaque route parameter for a reviewed new Run. */
 export function storeWorkflowReviewedRunSeed(seed: WorkflowReviewedRunSeed): string {
-    return storeTempData({
-        kind: WORKFLOW_REVIEWED_RUN_SEED_KIND,
-        seed,
-        lifetime: captureActiveServerAccountScopeLifetime(),
-    } satisfies StoredWorkflowReviewedRunSeed);
+    return storeWorkflowEditorDraftSeed(WORKFLOW_REVIEWED_RUN_SEED_KIND, seed);
 }
 
 /**
- * Reads a seed exactly once. The store is single-use by design, so returning
- * through history cannot silently re-seed an editor with stale accepted bytes.
+ * Reads without consuming during render. The editor consumes after commit,
+ * keeping initial render retries safe without permitting history reuse.
  */
 export function readWorkflowReviewedRunSeed(dataId: string): WorkflowReviewedRunSeed | null {
-    const stored = getTempData<StoredWorkflowReviewedRunSeed>(dataId);
-    if (stored === null || stored.kind !== WORKFLOW_REVIEWED_RUN_SEED_KIND || !stored.lifetime?.isCurrent()) return null;
-    return stored.seed;
+    return readWorkflowEditorDraftSeed(WORKFLOW_REVIEWED_RUN_SEED_KIND, dataId);
 }

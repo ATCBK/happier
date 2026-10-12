@@ -6,6 +6,7 @@ import { machineAdministrationTargetsEqual } from './targetSelection';
 import type {
     FreshMachineAdministrationExecutionTargetV1,
     MachineAdministrationTargetSelectionV1,
+    MachineAdministrationExecutionTargetOptions,
 } from './useTargetSelection';
 
 /**
@@ -29,8 +30,9 @@ export function useMachineAdministrationExecutionTargetBinding({
 
     const resolveExactExecutionTarget = React.useCallback((
         expectedTarget: MachineAdministrationTargetV1 | null,
+        options?: MachineAdministrationExecutionTargetOptions,
     ): FreshMachineAdministrationExecutionTargetV1 | null => {
-        const resolved = currentRef.current.resolveExecutionTarget();
+        const resolved = currentRef.current.resolveExecutionTarget(options);
         return expectedTarget !== null
             && resolved !== null
             && machineAdministrationTargetsEqual(expectedTarget, resolved.target)
@@ -41,9 +43,10 @@ export function useMachineAdministrationExecutionTargetBinding({
     const isExecutionTargetCurrent = React.useCallback((
         expectedSelection: string,
         expectedTarget: FreshMachineAdministrationExecutionTargetV1,
+        options?: MachineAdministrationExecutionTargetOptions,
     ): boolean => isMachineAdministrationExecutionTargetCurrent({
         expectedTarget,
-        resolveCurrentTarget: currentRef.current.resolveExecutionTarget,
+        resolveCurrentTarget: () => currentRef.current.resolveExecutionTarget(options),
         expectedSelectionKey: expectedSelection,
         currentSelectionKey: currentRef.current.selectionKey,
     }), []);

@@ -401,6 +401,19 @@ export function buildLocalServiceRows(input: Readonly<{
 }
 
 /**
+ * The row a detected listener belongs to (a Processes port chip names it by inventory entry). One
+ * port's bindings fold into one row, so a binding the fold absorbed still finds its row by port.
+ */
+export function selectLocalServiceRowForInventoryEntry(
+    rows: readonly ServiceRow[],
+    entry: Readonly<{ inventoryEntryId: string; port: number }>,
+): ServiceRow | null {
+    return rows.find((row) => inventoryIdFromTarget(row.target) === entry.inventoryEntryId)
+        ?? rows.find((row) => row.target.source === 'inventory_entry' && row.portLabel === `:${entry.port}`)
+        ?? null;
+}
+
+/**
  * The pane's sections, by what the user can do with a row (session-tabs lab S): what is running here,
  * what can be started (a launcher target with a start action), what else runs on the machine, and
  * Happier's own listeners. A row that is neither running nor startable (a dead system listener, a
@@ -442,11 +455,17 @@ export function groupLocalServiceRowsBySection(rows: readonly ServiceRow[]): Rea
         .filter((entry) => entry.rows.length > 0);
 }
 
-/** Actual listening user services; openable access and startable suggestions are not listener evidence. */
+/**
+ * Actual running user services: a listener the scan observed, or a supervised service whose actual
+ * lifetime is `running` (a queue worker has no listener). Openable access and startable suggestions
+ * are not evidence, so the header's count never contradicts the "Running" group it sits above.
+ */
 export function selectLocalServiceRunningCount(rows: readonly ServiceRow[]): number {
-    const listeners = new Set<string>();
+    const running = new Set<string>();
     for (const row of rows) {
-        if (row.listeningListenerKey && !row.internal) listeners.add(row.listeningListenerKey);
+        if (row.internal) continue;
+        if (row.listeningListenerKey) running.add(row.listeningListenerKey);
+        else if (row.target.source === 'managed_service' && row.target.serviceState === 'running' && row.status === 'running') running.add(row.id);
     }
-    return listeners.size;
+    return running.size;
 }

@@ -1,6 +1,7 @@
 import { normalizeAcpConfigOptionsArray, type AcpConfigOption } from '@/sync/domains/sessionControl/configOptionsControl';
 import { createUnavailablePreflightModelList, type PreflightModelList } from '@/sync/domains/models/modelOptions';
 import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { ProbedResourceSnapshot } from '@happier-dev/protocol/common/probedResourceCache';
 
 import { createPersistentProbedResourceCache } from '@/sync/runtime/probedResources/createPersistentProbedResourceCache';
@@ -46,7 +47,7 @@ function normalizePersistedModelList(input: unknown): PreflightModelList | null 
         const modelRecord = rawModel as Record<string, unknown>;
         if (typeof modelRecord.id !== 'string' || typeof modelRecord.name !== 'string') return [];
         const modelOptions = normalizeModelOptions(modelRecord.modelOptions);
-        const descriptor = ProviderModelDescriptorV1Schema.safeParse({
+        const descriptor = createStoredReadSchema(ProviderModelDescriptorV1Schema).safeParse({
             id: modelRecord.id,
             name: modelRecord.name,
             capabilities: modelRecord.capabilities,

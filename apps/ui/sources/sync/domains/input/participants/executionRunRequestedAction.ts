@@ -3,6 +3,7 @@ import {
     PendingRequestedActionV1Schema,
     type PendingRequestedActionV1,
 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 /**
  * Reads the canonical requested action stored by current composers. Invalid or
@@ -12,7 +13,7 @@ import {
 export function readExecutionRunRequestedAction(
     value: unknown,
 ): PendingRequestedActionV1 {
-    const current = PendingRequestedActionV1Schema.safeParse(value);
+    const current = createStoredReadSchema(PendingRequestedActionV1Schema).safeParse(value);
     if (current.success) return current.data;
     return DEFAULT_PENDING_REQUESTED_ACTION_V1;
 }

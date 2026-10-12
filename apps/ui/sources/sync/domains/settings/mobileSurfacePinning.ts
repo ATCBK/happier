@@ -7,7 +7,7 @@ export type NavigationPlacementPreferences = Readonly<{
     orderedIds: readonly string[];
     placements: Readonly<Record<string, NavigationPlacement>>;
 }>;
-export const NAVIGATION_SURFACE_IDS = ['appRail', 'sessionRail', 'workspaceRail', 'sessionTabBar'] as const;
+export const NAVIGATION_SURFACE_IDS = ['appRail', 'sessionRail', 'workspaceRail', 'sessionTabBar', 'phoneLauncher'] as const;
 export type NavigationSurfaceId = typeof NAVIGATION_SURFACE_IDS[number];
 export type NavigationSurfacePlacementsV1 = Readonly<Partial<Record<NavigationSurfaceId, NavigationPlacementPreferences>>>;
 
@@ -21,6 +21,7 @@ export const NavigationSurfacePlacementsV1Schema = z.object({
     sessionRail: NavigationPlacementPreferencesSchema.optional(),
     workspaceRail: NavigationPlacementPreferencesSchema.optional(),
     sessionTabBar: NavigationPlacementPreferencesSchema.optional(),
+    phoneLauncher: NavigationPlacementPreferencesSchema.optional(),
 }).strict();
 const storedNavigationPlacementPreferencesSchema = NavigationPlacementPreferencesSchema.strip();
 export const StoredNavigationSurfacePlacementsV1Schema = NavigationSurfacePlacementsV1Schema.extend({
@@ -28,6 +29,7 @@ export const StoredNavigationSurfacePlacementsV1Schema = NavigationSurfacePlacem
     sessionRail: storedNavigationPlacementPreferencesSchema.optional(),
     workspaceRail: storedNavigationPlacementPreferencesSchema.optional(),
     sessionTabBar: storedNavigationPlacementPreferencesSchema.optional(),
+    phoneLauncher: storedNavigationPlacementPreferencesSchema.optional(),
 }).strip();
 export const EMPTY_NAVIGATION_PLACEMENT_PREFERENCES: NavigationPlacementPreferences = Object.freeze({ orderedIds: Object.freeze([]), placements: Object.freeze({}) });
 export const SESSION_COCKPIT_DEFAULT_BAR_SURFACE_IDS = Object.freeze(['browse', 'git', 'companion', 'terminal'] as const);

@@ -161,6 +161,7 @@ export function computeProviderAccountUsageGaugeViewModel(params: Readonly<{
      * `error_last_known_good` the caller knows about.
      */
     state: ProviderAccountUsageStateV1;
+    activeModelId?: string | null;
     windowMode: ConnectedServiceQuotaGaugeWindowMode;
     windowModes?: readonly ConnectedServiceQuotaGaugeWindowMode[] | null;
     nowMs: number;
@@ -172,6 +173,7 @@ export function computeProviderAccountUsageGaugeViewModel(params: Readonly<{
     if (params.state === 'not_loaded' || params.state === 'loaded_empty') return null;
     const viewModel = computeConnectedServiceQuotaGaugeViewModel({
         snapshot: toGaugeQuotaSnapshot(params.snapshot),
+        activeModelId: params.activeModelId,
         windowMode: params.windowMode,
         windowModes: params.windowModes,
         nowMs: params.nowMs,

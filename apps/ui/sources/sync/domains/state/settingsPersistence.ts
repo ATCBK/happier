@@ -63,19 +63,22 @@ export function saveSettings(settings: Settings, version: number) {
     mmkv.set(settingsKey(), JSON.stringify({ settings: persistedSettings, version }));
 }
 
-export function loadLocalSettings(): LocalSettings {
-    const mmkv = getPersistenceStorage();
-    const localSettings = mmkv.getString(localSettingsKey());
-    if (localSettings) {
-        try {
-            const parsed = JSON.parse(localSettings);
-            return localSettingsParse(parsed);
-        } catch (e) {
-            console.error('Failed to parse local settings', e);
-            return { ...localSettingsDefaults };
+/** Retain the stored value only for owner-level startup healing of theme profiles. */
+export function loadLocalSettingsSnapshot(): Readonly<{ settings: LocalSettings; storedValue: unknown }> {
+    try {
+        const localSettings = getPersistenceStorage().getString(localSettingsKey());
+        if (localSettings) {
+            const storedValue: unknown = JSON.parse(localSettings);
+            return { settings: localSettingsParse(storedValue), storedValue };
         }
+    } catch (e) {
+        console.error('Failed to parse local settings', e);
     }
-    return { ...localSettingsDefaults };
+    return { settings: { ...localSettingsDefaults }, storedValue: undefined };
+}
+
+export function loadLocalSettings(): LocalSettings {
+    return loadLocalSettingsSnapshot().settings;
 }
 
 export function saveLocalSettings(settings: LocalSettings) {

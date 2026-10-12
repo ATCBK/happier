@@ -1,4 +1,5 @@
 import type { Metadata } from '@happier-dev/session-core/state';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import {
     SessionDiscussionSelectionSourceV1Schema,
     type SessionDiscussionSelectionSourceV1,
@@ -45,7 +46,7 @@ export function readSessionInitialPromptV1(metadata: Metadata | null | undefined
     const sourceSessionId = typeof candidate.sourceSessionId === 'string' && candidate.sourceSessionId.trim().length > 0
         ? candidate.sourceSessionId.trim()
         : null;
-    const sourceResult = SessionInitialPromptDiscussionSourceV1Schema.safeParse(candidate.source);
+    const sourceResult = createStoredReadSchema(SessionInitialPromptDiscussionSourceV1Schema).safeParse(candidate.source);
     const source = sourceResult.success ? sourceResult.data : null;
 
     return {

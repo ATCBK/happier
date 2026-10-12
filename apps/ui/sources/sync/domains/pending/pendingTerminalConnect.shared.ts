@@ -1,4 +1,4 @@
-import { HomeConnectionDescriptorV1Schema, type HomeConnectionDescriptorV1 } from '@happier-dev/protocol/auth/accountDirectory';
+import { HomeConnectionDescriptorV1Schema, StoredHomeConnectionDescriptorV1Schema, type HomeConnectionDescriptorV1 } from '@happier-dev/protocol/auth/accountDirectory';
 import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import {
     createServerAccountScope,
@@ -124,7 +124,7 @@ export function parsePendingTerminalConnectRecord(value: unknown): PendingTermin
     if (pairing && pairing.expiresAtMs <= Date.now()) return null;
     const descriptor = record.homeConnectionDescriptor === undefined
         ? undefined
-        : HomeConnectionDescriptorV1Schema.safeParse(record.homeConnectionDescriptor);
+        : StoredHomeConnectionDescriptorV1Schema.safeParse(record.homeConnectionDescriptor);
     if (descriptor && !descriptor.success) return null;
     if (descriptor?.success && descriptor.data.homeServerIdentityId !== serverIdentityId) return null;
     if (descriptor?.success && !pairing) return null;

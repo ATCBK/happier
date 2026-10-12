@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { createSessionFixture, createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { getSessionName, getSessionStatus } from '@/utils/sessions/sessionUtils';
+import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 
 import { applySessionListRenderablePatch, areSessionListRenderablesEqual, buildSessionListRenderableFromSession } from './sessionListRenderable';
 import { buildSessionFromListRenderable } from './sessionListRenderableSessionProjection';
@@ -88,6 +89,71 @@ describe('locked shared title projection', () => {
 });
 
 describe('buildSessionFromListRenderable', () => {
+    it('uses independently current metadata for work facts when an opened report has older metadata', () => {
+        const metadata = (title: string) => ({ path: '/repo', host: 'test', sessionWorkStateV1: {
+            v: 1 as const, backendId: 'claude', updatedAt: 1_000_000,
+            items: [{ id: 'task', kind: 'task' as const, origin: 'happier' as const, title,
+                status: 'active' as const, updatedAt: 1_000_000 }],
+        } });
+        const base = createSessionFixture({ seq: 20, metadataVersion: 1, active: true, activeAt: 1_000_000,
+            metadata: { ...metadata('Earlier work'), work: { memoryEnabled: true } } });
+        const row = buildSessionListRenderableFromSession({ ...base, seq: 19, metadataVersion: 2, metadata: metadata('Current work') });
+        expect(getSessionStatus(row, 1_000_000).awareness.currentWork?.title).toBe('Current work');
+        const current = buildSessionFromListRenderable(row, { baseSession: base });
+        expect(getSessionStatus(current, 1_000_000).awareness.currentWork)
+            .toEqual(getSessionStatus(row, 1_000_000).awareness.currentWork);
+        expect(current.metadata?.work).toEqual(base.metadata?.work);
+        expect(current.metadataVersion).toBe(2);
+        const newerBase = { ...base, metadataVersion: 3, metadata: metadata('Newest work') };
+        const retained = buildSessionFromListRenderable(row, { baseSession: newerBase });
+        expect(getSessionStatus(retained, 1_000_000).awareness.currentWork)
+            .toEqual(getSessionStatus(newerBase, 1_000_000).awareness.currentWork);
+        expect(retained.metadataVersion).toBe(3);
+    });
+    it('keeps the public Agent and owner view on the selected layout-v1 metadata tuple', () => {
+        const base = createSessionFixture({ metadataLayoutVersion: 1, metadataVersion: 3,
+            metadata: parseDecryptedSessionMetadata({ v: 1, agentPresentation: { agentId: 'codex' } }, 1),
+            ownerMetadataView: { path: '/newer', host: 'machine', work: { memoryEnabled: true } } });
+        const row = buildSessionListRenderableFromSession({ ...base, metadataVersion: 2,
+            metadata: parseDecryptedSessionMetadata({ v: 1, agentPresentation: { agentId: 'claude' } }, 1),
+            ownerMetadataView: { path: '/older', host: 'machine' } });
+        const retained = buildSessionFromListRenderable(row, { baseSession: base });
+        expect(readSessionPresentationAgentId(retained)).toBe('codex');
+        expect(readSessionOwnerMetadataView(retained)).toEqual(base.ownerMetadataView);
+        expect(retained.metadataVersion).toBe(3);
+    });
+    it('merges independently ordered turn facts instead of reviving an older in-progress state', () => {
+        const base = createSessionFixture({ id: 'report', seq: 10, active: true, latestTurnStatus: 'completed', latestTurnStatusObservedAt: 30 });
+        const row = buildSessionListRenderableFromSession({ ...base, seq: 11, latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: 20 });
+        const report = buildSessionFromListRenderable(row, { baseSession: base });
+        expect(report.seq).toBe(11);
+        expect(report.latestTurnStatus).toBe('completed');
+    });
+    it('keeps the list work facts when a layout-v1 report has not been opened', () => {
+        const nowMs = 1_000_000;
+        const source = createSessionFixture({ metadataLayoutVersion: 1, active: true, activeAt: nowMs,
+            metadata: parseDecryptedSessionMetadata({ v: 1, agentPresentation: { agentId: 'claude' } }, 1),
+            ownerMetadataView: { path: '/repo', host: 'test', sessionWorkStateV1: { v: 1, backendId: 'claude', updatedAt: nowMs,
+                items: [{ id: 'task', kind: 'task', origin: 'happier', title: 'Payments rollout', status: 'blocked', updatedAt: nowMs }] } } });
+        const row = buildSessionListRenderableFromSession(source);
+        const report = buildSessionFromListRenderable(row);
+        expect(getSessionStatus(row, nowMs).awareness.currentWork).toBeDefined();
+        expect(getSessionStatus(report, nowMs).awareness.currentWork).toEqual(getSessionStatus(row, nowMs).awareness.currentWork);
+    });
+    it('keeps the declared public Agent identity when an unopened layout-v1 report is reconstructed', () => {
+        const source = createSessionFixture({ metadataLayoutVersion: 1,
+            metadata: parseDecryptedSessionMetadata({ v: 1, agentPresentation: { agentId: 'claude' } }, 1),
+            ownerMetadataView: { path: '/repo', host: 'test', flavor: 'codex' } });
+        const row = buildSessionListRenderableFromSession(source);
+        const report = buildSessionFromListRenderable(row);
+        expect(readSessionPresentationAgentId(report)).toBe('claude');
+        expect(readSessionOwnerMetadataView(report)?.path).toBe('/repo');
+        const unreadable = buildSessionFromListRenderable({ ...row, metadata: null, metadataUnavailable: true });
+        expect(readSessionPresentationAgentId(unreadable)).toBeNull();
+        const warmUnreadable = buildSessionFromListRenderable({ ...row, metadata: null, metadataUnavailable: true }, { baseSession: source });
+        expect(warmUnreadable.metadata).toBeNull();
+        expect(warmUnreadable.ownerMetadataView).toBeNull();
+    });
     it('preserves an explicit detached list edge rather than reviving the opened session lead', () => {
         const base = createSessionFixture({ reportsTo: { sessionId: 'former-lead' } });
         const detached = buildSessionListRenderableFromSession({ ...base, reportsTo: null });
@@ -122,6 +188,11 @@ describe('buildSessionFromListRenderable', () => {
             ...row,
             metadataUnavailable: true,
         }))).toBeNull();
+        const contracted = buildSessionFromListRenderable({ ...row, metadataLayoutVersion: 1, metadata: null,
+            metadataVersion: 0, metadataUnavailable: true, access: createSessionAccessFixture('view'), accessLevel: 'view' },
+        { baseSession: legacy });
+        expect(contracted.metadata).toBeNull();
+        expect(contracted.ownerMetadataView).toBeNull();
     });
 
     it('preserves the safe responsible Account summary through list renderable reconstruction', () => {

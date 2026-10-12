@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { t } from '@/text';
 
 import {
     projectThisComputerServiceRowsForApp,
@@ -16,6 +18,9 @@ const healthyDaemon = {
 } as const;
 
 describe('resolveThisComputerConnection', () => {
+    beforeEach(async () => {
+        await upsertServerProfile({ serverUrl: healthyDaemon.daemonServerUrl, name: 'Studio' });
+    });
     it('names both accounts when this computer serves the same Home as somebody else', () => {
         expect(resolveThisComputerConnection({
             daemon: { ...healthyDaemon, daemonAccountId: 'acct_other_1234567890', daemonAccountLabel: 'robin' },
@@ -25,14 +30,14 @@ describe('resolveThisComputerConnection', () => {
             appAccountLabel: 'Leeroy',
         })).toEqual({
             status: 'daemon_account_mismatch',
-            homeLabel: 'https://relay.example.test',
-            daemonHomeLabel: 'https://relay.example.test',
+            homeLabel: 'Studio',
+            daemonHomeLabel: 'Studio',
             appAccountLabel: 'Leeroy',
             daemonAccountLabel: 'robin',
         });
     });
 
-    it('falls back to a short account id when the daemon account has no readable label', () => {
+    it('names unnamed people neutrally and the viewer as their own account, never by an id', () => {
         const connection = resolveThisComputerConnection({
             daemon: { ...healthyDaemon, daemonAccountId: 'acct_other_1234567890' },
             activeRelayUrl: 'https://relay.example.test',
@@ -40,8 +45,23 @@ describe('resolveThisComputerConnection', () => {
             appAccountId: 'acct_app',
             appAccountLabel: null,
         });
-        expect(connection?.daemonAccountLabel).toBe('acct_oth…');
-        expect(connection?.appAccountLabel).toBe('acct_app');
+        expect(connection?.daemonAccountLabel).toBe(t('accountDisplay.unnamed'));
+        expect(connection?.appAccountLabel).toBe(t('accountDisplay.yours'));
+        const self = resolveThisComputerConnection({
+            daemon: healthyDaemon,
+            activeRelayUrl: healthyDaemon.daemonServerUrl,
+            activeLocalRelayUrl: null,
+            appAccountId: 'acct_app',
+            appAccountLabel: 'Leeroy',
+        });
+        expect(self?.daemonAccountLabel).toBe('Leeroy');
+        expect(resolveThisComputerConnection({
+            daemon: { ...healthyDaemon, daemonAccountId: null },
+            activeRelayUrl: healthyDaemon.daemonServerUrl,
+            activeLocalRelayUrl: null,
+            appAccountId: 'acct_app',
+            appAccountLabel: null,
+        })?.daemonAccountLabel).toBeNull();
     });
 
     it('is aligned for this account on this Home, and absent without a daemon or a status read', () => {
@@ -72,15 +92,15 @@ describe('resolveThisComputerConnection', () => {
 
     it('names the other Home when the daemon serves a different relay', () => {
         expect(resolveThisComputerConnection({
-            daemon: { ...healthyDaemon, daemonServerUrl: 'https://api.happier.dev', daemonAccountId: 'acct_cloud' },
+            daemon: { ...healthyDaemon, daemonServerUrl: 'https://other-home.example.test', daemonAccountId: 'acct_other_home' },
             activeRelayUrl: 'http://127.0.0.1:3012',
             activeLocalRelayUrl: null,
             appAccountId: 'acct_app',
             appAccountLabel: 'Leeroy',
         })).toMatchObject({
             status: 'daemon_url_mismatch',
-            homeLabel: 'http://127.0.0.1:3012',
-            daemonHomeLabel: 'https://api.happier.dev',
+            homeLabel: t('settingsAccount.thisHomeTitle'),
+            daemonHomeLabel: t('settingsAccount.thisHomeTitle'),
         });
     });
 });

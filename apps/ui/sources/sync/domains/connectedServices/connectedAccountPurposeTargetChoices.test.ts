@@ -71,12 +71,26 @@ const resolveAuthentication = () => ({
   modes: [{
     id: 'oauth',
     kind: 'oauthAuthorizationCode' as const,
+    callbackUrl: 'http://127.0.0.1:4000/auth/callback',
     pkce: 'required' as const,
     outcomeReconciliation: 'none' as const,
   }],
 });
 
 describe('buildConnectedAccountPurposeTargetChoices', () => {
+  it('explains the same unavailable selected pool and disabled choices from eligibility', () => {
+    const choices = buildConnectedAccountPurposeTargetChoices({
+      declaration: { purpose: 'request-auth', service, required: true },
+      selectedTarget: { kind: 'group', service, groupId: group.ref.groupId },
+      accounts: [unavailableAccount], groups: [{ ...group, members: [] }],
+      labelsByKey: {}, serviceTitle: 'Acme Gateway', resolveAuthentication,
+    });
+    const selected = choices.find(choice => choice.current);
+    expect(selected?.presentation.secondaryLabel).toContain(t('connectedServices.purposeTargets.poolEmpty'));
+    expect(selected?.presentation.accessibilityLabel).toContain(t('connectedServices.purposeTargets.poolEmpty'));
+    expect(choices.find(choice => choice.kind === 'account')?.presentation.secondaryLabel)
+      .toContain(t('connectedServices.purposeTargets.accountReconnect'));
+  });
   it('applies privacy to visible and assistive identities in purpose choices through the target presenter', () => {
     const choices = buildConnectedAccountPurposeTargetChoices({
       declaration: { purpose: 'request-auth', service, required: true }, selectedTarget: null,
@@ -110,7 +124,7 @@ describe('buildConnectedAccountPurposeTargetChoices', () => {
       target: choice.target?.kind ?? 'none',
       selectable: choice.selectable,
     }))).toEqual([
-      { title: '—', target: 'none', selectable: true },
+      { title: 'Not set', target: 'none', selectable: true },
       { title: 'Expired account', target: 'account', selectable: false },
       { title: 'Work account', target: 'account', selectable: true },
       { title: 'Team pool', target: 'group', selectable: true },
