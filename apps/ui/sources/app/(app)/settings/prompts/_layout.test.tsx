@@ -7,19 +7,25 @@ const useArtifactsLoaded = vi.hoisted(() => vi.fn());
 const routerState = vi.hoisted(() => ({ pathname: '/settings/prompts', screenOptions: null as null | Record<string, unknown> }));
 
 // expo-router is the navigation boundary: record what the layout asks its settings-stack screen to show.
-vi.mock('expo-router', () => ({
-    Slot: () => React.createElement('PromptRouteSlot'),
-    usePathname: () => routerState.pathname,
-    Stack: {
-        Screen: (props: { options?: Record<string, unknown> }) => {
-            routerState.screenOptions = props.options ?? null;
-            return null;
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    const boundary = createExpoRouterMock({ pathname: () => routerState.pathname });
+    return {
+        ...boundary.module,
+        Slot: () => React.createElement('PromptRouteSlot'),
+        Stack: {
+            ...boundary.module.Stack,
+            Screen: (props: { options?: Record<string, unknown> }) => {
+                routerState.screenOptions = props.options ?? null;
+                return null;
+            },
         },
-    },
-}));
-vi.mock('react-native-unistyles', () => ({ StyleSheet: { create: (styles: unknown) => styles } }));
+    };
+});
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({ ActivitySpinner: 'ActivitySpinner' }));
-vi.mock('@/sync/domains/state/storage', () => ({ useArtifactsLoaded }));
+vi.mock('@/sync/domains/state/storage', async (importOriginal) => (await import('@/dev/testkit/mocks/storage'))
+    .createStorageModuleMock({ importOriginal, overrides: { useArtifactsLoaded } }));
 
 describe('PromptsLayoutRoute', () => {
     beforeEach(() => {

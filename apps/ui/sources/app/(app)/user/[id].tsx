@@ -3,7 +3,8 @@ import { View, Linking } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '@/auth/context/AuthContext';
 import { getUserProfile, sendFriendRequest, removeFriend } from '@/sync/api/social/apiFriends';
-import { UserProfile, getDisplayName } from '@/sync/domains/social/friendTypes';
+import type { UserProfile } from '@/sync/domains/social/friendTypes';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -103,7 +104,7 @@ export default function UserProfileScreen() {
             // Removing a friend
             const confirmed = await Modal.confirm(
                 t('friends.removeFriend'),
-                t('friends.removeFriendConfirm', { name: getDisplayName(userProfile) }),
+                t('friends.removeFriendConfirm', { name: formatAccountDisplayName(userProfile) ?? t('accountDisplay.unnamed') }),
                 { confirmText: t('friends.remove'), destructive: true }
             );
 
@@ -112,7 +113,7 @@ export default function UserProfileScreen() {
             // Canceling a sent request
             const confirmed = await Modal.confirm(
                 t('friends.cancelRequest'),
-                t('friends.cancelRequestConfirm', { name: getDisplayName(userProfile) }),
+                t('friends.cancelRequestConfirm', { name: formatAccountDisplayName(userProfile) ?? t('accountDisplay.unnamed') }),
                 { confirmText: t('common.yes'), destructive: false }
             );
 
@@ -147,7 +148,7 @@ export default function UserProfileScreen() {
         );
     }
 
-    const displayName = getDisplayName(userProfile);
+    const displayName = formatAccountDisplayName(userProfile) ?? t('accountDisplay.unnamed');
     const avatarUrl = userProfile.avatar?.url;
 
     // What the viewer can do about this friendship. The one forward action is primary; declining or

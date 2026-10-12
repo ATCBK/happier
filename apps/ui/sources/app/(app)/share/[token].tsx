@@ -1,4 +1,5 @@
-import { type SessionMessageV1 } from '@happier-dev/protocol';
+import { readAccountNameFromLegacyProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
+import type { SessionMessageV1 } from '@happier-dev/protocol';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -42,11 +43,13 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 import { Icon } from '@/components/ui/icons/Icon';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 
 const SHARE_SCREEN_OPTIONS = { headerShown: false } as const;
 
 type ShareOwner = {
     id: string;
+    name?: string | null;
     username: string | null;
     firstName: string | null;
     lastName: string | null;
@@ -129,13 +132,6 @@ export function resolvePublicShareTokenParam(
     } catch {
         return null;
     }
-}
-
-function getOwnerDisplayName(owner: ShareOwner | null): string {
-    if (!owner) return t('status.unknown');
-    if (owner.username) return `@${owner.username}`;
-    const fullName = [owner.firstName, owner.lastName].filter(Boolean).join(' ');
-    return fullName || t('status.unknown');
 }
 
 function normalizeMessageSeq(message: Readonly<{ seq?: number | null }>): number | undefined {
@@ -366,7 +362,9 @@ export default memo(function PublicShareViewerScreen() {
                 }
                 if (response.status === 403) {
                     if (data?.requiresConsent) {
-                        setConsentInfo(data as PublicShareConsentResponse);
+                        const consent = data as PublicShareConsentResponse;
+                        setConsentInfo({ ...consent, owner: consent.owner ? { ...consent.owner,
+                            name: readAccountNameFromLegacyProfileV1(consent.owner) } : null });
                         setIsLoading(false);
                         return;
                     }
@@ -377,6 +375,7 @@ export default memo(function PublicShareViewerScreen() {
             }
 
             const data = (await response.json()) as PublicShareResponse;
+            data.owner = { ...data.owner, name: readAccountNameFromLegacyProfileV1(data.owner) };
             if (!isCurrentLoad()) return;
 
             const messagesPath = buildPublicShareMessagesPath({
@@ -640,7 +639,7 @@ export default memo(function PublicShareViewerScreen() {
     }
 
     if (consentInfo?.requiresConsent) {
-        const ownerName = getOwnerDisplayName(consentInfo.owner);
+        const ownerName = (consentInfo.owner ? formatAccountDisplayName(consentInfo.owner) : null) ?? t('status.unknown');
         return (
             <ItemList presentation="grouped" style={{ paddingTop: 0 }}>
                 <ItemGroup title={t('session.sharing.consentRequired')}>
@@ -675,7 +674,7 @@ export default memo(function PublicShareViewerScreen() {
     }
 
     const { share, decryptedMetadata } = dataset;
-    const ownerName = getOwnerDisplayName(share.owner);
+    const ownerName = formatAccountDisplayName(share.owner) ?? t('status.unknown');
     const sessionName = decryptedMetadata?.name || decryptedMetadata?.path || t('session.sharing.session');
 
     return (

@@ -1,8 +1,6 @@
 import React from 'react';
-import { View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { t } from '@/text';
-import { StyleSheet } from 'react-native-unistyles';
 import { WizardModalShell } from '@/components/onboarding/ui/WizardModalShell';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { SecretKeyLoginForm } from '@/components/account/restore/SecretKeyLoginForm';
@@ -19,12 +17,7 @@ import {
 } from '@/components/settings/apiTokens/apiTokenCreateResume';
 
 
-const stylesheet = StyleSheet.create((theme) => ({
-    body: { paddingHorizontal: 24 },
-}));
-
 export default function Restore() {
-    const styles = stylesheet;
     const router = useRouter();
     const auth = useAuth();
     const params = useLocalSearchParams<{
@@ -67,12 +60,14 @@ export default function Restore() {
             testID="restore-manual-wizard"
             stepIndex={1}
             stepCount={3}
-            title={t('setupOnboarding.authRestoreTitle')}
-            subtitle={t('setupOnboarding.authRestoreSubtitle')}
+            // A standalone page: Settings, token repair and the session view reach it too, so it claims no step.
+            showProgress={false}
+            title={t('setupOnboarding.authSecretKeyTitle')}
+            subtitle={t('setupOnboarding.authSecretKeySubtitle')}
             onBack={() => safeRouterBack({ router, fallbackHref: '/restore' })}
             showSkip={false}
         >
-            <View style={styles.body}>
+            <>
                 {hasExactTargetRequest ? exactTarget ? (
                     <SecretKeyLoginForm
                         target={{ ...exactTarget, expectedAccountId, requireKeyChallengeV2: true }}
@@ -92,7 +87,7 @@ export default function Restore() {
                 ) : (
                     <SecretKeyLoginForm onSuccess={completedReturnTo ? () => router.replace(completedReturnTo) : undefined} />
                 )}
-            </View>
+            </>
         </WizardModalShell>
     );
 }

@@ -8,7 +8,6 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import {
     useCurrentSecretBindingsByProfileIdMutable,
     useSetting,
-    useSettingMutable,
     useSettingsSelector,
 } from '@/sync/domains/state/storage';
 import { t } from '@/text';
@@ -20,7 +19,7 @@ import { machinePreviewEnv } from '@/sync/ops';
 import { getRequiredSecretEnvVarNames } from '@/sync/domains/profiles/profileSecrets';
 import { getTempData, storeTempData } from '@/utils/sessions/tempDataStore';
 import { ProfilesList } from '@/components/profiles/ProfilesList';
-import { useDeleteAiLaunchProfile } from '@/sync/store/settingsWriters';
+import { useDeleteAiLaunchProfile, useProfileFavoriteIdsMutable } from '@/sync/store/settingsWriters';
 import { SecretRequirementModal, type SecretRequirementModalResult } from '@/components/secrets/requirements';
 import { useSavedSecretsMutable } from '@/components/secrets/useSavedSecretsMutable';
 import { getSecretSatisfaction } from '@/utils/secrets/secretSatisfaction';
@@ -60,7 +59,7 @@ export default React.memo(function ProfilePickerScreen() {
     const [secretBindingsByProfileId, setSecretBindingsByProfileId] = useCurrentSecretBindingsByProfileIdMutable();
     const deleteAiLaunchProfile = useDeleteAiLaunchProfile();
     const profiles = useAiLaunchProfilesForLegacyUi();
-    const [favoriteProfileIds, setFavoriteProfileIds] = useSettingMutable('favoriteProfiles');
+    const [favoriteProfileIds, setFavoriteProfileIds] = useProfileFavoriteIdsMutable();
     const settings = useSettingsSelector((settings) => ({
         lastUsedAgent: settings.lastUsedAgent,
         lastUsedBackendTarget: settings.lastUsedBackendTarget,

@@ -18,18 +18,22 @@ import { useAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/
 import { filterVisibleMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import { machineExecutionRunsList } from '@/sync/ops/machineExecutionRuns';
-import { sessionExecutionRunStop } from '@/sync/ops/sessionExecutionRuns';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { machineStopSession } from '@/sync/ops/machines';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useMountedShouldContinue } from '@/hooks/ui/useMountedShouldContinue';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
-import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
 
 type MachineRunsState =
@@ -80,6 +84,30 @@ function formatRunDetails(run: DaemonExecutionRunEntry): string {
   return `${t('runs.runLabel', { runId: run.runId })} · ${detailParts.join(' · ')}`;
 }
 
+/** Each collection row retains its own exact Home through admission and approval. */
+function RunStopButton(props: Readonly<{
+  serverId: string;
+  stopping: boolean;
+  spinnerColor: string;
+  stopColor: string;
+  onStop: (execution: ReturnType<typeof useMountedActionExecution>) => Promise<void>;
+}>) {
+  const execution = useMountedActionExecution(props.serverId);
+  const router = useRouter();
+  return (<>
+    <Pressable accessibilityRole="button" accessibilityLabel={t('runs.stop.stopRunA11y')}
+      onPress={() => props.onStop(execution)} disabled={props.stopping}
+      style={({ pressed }) => ({ opacity: pressed ? motionTokens.press.opacity : 1 })}>
+      {props.stopping ? <ActivitySpinner size="small" color={props.spinnerColor} />
+        : <Icon name="stop-circle" size={20} color={props.stopColor} />}
+    </Pressable>
+    {execution.approval.approvalPending && execution.approval.approvalId ? (
+      <ActionApprovalPendingNotice message={t('approvals.status.open')}
+        onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(execution.approval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}`)} />
+    ) : null}
+  </>);
+}
+
 export default function RunsScreen() {
   const { theme } = useUnistyles();
   const router = useRouter();
@@ -102,6 +130,8 @@ export default function RunsScreen() {
   const requestedRunId = requestedTarget?.runId ?? null;
   const shouldContinue = useMountedShouldContinue();
   const inventory = useAllProfileMachineInventorySnapshots();
+  const machineScopeBindings = useServerCredentialAccountScopeBindings(inventory.flatMap(snapshot =>
+    snapshot.kind === 'resolved' ? [snapshot.serverIdentityId] : []));
   const [showFinished, setShowFinished] = React.useState(requestedRunId !== null);
   const [stoppingRunAddressKey, setStoppingRunAddressKey] = React.useState<string | null>(null);
   const [state, setState] = React.useState<MachineRunsState>({ status: 'idle' });
@@ -123,7 +153,7 @@ export default function RunsScreen() {
     return entries;
   }, [inventory, requestedMachineId, requestedServerId]);
 
-  const load = React.useCallback(async () => {
+  const load = React.useCallback(async (intent?: 'retry') => {
     setState({ status: 'loading' });
 
     const runsByMachineAddressKey: Record<string, readonly DaemonExecutionRunEntry[]> = {};
@@ -131,13 +161,18 @@ export default function RunsScreen() {
     try {
       await Promise.all(
         serverEntries.flatMap(([serverId, machines]) => {
+          const binding = machineScopeBindings.get(serverId);
+          const snapshot = inventory.find(snapshot => snapshot.kind === 'resolved' && snapshot.serverIdentityId === serverId);
+          if (!binding?.isCurrent() || snapshot?.kind !== 'resolved' || snapshot.observation !== 'live'
+            || snapshot.accountId !== binding.scope.accountId) return [];
           return machines.map(async (machine) => {
             const machineId = String(machine?.id ?? '').trim();
             if (!machineId) return;
-            if (!isMachineOnline(machine)) return;
+            if (!isMachineVisibleForLaunchSelection(machine) || machine.availability?.kind === 'locked') return;
+            if (intent !== 'retry' && !isMachineReachable(binding.scope, machine)) return;
 
-            const res = await machineExecutionRunsList(machineId, { serverId });
-            if (res.ok) {
+            const res = await machineExecutionRunsList(machineId, { serverId, accountId: binding.scope.accountId });
+            if (res.ok && binding.isCurrent()) {
               runsByMachineAddressKey[executionRunMachineAddressKey(serverId, machineId)] = res.runs;
             }
           });
@@ -148,7 +183,7 @@ export default function RunsScreen() {
     } catch (error) {
       setState({ status: 'error', error: error instanceof Error ? error.message : t('runs.failedToLoad') });
     }
-  }, [serverEntries]);
+  }, [inventory, machineScopeBindings, serverEntries]);
 
   React.useEffect(() => {
     void load();
@@ -159,7 +194,7 @@ export default function RunsScreen() {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t('runs.a11y.refresh')}
-        onPress={() => void load()}
+        onPress={() => void load('retry')}
         hitSlop={10}
         style={({ pressed }) => ({ padding: 4, opacity: pressed ? motionTokens.press.opacity : 1 })}
       >
@@ -201,7 +236,6 @@ export default function RunsScreen() {
                   testIDPrefix="runs.filter"
                   accessibilityLabel={t('detailPages.runs.filterLabel')}
                   compact
-                  slidingThumb
                 />
               </View>
             )}
@@ -226,7 +260,7 @@ export default function RunsScreen() {
             serverEntries.flatMap(([serverId, machines]) => {
               if (!Array.isArray(machines) || machines.length === 0) return [];
               const homeName = showsHomeNames
-                ? resolveHomeDisplayName(getServerProfileById(serverId)) ?? serverId
+                ? resolveHomeDisplayLabel(getServerProfileById(serverId), serverId)
                 : null;
 
               return machines.map((machine) => {
@@ -251,8 +285,7 @@ export default function RunsScreen() {
                       testID="runs.open-machine"
                       title={t('runs.openMachine')}
                       onPress={() => {
-                        const query = serverId ? `?serverId=${encodeURIComponent(serverId)}` : '';
-                        router.push(`/machine/${machineId}${query}` as any);
+                        router.push(machinePageHref({ door: 'rail', target: { machineId, serverId: serverId || undefined } }) as never);
                       }}
                     />
                     {runs.length === 0 ? (
@@ -262,11 +295,14 @@ export default function RunsScreen() {
                         const sessionId = readExecutionRunSessionAssociation(run);
                         const canStop = run.status === 'running' && sessionId !== null;
                         const runAddressKey = executionRunRowAddressKey(serverId, machineId, run.runId);
-                        const onStop = async () => {
+                        const onStop = async (execution: ReturnType<typeof useMountedActionExecution>) => {
                           if (!sessionId) return;
                           if (!canStop) return;
                           setStoppingRunAddressKey(runAddressKey);
+                          let issued = false;
+                          let refreshRuns = false;
                           const stopSessionProcess = async () => {
+                            if (!execution.isCurrent()) return;
                             const stopResult = await machineStopSession(machineId, sessionId, { serverId });
                             if (stopResult.ok) return;
 
@@ -283,34 +319,34 @@ export default function RunsScreen() {
                               Modal.alert(t('common.error'), stopResult.error || t('runs.stop.failedToStopSession'));
                             }
                           };
-                          try {
-                            const res = await sessionExecutionRunStop(sessionId, { runId: run.runId }, { serverId });
-                            if ((res as any)?.ok === false) {
-                              const confirmed = await Modal.confirm(
-                                t('runs.stop.stopRunFailedTitle'),
-                                t('runs.stop.stopRunFailedBody'),
-                                { confirmText: t('runs.stop.stopSession'), cancelText: t('common.cancel'), destructive: true },
-                              );
-                              if (confirmed) {
-                                await stopSessionProcess();
-                              } else {
-                                Modal.alert(t('common.error'), String((res as any).error ?? t('runs.stop.failedToStopRun')));
-                              }
+                          const showStopFailure = async (error: string) => {
+                            if (!execution.isCurrent()) return;
+                            if (!issued) {
+                              Modal.alert(t('common.error'), error);
+                              return;
                             }
-                          } catch (error) {
                             const confirmed = await Modal.confirm(
                               t('runs.stop.stopRunFailedTitle'),
                               t('runs.stop.stopRunFailedBody'),
                               { confirmText: t('runs.stop.stopSession'), cancelText: t('common.cancel'), destructive: true },
                             );
-                            if (confirmed) {
-                              await stopSessionProcess();
-                            } else {
-                              Modal.alert(t('common.error'), error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
+                            if (!execution.isCurrent()) return;
+                            if (confirmed) await stopSessionProcess();
+                            else Modal.alert(t('common.error'), error);
+                          };
+                          try {
+                            const res = await execution.execute('execution.run.stop', { sessionId, runId: run.runId },
+                              { onTransportIssued: () => { issued = true; } });
+                            refreshRuns = res.ok || issued;
+                            if (!res.ok) {
+                              await showStopFailure(res.error || t('runs.stop.failedToStopRun'));
                             }
+                          } catch (error) {
+                            refreshRuns = issued;
+                            await showStopFailure(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
                           } finally {
                             setStoppingRunAddressKey(null);
-                            await load();
+                            if (refreshRuns && execution.isCurrent()) await load();
                           }
                         };
 
@@ -318,6 +354,7 @@ export default function RunsScreen() {
                           <ExecutionRunRow
                             key={run.runId}
                             run={run as any}
+                            serverId={serverId}
                             selected={run.runId === requestedRunId}
                             subtitle={formatRunDetails(run)}
                             onPress={sessionId ? () => router.push(buildScopedSessionRouteHref({
@@ -326,19 +363,13 @@ export default function RunsScreen() {
                               suffix: `/runs/${encodeURIComponent(run.runId)}`,
                             }) as any) : undefined}
                             rightAccessory={canStop ? (
-                              <Pressable
-                                accessibilityRole="button"
-                                accessibilityLabel={t('runs.stop.stopRunA11y')}
-                                onPress={onStop}
-                                disabled={stoppingRunAddressKey === runAddressKey}
-                                style={({ pressed }) => ({ opacity: pressed ? motionTokens.press.opacity : 1 })}
-                              >
-                                {stoppingRunAddressKey === runAddressKey ? (
-                                  <ActivitySpinner size="small" color={theme.colors.text.secondary} />
-                                ) : (
-                                  <Icon name="stop-circle" size={20} color={theme.colors.accent.orange} />
-                                )}
-                              </Pressable>
+                              <RunStopButton
+                                serverId={serverId}
+                                onStop={onStop}
+                                stopping={stoppingRunAddressKey === runAddressKey}
+                                spinnerColor={theme.colors.text.secondary}
+                                stopColor={theme.colors.accent.orange}
+                              />
                             ) : null}
                           />
                         );

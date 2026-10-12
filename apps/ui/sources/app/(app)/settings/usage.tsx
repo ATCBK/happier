@@ -25,6 +25,7 @@ export function UsageSettingsScreen() {
         params.focusLabel,
         params.scope,
         params.layoutId,
+        params.queryOverrides,
     ]);
     // Each writer sets only the params it owns: filters never clear the selected view, and back.
     const handleFiltersChange = React.useCallback((filters: Parameters<typeof buildUsageRouteParams>[0]) => {

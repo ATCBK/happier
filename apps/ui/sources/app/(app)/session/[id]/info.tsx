@@ -141,6 +141,7 @@ import { usePluginUiSessionPolicyEvaluationContext } from '@/components/sessions
 import { WorkspaceSyncRelationshipList } from '@/components/workspaces/sync/WorkspaceSyncRelationshipList';
 import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
 import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
 type RawJsonSectionId = 'agentState' | 'metadata' | 'sessionStatus' | 'session';
 type RawJsonSnapshot = Readonly<{
@@ -1407,12 +1408,9 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                                 </Text>
                             }
                             onPress={() => {
-                                const encodedMachineId = encodeURIComponent(reachableMachineId);
                                 const normalizedServerId = String(sessionServerId ?? '').trim();
-                                const href = normalizedServerId
-                                    ? `/machine/${encodedMachineId}?serverId=${encodeURIComponent(normalizedServerId)}`
-                                    : `/machine/${encodedMachineId}`;
-                                router.push(href);
+                                router.push(machinePageHref({ door: 'rail',
+                                    target: { machineId: reachableMachineId, serverId: normalizedServerId || undefined } }) as never);
                             }}
                         />
                     )}

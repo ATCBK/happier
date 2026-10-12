@@ -44,6 +44,7 @@ import {
     Text as PluginText,
     Tabs as PluginTabs,
 } from '@happier-dev/plugin-ui';
+import { CountedDisclosureItem as PluginCountedDisclosureItem } from '@happier-dev/plugin-ui/components';
 import {
     HappierBadge,
     HappierBanner,
@@ -81,6 +82,8 @@ import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { Text } from '@/components/ui/text/Text';
+import { CountedDisclosureItem } from '@/components/ui/lists/CountedDisclosureItem';
+import { t } from '@/text';
 import { createPluginUiPrivatePresentationHost } from '@/components/plugins/surfaces/pluginUiPrivatePresentationHost';
 import {
     createPluginSurfaceContext,
@@ -140,11 +143,15 @@ function useDemoSurfaceContext(): DemoSurfaceContext {
             && resolveAuthCredentialsScopeKey(currentCredentials) === credentialScope,
         );
     }, [accountLifetime, credentialScope]);
-    const accountEncryptionMode = usePluginSurfaceAccountEncryptionMode({
+    const accountEncryptionModeReadiness = usePluginSurfaceAccountEncryptionMode({
         accountLifetime,
         credentials,
         isCurrent: isAccountEncryptionModeCurrent,
     });
+    // The hook reports readiness; only a ready disclosure carries the Account mode.
+    const accountEncryptionMode = accountEncryptionModeReadiness.status === 'ready'
+        ? accountEncryptionModeReadiness.mode
+        : null;
     const context = React.useMemo(() => {
         if (!accountLifetime || !accountEncryptionMode || !isAccountEncryptionModeCurrent()) {
             return null;
@@ -463,6 +470,14 @@ function PluginExpandedSamples() {
                             onPress={() => undefined}
                         />
                     </PluginItemGroup>
+                    <PluginItemGroup>
+                        <CountedDisclosureItem title={t('systemStatus.machine.offline')} count={3} testID="core-counted-demo">
+                            <Text testID="core-counted-demo.details">Laptop · Desktop · Build server</Text>
+                        </CountedDisclosureItem>
+                        <PluginCountedDisclosureItem title={t('systemStatus.machine.offline')} count={3} testID="plugin-counted-demo">
+                            <PluginText testID="plugin-counted-demo.details" value="Laptop · Desktop · Build server" />
+                        </PluginCountedDisclosureItem>
+                    </PluginItemGroup>
                     <PluginForm
                         hints={{ fields: [
                             { path: 'name', title: 'Name', widget: 'text', required: true },
@@ -608,13 +623,13 @@ function PluginSurfaceSamples() {
     return (
         <View>
             <Sample title="Plugin title tone accent">
-                <PluginText variant="title" tone="accent" value="Review summary" testID="plugin-text-title" />
+                <PluginText variant="heading" tone="accent" value="Review summary" testID="plugin-text-title" />
             </Sample>
             <Sample title="Plugin body tone neutral">
                 <PluginText value="The quick brown fox jumps over the lazy dog" testID="plugin-text-body" />
             </Sample>
             <Sample title="Plugin caption tone muted">
-                <PluginText variant="caption" tone="muted" value="Last checked a moment ago" testID="plugin-text-caption" />
+                <PluginText variant="micro" tone="muted" value="Last checked a moment ago" testID="plugin-text-caption" />
             </Sample>
             <Sample title="Plugin danger tone">
                 <PluginText variant="label" tone="danger" value="3 findings need attention" testID="plugin-text-danger" />

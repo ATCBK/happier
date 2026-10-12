@@ -36,7 +36,7 @@ import {
     resolveNewSessionSecretRequirementRoutePresentation,
 } from '@/components/sessions/new/navigation/newSessionPresentation';
 import { RootLayoutNavigationEffects } from '@/components/navigation/root/RootLayoutNavigationEffects';
-import { RootLayoutRedirectGate } from '@/components/navigation/root/RootLayoutRedirectGate';
+import { renderRootLayoutRedirectGate } from '@/components/navigation/root/RootLayoutRedirectGate';
 import { useOnboardingJourneySessionActive } from '@/components/onboarding/tour/state/journeySession';
 import { VoiceAnnouncer } from '@/components/voice/surface/VoiceAnnouncer';
 import { ActivityPersonalSessionMembershipProvider } from '@/activity/source/activityPersonalSessionMembership';
@@ -473,7 +473,7 @@ const RootLayoutShell = React.memo(function RootLayoutShell(): React.ReactElemen
               * carries the title. Settings re-provides its own value.
               */}
             <NavigationTitleChromeProvider showsTitle={!appShellPresent}>
-            <Stack screenOptions={rootStackScreenOptions}>
+            <Stack screenOptions={rootStackScreenOptions} layout={renderRootLayoutRedirectGate}>
                 <Stack.Screen
                     name="index"
                     options={rootStackRouteOptions.index}
@@ -823,12 +823,11 @@ export default function RootLayout(): React.ReactElement {
     // `<RootLayoutShell />` element reference stays stable and its Stack subtree is not
     // re-rendered when the route changes. Navigation/auth side effects live in the null-rendering
     // `<RootLayoutNavigationEffects />` sibling; the unauthenticated redirect check and the
-    // auth-recovery hold live in the `<RootLayoutRedirectGate />`, the only
+    // auth-recovery hold live inside the navigator's `<RootLayoutRedirectGate />`, the only
     // navigation-subscribing owner in this render path.
     return (
         <>
             <RootLayoutNavigationEffects />
-            <RootLayoutRedirectGate>
                 {/*
                   * One Voice energy clock for the whole app (§4.2 rule 6): every
                   * Voice surface animates from these shared values, so amplitude
@@ -838,7 +837,6 @@ export default function RootLayout(): React.ReactElement {
                   * setting or session-status change.
                   */}
                 <RootLayoutShell />
-            </RootLayoutRedirectGate>
         </>
     );
 }

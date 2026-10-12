@@ -11,10 +11,12 @@ import { sync } from '@/sync/sync';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Switch } from '@/components/ui/forms/Switch';
 import { useConnectAccount } from '@/hooks/auth/useConnectAccount';
-import { getAvatarUrl, getDisplayName } from '@/sync/domains/profiles/profile';
+import { getAvatarUrl } from '@/sync/domains/profiles/profile';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { HappyError } from '@/utils/errors/errors';
 import { setAccountUsername } from '@/sync/api/account/apiUsername';
+import { setAccountName } from '@/sync/api/account/apiAccountName';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
 import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityReadiness';
@@ -23,12 +25,11 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { isRunningOnMac } from '@/utils/platform/platform';
 import { isWebMobileLikeQrScannerHost } from '@/utils/platform/webMobileHeuristics';
 import { canUseCurrentDeviceQrScanner } from '@/utils/platform/qrScannerSupport';
-import { ACCOUNT_ERASURE_CONFIRMATION_V1 } from '@happier-dev/protocol/auth/accountErasure';
 import { Icon } from '@/components/ui/icons/Icon';
-import { presentFirstKeyCredentialLifecycle } from '@/components/account/presentFirstKeyCredentialLifecycle';
-import { deleteCurrentAccount } from '@/sync/api/account/deleteCurrentAccount';
 import { accountErasureFailureNotice } from '@/components/settings/home/governance/homeGovernanceLabels';
-import { AccountDeletedLocalCleanupError, completeAccountDeletion } from '@/components/settings/account/accountDeletionLifecycle';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { SettingsHistorySection } from '@/components/settings/account/SettingsHistorySection';
 import { AccountServiceSettingsSection } from '@/components/settings/account/AccountServiceSettingsSection';
 import { AccountIdentifier } from '@/components/settings/account/AccountIdentifier';
@@ -52,15 +53,13 @@ import { SelectionTiles, type SelectionTile } from '@/components/ui/forms/Select
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { ADD_HOME_RESTORE_PATH } from '@/auth/pairing/homeQrEntryIntent';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { confirmForCapturedAccount } from '@/components/settings/apiTokens/confirmForCapturedAccount';
-import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { serverFetch, type ServerFetch } from '@/sync/http/client';
 
 export const WorkspaceRouteBody = React.memo(() => {
     const { theme } = useUnistyles();
     const auth = useAuth();
     const router = useRouter();
+    const accountScope = useAccountSettingsScope();
+    const accountExecution = useMountedActionExecution(accountScope);
     const { width, height } = useWindowDimensions();
     const [accountDeletionPending, setAccountDeletionPending] = useState(false);
     const [analyticsOptOut, setAnalyticsOptOut] = useSettingMutable('analyticsOptOut');
@@ -75,38 +74,63 @@ export const WorkspaceRouteBody = React.memo(() => {
     const activeHomeName = resolveHomeDisplayName(getServerProfileById(activeServer.serverId));
     const activeHomeLabel = activeHomeName ?? t('settingsAccount.thisHome');
     // Profile display values
-    const displayName = getDisplayName(profile);
+    const displayName = formatAccountDisplayName(profile);
     const security = useAccountSecurityProjection();
     const canSetUsername =
         friendsEnabled &&
         !friendsIdentityReadiness.isLoadingFeatures &&
         friendsIdentityReadiness.gate.gateVariant === 'username';
 
-    const [usernameDraft, setUsernameDraft] = useState<string | null>(null);
-    const [savingUsername, saveUsername] = useHappyAction(async () => {
-        if (!auth.credentials) return;
-        if (!canSetUsername) return;
-        if (usernameDraft === null) return;
-
-        try {
-            const res = await setAccountUsername(auth.credentials, usernameDraft);
-            applyProfile({ ...profile, username: res.username });
-            setUsernameDraft(null);
-        } catch (e) {
-            if (e instanceof HappyError) {
-                const msg =
+    // The profile editor: the Account's name for everyone, and its username where Friends uses one.
+    const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
+    const [nameError, setNameError] = useState<string | null>(null);
+    const [usernameError, setUsernameError] = useState<string | null>(null);
+    const openProfileEditor = () => {
+        setNameError(null);
+        setUsernameError(null);
+        setProfileDraft({ name: profile.name ?? '', username: profile.username ?? '' });
+    };
+    const nameChanged = profileDraft !== null && profileDraft.name.trim() !== (profile.name ?? '');
+    const usernameChanged = canSetUsername && profileDraft !== null && profileDraft.username.trim() !== (profile.username ?? '');
+    const [savingProfile, saveProfile] = useHappyAction(async () => {
+        if (!auth.credentials || profileDraft === null) return;
+        if (nameChanged) {
+            setNameError(null);
+            try {
+                // The API publishes the Home's acknowledgment itself; nothing captured here is re-applied.
+                await setAccountName(auth.credentials, profileDraft.name, accountExecution);
+            } catch {
+                setNameError(t('settingsAccount.nameSaveFailed'));
+                return;
+            }
+        }
+        if (usernameChanged) {
+            setUsernameError(null);
+            try {
+                await setAccountUsername(auth.credentials, profileDraft.username.trim(), accountExecution);
+            } catch (e) {
+                if (!(e instanceof HappyError)) throw e;
+                setUsernameError(
                     e.message === 'username-taken' ? t('friends.username.taken')
                         : e.message === 'invalid-username' ? t('friends.username.invalid')
                             : e.message === 'username-disabled' ? t('friends.username.disabled')
                                 : e.message === 'friends-disabled' ? t('friends.disabled')
-                                    : e.message;
-                await Modal.alert(t('common.error'), msg);
+                                    : t('errors.operationFailed'),
+                );
                 return;
             }
-            throw e;
         }
+        setProfileDraft(null);
     });
+    const cancelProfileEditor = () => { if (!savingProfile) setProfileDraft(null); };
+    const cancelOnEscape = (event: { nativeEvent: { key: string } }) => { if (event.nativeEvent.key === 'Escape') cancelProfileEditor(); };
 
+    const executeLeavingAction = async (actionId: 'account.signOut' | 'account.credentials.forgetAll' | 'account.delete') => {
+        if (!accountScope) throw new Error('Account is unavailable');
+        const outcome = await accountExecution.execute(actionId, { ...accountScope,
+            ...(actionId === 'account.credentials.forgetAll' ? { scope: 'all-credentials' } : {}) });
+        if (!outcome.ok) throw new HappyError(outcome.error, false, { code: outcome.errorCode, details: outcome.details });
+    };
     const handleLogout = async () => {
         const confirmed = await Modal.confirm(
             t('settingsAccount.logoutHome', { home: activeHomeLabel }),
@@ -117,13 +141,7 @@ export const WorkspaceRouteBody = React.memo(() => {
             },
         );
         if (confirmed) {
-            await presentFirstKeyCredentialLifecycle({
-                run: async () =>
-                    await auth.logout({
-                        beforeMutation: () =>
-                            router.replace('/'),
-                    }),
-            });
+            await executeLeavingAction('account.signOut');
         }
     };
     const handleForgetAllCredentials = async () => {
@@ -136,70 +154,13 @@ export const WorkspaceRouteBody = React.memo(() => {
             },
         );
         if (!confirmed) return;
-        let routed = false;
-        const routeAfterAuthorization = () => {
-            if (routed) return;
-            routed = true;
-            router.replace('/');
-        };
-        await presentFirstKeyCredentialLifecycle({
-            run: async () =>
-                await auth.logout({
-                    scope: 'all-credentials',
-                    beforeMutation: routeAfterAuthorization,
-                }),
-            onCompleted: routeAfterAuthorization,
-        });
+        await executeLeavingAction('account.credentials.forgetAll');
     };
     const handleDeleteAccount = async () => {
         if (accountDeletionPending) return;
-        const credentials = auth.credentials;
-        const capturedTarget = captureActiveServerAccountScopeLifetime();
-        const capturedServer = getAppliedActiveServerSnapshot();
-        if (!credentials || !capturedTarget) { await Modal.alertAsync(t('common.error'), t('settingsAccount.deleteAccountFailed')); return; }
-        try {
-            if (parseToken(credentials.token) !== capturedTarget.scope.accountId) throw new Error('Account credential changed');
-        } catch { await Modal.alertAsync(t('common.error'), t('settingsAccount.deleteAccountFailed')); return; }
-        const deletionTarget = await confirmForCapturedAccount({ captureDestructiveTarget: () => capturedTarget }, async () => {
-            const confirmation = await Modal.prompt(t('settingsAccount.deleteAccountConfirmTitle'), t('settingsAccount.deleteAccountConfirmBody'), { placeholder: ACCOUNT_ERASURE_CONFIRMATION_V1, confirmText: t('settingsAccount.deleteAccount') });
-            if (confirmation === null) return false;
-            if (confirmation.trim() !== ACCOUNT_ERASURE_CONFIRMATION_V1) {
-                await Modal.alertAsync(t('settingsAccount.deleteAccountInvalidTitle'), t('settingsAccount.deleteAccountInvalidBody'));
-                return false;
-            }
-            return true;
-        });
-        if (!deletionTarget) return;
-        const request: ServerFetch = (path, init, options) => serverFetch(path, init, { ...options,
-            expectedActiveServer: { serverId: capturedServer.serverId, generation: capturedServer.generation },
-        });
         setAccountDeletionPending(true);
-        let runDeletionCleanup = async () => await completeAccountDeletion({
-            target: deletionTarget,
-            deleteCurrentAccount: async options => await deleteCurrentAccount(credentials, { ...options, request }),
-            logout: options => auth.logout({ ...options, target: { serverId: capturedServer.serverId, serverUrl: capturedServer.serverUrl }, expectedCredentials: credentials }),
-            replace: (path) => router.replace(path),
-        });
         try {
-            while (true) {
-                try {
-                    await presentFirstKeyCredentialLifecycle({ run: runDeletionCleanup });
-                    break;
-                } catch (error) {
-                    if (!(error instanceof AccountDeletedLocalCleanupError)) throw error;
-                    let retry = false;
-                    await Modal.alertAsync(
-                        t('settingsAccount.deleteAccountCleanupFailedTitle'),
-                        t('settingsAccount.deleteAccountCleanupFailed'),
-                        [
-                            { text: t('common.cancel'), style: 'cancel' },
-                            { text: t('common.retry'), onPress: () => { retry = true; } },
-                        ],
-                    );
-                    if (!retry) break;
-                    runDeletionCleanup = error.retryLocalCleanup;
-                }
-            }
+            await executeLeavingAction('account.delete');
         } catch (error) {
             if (error instanceof Error && error.name === 'AbortError') return;
             // The Home's typed verdict names the real obstacle — the last Home
@@ -272,39 +233,83 @@ export const WorkspaceRouteBody = React.memo(() => {
                         thumbhash={profile.avatar?.thumbhash}
                     />
                 )}
-                actions={canSetUsername ? (
+                // Naming yourself is this page's own operation: it stays by the identity on phones too.
+                actionsPlacement="page"
+                actions={(
                     <RoundButton
-                        testID="settings-account-username"
+                        testID="settings-account-edit-profile"
                         size="small"
                         display="secondary"
-                        title={profile.username ? t('settingsAccount.editUsername') : t('settingsAccount.chooseUsername')}
-                        accessibilityHint={profile.username ? undefined : t('friends.username.required')}
-                        onPress={() => setUsernameDraft(profile.username ?? '')}
-                        disabled={savingUsername}
-                        loading={savingUsername}
+                        title={profile.name ? t('settingsAccount.editProfile') : t('settingsAccount.addName')}
+                        accessibilityHint={canSetUsername && !profile.username ? t('friends.username.required') : undefined}
+                        onPress={openProfileEditor}
+                        disabled={profileDraft !== null}
                     />
-                ) : undefined}
+                )}
             />
 
-            {canSetUsername && usernameDraft !== null ? (
-                <ItemGroup>
+            {profileDraft !== null ? (
+                <ItemGroup
+                    title={t('settingsAccount.profileTitle')}
+                    description={t('settingsAccount.profileDescription', { home: activeHomeLabel })}
+                >
+                    {accountExecution.approval.approvalPending && accountExecution.approval.approvalId && accountExecution.binding ? (
+                        <ActionApprovalPendingNotice
+                            testID="settings-account-profile-approval-pending"
+                            message={t('approvals.waitingForYou')}
+                            summary={accountExecution.approval.approvalSummary}
+                            onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(accountExecution.approval.approvalId!)}?serverId=${encodeURIComponent(accountExecution.binding!.scope.serverId)}`)}
+                        />
+                    ) : null}
                     <SectionContentRow>
-                        <FieldItem label={t('profile.username')}>
+                        <FieldItem label={t('settingsAccount.nameLabel')}>
                             <FieldTextInput
-                                testID="settings-account-username-field"
-                                value={usernameDraft}
-                                onChangeText={setUsernameDraft}
-                                accessibilityLabel={t('profile.username')}
-                                autoCapitalize="none"
-                                editable={!savingUsername}
-                                onSubmitEditing={saveUsername}
+                                testID="settings-account-name-field"
+                                value={profileDraft.name}
+                                onChangeText={(name) => { setNameError(null); setProfileDraft({ ...profileDraft, name }); }}
+                                accessibilityLabel={t('settingsAccount.nameLabel')}
+                                placeholder={t('settingsAccount.namePlaceholder')}
+                                error={nameError}
+                                autoCapitalize="words"
+                                autoComplete="name"
+                                textContentType="name"
+                                autoFocus
+                                editable={!savingProfile}
+                                returnKeyType={canSetUsername ? 'next' : 'done'}
+                                onSubmitEditing={saveProfile}
+                                onKeyPress={cancelOnEscape}
                             />
                         </FieldItem>
                     </SectionContentRow>
+                    {canSetUsername ? (
+                        <SectionContentRow>
+                            <FieldItem label={t('profile.username')}>
+                                <FieldTextInput
+                                    testID="settings-account-username-field"
+                                    value={profileDraft.username}
+                                    onChangeText={(username) => { setUsernameError(null); setProfileDraft({ ...profileDraft, username }); }}
+                                    accessibilityLabel={t('profile.username')}
+                                    error={usernameError}
+                                    autoCapitalize="none"
+                                    autoComplete="username"
+                                    editable={!savingProfile}
+                                    onSubmitEditing={saveProfile}
+                                    onKeyPress={cancelOnEscape}
+                                />
+                            </FieldItem>
+                        </SectionContentRow>
+                    ) : null}
                     <SectionContentRow>
-                        <View style={{ flexDirection: 'row', gap: 8 }}>
-                            <RoundButton testID="settings-account-username-cancel" size="small" display="secondary" title={t('common.cancel')} disabled={savingUsername} onPress={() => setUsernameDraft(null)} />
-                            <RoundButton testID="settings-account-username-save" size="small" title={t('common.save')} disabled={savingUsername || !usernameDraft.trim()} loading={savingUsername} onPress={saveUsername} />
+                        <View style={accountStyles.editorActions}>
+                            <RoundButton testID="settings-account-profile-cancel" size="small" display="secondary" title={t('common.cancel')} disabled={savingProfile} onPress={cancelProfileEditor} />
+                            <RoundButton
+                                testID="settings-account-profile-save"
+                                size="small"
+                                title={t('common.save')}
+                                disabled={savingProfile || !accountExecution.ready || !(nameChanged || usernameChanged) || (usernameChanged && !profileDraft.username.trim())}
+                                loading={savingProfile && !accountExecution.approval.approvalPending}
+                                onPress={saveProfile}
+                            />
                         </View>
                     </SectionContentRow>
                 </ItemGroup>
@@ -320,6 +325,7 @@ export const WorkspaceRouteBody = React.memo(() => {
 
             <AccountServiceSettingsSection />
 
+            {/* On a narrow page the shared tile owner draws these actions as rows of one group. */}
             <ItemGroup title={t('settingsAccount.devices')} surface="none">
                 <SelectionTiles
                     variant="action"
@@ -396,51 +402,47 @@ export const WorkspaceRouteBody = React.memo(() => {
                 />
             </ItemGroup>
 
-            {/* Leaving: quiet, separated actions. The irreversible one stands apart at the end. */}
-            <ItemGroup surface="none" accessibilityLabel={t('settingsAccount.dangerZone')}>
-                <View testID="settings-account-danger-zone" style={accountStyles.leaveActions}>
-                    <RoundButton
-                        testID="settings-account-logout"
-                        size="small"
-                        display="secondary"
-                        leading={<Icon name="sign-out" size={15} color={theme.colors.text.primary} />}
-                        title={t('settingsAccount.logoutHome', { home: activeHomeLabel })}
-                        titleNumberOfLines="complete"
-                        accessibilityHint={t('settingsAccount.logoutHomeSubtitle', { home: activeHomeLabel })}
-                        disabled={accountDeletionPending}
-                        onPress={handleLogout}
-                    />
-                    <RoundButton
-                        testID="settings-account-forget-all-credentials"
-                        size="small"
-                        display="inverted"
-                        title={t('settingsAccount.forgetAllCredentials')}
-                        titleNumberOfLines="complete"
-                        textStyle={accountStyles.quietAction}
-                        accessibilityHint={t('settingsAccount.forgetAllCredentialsSubtitle')}
-                        disabled={accountDeletionPending}
-                        onPress={handleForgetAllCredentials}
-                    />
-                    <View style={accountStyles.leaveSpacer} />
-                    <RoundButton
-                        testID="settings-account-delete"
-                        size="small"
-                        display="destructive"
-                        title={t('settingsAccount.deleteAccountEllipsis')}
-                        titleNumberOfLines="complete"
-                        accessibilityHint={t('settingsAccount.deleteAccountSubtitle')}
-                        disabled={accountDeletionPending}
-                        loading={accountDeletionPending}
-                        onPress={handleDeleteAccount}
-                    />
-                </View>
-                <Text style={accountStyles.footnote}>{t('settingsAccount.signOutFootnote')}</Text>
+            {/* Leaving: one group of rows; Delete is its only destructive row. */}
+            <ItemGroup title={t('settingsAccount.dangerZone')}>
+                <Item
+                    testID="settings-account-logout"
+                    icon={<Icon name="sign-out" size={20} color={theme.colors.text.secondary} />}
+                    title={t('settingsAccount.logoutHome', { home: activeHomeLabel })}
+                    subtitle={t('settingsAccount.logoutHomeSubtitle', { home: activeHomeLabel })}
+                    subtitleLines={0}
+                    showChevron={false}
+                    disabled={accountDeletionPending}
+                    onPress={handleLogout}
+                />
+                <Item
+                    testID="settings-account-forget-all-credentials"
+                    icon={<Icon name="key" size={20} color={theme.colors.text.secondary} />}
+                    title={t('settingsAccount.forgetAllCredentials')}
+                    subtitle={t('settingsAccount.forgetAllCredentialsSubtitle')}
+                    subtitleLines={0}
+                    showChevron={false}
+                    disabled={accountDeletionPending}
+                    onPress={handleForgetAllCredentials}
+                />
+                <Item
+                    testID="settings-account-delete"
+                    icon={<Icon name="trash" size={20} color={theme.colors.state.danger.foreground} />}
+                    title={t('settingsAccount.deleteAccountEllipsis')}
+                    subtitle={t('settingsAccount.deleteAccountSubtitle')}
+                    subtitleLines={0}
+                    destructive
+                    showChevron={false}
+                    disabled={accountDeletionPending}
+                    loading={accountDeletionPending}
+                    onPress={handleDeleteAccount}
+                />
             </ItemGroup>
         </ItemList>
     );
 });
 
 type DeviceTileId = 'addPhone' | 'addHome' | 'linkDevice';
+type ProfileDraft = Readonly<{ name: string; username: string }>;
 
 const accountStyles = StyleSheet.create((theme) => ({
     identifier: {
@@ -448,28 +450,10 @@ const accountStyles = StyleSheet.create((theme) => ({
         fontSize: 12.5,
         color: theme.colors.text.secondary,
     },
-    leaveActions: {
+    editorActions: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        gap: 8,
-    },
-    // Pushes "Delete account" to the far edge when the row fits, apart from the recoverable actions.
-    leaveSpacer: {
-        flexGrow: 1,
-    },
-    quietAction: {
-        ...Typography.default('medium'),
-        fontSize: 13,
-        color: theme.colors.text.secondary,
-    },
-    footnote: {
-        ...Typography.default('regular'),
-        fontSize: 12,
-        lineHeight: 16,
-        color: theme.colors.text.tertiary,
-        marginTop: 10,
-        marginHorizontal: 2,
+        justifyContent: 'flex-end',
+        gap: theme.space.s8,
     },
 }));
 import { WorkspaceRouteEntry } from '@/components/appShell/workspace/createWorkspaceRouteEntry';

@@ -3,6 +3,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { computeContentPublicKeyFingerprint, McpServersSettingsV1Schema, SavedSecretResourceMaterialV1Schema } from '@happier-dev/protocol';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { renderScreen } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -18,6 +20,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { resetSavedSecretCatalogEngineForTests } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { getSavedSecretCatalogSnapshot } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import Screen from './secrets';
 
 installDisconnectedServerSocketBoundary();
@@ -74,7 +77,10 @@ describe('SecretsSettingsScreen shared feature decision', () => {
         storage.setState(initialStorage, true);
     });
     async function render(options: Parameters<typeof createSecretSettingsTestHarness>[0] = {}, resourceMode?: 'plain' | 'e2ee') {
-        account = await createSecretSettingsTestHarness(options);
+        account = await createSecretSettingsTestHarness({ ...options, settings: options.settings ?? settingsParse({
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+                approvalWaivedSurfaces: { 'secrets.shared.create': ['ui'], 'secrets.shared.promote': ['ui'] } }),
+        }) });
         if (resourceMode) await account.addOwnerResource(resourceMode);
         const screen = await renderScreen(<InjectedAuthProvider credentials={account.credentials}><Screen /></InjectedAuthProvider>);
         screens.push(screen);
@@ -93,19 +99,20 @@ describe('SecretsSettingsScreen shared feature decision', () => {
         account = undefined;
     }
 
-    it('opens the grant picker for a still-personal secret and converts nothing until it is saved', async () => {
-        const { screen, page, account } = await render();
-        const secret = page().personalSecrets[0];
+    it('opens the grant picker for a private resource and writes nothing until it is saved', async () => {
+        const { screen, page, account } = await render({}, 'plain');
+        const secret = page().sharedEntries[0];
+        const resourcesBeforeOpening = [...account.resources];
         const settingsWritesBeforeOpening = [...account.settingsWrites];
-        await act(async () => { page().onSharePersonal?.(secret); });
+        await act(async () => { page().onManageAccessShared?.(secret); });
         const editor = screen.tree.findByType(AccessComponent).props;
         expect(storage.getState().settingsScope).toEqual(account.scope);
         expect(storage.getState().settingsVersion).not.toBeNull();
-        expect(editor.target).toEqual({ kind: 'personal', secret, expectedSettingsVersion: storage.getState().settingsVersion });
+        expect(editor.target).toEqual({ kind: 'shared', entry: secret });
         expect(editor.scope).toEqual(account.scope);
-        expect(page().accessEditor?.key).toBe(secret.id);
+        expect(page().accessEditor?.key).toBe(secret.ref);
         expect(account.settingsWrites).toEqual(settingsWritesBeforeOpening);
-        expect(account.resources).toEqual([]);
+        expect(account.resources).toEqual(resourcesBeforeOpening);
         await act(async () => { editor.onClose(); });
         expect(page().accessEditor).toBeNull();
         expect(screen.tree.findAllByType(AccessComponent)).toHaveLength(0);
@@ -113,7 +120,7 @@ describe('SecretsSettingsScreen shared feature decision', () => {
         expect(account.request.mock.calls.some(([url]) => new URL(String(url)).pathname.endsWith('/promote'))).toBe(false);
     });
 
-    it('keeps personal editing available while hiding every shared mutation when disabled', async () => {
+    it('keeps private resource editing available when Teams is disabled', async () => {
         const { screen, page } = await render({ sharedEnabled: false });
         expect(page().onRenamePersonal).toBeTypeOf('function');
         expect(page().onRotatePersonal).toBeTypeOf('function');
@@ -121,13 +128,12 @@ describe('SecretsSettingsScreen shared feature decision', () => {
         await act(async () => { page().onAdd(); });
         const editor = screen.tree.findByType(CreateComponent).props;
         expect(editor.onCreatePersonal).toBeTypeOf('function');
-        expect(editor.sharedAvailable).toBe(false);
-        expect(page().onSharePersonal).toBeUndefined();
-        expect(page().onRenameShared).toBeUndefined();
-        expect(page().onRotateShared).toBeUndefined();
-        expect(page().onManageAccessShared).toBeUndefined();
-        expect(page().onDeleteShared).toBeUndefined();
-        expect(page().onRetrySharedCatalog).toBeUndefined();
+        expect(editor.sharedAvailable).toBe(true);
+        expect(page().onRenameShared).toBeTypeOf('function');
+        expect(page().onRotateShared).toBeTypeOf('function');
+        expect(page().onManageAccessShared).toBeTypeOf('function');
+        expect(page().onDeleteShared).toBeTypeOf('function');
+        expect(page().onRetrySharedCatalog).toBeTypeOf('function');
         expect(page().approvalId).toBeNull();
     });
 
@@ -142,16 +148,21 @@ describe('SecretsSettingsScreen shared feature decision', () => {
         expect(page().onDeleteShared).toBeTypeOf('function');
     });
 
-    it('keeps collision-rekey recovery reachable while shared hydration is blocked', async () => {
-        const settings = settingsParse({ secrets: [{ id: 'happier:shared-secret:v1:resource-a',
-            name: 'Personal collision', kind: 'token', encryptedValue: { _isSecretValue: true, value: 'personal-value' },
-            createdAt: 1, updatedAt: 1 }] });
-        const { screen, page, account } = await render({ settings, rejectSettingsWrites: true });
-        await vi.waitFor(() => expect(account.settingsWrites.length).toBeGreaterThan(0));
+    it('keeps current material and catalog recovery reachable while retained source admission is blocked', async () => {
+        const rawSettings = { secrets: [{ id: 'future-material',
+            name: 'Retained source', kind: 'token', encryptedValue: { _isSecretValue: true, encryptedValue: { t: 'future-secret-envelope', c: 'opaque' } },
+            createdAt: 1, updatedAt: 1 }] };
+        const { screen, page, account } = await render({ rawSettings, settings: settingsParse(rawSettings) }, 'plain');
+        await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(account.scope)).toMatchObject({
+            status: 'ready', legacyImport: { status: 'pending', reason: 'source-uncharacterized' },
+        }));
         await vi.waitFor(() => expect(page().onRetrySharedCatalog).toBeTypeOf('function'));
-        expect(storage.getState().settings.secrets[0].id).toBe('happier:shared-secret:v1:resource-a');
+        expect(account.settingsWrites).toEqual([]);
+        expect(account.promotions).toEqual([]);
+        expect(page().resolveSharedReference('happier:shared-secret:v1:resource-a')).toMatchObject({ status: 'ready' });
+        expect(account.persistedRawSettings).toMatchObject({ secrets: [{ id: 'future-material' }] });
         await act(async () => { page().onAdd(); });
-        expect(screen.tree.findByType(CreateComponent).props.sharedAvailable).toBe(false);
+        expect(screen.tree.findByType(CreateComponent).props.sharedAvailable).toBe(true);
     });
 
     it('preserves exact shared-secret rotation bytes, including an all-whitespace value', async () => {
@@ -205,7 +216,7 @@ describe('SecretsSettingsScreen shared feature decision', () => {
     });
 
     async function renderCorrupt(settings?: ReturnType<typeof settingsParse>) {
-        account = await createSecretSettingsTestHarness({ settings });
+        account = await createSecretSettingsTestHarness({ settings: settings ?? settingsParse({}) });
         account.resources.push(SavedSecretResourceMaterialV1Schema.parse({ entry: ownerCorrupt }),
             SavedSecretResourceMaterialV1Schema.parse({ entry: { materialStatus: 'resource_corrupt', relationship: 'recipient', repair: null } }));
         const screen = await renderScreen(<InjectedAuthProvider credentials={account.credentials}><Screen /></InjectedAuthProvider>);
@@ -218,20 +229,28 @@ describe('SecretsSettingsScreen shared feature decision', () => {
         const { page, account } = await renderCorrupt();
         vi.mocked(Modal.confirm).mockResolvedValue(true);
         await act(async () => { page().onDeleteCorruptShared?.(ownerCorrupt); });
-        await vi.waitFor(() => expect(account.deletes).toEqual([{ resourceId: 'opaque-corrupt-row', expectedRevision: -3 }]));
+        await vi.waitFor(() => expect(account.deletes).toEqual([{ resourceId: 'opaque-corrupt-row', expectedRevision: -3,
+            expectedSettingsVersion: storage.getState().settingsVersion,
+            referenceCensus: { accountMode: 'plain', profileTransferRevision: 'absent',
+                profiles: { referenceGuardRevision: 3, rows: [] },
+                catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent', connectedConfigurations: 'absent', connectedPurposes: 'absent' },
+                remoteHosts: { revision: 'absent', resourceRefs: [] }, notificationChannels: { revision: 'absent', resourceRefs: [] } },
+        }]));
         expect(Modal.confirm).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ destructive: true }));
         expect(account.resources).toHaveLength(1);
         expect(account.resources[0].entry.relationship).toBe('recipient');
     });
 
     it('names the bindings when the owner reference census refuses a corrupt-row deletion', async () => {
-        const settings = settingsParse({ mcpServersSettingsV1: McpServersSettingsV1Schema.parse({ v: 1, strictMode: false,
+        const mcp = McpServersSettingsV1Schema.parse({ v: 1, strictMode: false,
             servers: [{ id: 'srv', name: 'server', transport: 'stdio', stdio: { command: 'node', args: [] },
-                env: { TOKEN: { t: 'savedSecret', secretId: 'happier:shared-secret:v1:opaque-corrupt-row' } }, createdAt: 1, updatedAt: 1 }], bindings: [] }) });
-        const { page, account } = await renderCorrupt(settings);
+                env: { TOKEN: { t: 'savedSecret', secretId: 'happier:shared-secret:v1:opaque-corrupt-row' } }, createdAt: 1, updatedAt: 1 }], bindings: [] });
+        const { page, account } = await renderCorrupt();
+        account.catalogRows.set(MCP_SERVER_CATALOG_ROWS_ROUTE_V1, { status: 'present', revision: 1,
+            content: { t: 'plain', v: McpServerCatalogV1Schema.parse({ v: 1, servers: mcp.servers, bindings: mcp.bindings }) } });
         vi.mocked(Modal.confirm).mockResolvedValue(true);
         await act(async () => { page().onDeleteCorruptShared?.(ownerCorrupt); });
-        await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('mcpServersSettingsV1.servers[0].env.TOKEN')));
+        await vi.waitFor(() => expect(Modal.alert).toHaveBeenCalledWith(expect.any(String), expect.stringContaining('servers[0].env.TOKEN')));
         expect(account.deletes).toEqual([]);
         expect(account.resources).toHaveLength(2);
     });

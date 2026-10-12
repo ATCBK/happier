@@ -5,10 +5,18 @@ import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { ThemeModePreview } from '@/components/settings/appearance/ThemeModePreview';
-import { GlassAppearanceSection } from '@/components/settings/appearance/GlassAppearanceControls';
+import { useGlassAppearanceSummary } from '@/components/settings/appearance/GlassAppearanceControls';
+import { useAtmosphereMomentsSummary } from '@/components/settings/appearance/AtmosphereAppearanceRows';
+import { useMotionAppearanceSummary, useWidgetsAppearanceSummary } from '@/components/settings/appearance/AppearanceSubpageScreens';
+import { AppearanceLivePreview } from '@/components/settings/appearance/AppearanceLivePreview';
+import { PageAsideColumns } from '@/components/ui/layout/PageAsideColumns';
+import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
+import { buildSettingHref } from '@/components/settings/catalog/settingDeclarations';
+import { requestHomeCustomize } from '@/components/hub/header/homeCustomizeRequest';
+import { useMachineSummarySettingValue } from '@/components/machines/summary/useMachineSummarySetting';
+import { machineSummaryStyleTitle } from '@/components/machines/summary/MachineSummaryStyleTiles';
 import { AvatarStylePreview } from '@/components/settings/appearance/AvatarStylePreview';
 import { APPEARANCE_SETTINGS } from '@/components/settings/appearance/appearanceSettings';
-import { HomeLayoutEditor } from '@/components/hub/layout/HomeLayoutEditor';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import React from 'react';
 import { Platform, useWindowDimensions } from 'react-native';
@@ -28,8 +36,6 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { ItemDensityChoiceRow } from '@/components/settings/appearance/ItemDensityPreview';
-import { WidgetFrameAppearanceSection } from '@/components/settings/appearance/WidgetFrameAppearanceSection';
-import { SurfaceFinishAppearanceSection } from '@/components/settings/appearance/SurfaceFinishAppearanceSection';
 import { resolveAppearanceDefaults } from '@/components/settings/appearance/appearanceDefaults';
 import { buildThemePresetSourceOptions } from '@/components/settings/appearance/themeProfiles/themeProfilePresetOptions';
 import { Modal } from '@/modal';
@@ -44,21 +50,7 @@ import {
     clearActiveThemeProfiles,
 } from '@/theme/profiles/themeProfilePersistence';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
-import {
-    HAPPIER_SPINNER_PAUSE_IDS,
-    happierPageTextMetrics,
-    HAPPIER_SPINNER_SPEED_IDS,
-    HAPPIER_SPINNER_STYLE_IDS,
-    happierSpinnerStyleTimingControls,
-    isHappierSpinnerStyleId,
-    normalizeHappierSpinnerStyleId,
-    type HappierSpinnerPauseId,
-    type HappierSpinnerSpeedId,
-} from '@happier-dev/plugin-ui/presentation';
-import {
-    LOADING_INDICATOR_STYLE_LABEL_KEYS,
-    LoadingIndicatorStylePreview,
-} from '@/components/settings/appearance/LoadingIndicatorStylePreview';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 // Define known avatar styles for this version of the app
 type KnownAvatarStyle = 'pixelated' | 'gradient' | 'brutalist';
@@ -97,9 +89,6 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
     const [uiFontScale, setUiFontScale] = useLocalSettingMutable('uiFontScale');
     const [uiContentWidthMode, setUiContentWidthMode] = useLocalSettingMutable('uiContentWidthMode');
     const [uiItemDensity, setUiItemDensity] = useLocalSettingMutable('uiItemDensity');
-    const [loadingIndicatorStyle, setLoadingIndicatorStyle] = useLocalSettingMutable('loadingIndicatorStyle');
-    const [loadingIndicatorSpeed, setLoadingIndicatorSpeed] = useLocalSettingMutable('loadingIndicatorSpeed');
-    const [loadingIndicatorPause, setLoadingIndicatorPause] = useLocalSettingMutable('loadingIndicatorPause');
     const [uiMultiPanePanelsEnabled, setUiMultiPanePanelsEnabled] = useLocalSettingMutable('uiMultiPanePanelsEnabled');
     const [hideConnectedAccountIdentities, setHideConnectedAccountIdentities] = useLocalSettingMutable('hideConnectedAccountIdentities');
     const [detailsPaneTabsBehavior, setDetailsPaneTabsBehavior] = useLocalSettingMutable('detailsPaneTabsBehavior');
@@ -112,13 +101,16 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
     const [tabBarOpenTabsBadgeEnabled, setTabBarOpenTabsBadgeEnabled] = useSettingMutable('tabBarOpenTabsBadgeEnabled');
     const [tabBarShowLabels, setTabBarShowLabels] = useSettingMutable('tabBarShowLabels');
     const [tabBarSize, setTabBarSize] = useSettingMutable('tabBarSize');
-    const [visualEffectsLevel, setVisualEffectsLevel] = useSettingMutable('visualEffectsLevel');
     const [contextGaugeStyle, setContextGaugeStyle] = useSettingMutable('contextGaugeStyle');
-    const [animatedNumbers, setAnimatedNumbers] = useSettingMutable('animatedNumbers');
     const [alwaysShowContextSize, setAlwaysShowContextSize] = useSettingMutable('alwaysShowContextSize');
     const [preferredLanguage] = useSettingMutable('preferredLanguage');
     const [badgesExpanded, setBadgesExpanded] = React.useState(false);
     const reduceMotion = useReducedMotionPreference();
+    const glassSummary = useGlassAppearanceSummary();
+    const momentsSummary = useAtmosphereMomentsSummary();
+    const widgetsSummary = useWidgetsAppearanceSummary();
+    const motionSummary = useMotionAppearanceSummary();
+    const machineSummaryStyle = useMachineSummarySettingValue().style;
     const safeThemeProfiles = themeProfiles ?? DEFAULT_THEME_PROFILES_LOCAL_STATE;
     // The Themes row summarizes the library: which theme each mode uses and how many there are. The
     // library screen owns choosing them.
@@ -154,26 +146,6 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
         ];
     }, []);
 
-    const visualEffectsLevelMenuItems = React.useMemo((): readonly DropdownMenuItem[] => {
-        return [
-            {
-                id: 'full',
-                title: t('settingsAppearance.visualEffects.levelOptions.full'),
-                subtitle: t('settingsAppearance.visualEffects.levelOptions.fullDescription'),
-            },
-            {
-                id: 'subtle',
-                title: t('settingsAppearance.visualEffects.levelOptions.subtle'),
-                subtitle: t('settingsAppearance.visualEffects.levelOptions.subtleDescription'),
-            },
-            {
-                id: 'minimal',
-                title: t('settingsAppearance.visualEffects.levelOptions.minimal'),
-                subtitle: t('settingsAppearance.visualEffects.levelOptions.minimalDescription'),
-            },
-        ];
-    }, []);
-
     const contextGaugeMenuItems = React.useMemo((): readonly DropdownMenuItem[] => {
         return [
             { id: 'gauge', title: t('settingsAppearance.visualEffects.contextGaugeOptions.gauge') },
@@ -200,24 +172,6 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
             { id: 'persistent', title: t('settingsAppearance.detailsPaneTabsBehaviorOptions.persistent') },
         ];
     }, []);
-
-    const loadingIndicatorOptions = React.useMemo(() => {
-        return HAPPIER_SPINNER_STYLE_IDS.map((styleId) => ({
-            id: styleId,
-            title: t(LOADING_INDICATOR_STYLE_LABEL_KEYS[styleId]),
-            preview: <LoadingIndicatorStylePreview styleId={styleId} />,
-        }));
-    }, []);
-
-    const loadingIndicatorSpeedChoices = React.useMemo(() => HAPPIER_SPINNER_SPEED_IDS.map((id) => ({
-        id,
-        label: t(`settingsAppearance.loadingIndicatorSpeedOptions.${id}`),
-    })), []);
-
-    const loadingIndicatorPauseChoices = React.useMemo(() => HAPPIER_SPINNER_PAUSE_IDS.map((id) => ({
-        id,
-        label: t(`settingsAppearance.loadingIndicatorPauseOptions.${id}`),
-    })), []);
 
     const itemDensityMenuItems = React.useMemo(() => {
         return [
@@ -300,10 +254,6 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
 
     // Ensure we have a valid style for display, defaulting to gradient for unknown values
     const displayStyle: KnownAvatarStyle = isKnownAvatarStyle(avatarStyle) ? avatarStyle : 'gradient';
-    const displayLoadingIndicatorStyle = normalizeHappierSpinnerStyleId(loadingIndicatorStyle);
-    // A timing choice the chosen style ignores stays visible but disabled, and says why once: the
-    // Classic Ring's note on Speed also covers the Pause row beneath it.
-    const loadingIndicatorTiming = happierSpinnerStyleTimingControls(displayLoadingIndicatorStyle);
     
     // Language display
     const getLanguageDisplayText = () => {
@@ -331,7 +281,7 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
     ].filter(Boolean).join(' · ');
 
     return (
-        <ItemList style={{ paddingTop: 0 }}>
+        <ItemList style={{ paddingTop: 0 }} pageColumn={deviceType === 'phone' ? 'reading' : 'wide'}>
             <SettingsPageHeader
                 description={t('settingsAppearance.pageDescription')}
                 actions={
@@ -347,6 +297,12 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                 }
             />
 
+            <PageAsideColumns
+                aside={<AppearanceLivePreview />}
+                compact={deviceType === 'phone'}
+                compactAside="none"
+            >
+            {({ sideBySide }) => (<>
             {/* Theme: the mode is a visual choice; each mode's theme stays one tap away. */}
             <ItemGroup title={t('settingsAppearance.theme')}>
                 <SettingAnchor setting={APPEARANCE_SETTINGS.settings.themeMode}>
@@ -400,8 +356,6 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                 ) : null}
             </ItemGroup>
 
-            <GlassAppearanceSection />
-
             {/* Text & density */}
             <ItemGroup title={t('settingsAppearance.text')}>
                 <SettingAnchor setting={APPEARANCE_SETTINGS.settings.textSize}>
@@ -428,6 +382,7 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                 </SettingAnchor>
                 <SettingAnchor setting={APPEARANCE_SETTINGS.settings.density}>
                     <ItemDensityChoiceRow
+                        previewShownElsewhere={sideBySide}
                         title={t(APPEARANCE_SETTINGS.settings.density.titleKey)}
                         subtitle={t('settingsAppearance.itemDensityDescription')}
                         subtitleLines={0}
@@ -494,51 +449,29 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                         showChevron={false}
                     />
                 ) : null}
-            </ItemGroup>
-            </SettingSection>
-
-            {/* The home beside the session list: the same editor as the home's "Customize home". */}
-            <SettingSection section={APPEARANCE_SETTINGS.sectionRefs.home}>
-                <SettingAnchor setting={APPEARANCE_SETTINGS.settings.homeSections}>
-                    <HomeLayoutEditor title={t(APPEARANCE_SETTINGS.settings.homeSections.titleKey)} />
-                </SettingAnchor>
-            </SettingSection>
-
-            {/* How widgets are framed on this device: Home, Board and Companion, Card | Plain. */}
-            <WidgetFrameAppearanceSection />
-            <SurfaceFinishAppearanceSection />
-
-            {/* Motion & depth: effects, animated numbers, and the blur behind layered surfaces. */}
-            <ItemGroup
-                title={t('settingsAppearance.visualEffects.title')}
-                description={reduceMotion
-                    ? t('settingsAppearance.visualEffects.reduceMotionActive')
-                    : t('settingsAppearance.visualEffects.footer')}
-            >
-                <SegmentedChoiceItem
-                    title={t('settingsAppearance.visualEffects.level')}
-                    subtitle={t('settingsAppearance.visualEffects.levelDescription')}
-                    subtitleLines={0}
-                    testID="settings-appearance-visualEffectsLevel-select"
-                    testIDPrefix="settings-appearance-visualEffectsLevel"
-                    options={toChoices<'full' | 'subtle' | 'minimal'>(visualEffectsLevelMenuItems)}
-                    value={visualEffectsLevel}
-                    onChange={setVisualEffectsLevel}
-                />
+                {/* Home's sections are arranged on Home itself, by its own Customize. */}
+                <SettingSection section={APPEARANCE_SETTINGS.sectionRefs.home}>
+                    <SettingRow
+                        setting={APPEARANCE_SETTINGS.settings.homeSections}
+                        testID="settings-appearance-customize-home"
+                        icon={<Icon name="house" />}
+                        subtitleLines={0}
+                        onPress={() => {
+                            requestHomeCustomize();
+                            router.push('/home');
+                        }}
+                    />
+                </SettingSection>
+                {/* The Machine summary's look lives with the machines it summarizes. */}
                 <Item
-                    title={t('settingsAppearance.visualEffects.animatedNumbers')}
-                    subtitle={t('settingsAppearance.visualEffects.animatedNumbersDescription')}
-                    subtitleLines={0}
-                    rightElement={
-                        <Switch
-                            testID="settings-appearance-animatedNumbers-switch"
-                            value={animatedNumbers}
-                            onValueChange={setAnimatedNumbers}
-                        />
-                    }
-                    showChevron={false}
+                    testID="settings-appearance-machine-summary"
+                    title={t('machineSummary.settingTitle')}
+                    icon={<Icon name="hard-drives" />}
+                    detail={machineSummaryStyleTitle(machineSummaryStyle)}
+                    onPress={() => router.push(buildSettingHref(SETTINGS_ROUTES.machineDefaults, APPEARANCE_SETTINGS.settings.machineSummaryStyle))}
                 />
             </ItemGroup>
+            </SettingSection>
 
             {/* How sessions look */}
             <ItemGroup title={t('tabs.sessions')}>
@@ -597,52 +530,36 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                 />
             </ItemGroup>
 
-            <ItemGroup title={t('settingsAppearance.loadingIndicator')} description={t('settingsAppearance.loadingIndicatorFooter')}>
-                <SettingRow
-                    setting={APPEARANCE_SETTINGS.settings.loadingIndicatorStyle}
-                    accessoryLayout="stacked"
-                    rightElement={
-                        <SelectionTiles
-                            variant="visual"
-                            accessibilityLabel={t(APPEARANCE_SETTINGS.settings.loadingIndicatorStyle.titleKey)}
-                            testIdPrefix="settings-appearance-loadingIndicator"
-                            value={displayLoadingIndicatorStyle}
-                            options={loadingIndicatorOptions}
-                            onChange={(next) => {
-                                if (isHappierSpinnerStyleId(next)) setLoadingIndicatorStyle(next);
-                            }}
-                        />
-                    }
-                    showChevron={false}
+            {/* Rarely changed families, each on its own page; the row says what is chosen now. */}
+            <ItemGroup title={t('settingsAppearance.materialsAndMotion')}>
+                <Item
+                    testID="settings-appearance-glass"
+                    title={t('settingsAppearance.glassControls.sectionTitle')}
+                    icon={<Icon name="circle-half" />}
+                    detail={glassSummary}
+                    onPress={() => router.push(SETTINGS_ROUTES.appearanceGlass)}
                 />
-                <SettingAnchor setting={APPEARANCE_SETTINGS.settings.loadingIndicatorSpeed}>
-                    <SegmentedChoiceItem<HappierSpinnerSpeedId>
-                        title={t(APPEARANCE_SETTINGS.settings.loadingIndicatorSpeed.titleKey)}
-                        subtitle={loadingIndicatorTiming.speed
-                            ? t('settingsAppearance.loadingIndicatorSpeedDescription')
-                            : t('settingsAppearance.loadingIndicatorSpeedUnavailable')}
-                        subtitleLines={0}
-                        testIDPrefix="settings-appearance-loadingIndicatorSpeed"
-                        options={loadingIndicatorSpeedChoices}
-                        value={loadingIndicatorSpeed}
-                        onChange={setLoadingIndicatorSpeed}
-                        disabled={!loadingIndicatorTiming.speed}
-                    />
-                </SettingAnchor>
-                <SettingAnchor setting={APPEARANCE_SETTINGS.settings.loadingIndicatorPause}>
-                    <SegmentedChoiceItem<HappierSpinnerPauseId>
-                        title={t(APPEARANCE_SETTINGS.settings.loadingIndicatorPause.titleKey)}
-                        subtitle={loadingIndicatorTiming.pause || !loadingIndicatorTiming.speed
-                            ? t('settingsAppearance.loadingIndicatorPauseDescription')
-                            : t('settingsAppearance.loadingIndicatorPauseUnavailable')}
-                        subtitleLines={0}
-                        testIDPrefix="settings-appearance-loadingIndicatorPause"
-                        options={loadingIndicatorPauseChoices}
-                        value={loadingIndicatorPause}
-                        onChange={setLoadingIndicatorPause}
-                        disabled={!loadingIndicatorTiming.pause}
-                    />
-                </SettingAnchor>
+                <Item
+                    testID="settings-appearance-moments"
+                    title={t('settingsAppearance.glassControls.moments')}
+                    icon={<Icon name="sparkle" />}
+                    detail={momentsSummary}
+                    onPress={() => router.push(SETTINGS_ROUTES.appearanceMoments)}
+                />
+                <Item
+                    testID="settings-appearance-widgets"
+                    title={t('settingsAppearance.widgetsAndSurfaces')}
+                    icon={<Icon name="squares-four" />}
+                    detail={widgetsSummary}
+                    onPress={() => router.push(SETTINGS_ROUTES.appearanceWidgets)}
+                />
+                <Item
+                    testID="settings-appearance-motion"
+                    title={t('settingsAppearance.visualEffects.title')}
+                    icon={<Icon name="play-circle" />}
+                    detail={motionSummary}
+                    onPress={() => router.push(SETTINGS_ROUTES.appearanceMotion)}
+                />
             </ItemGroup>
 
             {/* Tab bar (phones and tablets) */}
@@ -744,8 +661,9 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
             </ItemGroup>
             </SettingSection>
 
-            {/* Replay comes after the choices it teaches, so Theme stays the page's first decision. */}
-            <ItemGroup surface="none">
+            {/* Replay comes after the choices it teaches, so Theme stays the page's first decision. It sits on
+                a sheet like every other row: alone on the canvas it read as a stray line (fidelity review 1). */}
+            <ItemGroup>
                 <SettingRow
                     setting={APPEARANCE_SETTINGS.settings.personalize}
                     testID="settings-appearance-personalize"
@@ -767,6 +685,8 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                     onPress={() => router.push('/settings/language')}
                 />
             </ItemGroup>
+            </>)}
+            </PageAsideColumns>
         </ItemList>
     );
 });

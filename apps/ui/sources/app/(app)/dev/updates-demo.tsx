@@ -135,12 +135,12 @@ const noop = () => {};
 const asyncNoop = async () => {};
 
 const PILL_SUMMARIES: ReadonlyArray<UpdatesSummary> = [
-    { actionableCount: 3, failedCount: 0, runningCount: 0, phase: 'available', status: 'available', visible: true },
-    { actionableCount: 0, failedCount: 0, runningCount: 0, phase: 'running', status: 'running', visible: true },
-    { actionableCount: 0, failedCount: 0, runningCount: 0, phase: 'ready', status: 'ready', visible: true },
-    { actionableCount: 0, failedCount: 0, runningCount: 0, phase: 'failed', status: 'failed', visible: true },
-    { actionableCount: 0, failedCount: 0, runningCount: 0, phase: 'required', status: 'required', visible: true },
-    { actionableCount: 0, failedCount: 0, runningCount: 0, phase: 'completed', status: 'upToDate', visible: true },
+    { actionableCount: 3, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'available', status: 'available', visible: true },
+    { actionableCount: 0, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'running', status: 'running', visible: true },
+    { actionableCount: 0, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'ready', status: 'ready', visible: true },
+    { actionableCount: 0, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'failed', status: 'failed', visible: true },
+    { actionableCount: 0, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'required', status: 'required', visible: true },
+    { actionableCount: 0, manualCount: 0, failedCount: 0, runningCount: 0, phase: 'completed', status: 'upToDate', visible: true },
 ];
 
 export default function UpdatesDemoScreen() {
