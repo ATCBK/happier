@@ -1,10 +1,42 @@
 import { describe, expect, it } from 'vitest';
+import { ZodError } from 'zod';
 
 import * as protocol from '../../index.js';
 import { normalizeLegacyContinueWithReplayRpcParamsInput } from './compat/continueWithReplayRpcParamsCompat.js';
-import { buildBackendTargetKeyV2, BackendTargetKeyV2InputSchema, parseBackendTargetKeyV2 } from './backendTargetRefV2.js';
+import { backendTargetKeysMatch, buildBackendTargetKeyV2, BackendTargetKeyV2InputSchema, PersistedBackendTargetRefV2Schema, parseBackendTargetKeyV2, readBackendTargetKeyV2, resolveBackendTargetKeyV2 } from './backendTargetRefV2.js';
 
 describe('BackendTargetRefV2 compatibility', () => {
+  it('refuses an abstract configured Agent key at strict target resolution', () => {
+    expect(() => resolveBackendTargetKeyV2('backend:custom-acp')).toThrow(ZodError);
+  });
+
+  it('does not admit a retained routing reference that cannot produce a target key', () => {
+    expect(PersistedBackendTargetRefV2Schema.safeParse({ kind: 'backend', backendId: 'bad:target' }).success).toBe(false);
+  });
+
+  it('classifies malformed stored targets without permitting them as current input', () => {
+    for (const target of [null, undefined, '', 'backend:custom-acp', 'agent:happier.agent.custom-acp/custom-acp',
+      { kind: 'backend', backendId: 'bad:target' }, { kind: 'backend', backendId: 'custom-acp' }]) {
+      expect(readBackendTargetKeyV2(target)).toBeNull();
+      expect(BackendTargetKeyV2InputSchema.safeParse(target).success).toBe(false);
+    }
+    expect(backendTargetKeysMatch('backend:custom-acp', 'backend:custom-acp')).toBe(false);
+    const failure = new Error('Stored source unavailable');
+    expect(() => readBackendTargetKeyV2({ kind: 'backend', get backendId() { throw failure; } })).toThrow(failure);
+  });
+
+  it('reads actual predecessor configured and flat Agent targets without changing their identity', () => {
+    // ../0.2 e087d15a2f0cce1de6de8ef0895d9c8bcc035056:
+    // packages/protocol/src/backendTargets/backendTargetRef.ts serializes these V1 shapes.
+    const configuredKey = 'agent:happier.agent.custom-acp/custom-acp:definition:review-agent';
+    expect(readBackendTargetKeyV2({ kind: 'configuredAcpBackend', backendId: 'review-agent' })).toBe(configuredKey);
+    expect(readBackendTargetKeyV2('acpBackend:review-agent')).toBe(configuredKey);
+    expect(readBackendTargetKeyV2('agent:claude')).toBe('agent:happier.agent.claude/claude');
+    expect(readBackendTargetKeyV2('agent:acme.agent/native')).toBe('agent:acme.agent/native');
+    expect(readBackendTargetKeyV2({ kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+      definitionId: 'review:with/slashes' })).toBe('agent:happier.agent.custom-acp/custom-acp:definition:review%3Awith%2Fslashes');
+  });
+
   it('roundtrips distinct configured definition keys under the same real Agent contribution', () => {
     const identity = { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' };
     const a = { kind: 'agent' as const, identity, definitionId: 'review-a' };
@@ -187,6 +219,12 @@ describe('BackendTargetRefV2 compatibility', () => {
   });
 
   it('rejects customAcp placeholders as concrete backend targets', () => {
+    // A configured Agent lowered to its current container id must remain an
+    // invalid input. UI compatibility readers classify this exact error;
+    // executable admission must not reinterpret the container as a definition.
+    expect(() => resolveBackendTargetKeyV2('agent:happier.agent.custom-acp/custom-acp')).toThrow(ZodError);
+    expect(() => resolveBackendTargetKeyV2({ kind: 'builtInAgent', agentId: 'custom-acp' })).toThrow(ZodError);
+
     expect(() => (protocol as any).readBackendTargetRefV2({
       kind: 'backend',
       backendId: 'customAcp',

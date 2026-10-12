@@ -72,6 +72,23 @@ export const BackendTargetRefV2Schema = lazyZodSchema(() => z.object({
       message: 'configuredBackendId is required when sourceKind is configured',
     });
   }
+  if (!value.configuredBackendId) {
+    if (value.backendId.includes(':')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['backendId'],
+        message: 'backendId cannot contain target-key delimiters',
+      });
+    }
+    const identity = resolveBundledAgentIdentityV1(value.backendId) ?? parseQualifiedPluginContributionKey(value.backendId);
+    if (identity && !AgentExecutionTargetV1Schema.safeParse({ kind: 'agent', identity }).success) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['backendId'],
+        message: 'backendTarget must identify an executable Agent',
+      });
+    }
+  }
 }));
 export type BackendTargetRefV2 = z.infer<typeof BackendTargetRefV2Schema>;
 
@@ -89,7 +106,14 @@ export const PersistedBackendTargetRefV2Schema = lazyZodSchema(() => z.union([
 export type PersistedBackendTargetRefV2 = z.infer<typeof PersistedBackendTargetRefV2Schema>;
 
 function isBackendTargetKeyV2(value: string): boolean {
-  if (/^backend:[^:]+(?::configured:[^:]+)?$/.test(value)) return true;
+  if (/^backend:[^:]+(?::configured:[^:]+)?$/.test(value)) {
+    const [backendId, configuredBackendId] = value.slice('backend:'.length).split(':configured:');
+    return BackendTargetRefV2Schema.safeParse({
+      kind: 'backend',
+      backendId,
+      ...(configuredBackendId === undefined ? {} : { configuredBackendId }),
+    }).success;
+  }
   if (!value.startsWith('agent:')) return false;
   const [qualifiedIdentity, encodedDefinitionId, ...extra] = value.slice('agent:'.length).split(':definition:');
   if (extra.length > 0) return false;
@@ -339,15 +363,28 @@ export function resolveBackendTargetKeyV2(input: BackendTargetRefV2Input): Backe
   const canonicalKey = BackendTargetKeyV2Schema.safeParse(input);
   if (canonicalKey.success) {
     if (typeof input === 'string' && input.startsWith('backend:')) {
-      try { return buildBackendTargetKeyV2(parseBackendTargetKeyV2(input)); }
-      catch { return canonicalKey.data; }
+      return buildBackendTargetKeyV2(parseBackendTargetKeyV2(input));
     }
     return canonicalKey.data;
   }
   return buildBackendTargetKeyV2(readBackendTargetRefV2(input));
 }
 
+/**
+ * Presentation and persisted-data reads classify invalid targets as unresolved.
+ * Construction and request/write admission keep using the strict owner above.
+ * Unexpected source failures are not target validation failures.
+ */
+export function readBackendTargetKeyV2(input: unknown): BackendTargetKeyV2 | null {
+  try {
+    return resolveBackendTargetKeyV2(BackendTargetRefV2InputSchema.parse(input));
+  } catch (error) {
+    if (!(error instanceof z.ZodError)) throw error;
+    return null;
+  }
+}
+
 export function backendTargetKeysMatch(left: BackendTargetRefV2Input, right: BackendTargetRefV2Input): boolean {
-  try { return resolveBackendTargetKeyV2(left) === resolveBackendTargetKeyV2(right); }
-  catch { return false; }
+  const leftKey = readBackendTargetKeyV2(left);
+  return leftKey !== null && leftKey === readBackendTargetKeyV2(right);
 }
