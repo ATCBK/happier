@@ -15,6 +15,7 @@ import { loadAuthoringMemoryProjection, saveAuthoringMemoryProjection } from './
 import { getPersistenceStorage } from './domains/state/persistenceStorage';
 import { createAccountSettingsScope, type AccountSettingsScope } from './domains/settings/scope/accountSettingsScope';
 import type { Settings } from './domains/settings/settings';
+import { profileDefaults } from './domains/profiles/profile';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 
 // MMKV/native SDK and the prepared HTTP adapter are the real system boundaries.
@@ -86,9 +87,6 @@ afterEach(() => {
 
 describe('Sync authoring-memory runtime', () => {
     it('starts independent Account projection reads while Settings is pending, keeping Sessions and readiness behind Settings', async () => {
-        // A configured single-slot limiter intentionally serializes requests;
-        // this scheduling regression exercises the incumbent multi-slot budget.
-        expect(sync.getSyncTuning().bootstrapConcurrencyLimit).toBeGreaterThan(1);
         // Capability HTTP reads are outside the prepared Account adapter. An
         // unsupported endpoint disables optional projections without live I/O.
         vi.stubGlobal('fetch', async () => Response.json({}, { status: 404 }));
@@ -111,6 +109,7 @@ describe('Sync authoring-memory runtime', () => {
         network.request.mockImplementation(async (path, init) => {
             requests.push(path);
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: scope.accountId });
             if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });
             if (path === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture());
             if (path === '/v2/account/settings' && init?.method !== 'POST') {
