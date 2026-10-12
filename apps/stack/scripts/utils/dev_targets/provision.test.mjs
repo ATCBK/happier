@@ -210,6 +210,24 @@ async function onboardingFixture(t) {
   return { root, config, target, scripts, probes, boundary };
 }
 
+test('host toolchain preparation streams the Iroh pin to the selected worker account without elevation', async t => {
+  const fixture = await onboardingFixture(t);
+  const requests = [];
+  await prepareDevTargetHost({ target: fixture.target, toolchain: true }, {
+    ...fixture.boundary,
+    runInteractive: async request => { requests.push(request); await fixture.boundary.runInteractive(request); },
+  });
+  const rust = fixture.scripts.find(script => script.includes('node --input-type=module -e'));
+  assert.ok(rust, 'host preparation must establish the native Rust compiler');
+  const pin = await readFile(new URL('../../../../../packages/iroh-native/rust-toolchain.toml', import.meta.url), 'utf8');
+  const channel = pin.match(/^channel\s*=\s*"([^"]+)"$/mu)[1];
+  assert.ok(rust.includes(JSON.stringify(channel)), 'the package toolchain pin must be authoritative');
+  assert.ok(!rust.includes('sudo'), 'Rust belongs to the selected user, not root');
+  assert.ok(requests.find(request => request.args.at(-1) === rust).args.includes('ControlPath=none'),
+    'a previous account ControlMaster must not receive the selected worker installation');
+  await promisify(execFile)('bash', ['-n', '-c', rust]);
+});
+
 for (const [flag, options, expected] of [
   ['toolchain', { toolchain: true }, /--profile=toolchain/],
   ['create-user', { createUser: 'happier' }, /getent passwd.*useradd[\s\S]*authorized_keys[\s\S]*NOPASSWD: ALL/s],

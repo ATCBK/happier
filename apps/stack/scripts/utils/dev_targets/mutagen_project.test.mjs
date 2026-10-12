@@ -145,6 +145,8 @@ test('renderMutagenProject creates one-way source replicas while retaining targe
     'apps/ui/src-tauri/systemTasks',
     'apps/ui/src-tauri/ssh',
     'apps/ui/src-tauri/integrations',
+    'packages/iroh-native/native',
+    'packages/iroh-native/native-test',
     'apps/ui/android/app/build',
     'apps/ui/android/build',
     'apps/ui/android/.gradle',

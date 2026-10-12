@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { runDevTargetCommand, runDevTargetDependencyBootstrap } from './executor.mjs';
 import { buildWorkerPowerScript, configureDevTargetPower, LINUX_WORKER_SLEEP_TARGETS } from './worker_power.mjs';
@@ -200,6 +200,19 @@ export async function prepareDevTargetHost({ target, growRoot = false, noSleep =
     if (!/^ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]+)?$/.test(publicKey)) throw new Error('[dev-targets] invalid dedicated public key');
   }
   const toolchainSource = toolchain ? await readFile(new URL('../../provision/linux-ubuntu-provision.sh', import.meta.url), 'utf8') : '';
+  let rustPreparationSource = '';
+  if (toolchain) {
+    // Stream the package-owned installer and pin: onboarding can precede the
+    // worker's source mirror, and Rust must run as the selected SSH user.
+    const repoDir = env.HAPPIER_STACK_REPO_DIR || fileURLToPath(new URL('../../../../../', import.meta.url));
+    const rustPackageDir = join(repoDir, 'packages/iroh-native');
+    const installerUrl = pathToFileURL(join(rustPackageDir, 'scripts/ensure-rust-toolchain.mjs'));
+    const { readPinnedRustChannel } = await import(installerUrl.href);
+    const [installer, pin] = await Promise.all([
+      readFile(installerUrl, 'utf8'), readFile(join(rustPackageDir, 'rust-toolchain.toml'), 'utf8'),
+    ]);
+    rustPreparationSource = `${installer}\nprepareRustToolchain({ platform: 'host', channel: ${JSON.stringify(readPinnedRustChannel(pin))} });\n`;
+  }
   const rollbackUnit = `happier-host-prepare-${randomUUID()}`;
   const rollbackDir = `/var/lib/${rollbackUnit}`;
   const rollbackScript = `#!/bin/bash
@@ -597,6 +610,11 @@ echo '[dev-targets] fresh key login verified; automatic rollback canceled'`));
       if (previousSshConfig != null) await writeSshConfig(target.sshConfigFile, previousSshConfig);
       throw error;
     }
+  }
+  if (toolchain) {
+    await runInteractive({ command: 'ssh', args: configuredSshArgs({ configPath: prepared.sshConfigFile,
+      sshAlias: prepared.ssh, remoteCommand: prependRemotePath(prepared,
+        `node --input-type=module -e ${posixQuote(rustPreparationSource)}`), dedicated: true }), env });
   }
   return prepared;
 }
