@@ -253,6 +253,30 @@ describe('current Project setup effect and preparation admission', () => {
         expect(await prepareProjectSetup(input)).toMatchObject({ kind: 'pendingApproval', code: 'project_setup_consent_required' });
     });
 
+    it('honours the setup Action surface waiver without creating remembered trust or accepting an agent decision', async () => {
+        const { input } = await fixture({ version: 1, workspace: { setup: [{ kind: 'command', command: 'echo setup' }] } });
+        const post = trustTransport(null);
+        const settings = { v: 1, actions: {}, approvalWaivedSurfaces: { 'projects.prepare': ['agent'] } };
+        expect(await prepareProjectSetup({ ...input, approvalContext: { surface: 'rpc' as const } }))
+            .toMatchObject({ kind: 'pendingApproval', code: 'project_setup_consent_required' });
+        const waived = { ...input, approvalContext: { surface: 'agent' as const }, secretEnvironment: {
+            accountSettings: { actionsSettingsV1: settings }, settingsSecretsReadKeys: [],
+        } };
+        expect(await prepareProjectSetup(waived)).toMatchObject({ kind: 'prepared', consent: 'thisTime', previousSuccess: false });
+        expect(post.mock.calls.some(([url]) => String(url).endsWith('/mutate'))).toBe(false);
+        expect(await prepareProjectSetup({ ...waived, approvalContext: { surface: 'mcp' as const } }))
+            .toMatchObject({ kind: 'pendingApproval', code: 'project_setup_consent_required' });
+        expect(await prepareProjectSetup({ ...waived, secretEnvironment: { ...waived.secretEnvironment, accountSettings: {
+            actionsSettingsV1: { ...settings, actions: { 'projects.prepare': { approvalRequiredSurfaces: ['agent'] } } },
+        } } })).toMatchObject({ kind: 'pendingApproval', code: 'project_setup_consent_required' });
+        const plan = await reviewed(input);
+        expect(await prepareProjectSetup({ ...waived, expectedEffectDigest: 'stale' }))
+            .toMatchObject({ kind: 'pendingApproval', code: 'project_setup_effect_changed' });
+        const decision = { authority: 'present_user' as const, project: plan.project, reviewedEffectDigest: plan.reviewedEffectDigest };
+        expect(await prepareProjectSetup({ ...waived, effectDecision: { ...decision, authority: 'account_automation' } as unknown as typeof decision }))
+            .toMatchObject({ kind: 'pendingApproval', code: 'project_setup_consent_required' });
+    });
+
     it('prepares an admitted child with its inherited manifest while its physical controller is offline', async () => {
         const { root, input } = await fixture({ version: 1, devcontainer: {} });
         const observation = { nativeResourceId: 'native-child', user: 'coder', workspaceFolder: root,

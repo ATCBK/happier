@@ -1,5 +1,3 @@
-import { freemem, totalmem } from 'node:os';
-
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions';
 import type { MachineFinitePolicyGetResultV1 } from '@happier-dev/protocol/machines/machineFinitePolicyV1';
 import type { FiniteAdmissionV1, ProjectWorkerDependencyV1, ProjectWorkerMemoryObservationV1, WorkerLoadObservationV1 } from '@happier-dev/protocol/workspaces/projectWorkerExecutionV1';
@@ -67,7 +65,7 @@ export function createProjectWorkerAdmission(options: Readonly<{
   const entries = new Map<string, Entry>();
   const queue: Entry[] = [];
   const listeners = new Set<() => void>();
-  const readMemory = options.readMemory ?? (() => ({ totalBytes: totalmem(), availableBytes: freemem() }));
+  const readMemory = options.readMemory ?? (() => null);
   let admissionTail: Promise<void> = Promise.resolve();
   let pumping: Promise<void> | null = null;
   let changedWhilePumping = false;
@@ -176,7 +174,11 @@ export function createProjectWorkerAdmission(options: Readonly<{
   function notifyChanged(): Promise<void> {
     changedWhilePumping = true;
     if (!pumping) {
-      pumping = pump().finally(() => { pumping = null; });
+      pumping = pump().finally(() => {
+        pumping = null;
+        // A notification can arrive after pump exits but before this finalizer clears its promise.
+        if (changedWhilePumping && queue.length) void notifyChanged();
+      });
     }
     return pumping;
   }

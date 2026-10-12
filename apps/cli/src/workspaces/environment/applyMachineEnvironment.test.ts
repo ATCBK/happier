@@ -38,7 +38,7 @@ describe('applyMachineEnvironment', () => {
     let stopped = 0;
     const terminalSessions = createTerminalPtySessionManager({ ptyProvider: provider, env: { SHELL: '/bin/bash' },
       probeProcessGroup: () => 'absent', stopProcessTree: async () => { stopped++; },
-      config: { maxSessions: 10, idleTimeoutMs: 60000, bufferMaxBytes: 100000, bufferMaxEvents: 1000,
+      config: { bufferMaxBytes: 100000, bufferMaxEvents: 1000,
         bufferRetentionMs: 600000, urlParseBufferLimit: 32768, maxWriteChunkBytes: 16384, defaultCols: 80, defaultRows: 24 },
     });
     managers.push(terminalSessions);

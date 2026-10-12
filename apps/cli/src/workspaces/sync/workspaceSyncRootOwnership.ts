@@ -47,12 +47,6 @@ type RecordSnapshot = Readonly<{ raw: string; record: OwnershipRecordV2 | null }
 const operations = new Set(['sync', 'bootstrap', 'handoff']);
 const ownerTokenPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(record).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
 function parseOwner(record: Record<string, unknown>): WorkspaceRootOwnership | null {
   if (typeof record.ownerId !== 'string' || !record.ownerId) return null;
   if (typeof record.canonicalRoot !== 'string' || !record.canonicalRoot) return null;
@@ -74,11 +68,9 @@ function parseRecord(raw: string): OwnershipRecordV2 | null {
     const record = value as Record<string, unknown>;
     const owner = parseOwner(record);
     if (!owner) return null;
-    if (record.v !== 2
-      || !hasExactKeys(record, ['v', 'ownerId', 'canonicalRoot', 'operation', 'rootFingerprint', 'processOwner'])) return null;
+    if (record.v !== 2) return null;
     if (!record.processOwner || typeof record.processOwner !== 'object' || Array.isArray(record.processOwner)) return null;
     const processOwner = record.processOwner as Record<string, unknown>;
-    if (!hasExactKeys(processOwner, ['pid', 'processStartedAtMs', 'ownerToken'])) return null;
     if (!Number.isSafeInteger(processOwner.pid) || Number(processOwner.pid) < 1) return null;
     if (!(processOwner.processStartedAtMs === null
       || (Number.isSafeInteger(processOwner.processStartedAtMs) && Number(processOwner.processStartedAtMs) >= 0))) return null;

@@ -2,6 +2,7 @@ import { createProjectNativeEnvironmentIoForHost, type ProjectNativeEnvironmentI
 import type { ProjectNativeCommandIo } from './projectNativeResolution';
 import { projectNativeSystemIo } from './projectNativeSystemIo';
 import { findBuiltinNativeEnvironmentAdapterV1 } from '@happier-dev/protocol/plugins/contributions/projectNativeAdapters';
+import type { OwnerRemainderPort } from '@/daemon/processes/endOwnerRemainder';
 
 export type ProjectNativeIo = Readonly<{
     commandIo: ProjectNativeCommandIo;
@@ -9,9 +10,10 @@ export type ProjectNativeIo = Readonly<{
 }>;
 
 /** Host-only composition. Passive command IO never probes; admitted environment IO may characterize its installed tool. */
-export function createProjectNativeIo(): ProjectNativeIo {
+export function createProjectNativeIo(input: Readonly<{ ownerRemainder?: OwnerRemainderPort }> = {}): ProjectNativeIo {
     const commandIo = projectNativeSystemIo;
     const environmentIo = createProjectNativeEnvironmentIoForHost({
+        ownerRemainder: input.ownerRemainder,
         async resolveTool(tool, signal, scopedIo) {
             const adapter = findBuiltinNativeEnvironmentAdapterV1(tool, process.platform);
             if (!adapter || process.arch !== 'x64') return null;

@@ -357,6 +357,7 @@ export async function openProject(input: OpenProjectInputV1, runtime: ProjectOpe
         const association = await resolveProjectSetupAcceptedWorkspace({ address: workspace, ...requester.rows,
           serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal: context.signal });
         const prepared = await prepareProjectSetup({ ...runtime.setupPreparation,
+          approvalContext: context.localActionContext,
           workspace: association.workspace, projectAssociation: association,
           requester: { ...(credentials ? { credentials } : {}), serverHttpBaseUrl: runtime.serverHttpBaseUrl,
             ...(requester.rows.authorization ? { authorization: requester.rows.authorization, effectActionId: 'projects.open' } : {}),

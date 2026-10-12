@@ -68,7 +68,7 @@ describe('finite Project setup execution', () => {
         const manager = createTerminalPtySessionManager({ ptyProvider, env: { SHELL: '/bin/bash' },
             probeProcessGroup: () => 'absent',
             stopProcessTree: async () => { stopped++; if (stopUnconfirmed) throw Object.assign(new Error('termination incomplete'), { code: 'plugin_exec_termination_incomplete' }); },
-            config: { maxSessions: 10, idleTimeoutMs: 60000, bufferMaxBytes: 100000, bufferMaxEvents: 1000, bufferRetentionMs: 600000,
+            config: { bufferMaxBytes: 100000, bufferMaxEvents: 1000, bufferRetentionMs: 600000,
                 urlParseBufferLimit: 32768, maxWriteChunkBytes: 16384, defaultCols: 80, defaultRows: 24 },
         });
         managers.push(manager);

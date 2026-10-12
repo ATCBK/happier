@@ -15,7 +15,7 @@ import { createPluginRuntimeOccurrenceId } from '../../plugins/runtime/runtimeSl
 import { createProductionPluginInvocationServiceOwners } from '../../plugins/runtime/invocation/services/production.ts';
 import { createPluginInvocationLifetime } from '../../plugins/runtime/invocation/lifetime.ts';
 import { produceProjectNativeEnvironment } from './produceProjectNativeEnvironment.ts';
-import * as processTreeBoundary from '../../agent/runtime/process/killProcessTree.ts';
+import * as processTreeBoundary from '../../processes/terminate/terminateProcessTree.ts';
 import type { ProjectNativeEnvironmentInput } from './produceProjectNativeEnvironment.ts';
 import type { ActivationTarget } from '../../plugins/runtime/lifecycle/activation/targets.ts';
 import { produceProjectLaunchEnvironmentForHost } from '../../plugins/runtime/invocation/services/exec.ts';
@@ -128,7 +128,7 @@ test.each(['ready', 'environmentOnly', 'environmentOnlyWrapper', 'ordinaryFailed
     if (mode === 'cancelledProcess') {
       // Fault the genuine OS tree-termination boundary only after a real child
       // is captured; a resolver error without a process is not custody proof.
-      const termination = vi.spyOn(processTreeBoundary, 'killProcessTree')
+      const termination = vi.spyOn(processTreeBoundary, 'terminateProcessTree')
         .mockRejectedValueOnce(new Error('private native process diagnostics'));
       restoreTermination = () => termination.mockRestore();
       let reportUncertainty!: () => void;

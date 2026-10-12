@@ -7,6 +7,9 @@ import type { ProjectManifestFileSnapshot } from '@happier-dev/protocol/workspac
 import { QualifiedProjectTrustProjectV1Schema, type QualifiedProjectTrustProjectV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import type { ProjectSetupSuccessV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectSetupSuccessV1';
 import type { ProjectSetupReadinessV1 } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { SecretReferenceOverlayV1Schema, listSecretReferenceOverlayV1BindingNames, readSecretReferenceOverlayV1Reference, type SecretReferenceOverlayV1 } from '@happier-dev/protocol/profiles/secretReferenceOverlayV1';
 
 import { LaunchSecretReferenceOverlayError, resolveProjectSecretReferenceEnvironment, type ProjectSecretReferenceEnvironmentInput } from '@/settings/secrets/secretReferenceOverlay';
@@ -26,6 +29,9 @@ import { resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspac
 import { readProjectDefinitionFile, readProjectDefinitionFileBytes } from './nativeDefinitionFiles';
 import { createProjectSetupTrustClient, type ProjectSetupTrustClientInput } from './projectSetupTrust';
 import { createProjectSetupSuccessStore } from './projectSetupSuccess';
+import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 
 export type PreparedProjectSetupCommand = Readonly<
     { kind: 'literal'; source: Extract<ProjectCommandSourceV1, { kind: 'command' }>; cwd: string }
@@ -53,6 +59,8 @@ export type ProjectSetupPreparationInput = Readonly<{
     successHomeDir?: string;
     /** Supplied only by the admitted host human-review producer, never Action params or custodian credentials. */
     effectDecision?: Readonly<{ authority: 'present_user'; project: QualifiedProjectTrustProjectV1; reviewedEffectDigest: string }>;
+    /** The admitted host's original surface and Account policy, never Project Action input. */
+    approvalContext?: Pick<ActionExecutorContext, 'surface' | 'actionsSettings'>;
     signal?: AbortSignal;
 }>;
 
@@ -405,9 +413,23 @@ export async function prepareProjectSetup(input: ProjectSetupPreparationInput & 
             if (decision.reviewedEffectDigest !== plan.reviewedEffectDigest) return { kind: 'pendingApproval', code: 'project_setup_effect_changed', plan };
             consent = 'thisTime';
         } else {
-            const remembered = await createProjectSetupTrustClient(input.requester).resolveConsent(plan.project, plan.reviewedEffectDigest);
-            if (remembered.kind === 'pendingApproval') return { kind: 'pendingApproval', code: remembered.code, plan };
-            consent = 'trusted';
+            const requester = readRequesterAccountActionContext(input.requester.authorization);
+            const settings = input.approvalContext?.actionsSettings ?? (requester
+                ? normalizeActionsSettingsV1(requester.accountSettingsContext.settings.actionsSettingsV1)
+                : input.secretEnvironment
+                    ? normalizeActionsSettingsV1(input.secretEnvironment.accountSettings.actionsSettingsV1)
+                    : input.requester.credentials
+                        ? createActionSettingsProvider({ scopeKey: resolveAccountSettingsScopeKey(input.requester.credentials) }).getActionsSettings()
+                        : normalizeActionsSettingsV1(undefined));
+            if (!isApprovalRequiredByActionsSettings('projects.prepare', settings, input.approvalContext)) {
+                // The person's policy permits this invocation; it does not write a
+                // Project trust grant or turn an agent into an approving user.
+                consent = 'thisTime';
+            } else {
+                const remembered = await createProjectSetupTrustClient(input.requester).resolveConsent(plan.project, plan.reviewedEffectDigest);
+                if (remembered.kind === 'pendingApproval') return { kind: 'pendingApproval', code: remembered.code, plan };
+                consent = 'trusted';
+            }
         }
         const previousSuccess = input.purpose === 'setup' && input.successHomeDir !== undefined
             ? await createProjectSetupSuccessStore({ homeDir: input.successHomeDir }).matches({

@@ -744,6 +744,10 @@ describe('workspaceSyncTargetBootstrap', () => {
     await prepared.publishReady();
     await prepared.release();
 
+    const readyName = (await readdir(materializationDirectory)).find((name) => name.endsWith('.ready.json'))!;
+    const readyPath = join(materializationDirectory, readyName);
+    await writeFile(readyPath, JSON.stringify({ ...JSON.parse(await readFile(readyPath, 'utf8')), retiredReady: true }));
+
     const restarted = await workspaceSyncTargetBootstrap(input({
       rootPath: target,
       materializationDirectory,

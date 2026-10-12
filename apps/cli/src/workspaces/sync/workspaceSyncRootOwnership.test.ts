@@ -218,6 +218,12 @@ describe('workspace root ownership', () => {
     expect((await readdir(lockDirectory)).some((name) => name.endsWith('.json'))).toBe(true);
     if (process.platform !== 'win32') expect((await stat(lockDirectory)).mode & 0o777).toBe(0o700);
 
+    const recordName = (await readdir(lockDirectory)).find((name) => name.endsWith('.json'))!;
+    const recordPath = join(lockDirectory, recordName);
+    const retained = JSON.parse(await readFile(recordPath, 'utf8'));
+    await writeFile(recordPath, JSON.stringify({ ...retained, retiredOwner: true,
+      processOwner: { ...retained.processOwner, retiredProcess: true } }));
+
     const reconstructed = createWorkspaceRootOwnershipManager({ lockDirectory });
     await expect(reconstructed.tryAcquire({ ownerId: 'relationship-1', canonicalRoot: workspaceRoot, operation: 'sync' }))
       .resolves.toMatchObject({ kind: 'overlap', existing: { ownerId: 'relationship-1' } });
@@ -225,6 +231,7 @@ describe('workspace root ownership', () => {
       .resolves.toMatchObject({ kind: 'overlap', existing: { ownerId: 'relationship-1' } });
 
     await (first as Exclude<typeof first, { kind: 'overlap' }>).release();
+    await expect(access(recordPath)).rejects.toMatchObject({ code: 'ENOENT' });
     await rm(lockDirectory, { recursive: true, force: true });
   });
 

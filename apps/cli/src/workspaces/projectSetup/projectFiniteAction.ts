@@ -310,7 +310,7 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             }
         } else if (sourceAssociation.workspace.machineId !== runtime.machineId) return failure('target_not_local');
         const readWorkerExecutionBasis = async (definition: typeof initialSourceDefinition) => {
-            const manifest = definition.document?.manifest;
+            const manifest = definition.document?.status === 'valid' ? definition.document.manifest : undefined;
             const declaredEffect = selectedExecutionDeclaration(definition);
             const inspection = sourceAssociation.workspace.machineId === runtime.machineId
                 ? await inspectProjectDefinitionExecutionFacts({ root: sourceAssociation.workspace.rootPath,
@@ -367,6 +367,7 @@ export function createProjectFiniteAction(runtime: ProjectFiniteActionRuntime, i
             }) : association.workspace.rootPath;
         let secretEnvironment = runtime.secretEnvironment;
         const preparation = (): Parameters<typeof prepareProjectSetup>[0] => ({ workspace: association.workspace, projectAssociation: association,
+            approvalContext: args.context,
             requester: { ...projectRuntimeAccountRowsInput(runtime, request.actionId), serverHttpBaseUrl: runtime.serverHttpBaseUrl },
             purpose: request.actionId === 'projects.prepare' ? request.input.phase : 'setup',
             platform: { os: (runtime.platform ?? process.platform) === 'win32' ? 'windows' : runtime.platform ?? process.platform, arch: runtime.arch ?? process.arch },

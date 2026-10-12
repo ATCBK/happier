@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerMachineRpcHandlers, type MachineRpcLifecycleRegistration } from '@/api/machine/rpcHandlers';
@@ -24,8 +24,8 @@ import { createProjectWorkerAdmission } from './projectWorkerAdmission';
 
 const osBoundary = vi.hoisted(() => ({
   provider: null as PtyProvider | null,
-  stop: null as ((...args: Parameters<typeof killProcessTree>) => Promise<void>) | null,
-  killActual: null as typeof killProcessTree | null,
+  stop: null as ((...args: Parameters<typeof terminateProcessTree>) => Promise<void>) | null,
+  killActual: null as typeof terminateProcessTree | null,
 }));
 // Only OS adapters are replaced. The installed registration creates and
 // disposes the real manager, and all lifecycle/queue/setup owners stay real.
@@ -33,11 +33,11 @@ vi.mock('@/terminal/pty/provider', async importOriginal => {
   const actual = await importOriginal<typeof import('@/terminal/pty/provider')>();
   return { ...actual, createNodePtyProvider: () => osBoundary.provider ?? actual.createNodePtyProvider() };
 });
-vi.mock('@/agent/runtime/process/killProcessTree', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/agent/runtime/process/killProcessTree')>();
-  osBoundary.killActual = actual.killProcessTree;
-  return { ...actual, killProcessTree: async (...args: Parameters<typeof killProcessTree>) =>
-    osBoundary.stop ? await osBoundary.stop(...args) : await actual.killProcessTree(...args) };
+vi.mock('@/processes/terminate/terminateProcessTree', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/processes/terminate/terminateProcessTree')>();
+  osBoundary.killActual = actual.terminateProcessTree;
+  return { ...actual, terminateProcessTree: async (...args: Parameters<typeof terminateProcessTree>) =>
+    osBoundary.stop ? await osBoundary.stop(...args) : await actual.terminateProcessTree(...args) };
 });
 
 // Native POSIX PTY and tree settlement are real. Windows/macOS native carriers
@@ -258,8 +258,8 @@ describe.skipIf(process.platform === 'win32')('finite FIFO with real Project pro
         for (const operationId of ['process-1', 'process-2', 'process-3']) operations.runner.cancel(scope, operationId);
       }
       await registration?.dispose();
-      await Promise.all(pids.filter(isPidAlive).map(pid => killProcessTree({ pid })));
-      await Promise.all(childPids().filter(isPidAlive).map(pid => killProcessTree({ pid })));
+      await Promise.all(pids.filter(isPidAlive).map(pid => terminateProcessTree({ pid })));
+      await Promise.all(childPids().filter(isPidAlive).map(pid => terminateProcessTree({ pid })));
       sessions?.dispose(); osBoundary.provider = null; vi.restoreAllMocks();
       await rm(taskRoot, { recursive: true, force: true });
     }

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import { lstat } from 'node:fs/promises';
+import { z } from 'zod';
 
 export type WorkspaceSyncRootObjectIdentityV1 = Readonly<{
   v: 1;
@@ -10,17 +11,15 @@ export type WorkspaceSyncRootObjectIdentityV1 = Readonly<{
   birthtimeMs: string | null;
 }>;
 
+export const WorkspaceSyncRootObjectIdentityV1Schema = z.object({
+  v: z.literal(1),
+  device: z.string().regex(/^\d+$/u),
+  inode: z.string().regex(/^[1-9]\d*$/u),
+  birthtimeMs: z.string().regex(/^\d+(?:\.\d+)?$/u).nullable(),
+}).strict();
+
 export function isWorkspaceSyncRootObjectIdentityV1(value: unknown): value is WorkspaceSyncRootObjectIdentityV1 {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const candidate = value as Record<string, unknown>;
-  return Object.keys(candidate).sort().join('\0') === ['birthtimeMs', 'device', 'inode', 'v'].sort().join('\0')
-    && candidate.v === 1
-    && typeof candidate.device === 'string'
-    && /^\d+$/u.test(candidate.device)
-    && typeof candidate.inode === 'string'
-    && /^[1-9]\d*$/u.test(candidate.inode)
-    && (candidate.birthtimeMs === null
-      || (typeof candidate.birthtimeMs === 'string' && /^\d+(?:\.\d+)?$/u.test(candidate.birthtimeMs)));
+  return WorkspaceSyncRootObjectIdentityV1Schema.safeParse(value).success;
 }
 
 /** One identity projection for both pathname admission and retained directory handles. */

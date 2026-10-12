@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { WorkspaceSyncRuntimeReadinessV1 } from '@happier-dev/protocol';
 import type { MutagenControlCommandV1 } from './transport/workspaceSyncBrokerProtocol';
 import type { WorkspaceSyncBrokerOpenContext } from './transport/workspaceSyncBroker';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
 
 export type WorkspaceSyncVerifiedRuntime = Readonly<{
   managerPath: string;
@@ -162,6 +163,18 @@ export class WorkspaceSyncSidecarLifecycle {
 
   async runReconciliation<T>(action: () => Promise<T>): Promise<T> {
     return await this.reconciliationContext.run(true, action);
+  }
+
+  readProcessRoots(): readonly HappierProcessRootSource[] {
+    return [...new Set([this.activeProcess, this.lateSpawnProcess])].flatMap((process) => process ? [{
+      owner: { kind: 'workspace_sync' as const }, pid: process.pid,
+      stop: async () => {
+        if (this.activeProcess !== process && this.lateSpawnProcess !== process) {
+          throw Object.assign(new Error('Workspace sync root has changed'), { code: 'process_root_changed' });
+        }
+        await this.stop();
+      },
+    }] : []);
   }
 
   async stop(): Promise<void> {
@@ -346,6 +359,10 @@ export class WorkspaceSyncSidecarLifecycle {
           throw error;
         }
         this.assertNotStopping();
+        // Custody begins at spawn, not authentication. Processes must be able to
+        // request this supervisor's stop while the broker handshake is awaiting.
+        this.activeBroker = broker;
+        this.activeProcess = process;
         termination = process.waitForTermination();
         const startup = (async () => {
           await broker.waitForReady(process.pid);
@@ -362,8 +379,6 @@ export class WorkspaceSyncSidecarLifecycle {
         if (startupTimer !== undefined) clearTimeout(startupTimer);
       }
       this.assertNotStopping();
-      this.activeBroker = broker;
-      this.activeProcess = process;
       this.authenticated = true;
       this.currentAuthenticatedReadiness?.resolve();
       this.currentAuthenticatedReadiness = null;
@@ -374,6 +389,7 @@ export class WorkspaceSyncSidecarLifecycle {
       if (isRestart) {
         await this.runReconciliation(async () => await this.dependencies.onRestartReady());
       }
+      this.assertNotStopping();
       this.ready = true;
       this.publishReadiness({ state: 'ready' });
       this.completedInitialStart = true;

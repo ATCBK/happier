@@ -174,11 +174,7 @@ export type WorkspaceSyncTargetBootstrapDependencies = Readonly<{
 function isExactReadyFact(value: unknown, expected: Omit<WorkspaceSyncFinalReadyFact, 'completedAtMs'>): value is WorkspaceSyncFinalReadyFact {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  const expectedKeys = ['canonicalRoot', 'completedAtMs', 'endpointRole', 'policyDigest', 'relationshipId', 'rootFingerprint', 'targetWorkspaceRefId', 'v'];
-  return keys.length === expectedKeys.length
-    && keys.every((key, index) => key === expectedKeys[index])
-    && record.v === expected.v
+  return record.v === expected.v
     && record.relationshipId === expected.relationshipId
     && record.endpointRole === expected.endpointRole
     && record.targetWorkspaceRefId === expected.targetWorkspaceRefId

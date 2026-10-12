@@ -34,7 +34,7 @@ import { createTerminalPtySessionManager } from '@/terminal/pty/sessions';
 import type { PtyExitEvent, PtyProcess, PtySpawnParams } from '@/terminal/pty/provider';
 import { createProjectFiniteAction, type ProjectFiniteActionRuntime } from './projectFiniteAction';
 import { createProjectNativeEnvironmentIoForHost } from '@/plugins/runtime/invocation/services/exec';
-import * as processTreeBoundary from '@/agent/runtime/process/killProcessTree';
+import * as processTreeBoundary from '@/processes/terminate/terminateProcessTree';
 import { admitRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import nacl from 'tweetnacl';
@@ -50,6 +50,10 @@ import { readProjectAccountRows } from '@/workspaces/projectAccountRows';
 import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { inspectProjectSetupReadinessFromRuntime } from './projectSetupReadiness';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
+import { executeWaitActionV1 } from '../../../../../packages/protocol/src/actions/executor/waitAction';
+import { executeActionOperationActionV1 } from '../../../../../packages/protocol/src/actions/executor/actionOperationActions';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 const turn = () => new Promise<void>(resolve => setImmediate(resolve));
 // The Home HTTP boundary publishes this fixture Account identity; it is not caller-supplied Action authority.
@@ -60,10 +64,12 @@ class BoundaryPty implements PtyProcess {
     readonly pid = 3456;
     readonly ownedProcessGroupId = 3456;
     private readonly exits = new Set<(event: PtyExitEvent) => void>();
+    private readonly data = new Set<(data: string) => void>();
     write() {}
     resize() {}
     kill() {}
-    onData() { return { dispose() {} }; }
+    onData(listener: (data: string) => void) { this.data.add(listener); return { dispose: () => this.data.delete(listener) }; }
+    output(data: string) { for (const listener of this.data) listener(data); }
     onExit(listener: (event: PtyExitEvent) => void) { this.exits.add(listener); return { dispose: () => this.exits.delete(listener) }; }
     exit(exitCode: number) { for (const listener of this.exits) listener({ exitCode }); }
 }
@@ -100,7 +106,7 @@ describe('authenticated finite Project Action owner', () => {
         const spawned: Array<{ params: PtySpawnParams; pty: BoundaryPty }> = [];
         const terminalSessions = createTerminalPtySessionManager({
             ptyProvider: { spawn(params) { const pty = new BoundaryPty(); spawned.push({ params, pty }); return pty; } },
-            config: { maxSessions: 10, idleTimeoutMs: 60_000, bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
+            config: { bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
                 bufferRetentionMs: 600_000, urlParseBufferLimit: 32_768, maxWriteChunkBytes: 16_384, defaultCols: 80, defaultRows: 24 },
             // The fake OS process has no descendants after its exit event.
             env: {}, platform: 'linux', stopProcessTree: async () => {}, probeProcessGroup: () => 'absent',
@@ -176,8 +182,13 @@ describe('authenticated finite Project Action owner', () => {
                 if (!prepared.ok) throw Object.assign(new Error(prepared.errorCode), { code: prepared.errorCode });
             },
         };
+        let setupApprovalWaived = false;
+        const actionSettings = () => normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: {
+            'projects.script.run': ['rpc', 'api', 'agent'], 'projects.compute.exec': ['rpc', 'api', 'agent'],
+            ...(setupApprovalWaived ? { 'projects.prepare': ['rpc', 'api', 'agent'] } : {}),
+        } });
         const invoke = (actionId: 'projects.prepare' | 'projects.script.run' | 'projects.compute.exec', input: unknown, ingress = context) =>
-            createProjectFiniteAction(runtime, ingress)({ actionId, input, context: { authority: 'account_automation', actionRequestId: ingress.transportRequestId ?? 'request', serverId: homeId } });
+            createProjectFiniteAction(runtime, ingress)({ actionId, input, context: { authority: 'account_automation', surface: 'agent', actionsSettings: actionSettings(), actionRequestId: ingress.transportRequestId ?? 'request', serverId: homeId } });
         const handlers = new Map<string, RpcHandler<unknown, unknown>>();
         const registrar: RpcHandlerRegistrar = { registerHandler<TRequest, TResponse>(method: string, handler: RpcHandler<TRequest, TResponse>) {
             // RPC ingress is untyped; registered production handlers validate the request beneath this boundary.
@@ -191,7 +202,7 @@ describe('authenticated finite Project Action owner', () => {
                 credentials: current.credentials, mode: 'plain', ctx: null, sessionId: 'fixture-session', serverId: current.serverId, serverHttpBaseUrl: current.serverHttpBaseUrl,
                 actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
                     actions: invocationApprovalRequired ? { 'projects.script.run': { approvalRequiredSurfaces: ['rpc', 'api'] } } : {},
-                    ...(invocationApprovalRequired ? {} : { approvalWaivedSurfaces: { 'projects.prepare': ['rpc', 'api', 'agent'], 'projects.script.run': ['rpc', 'api', 'agent'], 'projects.compute.exec': ['rpc', 'api', 'agent'] } }),
+                    ...(invocationApprovalRequired ? {} : { approvalWaivedSurfaces: actionSettings().approvalWaivedSurfaces }),
                 }) },
                 }, { machinePoolAction: createAccountServerActionDeps({ token: current.credentials.token, credentials: current.credentials,
                     serverId: current.serverId, serverHttpBaseUrl: current.serverHttpBaseUrl }).machinePoolAction,
@@ -229,6 +240,7 @@ describe('authenticated finite Project Action owner', () => {
             setToolRelativeExecutable: (path: string) => { nativeExecutableRelativePath = path; },
             setConfigEnvironment: (name: string, value: string) => { configEnvironment[name] = value; },
             retireCredentials: () => { credentialCurrent = false; }, requireInvocationApproval: () => { invocationApprovalRequired = true; },
+            waiveSetupApproval: () => { setupApprovalWaived = true; },
             addWorkerTarget, continueCopy: () => continueCopy(), holdCopy,
             setWorkerDestination: (machineId: string) => { workerDestination = { kind: 'machine', machineId }; },
             setWorkerUnavailable: (value: 'ask' | 'primary' | 'fail') => { unavailable = value; },
@@ -260,15 +272,18 @@ describe('authenticated finite Project Action owner', () => {
         let helperPid: number | undefined;
         let allowTermination = false;
         let terminationAttempts = 0;
-        const terminate = processTreeBoundary.killProcessTree;
-        const boundary = vi.spyOn(processTreeBoundary, 'killProcessTree').mockImplementation(async (...args) => {
+        const terminate = processTreeBoundary.terminateProcessTree;
+        const boundary = vi.spyOn(processTreeBoundary, 'terminateProcessTree').mockImplementation(async (...args) => {
             terminationAttempts++;
             if (!allowTermination) throw new Error('OS cannot yet prove native environment tree absent');
             await terminate(...args);
         });
         try {
             expect(await h.rpcInvoke('projects.script.run', input)).toMatchObject({ operation: { operationId: 'operation' } });
-            await expect.poll(() => h.operationRuntime.store.get(scope, 'operation')?.setupReview?.code).toBe('project_setup_consent_required');
+            await expect.poll(() => {
+                const snapshot = h.operationRuntime.store.get(scope, 'operation');
+                return snapshot?.setupReview?.code ?? snapshot?.error?.errorCode ?? snapshot?.state;
+            }).toBe('project_setup_consent_required');
             await h.rememberSetup(h.operationRuntime.store.get(scope, 'operation')!.setupReview!.reviewedEffectDigest);
             expect(await h.rpcInvoke('projects.script.run', input)).toMatchObject({ operation: { operationId: 'operation' } });
             await expect.poll(async () => {
@@ -323,6 +338,7 @@ describe('authenticated finite Project Action owner', () => {
                         revision: 1, endpoints: [{ kind: 'https', url: serverUrl }] }) };
                 await updateSettings(settings => ({ ...settings, activeServerId: profileId, servers: { [profileId]: profile } }));
                 const h = await harness(undefined, null, 'machine', ownerToken, profileId, serverId);
+                h.waiveSetupApproval();
                 expect.soft(await inspectProjectSetupReadinessFromRuntime({ runtime: h.runtime, ingress: h.context,
                     workspace: h.address, context: { serverId } })).toMatchObject({ kind: 'notRequired' });
                 const selection = { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } as const;
@@ -393,6 +409,54 @@ describe('authenticated finite Project Action owner', () => {
                 expect(h.spawned).toHaveLength(1);
             } finally { scope.restore(); reloadConfiguration(); }
         });
+    });
+
+    it.each(['projects.prepare', 'projects.script.run', 'projects.compute.exec'] as const)(
+        'emits registered %s, operation, Wait and output contracts through real preparation/runner/byte-ring owners', async actionId => {
+        const source = { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } as const;
+        const h = await harness(actionId === 'projects.prepare'
+            ? { version: 1, workspace: { setup: [source] } } : undefined);
+        if (actionId === 'projects.prepare') {
+            const workspace = h.workspaceRefs[0]!;
+            const review = await reviewProjectSetupEffect({ workspace,
+                projectAssociation: { workspace, project: { serverId: 'home', projectId: 'project' } },
+                requester: { credentials: h.runtime.credentials, serverHttpBaseUrl: h.runtime.serverHttpBaseUrl },
+                purpose: 'setup', platform: { os: 'linux', arch: 'x64' }, nativeIo: h.runtime.nativeIo,
+                successHomeDir: h.runtime.successHomeDir });
+            if (review.kind !== 'reviewed') throw new Error(review.code);
+            await h.rememberSetup(review.plan.reviewedEffectDigest);
+        }
+        if (actionId === 'projects.compute.exec') h.allowAdHoc();
+        const input = actionId === 'projects.prepare' ? { workspace: h.address, phase: 'setup' }
+            : actionId === 'projects.script.run' ? { workspace: h.address, selection: { kind: 'native', source } }
+            : { workspace: h.address, executable: '/installed/echo', argv: ['', '界🚀'.repeat(700)], cwd: h.root };
+        const accepted = await h.invoke(actionId, input);
+        assertActionOutputContract(actionId, accepted);
+        expect(accepted).toMatchObject({ operation: { operationId: 'operation', state: 'accepted' } });
+        await expect.poll(() => h.spawned.length).toBe(1);
+        h.spawned[0]!.pty.output('世界🚀\u0000\n');
+        h.spawned[0]!.pty.exit(actionId === 'projects.script.run' ? 7 : 0);
+        const scope = { accountId: 'owner', machineId: 'machine' };
+        const terminal = await h.operationRuntime.runner.waitForTerminal(scope, 'operation');
+        expect(terminal?.state).toBe(actionId === 'projects.script.run' ? 'failed' : 'succeeded');
+        const address = { serverId: 'home', machineId: 'machine', operationId: 'operation' };
+        const operation = await h.operationRuntime.handlers.getV2({ operationId: address.operationId }, h.context);
+        assertActionOutputContract('action.operations.get', operation);
+        const waited = await executeWaitActionV1({ target: { kind: 'action_operation', ...address }, condition: { kind: 'terminal' } }, {
+            // The Machine transport reaches the real operation owner, not a fabricated snapshot.
+            operation: async () => ({ disposition: 'matched', snapshot: await h.operationRuntime.runner.waitForTerminal(scope, address.operationId) }),
+        });
+        assertActionOutputContract('wait', waited);
+        expect(waited.disposition).toBe('matched');
+        const output = await executeActionOperationActionV1({ actionId: 'projects.execution.output.read',
+            input: { ...address, byteOffset: 0 }, transport: async request => {
+                if (request.method === 'actionOperation.get.v2') return await h.operationRuntime.handlers.getV2(request.payload, h.context);
+                if (request.method !== RPC_METHODS.DAEMON_TERMINAL_STREAM_READ_BYTES) throw new Error(request.method);
+                const { TerminalStreamReadRequestSchema } = await import('@happier-dev/protocol/terminal/stream');
+                return h.runtime.terminalSessions.readByteStream(TerminalStreamReadRequestSchema.parse(request.payload));
+            } });
+        assertActionOutputContract('projects.execution.output.read', output);
+        expect(output).toMatchObject({ ok: true, terminalId: expect.any(String) });
     });
 
     it('runs a detected native source without importing a manifest and observes the real nonzero process outcome', async () => {
@@ -625,7 +689,10 @@ describe('authenticated finite Project Action owner', () => {
         const result = await h.invoke('projects.script.run', { workspace: h.address, selection: { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } });
         expect(result).toMatchObject({ operation: { operationId: 'operation' } });
         const scope = { accountId: 'owner', machineId: 'machine' };
-        await expect.poll(() => h.operationRuntime.store.get(scope, 'operation')?.setupReview?.code).toBe('project_setup_consent_required');
+        await expect.poll(() => {
+            const snapshot = h.operationRuntime.store.get(scope, 'operation');
+            return snapshot?.setupReview?.code ?? snapshot?.error?.errorCode ?? snapshot?.state;
+        }).toBe('project_setup_consent_required');
         const preparing = h.operationRuntime.store.get(scope, 'operation');
         expect(preparing).toMatchObject({ state: 'accepted', progress: { kind: 'phase', phase: 'setup' },
             domainRef: { purpose: 'script', machineId: 'machine', workspaceRefId: 'accepted', cwd: h.root } });
@@ -634,7 +701,7 @@ describe('authenticated finite Project Action owner', () => {
         // This contract compares consent intent, not concurrent operation-id
         // allocation. Admit each original request before asserting its receipt.
         for (const [index, consentScope] of (['thisTime', 'untilChanged'] as const).entries()) {
-            const pending = await h.rpcInvoke('projects.prepare', {
+            const pending = await h.invoke('projects.prepare', {
                 workspace: h.address, phase: 'setup', expectedEffectDigest: reviewed.reviewedEffectDigest, consentScope,
             }, { ...h.context, transportRequestId: `prepare-${consentScope}` });
             const operationId = `operation-${index + 2}`;
@@ -653,6 +720,22 @@ describe('authenticated finite Project Action owner', () => {
             consentScope: 'thisTime', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
         expect(JSON.stringify(result)).not.toContain('requester'); expect(JSON.stringify(result)).not.toContain('successBasis');
         expect(h.spawned).toEqual([]);
+        expect(h.post.mock.calls.filter(([url]) => String(url).endsWith('/project-trust/mutate'))).toEqual([]);
+    });
+
+    it('honours a setup policy waiver on the authenticated finite Run without granting remembered trust', async () => {
+        const h = await harness({ version: 1, workspace: { setup: [{ kind: 'command', command: 'echo setup' }] } });
+        h.waiveSetupApproval();
+        const result = await h.rpcInvoke('projects.script.run', { workspace: h.address,
+            selection: { kind: 'native', source: { kind: 'native', tool: 'make', file: 'Makefile', target: 'check' } } });
+        expect(result).toMatchObject({ operation: { operationId: 'operation' } });
+        await expect.poll(() => h.spawned.length).toBe(1);
+        const scope = { accountId: 'owner', machineId: 'machine' };
+        expect(h.operationRuntime.store.get(scope, 'operation')?.setupReview).toBeUndefined();
+        h.spawned[0]!.pty.exit(0);
+        await expect.poll(() => h.spawned.length).toBe(2);
+        h.spawned[1]!.pty.exit(0);
+        expect(await h.operationRuntime.runner.waitForTerminal(scope, 'operation')).toMatchObject({ state: 'succeeded' });
         expect(h.post.mock.calls.filter(([url]) => String(url).endsWith('/project-trust/mutate'))).toEqual([]);
     });
 

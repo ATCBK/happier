@@ -1,4 +1,3 @@
-import { totalmem } from 'node:os';
 import { describe, expect, it } from 'vitest';
 
 import { createActionOperationRunner } from '@/daemon/actionOperations/actionOperationRunner';
@@ -357,7 +356,7 @@ describe('finite target admission and real reservation custody', () => {
     h.gates.get('observed')!.resolve(success); await turn();
   });
 
-  it('uses real OS total memory for the production default rather than accepting guessed capacity', async () => {
+  it('refuses memory-bound work until the canonical memory owner reports capacity', async () => {
     const policyPort: MachineFinitePolicyMetadataPortV1 = {
       read: async () => ({ status: 'ready', metadata: {}, metadataVersion: 1 }),
       compareAndSwap: async () => ({ status: 'unavailable' }),
@@ -366,10 +365,10 @@ describe('finite target admission and real reservation custody', () => {
       admissionDrain: createDaemonAdmissionDrain() });
     let accepted = false;
     let started = false;
-    expect(await admission.execute({ operationId: 'too-large-on-os', workspaceRefId: 'worker-copy',
-      signal: new AbortController().signal, memoryDemand: { bytes: totalmem() + 1, basis: { kind: 'declared' } },
+    expect(await admission.execute({ operationId: 'unknown-memory', workspaceRefId: 'worker-copy',
+      signal: new AbortController().signal, memoryDemand: { bytes: 1, basis: { kind: 'declared' } },
       accept: () => { accepted = true; }, run: async () => { started = true; return success; },
-    })).toMatchObject({ ok: true, result: { kind: 'not_accepted', reason: 'memory_insufficient' } });
+    })).toMatchObject({ ok: true, result: { kind: 'not_accepted', reason: 'memory_unavailable' } });
     expect(accepted).toBe(false);
     expect(started).toBe(false);
   });

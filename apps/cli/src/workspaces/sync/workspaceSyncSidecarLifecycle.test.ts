@@ -8,6 +8,44 @@ import {
 } from './workspaceSyncSidecarLifecycle';
 
 describe('WorkspaceSyncSidecarLifecycle', () => {
+  it('stops the exact pending-authentication root without publishing readiness or restarting it', async () => {
+    let finishReadiness!: () => void;
+    const readiness = new Promise<void>((resolve) => { finishReadiness = resolve; });
+    let exit!: (event: { type: 'exited'; code: number }) => void;
+    const termination = new Promise<{ type: 'exited'; code: number }>((resolve) => { exit = resolve; });
+    const states: string[] = [];
+    const waitForReady = vi.fn(async () => await readiness);
+    const spawn = vi.fn<SpawnWorkspaceSyncSidecar>(async () => ({ pid: 42,
+      waitForTermination: async () => await termination, stop: async () => exit({ type: 'exited', code: 0 }) }));
+    const lifecycle = new WorkspaceSyncSidecarLifecycle({
+      resolveRuntime: async () => ({ managerPath: '/verified/manager', agentPath: '/verified/agent',
+        dataDir: '/private/data', brokerDir: '/private/broker', manifest: { engineVersion: '1', protocolEpoch: 'external-stream-v1' } }),
+      createBroker: async () => ({ bootstrapDescriptor: new Uint8Array([1]), waitForReady,
+        command: async () => [], close: async () => undefined }),
+      openExternalStream: vi.fn(), spawn, ensurePrivateDirectory: async () => undefined,
+      randomBytes: () => new Uint8Array(32), randomId: () => 'opaque-id', onRestartReady: async () => undefined,
+      onReadinessChanged: (state) => states.push(state.state), shutdownGraceMs: 0,
+    });
+    const starting = lifecycle.start().catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(waitForReady).toHaveBeenCalled());
+      const root = lifecycle.readProcessRoots()[0];
+      expect(root).toMatchObject({ owner: { kind: 'workspace_sync' }, pid: 42 });
+      const stopping = root?.stop?.();
+      finishReadiness();
+      await stopping;
+      expect(await starting).toMatchObject({ code: 'engine_unavailable' });
+      expect(states).not.toContain('ready');
+      expect(lifecycle.readProcessRoots()).toEqual([]);
+      await expect(lifecycle.start()).rejects.toMatchObject({ code: 'engine_unavailable' });
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      finishReadiness();
+      await lifecycle.stop();
+      await starting;
+    }
+  });
+
   it.each(['resolve', 'broker', 'spawn'] as const)(
     'waits for an in-flight %s acquisition and retires every late sidecar resource',
     async (blockedStage) => {
@@ -124,7 +162,11 @@ describe('WorkspaceSyncSidecarLifecycle', () => {
     expect(createBroker).toHaveBeenCalledWith(expect.objectContaining({ openExternalStream }));
     expect(setExpectedSidecarPid).toHaveBeenCalledWith(42);
 
-    await lifecycle.stop();
+    const root = lifecycle.readProcessRoots()[0];
+    expect(root).toMatchObject({ owner: { kind: 'workspace_sync' }, pid: 42 });
+    await root?.stop?.();
+    expect(lifecycle.readProcessRoots()).toEqual([]);
+    await expect(lifecycle.start()).rejects.toMatchObject({ code: 'engine_unavailable' });
     expect(command).toHaveBeenCalledWith(expect.objectContaining({ t: 'shutdown' }));
     expect(closeBroker).toHaveBeenCalledTimes(1);
     expect(stop).not.toHaveBeenCalled();
@@ -587,7 +629,7 @@ describe('WorkspaceSyncSidecarLifecycle', () => {
       maximumActive = Math.max(maximumActive, active);
       const waitForTermination = new Promise<{ type: 'exited'; code: number }>((resolve) => exits.push(resolve));
       return {
-        pid: 40 + exits.length,
+        pid: 42,
         waitForTermination: async () => { const event = await waitForTermination; active -= 1; return event; },
         stop: async () => { active = Math.max(0, active - 1); },
       };
@@ -602,11 +644,14 @@ describe('WorkspaceSyncSidecarLifecycle', () => {
     });
     await lifecycle.start();
     expect(onRestartReady).not.toHaveBeenCalled();
+    const departedRoot = lifecycle.readProcessRoots()[0];
     exits[0]?.({ type: 'exited', code: 1 });
     await vi.advanceTimersByTimeAsync(2_000);
     expect(spawn).toHaveBeenCalledTimes(2);
     expect(maximumActive).toBe(1);
     expect(onRestartReady).toHaveBeenCalledTimes(1);
+    await expect(departedRoot?.stop?.()).rejects.toMatchObject({ code: 'process_root_changed' });
+    expect(active).toBe(1);
     await lifecycle.stop();
     vi.useRealTimers();
   });
@@ -703,14 +748,18 @@ describe('WorkspaceSyncSidecarLifecycle', () => {
     }
   });
 
-  it('stops and closes a replacement sidecar when restart reconciliation fails', async () => {
+  it.each(['reconciliation_failure', 'root_stop'] as const)(
+    'stops and closes a replacement sidecar without publishing readiness after %s', async (reason) => {
     vi.useFakeTimers();
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     const exits: Array<(event: { type: 'exited'; code: number }) => void> = [];
     const stops: Array<ReturnType<typeof vi.fn>> = [];
     const brokerCloses: Array<ReturnType<typeof vi.fn>> = [];
     let rejectRestartReconciliation!: (error: Error) => void;
-    const restartReconciliation = new Promise<void>((_resolve, reject) => {
+    let finishRestartReconciliation!: () => void;
+    const states: string[] = [];
+    const restartReconciliation = new Promise<void>((resolve, reject) => {
+      finishRestartReconciliation = resolve;
       rejectRestartReconciliation = reject;
     });
     const spawn = vi.fn<SpawnWorkspaceSyncSidecar>(async () => {
@@ -731,6 +780,7 @@ describe('WorkspaceSyncSidecarLifecycle', () => {
       openExternalStream: vi.fn(), spawn, ensurePrivateDirectory: vi.fn(async () => undefined),
       randomBytes: () => new Uint8Array(32), randomId: () => 'opaque-id',
       onRestartReady: async () => await restartReconciliation,
+      onReadinessChanged: (state) => states.push(state.state),
       shutdownGraceMs: 0,
     });
 
@@ -749,11 +799,22 @@ describe('WorkspaceSyncSidecarLifecycle', () => {
       await Promise.resolve();
       expect(waitingStartSettled).toBe(false);
 
-      rejectRestartReconciliation(new Error('settings reconciliation failed'));
+      const stopping = reason === 'root_stop' ? lifecycle.readProcessRoots()[0]?.stop?.() : undefined;
+      if (reason === 'root_stop') finishRestartReconciliation();
+      else rejectRestartReconciliation(new Error('settings reconciliation failed'));
       await expect(waitingStart).rejects.toMatchObject({ code: 'engine_unavailable' });
-      expect(stops[1]).toHaveBeenCalledTimes(1);
-      expect(brokerCloses[1]).toHaveBeenCalledTimes(1);
+      await stopping;
+      expect(states.filter((state) => state === 'ready')).toHaveLength(1);
+      if (reason === 'reconciliation_failure') {
+        expect(stops[1]).toHaveBeenCalledTimes(1);
+        expect(brokerCloses[1]).toHaveBeenCalledTimes(1);
+      } else {
+        expect(lifecycle.readProcessRoots()).toEqual([]);
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(spawn).toHaveBeenCalledTimes(2);
+      }
     } finally {
+      finishRestartReconciliation();
       await lifecycle.stop();
       random.mockRestore();
       vi.useRealTimers();

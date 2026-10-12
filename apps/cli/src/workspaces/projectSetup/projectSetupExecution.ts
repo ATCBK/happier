@@ -31,7 +31,7 @@ export type ProjectSetupExecutionInput = Readonly<{
     requesterAccountId: string;
     terminalCustody?: TerminalPtyCustody;
     operation: ProjectSetupOperationContext;
-    terminalSessions: Pick<TerminalPtySessionManager, 'ensure' | 'waitForExit' | 'requestStop'>;
+    terminalSessions: Pick<TerminalPtySessionManager, 'prepare' | 'ensure' | 'waitForExit' | 'requestStop'>;
     environmentIo: ProjectNativeEnvironmentIoForHost;
     hostEnvironment?: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;

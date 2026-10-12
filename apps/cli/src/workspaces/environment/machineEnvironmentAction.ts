@@ -13,10 +13,12 @@ import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalo
 import { createProjectNativeInvocationCustody, type ProjectSetupOperationContext } from '@/workspaces/projectSetup/projectSetupExecution';
 import { applyMachineEnvironment } from './applyMachineEnvironment';
 import { createProjectNativeIo } from '@/workspaces/projectSetup/projectNativeIo';
+import type { OwnerRemainderPort } from '@/daemon/processes/endOwnerRemainder';
 
 /** Receiving target only. Home owns the exact accessible preset/snapshot;
  * this installed runtime owns process and Account secret custody. */
 export function createMachineEnvironmentAction(params: Readonly<{
+  ownerRemainder?: OwnerRemainderPort;
   apiMachine: ApiMachineClient;
   machineId: string;
   homeId: string;
@@ -85,7 +87,7 @@ export function createMachineEnvironmentAction(params: Readonly<{
             savedSecretResources: secrets.savedSecretResources };
         }
         if (!await isCurrent()) throw Object.assign(new Error('machine_admission_changed'), { code: 'machine_admission_changed' });
-        const io = createProjectNativeIo().environmentIo.createInvocation({ signal: cancellationSignal, retainCapture: custody.retain });
+        const io = createProjectNativeIo({ ownerRemainder: params.ownerRemainder }).environmentIo.createInvocation({ signal: cancellationSignal, retainCapture: custody.retain });
         const result = await applyMachineEnvironment({ homeId: input.homeId, machineId: input.machineId,
           preset: { id: input.presetId, revision: input.presetRevision }, requesterAccountId, userHomeDirectory: homedir(),
           environment: resolved.environment, operation, signal: cancellationSignal, terminalSessions,
