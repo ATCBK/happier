@@ -5,10 +5,13 @@ import { AIBackendProfileSchema, type AIBackendProfile } from '@/sync/domains/pr
 import { buildBackendTargetKey, buildBackendTargetKeyV2 } from '@happier-dev/protocol';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { ProfileEditForm } from './ProfileEditForm';
 import {
     installProfileEditFormModuleMocks,
     resetProfileEditFormTestState,
     publishProfileEditFormAcpCatalogFixture,
+    loadProfileEditFormCatalogFixtureOwners,
+    publishProfileEditFormPrivateRowFixture,
 } from './profileEditFormTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -32,8 +35,7 @@ const catalogRecord = AcpCatalogRecordV1Schema.parse({
                 id: 'custom-backend',
                 name: 'custom-backend',
                 title: 'Custom Backend',
-                command: 'custom-acp',
-                args: ['serve'],
+                launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                 env: {},
                 createdAt: 1,
                 updatedAt: 1,
@@ -41,8 +43,12 @@ const catalogRecord = AcpCatalogRecordV1Schema.parse({
         ],
 });
 let disposeCatalog: (() => void) | undefined;
-beforeEach(async () => { disposeCatalog = await publishProfileEditFormAcpCatalogFixture(catalogRecord); });
-afterEach(() => { standardCleanup(); disposeCatalog?.(); disposeCatalog = undefined; });
+let disposePrivateRow: (() => void) | undefined;
+beforeEach(async () => {
+    disposeCatalog = await publishProfileEditFormAcpCatalogFixture(catalogRecord);
+    disposePrivateRow = await publishProfileEditFormPrivateRowFixture(buildProfile());
+});
+afterEach(() => { standardCleanup(); disposePrivateRow?.(); disposeCatalog?.(); disposeCatalog = undefined; });
 
 installProfileEditFormModuleMocks({
     storageModule: async () => {
@@ -68,8 +74,10 @@ installProfileEditFormModuleMocks({
 });
 
 async function loadProfileEditForm() {
-    return await import('./ProfileEditForm');
+    return { ProfileEditForm };
 }
+
+await loadProfileEditFormCatalogFixtureOwners();
 
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: (featureId: string) => featureId === 'sessions.direct',
@@ -89,8 +97,8 @@ vi.mock('@/components/ui/lists/Item', () => ({
     },
 }));
 
-function buildProfile(): AIBackendProfile {
-    return AIBackendProfileSchema.parse({
+function buildProfile(): AIBackendProfile & { profileRecordRevision: number } {
+    return { ...AIBackendProfileSchema.parse({
         id: 'p1',
         name: 'P',
         environmentVariables: [],
@@ -108,7 +116,7 @@ function buildProfile(): AIBackendProfile {
         createdAt: 0,
         updatedAt: 0,
         version: '1.0.0',
-    });
+    }), profileRecordRevision: 1 };
 }
 
 describe('ProfileEditForm backend targets', () => {
@@ -150,17 +158,18 @@ describe('ProfileEditForm backend targets', () => {
         const saveRef = { current: null as null | (() => boolean) };
         const onSave = vi.fn((_: AIBackendProfile) => true);
         const { ProfileEditForm } = await loadProfileEditForm();
+        const machineLoginProfile = { ...AIBackendProfileSchema.parse({
+            ...buildProfile(),
+            authMode: 'machineLogin',
+            compatibility: { codex: false, customAcp: false },
+            compatibilityByTargetKey: {
+                [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'codex' })]: true,
+                [buildBackendTargetKey({ kind: 'configuredAcpBackend', backendId: 'custom-backend' })]: false,
+            },
+        }), profileRecordRevision: 1 };
 
         await renderScreen(React.createElement(ProfileEditForm, {
-            profile: AIBackendProfileSchema.parse({
-                ...buildProfile(),
-                authMode: 'machineLogin',
-                compatibility: { codex: false, customAcp: false },
-                compatibilityByTargetKey: {
-                    [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'codex' })]: true,
-                    [buildBackendTargetKey({ kind: 'configuredAcpBackend', backendId: 'custom-backend' })]: false,
-                },
-            }),
+            profile: machineLoginProfile,
             machineId: null,
             onSave,
             onCancel: vi.fn(),

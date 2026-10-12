@@ -3,17 +3,39 @@ import { vi } from 'vitest';
 
 import type { ExpoRouterParams } from '@/dev/testkit/mocks/router';
 import type { AcpCatalogRecordV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
+import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
 
 type ModuleFactory = () => unknown | Promise<unknown>;
 
-/** Publishes the real scoped row; Settings mocks do not supply catalog authority. */
-export async function publishProfileEditFormAcpCatalogFixture(record: AcpCatalogRecordV1) {
-    const [{ getStorage }, { getActiveServerId }, catalog, engine] = await Promise.all([
+/** Load the real owners during collection, outside a test or hook deadline. */
+export function loadProfileEditFormCatalogFixtureOwners() {
+    return Promise.all([
         import('@/sync/domains/state/storageStore'),
         import('@/sync/domains/server/serverProfiles'),
         import('@/sync/store/settings/acpCatalogSnapshot'),
+        import('@/sync/store/settings/profileCatalogSnapshot'),
         import('@/sync/engine/settings/acpCatalogEngine'),
     ]);
+}
+
+/** Existing legacy editors capture their acknowledged row and private attachments. */
+export async function publishProfileEditFormPrivateRowFixture(profile: AIBackendProfile) {
+    const [{ getStorage }, , , profiles] = await loadProfileEditFormCatalogFixtureOwners();
+    const scope = getStorage().getState().settingsScope;
+    if (!scope) throw new Error('Profile fixture requires a scoped catalog');
+    const { profileRecordRevision: _revision, ...definition } = profile as AIBackendProfile & { profileRecordRevision?: number };
+    const record = ProfileRecordV1Schema.parse({ v: 1, id: profile.id,
+        definition: { kind: 'legacy', profile: definition }, enabled: true, promptStack: [], secretBindings: {} });
+    profiles.resetProfileCatalogSnapshotsForTests();
+    profiles.applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', records: [{ record, revision: 1 }],
+        control: null, controlRevision: 'absent', referenceGuardRevision: 'absent', diagnostics: [] }, true);
+    return () => profiles.resetProfileCatalogSnapshotsForTests();
+}
+
+/** Publishes the real scoped row; Settings mocks do not supply catalog authority. */
+export async function publishProfileEditFormAcpCatalogFixture(record: AcpCatalogRecordV1) {
+    const [{ getStorage }, { getActiveServerId }, catalog, , engine] = await loadProfileEditFormCatalogFixtureOwners();
     const previousScope = getStorage().getState().settingsScope;
     const scope = { serverId: getActiveServerId(), accountId: 'profile-editor-fixture' };
     engine.resetAcpCatalogEngineForTests();
@@ -97,7 +119,7 @@ export function installProfileEditFormModuleMocks(
             navigation: {
                 setOptions: profileEditFormTestState.navigationSetOptionsSpy,
             },
-            params: profileEditFormTestState.options.routeParams,
+            params: () => profileEditFormTestState.options.routeParams,
         }).module;
     });
 

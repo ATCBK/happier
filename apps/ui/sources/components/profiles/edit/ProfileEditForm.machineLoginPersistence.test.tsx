@@ -6,10 +6,13 @@ import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibil
 import { buildBackendTargetKey, buildBackendTargetKeyV2 } from '@happier-dev/protocol';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { ProfileEditForm } from './ProfileEditForm';
 import {
     installProfileEditFormModuleMocks,
     resetProfileEditFormTestState,
     publishProfileEditFormAcpCatalogFixture,
+    loadProfileEditFormCatalogFixtureOwners,
+    publishProfileEditFormPrivateRowFixture,
 } from './profileEditFormTestHelpers';
 
 
@@ -48,8 +51,7 @@ const catalogRecord = AcpCatalogRecordV1Schema.parse({
                 id: 'custom-backend',
                 name: 'custom-backend',
                 title: 'Custom Backend',
-                command: 'custom-acp',
-                args: ['serve'],
+                launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                 env: {},
                 createdAt: 1,
                 updatedAt: 1,
@@ -57,8 +59,14 @@ const catalogRecord = AcpCatalogRecordV1Schema.parse({
         ],
 });
 let disposeCatalog: (() => void) | undefined;
-beforeEach(async () => { disposeCatalog = await publishProfileEditFormAcpCatalogFixture(catalogRecord); });
-afterEach(() => { standardCleanup(); disposeCatalog?.(); disposeCatalog = undefined; });
+let disposePrivateRow: (() => void) | undefined;
+beforeEach(async () => {
+    disposeCatalog = await publishProfileEditFormAcpCatalogFixture(catalogRecord);
+    disposePrivateRow = await publishProfileEditFormPrivateRowFixture(buildProfile());
+});
+afterEach(() => { standardCleanup(); disposePrivateRow?.(); disposeCatalog?.(); disposeCatalog = undefined; });
+
+await loadProfileEditFormCatalogFixtureOwners();
 
 vi.mock('@/components/profiles/environmentVariables/EnvironmentVariablesList', () => ({
     EnvironmentVariablesList: () => null,
@@ -78,6 +86,7 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
             typeof value === 'string' && value === 'codex',
         getAgentCore: () => {
             const core = actual.getAgentCore('codex');
+            if (!core) throw new Error('Expected the bundled Codex Agent core');
             return {
                 ...core,
                 permissions: { ...core.permissions, modeGroup: 'codexLike' },
@@ -152,7 +161,7 @@ vi.mock('@/components/secrets/requirements', () => ({
     SecretRequirementModal: () => null,
 }));
 
-function buildProfile(): AIBackendProfile {
+function buildProfile(): AIBackendProfile & { profileRecordRevision: number } {
     const configuredTargetKey = buildBackendTargetKey({ kind: 'configuredAcpBackend', backendId: 'custom-backend' });
 
     return {
@@ -175,12 +184,12 @@ function buildProfile(): AIBackendProfile {
         createdAt: 0,
         updatedAt: 0,
         version: '1.0.0',
-    } satisfies AIBackendProfile;
+        profileRecordRevision: 1,
+    };
 }
 
 describe('ProfileEditForm machine-login persistence', () => {
     it('clears machine-login persistence when multiple compatible targets share a machine-login key', async () => {
-        const { ProfileEditForm } = await import('./ProfileEditForm');
         const saveRef = { current: null as null | (() => boolean) };
         const onSave = vi.fn((_: AIBackendProfile) => true);
         const configuredTargetKey = buildBackendTargetKey({ kind: 'configuredAcpBackend', backendId: 'custom-backend' });
