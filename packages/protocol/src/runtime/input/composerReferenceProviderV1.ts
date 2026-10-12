@@ -120,7 +120,7 @@ export type ComposerReferenceContextBlockEntryV1 = Readonly<{
 
 export const ComposerAttachmentContextBlockEntryV1Schema = lazyZodSchema(() => z.object({
   attachment: ResolvedComposerAttachmentDispatchV1Schema,
-  context: ComposerReferenceContextV1Schema.optional(),
+  context: z.string().min(1).optional(),
 }).strict());
 export type ComposerAttachmentContextBlockEntryV1 = Readonly<{
   attachment: ResolvedComposerAttachmentDispatchV1;

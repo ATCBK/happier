@@ -5,12 +5,15 @@ import { MAX_INTERACTION_TRANSIENT_JSON_BYTES_V1 } from '../../plugins/interacti
 import {
   AgentDispatchStructuredInputV1Schema,
   HappierStructuredInputV1Schema,
+  RawIngressStructuredInputV1Schema,
+  readAdmittedHappierStructuredInputV1FromMeta,
   readSessionAttachmentEnvelopeRecordsV1,
   sanitizeHappierStructuredInputV1,
   sanitizeSessionStructuredInputMeta,
 } from './structuredInputV1.js';
 import { MAX_COMPOSER_ATTACHMENT_INSTANCES_V1 } from './composerAttachmentV1.js';
 import { SkillMentionV1Schema } from './skillMentionV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 const validComposerAttachment = {
   v: 1,
@@ -102,6 +105,44 @@ function buildComposerAttachmentAggregateAtByteLimit(): readonly Record<string, 
 }
 
 describe('readSessionAttachmentEnvelopeRecordsV1', () => {
+  it('reads retained queued staged media without promoting it to admitted or dispatched input', () => {
+    const attachment = { ...validComposerAttachment, content: { kind: 'stagedMedia', handle: {
+      v: 1, id: 'stage-1', executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+      owner: { pluginId: 'example.composer', localId: 'issue' }, mediaKind: 'image', mimeType: 'image/png',
+      name: 'hero.png', sizeBytes: 42, sha256: 'a'.repeat(64) } } };
+    const mention = { kind: 'future.reference', ref: 'future:opaque', token: '@future', nativeAnnotation: { keep: true } };
+    const canonical = RawIngressStructuredInputV1Schema.parse({ v: 1, composerAttachments: [attachment],
+      mentions: [mention], nativeEnvelope: { keep: true } });
+    const retained = { ...canonical, composerAttachments: [{ ...attachment, retired: true,
+      content: { ...attachment.content, retired: true,
+        handle: { ...attachment.content.handle, retired: true,
+          executionTarget: { ...attachment.content.handle.executionTarget, retired: true } } } }] };
+    const reader = createStoredReadSchema(RawIngressStructuredInputV1Schema);
+    expect(reader.parse(retained)).toEqual(canonical);
+    expect(RawIngressStructuredInputV1Schema.safeParse(retained).success).toBe(false);
+    expect(readAdmittedHappierStructuredInputV1FromMeta({ happierStructuredInputV1: retained })).toEqual({ status: 'invalid' });
+    expect(reader.safeParse({ ...retained, resolvedComposerAttachments: [] }).success).toBe(false);
+    expect(reader.safeParse({ ...retained, composerAttachments: [{ ...attachment,
+      content: { ...attachment.content, handle: { ...attachment.content.handle, sha256: 'invalid' } } }] }).success).toBe(false);
+  });
+
+  it('opens retained declared structured fields while preserving the explicitly open native reference bags', () => {
+    const source = { kind: 'session_discussion', sessionId: 'session-a', discussionId: 'discussion-a', messageIds: ['message-a'] };
+    const mention = { kind: 'future.reference', ref: 'future:opaque', token: '@future', nativeAnnotation: { keep: true } };
+    const canonical = { v: 1, sessionDiscussionSelectionSourceV1: source,
+      mentions: [mention], nativeEnvelope: { keep: true } };
+    expect(readAdmittedHappierStructuredInputV1FromMeta({ happierStructuredInputV1: canonical }))
+      .toEqual({ status: 'admitted', structuredInput: canonical });
+    const retained = { ...canonical, sessionDiscussionSelectionSourceV1: { ...source, retired: true } };
+    expect(readAdmittedHappierStructuredInputV1FromMeta({ happierStructuredInputV1: retained }))
+      .toEqual({ status: 'admitted', structuredInput: canonical });
+    expect(HappierStructuredInputV1Schema.safeParse(retained).success).toBe(false);
+    expect(readAdmittedHappierStructuredInputV1FromMeta({ happierStructuredInputV1: { ...retained,
+      sessionDiscussionSelectionSourceV1: { ...source, sessionId: ' ' } } })).toEqual({ status: 'invalid' });
+    expect(readAdmittedHappierStructuredInputV1FromMeta({ happierStructuredInputV1: { ...retained,
+      resolvedComposerAttachments: [] } })).toEqual({ status: 'invalid' });
+  });
+
   it('retains a bounded Discussion selection source and rejects Run-only correlation', () => {
     const source = {
       kind: 'session_discussion' as const,

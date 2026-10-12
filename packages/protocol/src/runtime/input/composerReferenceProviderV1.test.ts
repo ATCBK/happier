@@ -9,6 +9,18 @@ import {
 
 const REFERENCE = { pluginId: 'acme.issues', localId: 'issues' } as const;
 
+describe('inline attachment context', () => {
+  it('renders complete attachment text beyond the separate reference-context budget', () => {
+    const context = `${'Furniture lead\n'.repeat(5_000)}end-of-attachment`;
+    const rendered = renderComposerReferenceContextBlockV1([], [{
+      attachment: { v: 1, instanceId: 'attachment-1', attachment: { pluginId: 'happier.channels', localId: 'channel-file' },
+        key: 'file-1', value: {}, presentation: { label: 'Lead', typeLabel: 'File' } },
+      context,
+    }]);
+    expect(rendered).toContain('end-of-attachment');
+  });
+});
+
 describe('composer reference persisted identity', () => {
   it('writes only the qualified reference, opaque candidate id, and advisory label into the incumbent mention element', () => {
     const payload = buildComposerReferenceMentionPayloadV1({

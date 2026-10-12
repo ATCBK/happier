@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { BrowserContextMessageMetaV1Schema, BrowserContextMessagePayloadV1Schema } from '../../browser/context/v1.js';
 
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
@@ -420,6 +421,35 @@ export type RawIngressStructuredInputV1 = Readonly<
   }>
 >;
 
+function rejectPersistedDispatchAttachments(value: unknown, context: z.RefinementCtx): void {
+  if (Object.hasOwn(value as object, 'resolvedComposerAttachments')) {
+    context.addIssue({ code: 'custom', path: ['resolvedComposerAttachments'],
+      message: 'Dispatch attachments are not persisted Message input.' });
+  }
+  rejectOversizedComposerAttachmentEnvelope(value, context);
+}
+
+function createStoredStructuredInputV1Schema<T extends z.core.$ZodType>(attachments: T) {
+  return createStoredReadSchema(HappierStructuredInputV1ObjectSchema)
+    .omit({ composerAttachments: true })
+    .extend({
+      // These are intentionally additive native reference bags, not closed
+      // typed fields. Preserve unknown kinds and their inert annotations.
+      mentions: z.array(MentionRefV1Schema).optional(),
+      composerAttachments: z.array(createStoredReadSchema(attachments))
+        .max(MAX_COMPOSER_ATTACHMENT_INSTANCES_V1).optional(),
+    })
+    .passthrough()
+    .superRefine(rejectPersistedDispatchAttachments);
+}
+
+export const HappierStructuredInputV1StoredSchema = lazyZodSchema(() =>
+  createStoredStructuredInputV1Schema(ComposerAttachmentInputV1Schema));
+export const RawIngressStructuredInputV1StoredSchema = lazyZodSchema(() =>
+  createStoredStructuredInputV1Schema(ComposerAttachmentDraftV1Schema));
+defineStoredReadProjection(HappierStructuredInputV1Schema, () => HappierStructuredInputV1StoredSchema);
+defineStoredReadProjection(RawIngressStructuredInputV1Schema, () => RawIngressStructuredInputV1StoredSchema);
+
 /**
  * A Message-admitted envelope has already crossed the raw ingress trust
  * boundary. Consumers distinguish its absence from invalid persisted bytes so
@@ -447,10 +477,10 @@ export function readAdmittedHappierStructuredInputV1FromMeta(
   }
 
   const envelope = asRecord(metadata[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]);
-  if (!envelope || Object.prototype.hasOwnProperty.call(envelope, 'resolvedComposerAttachments')) {
+  if (!envelope) {
     return { status: 'invalid' };
   }
-  const parsed = HappierStructuredInputV1Schema.safeParse(envelope);
+  const parsed = HappierStructuredInputV1StoredSchema.safeParse(envelope);
   return parsed.success
     ? { status: 'admitted', structuredInput: parsed.data }
     : { status: 'invalid' };
