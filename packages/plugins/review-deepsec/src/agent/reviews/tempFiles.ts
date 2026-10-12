@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createSecureTempDirectorySync } from '@happier-dev/plugin-sdk/fs';
 
 import type { DeepSecTempFiles, DeepSecTempFileRequest } from './run.js';
 
 export async function createDeepSecTempFiles(): Promise<DeepSecTempFiles> {
-  const directory = await mkdtemp(join(tmpdir(), 'happier-deepsec-'));
+  const temporary = createSecureTempDirectorySync({ prefix: 'deepsec' });
+  const directory = temporary.path;
   return {
     async createTextFile(request: DeepSecTempFileRequest) {
       const path = join(directory, `${randomUUID()}${request.suffix}`);
@@ -22,7 +23,7 @@ export async function createDeepSecTempFiles(): Promise<DeepSecTempFiles> {
       return await readFile(path, 'utf8');
     },
     async cleanup() {
-      await rm(directory, { recursive: true, force: true });
+      temporary.cleanup();
     },
   };
 }
