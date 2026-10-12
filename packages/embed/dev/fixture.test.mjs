@@ -20,7 +20,7 @@ function ownedStore() {
 test('the plugin uses only the host Action identity for backend replay', async () => {
   const store = ownedStore();
   const keys = [];
-  const testkit = await createPluginTestkit({ manifest, activate });
+  const testkit = await createPluginTestkit({ manifest, module: { activate } });
   try {
     const registration = testkit.registration('actions', 'update-stage');
     assert.ok(registration);
@@ -50,9 +50,9 @@ test('the plugin uses only the host Action identity for backend replay', async (
 });
 
 test('validates business Action input before changing the lead', () => {
-  assert.deepEqual(actionSchemas.record_analysis.parse(analysis), analysis);
+  assert.deepEqual({ ...actionSchemas.record_analysis.parse(analysis) }, analysis);
   assert.throws(() => actionSchemas.record_analysis.parse({ ...analysis, invocationId: 'caller-id' }));
-  assert.deepEqual(actionSchemas.update_stage.parse({ leadId: 'northstar', stage: 'qualified' }),
+  assert.deepEqual({ ...actionSchemas.update_stage.parse({ leadId: 'northstar', stage: 'qualified' }) },
     { leadId: 'northstar', stage: 'qualified' });
   assert.throws(() => actionSchemas.update_stage.parse({ leadId: 'northstar', stage: 'qualified', invocationId: 'caller-id' }));
   const store = ownedStore();
@@ -69,10 +69,14 @@ test('replays an invocation once and rejects key reuse for a different mutation'
   const store = ownedStore();
   const result = store.apply('update_stage', { leadId: 'northstar', stage: 'qualified' }, 'approval-1', leadSessionId);
   assert.deepEqual(store.apply('update_stage', { leadId: 'northstar', stage: 'qualified' }, 'approval-1', leadSessionId), result);
+  // A replay key is correlation, not ownership: even an exact retained key must not disclose its result.
+  assert.throws(() => store.apply('update_stage', { leadId: 'northstar', stage: 'qualified' }, 'approval-1', 'unowned-session'), /session_forbidden/);
+  store.attachLeadSession('other-salesperson', 'alpine', 'foreign-owned-session');
+  assert.throws(() => store.apply('update_stage', { leadId: 'northstar', stage: 'qualified' }, 'approval-1', 'foreign-owned-session'), /lead_forbidden/);
   assert.equal(store.listLeads('salesperson')[0].stageUpdates, 1);
   assert.throws(() => store.apply('update_stage', { leadId: 'northstar', stage: 'won' }, 'approval-1', leadSessionId), /idempotency_conflict/);
   assert.throws(() => store.apply('record_analysis', analysis, '', leadSessionId), /idempotency_key_required/);
-  assert.throws(() => store.apply('update_stage', { leadId: 'northstar', stage: 'won', invocationId: 'other-id' }, 'approval-2', leadSessionId));
+  assert.throws(() => store.apply('update_stage', { leadId: 'northstar', stage: 'won', invocationId: 'approval-2' }, 'approval-2', leadSessionId));
   assert.equal(store.listLeads('salesperson')[0].stage, 'qualified');
 });
 

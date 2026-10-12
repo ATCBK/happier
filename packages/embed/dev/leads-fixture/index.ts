@@ -4,10 +4,11 @@ import { actionResultSchema, actionSchemas, FIXTURE_ORIGIN } from './contracts.m
 async function execute(action: keyof typeof actionSchemas, input: unknown, context: PluginInvocationContext) {
   const parsed = actionSchemas[action].parse(input);
   if (!context.session) throw new Error('fixture_session_required');
+  if (!context.invocationId?.trim()) throw new Error('fixture_invocation_required');
   const response = await context.services.http.request({
     url: `${FIXTURE_ORIGIN}/api/actions/${action}`,
     method: 'POST', redirect: 'error',
-    headers: { 'content-type': 'application/json', 'idempotency-key': parsed.invocationId,
+    headers: { 'content-type': 'application/json', 'idempotency-key': context.invocationId,
       'x-happier-fixture-session-id': context.session.id },
     body: new TextEncoder().encode(JSON.stringify(parsed)),
   }, { signal: context.signal });
@@ -26,13 +27,13 @@ export const { manifest, activate } = definePlugin({
   }], optional: [] },
   actions: {
     'record-analysis': {
-      title: 'Record lead analysis', description: 'Save a score, summary and next step. Use a stable invocationId for replay.',
+      title: 'Record lead analysis', description: 'Save a score, summary and next step.',
       scopes: ['session'], surfaces: ['agent', 'mcp', 'cli', 'ui'], dangerLevel: 'safe',
       hostAccess: ['fixture-backend'], inputSchema: actionSchemas.record_analysis, resultSchema: actionResultSchema,
       run: (input, context) => execute('record_analysis', input, context),
     },
     'update-stage': {
-      title: 'Update lead stage', description: 'Propose a pipeline stage change. Keep invocationId unchanged on retry.',
+      title: 'Update lead stage', description: 'Propose a pipeline stage change.',
       scopes: ['session'], surfaces: ['agent', 'mcp', 'cli', 'ui'], dangerLevel: 'writesRemote',
       confirmation: { title: 'Update this lead’s stage?', body: 'The CRM pipeline will change after approval.', confirmLabel: 'Update stage' },
       hostAccess: ['fixture-backend'], inputSchema: actionSchemas.update_stage, resultSchema: actionResultSchema,

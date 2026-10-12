@@ -37,8 +37,7 @@ export function createFixtureStore() {
     apply(action, input, idempotencyKey, sessionId) {
       if (typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) throw new Error('idempotency_key_required');
       if (!Object.hasOwn(actionSchemas, action)) throw new Error('action_not_found');
-      if (input?.invocationId !== undefined && input.invocationId !== idempotencyKey) throw new Error('idempotency_key_mismatch');
-      const parsed = actionSchemas[action].parse({ ...input, invocationId: idempotencyKey });
+      const parsed = actionSchemas[action].parse(input);
       const ownerId = sessionOwners.get(sessionId);
       if (!ownerId) throw new Error('session_forbidden');
       const lead = leads.find((entry) => entry.id === parsed.leadId);
@@ -70,7 +69,7 @@ export async function createLeadChat({ happier, store, userId, leadId }) {
     : await happier.embed.createSession({ title: lead.name }, { requestId: `fixture-lead-${userId}-${lead.id}` });
   store.attachLeadSession(userId, lead.id, session.id);
   const result = await session.send(
-    `Analyze this lead. Call the Leads fixture record-analysis Action with leadId=${lead.id}, score (0-100), summary and nextStep. Include a unique invocationId, reused if this same call is retried.\n${lead.notes}`,
+    `Analyze this lead. Call the Leads fixture record-analysis Action with leadId=${lead.id}, score (0-100), summary and nextStep.\n${lead.notes}`,
     { requestId: `fixture-analysis-${userId}-${lead.id}` },
   );
   if (result.status !== 'accepted' && result.status !== 'alreadyAccepted') {
