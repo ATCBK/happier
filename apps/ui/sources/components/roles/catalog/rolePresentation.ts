@@ -26,22 +26,30 @@ export function describeRoleFacts(engineLabel: string | null, runsAs: RoleRunsAs
 }
 
 /**
- * A role row's one line (lab `settings-R`): its engine, then how it runs. An engine this Account has
+ * A role row's one line (lab `settings-R`): its engine ("Default agent" when it pins none), then how it runs. An engine this Account has
  * not enabled says "choose an engine" after its name; the Orchestrator runs as the session it is
- * turned on in, so it says "this session" instead of a runs-as it cannot change.
+ * turned on in, so it says "This session" (the detail's own runs-as words) instead of a runs-as it
+ * cannot change.
  */
 export function describeRoleRowFacts(
   entry: Pick<RoleCatalogEntry, 'roleId'> & Readonly<{ role: Pick<RoleCatalogEntry['role'], 'engine' | 'runsAs'> }>,
-  engine: Readonly<{ label: string | null; unavailable: boolean }>,
+  engine: Readonly<{ label: string | null; unavailable: boolean; pending?: boolean }>,
 ): string {
+  // The engine leads the line; a role that pins none runs on the default agent and says so.
+  // While the Agent catalog has not said which agent an unpinned role follows, the line says nothing of it.
   const engineLabel = engine.unavailable && entry.role.engine
-    ? joinHappierFacts(engine.label, t('roles.rail.chooseEngine')) : engine.label;
+    ? joinHappierFacts(engine.label, t('roles.rail.chooseEngine'))
+    : engine.pending ? null : engine.label ?? t('roles.rail.defaultEngine');
   return entry.roleId === 'orchestrator'
-    ? joinHappierFacts(engineLabel, t('roles.session.thisSession'))
+    ? joinHappierFacts(engineLabel, t('roles.settings.runsAsThisSession'))
     : describeRoleFacts(engineLabel, entry.role.runsAs.kind);
 }
 
 export function useDescribeRoleRow(): (entry: RoleCatalogEntry) => string {
   const presentEngine = useRoleEnginePresentation();
-  return React.useCallback((entry) => describeRoleRowFacts(entry, presentEngine(entry.role.engine)), [presentEngine]);
+  return React.useCallback((entry) => {
+    const engine = presentEngine(entry.role.engine);
+    // The row's mark is the pinned agent's own, so its line starts at the model.
+    return describeRoleRowFacts(entry, { label: engine.choiceLabel, unavailable: engine.unavailable, pending: engine.pending });
+  }, [presentEngine]);
 }

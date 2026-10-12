@@ -4,7 +4,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import type { RoleEngineV1 } from '@happier-dev/protocol';
 
-import { useRoleEngineCatalog } from '@/components/roles/catalog/useRoleEnginePresentation';
+import { resolveRoleEngineTargetKey, useRoleEngineCatalog } from '@/components/roles/catalog/useRoleEnginePresentation';
 import { AgentInputChipPickerPopover } from '@/components/sessions/agentInput/components/AgentInputChipPickerPopover';
 import { buildSessionAgentPickerDetailContent } from '@/components/sessions/agentPicker/buildSessionAgentPickerDetailContent';
 import { buildSessionAgentPickerOptions } from '@/components/sessions/agentPicker/buildSessionAgentPickerOptions';
@@ -29,6 +29,8 @@ export const RoleEngineField = React.memo(function RoleEngineField(props: Readon
     engine: RoleEngineV1 | undefined;
     label: string | null;
     leading?: React.ReactNode;
+    /** The agent a role without an engine follows is not known yet: the field shows a quiet bar, no words. */
+    pending?: boolean;
     disabled?: boolean;
     onChange: (engine: RoleEngineV1) => void;
     /** Engine-group consumers may also choose a Role through the incumbent rail. */
@@ -47,14 +49,15 @@ export const RoleEngineField = React.memo(function RoleEngineField(props: Readon
         chevronColor: theme.colors.text.secondary,
         field: resolveFieldBoxColors(theme),
         placeholder: t('roles.rail.defaultEngine'),
-        leading: props.leading,
+        leading: props.pending ? undefined : props.leading,
+        loading: props.pending === true,
     });
     return (
         <View ref={anchorRef} collapsable={false}>
             <HappierPressable
                 testID={props.testID}
                 accessibilityRole="button"
-                accessibilityLabel={`${t('roles.settings.engineTitle')}: ${props.label ?? t('roles.rail.defaultEngine')}`}
+                accessibilityLabel={props.pending ? t('roles.settings.engineTitle') : `${t('roles.settings.engineTitle')}: ${props.label ?? t('roles.rail.defaultEngine')}`}
                 disabled={props.disabled || unavailable}
                 onPress={() => { if (!unavailable) setOpen(true); }}
             >
@@ -87,6 +90,7 @@ function RoleEnginePopover(props: Readonly<{
     const { entries, ready, scope, snapshot } = useRoleEngineCatalog(props.capabilityServerId || undefined);
     const { capabilityServerId } = props;
     const { engine, onChange } = props;
+    const engineTargetKey = engine ? resolveRoleEngineTargetKey(engine.agentTargetKey) : null;
     const options = React.useMemo(() => buildSessionAgentPickerOptions({
         entries,
         leadingOptions: props.roleSelection ? [buildRolesRailPickerOption(props.roleSelection)] : undefined,
@@ -98,7 +102,7 @@ function RoleEnginePopover(props: Readonly<{
             deferredDetailContentCacheKey: `role-engine:${entry.backendTargetKey}`,
             closeOnSelectImmediate: false,
             onSelectImmediate: () => {
-                if (engine?.agentTargetKey !== entry.backendTargetKey) {
+                if (engineTargetKey !== entry.backendTargetKey) {
                     onChange({ agentTargetKey: entry.backendTargetKey });
                 }
             },
@@ -110,11 +114,11 @@ function RoleEnginePopover(props: Readonly<{
                 cwd: null,
                 settings,
                 selection: {
-                    modelId: engine?.agentTargetKey === entry.backendTargetKey ? engine.modelId ?? '' : '',
+                    modelId: engine && engineTargetKey === entry.backendTargetKey ? engine.modelId ?? '' : '',
                     sessionModeId: null,
                     // The role's effort is the Agent's `reasoning_effort` option, the one the picker
                     // offers beside the models; admission stamps it back the same way (`admitAgentStartV1`).
-                    configOverrides: engine?.agentTargetKey === entry.backendTargetKey && engine.effort
+                    configOverrides: engine?.effort && engineTargetKey === entry.backendTargetKey
                         ? { [ROLE_EFFORT_CONFIG_OPTION_ID]: engine.effort } : {},
                 },
                 onSelectionChange: (next) => {
@@ -127,7 +131,7 @@ function RoleEnginePopover(props: Readonly<{
                 },
             }),
         }),
-    }), [capabilityServerId, engine, entries, onChange, props.roleSelection, settings]);
+    }), [capabilityServerId, engine, engineTargetKey, entries, onChange, props.roleSelection, settings]);
 
     if (!ready) {
         const unavailable = scope === null || snapshot?.catalog.status === 'unavailable' || snapshot?.catalog.status === 'partial';
@@ -142,7 +146,7 @@ function RoleEnginePopover(props: Readonly<{
             anchorRef={props.anchorRef}
             title=""
             options={options}
-            selectedOptionId={engine?.agentTargetKey ?? null}
+            selectedOptionId={engineTargetKey}
             onSelect={() => {}}
             onRequestClose={props.onRequestClose}
             detailContentOwnsScroll

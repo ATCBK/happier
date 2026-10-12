@@ -9,7 +9,7 @@ import { resolvedRoleToArtifact } from '@/sync/domains/roles/roleCatalog';
 import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
 
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
-import { useRoleCatalog } from '@/components/roles/catalog/useRoleCatalog';
+import { useRoleCatalogEntryValue } from '@/components/roles/catalog/useRoleCatalog';
 import { RolesRailDetail } from '@/components/roles/rail/RolesRailDetail';
 import type { RolesRailPickerOptionParams } from '@/components/roles/rail/buildRolesRailPickerOption';
 import type { RoleRailItem } from '@/components/roles/rail/rolesRailTypes';
@@ -22,7 +22,8 @@ import {
     resolveSessionActionDefaultBackend,
     resolveSessionActionDefaultTarget,
 } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
-import { useSessionSelector, useSessionMetadata } from '@/sync/domains/state/storage';
+import { useSessionSelector } from '@/sync/domains/state/storage';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { roleActions } from '@/sync/ops/roles/roleActions';
 import { t } from '@/text';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -42,7 +43,7 @@ export function isSessionRoleSnapshotCopiedAcrossOwners(session: Session | null,
 
 /** The session's own role id, as a primitive: closed chrome re-renders only when the role changes. */
 export function useSessionRoleId(sessionId: string, serverId?: string | null): string | null {
-    return useSessionSelector(sessionId, serverId, (session) => readSessionRoleIdV1(session?.metadata ?? null));
+    return useSessionSelector(sessionId, serverId, (session) => readSessionRoleIdV1(session ? readSessionOwnerMetadataView(session) : null));
 }
 
 /**
@@ -70,6 +71,8 @@ type SessionRoleWriteResult = Readonly<{ ok: boolean; errorCode?: string; error?
  */
 export function describeSessionRoleRefusal(result: SessionRoleWriteResult): Readonly<{ title: string; message: string }> {
     switch (result.errorCode) {
+        case 'session_role_runtime_unavailable':
+            return { title: t('roles.session.refusal.runtimeUnavailableTitle'), message: t('roles.session.refusal.runtimeUnavailableBody') };
         case 'role_policy_unenforceable':
             return { title: t('roles.session.refusal.unenforceableTitle'), message: t('roles.session.refusal.unenforceableBody') };
         case 'role_policy_restart_required':
@@ -95,16 +98,19 @@ export async function settleSessionRoleWrite(result: SessionRoleWriteResult): Pr
 /**
  * One role of this session as the one resolver answers it (Settings → session): its name, engine and
  * hands-off. Null while the role is unknown or unresolvable here. The Work tab's Role row and the
- * popover's Hands-off switch read the same answer.
+ * popover's Hands-off switch read the same answer. Closed chrome reads only the cached selected
+ * entry; opening the existing detail surface refreshes the catalog.
  */
-export function useSessionRoleSelection(sessionId: string, roleId: string | null, serverId?: string | null): Readonly<{
+export function useSessionRoleSelection(sessionId: string, roleId: string | null, serverId?: string | null, refreshOnMount = true): Readonly<{
     sessionRoles: ReturnType<typeof readSessionRolesV1>;
     selection: ResolvedRoleV1 | null;
 }> {
-    const metadata = useSessionMetadata(sessionId, serverId);
-    const sessionRoles = React.useMemo(() => readSessionRolesV1(metadata), [metadata]);
-    const catalog = useRoleCatalog(serverId);
-    const entry = roleId ? catalog.entries.find((candidate) => candidate.roleId === roleId) : undefined;
+    const snapshot = useSessionSelector(sessionId, serverId, (session) => {
+        const work = session ? readSessionOwnerMetadataView(session)?.work : null;
+        return work && typeof work === 'object' && 'sessionRolesV1' in work ? work.sessionRolesV1 : null;
+    });
+    const sessionRoles = React.useMemo(() => readSessionRolesV1({ work: { sessionRolesV1: snapshot } }), [snapshot]);
+    const entry = useRoleCatalogEntryValue(roleId, serverId, refreshOnMount);
     const selection = React.useMemo(() => {
         if (!roleId) return null;
         const resolved = resolveRoleSelectionV1({
@@ -213,8 +219,13 @@ export function SessionRolePopover(props: Readonly<{
         >
             {({ maxHeight, maxWidth }) => (
                 <FloatingOverlay maxHeight={maxHeight} scrollEnabled={false} surfaceChrome="theme">
-                    {/* A fixed frame, so the rail's grid scrolls inside it and its footer stays at the foot. */}
-                    <View testID="session-role-popover" style={[styles.rolePopover, { height: maxHeight, width: maxWidth }]}>
+                    {/* A fixed frame, so the rail's grid scrolls inside it and its footer stays at the foot.
+                        The Popover's bounds include its own edge padding, so the frame is that much smaller;
+                        at the full bounds the right column and "Manage roles" were clipped at the edge. */}
+                    <View testID="session-role-popover" style={[styles.rolePopover, {
+                        height: Math.max(0, maxHeight - 2 * ROLE_POPOVER_EDGE_PADDING.vertical),
+                        width: Math.max(0, maxWidth - 2 * ROLE_POPOVER_EDGE_PADDING.horizontal),
+                    }]}>
                     <RolesRailDetail
                         serverId={props.serverId}
                         value={params.value}

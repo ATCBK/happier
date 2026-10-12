@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { OptionPickerOverlay, type OptionPickerOption } from '@/components/sessions/pickers/OptionPickerOverlay';
 import { HappierPressable, joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
+import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
@@ -44,6 +45,7 @@ export function RolesRailDetail(props: RolesRailDetailProps) {
 
 export function RolesRailDetailView(props: RolesRailDetailProps & Readonly<{ roles: ReadonlyArray<RoleRailItem>; status?: 'loading' | 'ready' | 'failed' }>) {
     const { describeConsequence, onChange, onManageRoles, roles, value } = props;
+    const { theme } = useUnistyles();
     const options = React.useMemo<ReadonlyArray<OptionPickerOption>>(() => roles.map((item) => {
         // A role that cannot be chosen as it stands keeps its place and says why, with its way out:
         // an engine this Account has not enabled is chosen in Manage roles; a role no layer resolves
@@ -98,6 +100,7 @@ export function RolesRailDetailView(props: RolesRailDetailProps & Readonly<{ rol
                         style={styles.manage}
                     >
                         <Text style={styles.manageText}>{t('roles.rail.manage')}</Text>
+                        <Icon name="caret-right" size={14} color={theme.colors.text.tertiary} />
                     </HappierPressable>
                 ) : null}
             </View>
@@ -165,6 +168,9 @@ const styles = StyleSheet.create((theme) => ({
     },
     manage: {
         flexShrink: 0,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
         paddingVertical: 6,
     },
     manageText: {

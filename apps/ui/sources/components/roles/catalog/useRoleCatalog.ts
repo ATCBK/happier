@@ -4,7 +4,8 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { ResolvedRoleV1 } from '@happier-dev/protocol/prompts/roles/rolesV1';
 
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
+import { getPromptLibraryCatalogValue, subscribePromptLibraryCatalogSnapshots } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
+import { observePromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 import { areServerAccountScopesEqual, serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
@@ -94,33 +95,40 @@ export function invalidateRoleCatalog(scopeKey?: string): void {
  */
 const subscribeCatalog = (listener: () => void) => {
     listeners.add(listener);
-    return () => { listeners.delete(listener); };
+    const unsubscribeOverrides = subscribePromptLibraryCatalogSnapshots(listener);
+    return () => { listeners.delete(listener); unsubscribeOverrides(); };
 };
 const selectEntries = (entries: ReadonlyArray<RoleCatalogEntry>) => entries;
 
-function useRoleCatalogSelection<T>(select: (entries: ReadonlyArray<RoleCatalogEntry>) => T, refreshOnMount = true, serverId?: string | null) {
+function useRoleCatalogSelectionValue<T>(select: (entries: ReadonlyArray<RoleCatalogEntry>) => T, refreshOnMount = true, serverId?: string | null) {
     const profileScope = useActiveServerAccountScope();
     const scope = useActiveServerAccountScope(serverId === undefined ? profileScope?.serverId ?? null : serverId);
     const scopeKey = scope ? serverAccountScopeKeySuffix(scope) : 'local';
-    const overrideCatalog = usePromptLibraryCatalogValue('role-overrides', scope);
-    const overrides = overrideCatalog.value?.overrides;
     const read = React.useCallback(() => {
+        const overrides = getPromptLibraryCatalogValue(scope, 'role-overrides').value?.overrides;
         const cell = lastKnownByScope.get(scopeKey);
         return select(cell?.snapshot.items && overrides ? cell.project({ items: cell.snapshot.items, overrides }) : EMPTY_ENTRIES);
-    }, [scopeKey, overrides, select]);
+    }, [scopeKey, scope, select]);
     const selection = React.useSyncExternalStore(subscribeCatalog, read, read);
-    const readStatus = React.useCallback((): RoleCatalogState['status'] => {
-        if (!scope) return 'failed';
-        if (overrideCatalog.status === 'unavailable') return 'failed';
-        if (!overrides) return 'loading';
-        const snapshot = lastKnownByScope.get(scopeKey)?.snapshot;
-        return snapshot?.items ? 'ready' : snapshot?.failed ? 'failed' : 'loading';
-    }, [scopeKey, scope, overrideCatalog.status, overrides]);
-    const status = React.useSyncExternalStore(subscribeCatalog, readStatus, readStatus);
+    React.useEffect(() => scope ? observePromptLibraryCatalog(scope) : undefined, [scopeKey]);
     React.useEffect(() => {
         if (scope && refreshOnMount) void loadRoleCatalog(scope);
     }, [scopeKey, refreshOnMount]);
     const refresh = React.useCallback(() => { if (scope) void loadRoleCatalog(scope); }, [scopeKey]);
+    return { selection, refresh, scopeKey, scope };
+}
+
+function useRoleCatalogSelection<T>(select: (entries: ReadonlyArray<RoleCatalogEntry>) => T, refreshOnMount = true, serverId?: string | null) {
+    const { selection, refresh, scopeKey, scope } = useRoleCatalogSelectionValue(select, refreshOnMount, serverId);
+    const readStatus = React.useCallback((): RoleCatalogState['status'] => {
+        if (!scope) return 'failed';
+        const overrideCatalog = getPromptLibraryCatalogValue(scope, 'role-overrides');
+        if (overrideCatalog.status === 'unavailable') return 'failed';
+        if (!overrideCatalog.value?.overrides) return 'loading';
+        const snapshot = lastKnownByScope.get(scopeKey)?.snapshot;
+        return snapshot?.items ? 'ready' : snapshot?.failed ? 'failed' : 'loading';
+    }, [scopeKey, scope]);
+    const status = React.useSyncExternalStore(subscribeCatalog, readStatus, readStatus);
     return React.useMemo(() => ({
         status,
         selection,
@@ -140,10 +148,16 @@ export function useRoleCatalogEntry(roleId: string | null, serverId?: string | n
     return React.useMemo(() => ({ entry, status, refresh }), [entry, status, refresh]);
 }
 
+/** Summary readers observe the selected value, not unrelated catalog loading/status changes. */
+export function useRoleCatalogEntryValue(roleId: string | null, serverId?: string | null, refreshOnMount = true): RoleCatalogEntry | null {
+    const select = React.useCallback((entries: ReadonlyArray<RoleCatalogEntry>) => entries.find((entry) => entry.roleId === roleId) ?? null, [roleId]);
+    return useRoleCatalogSelectionValue(select, refreshOnMount, serverId).selection;
+}
+
 /** Only the Orchestrator preview consumes the callable-role list, through the canonical renderer. */
 export function useRoleCatalogPromptPreview(role: ResolvedRoleV1): string {
     const select = React.useCallback((entries: ReadonlyArray<RoleCatalogEntry>) => renderSessionRoleBlockV1({
         role, source: 'dispatch', availableRoles: entries.map((entry) => entry.role),
     }), [role]);
-    return useRoleCatalogSelection(select, false).selection;
+    return useRoleCatalogSelectionValue(select, false).selection;
 }

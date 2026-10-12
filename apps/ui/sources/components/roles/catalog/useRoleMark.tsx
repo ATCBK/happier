@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 import type { RoleArtifactV1 } from '@happier-dev/protocol';
-import { HappierRoleMark } from '@happier-dev/plugin-ui/presentation';
+import { HappierRoleMark, HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 
 import { Icon } from '@/components/ui/icons/Icon';
 
@@ -20,14 +20,20 @@ export function useRoleMark(): (
   const presentEngine = useRoleEnginePresentation();
   const { theme } = useUnistyles();
   return React.useCallback(
-    (role, size, roleId) =>
-      <HappierRoleMark roleId={roleId} runsAs={role.runsAs.kind} agentMark={presentEngine(role.engine, size).icon} renderGlyph={(glyph) => (
+    (role, size, roleId) => {
+      const engine = presentEngine(role.engine, size);
+      // Until the Agent catalog names the agent an unpinned role follows, its mark is a quiet block of the same size.
+      const agentMark = engine.pending
+        ? <HappierSkeletonBlock width={size} height={size} radius={size / 2} color={theme.colors.surface.pressedOverlay} />
+        : engine.icon;
+      return <HappierRoleMark roleId={roleId} runsAs={role.runsAs.kind} agentMark={agentMark} renderGlyph={(glyph) => (
         <Icon
           name={glyph}
           size={size}
           color={theme.colors.text.secondary}
         />
-      )} />,
-    [presentEngine, theme.colors.text.secondary],
+      )} />;
+    },
+    [presentEngine, theme.colors.surface.pressedOverlay, theme.colors.text.secondary],
   );
 }

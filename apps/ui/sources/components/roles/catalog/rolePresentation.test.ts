@@ -25,12 +25,18 @@ describe('role row facts', () => {
     it('stays quiet about an engine the catalog can run, and about a role that pins none', () => {
         expect(describeRoleRowFacts({ roleId: 'writer', role: { engine, runsAs: session } }, { label: 'Claude', unavailable: false }))
             .not.toContain(t('roles.rail.chooseEngine'));
+        // A role that pins no engine still leads with its engine fact: it runs on the default agent.
         expect(describeRoleRowFacts({ roleId: 'writer', role: { runsAs: session } }, { label: null, unavailable: false }))
+            .toBe(`${t('roles.rail.defaultEngine')} · ${t('roles.settings.runsAsSession')}`);
+    });
+
+    it('leaves the engine out of the line while the catalog has not said which agent an unpinned role follows', () => {
+        expect(describeRoleRowFacts({ roleId: 'writer', role: { runsAs: session } }, { label: null, unavailable: false, pending: true }))
             .toBe(t('roles.settings.runsAsSession'));
     });
 
     it('says the Orchestrator runs as this session rather than a runs-as it cannot change', () => {
         expect(describeRoleRowFacts({ roleId: 'orchestrator', role: { runsAs: session } }, { label: null, unavailable: false }))
-            .toBe(t('roles.session.thisSession'));
+            .toBe(`${t('roles.rail.defaultEngine')} · ${t('roles.settings.runsAsThisSession')}`);
     });
 });
