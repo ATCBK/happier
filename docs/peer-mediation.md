@@ -6,8 +6,9 @@ server, and who owns each step. This page is the internal counterpart to the ope
 
 **Status of this page.** The Iroh Home and machine-carrier contracts were refreshed against the
 current 0.3 development source on 2026-09-23. The TCP lifecycle, preview HTTP/WebSocket
-transport and signing-readiness contracts below were refreshed against 0.3 development
-source on 2026-10-01. Other peer-mediation claims were checked on 2026-08-23.
+transport contracts below were refreshed against 0.3 development source on 2026-10-01;
+signer derivation and readiness were refreshed on 2026-10-11. Other peer-mediation claims were
+checked on 2026-08-23.
 Where the `PMS-1 … PMS-9` specification packets
 (`.project/plans/runtime-unification-v2/stages/stage-A/`) describe behaviour the code does not
 implement, this page documents the code and says so. The packets are the design authority; they are
@@ -129,6 +130,32 @@ Machine grants remain the application authority at the endpoints. Happier does n
 relay endpoint registry. A private callback is available only to a custom composition that already
 owns one complete allowlist for every endpoint class it intends to carry.
 
+The stock local relay used by the Chromium development proof is a test fixture, not a relay
+started by an ordinary Home or development stack. `test_relay.rs#LocalTestRelay` is compiled only
+with `test-relay-fixture`; the separate `deploy/iroh-relay` profile requires operator deployment.
+`packages/iroh-native/src/relayConfig.ts#readIrohRelayConfigFromEnv` supplies an empty relay set
+when neither relay variable is configured. Derived grant signing does not supply a relay or make
+an unavailable native endpoint active.
+
+Finite Machine selection and Home selection have different descriptor inputs. The browser Home
+carrier above requires the Home's Iroh descriptor; browser finite transfers instead require the
+target Machine's current `irohMachineEndpoint` with a non-empty relay set.
+`resolveMachineCarrierPreselection.ts#resolveMachineCarrierPreselection` also requires an
+application-carrier policy that permits Iroh, enabled transfer/direct-peer/peer-mediation bits and the Machine's
+declared finite-transfer application. A Home descriptor is not an additional Machine-transfer
+predicate when Home control requests use an independently reachable Standard route. Missing
+Machine endpoint publication refuses the transfer before any relay dial.
+
+Bounded viewer reads are a separate operation in current unreleased 0.3 source.
+`fileReadWrite.ts#workspaceReadFile` invokes `daemon.filesystem.readFile` through the existing
+filesystem Action admission and guarded Machine RPC, validates the response and enforces the
+caller's inline byte ceiling. `refreshWorkspaceFileDetails.ts#refreshWorkspaceFileDetails`
+consumes that owner. This read needs neither a finite-transfer lease nor an Iroh relay; workspace
+Search likewise reads through its own authorized Machine RPC. Downloads and other prepared finite
+operations still use `happier/machine/1` without a Standard fallback. A served UI built before the
+bounded-read change can therefore still show the transfer refusal until its UI export is rebuilt
+and loaded.
+
 Endpoint identity continuity follows the authority that depends on it. A Home endpoint is durable
 first-contact descriptor authority, so lost or changed Home key material fails closed through the
 canonical descriptor continuity record and requires an explicit descriptor recovery/update. A
@@ -217,6 +244,17 @@ Development 0.3 direct admission uses current V2 ephemeral proofs for machine RP
 live-stream start and TCP/Voice tunnel opens. The old account-signed V1 direct
 routes and loopback probe are not registered. The listener publishes its base URL;
 current clients select their operation's route without probing an older daemon.
+The UI machine-RPC preflight rejects a loopback advertisement whose `expiresAt`
+has passed before requesting a grant. Fresh Machine presence and a new grant do
+not by themselves renew that advertisement; the existing per-method server fallback applies.
+The daemon's existing 20-second Machine heartbeat also republishes the live
+listener's advertisement. `startPeerMediationLoopback` renews its expiry at half
+the existing lifetime (the maximum enabled flow's grant-policy TTL), preserving
+the bound URL and fingerprint. `bootstrapMachineSyncRuntime` uses that same live
+owner for heartbeat and reconnect publication, withdraws the loopback advert at
+stop, and never renews a closed listener. A crash or disconnected publication
+path leaves the last advert to expire; renewal does not extend signed grants.
+The same preflight owns passive Voice direct-route readiness.
 Readers still accept both secret and data-key credentials created by 0.2, but
 those stored-data formats do not select a transport-proof version or require an
 Account signing seed at daemon startup. Current native-machine handshakes,
@@ -241,6 +279,20 @@ deployed row resolves to `server_required` with reason `unclassified`, so adding
 without classifying it denies direct routing rather than inheriting a neighbour's answer.
 `isMachineRpcDirectRoutePolicy` is the one predicate callers use, and the relay fallback for
 `daemon_voice_audio` is declared on the row rather than negotiated per call.
+
+In 0.3 development, contribution-registry projection describes use the authenticated
+Home route. These reads admit Session creation and plugin surfaces on every client;
+a Machine's loopback advertisement does not prove that the requesting device can
+reach it. The daemon remains the projection authority.
+
+In 0.3 development, Machine RPC fallback preserves the outcome of the whole invocation.
+Route preparation failures and bound direct refusals before handler execution may use the
+authenticated relay. Once direct HTTP is issued, a lost, unreadable or mismatched response
+is `outcomeUnknown` and does not replay the payload through the relay. The daemon's
+`handler_unavailable` response is also ambiguous because it can follow a handler exception.
+Direct command receipts do not cover relay replay. A later unsent attempt cannot erase an
+earlier unresolved dispatch; a proven pre-effect refusal, including relay method unavailability,
+retains its no-effect meaning.
 
 The same module carries the restricted Runner's authority map, and it augments the route
 policy rather than replacing it. `resolveEphemeralRunnerMachineRpcAuthority` answers which
@@ -342,9 +394,9 @@ proof of rendered pixels or a launched daemon/device journey.
 
 ## 2. The enablement contract
 
-This is the part that surprises people: on a generic Home the substrate is unavailable until its
-grant signer is configured. Managed Personal Homes derive that same signer from their existing
-persisted master secret; they do not store or configure a second signing secret.
+In 0.3 development, every Home derives its grant signer from its existing master secret by default:
+generic, Team/shared, dev, QA, preview, self-hosted and managed Personal Homes. No separate signer
+configuration or secret store is needed. Explicit operator configuration overrides that derivation.
 
 ### 2.1 Grant signing is the master switch
 
@@ -361,16 +413,19 @@ configuration is partial or invalid:
 | `HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PUBLIC_KEY` | *(optional)* | cross-checked against the key derived from the seed; mismatch → `invalid_public_key` |
 | `HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_EXPIRES_AT` | *(optional)* | epoch **milliseconds** |
 
-When all four fields are absent and `HAPPIER_MANAGED_RELAY_PURPOSE=personal-home`, the resolver
+When all four fields are absent, the resolver
 derives a stable Ed25519 key from `HANDY_MASTER_SECRET` under the distinct
-`happier.machine-route-grant.v1` domain. Backup, restore, relocation, and reinstall already preserve
-that master secret, so they preserve the derived public key without another archive field. Generic
-Homes, Team/shared Homes, and preview runtimes do not receive this fallback merely because they
-have a master secret; they continue to require complete explicit signer configuration.
+`happier.machine-route-grant.v1` domain, independently of `HAPPIER_MANAGED_RELAY_PURPOSE`.
+The existing server master-secret owner loads or creates `handy-master-secret.txt` for local-data
+runtimes; managed full stacks retain their master secret through the existing infrastructure owner.
+External-backend servers already require `HANDY_MASTER_SECRET` for authentication. A missing or
+blank master secret still returns `missing_key_id`; it never creates a separate signing secret.
+Restarts with the same master secret preserve the derived public key. Personal Home backup,
+restore, relocation and reinstall preserve that secret without another archive field.
 
 The derived key ID uses the same SHA-256-of-public-key convention as the Account Directory signer,
 but the two domains produce different keys. There is no overlapping-key rotation registry: changing
-the Personal Home master secret changes the derived authority, while explicit signer configuration
+the Home master secret changes the derived authority, while explicit signer configuration
 remains the operator-owned rotation and expiry mechanism.
 
 An explicit signing key is usable only while its expiry is in the future. The same resolver
@@ -678,16 +733,17 @@ code that disabled the feature, and it has been removed.
 
 ## 3. Reachability, measured
 
-The historical counts and configuration table below come from the 2026-08-18 audit
+The historical counts below come from the 2026-08-18 audit
 (`.project/reviews/2026-08-18-21-34-57-ru2-browser-local-services-completion-audit-e62cd7/REPORT-TUNNELS.md`)
 and were spot-checked, not re-measured, on 2026-08-23. They are not a current Settings or
 enablement catalogue; current Account preferences and signing prerequisites are described above.
+The configuration table reflects the 0.3 development signer default as of 2026-10-11.
 
 | Configuration | What runs |
 | --- | --- |
-| Defaults | Nothing. The mint route 404s and the preview capability reports `peer_mediation_grant_signing_unavailable`; a request that reaches the data path anyway gets a typed 503. Observability is off (fail-closed). |
-| + the four signing variables | The loopback-direct half (`directPeerEnabled` is already true), and the parent gate observability depends on. |
-| + `…PEER_MEDIATION_OBSERVABILITY__ENABLED` on top of those | PMS-9 observability, readable through the socket subscription and the daemon snapshot action. |
+| Defaults with the Home master secret | The derived signer enables the peer-mediation substrate and the loopback-direct half (`directPeerEnabled` is already true). Preview relay still needs its tunnel gate and port allowlist. Observability is off (fail-closed). |
+| Explicit signing override | A complete, valid override replaces the derived authority. Partial, invalid or expired configuration refuses signing, disables peer mediation and makes the mint route return 404. |
+| + `…PEER_MEDIATION_OBSERVABILITY__ENABLED` with a usable signer | PMS-9 observability, readable through the socket subscription and the daemon snapshot action. |
 | + `…TUNNEL_SERVER_ROUTED__ENABLED` and a non-empty `…TUNNEL_ALLOWED_PORTS` | Historical ~16,000 LOC inventory: voice tunnel, private preview, simulator relay, direct machine RPC. This is not the current speech enablement contract. |
 | Any configuration | ~5,500 LOC stays dark — see below. |
 

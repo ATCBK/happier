@@ -131,6 +131,21 @@ These variables configure the Happier side, not the relay image above. The serve
 additionally requires a stable `HAPPIER_CANONICAL_SERVER_URL` — see
 [Environment variables](/self-hosting/env).
 
+The local relay used by development transport tests is a test fixture. An ordinary Home or
+development stack does not start it automatically. Default grant signing does not provision an
+Iroh relay or enable a native carrier that is unavailable on the running computer.
+
+Browser Home connections use the Home's published Iroh endpoint. Browser finite Machine transfers
+use the target Machine's published endpoint and its configured relay URLs; setting relay URLs only
+on the Home does not supply the Machine's missing endpoint or relay configuration. Both runtimes
+must have a usable native carrier before they can publish those endpoints.
+
+In current unreleased 0.3 source, bounded text-file previews use the existing filesystem Action
+and Machine RPC, so they can work through the ordinary Home connection without an Iroh relay.
+Downloads and other prepared finite transfers still require the Machine carrier. An older served
+UI export can still send previews through finite transfer; rebuild and load the updated UI before
+checking the new preview behavior.
+
 ### Persist the Home and Machine settings
 
 Home and Machine runtimes persist these values through different owners:
@@ -227,6 +242,11 @@ token is not supported.
 - **The relay runs, but clients never use it.** The server's `HAPPIER_IROH_RELAY_URLS` is unset
   or does not match the deployed relay origin; with no relay URLs an `automatic` policy stays
   direct-only.
+- **A browser transfer requires a direct machine connection despite enabled grant signing.**
+  Check that the target Machine publishes an Iroh endpoint with at least one relay URL, declares
+  finite import/export support, and that the client permits Iroh. Enabled transfer and signing
+  gates do not establish those facts. A daemon reporting an unavailable native carrier cannot
+  publish its endpoint; configuring a relay alone does not repair that carrier.
 
 ## Related
 
