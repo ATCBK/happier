@@ -1,4 +1,4 @@
-import type { BackendTargetRefV1, McpValueRefV1 } from '@happier-dev/protocol';
+import type { BackendTargetRefV1, ValueRefV1 } from '@happier-dev/protocol';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 import type { AcpPermissionHandler } from '@/agent/acp/AcpBackend';
@@ -22,7 +22,7 @@ import { SavedSecretResolutionError } from '@/settings/secrets/savedSecretCatalo
 import { isConfiguredAcpProbeTarget } from './isConfiguredAcpProbeTarget';
 
 function tryResolveLiteralConfiguredAcpEnvironment(
-  env: Readonly<Record<string, McpValueRefV1>>,
+  env: Readonly<Record<string, ValueRefV1>>,
 ): Record<string, string> | null {
   const launchEnv: Record<string, string> = {};
   for (const [envKey, valueRef] of Object.entries(env)) {
