@@ -16,7 +16,8 @@ function createHarness(readError?: Error, guidanceSource?: Readonly<Record<strin
   // Artifact/settings persistence is the system boundary; Role decisions and
   // the public Action admission/failure projection remain real.
   const artifactStore: RoleArtifactStoreV1 = {
-    list: async () => ({ items: [...rows.values()].map(row => ({ ...row, headerVersion: row.revision.headerVersion, updatedAt: 1 })) }),
+    list: async () => ({ items: [...rows.values()].map(row => ({ ...row, headerVersion: row.revision.headerVersion,
+      bodyVersion: row.revision.bodyVersion, updatedAt: 1 })) }),
     read: async (artifactId) => {
       if (readError) throw readError;
       return rows.get(artifactId) ?? null;
@@ -87,6 +88,28 @@ function createHarness(readError?: Error, guidanceSource?: Readonly<Record<strin
 const context = { surface: 'ui', authority: 'present_user' } as const;
 
 describe('Account Role Action refusal projection', () => {
+  it('lists Role documents and revisions from the Artifact body page without serial rereads', async () => {
+    const read = createRoleSourceReaderV1({ artifactStore: {
+      list: async options => ({ items: [
+        { artifactId: 'first-role', header: { kind: 'role.v1' }, access: 'owner', ownerAccountId: 'account',
+          headerVersion: 2, updatedAt: 1,
+          ...(options.includeBody ? { body: JSON.stringify(BUILT_IN_ROLES_V1.builder), bodyVersion: 3 } : {}) },
+        { artifactId: 'second-role', header: { kind: 'role.v1' }, access: 'view', ownerAccountId: 'other',
+          headerVersion: 4, updatedAt: 1,
+          ...(options.includeBody ? { body: JSON.stringify(BUILT_IN_ROLES_V1.reviewer), bodyVersion: 5 } : {}) },
+      ] }),
+      // The Artifact body-page transport is the boundary. A reread could pair a
+      // later body with the earlier header/revision and reintroduces the N+1.
+      read: async () => { throw new Error('Role catalog must consume its body page'); },
+    } });
+    expect(await read()).toMatchObject({ status: 'ready', diagnostics: [], entries: expect.arrayContaining([
+      { roleId: 'first-role', role: BUILT_IN_ROLES_V1.builder, revision: { headerVersion: 2, bodyVersion: 3 },
+        shared: false, viewOnly: false, migratedFromV0_2: false },
+      { roleId: 'second-role', role: BUILT_IN_ROLES_V1.reviewer, revision: { headerVersion: 4, bodyVersion: 5 },
+        shared: true, viewOnly: true, migratedFromV0_2: false },
+    ]) });
+  });
+
   it('lists plugin role documents as read-only and refuses replacing their instructions', async () => {
     const roleId = 'plugin:example/review';
     const read = createRoleSourceReaderV1({ readPluginRoles: () => [{ pluginId: 'example', pluginDisplayName: 'Example tools', localId: 'review', role: BUILT_IN_ROLES_V1.reviewer }] });
@@ -207,23 +230,18 @@ const role = { name: 'Reviewer', instructions: 'Review the change', runsAs: { ki
   workspaceWrites: 'deny', secondOpinion: 'off', enabled: true } as const;
 
 describe('Account Role artifact attribution', () => {
-  it.each(['missing', 'non-text', 'invalid-json', 'invalid-role', 'read-failed'] as const)(
+  it.each(['missing', 'non-text', 'invalid-json', 'invalid-role'] as const)(
     'keeps built-in, plugin and available roles when another Artifact is %s', async (unavailable) => {
-      const revision = { headerVersion: 1, bodyVersion: 1 };
       const header = { kind: 'role.v1', name: role.name };
       const read = createRoleSourceReaderV1({
         readPluginRoles: () => [{ pluginId: 'example', localId: 'review', role }],
         artifactStore: {
           list: async () => ({ items: ['unavailable', 'available'].map(artifactId => ({
-            artifactId, header, access: 'owner', ownerAccountId: 'account', headerVersion: 1, updatedAt: 1,
+            artifactId, header, access: 'owner', ownerAccountId: 'account', headerVersion: 1, bodyVersion: 1, updatedAt: 1,
+            body: artifactId === 'available' ? JSON.stringify(role) : unavailable === 'missing' ? undefined
+              : unavailable === 'non-text' ? null : unavailable === 'invalid-json' ? '{' : JSON.stringify({ name: 'Incomplete' }),
           })) }),
-          read: async artifactId => {
-            if (artifactId === 'available') return { artifactId, header, revision, body: JSON.stringify(role), ownerAccountId: 'account', access: 'owner' as const };
-            if (unavailable === 'missing') return null;
-            if (unavailable === 'read-failed') throw new Error('artifact_content_unavailable');
-            return { artifactId, header, revision, ownerAccountId: 'account', access: 'owner' as const, body: unavailable === 'non-text' ? null
-              : unavailable === 'invalid-json' ? '{' : JSON.stringify({ name: 'Incomplete' }) };
-          },
+          read: async () => { throw new Error('Unexpected Role reread'); },
         },
       });
       const { entries } = await read();
@@ -237,9 +255,8 @@ describe('Account Role artifact attribution', () => {
   it('preserves cancellation when an Artifact read is interrupted', async () => {
     const controller = new AbortController();
     const read = createRoleSourceReaderV1({ artifactStore: {
-      list: async () => ({ items: [{ artifactId: 'role', header: { kind: 'role.v1' }, access: 'owner',
-        ownerAccountId: 'account', headerVersion: 1, updatedAt: 1 }] }),
-      read: async () => { controller.abort(new Error('cancelled')); throw controller.signal.reason; },
+      list: async () => { controller.abort(new Error('cancelled')); throw controller.signal.reason; },
+      read: async () => { throw new Error('Unexpected Role reread'); },
     } });
     await expect(read(controller.signal)).rejects.toThrow('cancelled');
   });
@@ -249,7 +266,8 @@ describe('Account Role artifact attribution', () => {
     const header = { kind: 'role.v1', name: role.name };
     const read = createRoleSourceReaderV1({ artifactStore: {
       list: async () => ({ items: [{ artifactId: 'stored-role', header, access: 'owner',
-        ownerAccountId: 'account', headerVersion: 1, updatedAt: 1 }] }),
+        ownerAccountId: 'account', headerVersion: 1, bodyVersion: 1, updatedAt: 1,
+        body: JSON.stringify({ ...role, future: true, runsAs: { ...role.runsAs, future: true } }) }] }),
       read: async () => ({ artifactId: 'stored-role', header, revision, ownerAccountId: 'account', access: 'owner' as const,
         body: JSON.stringify({ ...role, future: true, runsAs: { ...role.runsAs, future: true } }) }),
     } });

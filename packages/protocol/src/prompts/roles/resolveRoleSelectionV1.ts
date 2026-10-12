@@ -1,5 +1,5 @@
 import type { RoleArtifactV1, RoleEngineV1 } from './roleArtifactV1.js';
-import type { PluginRoleContributionV1, RoleInstructionsOverrideV1, RoleOverrideV1, WorkflowRoleV1, ResolvedRoleV1 } from './rolesV1.js';
+import type { PluginRoleContributionV1, RoleInstructionsOverrideV1, RoleOverrideV1, WorkflowRoleV1, ResolvedRoleV1, ResolvedRolesSnapshotV1 } from './rolesV1.js';
 import { readSessionRolesV1, type SessionRolesV1 } from './sessionRolesSnapshot.js';
 import { BUILT_IN_ROLES_V1 } from './builtInRolesV1.js';
 import { ResolvedRoleV1Schema, type RoleResolutionLayerV1 } from './rolesV1.js';
@@ -21,6 +21,18 @@ export type ResolveRoleSelectionV1Input = Readonly<{
 }>;
 export type RoleSelectionRefusalV1 = Readonly<{ code: 'role_target_unavailable' | 'role_source_incomplete' | 'target_unavailable'; roleId: string; agentTargetKey?: string }>;
 export type ResolveRoleSelectionV1Result = Readonly<{ ok: true; selection: ResolvedRoleV1 }> | Readonly<{ ok: false; refusal: RoleSelectionRefusalV1 }>;
+
+/** Complete spawn inventory, resolved by the same per-field owner as live roles. */
+export function resolveRolesSnapshotV1(input: Pick<ResolveRoleSelectionV1Input,
+  'roleSourceInventory' | 'settingsOverrides' | 'sessionRoles' | 'defaultEngine' | 'availableAgentTargetKeys'>): ResolvedRolesSnapshotV1 {
+  const roleIds = new Set([...Object.keys(BUILT_IN_ROLES_V1),
+    ...(input.roleSourceInventory?.entries.map(entry => entry.roleId) ?? []),
+    ...Object.keys(input.sessionRoles?.sessionRoles ?? {}), ...Object.keys(input.settingsOverrides ?? {})]);
+  return Object.fromEntries([...roleIds].flatMap(roleId => {
+    const resolved = resolveRoleSelectionV1({ ...input, roleId });
+    return resolved.ok ? [[roleId, resolved.selection]] : [];
+  }));
+}
 
 /** A role adds a workspace ceiling; it never changes permission mode or grants coordination authority. */
 export function readSessionWorkspaceWritesV1(

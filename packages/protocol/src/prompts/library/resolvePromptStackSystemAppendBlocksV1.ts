@@ -18,6 +18,7 @@ export type PromptStackScopeV1 = Readonly<{
   profileId?: string;
 }>;
 export type PromptStackLayerV1 = 'account' | 'profile' | 'project' | 'session';
+export type PromptStackMemoryPreparationV1 = Omit<ReturnType<typeof renderMemoryDocV1>, 'markdown'>;
 type PromptStackAdmittedEntryIdentityV1 = Readonly<{
   entryId: string;
   layer: PromptStackLayerV1;
@@ -25,7 +26,7 @@ type PromptStackAdmittedEntryIdentityV1 = Readonly<{
   ref: PromptArtifactRefV1;
 }>;
 export type PromptStackAdmittedEntryV1 = PromptStackAdmittedEntryIdentityV1 & (
-  | Readonly<{ outcome: 'ready' | 'valid-empty'; revision: PromptLibraryStoredArtifact['revision'] }>
+  | Readonly<{ outcome: 'ready' | 'valid-empty'; revision: PromptLibraryStoredArtifact['revision']; memory?: PromptStackMemoryPreparationV1 }>
   | Readonly<{ outcome: 'unavailable'; reason: PromptStackPreparationReason; revision: PromptLibraryStoredArtifact['revision'] | null }>
 );
 export type PromptStackSystemAppendResultV1 = Readonly<{
@@ -50,6 +51,8 @@ export class PromptStackPreparationError extends Error {
 export type PromptStackSystemAppendInputV1 = Readonly<{
   surface: 'coding' | 'voice';
   scope?: PromptStackScopeV1 | null;
+  /** Read only after Protocol selects at least one effective entry. */
+  readScope?: () => Promise<PromptStackScopeV1 | null>;
   promptStacksV1?: PromptStacksV1 | null;
   profileId?: string | null;
   accountEntries?: readonly PromptStackEntryV1[];
@@ -108,7 +111,19 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
     .map(entry => ({ entry, layer })));
   const out: string[] = [];
   const admittedEntries: PromptStackAdmittedEntryV1[] = [];
-  const scope = args.scope ? { ...args.scope } : null;
+  if (entries.length === 0) return { blocks: out, admittedEntries };
+  args.signal?.throwIfAborted();
+  let resolvedScope = args.scope;
+  if (resolvedScope === undefined && args.readScope) {
+    try { resolvedScope = await args.readScope(); }
+    catch (error) {
+      args.signal?.throwIfAborted();
+      if (error instanceof PromptStackPreparationError) throw error;
+      throw new PromptStackPreparationError('unavailable');
+    }
+  }
+  args.signal?.throwIfAborted();
+  const scope = resolvedScope ? { ...resolvedScope } : null;
   let preparing: PromptStackAdmittedEntryIdentityV1 | null = null;
   let observedRevision: PromptLibraryStoredArtifact['revision'] | null = null;
   const reads = new Map<string, Promise<PromptLibraryStoredArtifact | null>>();
@@ -128,6 +143,14 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
       throw new PromptStackPreparationError(locked ? 'locked' : 'unavailable', ref);
     }
   };
+  const readEntry = async <T>(pending: Promise<T>, entry: PromptStackEntryV1): Promise<T | null> => {
+    try { return await pending; }
+    catch (error) {
+      args.signal?.throwIfAborted();
+      if (!entry.required && error instanceof PromptStackPreparationError && error.reason === 'not_found') return null;
+      throw error;
+    }
+  };
   try {
     for (const { entry, layer } of entries) {
       const ref = { ...entry.ref, ...(entry.ref.serverId === undefined && scope ? { serverId: scope.serverId } : {}) };
@@ -138,7 +161,7 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
         if (!args.readArtifactHeader) throw new PromptStackPreparationError('unavailable', ref);
         let pending = headers.get(key);
         if (!pending) { pending = read(ref, () => args.readArtifactHeader!(ref)); headers.set(key, pending); }
-        const header = await pending;
+        const header = await readEntry(pending, entry);
         if (!header) {
           if (entry.required) throw new PromptStackPreparationError('not_found', ref);
           admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: 'not_found', revision: null });
@@ -151,7 +174,7 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
       }
       let pending = reads.get(key);
       if (!pending) { pending = read(ref, () => args.readArtifact(ref)); reads.set(key, pending); }
-      const artifact = await pending;
+      const artifact = await readEntry(pending, entry);
       if (!artifact) {
         if (entry.required) throw new PromptStackPreparationError('not_found', ref);
         admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: 'not_found', revision: null });
@@ -163,13 +186,17 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
       const fail = (reason: PromptStackPreparationReason): never => { throw new PromptStackPreparationError(reason, ref); };
       let text: string;
       let memoryDocument: string | null = null;
+      let memory: PromptStackMemoryPreparationV1 | undefined;
       if (ref.kind === 'doc' && artifact.header?.kind === 'memory_doc.v1') {
         const header = MemoryDocArtifactHeaderV1StoredSchema.safeParse(artifact.header);
         if (!header.success) throw new PromptStackPreparationError('malformed', ref);
         memoryDocument = header.data.title;
         const parsed = MemoryDocBodyV1StoredSchema.safeParse(bodyJson);
         if (!parsed.success) throw new PromptStackPreparationError('malformed', ref);
-        text = renderMemoryDocV1({ body: parsed.data, nowMs: (args.nowMs ?? Date.now)(), maxChars: entry.maxChars }).markdown;
+        const rendered = renderMemoryDocV1({ body: parsed.data, nowMs: (args.nowMs ?? Date.now)(), maxChars: entry.maxChars });
+        text = rendered.markdown;
+        const { markdown: _markdown, ...selection } = rendered;
+        memory = selection;
       } else if (ref.kind === 'doc') {
         if (artifact.header?.kind !== 'prompt_doc.v2') fail('wrong_kind');
         if (!createStoredReadSchema(PromptDocArtifactHeaderV1Schema).safeParse(artifact.header).success) fail('malformed');
@@ -187,7 +214,8 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
         catch { throw new PromptStackPreparationError('malformed', ref); }
       }
       const trimmed = text.trim();
-      admittedEntries.push({ ...preparing, outcome: trimmed ? 'ready' : 'valid-empty', revision: observedRevision });
+      admittedEntries.push({ ...preparing, outcome: trimmed ? 'ready' : 'valid-empty', revision: observedRevision,
+        ...(memory ? { memory } : {}) });
       if (!trimmed) continue;
       out.push(memoryDocument !== null
         ? `Memory: ${JSON.stringify({ document: memoryDocument, layer, ref })}\n${trimmed}`
@@ -199,7 +227,9 @@ export async function resolvePromptStackSystemAppendBlocksV1(args: PromptStackSy
     admittedEntries.push({ ...preparing, outcome: 'unavailable', reason: error.reason, revision: observedRevision });
     // Existing callers still refuse a failed preparation. Its partial facts
     // cannot masquerade as a successfully admitted complete inventory.
-    throw new PromptStackPreparationError(error.reason, error.ref, admittedEntries);
+    // Adding admission facts must not erase the boundary's typed failure cause.
+    throw Object.assign(new PromptStackPreparationError(error.reason, error.ref, admittedEntries),
+      error.cause === undefined ? {} : { cause: error.cause });
   }
   return { blocks: out, admittedEntries };
 }

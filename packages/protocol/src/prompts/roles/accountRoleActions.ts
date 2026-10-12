@@ -12,6 +12,7 @@ import type { PluginRoleContributionV1 } from './rolesV1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import type { RoleOverrideMutationV1 } from './roleOverrideRecordV1.js';
 import type { WorkflowArtifactRevisionV1 } from '../../workflows/workflowDefinitionV1.js';
+import { RPC_ERROR_CODES } from '../../rpc/errors.js';
 
 export type RoleArtifactStoreV1 = Omit<WorkflowDefinitionArtifactOperations, 'create'> & Readonly<{
   create: (input: Parameters<WorkflowDefinitionArtifactOperations['create']>[0]) => Promise<Readonly<{
@@ -51,14 +52,15 @@ function readStoredRoleBodyV1(body: unknown): RoleArtifactV1 | null {
 
 export type RoleArtifactRetentionReceiptV1 = Readonly<{ artifactId: string; expectedRevision: WorkflowArtifactRevisionV1 }>;
 
-class AccountRoleActionRefusalV1 extends Error {
+/** Typed domain refusal shared by Account and Session Role Action owners. */
+export class RoleActionRefusalV1 extends Error {
   constructor(readonly code: string) {
     super(code);
   }
 }
 
 function refuse(code: string): never {
-  throw new AccountRoleActionRefusalV1(code);
+  throw new RoleActionRefusalV1(code);
 }
 
 /** Current guidance remains re-importable until its actual Settings source is cleaned. */
@@ -79,8 +81,15 @@ export async function assertAccountRoleArtifactDeletionV1(params: Readonly<{
 
 /** Internal Action adapter: transport exceptions are not Role-owner refusals. */
 export function projectAccountRoleActionRefusalV1(error: unknown): ActionExecuteFailure | null {
-  return error instanceof AccountRoleActionRefusalV1 || error instanceof LegacyRolesInventoryIncompleteError
+  return error instanceof RoleActionRefusalV1 || error instanceof LegacyRolesInventoryIncompleteError
     ? { ok: false, errorCode: error.code, error: error.message }
+    : null;
+}
+
+/** Session Role writes are served by the live owner of their durable intent outbox. */
+export function projectSessionRoleRpcFailureV1(actionId: string, errorCode: string | undefined): ActionExecuteFailure | null {
+  return actionId.startsWith('session.') && errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
+    ? { ok: false, errorCode: 'session_role_runtime_unavailable', error: 'Start or resume the session to change its role.' }
     : null;
 }
 
@@ -101,21 +110,21 @@ export function createRoleSourceReaderV1(params: RoleSourceReaderParamsV1): Role
       let cursor: string | undefined;
       do {
         // The Artifact list owner's maximum page is 500; consume every page.
-        const page = await params.artifactStore.list({ limit: 500, ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
+        const page = await params.artifactStore.list({ limit: 500, includeBody: true, ...(cursor ? { cursor } : {}), ...(signal ? { signal } : {}) });
         for (const header of page.items) {
           if (header.header.kind !== 'role.v1') continue;
-          let artifact: Awaited<ReturnType<RoleArtifactStoreV1['read']>>;
-          try { artifact = await params.artifactStore.read(header.artifactId, signal ? { signal } : undefined); }
-          catch { signal?.throwIfAborted(); diagnostics.push({ source: 'artifact', artifactId: header.artifactId, reason: 'unavailable' }); continue; }
-          if (!artifact || typeof artifact.body !== 'string') {
-            diagnostics.push({ source: 'artifact', artifactId: header.artifactId, reason: artifact ? 'invalid_stored_content' : 'unavailable' });
+          // The Artifact page owns the matching header/body revision and opens
+          // their envelopes in a batch. Per-role rereads add latency and can
+          // observe a different revision from the listed document.
+          if (typeof header.body !== 'string' || header.bodyVersion === undefined) {
+            diagnostics.push({ source: 'artifact', artifactId: header.artifactId, reason: 'invalid_stored_content' });
             continue;
           }
-          const role = readStoredRoleBodyV1(artifact.body);
+          const role = readStoredRoleBodyV1(header.body);
           if (!role) { diagnostics.push({ source: 'artifact', artifactId: header.artifactId, reason: 'invalid_stored_content' }); continue; }
           const access = ArtifactCallerAccessV1Schema.parse(header.access);
-          entries.push({ roleId: artifact.artifactId, role, revision: artifact.revision,
-            shared: access !== 'owner', viewOnly: access === 'view', migratedFromV0_2: artifact.header.migratedFromV0_2 === true });
+          entries.push({ roleId: header.artifactId, role, revision: { headerVersion: header.headerVersion, bodyVersion: header.bodyVersion },
+            shared: access !== 'owner', viewOnly: access === 'view', migratedFromV0_2: header.header.migratedFromV0_2 === true });
         }
         if (page.nextCursor === cursor && page.nextCursor !== undefined) refuse('artifact_list_cursor_invalid');
         cursor = page.nextCursor;

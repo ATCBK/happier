@@ -5,6 +5,7 @@ import { ArtifactOrganizationMutationFailureV1, mutateArtifactOrganizationV1, re
 import {
   PromptBundleArtifactHeaderV1Schema,
   PromptBundleBodyV1Schema,
+  PromptBundleBodyV1WriteSchema,
   validatePromptBundleBodyV1AgainstSchemaId,
   type PromptBundleBodyV1,
   type PromptBundleEntryV1,
@@ -379,7 +380,7 @@ export async function createPromptBundleInLibrary(params: Readonly<{
   const hasOrganization = params.request.folderId != null || normalizePromptTags(params.request.tags).length > 0;
   if (hasOrganization) await requirePromptArtifactOrganizationV1(params.store, params.request, params.signal);
   const now = (params.nowMs ?? Date.now)();
-  const body = PromptBundleBodyV1Schema.parse({ v: 1, entries: [...params.request.entries], createdAtMs: now, updatedAtMs: now });
+  const body = PromptBundleBodyV1WriteSchema.parse({ v: 1, entries: [...params.request.entries], createdAtMs: now, updatedAtMs: now });
   const validation = validatePromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: params.request.bundleSchemaId, body });
   if (!validation.ok) throw Object.assign(new Error(validation.errorCode), { code: validation.errorCode });
   const header = PromptBundleArtifactHeaderV1Schema.parse({ v: 1, kind: 'prompt_bundle.v2', title: params.request.title,
@@ -556,11 +557,10 @@ export async function updatePromptBundleInLibrary(params: Readonly<{
   request: Readonly<{
     artifactId: string;
     title: string;
-    skillMarkdown: string;
     expectedRevision?: PromptLibraryStoredArtifact['revision'];
     folderId?: string | null;
     tags?: readonly string[];
-  }>;
+  }> & (Readonly<{ skillMarkdown: string; entries?: never }> | Readonly<{ entries: readonly PromptBundleEntryV1[]; skillMarkdown?: never; expectedRevision: PromptLibraryStoredArtifact['revision'] }>);
   nowMs?: () => number;
   signal?: AbortSignal;
 }>): Promise<Readonly<{ ok: true; artifactId: string; revision?: PromptLibraryStoredArtifact['revision'] }>> {
@@ -582,11 +582,11 @@ export async function updatePromptBundleInLibrary(params: Readonly<{
   if (!body) throw new Error('prompt_bundle_invalid_body');
   const nextBody: PromptBundleBodyV1 = {
     ...body,
-    entries: upsertSkillMd(body.entries, params.request.skillMarkdown),
+    entries: params.request.entries === undefined ? upsertSkillMd(body.entries, params.request.skillMarkdown) : [...params.request.entries],
     updatedAtMs: (params.nowMs ?? Date.now)(),
   };
   const validation = validatePromptBundleBodyV1AgainstSchemaId({
-    bundleSchemaId: 'skills.skill_md_v1',
+    bundleSchemaId: params.request.entries === undefined ? 'skills.skill_md_v1' : header.data.bundleSchemaId,
     body: nextBody,
   });
   if (!validation.ok) throw new Error(validation.errorCode);
@@ -596,14 +596,14 @@ export async function updatePromptBundleInLibrary(params: Readonly<{
     v: 1,
     kind: 'prompt_bundle.v2',
     title: params.request.title,
-    bundleSchemaId: 'skills.skill_md_v1',
+    bundleSchemaId: params.request.entries === undefined ? 'skills.skill_md_v1' : header.data.bundleSchemaId,
   };
   throwIfAborted(params.signal);
   const receipt = await params.store.update({
     artifactId: params.request.artifactId,
     expectedRevision: artifact.revision,
     header: nextHeader,
-    body: JSON.stringify(PromptBundleBodyV1Schema.parse(nextBody)),
+    body: JSON.stringify(PromptBundleBodyV1WriteSchema.parse(nextBody)),
     ...(params.signal ? { signal: params.signal } : {}),
   });
   await persistPromptArtifactOrganizationV1({ store: params.store, artifactId: params.request.artifactId, request: params.request,
