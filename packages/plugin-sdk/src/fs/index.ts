@@ -14,6 +14,7 @@ export { createAbsolutePathSymlink } from '../runtime/createAbsolutePathSymlink.
 export { createSecureTempDirectorySync } from '../runtime/tempTextFile.js';
 export { expandHomePath } from '../sessions/fileStores/paths.js';
 export { isCanonicalAbsolutePathInsideRoot } from '../sessions/fileStores/paths.js';
+export { linkDirectoryChildren } from '../runtime/linkDirectoryChildren.js';
 export { listConnectedServiceNativeHomes } from './nativeHome.js';
 export { openSqliteDatabaseSync } from './sqlite.js';
 export { resolveConfiguredNativeHomePath } from './nativeHome.js';

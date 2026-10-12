@@ -92,6 +92,7 @@ type RetiredTimeoutService = never; /* @sdk-negative-type-case-end */
             'createSecureTempDirectorySync',
             'expandHomePath',
             'isCanonicalAbsolutePathInsideRoot',
+            'linkDirectoryChildren',
             'resolveConfiguredPath',
             'resolveHomeDirFromEnvironment',
             'withExclusiveFileLock',

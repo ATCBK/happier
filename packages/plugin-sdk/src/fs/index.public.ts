@@ -6,6 +6,7 @@ export type { SecureTempDirectoryInput } from '../fs.js';
 export type { SecureTempTextFileInput } from '../fs.js';
 export { canonicalizePath } from '../sessions/fileStores/paths.js';
 export { createAbsolutePathSymlink } from '../runtime/createAbsolutePathSymlink.js';
+export { linkDirectoryChildren } from '../runtime/linkDirectoryChildren.js';
 export { createSecureTempDirectorySync } from '../runtime/tempTextFile.js';
 export { canonicalizePathSync } from '../sessions/fileStores/paths.js';
 export { expandHomePath } from '../sessions/fileStores/paths.js';

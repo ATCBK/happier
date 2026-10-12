@@ -38,6 +38,7 @@ export type {
 } from './runtime/tempTextFile.js';
 export { createSecureTempDirectorySync, writeSecureTempTextFileSync } from './runtime/tempTextFile.js';
 export { createAbsolutePathSymlink } from './runtime/createAbsolutePathSymlink.js';
+export { linkDirectoryChildren } from './runtime/linkDirectoryChildren.js';
 export {
   canonicalizePath,
   canonicalizePathSync,
