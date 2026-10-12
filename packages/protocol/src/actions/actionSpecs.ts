@@ -7215,6 +7215,11 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX = Object.freeze(defineActionSpecs([
   },
   {
     id: 'session.open',
+    // Navigation belongs to the answering client, including CLI requests.
+    // Only explicit resume without a Workspace destination is headless.
+    executionPlacementForInput: (input: unknown) =>
+      typeof input === 'object' && input !== null && 'intent' in input && input.intent === 'resume'
+        && !('destination' in input) && !('tabId' in input) ? 'session' : 'client',
     title: 'Open session',
     description: 'Open or resume a session. Explicit fresh-folder consent lets the daemon recover a missing managed folder.',
     sideEffectClass: 'external',

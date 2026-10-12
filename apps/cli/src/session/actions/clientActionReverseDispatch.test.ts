@@ -9,6 +9,27 @@ function executor(client: ClientActionMachineRpc | null) {
 }
 
 describe('client Action reverse delivery', () => {
+  it('opens the exact comparison through the answering client without resuming a Session headlessly', async () => {
+    const input = { sessionId: 'session', serverId: 'home', destination: { kind: 'scmReview',
+      comparison: { kind: 'workingTree' }, view: 'walkthrough', explain: true, comparisonId: 'a'.repeat(64) } } as const;
+    const client: ClientActionMachineRpc = {
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
+      callConnectedClientRpc: async (_method, payload, options) => {
+        expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({ actionId: 'session.open', input,
+          context: { surface: 'cli', authority: 'present_user' } });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: {
+          status: 'opened', sessionId: input.sessionId, serverId: input.serverId,
+        } } } };
+      },
+    };
+    const context = { surface: 'cli', authority: 'present_user', serverId: 'home' } as const;
+    await expect(executor(client).execute('session.open', input, context)).resolves.toEqual({ ok: true,
+      result: { status: 'opened', sessionId: 'session', serverId: 'home' } });
+    await expect(executor(null).execute('session.open', input, context)).resolves.toMatchObject({
+      ok: false, errorCode: 'unavailable', error: 'noClient',
+    });
+  });
   it.each(['agent', 'mcp'] as const)('delivers the secret-free SSH lifecycle to the answering App for %s', async surface => {
     const operations = [
       { actionId: 'machines.add.ssh.start', input: { serverId: 'home', savedHostId: 'saved-box', expectedHostRevision: 4 }, result: { taskId: 'ssh-task' } },
