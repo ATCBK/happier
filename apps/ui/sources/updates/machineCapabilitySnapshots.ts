@@ -14,7 +14,7 @@ export function useMachinesCapabilitySnapshots(
     serverId: string,
     machineIds: readonly string[],
 ): ReadonlyMap<string, MachineCapabilitiesSnapshot | null> {
-    const key = machineIds.join('\u0000');
+    const key = [...new Set(machineIds)].join('\u0000');
     const lastRef = React.useRef<ReadonlyMap<string, MachineCapabilitiesSnapshot | null>>(new Map());
     const subscribe = React.useCallback((listener: () => void) => {
         const ids = key ? key.split('\u0000') : [];
