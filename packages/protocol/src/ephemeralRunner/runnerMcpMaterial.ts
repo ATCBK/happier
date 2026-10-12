@@ -8,8 +8,8 @@ import {
   McpServersSettingsV1Schema,
   type McpServerCatalogEntryV1,
   type McpServersSettingsV1,
-  type McpValueRefV1,
 } from '../mcp/servers/settingsV1.js';
+import type { ValueRefV1 } from '../valueRefs/valueRefV1.js';
 
 const RunnerReviewedMcpServerV1Schema = z.object({
   serverId: z.string().min(1),
@@ -73,9 +73,9 @@ export type RunnerMcpMaterializationFailureV1 = Readonly<{
 function resolvePortableValueRef(input: Readonly<{
   serverId: string;
   path: string;
-  ref: McpValueRefV1;
+  ref: ValueRefV1;
   resolveSavedSecret: (secretId: string) => Readonly<{ value: string; revision: number }> | null;
-}>): { ok: true; value: McpValueRefV1; savedSecretRevision: Readonly<{ secretId: string; revision: number }> | null } | RunnerMcpMaterializationFailureV1 {
+}>): { ok: true; value: ValueRefV1; savedSecretRevision: Readonly<{ secretId: string; revision: number }> | null } | RunnerMcpMaterializationFailureV1 {
   if (input.ref.t === 'savedSecret') {
     const resolved = input.resolveSavedSecret(input.ref.secretId);
     return resolved === null
@@ -104,7 +104,7 @@ function materializeConfig(input: Readonly<{
   config: McpServerCatalogEntryV1;
   resolveSavedSecret: (secretId: string) => Readonly<{ value: string; revision: number }> | null;
 }>): { ok: true; config: McpServerCatalogEntryV1; savedSecretRevisions: ReadonlyArray<Readonly<{ secretId: string; revision: number }>> } | RunnerMcpMaterializationFailureV1 {
-  const env: Record<string, McpValueRefV1> = {};
+  const env: Record<string, ValueRefV1> = {};
   const savedSecretRevisions = new Map<string, number>();
   for (const [key, ref] of Object.entries(input.config.env)) {
     const resolved = resolvePortableValueRef({ serverId: input.serverId, path: `env:${key}`, ref, resolveSavedSecret: input.resolveSavedSecret });
@@ -117,7 +117,7 @@ function materializeConfig(input: Readonly<{
     config: { ...input.config, env },
     savedSecretRevisions: [...savedSecretRevisions].map(([secretId, revision]) => ({ secretId, revision })),
   };
-  const headers: Record<string, McpValueRefV1> = {};
+  const headers: Record<string, ValueRefV1> = {};
   for (const [key, ref] of Object.entries(input.config.remote?.headers ?? {})) {
     const resolved = resolvePortableValueRef({ serverId: input.serverId, path: `header:${key}`, ref, resolveSavedSecret: input.resolveSavedSecret });
     if (!resolved.ok) return resolved;
