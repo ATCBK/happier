@@ -93,13 +93,26 @@ describe('resolveWorkStatusTone', () => {
         }
     });
 
+    it('presents unreachable Stop custody as offline and keeps header actions nonterminal', () => {
+        const facts = { state: 'cancelled' as const, workflowCustodyState: 'pending' as const,
+            machineReachable: false, machineName: 'Build box', inAttentionWindow: true, word: 'Stopped' };
+        expect(resolveWorkStatusTone({ kind: 'workflow_run', facts })).toEqual({
+            bucket: 'offline', tone: 'neutral', word: t('workflows.run.stopWhenMachineReconnects', { machine: 'Build box' }),
+        });
+        expect(describeWorkflowRunState(facts.state, facts)).toMatchObject({ terminal: false, variant: 'neutral',
+            label: t('workflows.run.stopWhenMachineReconnects', { machine: 'Build box' }) });
+        expect(resolveWorkStatusTone({ kind: 'workflow_step', facts: { lifecycle: 'cancel_requested',
+            machineReachable: false, machineName: 'Build box', inAttentionWindow: true, word: 'Stopping' } }))
+            .toEqual({ bucket: 'offline', tone: 'neutral', word: t('workflows.run.stopWhenMachineReconnects', { machine: 'Build box' }) });
+    });
+
     it('gives attention precedence over reachability and keeps the run word', () => {
         expect(resolveWorkStatusTone({ kind: 'workflow_run', facts: {
             state: 'running', inAttentionWindow: true, machineReachable: false, word: 'Running',
         } })).toEqual({ bucket: 'needs_you', tone: 'attention', word: 'Running' });
         expect(resolveWorkStatusTone({ kind: 'workflow_run', facts: {
             state: 'cancelled', inAttentionWindow: true, machineReachable: false, word: 'Stopped',
-        } })).toEqual({ bucket: 'needs_you', tone: 'attention', word: 'Stopped' });
+        } })).toEqual({ bucket: 'finished', tone: 'neutral', word: 'Stopped' });
         expect(resolveWorkStatusTone({ kind: 'workflow_run', facts: {
             state: 'cancelled', inAttentionWindow: false, machineReachable: false, word: 'Stopped',
         } })).toEqual({ bucket: 'finished', tone: 'neutral', word: 'Stopped' });
@@ -174,6 +187,15 @@ describe('resolveWorkStatusTone', () => {
     });
 
     it('keeps trouble in Finished unless the attention owner places it in Needs you', () => {
+        for (const facts of [
+            { state: 'cancel_requested' as const },
+            { state: 'cancelled' as const, workflowCustodyState: 'pending' as const },
+            { state: 'running' as const, cancelRequested: true },
+        ]) {
+            expect(resolveWorkStatusTone({ kind: 'workflow_run', facts: {
+                ...facts, inAttentionWindow: true, word: 'Previous outcome',
+            } })).toEqual({ bucket: 'working', tone: 'neutral', word: t('workflows.run.stopping') });
+        }
         expect(resolveWorkStatusTone({ kind: 'workflow_run', facts: {
             state: 'failed', machineReachable: false, word: 'Failed',
         } })).toEqual({ bucket: 'finished', tone: 'danger', word: 'Failed' });
@@ -182,7 +204,7 @@ describe('resolveWorkStatusTone', () => {
         } })).toEqual({ bucket: 'needs_you', tone: 'attention', word: 'Outcome uncertain' });
         expect(resolveWorkStatusTone({ kind: 'workflow_step', facts: {
             lifecycle: 'cancel_requested', inAttentionWindow: false, word: 'Stopping',
-        } })).toEqual({ bucket: 'working', tone: 'neutral', word: 'Stopping' });
+        } })).toEqual({ bucket: 'working', tone: 'neutral', word: t('workflows.run.stopping') });
     });
 
     it('preserves supplied words while offline Session facts stay neutral', () => {

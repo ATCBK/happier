@@ -5,7 +5,8 @@ vi.mock('@/text', async () => {
     return createTextModuleMock();
 });
 
-import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { buildSessionFromListRenderable } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
 
 import { resolveWorkStatusTone } from './resolveWorkStatusTone';
 import { readSessionWorkStalled, readSessionWorkStatusFacts, withOutstandingReports } from './sessionWorkStatusFacts';
@@ -13,6 +14,39 @@ import { readSessionWorkStalled, readSessionWorkStatusFacts, withOutstandingRepo
 const NOW = 1_000_000;
 
 describe('readSessionWorkStatusFacts', () => {
+    it('keeps an HTTP-loaded inactive row offline before and after unchanged details hydrate', () => {
+        const row = createSessionListRenderableSessionFixture({
+            encryptionMode: 'e2ee', encryptedContentAvailability: undefined, metadata: null,
+            presence: undefined, active: false, activeAt: NOW - 3_600_000,
+            hasPendingPermissionRequests: undefined, hasPendingUserActionRequests: undefined,
+        });
+        const cold = buildSessionFromListRenderable(row, { serverId: 'home-a' });
+        const status = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(cold, NOW) });
+        expect(status).toEqual({ bucket: 'offline', tone: 'neutral', word: 'status.offline' });
+        // The content remains unavailable during hydration; a public runtime word grants no read.
+        expect(readSessionWorkStatusFacts(cold, NOW).awareness.encryption).toBe('unknown');
+        const hydrated = createSessionFixture({ ...cold, encryptedContentAvailability: 'ready',
+            metadata: createSessionFixture().metadata, presence: 0 });
+        expect(resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(hydrated, NOW) })).toEqual(status);
+    });
+
+    it('names an unknown runtime state with a quiet localized word', () => {
+        const row = createSessionListRenderableSessionFixture({
+            encryptionMode: 'e2ee', encryptedContentAvailability: undefined, metadata: null,
+            active: true, presence: undefined,
+        });
+        const status = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(row, NOW) });
+        expect(status).toEqual({ bucket: 'idle', tone: 'neutral', word: 'status.unknownState' });
+    });
+
+    it('says a detached Session is offline once, leaving when it was last seen to the row time', () => {
+        // A hydrated row the Home marked inactive, with no device-observed presence.
+        const detached = createSessionListRenderableSessionFixture({ active: false, presence: undefined, activeAt: NOW - 3_600_000 });
+        const facts = readSessionWorkStatusFacts(detached, NOW);
+        expect(facts.word).toBe('status.offline');
+        expect(resolveWorkStatusTone({ kind: 'session', facts }).bucket).toBe('offline');
+    });
+
     it('reads a list row the way the Session owner does: a pending permission needs you, a turn in flight is not settled', () => {
         const waiting = createSessionListRenderableSessionFixture({
             active: true, activeAt: NOW, hasPendingPermissionRequests: true, pendingRequestObservedAt: NOW,

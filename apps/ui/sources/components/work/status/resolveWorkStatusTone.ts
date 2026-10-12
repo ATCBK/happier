@@ -2,7 +2,7 @@ import { isInProgressAgentActivityStatus, isTerminalAgentActivityStatus, type Ag
 import { isTerminalAutomationRunStateV3 } from '@happier-dev/protocol/automations/automationRunStateV3';
 import { readSessionAwarenessWorkStatusV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import type { SessionAwarenessPresentationFactsV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
-import type { WorkflowInvocationLifecycleV1, WorkflowRunStateV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import type { WorkflowInvocationLifecycleV1, WorkflowRunStateV1, WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { WorkerUpdateV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
 import type { ActionOperationSnapshotV1, ActionOperationStateV1 } from '@happier-dev/protocol/actions/operations/v1';
 
@@ -64,6 +64,8 @@ type WorkflowFacts = Readonly<{
     inAttentionWindow?: boolean;
     /** Absent means unknown, not offline. */
     machineReachable?: boolean;
+    machineName?: string | null;
+    workflowCustodyState?: WorkflowRunSummaryV1['workflowCustodyState'];
 }>;
 
 export type WorkStatusInput =
@@ -74,8 +76,8 @@ export type WorkStatusInput =
         word: string;
     }> }>
     | Readonly<{ kind: 'worker_update'; facts: Readonly<{ update: WorkerUpdateV1 }> }>
-    | Readonly<{ kind: 'workflow_run'; facts: WorkflowFacts & Readonly<{ state: WorkStatusRunState }> }>
-    | Readonly<{ kind: 'workflow_step'; facts: WorkflowFacts & Readonly<{ lifecycle: WorkStatusStepLifecycle }> }>
+    | Readonly<{ kind: 'workflow_run'; facts: WorkflowFacts & Readonly<{ state: WorkStatusRunState; cancelRequested?: boolean }> }>
+    | Readonly<{ kind: 'workflow_step'; facts: WorkflowFacts & Readonly<{ lifecycle: WorkStatusStepLifecycle; runStopPending?: boolean }> }>
     | Readonly<{ kind: 'session'; facts: Readonly<{
         word: string;
         awareness: SessionAwarenessPresentationFactsV1;
@@ -138,6 +140,34 @@ export function isTerminalWorkflowRunState(state: WorkflowRunStateV1): boolean {
     return isTerminalAutomationRunStateV3(state);
 }
 
+type WorkflowRunStopFacts = Readonly<{
+    state: WorkStatusRunState;
+    workflowCustodyState?: WorkflowRunSummaryV1['workflowCustodyState'];
+    cancelRequested?: boolean;
+    machineReachable?: boolean;
+}>;
+
+/** Cancellation acceptance does not prove that the Run's physical work stopped. */
+export function isWorkflowRunStopPending(facts: WorkflowRunStopFacts): boolean {
+    if (facts.state === 'cancel_requested') return true;
+    return facts.state === 'cancelled'
+        ? facts.workflowCustodyState === 'pending'
+        : !isTerminalWorkflowRunState(facts.state) && facts.cancelRequested === true;
+}
+
+/** An unreachable Machine cannot currently carry out the accepted Stop. */
+export function isWorkflowRunStopping(facts: WorkflowRunStopFacts): boolean {
+    return facts.machineReachable !== false && isWorkflowRunStopPending(facts);
+}
+
+function presentWorkflowStop(facts: WorkflowFacts): WorkStatusPresentation {
+    return facts.machineReachable === false
+        ? { bucket: 'offline', tone: 'neutral', word: facts.machineName
+            ? t('workflows.run.stopWhenMachineReconnects', { machine: facts.machineName })
+            : t('workflows.run.stopWhenMachineReconnectsUnknown') }
+        : { bucket: 'working', tone: 'neutral', word: t('workflows.run.stopping') };
+}
+
 export function isTerminalWorkflowInvocationLifecycle(lifecycle: WorkflowInvocationLifecycleV1): boolean {
     return STEP_STATUS[lifecycle].bucket === 'finished';
 }
@@ -178,8 +208,22 @@ export function resolveWorkStatusTone(input: WorkStatusInput): WorkStatusPresent
             if (update.ownerState === 'stalled') return { bucket: 'offline', tone: 'neutral', word };
             return { bucket: 'finished', tone: failed ? 'danger' : update.ownerState === 'timeout' ? 'attention' : 'neutral', word };
         }
-        case 'workflow_run': return presentWorkflow(RUN_STATUS[input.facts.state], input.facts);
-        case 'workflow_step': return presentWorkflow(STEP_STATUS[input.facts.lifecycle], input.facts);
+        case 'workflow_run': {
+            const facts = input.facts;
+            if (isWorkflowRunStopPending(facts)) return presentWorkflowStop(facts);
+            // A stopped Run cannot still ask for a hold answer. A retained
+            // attention window can lag the parent's terminal observation.
+            return presentWorkflow(RUN_STATUS[facts.state], facts.state === 'cancelled'
+                ? { ...facts, inAttentionWindow: false } : facts);
+        }
+        case 'workflow_step': {
+            const facts = input.facts;
+            if (facts.lifecycle === 'cancel_requested'
+                || facts.runStopPending === true && !isTerminalWorkflowInvocationLifecycle(facts.lifecycle)) {
+                return presentWorkflowStop(facts);
+            }
+            return presentWorkflow(STEP_STATUS[facts.lifecycle], facts);
+        }
         case 'session': {
             const { awareness, settled, word } = input.facts;
             return { ...readSessionAwarenessWorkStatusV1({ awareness, settled }), word };
