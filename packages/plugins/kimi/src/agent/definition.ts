@@ -22,8 +22,7 @@ export const AGENT_DEFINITION = Object.freeze({
     // Kimi Code receives Happier's tools as ACP MCP servers, which is exactly
     // what this Agent's runtime declaration promises with
     // `mcp: { policy: 'pass_through' }`. `shell_bridge` contradicted that: the
-    // host builds a session's MCP servers only for `native_mcp`
-    // (`runHostSessionRuntime`'s `supportsMcpServers`), so `pass_through` had an
+    // host's user-MCP delivery predicate excludes `shell_bridge`, so `pass_through` had an
     // empty set to forward and Kimi advertised tools it never received.
     tools: { delivery: 'native_mcp', support: 'experimental' },
   },
