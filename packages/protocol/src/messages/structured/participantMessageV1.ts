@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { z } from 'zod';
 import { ExecutionRunIdSchema } from '../../sessions/idsV1.js';
 
@@ -92,13 +93,19 @@ export function withParticipantRecipientV1(
   return { ...meta, happier: { kind: 'participant_message.v1', payload: { recipient } } };
 }
 
-/** Reads only closed operational metadata, independently of the historical display parser. */
-export function readParticipantRecipientRoutingIdentityV1(meta: unknown): ParticipantRecipientRoutingIdentityV1 | null {
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
-  const parsed = z.object({
+const ParticipantRecipientRoutingEnvelopeV1Schema = lazyZodSchema(() => z.object({
     kind: z.literal('participant_message.v1'),
     payload: z.object({ recipient: ParticipantRecipientRoutingIdentityV1Schema }).strict(),
-  }).strict().safeParse((meta as Record<string, unknown>).happier);
+  }).strict());
+
+/** Fresh operational metadata stays closed; retained readers explicitly project known routing facts. */
+export function readParticipantRecipientRoutingIdentityV1(
+  meta: unknown,
+  mode: 'input' | 'stored' = 'input',
+): ParticipantRecipientRoutingIdentityV1 | null {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+  const parsed = (mode === 'stored' ? createStoredReadSchema(ParticipantRecipientRoutingEnvelopeV1Schema)
+    : ParticipantRecipientRoutingEnvelopeV1Schema).safeParse((meta as Record<string, unknown>).happier);
   return parsed.success ? parsed.data.payload.recipient : null;
 }
 

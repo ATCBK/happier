@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 
 import { PluginContributionLocalIdSchema } from '../../plugins/contributionIdentity.js';
@@ -63,13 +64,15 @@ function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
  */
 export function readConversationTurnOriginV1FromMessageMeta(
   meta: unknown,
+  purpose: 'input' | 'stored' = 'stored',
 ): ConversationTurnOriginV1 | null {
   const metaRecord = readRecord(meta);
   const happier = readRecord(metaRecord?.happier);
   if (!happier || !(CONVERSATION_TURN_ORIGIN_META_FIELD_V1 in happier)) {
     return AGENT_THREAD_TEXT_CONVERSATION_TURN_ORIGIN_V1;
   }
-  const parsed = ConversationTurnOriginV1Schema.safeParse(
+  const parsed = (purpose === 'stored' ? createStoredReadSchema(ConversationTurnOriginV1Schema)
+    : ConversationTurnOriginV1Schema).safeParse(
     happier[CONVERSATION_TURN_ORIGIN_META_FIELD_V1],
   );
   return parsed.success ? parsed.data : null;
