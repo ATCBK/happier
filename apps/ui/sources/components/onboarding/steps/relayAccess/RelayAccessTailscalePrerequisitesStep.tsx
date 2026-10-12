@@ -12,6 +12,7 @@ export type RelayAccessTailscalePrerequisitesStepProps = Readonly<{
     serverProfileId?: string | null;
     target?: RelayAccessTaskTarget;
     runWithTarget?: RelayAccessControlOptions['runWithTarget'];
+    remoteHost?: RelayAccessControlOptions['remoteHost'];
     onShareUrlChange?: (shareUrl: string | null) => void;
     onWizardPrimaryChange?: (state: Readonly<{
         label: string;
@@ -32,6 +33,7 @@ export const RelayAccessTailscalePrerequisitesStep = React.memo(function RelayAc
             serverProfileId={props.serverProfileId}
             target={props.target}
             runWithTarget={props.runWithTarget}
+            remoteHost={props.remoteHost}
             onShareUrlChange={props.onShareUrlChange}
             forcedProviderId={props.providerId}
             showProviderChoices={false}

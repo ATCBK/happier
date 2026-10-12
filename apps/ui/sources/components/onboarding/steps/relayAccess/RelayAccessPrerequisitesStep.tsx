@@ -16,6 +16,7 @@ export type RelayAccessPrerequisitesStepProps = Readonly<{
     serverProfileId?: string | null;
     target?: RelayAccessTaskTarget;
     runWithTarget?: RelayAccessControlOptions['runWithTarget'];
+    remoteHost?: RelayAccessControlOptions['remoteHost'];
     onShareUrlChange?: (shareUrl: string | null) => void;
     onWizardPrimaryChange?: (state: RelayAccessWizardPrimaryState | null) => void;
     onRequestAdvance?: () => void;
@@ -28,6 +29,7 @@ type RelayAccessPrerequisiteStepComponent = React.ComponentType<Readonly<{
     serverProfileId?: string | null;
     target?: RelayAccessTaskTarget;
     runWithTarget?: RelayAccessControlOptions['runWithTarget'];
+    remoteHost?: RelayAccessControlOptions['remoteHost'];
     onShareUrlChange?: (shareUrl: string | null) => void;
     onWizardPrimaryChange?: (state: RelayAccessWizardPrimaryState | null) => void;
     onRequestAdvance?: () => void;
@@ -46,6 +48,7 @@ const RelayAccessTailscaleRegistryStep: RelayAccessPrerequisiteStepComponent = R
             serverProfileId={props.serverProfileId}
             target={props.target}
             runWithTarget={props.runWithTarget}
+            remoteHost={props.remoteHost}
             onShareUrlChange={props.onShareUrlChange}
             onWizardPrimaryChange={props.onWizardPrimaryChange}
             onRequestAdvance={props.onRequestAdvance}
@@ -76,6 +79,7 @@ export const RelayAccessPrerequisitesStep = React.memo(function RelayAccessPrere
             serverProfileId={props.serverProfileId}
             target={props.target}
             runWithTarget={props.runWithTarget}
+            remoteHost={props.remoteHost}
             onShareUrlChange={props.onShareUrlChange}
             onWizardPrimaryChange={props.onWizardPrimaryChange}
             onRequestAdvance={props.onRequestAdvance}

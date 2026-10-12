@@ -16,6 +16,7 @@ export type RelayAccessLanUrlStepProps = Readonly<{
     serverProfileId?: string | null;
     target?: RelayAccessTaskTarget;
     runWithTarget?: RelayAccessControlOptions['runWithTarget'];
+    remoteHost?: RelayAccessControlOptions['remoteHost'];
     onShareUrlChange?: (shareUrl: string | null) => void;
     onWizardPrimaryChange?: (state: RelayAccessWizardPrimaryState | null) => void;
     onRequestAdvance?: () => void;

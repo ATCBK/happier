@@ -3,6 +3,7 @@ import { isSameServerUrl, normalizeServerUrl } from '@/sync/domains/server/activ
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { isLocalishServerUrl } from '@/sync/domains/server/url/serverUrlClassification';
 import { t } from '@/text';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 
 import type { WizardProfileChoice } from './relaySelectionTypes';
 import { resolveCanonicalCloudRelayProfile } from './relaySelectionHelpers';
@@ -24,7 +25,7 @@ export function buildRelayProfileChoices(params: Readonly<{
         .map((profile) => ({
             kind: 'profile' as const,
             id: profile.id,
-            name: profile.name,
+            name: resolveHomeDisplayLabel(profile, profile.id),
             serverUrl: normalizeServerUrl(profile.serverUrl) ?? profile.serverUrl,
         }));
 

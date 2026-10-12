@@ -5,7 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
+import { resolveHomeDisplayNameForRelayUrl } from '@/components/settings/server/homeDisplayName';
 import { t } from '@/text';
 
 export type ActiveRelaySummaryProps = Readonly<{
@@ -61,7 +61,7 @@ export function ActiveRelaySummary(props: ActiveRelaySummaryProps) {
                     testID={`${props.idPrefix ?? 'relay-summary'}-line`}
                     style={styles.value}
                 >
-                    {toServerUrlDisplay(props.relayUrl)}
+                    {resolveHomeDisplayNameForRelayUrl(props.relayUrl) ?? t('settingsAccount.thisHomeTitle')}
                 </Text>
             </View>
         </View>

@@ -105,6 +105,7 @@ export function renderOnboardingWizardStepBody(params: Readonly<{
     serverProfileId: string | null;
     relayAccessTarget: RelayAccessTaskTarget;
     runWithRelayAccessTarget?: RelayAccessControlOptions['runWithTarget'];
+    relayAccessRemoteHost?: RelayAccessControlOptions['remoteHost'];
     lastKnownSnapshotRelayUrl: string;
     reachabilityRemediation: EndpointReachabilityRemediation | null;
     reachabilityRemediationTaskSnapshot: SystemTaskRunState | null;
@@ -164,6 +165,7 @@ export function renderOnboardingWizardStepBody(params: Readonly<{
         machineId: string | null;
         relayRuntimeUrl: string | null;
         relayAccessTarget: RelayAccessTaskTarget | null;
+        relayAccessRemoteHost?: RelayAccessControlOptions['remoteHost'];
         runWithRelayAccessTarget?: RelayAccessControlOptions['runWithTarget'];
         mode: RemoteSshChecklistMode;
     }>) => void;
@@ -309,6 +311,7 @@ export function renderOnboardingWizardStepBody(params: Readonly<{
                 serverProfileId={params.serverProfileId}
                 target={params.relayAccessTarget}
                 runWithTarget={params.runWithRelayAccessTarget}
+                remoteHost={params.relayAccessRemoteHost}
                 presentation="wizard"
                 onShareUrlChange={params.onRelayAccessShareUrlChange}
                 onWizardPrimaryChange={params.onWizardPrimaryChange}
@@ -330,6 +333,7 @@ export function renderOnboardingWizardStepBody(params: Readonly<{
                 serverProfileId={params.serverProfileId}
                 target={params.relayAccessTarget}
                 runWithTarget={params.runWithRelayAccessTarget}
+                remoteHost={params.relayAccessRemoteHost}
                 onWizardPrimaryChange={params.onWizardPrimaryChange}
                 onRequestAdvance={params.onRelayAccessAdvance}
             />

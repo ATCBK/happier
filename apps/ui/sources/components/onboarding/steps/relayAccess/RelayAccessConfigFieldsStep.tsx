@@ -39,6 +39,7 @@ export type RelayAccessConfigFieldsStepProps = Readonly<{
     serverProfileId?: string | null;
     target?: RelayAccessTaskTarget;
     runWithTarget?: RelayAccessControlOptions['runWithTarget'];
+    remoteHost?: RelayAccessControlOptions['remoteHost'];
     onShareUrlChange?: (shareUrl: string | null) => void;
     onWizardPrimaryChange?: (state: RelayAccessWizardPrimaryState | null) => void;
     onRequestAdvance?: () => void;
@@ -61,6 +62,7 @@ export const RelayAccessConfigFieldsStep = React.memo(function RelayAccessConfig
         upstreamUrl: props.upstreamUrl ?? null,
         target: props.target,
         runWithTarget: props.runWithTarget,
+        remoteHost: props.remoteHost,
     });
 
     const configuredDraft = React.useMemo(

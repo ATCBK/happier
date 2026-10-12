@@ -7,9 +7,8 @@ import { t, tLoose } from '@/text';
 import { lightTheme } from '@/theme';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { MachineSetupTextField } from '@/components/ui/forms/MachineSetupTextField';
+import { MachineSetupFieldLabel, MachineSetupFieldSupport, MachineSetupTextField } from '@/components/ui/forms/MachineSetupTextField';
 import { SegmentedTabBar, type SegmentedTab } from '@/components/ui/navigation/SegmentedTabBar';
-import { Text } from '@/components/ui/text/Text';
 
 export type SshAuthMode = 'agent' | 'keyfile' | 'password';
 
@@ -299,26 +298,15 @@ export const SshCredentialsFields = React.memo(function SshCredentialsFields(pro
             )}
 
             {isFormLayout ? (
-                // "Sign in with" and what it means on the left, the choice on the right; stacked when narrow.
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: margins.sm }}>
-                    <View style={{ flexGrow: 1, flexBasis: 160, minWidth: 0 }}>
-                        <Text style={{ color: theme.colors.text.primary }}>
-                            {t('settings.machineSetupRemoteSshAuthMethodLabel')}
-                        </Text>
-                        <Text style={{ color: theme.colors.text.secondary, fontSize: 13, lineHeight: 18 }}>
-                            {t(value.authMode === 'keyfile'
-                                ? 'addFlows.sshSignInKeyFile'
-                                : value.authMode === 'password'
-                                    ? 'addFlows.sshSignInPassword'
-                                    : 'addFlows.sshSignInAgent')}
-                        </Text>
-                    </View>
+                // The choice is a field like the ones above it: its label, the choice, what it means as help.
+                <View style={{ gap: margins.sm }}>
+                    <MachineSetupFieldLabel>{t('settings.machineSetupRemoteSshAuthMethodLabel')}</MachineSetupFieldLabel>
                     {/* Long translations stay reachable: the choice scrolls rather than clipping a label. */}
                     <ScrollView
                         testID={`${testIDs.sshAuthMethod ?? resolveTestID('sshAuthMethod')}-scroller`}
                         horizontal
                         showsHorizontalScrollIndicator={false}
-                        style={{ flexGrow: 0, maxWidth: '100%' }}
+                        style={{ flexGrow: 0, alignSelf: 'flex-start', maxWidth: '100%' }}
                     >
                         <SegmentedTabBar
                             role="radiogroup"
@@ -331,6 +319,13 @@ export const SshCredentialsFields = React.memo(function SshCredentialsFields(pro
                             targetSize="platform"
                         />
                     </ScrollView>
+                    <MachineSetupFieldSupport>
+                        {t(value.authMode === 'keyfile'
+                            ? 'addFlows.sshSignInKeyFile'
+                            : value.authMode === 'password'
+                                ? 'addFlows.sshSignInPassword'
+                                : 'addFlows.sshSignInAgent')}
+                    </MachineSetupFieldSupport>
                 </View>
             ) : (
                 <ItemGroup>

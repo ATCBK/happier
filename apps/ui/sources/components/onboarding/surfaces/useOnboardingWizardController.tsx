@@ -201,6 +201,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
     const [localRelayRuntimeStatus, setLocalRelayRuntimeStatus] = React.useState<LocalRelayRuntimeStatus>(null);
     const [relayAccessTarget, setRelayAccessTarget] = React.useState<RelayAccessTaskTarget | null>(null);
     const relayAccessRunnerRef = React.useRef<RelayAccessControlOptions['runWithTarget']>(undefined);
+    const relayAccessRemoteHostRef = React.useRef<RelayAccessControlOptions['remoteHost']>(undefined);
     const [relayAccessShareUrl, setRelayAccessShareUrl] = React.useState<string | null>(null);
     const [accountDirectoryKeyRequest, setAccountDirectoryKeyRequest] = React.useState<WelcomeAuthenticationMethod | null>(null);
     const [accountDirectoryContinuationIntent, setAccountDirectoryContinuationIntent] = React.useState<AccountContinuationIntent | null>(null);
@@ -253,6 +254,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
             return;
         }
         setRelayAccessTarget({ kind: 'local' });
+        relayAccessRemoteHostRef.current = undefined;
         setRelayAccessShareUrl(null);
         const profile = await upsertServerProfileOnly({
             serverUrl: relayUrl,
@@ -343,6 +345,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
                     break;
                 case 'clearRelayAccessDraft':
                     relayAccessRunnerRef.current = undefined;
+                    relayAccessRemoteHostRef.current = undefined;
                     setRelayAccessTarget(null);
                     setRelayAccessShareUrl(null);
                     break;
@@ -597,6 +600,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
                         return;
                     }
                     relayAccessRunnerRef.current = undefined;
+                    relayAccessRemoteHostRef.current = undefined;
                     setRelayAccessTarget(null);
                     setRelayAccessShareUrl(null);
                     dispatch({
@@ -623,6 +627,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
             locked: choiceId === 'customUrl' ? state.context.relaySelection.locked : false,
         };
         relayAccessRunnerRef.current = undefined;
+        relayAccessRemoteHostRef.current = undefined;
         setRelayAccessTarget(null);
         setRelayAccessShareUrl(null);
         dispatch({ type: 'wizard/setRelaySelection', relaySelection: next });
@@ -630,6 +635,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
 
     const selectProfileRelay = React.useCallback((profile: WizardProfileChoice) => {
         relayAccessRunnerRef.current = undefined;
+        relayAccessRemoteHostRef.current = undefined;
         setRelayAccessTarget(null);
         setRelayAccessShareUrl(null);
         dispatch({
@@ -734,6 +740,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
             disabled: state.context.relaySelection.locked && !selected,
             onPress: () => {
                 relayAccessRunnerRef.current = undefined;
+                relayAccessRemoteHostRef.current = undefined;
                 setRelayAccessTarget(null);
                 setRelayAccessShareUrl(null);
                 dispatch({
@@ -821,6 +828,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
         relayRuntimeUrl: string | null;
         relayAccessTarget: RelayAccessTaskTarget | null;
         runWithRelayAccessTarget?: RelayAccessControlOptions['runWithTarget'];
+        relayAccessRemoteHost?: RelayAccessControlOptions['remoteHost'];
         mode: 'remoteMachine' | 'remoteRelayHost';
     }>) => {
         const relayUrl = typeof payload.relayRuntimeUrl === 'string' ? payload.relayRuntimeUrl.trim() : '';
@@ -830,6 +838,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
 
         setRelaySwitchDecision('switch');
         relayAccessRunnerRef.current = payload.runWithRelayAccessTarget;
+        relayAccessRemoteHostRef.current = payload.relayAccessRemoteHost;
         setRelayAccessTarget(payload.relayAccessTarget);
         setRelayAccessShareUrl(null);
         const relayProfile = await upsertServerProfileOnly({
@@ -884,6 +893,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
     const handleScan = React.useCallback(async (data: string) => {
         const parsed = parseOnboardingScanPayload(data);
         relayAccessRunnerRef.current = undefined;
+        relayAccessRemoteHostRef.current = undefined;
         setRelayAccessTarget(null);
         setRelayAccessShareUrl(null);
         if (parsed.kind === 'legacy_pairing_update_required') {
@@ -1536,6 +1546,7 @@ export function useOnboardingWizardController(props: OnboardingWizardSurfaceProp
         serverProfileId: state.context.relaySelection.relayProfileId ?? null,
         relayAccessTarget: relayAccessTarget ?? defaultRelayAccessTarget,
         runWithRelayAccessTarget: relayAccessTarget ? relayAccessRunnerRef.current : undefined,
+        relayAccessRemoteHost: relayAccessTarget ? relayAccessRemoteHostRef.current : undefined,
         lastKnownSnapshotRelayUrl: lastKnownSnapshotRelayUrlRef.current || '',
         reachabilityRemediation: activeReachabilityRemediation,
         reachabilityRemediationTaskSnapshot: tailscaleEnsureReadySnapshot,

@@ -146,8 +146,11 @@ const bareStylesheet = StyleSheet.create((theme) => ({
         width: '100%',
         maxWidth: 360,
     },
+    // The quiet text button's own horizontal padding is pulled back so its label shares the
+    // column's left edge with the Home chip and the fields above it.
     skipButton: {
         maxWidth: 360,
+        marginLeft: -16,
     },
 }));
 
@@ -217,7 +220,7 @@ function BareOnboardingWorkflowContent(props: BareOnboardingWorkflowContentProps
                         <View style={styles.skipButton}>
                             <RoundButton
                                 testID={`${props.testID}-skip`}
-                                size="small"
+                                size="normal"
                                 display="inverted"
                                 title={controller.skipLabel ?? undefined}
                                 disabled={controller.skipDisabled}
