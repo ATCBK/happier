@@ -93,7 +93,7 @@ function admit(
     preview: { verb: 'Organize', target },
   });
   return admission.status === 'refused'
-    ? widgetMovementRefused(admission.reason.code, admission.preview)
+    ? widgetMovementRefused(admission.reason, admission.preview)
     : admission;
 }
 

@@ -110,7 +110,6 @@ function LayoutBars(props: Readonly<{ phone: boolean }>) {
         layouts={PROJECT_LAYOUTS}
         selectedId="overview"
         onSelect={NOOP}
-        narrow={props.phone}
         onCreate={NOOP}
         actions={ACTIONS}
         labels={PROJECT_LABELS}
@@ -121,7 +120,6 @@ function LayoutBars(props: Readonly<{ phone: boolean }>) {
         layouts={USAGE_LAYOUTS}
         selectedId="overview"
         onSelect={NOOP}
-        narrow={props.phone}
         onCreate={NOOP}
         actions={null}
         labels={USAGE_LABELS}

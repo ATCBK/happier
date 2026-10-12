@@ -157,7 +157,6 @@ function ChildFrame(
         footprint: getWidgetSizeFootprintV1('home', props.child.size)!,
       }}
       mark={descriptor.icon}
-      compactHeader={!props.wide && !props.phone}
       {...(props.grip ? { leading: <EntityDragGrip accessibilityLabel="Move" /> } : {})}
       title={t(descriptor.titleKey)}
       {...(follows

@@ -77,7 +77,7 @@ function CellState(props: Readonly<{ tone: TextTone; label: string; live?: boole
     return (
         <Row gap="xsmall" align="center" style={{ minWidth: 0, maxWidth: '100%' }}>
             {props.tone === 'secondary' ? null : <HappierStatusDot color={theme.colors[HAPPIER_TONE_COLOR_TOKEN[props.tone]]} isPulsing={props.live === true} />}
-            <Stack style={{ flexShrink: 1, minWidth: 0 }}><Text variant="caption" tone="secondary" value={props.label} numberOfLines={1} /></Stack>
+            <Stack style={{ flexShrink: 1, minWidth: 0 }}><Text variant="micro" tone="secondary" value={props.label} numberOfLines={1} /></Stack>
         </Row>
     );
 }
@@ -113,7 +113,7 @@ function useAnatomy(open: (key: string) => void): CollectionAnatomy<PreviewEntry
             return entry.who === null ? where : `${where} · ${entry.who}`;
         },
         reason: (entry) => (entry.reason === null ? null : entry.reason.tone === 'secondary' ? (
-            <Text variant="caption" tone="secondary" value={entry.reason.label} numberOfLines={1} />
+            <Text variant="micro" tone="secondary" value={entry.reason.label} numberOfLines={1} />
         ) : <Badge variant="tinted" tone={entry.reason.tone} value={entry.reason.label} {...(entry.reason.icon === undefined ? {} : { icon: entry.reason.icon })} />),
         signal: (entry) => (entry.signal === null ? null : <CellState tone={entry.signal.tone} label={entry.signal.label} />),
         agent: (entry) => (entry.agent === null ? null : (
@@ -124,7 +124,7 @@ function useAnatomy(open: (key: string) => void): CollectionAnatomy<PreviewEntry
         action: () => <Button title="Pin" variant="plain" size="small" onPress={() => undefined} />,
         peek: (entry) => (
             <Stack gap="small">
-                <Text variant="body" tone="secondary" value={entry.summary} numberOfLines={3} />
+                <Text variant="meta" tone="secondary" value={entry.summary} numberOfLines={3} />
                 <Row gap="small">
                     <Button title="Open" variant="primary" size="small" onPress={() => { open(entry.id); }} />
                     <Button title="Pin" variant="secondary" size="small" onPress={() => undefined} />
@@ -211,7 +211,7 @@ export function CollectionPreviewSample(): React.ReactElement {
                 renderDetail={() => (opened === null ? null : (
                     <Stack gap="medium" style={{ padding: 24 }}>
                         <Row justify="space-between" align="center">
-                            <Text variant="caption" tone="secondary" value={opened.num === null ? opened.where : `${opened.where} ${opened.num}`} />
+                            <Text variant="micro" tone="secondary" value={opened.num === null ? opened.where : `${opened.where} ${opened.num}`} />
                             <Button title="Close" variant="plain" size="small" onPress={() => { setOpenKey(null); }} />
                         </Row>
                         <Heading level={1} value={opened.title} />
@@ -233,10 +233,10 @@ function PreviewDetailTabs(props: Readonly<{ entry: PreviewEntry }>): React.Reac
                     <Step marker={{ kind: 'number', value: 1 }} title="The ask">
                         <Text variant="reading" tone="neutral" value={props.entry.summary} />
                     </Step>
-                    <Step marker={{ kind: 'number', value: 2 }} title="What changed" trailing={<Text variant="caption" tone="secondary" value="+388 −142 in 17 files" />}>
+                    <Step marker={{ kind: 'number', value: 2 }} title="What changed" trailing={<Text variant="micro" tone="secondary" value="+388 −142 in 17 files" />}>
                         <Text variant="reading" tone="secondary" value="src/cart/totals.ts, services/pricing/round.ts and 15 more" />
                     </Step>
-                    <Step marker={{ kind: 'state', state: 'failed', label: '2 failing' }} title="Checks" trailing={<Text variant="caption" tone="danger" value="2 failing" />}>
+                    <Step marker={{ kind: 'state', state: 'failed', label: '2 failing' }} title="Checks" trailing={<Text variant="micro" tone="danger" value="2 failing" />}>
                         <Text variant="reading" tone="secondary" value="e2e / webkit rounds VAT on mixed baskets: expected 12.30, received 12.29" />
                     </Step>
                     <Step marker={{ kind: 'state', state: 'passed', label: 'Passed' }} title="Review" />
