@@ -29,7 +29,10 @@ const CODEX_APP_SERVER_CONTEXT_WINDOW_EXHAUSTED_MESSAGE_MARKERS = [
     'context window',
 ] as const;
 const CODEX_APP_SERVER_TURN_FAILURE_MESSAGE = 'Codex app-server turn failed.';
-const CODEX_APP_SERVER_RUNTIME_AUTH_KINDS = new Set([
+const CODEX_APP_SERVER_DIAGNOSTIC_ERROR_CODES = new Set([
+    'ContextWindowExceeded', 'UsageLimitExceeded', 'Unauthorized', 'Other',
+]);
+const CODEX_APP_SERVER_RUNTIME_AUTH_KIND_VALUES = [
     'usage_limit',
     'rate_limit',
     'temporary_throttle',
@@ -40,7 +43,11 @@ const CODEX_APP_SERVER_RUNTIME_AUTH_KINDS = new Set([
     'permission_denied',
     'plan',
     'unknown',
-]);
+] as const;
+const CODEX_APP_SERVER_RUNTIME_AUTH_KINDS: ReadonlySet<string> = new Set(CODEX_APP_SERVER_RUNTIME_AUTH_KIND_VALUES);
+
+type CodexTurnFailureReason = typeof CODEX_APP_SERVER_RUNTIME_AUTH_KIND_VALUES[number]
+    | 'workspace_routing_unauthorized' | 'context_window_exceeded' | 'auth_account_changed' | 'unclassified_provider_error';
 const CODEX_APP_SERVER_RUNTIME_AUTH_LIMIT_CATEGORIES = new Set([
     'usage_limit',
     'rate_limit',
@@ -71,6 +78,8 @@ type CodexAppServerErrorPayload = Readonly<{
 }>;
 
 class CodexAppServerTurnFailure extends Error {
+    readonly failureReason: CodexTurnFailureReason;
+    declare readonly providerErrorCode?: string;
     readonly isAuthAccountChanged: boolean;
     readonly contextWindowExhaustionEvidence: 'structured' | 'message' | null;
     readonly isTemporaryRecoverableTurnFailure: boolean;
@@ -85,6 +94,7 @@ class CodexAppServerTurnFailure extends Error {
         runtimeAuthClassification: unknown | null;
         isWorkspaceRoutingUnauthorized: boolean;
         isRejectedStartModelEntitlement: boolean;
+        providerErrorCode?: string;
     }>) {
         super(message);
         this.name = 'CodexAppServerTurnFailure';
@@ -94,7 +104,22 @@ class CodexAppServerTurnFailure extends Error {
         this.runtimeAuthClassification = options.runtimeAuthClassification;
         this.isWorkspaceRoutingUnauthorized = options.isWorkspaceRoutingUnauthorized;
         this.isRejectedStartModelEntitlement = options.isRejectedStartModelEntitlement;
+        const classification = readRecord(options.runtimeAuthClassification);
+        this.failureReason = options.isWorkspaceRoutingUnauthorized ? 'workspace_routing_unauthorized'
+            : options.contextWindowExhaustionEvidence === 'structured' ? 'context_window_exceeded'
+                : options.isAuthAccountChanged ? 'auth_account_changed'
+                    : CODEX_APP_SERVER_RUNTIME_AUTH_KIND_VALUES.find(kind => kind === classification?.kind) ?? 'unclassified_provider_error';
+        if (options.providerErrorCode) this.providerErrorCode = options.providerErrorCode;
     }
+}
+
+export function readCodexAppServerTurnFailureDiagnostic(error: unknown): Readonly<{
+    failureReason: CodexTurnFailureReason;
+    providerErrorCode?: string;
+}> {
+    return error instanceof CodexAppServerTurnFailure
+        ? { failureReason: error.failureReason, ...(error.providerErrorCode ? { providerErrorCode: error.providerErrorCode } : {}) }
+        : { failureReason: 'unclassified_provider_error' };
 }
 
 function readBoundedString(value: unknown, maxLength = 256): string | null {
@@ -281,6 +306,8 @@ export function createCodexAppServerTurnFailure(params: Readonly<{
         })
         : null;
     const sanitizedClassification = sanitizeCodexAppServerRuntimeAuthClassification(runtimeAuthClassification);
+    const providerErrorCode = [...CODEX_APP_SERVER_DIAGNOSTIC_ERROR_CODES].find(code =>
+        normalizeCodexErrorInfo(code) === normalizeCodexErrorInfo(payload?.codexErrorInfo ?? null));
     return new CodexAppServerTurnFailure(
         CODEX_APP_SERVER_TURN_FAILURE_MESSAGE,
         {
@@ -294,6 +321,7 @@ export function createCodexAppServerTurnFailure(params: Readonly<{
                 && sanitizedClassification.limitCategory === 'plan_invalid'
                 && sanitizedClassification.quotaScope === 'model'
                 && typeof sanitizedClassification.providerLimitId === 'string',
+            ...(providerErrorCode ? { providerErrorCode } : {}),
         },
     );
 }

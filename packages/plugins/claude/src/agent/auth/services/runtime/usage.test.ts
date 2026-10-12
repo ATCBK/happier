@@ -99,6 +99,15 @@ describe('mapClaudeRuntimeRateLimitsToUsageObservation', () => {
 });
 
 describe('mapClaudeRateLimitEventToUsageDetails', () => {
+  it('does not fabricate allowance IDs from generic errors, but preserves an explicit allowance', () => {
+    const event = { type: 'assistant', isApiErrorMessage: true, error: {
+      error_status: 429, type: 'rate_limit_error', message: 'Usage limit reached',
+    } };
+    expect(mapClaudeRateLimitEventToUsageDetails(event)?.providerLimitId).toBeUndefined();
+    expect(mapClaudeRateLimitEventToUsageDetails({ ...event, error: {
+      ...event.error, providerLimitId: 'seven_day_opus',
+    } })?.providerLimitId).toBe('seven_day_opus');
+  });
   it.each([undefined, 0.95])('uses the matching rejected unified window even with conflicting top-level utilization %s', (utilization) => {
     const event = { type: 'rate_limit_event', rate_limit_info: {
       status: 'rejected', rateLimitType: 'five_hour', utilization, unifiedWindows: {
@@ -131,7 +140,6 @@ describe('mapClaudeRateLimitEventToUsageDetails', () => {
       retryAfterMs: null,
       quotaScope: 'account',
       recoverability: 'wait',
-      providerLimitId: 'rate_limit',
     });
   });
 });

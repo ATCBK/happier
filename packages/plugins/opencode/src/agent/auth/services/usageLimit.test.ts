@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { classifyOpenCodeUsageLimitError } from './usageLimit.js';
 
 describe('classifyOpenCodeUsageLimitError', () => {
+  it.each(['GoUsageLimitError', 'FreeUsageLimitError'])('leaves unnamed allowances unknown for %s', (name) => {
+    expect(classifyOpenCodeUsageLimitError({
+      providerErrorPath: true,
+      parseResetAt: () => ({ retryAfterMs: null, resetAtMs: null }),
+      error: { name },
+    })?.providerLimitId).toBeNull();
+  });
   it('classifies OpenCode free-tier quota failures with injected retry timing', () => {
     const parseResetAt = vi.fn(() => ({ retryAfterMs: 2500, resetAtMs: 123_456 }));
 
@@ -22,7 +29,7 @@ describe('classifyOpenCodeUsageLimitError', () => {
       retryAfterMs: 2500,
       resetAtMs: 123_456,
       quotaScope: 'account',
-      providerLimitId: 'free_tier_limit',
+      providerLimitId: null,
       action: null,
     });
     expect(parseResetAt).toHaveBeenCalledWith({

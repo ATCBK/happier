@@ -22,7 +22,7 @@ import {
   CLAUDE_CODE_NATIVE_AUTH_PROVENANCE_FILE_NAME,
   parseClaudeCodeNativeAuthProvenance,
 } from '../native/provenance.js';
-import { mapClaudeRateLimitEventToUsageDetails } from './usage.js';
+import { mapClaudeProviderFailureToUsageDetails } from './usage.js';
 
 export type ClaudeConnectedServiceRuntimeFailureKind =
   | 'usage_limit'
@@ -248,7 +248,7 @@ function runtimeFailureIdentity(
 export function classifyClaudeConnectedServiceRuntimeAuthFailure(
   input: ClassifyClaudeConnectedServiceRuntimeAuthFailureInput,
 ): ClaudeConnectedServiceRuntimeFailureClassification | null {
-  const details = mapClaudeRateLimitEventToUsageDetails(input.error);
+  const details = mapClaudeProviderFailureToUsageDetails(input.error);
   if (!details) {
     if (!hasClaudeAuthFailureEvidence(input.error)) return classifyGenericRuntimeAuthFailure(input);
     return {

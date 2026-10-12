@@ -8,6 +8,18 @@ import {
 } from './failure.js';
 
 describe('createCodexAppServerTurnFailure', () => {
+    it('retains only closed provider failure reasons for failure logging', () => {
+        const failure = createCodexAppServerTurnFailure({ value: { error: {
+            message: 'secret credential and transcript', codexErrorInfo: 'ContextWindowExceeded',
+        } } });
+        expect(failure).toMatchObject({ failureReason: 'context_window_exceeded', providerErrorCode: 'ContextWindowExceeded' });
+        const unknown = createCodexAppServerTurnFailure({ value: { error: {
+            message: 'secret credential and transcript', codexErrorInfo: 'secret-credential',
+        } } });
+        expect(unknown).toMatchObject({ failureReason: 'unclassified_provider_error' });
+        expect(unknown).not.toHaveProperty('providerErrorCode');
+        expect(JSON.stringify(unknown)).not.toContain('secret');
+    });
     it('preserves bounded model entitlement evidence for host recovery', () => {
         const failure = createCodexAppServerTurnFailure({
             value: {

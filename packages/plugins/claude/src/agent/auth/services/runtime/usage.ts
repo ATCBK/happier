@@ -183,8 +183,9 @@ function readFirstField(records: readonly Record<string, unknown>[], names: read
 
 function collectSyntheticApiErrorRecords(record: Record<string, unknown>): Record<string, unknown>[] {
   const records = [record];
-  const error = isRecord(record.error) ? record.error : null;
-  if (error) records.push(error);
+  for (const key of ['error', 'response', 'payload', 'data']) {
+    if (isRecord(record[key])) records.push(record[key]);
+  }
   const message = isRecord(record.message) ? record.message : null;
   if (message) {
     records.push(message);
@@ -208,11 +209,17 @@ function containsRateLimitEvidence(value: unknown): boolean {
     value.error,
     value.code,
     value.type,
+    value.error_type,
+    value.errorType,
     value.kind,
     value.message,
     value.detail,
     value.details,
     value.description,
+    value.text,
+    value.content,
+    value.last_assistant_message,
+    value.lastAssistantMessage,
   ].some(containsRateLimitEvidence);
 }
 
@@ -260,25 +267,10 @@ function containsProviderCapacityEvidence(value: unknown): boolean {
 function readSyntheticProviderLimitId(records: readonly Record<string, unknown>[]): string | undefined {
   if (records.some(containsProviderCapacityEvidence)) return 'server_overloaded';
   if (records.some(containsTransientThrottleEvidence)) return 'transient';
-  for (const names of [
-    ['providerLimitId', 'provider_limit_id', 'limit', 'limitType', 'limit_type'],
-    ['code', 'error', 'type', 'kind'],
-  ] as const) {
-    for (const record of records) {
-      for (const name of names) {
-        const text = readString(record[name]);
-        if (!text) continue;
-        if (containsRateLimitEvidence(text)) return 'rate_limit';
-        if (
-          name === 'providerLimitId'
-          || name === 'provider_limit_id'
-          || name === 'limit'
-          || name === 'limitType'
-          || name === 'limit_type'
-        ) {
-          return text;
-        }
-      }
+  for (const record of records) {
+    for (const name of ['providerLimitId', 'provider_limit_id', 'limit', 'limitType', 'limit_type']) {
+      const text = readString(record[name]);
+      if (text) return text;
     }
   }
   return undefined;
@@ -308,6 +300,7 @@ function readSyntheticRetryAfterMs(records: readonly Record<string, unknown>[]):
 
 function mapSyntheticClaudeApiErrorToUsageDetails(
   record: Record<string, unknown>,
+  knownProviderFailure = false,
 ): NormalizedClaudeUsageLimitDetails | null {
   const records = collectSyntheticApiErrorRecords(record);
   const status = readHttpStatus(readFirstField(records, [
@@ -319,9 +312,9 @@ function mapSyntheticClaudeApiErrorToUsageDetails(
     'statusCode',
     'status_code',
   ]));
-  const hasRateLimitEvidence = containsRateLimitEvidence(record);
-  const hasTransientThrottleEvidence = containsTransientThrottleEvidence(record);
-  const hasProviderCapacityEvidence = status === 529 || containsProviderCapacityEvidence(record);
+  const hasRateLimitEvidence = records.some(containsRateLimitEvidence);
+  const hasTransientThrottleEvidence = records.some(containsTransientThrottleEvidence);
+  const hasProviderCapacityEvidence = status === 529 || records.some(containsProviderCapacityEvidence);
   const hasCompatibleStatus = status === null || status === 429 || status === 529;
   const isAssistantApiError =
     (record.type === 'assistant' || record.type === 'assistant_response')
@@ -329,24 +322,32 @@ function mapSyntheticClaudeApiErrorToUsageDetails(
     && (hasRateLimitEvidence || hasTransientThrottleEvidence || hasProviderCapacityEvidence || status === 429)
     && hasCompatibleStatus;
   const isResultApiError =
-    record.type === 'result'
+    (record.type === 'result' || knownProviderFailure)
     && hasCompatibleStatus
     && (status === 429 || hasRateLimitEvidence || hasTransientThrottleEvidence || hasProviderCapacityEvidence)
     && (
       status === 429
       || status === 529
       || record.is_error === true
+      || knownProviderFailure
       || readString(record.subtype)?.includes('error') === true
     );
   const isStructuredCapacityError = hasProviderCapacityEvidence && status === 529;
   if (!isAssistantApiError && !isResultApiError && !isStructuredCapacityError) return null;
 
-  const timing = parseClaudeUsageLimitReset({ body: record, nowMs: Date.now() });
+  const timing = parseClaudeUsageLimitReset({
+    headers: readHeaders(record),
+    body: {
+      ...record,
+      'retry-after': readFirstField(records, ['retry-after', 'retryAfter', 'retry_after']),
+    },
+    nowMs: Date.now(),
+  });
   const resetAtMs = readSyntheticResetAtMs(records) ?? timing.resetAtMs;
   const retryAfterMs = readSyntheticRetryAfterMs(records) ?? timing.retryAfterMs;
   const providerLimitId = hasProviderCapacityEvidence
     ? 'server_overloaded'
-    : readSyntheticProviderLimitId(records) ?? (status === 429 ? 'rate_limit' : undefined);
+    : readSyntheticProviderLimitId(records);
 
   return {
     v: 1,
@@ -366,6 +367,21 @@ function mapSyntheticClaudeApiErrorToUsageDetails(
     action: null,
     connectedService: null,
   };
+}
+
+// Known provider failures (including StopFailure) use the same evidence parser as
+// SDK API-error records, without inventing a quota-window ID from an error class.
+export function mapClaudeProviderFailureToUsageDetails(evidence: unknown): NormalizedClaudeUsageLimitDetails | null {
+  if (isRecord(evidence) && (
+    evidence.type === 'rate_limit_event'
+    || evidence.type === 'assistant'
+    || evidence.type === 'assistant_response'
+    || evidence.type === 'result'
+  )) {
+    return mapClaudeRateLimitEventToUsageDetails(evidence);
+  }
+  return mapSyntheticClaudeApiErrorToUsageDetails(isRecord(evidence) ? evidence : { error: evidence }, true)
+    ?? mapClaudeHeadersToUsageDetails(evidence);
 }
 
 function mapClaudeHeadersToUsageDetails(value: unknown): NormalizedClaudeUsageLimitDetails | null {

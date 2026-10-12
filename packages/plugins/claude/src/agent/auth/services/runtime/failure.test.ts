@@ -115,6 +115,16 @@ function createNativeAuthHarness(params: Readonly<{
 }
 
 describe('Claude runtime auth service classification', () => {
+  it('classifies unnamed provider 429 failures without requiring an SDK event envelope', async () => {
+    const { createClaudeConnectedServiceRuntimeAuthAdapter } = await import('./index.js');
+    const result = createClaudeConnectedServiceRuntimeAuthAdapter().classifyRuntimeAuthFailure({
+      target: { agentId: 'claude' },
+      selection: { serviceId: 'claude-subscription', activeProfileId: 'team', groupId: 'coders' },
+      error: { status: 429, error: { type: 'rate_limit_error', retryAfterMs: 1500 } },
+    });
+    expect(result).toMatchObject({ kind: 'usage_limit', retryAfterMs: 1500 });
+    expect(result?.providerLimitId).toBeNull();
+  });
   it('attaches source provider account identity and group generation to runtime usage-limit classifications', async () => {
     const { createClaudeConnectedServiceRuntimeAuthAdapter } = await import('./index.js');
     const adapter = createClaudeConnectedServiceRuntimeAuthAdapter();
