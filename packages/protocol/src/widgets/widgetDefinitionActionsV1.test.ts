@@ -15,6 +15,71 @@ const descriptor = { sizeDeclaration: { sizes: ['medium', 'full'] as ('medium' |
     inputSchema: { type: 'object' as const, properties: { session: { type: 'object' as const, properties: { serverId: { type: 'string' as const }, sessionId: { type: 'string' as const } }, required: ['serverId', 'sessionId'], additionalProperties: false } }, required: ['session'], additionalProperties: false },
     sessionInputPath: 'session' };
 describe('widget definition semantic Actions', () => {
+    it('promotes HTML through the real Save Action into an independent library bundle with its admitted policy', async () => {
+        const boundary = createWorkBoardArtifactBoundary();
+        const port = createWidgetDefinitionArtifactPortV1({ ...boundary.transport,
+            read: async (...args) => { const row = await boundary.transport.read(...args); return row ? { ...row, ownerAccountId: account.accountId } : null; },
+            list: async args => { const page = await boundary.transport.list(args); return { ...page, items: page.items.map(row => ({ ...row, ownerAccountId: account.accountId })) }; },
+        }, { accountId: account.accountId });
+        const source = { v: 1, entrypoint: 'index.html', files: {
+            'index.html': { mime: 'text/html', contentBase64: 'PGgxPlJlc3VsdDwvaDE+' },
+            'data.json': { mime: 'application/json', contentBase64: 'e30=' },
+        } };
+        const item = SessionSurfaceItemV1Schema.parse({ v: 1, title: 'Result', frame: 'frameless', height: { mode: 'auto', fallback: 'regular' },
+            source: { kind: 'hostedHtml', source, requestedCapabilities: { networkOrigins: ['https://cdn.example.com'] } } });
+        let currentItem = item;
+        const reader = createSessionWidgetDefinitionSourceReaderV1({ sessionBoardAction: async () => ({ v: 1, serverId: account.serverId, sessionId: 'session-a',
+            capabilities: { readTranscript: true, editSessionRecords: false }, layout: null, items: [{ itemId: 'source', revision, title: currentItem.title, sourceKind: currentItem.source.kind, item: currentItem }],
+            incomplete: false, page: { cursor: null, hasNext: false } }), readInstalledDescriptor: async () => null });
+        const executor = createActionExecutor({ widgetAccountScope: () => account, widgetDefinitionArtifacts: port, readSessionWidgetDefinitionSource: reader });
+        const result = await executor.execute('widgets.definition.saveFromSession', { account, session: { serverId: account.serverId, sessionId: 'session-a' },
+            itemId: 'source', artifactId: 'saved-html' }, { surface: 'ui', authority: 'present_user', serverId: account.serverId, bypassApprovals: true });
+        expect(result).toMatchObject({ ok: true, result: { definition: { id: 'saved-html', body: {
+            kind: 'html', source, requestedCapabilities: { networkOrigins: ['https://cdn.example.com'] },
+        } }, suggestedBindings: {} } });
+        const saved = await port.get('saved-html');
+        expect(saved?.body).toEqual({ kind: 'html', source, requestedCapabilities: { networkOrigins: ['https://cdn.example.com'] } });
+        expect(await port.list()).toMatchObject([{ artifactId: 'saved-html', bodyKind: 'html' }]);
+        currentItem = SessionSurfaceItemV1Schema.parse({ ...item, source: { kind: 'widget', instance: {
+            v: 1, id: 'source', definition: { kind: 'inline', definition: saved }, bindings: {}, networkOverride: { network: 'none' },
+        } } });
+        expect(await executor.execute('widgets.definition.saveFromSession', { account, session: { serverId: account.serverId, sessionId: 'session-a' },
+            itemId: 'source', artifactId: 'saved-inline-html' }, { surface: 'ui', authority: 'present_user', serverId: account.serverId, bypassApprovals: true }))
+            .toMatchObject({ ok: true, result: { definition: { networkOverride: { network: 'none' },
+                body: { kind: 'html', source, requestedCapabilities: { network: 'none' } } } } });
+        source.files['index.html'].contentBase64 = 'PGgxPkVkaXQ8L2gxPg==';
+        expect((await port.get('saved-html'))?.body).toEqual(saved?.body);
+        expect(await executor.execute('widgets.definition.create', { account, artifactId: 'agent-html', definition: {
+            name: 'New HTML', body: saved!.body, inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false },
+            sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+        } }, { surface: 'agent', serverId: account.serverId, defaultSessionId: 'session-a',
+            actionCaller: { kind: 'session', sessionId: 'session-a', starterDepth: 0, turnDepth: 0 }, actionRequestId: 'html-create' }))
+            .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        expect(await port.get('agent-html')).toBeNull();
+    });
+
+    it('defers saving Session content until the canonical approval owner admits the library copy', async () => {
+        const boundary = createWorkBoardArtifactBoundary();
+        const port = createWidgetDefinitionArtifactPortV1({ ...boundary.transport,
+            read: async (...args) => { const row = await boundary.transport.read(...args); return row ? { ...row, ownerAccountId: account.accountId } : null; },
+            list: async args => { const page = await boundary.transport.list(args); return { ...page, items: page.items.map(row => ({ ...row, ownerAccountId: account.accountId })) }; },
+        }, { accountId: account.accountId });
+        const item = SessionSurfaceItemV1Schema.parse({ v: 1, title: 'Session output', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
+            source: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Private output' } } } });
+        const reader = createSessionWidgetDefinitionSourceReaderV1({ sessionBoardAction: async () => ({ v: 1, serverId: account.serverId, sessionId: 'session-a',
+            capabilities: { readTranscript: true, editSessionRecords: true }, layout: null, items: [{ itemId: 'source', revision, title: item.title, sourceKind: 'declarative', item }],
+            incomplete: false, page: { cursor: null, hasNext: false } }), readInstalledDescriptor: async () => null });
+        const requests: unknown[] = [];
+        const executor = createActionExecutor({ widgetAccountScope: () => account, widgetDefinitionArtifacts: port, readSessionWidgetDefinitionSource: reader,
+            approvalsCreate: async ({ request }) => { requests.push(request); return { artifactId: 'save-approval' }; },
+        });
+        expect(await executor.execute('widgets.definition.saveFromSession', { account, session: { serverId: account.serverId, sessionId: 'session-a' }, itemId: 'source', artifactId: 'saved' },
+            { surface: 'cli', serverId: account.serverId, defaultSessionId: 'session-a', actionCaller: { kind: 'host' }, actionRequestId: 'save-from-session' }))
+            .toEqual({ ok: true, result: { kind: 'approval_request_created', artifactId: 'save-approval', actionId: 'widgets.definition.saveFromSession' } });
+        expect(requests).toMatchObject([{ actionId: 'widgets.definition.saveFromSession', approval: { flow: 'deferred', result: 'required' } }]);
+        expect(await port.get('saved')).toBeNull();
+        expect(item.source).toEqual({ kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Private output' } } });
+    });
     it('promotes a shared live definition into configurable Session inputs rather than retaining the source Session pin', async () => {
         const b = createWorkBoardArtifactBoundary();
         const port = createWidgetDefinitionArtifactPortV1({ ...b.transport,
@@ -51,6 +116,7 @@ describe('widget definition semantic Actions', () => {
         }, { accountId: 'owner' });
         const item = SessionSurfaceItemV1Schema.parse({ v: 1, title: 'Session checks', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
             source: { kind: 'widget', instance: { v: 1, id: 'source-item', definition: { kind: 'installed', surface: { pluginId: 'com.acme.test', localId: 'checks' } },
+                networkOverride: { network: 'none' },
                 bindings: { session: { kind: 'value', value: { serverId: 'home', sessionId: 'session-a' } } } } } });
         const requests: string[] = [];
         const reader = createSessionWidgetDefinitionSourceReaderV1({
@@ -69,7 +135,7 @@ describe('widget definition semantic Actions', () => {
             suggestedBindings: { session: { kind: 'context', slot: 'session' } } } });
         expect(requests).toEqual(['session.board.get']);
         expect(item.source.kind === 'widget' && item.source.instance.bindings.session).toEqual({ kind: 'value', value: { serverId: 'home', sessionId: 'session-a' } });
-        expect(await port.get('promoted')).toMatchObject({ sessionInputPath: 'session' });
+        expect(await port.get('promoted')).toMatchObject({ sessionInputPath: 'session', networkOverride: { network: 'none' } });
         const wrongAccount = await executor.execute('widgets.definition.get', { account: { ...account, accountId: 'other' }, artifactId: 'promoted' }, { surface: 'cli', serverId: 'home' });
         expect(wrongAccount).toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
     });

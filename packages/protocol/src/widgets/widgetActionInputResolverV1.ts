@@ -3,13 +3,14 @@ import { resolveEffectiveInputFields } from '../inputs/inputFieldRuntime.js';
 import { readInputPath } from '../inputs/inputPredicates.js';
 import type { JsonValue } from '../json/strictJsonValue.js';
 import type { WidgetActionInputResolverV1 } from './actionsV1.js';
-import { resolveConfiguredWidgetInputs, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
+import { isWidgetTargetHostableV1, resolveConfiguredWidgetInputs, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
 import { WidgetInstanceV1Schema, type WidgetBindingResolutionInputV1, type WidgetInputIssueV1, type WidgetInputBindingsV1, type WidgetInstanceV1 } from './widgetInstanceV1.js';
 import { readInputFieldOptionsConstraint, validateInputFieldSchema, validateInputFieldValue, type ResolvedInputTypeV1 } from '../inputs/inputTypeRuntime.js';
 import { hasValidPluginConnectedAccountPurposeBindingsV2 } from '../plugins/actions/v2.js';
 import type { PluginJsonSchemaV2 } from '../plugins/contributions/publicTypes.js';
 import { WidgetConnectedAccountPurposeBindingV1Schema } from './widgetConnectedAccountPurposeBindingV1.js';
 import { WidgetSizeDeclarationV1Schema } from './widgetPresentationV1.js';
+import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { readWidgetConnectedAccountPurposeV1 } from './widgetViewerPurposeV1.js';
 import type { PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import type { PluginProjectedResourceV2 } from '../daemon/contributionRegistryProjection.js';
@@ -110,6 +111,9 @@ export function createWidgetActionInputResolverV1(ports: WidgetActionInputResolv
         const descriptor = await ports.readDescriptor(request);
         request.signal?.throwIfAborted();
         if (!descriptor) return { status: 'unavailable', fields: [{ path: 'input', status: 'unavailable', reasonCode: 'widget_type_unavailable' }] };
+        if (!isWidgetTargetHostableV1(descriptor, request.ref.surface.owner.kind)) {
+            return { status: 'denied', fields: [{ path: 'input', status: 'denied', reasonCode: 'widget_target_surface_unsupported' }] };
+        }
         request.instance = inheritWidgetGroupViewerBindingsV1(request.instance, groupBindings, descriptor.inputs?.fields ?? []);
         const savedInstance = WidgetInstanceV1Schema.parse(request.instance);
         const [surfaceContext, currentViewer] = await Promise.all([ports.readContext(request), ports.readViewerValues(request)]);
@@ -117,6 +121,15 @@ export function createWidgetActionInputResolverV1(ports: WidgetActionInputResolv
         request.signal?.throwIfAborted();
         const viewerPaths = request.admission === 'configuration'
             ? Object.entries(savedInstance.bindings).filter(([, binding]) => binding.kind === 'viewer').map(([path]) => path) : [];
+        const contextPaths = request.admission === 'configuration' && request.configurationPatch
+            ? Object.entries(savedInstance.bindings).flatMap(([path, binding]) => {
+                const field = descriptor.inputs?.fields.find(field => field.path === path);
+                return binding.kind === 'context' && field && field.contextMode !== 'own'
+                    && !request.configurationPatch!.paths.includes(path)
+                    && sameStrictJsonValue(binding, request.configurationPatch!.previousBindings[path])
+                    && providedContext[binding.slot] === undefined ? [path] : [];
+            }) : [];
+        const deferredPaths = [...viewerPaths, ...contextPaths];
         const declarations = descriptor.connectedAccountPurposeBindings ?? [];
         const declarationIssues: WidgetInputIssueV1[] = viewerPaths.flatMap(path => {
             const binding = savedInstance.bindings[path]!;
@@ -136,13 +149,13 @@ export function createWidgetActionInputResolverV1(ports: WidgetActionInputResolv
         const hostViewerIssues = (currentViewer.fields ?? []).filter(field => !viewerPaths.includes(field.path)
             || field.status !== 'selection_required' || field.reasonCode !== 'widget_viewer_connection_missing');
         const viewerIssues = [...hostViewerIssues, ...declarationIssues.filter(issue => !hostViewerIssues.some(field => field.path === issue.path))];
-        const admittedDescriptor = viewerPaths.length ? { ...descriptor,
-            inputs: { fields: (descriptor.inputs?.fields ?? []).map(field => viewerPaths.includes(field.path)
-                ? { ...field, required: false, requiredWhen: undefined } : field) },
-            ...(descriptor.inputSchema ? { inputSchema: configurationSchema(descriptor.inputSchema, viewerPaths) } : {}),
+        const admittedDescriptor = deferredPaths.length ? { ...descriptor,
+            inputs: { fields: (descriptor.inputs?.fields ?? []).filter(field => !contextPaths.includes(field.path))
+                .map(field => viewerPaths.includes(field.path) ? { ...field, required: false, requiredWhen: undefined } : field) },
+            ...(descriptor.inputSchema ? { inputSchema: configurationSchema(descriptor.inputSchema, deferredPaths) } : {}),
         } : descriptor;
-        const instance = viewerPaths.length ? { ...savedInstance,
-            bindings: Object.fromEntries(Object.entries(savedInstance.bindings).filter(([path]) => !viewerPaths.includes(path))) } : savedInstance;
+        const instance = deferredPaths.length ? { ...savedInstance,
+            bindings: Object.fromEntries(Object.entries(savedInstance.bindings).filter(([path]) => !deferredPaths.includes(path))) } : savedInstance;
         const resolved = resolveConfiguredWidgetInputs({ instance, descriptor: admittedDescriptor, providedContext, viewerValues: currentViewer.values });
         if (resolved.status !== 'ready' || viewerIssues.length) {
             const fields = [...viewerIssues, ...(resolved.status === 'ready' ? [] : resolved.fields.filter(field =>
@@ -163,7 +176,8 @@ export function createWidgetActionInputResolverV1(ports: WidgetActionInputResolv
             const issue = (result: Exclude<ReturnType<typeof validateInputFieldValue>, { status: 'valid' }>) => ({ path: field.path,
                 ...result, reasonCode: result.reasonCode === 'input_type_option_invalid' ? 'widget_input_option_unavailable' : result.reasonCode });
             if (schema.status !== 'valid') { issues.push(issue(schema)); continue; }
-            const constraint = readInputFieldOptionsConstraint(field, type, request.instance.bindings[field.path]?.kind === 'viewer');
+            const contextBound = request.instance.bindings[field.path]?.kind === 'context';
+            const constraint = readInputFieldOptionsConstraint(field, type, request.instance.bindings[field.path]?.kind === 'viewer', { contextBound, value });
             const options = constraint.kind === 'static' ? constraint.options : constraint.kind === 'dynamic'
                 ? await ports.resolveOptions(field, resolved.input, request) : undefined;
             request.signal?.throwIfAborted();
@@ -179,7 +193,7 @@ export function createWidgetActionInputResolverV1(ports: WidgetActionInputResolv
                 }
             }
             const admitted = validateInputFieldValue({ field, value, type, options,
-                viewerPurpose: request.instance.bindings[field.path]?.kind === 'viewer' });
+                viewerPurpose: request.instance.bindings[field.path]?.kind === 'viewer', contextBound });
             if (admitted.status !== 'valid') issues.push(issue(admitted));
         }
         if (!issues.length) return resolved;

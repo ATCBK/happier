@@ -3,11 +3,13 @@ import type { ActionExecutorContext, ActionExecutorDeps } from '../actions/execu
 import { SessionSurfaceItemV1Schema } from '../sessions/board/item.js';
 import { WidgetInstanceActionInputSchemasV1 } from './actionsV1.js';
 import { admitWidgetActionSurfaceV1 } from './widgetActionScopeV1.js';
-import { projectWidgetDefinitionForSharedPublicationV1 } from './widgetDefinitionV1.js';
+import { projectWidgetDefinitionForSharedPublicationV1, readWidgetDefinitionNetworkOverrideV1 } from './widgetDefinitionV1.js';
+import { intersectUiSurfaceNetworkPoliciesV1, normalizeUiSurfaceCapabilityRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
+import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 
 const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
 
-/** Explicit shared copies enter approval custody with their exact admitted body, not a private pointer. */
+/** Copies capture stored egress before admission; Session publication also captures the body. */
 export async function prepareWidgetDefinitionPublicationV1(
   deps: Pick<ActionExecutorDeps, 'widgetAccountScope' | 'widgetDefinitionArtifacts'>,
   input: unknown, context: ActionExecutorContext,
@@ -15,24 +17,37 @@ export async function prepareWidgetDefinitionPublicationV1(
   const parsed = WidgetInstanceActionInputSchemasV1['widgets.item.add'].safeParse(input);
   if (!parsed.success) return failure('invalid_parameters');
   const args = parsed.data;
-  if (args.surface.owner.kind !== 'sessionBoard') return { ok: true, input: args };
   const scopeFailure = await admitWidgetActionSurfaceV1(deps, args.surface, context);
   if (scopeFailure) return scopeFailure;
   let instance = args.instance;
+  let definition = instance.definition.kind === 'inline' ? instance.definition.definition : null;
   if (instance.definition.kind === 'artifact') {
     if (!deps.widgetDefinitionArtifacts) return failure('widget_definition_unavailable');
     try {
-      const definition = await deps.widgetDefinitionArtifacts.get(instance.definition.artifactId, context.signal);
+      definition = await deps.widgetDefinitionArtifacts.get(instance.definition.artifactId, context.signal);
       const retired = await admitWidgetActionSurfaceV1(deps, args.surface, context);
       if (retired) return retired;
       if (!definition) return failure('widget_definition_not_found');
-      instance = { ...instance, definition: { kind: 'inline', definition: projectWidgetDefinitionForSharedPublicationV1(definition) } };
+      if (args.surface.owner.kind === 'sessionBoard') instance = { ...instance,
+        definition: { kind: 'inline', definition: projectWidgetDefinitionForSharedPublicationV1(definition) } };
     } catch (error) {
       if (context.signal?.aborted) return failure('cancelled');
       return failure(error instanceof Error && 'code' in error && typeof error.code === 'string'
         ? error.code : 'widget_definition_failed');
     }
   }
+  const storedNetwork = definition && readWidgetDefinitionNetworkOverrideV1(definition);
+  if (storedNetwork) {
+    const ceiling = normalizeUiSurfaceCapabilityRequestV1(storedNetwork);
+    const requested = normalizeUiSurfaceCapabilityRequestV1(instance.networkOverride ?? storedNetwork);
+    if (!ceiling || !requested) return failure('invalid_parameters');
+    const effective = intersectUiSurfaceNetworkPoliciesV1(requested, ceiling);
+    if (effective.network !== requested.network || !sameStrictJsonValue(effective.networkOrigins, requested.networkOrigins)) {
+      return failure('widget_network_change_requires_action');
+    }
+    instance = { ...instance, networkOverride: instance.networkOverride ?? storedNetwork };
+  }
+  if (args.surface.owner.kind !== 'sessionBoard') return { ok: true, input: { ...args, instance } };
   // The same Board grammar owns the privacy boundary at preview and at final upsert.
   const item = SessionSurfaceItemV1Schema.safeParse({ v: 1, title: instance.displayName ?? '',
     frame: 'card', height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'widget', instance } });

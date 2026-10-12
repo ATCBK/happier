@@ -18,6 +18,8 @@ export * from './widgetDefinitionPromotionV1.js';
 export * from './definitionActionsV1.js';
 export * from './widgetSnapshotV1.js';
 export * from './widgetSurfaceArtifactV1.js';
+export { createUsageWidgetPresetFragments, createUsageWidgetPresets, USAGE_WIDGET_PRESET_IDS,
+    type UsageWidgetPresetId } from './usageWidgetPresetsV1.js';
 export * from './widgetLayoutFragmentV1.js';
 export * from './widgetLayoutFragmentArtifactV1.js';
 export * from './fragmentActionsV1.js';

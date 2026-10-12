@@ -5,12 +5,23 @@ import { readWidgetActionSurfacePortV1 } from './executeWidgetInstanceActionV1.j
 import { WidgetSurfaceReadV1Schema, type WidgetSurfaceReadV1 } from './actionsV1.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 
+export type WidgetActionAccountScopeV1 = Readonly<{
+  serverId: string;
+  accountId: string;
+  /** Host-owned identity aliases; absent on hosts whose routing ids are already canonical. */
+  isSameServerId?: (serverId: string) => boolean;
+}>;
+
+function isWidgetActionServerInScopeV1(scope: WidgetActionAccountScopeV1, serverId: string): boolean {
+  return scope.isSameServerId?.(serverId) ?? scope.serverId === serverId;
+}
+
 /** Captured Account routing is admitted before dispatch or a mounted owner's destination read. */
 export function readWidgetActionAccountScopeAdmissionV1(
   deps: Pick<ActionExecutorDeps, 'widgetAccountScope'>,
   surface: WidgetSurfaceRefV1,
   context: ActionExecutorContext,
-): Readonly<{ ok: true; scope: Readonly<{ serverId: string; accountId: string }> }> | ActionExecuteFailure {
+): Readonly<{ ok: true; scope: WidgetActionAccountScopeV1 }> | ActionExecuteFailure {
   const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
   if (context.signal?.aborted) return failure('cancelled');
   let scope: ReturnType<NonNullable<ActionExecutorDeps['widgetAccountScope']>>;
@@ -18,7 +29,7 @@ export function readWidgetActionAccountScopeAdmissionV1(
   catch { return failure('widget_scope_unavailable'); }
   if (!scope) return failure('widget_scope_unavailable');
   const contextHomeId = context.serverIdentityId ?? context.serverId;
-  if (scope.serverId !== surface.serverId || contextHomeId && contextHomeId !== surface.serverId)
+  if (!isWidgetActionServerInScopeV1(scope, surface.serverId) || contextHomeId && !isWidgetActionServerInScopeV1(scope, contextHomeId))
     return failure('server_target_mismatch');
   if (scope.accountId !== surface.accountId && !(surface.owner.kind === 'project' && surface.artifactId || surface.owner.kind === 'workBoard'))
     return failure('account_target_mismatch');

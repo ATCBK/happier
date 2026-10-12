@@ -68,6 +68,7 @@ export function createHomeWidgetActionPortV1(port: HomeHubArtifactPortV1): Widge
           case 'frame': domain = { kind: 'frameStyle', sectionId: instanceId, frameStyle: intent.frameStyle }; break;
           case 'inputs': domain = { kind: 'widget_inputs', instanceId, bindings: intent.bindings, ...(intent.paths ? { paths: [...intent.paths] } : {}) }; break;
           case 'inputs_reset': domain = { kind: 'widget_inputs_reset', instanceId, ...(intent.paths ? { paths: [...intent.paths] } : {}) }; break;
+          case 'network': domain = intent; break;
           case 'move': {
             if ('nativeIndex' in intent && intent.tabId) return { ok: false, errorCode: 'widget_placement_unsupported', error: 'widget_placement_unsupported' };
             const layout = await port.read(signal);

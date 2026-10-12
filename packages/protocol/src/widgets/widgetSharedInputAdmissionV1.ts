@@ -49,10 +49,18 @@ export function getWidgetSharedInputIssuesV1(instance: unknown): readonly Widget
   const ref = instance.definition;
   if (!ref || typeof ref !== 'object' || !('kind' in ref) || ref.kind !== 'inline' || !('definition' in ref)) return issues;
   const definition = WidgetDefinitionV1StoredSchema.safeParse(ref.definition);
-  if (definition.success && definition.data.body.kind === 'declarative'
-    && readPluginDeclarativeDataSourcesV1(definition.data.body.document).some(source => source.kind === 'resource' && source.input !== undefined)) {
-    issues.push({ instanceId: 'id' in instance && typeof instance.id === 'string' ? instance.id : '',
-      path: ['definition'], reasonCode: 'widget_shared_resource_input_literal' });
+  if (definition.success) {
+    switch (definition.data.body.kind) {
+      case 'installed':
+      case 'builtin':
+      case 'html': break;
+      case 'declarative':
+        if (readPluginDeclarativeDataSourcesV1(definition.data.body.document).some(source => source.kind === 'resource' && source.input !== undefined)) {
+          issues.push({ instanceId: 'id' in instance && typeof instance.id === 'string' ? instance.id : '',
+            path: ['definition'], reasonCode: 'widget_shared_resource_input_literal' });
+        }
+        break;
+    }
   }
   return issues;
 }

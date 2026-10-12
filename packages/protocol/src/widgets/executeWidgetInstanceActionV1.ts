@@ -30,10 +30,12 @@ const surfacePort = readWidgetActionSurfacePortV1;
 export async function admitWidgetInstanceConfigurationV1(
   deps: ActionExecutorDeps, ref: WidgetInstanceRefV1, instance: WidgetInstanceV1, context: ActionExecutorContext,
   groupBindings?: WidgetInstanceV1['bindings'],
+  configurationPatch?: Parameters<NonNullable<ActionExecutorDeps['widgetInputs']>['resolve']>[0]['configurationPatch'],
 ): Promise<Extract<ActionExecuteResult, { ok: false }> | null> {
   if (!deps.widgetInputs) return failure('widget_inputs_unavailable');
   const validation = await deps.widgetInputs.resolve({ ref, instance, context, admission: 'configuration',
     ...(groupBindings ? { groupBindings } : {}),
+    ...(configurationPatch ? { configurationPatch } : {}),
     ...(context.signal ? { signal: context.signal } : {}) });
   context.signal?.throwIfAborted();
   return validation.status === 'ready' ? null : { ...failure('widget_inputs_invalid'), details: validation };
@@ -199,7 +201,11 @@ export async function executeWidgetInstanceActionV1(
   if (actionId === 'widgets.catalog.list') {
     if (!deps.widgetCatalog) return failure('widget_catalog_unavailable');
     const catalog = WidgetInstanceActionInputSchemasV1[actionId].parse(args);
-    if (catalog.boundSession && catalog.boundSession.serverId !== surface.serverId) return failure('server_target_mismatch');
+    if (catalog.boundSession) {
+      const boundScope = readWidgetActionAccountScopeAdmissionV1(deps,
+        { serverId: catalog.boundSession.serverId, accountId: surface.accountId, owner: surface.owner, ...(surface.artifactId ? { artifactId: surface.artifactId } : {}) }, context);
+      if (!boundScope.ok) return boundScope;
+    }
     const source = await deps.widgetCatalog.list(surface, context, context.signal, catalog.boundSession);
     const failed = ActionExecuteFailureSchema.safeParse(source);
     if (failed.success) return failed.data;
@@ -305,7 +311,8 @@ export async function executeWidgetInstanceActionV1(
       const area = 'to' in move ? move.to.area : move.area;
       if (area && ('to' in move ? move.to.surface : surface).owner.kind !== 'project') return failure('widget_placement_unsupported');
       if ('to' in move) {
-        if (move.to.surface.serverId !== surface.serverId) return failure('server_target_mismatch');
+        const destinationScope = readWidgetActionAccountScopeAdmissionV1(deps, move.to.surface, context);
+        if (!destinationScope.ok) return destinationScope;
         if (move.to.surface.accountId !== surface.accountId) return failure('account_target_mismatch');
         if (move.to.tabId && move.to.surface.owner.kind !== 'sessionBoard') return failure('widget_placement_unsupported');
         let sameDocument = sameStrictJsonValue(move.to.surface, surface);
@@ -345,6 +352,7 @@ export async function executeWidgetInstanceActionV1(
       break;
     }
     case 'widgets.item.frame.set': intent = { kind: 'frame', instanceId: ref!.instanceId, frameStyle: WidgetInstanceActionInputSchemasV1[actionId].parse(args).frameStyle }; break;
+    case 'widgets.item.network.set': intent = { kind: 'network', instanceId: ref!.instanceId, network: WidgetInstanceActionInputSchemasV1[actionId].parse(args).network }; break;
     case 'widgets.item.inputs.reset': {
       const { paths } = WidgetInstanceActionInputSchemasV1[actionId].parse(args);
       // The owner removes choices from its current winner; stale Action reads cannot overwrite siblings.
@@ -354,7 +362,8 @@ export async function executeWidgetInstanceActionV1(
     case 'widgets.item.inputs.set': {
       const { bindings: selectedBindings, paths } = WidgetInstanceActionInputSchemasV1[actionId].parse(args);
       const bindings = setWidgetInputBindingsV1(existing!.bindings, selectedBindings, paths);
-      const refusal = await admitWidgetInstanceConfigurationV1(deps, ref!, { ...existing!, bindings }, context);
+      const refusal = await admitWidgetInstanceConfigurationV1(deps, ref!, { ...existing!, bindings }, context, undefined,
+        paths ? { paths, previousBindings: existing!.bindings } : undefined);
       if (refusal) return refusal;
       intent = { kind: 'inputs', instanceId: ref!.instanceId, bindings: selectedBindings, ...(paths ? { paths } : {}) };
       break;

@@ -23,7 +23,7 @@ export const WidgetLayoutFragmentActionOutputSchemasV1 = {
     'widgets.fragment.delete': z.object({ artifactId: id, status: z.literal('deleted') }).strict(),
 } as const;
 export type WidgetLayoutFragmentActionDepsV1 = Readonly<{
-    widgetAccountScope?: () => Readonly<{ serverId: string; accountId: string }> | null;
+    widgetAccountScope?: () => import('./widgetActionScopeV1.js').WidgetActionAccountScopeV1 | null;
     widgetLayoutFragmentArtifacts?: WidgetLayoutFragmentArtifactPortV1;
 }>;
 export function readWidgetLayoutFragmentActionAccountV1(input: unknown) {

@@ -63,7 +63,9 @@ export async function executeWidgetDefinitionActionV1(deps: WidgetDefinitionActi
             }
             case 'widgets.definition.saveFromSession': {
                 const args = WidgetDefinitionActionInputSchemasV1[actionId].parse(input);
-                if (args.session.serverId !== scope.serverId) return failure('server_target_mismatch');
+                const sourceRefusal = await admitWidgetActionSurfaceV1(deps,
+                    { serverId: args.session.serverId, accountId: scope.accountId, owner: { kind: 'home' } }, context);
+                if (sourceRefusal) return sourceRefusal;
                 if (!deps.readSessionWidgetDefinitionSource) return failure('widget_definition_promotion_unavailable');
                 const source = await deps.readSessionWidgetDefinitionSource({ session: args.session, itemId: args.itemId, context, signal: context.signal });
                 if ('ok' in source) return source;

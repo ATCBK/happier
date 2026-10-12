@@ -16,6 +16,33 @@ function boundary() {
 }
 
 describe('personal widget areas at the Account Artifact owner', () => {
+    it('reads and personalizes every untouched Usage preset without a mounted page supplying defaults', async () => {
+        const b = boundary();
+        const core: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'one', owner: { kind: 'corePage', pageId: 'usage', area: 'main' } };
+        const views = createWidgetAreaLayoutArtifactPortV1(b.dashboardTransport, { surface: core, isCurrent: () => true });
+        const listed = await views.list();
+        expect(listed.map(row => row.surface.owner.kind === 'corePage' ? row.surface.owner.layoutId : null))
+            .toEqual(['overview', 'costs', 'work', 'usage', 'plans', 'coach', 'how-you-work', 'sources']);
+        expect(b.rows.size).toBe(0);
+        for (const view of listed) {
+            const owner = createWidgetSurfaceArtifactPortV1(b.transport, { surface: view.surface, isCurrent: () => true });
+            const state = await owner.readState();
+            expect(state).toMatchObject({ kind: 'missing', preset: { isEdited: false }, layout: { name: view.name } });
+            expect(flattenWidgetLayoutWidgetsV1(state.layout.items).length).toBeGreaterThan(0);
+        }
+        expect(b.rows.size).toBe(0);
+        const owner = createWidgetSurfaceArtifactPortV1(b.transport, { surface: listed[0]!.surface, isCurrent: () => true });
+        const initial = await owner.readState();
+        const first = flattenWidgetLayoutWidgetsV1(initial.layout.items)[0]!.instance.id;
+        await owner.apply({ kind: 'rename', instanceId: first, displayName: 'Mine' });
+        const replay = createWidgetSurfaceArtifactPortV1(b.transport, { surface: listed[0]!.surface, isCurrent: () => true });
+        expect(await replay.readState()).toMatchObject({ kind: 'present', preset: { isEdited: true } });
+        const reset = await replay.resetPreset();
+        expect(reset.layout.items).toEqual(initial.layout.items);
+        expect(await replay.readState()).toMatchObject({ preset: { isEdited: false } });
+        await replay.undoReset(reset.undo!);
+        expect(flattenWidgetLayoutWidgetsV1((await replay.readState()).layout.items)[0]!.instance.displayName).toBe('Mine');
+    });
     it('lists the same edited state Reset uses through edit, reset, undo, rename and reorder', async () => {
         const b = boundary();
         const core: WidgetSurfaceRefV1 = { ...surface, owner: { kind: 'corePage', pageId: 'usage', area: 'main' } };

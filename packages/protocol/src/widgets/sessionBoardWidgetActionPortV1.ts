@@ -11,6 +11,7 @@ import { getWidgetSizeFootprintV1, normalizeWidgetSizeForSurfaceV1, resolveSessi
 import type { WidgetActionSurfacePortV1, WidgetMoveCaptureV1 } from './actionsV1.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { resetWidgetInputBindingsV1, setWidgetInputBindingsV1, type WidgetInputBindingsV1, type WidgetSurfaceRefV1 } from './widgetInstanceV1.js';
+import type { UiSurfaceNetworkRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 
 const fail = (errorCode: string): Extract<ActionExecuteResult, { ok: false }> => ({ ok: false, errorCode, error: errorCode });
 
@@ -33,12 +34,15 @@ function orderedWidgetEntries(board: SessionBoardGetResultV1): SessionBoardGetRe
  */
 export function editSessionBoardWidgetItemV1(
   item: SessionSurfaceItemV1,
-  edit: Readonly<{ kind: 'rename'; displayName?: string }> | Readonly<{ kind: 'inputs'; bindings: WidgetInputBindingsV1 }>,
+  edit: Readonly<{ kind: 'rename'; displayName?: string }> | Readonly<{ kind: 'inputs'; bindings: WidgetInputBindingsV1 }>
+    | Readonly<{ kind: 'network'; network: UiSurfaceNetworkRequestV1 }>,
 ): SessionSurfaceItemV1 | null {
   if (item.source.kind !== 'widget') return null;
   const instance = item.source.instance;
   const { displayName: _previousName, ...unnamed } = instance;
-  const next = edit.kind === 'inputs' ? { ...instance, bindings: edit.bindings } : { ...unnamed, ...(edit.displayName ? { displayName: edit.displayName } : {}) };
+  const next = edit.kind === 'inputs' ? { ...instance, bindings: edit.bindings }
+    : edit.kind === 'network' ? { ...instance, networkOverride: edit.network }
+    : { ...unnamed, ...(edit.displayName ? { displayName: edit.displayName } : {}) };
   const updated = SessionSurfaceItemV1Schema.safeParse({ ...item, source: { kind: 'widget', instance: next }, ...(edit.kind === 'rename' ? { title: edit.displayName ?? item.title } : {}) });
   return updated.success ? updated.data : null;
 }
@@ -173,10 +177,10 @@ export function createSessionBoardWidgetActionPortV1(
         return await call('session.board.item.remove', { sessionId, itemId: existing!.itemId,
           expectedItemRevision: intent.boardRevisions?.itemRevision ?? existing!.revision, expectedLayoutRevision: intent.boardRevisions?.layoutRevision ?? board.layout.revision }, null);
       }
-      if (intent.kind === 'rename' || intent.kind === 'inputs' || intent.kind === 'inputs_reset') {
+      if (intent.kind === 'rename' || intent.kind === 'inputs' || intent.kind === 'inputs_reset' || intent.kind === 'network') {
         const updated = editSessionBoardWidgetItemV1(item, intent.kind === 'inputs' || intent.kind === 'inputs_reset'
           ? { kind: 'inputs', bindings: intent.kind === 'inputs_reset' ? resetWidgetInputBindingsV1(instance.bindings, intent.paths) : setWidgetInputBindingsV1(instance.bindings, intent.bindings, intent.paths) }
-          : { kind: 'rename', ...(intent.displayName ? { displayName: intent.displayName } : {}) });
+          : intent.kind === 'network' ? intent : { kind: 'rename', ...(intent.displayName ? { displayName: intent.displayName } : {}) });
         if (!updated || updated.source.kind !== 'widget') return fail('invalid_widget_shared_content');
         return await call('session.board.item.upsert', { sessionId, itemId: existing!.itemId, expectedItemRevision: existing!.revision, item: updated }, updated.source.instance);
       }

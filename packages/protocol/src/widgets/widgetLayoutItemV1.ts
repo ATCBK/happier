@@ -3,6 +3,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { InputPathSchema } from '../inputs/inputFields.js';
+import { UiSurfaceNetworkRequestV1Schema } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 import { WidgetInstanceV1Schema, WidgetInputBindingsV1Schema, resetWidgetInputBindingsV1, setWidgetInputBindingsV1 } from './widgetInstanceV1.js';
 import { WidgetGroupWidthV1Schema, WidgetGridSizeV1Schema, WidgetProjectAreaV1Schema, resolveWidgetGroupWidthFitV1 } from './widgetPresentationV1.js';
 
@@ -17,6 +18,8 @@ export type WidgetLayoutWidgetV1 = z.infer<typeof WidgetLayoutWidgetV1Schema>;
 export const WidgetLayoutGroupV1Schema = lazyZodSchema(() => z.object({
   kind: z.literal('group'), id, children: z.array(WidgetLayoutWidgetV1Schema).min(1),
   width: WidgetGroupWidthV1Schema.default('full'), title: id.optional(),
+  // Host preset copy is translated by the viewer; a rename retires this presentation marker.
+  titleKey: id.optional(),
   frameStyle: frameStyle.default('card'), dividers: z.enum(['hairline', 'none']).default('hairline'),
   context: WidgetInputBindingsV1Schema.optional(), area: WidgetProjectAreaV1Schema.optional(),
 }).strict());
@@ -61,6 +64,7 @@ export const WidgetLayoutItemIntentV1Schema = lazyZodSchema(() => z.discriminate
   z.object({ kind: z.literal('frame'), instanceId: id, frameStyle: frameStyle.nullable() }).strict(),
   z.object({ kind: z.literal('inputs'), instanceId: id, bindings: WidgetInputBindingsV1Schema, paths: z.array(InputPathSchema).optional() }).strict(),
   z.object({ kind: z.literal('inputs_reset'), instanceId: id, paths: z.array(InputPathSchema).optional() }).strict(),
+  z.object({ kind: z.literal('network'), instanceId: id, network: UiSurfaceNetworkRequestV1Schema }).strict(),
 ]));
 export type WidgetLayoutItemIntentV1 = z.infer<typeof WidgetLayoutItemIntentV1Schema>;
 export class WidgetLayoutMutationErrorV1 extends Error {
@@ -137,7 +141,7 @@ export function applyWidgetLayoutItemIntentV1(current: readonly WidgetLayoutItem
         switch (intent.kind) {
           case 'group_set': next = { ...item, ...(intent.width ? { width: intent.width } : {}), ...(intent.dividers ? { dividers: intent.dividers } : {}) }; break;
           case 'group_inputs': next = { ...item, context: intent.bindings }; break;
-          case 'rename': { const { title: _old, ...rest } = item; next = { ...rest, ...(intent.displayName ? { title: intent.displayName } : {}) }; break; }
+          case 'rename': { const { title: _old, titleKey: _preset, ...rest } = item; next = { ...rest, ...(intent.displayName ? { title: intent.displayName } : {}) }; break; }
           case 'width': next = { ...item, width: intent.width }; break;
           case 'frame': next = { ...item, frameStyle: intent.frameStyle ?? 'card' }; break;
           default: throw new WidgetLayoutMutationErrorV1('widget_group_operation_unsupported');
@@ -150,6 +154,7 @@ export function applyWidgetLayoutItemIntentV1(current: readonly WidgetLayoutItem
           case 'frame': { const { frameStyle: _old, ...rest } = item; next = { ...rest, ...(intent.frameStyle ? { frameStyle: intent.frameStyle } : {}) }; break; }
           case 'inputs': next = { ...item, instance: { ...item.instance, bindings: setWidgetInputBindingsV1(item.instance.bindings, intent.bindings, intent.paths) } }; break;
           case 'inputs_reset': next = { ...item, instance: { ...item.instance, bindings: resetWidgetInputBindingsV1(item.instance.bindings, intent.paths) } }; break;
+          case 'network': next = { ...item, instance: { ...item.instance, networkOverride: intent.network } }; break;
           default: throw new WidgetLayoutMutationErrorV1('widget_group_not_found');
         }
       }

@@ -9,6 +9,7 @@ import { WidgetAreaLayoutSummaryV1Schema as LayoutSummarySchema, type WidgetArea
 import { WidgetAreaPresetUndoV1Schema as PresetUndoSchema, WidgetAreaPresetResultV1Schema as PresetResultSchema, WidgetAreaPresetStateV1Schema as PresetStateSchema } from './widgetSurfaceArtifactV1.js';
 import { SessionBoardItemPlacementV1Schema } from '../sessions/board/layoutOperations.js';
 import { SessionBoardTabIdSchema } from '../sessions/board/ids.js';
+import { UiSurfaceNetworkRequestV1Schema } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 import { SessionSystemRecordRevisionSchema } from '../sessions/system/records/sessionSystemRecordRevision.js';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import type { ActionExecutorContext } from '../actions/executor/types.js';
@@ -123,6 +124,7 @@ export const WidgetInstanceActionInputSchemasV1 = {
     z.object({ ref: groupRef, width: WidgetGroupWidthV1Schema }).strict(),
   ]),
   'widgets.item.frame.set': z.object({ ref: WidgetInstanceRefV1Schema, frameStyle: WidgetFrameStyleV1Schema.nullable() }).strict(),
+  'widgets.item.network.set': z.object({ ref: WidgetInstanceRefV1Schema, network: UiSurfaceNetworkRequestV1Schema }).strict(),
   'widgets.item.inputs.get': refInput,
   'widgets.item.inputs.validate': bindingsInput,
   'widgets.item.inputs.set': bindingsInput.extend({ paths: z.array(InputPathSchema).optional() }).strict(),
@@ -181,6 +183,7 @@ export const WidgetInstanceActionOutputSchemasV1 = {
   'widgets.item.add': mutationResult, 'widgets.item.remove': mutationResult,
   'widgets.item.move': mutationResult.extend({ fromRef: WidgetInstanceRefV1Schema.optional(), status: z.literal('moved').optional() }).strict(), 'widgets.item.rename': mutationResult,
   'widgets.item.size.set': mutationResult, 'widgets.item.frame.set': mutationResult,
+  'widgets.item.network.set': mutationResult,
   'widgets.item.inputs.get': inputsResult, 'widgets.item.inputs.validate': WidgetBindingResolutionV1Schema,
   'widgets.item.inputs.set': mutationResult, 'widgets.item.inputs.reset': mutationResult,
   'widgets.item.refresh': z.object({ ref: WidgetInstanceRefV1Schema, status: z.literal('refreshed') }).strict(),
@@ -216,6 +219,8 @@ export type WidgetActionSurfacePortV1 = Readonly<{
   captureMove?(surface: WidgetSurfaceRefV1, instanceId: string, context: ActionExecutorContext, signal?: AbortSignal): Promise<WidgetMoveCaptureV1 | Extract<ActionExecuteResult, { ok: false }>>;
 }>;
 export type WidgetActionInputResolverV1 = Readonly<{
-  resolve(args: Readonly<{ ref: WidgetInstanceRefV1; instance: WidgetInstanceV1; context: ActionExecutorContext; groupBindings?: WidgetInstanceV1['bindings']; admission?: 'configuration' | 'execution'; signal?: AbortSignal }>): Promise<WidgetBindingResolutionV1>;
+  resolve(args: Readonly<{ ref: WidgetInstanceRefV1; instance: WidgetInstanceV1; context: ActionExecutorContext; groupBindings?: WidgetInstanceV1['bindings']; admission?: 'configuration' | 'execution';
+    /** Owner-read bindings before an exact-path edit; absent mounted slots may retain only unchanged references. */
+    configurationPatch?: Readonly<{ paths: readonly string[]; previousBindings: WidgetInstanceV1['bindings'] }>; signal?: AbortSignal }>): Promise<WidgetBindingResolutionV1>;
   readSizeDeclaration(args: Readonly<{ ref: WidgetInstanceRefV1; instance: WidgetInstanceV1; context: ActionExecutorContext; groupBindings?: WidgetInstanceV1['bindings']; signal?: AbortSignal }>): Promise<WidgetSizeDeclarationV1 | null>;
 }>;

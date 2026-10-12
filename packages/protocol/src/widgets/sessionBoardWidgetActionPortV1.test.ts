@@ -14,6 +14,23 @@ const inventory = { v: 1, serverId: 'home', sessionId: 'shared', capabilities: {
   layout: null, items: [], incomplete: false, page: { hasNext: false, cursor: null } };
 
 describe('configured widget Session Board transport', () => {
+  it('edits a transcript widget network choice through the revision-checked item owner without a Board layout', async () => {
+    let saved: SessionSurfaceItemV1 = { ...item, destination: 'transcript' };
+    const port = createSessionBoardWidgetActionPortV1(async ({ actionId, input }) => {
+      if (actionId === 'session.board.get') return { ...inventory, items: [{ itemId: 'copy', revision,
+        title: 'Copy', sourceKind: 'widget', ...(input && typeof input === 'object' && 'itemIds' in input ? { item: saved } : {}) }] };
+      const request = SessionBoardItemUpsertInputV1Schema.parse(input);
+      expect(request.expectedItemRevision).toBe(revision);
+      expect(request).not.toHaveProperty('placement');
+      expect(request).not.toHaveProperty('expectedLayoutRevision');
+      saved = request.item;
+      return { v: 1, serverId: 'home', sessionId: 'shared', destination: null,
+        result: { operation: 'upsert_item', itemId: 'copy', outcome: 'updated', itemRevision: revision } };
+    });
+    expect(await port.apply(surface, { kind: 'network', instanceId: 'copy', network: { network: 'none' } },
+      { surface: 'ui_button' })).toMatchObject({ ok: true, result: { instance: { ...instance, networkOverride: { network: 'none' } } } });
+    expect(saved.source).toEqual({ kind: 'widget', instance: { ...instance, networkOverride: { network: 'none' } } });
+  });
   it.each([
     { width: 'compact' as const, height: { mode: 'fixed' as const, size: 'tall' as const } },
     { width: 'wide' as const, height: { mode: 'auto' as const, fallback: 'regular' as const } },

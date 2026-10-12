@@ -1,11 +1,51 @@
 import { describe, expect, it } from 'vitest';
 import { readBuiltinWidgetDescriptorV1, SESSION_COMPANION_BUILTIN_ITEM_IDS } from './builtinWidgetDescriptorV1.js';
-import { readWidgetInputTargetV1, resolveConfiguredWidgetInputs, resolveConfiguredWidgetTargetInputV1, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
+import { isWidgetTargetHostableV1, readWidgetInputTargetV1, resolveConfiguredWidgetInputs, resolveConfiguredWidgetTargetInputV1, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
 import { composeWidgetGroupContextV1 } from './widgetActionInputResolverV1.js';
 import { normalizeUsageQuery } from '../inputs/usageQuery.js';
 import { setWidgetInputBindingsV1, type WidgetInstanceV1 } from './widgetInstanceV1.js';
 
 describe('native widget target contracts', () => {
+    it('admits app accounting on core pages while retaining Session pins on the established hosts', () => {
+        const session = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'session_summary' })!;
+        const usage = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_daily' })!;
+        expect(isWidgetTargetHostableV1(session, 'corePage')).toBe(false);
+        expect(isWidgetTargetHostableV1(usage, 'corePage')).toBe(true);
+        for (const surface of ['home', 'project', 'pluginArea', 'sessionBoard', 'companion']) {
+            expect(isWidgetTargetHostableV1(session, surface)).toBe(true);
+        }
+    });
+    it('admits machine widgets with followed qualified machines and per-widget size contracts', () => {
+        const four = ['machine_left_behind', 'machine_worktrees', 'machine_cleanup_suggestion'];
+        const six = ['machine_vitals', 'machine_fleet', 'machine_metric', 'machine_top_consumers', 'machine_storage', 'machine_guard', 'machine_activity'];
+        for (const id of [...four, ...six]) {
+            const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id });
+            expect(descriptor, id).not.toBeNull();
+            if (!descriptor) continue;
+            expect(descriptor.sizeDeclaration.sizes).toEqual(four.includes(id) ? ['small', 'medium', 'wide', 'full'] : ['small', 'medium', 'wide', 'full', 'tall', 'large']);
+            expect(descriptor.sizeDeclaration.defaultSize).toBe(id === 'machine_fleet' ? 'wide'
+                : ['machine_vitals', 'machine_left_behind', 'machine_worktrees'].includes(id) ? 'small' : 'medium');
+            expect(readWidgetInputTargetV1(descriptor)).toEqual({ kind: 'app' });
+            if (id === 'machine_fleet') {
+                expect(descriptor.inputs?.fields.map(field => field.path)).toEqual(['style', 'metrics']);
+                expect(resolveConfiguredWidgetInputs({ descriptor, instance: { v: 1, id: 'fleet', definition: { kind: 'builtin', id },
+                    bindings: { metrics: { kind: 'value', value: [] } } }, providedContext: {}, viewerValues: {} }))
+                    .toMatchObject({ status: 'ready', input: { metrics: [] } });
+                continue;
+            }
+            expect(descriptor.inputs?.fields.find(field => field.path === 'machine')).toMatchObject({ inputType: { hostType: 'machine' }, contextMode: 'follow' });
+            const bindings = { machine: { kind: 'context' as const, slot: 'machine' } };
+            const options = { descriptor, instance: { v: 1 as const, id: 'copy', definition: { kind: 'builtin' as const, id }, bindings },
+                providedContext: { machine: [{ serverId: 'home', machineId: 'm' }] }, viewerValues: {} };
+            expect(resolveConfiguredWidgetInputs(options)).toMatchObject({ status: 'ready', input: { machine: { serverId: 'home', machineId: 'm' } } });
+            expect(resolveConfiguredWidgetInputs({ ...options, providedContext: { machine: [{ machineId: 'm' }] } }).status).toBe('invalid');
+            if (id === 'machine_activity') expect(resolveConfiguredWidgetInputs({ ...options, instance: { ...options.instance, bindings: {} }, providedContext: {} }))
+                .toMatchObject({ status: 'ready', input: {} });
+            if (id === 'machine_top_consumers') expect(resolveConfiguredWidgetInputs({ ...options, instance: { ...options.instance,
+                bindings: { ...bindings, scope: { kind: 'value', value: 'session' } } } }))
+                .toMatchObject({ status: 'selection_required', fields: [{ path: 'session' }] });
+        }
+    });
     it('opens retained nine-path Sources copies and preserves edits of their applicable scope', () => {
         const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_sources' })!;
         // The original program preset saved every accounting query path on Sources too.
@@ -44,7 +84,7 @@ describe('native widget target contracts', () => {
     });
     it('admits real Usage builtins through declared fields, retaining independent scope pins and own presentation', () => {
         const query = normalizeUsageQuery({ period: { startMs: 1000 }, metric: 'cost', breakdown: ['agent'] });
-        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_daily' });
+        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_flow' });
         expect(descriptor).not.toBeNull();
         if (!descriptor) return;
         expect(readWidgetInputTargetV1(descriptor)).toEqual({ kind: 'app' });
@@ -53,7 +93,7 @@ describe('native widget target contracts', () => {
         const bindings = Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path,
             field.contextMode === 'follow' ? { kind: 'context' as const, slot: field.path }
                 : { kind: 'value' as const, value: field.path === 'metric' ? 'cost' : ['agent'] }]));
-        const options = { descriptor, instance: { v: 1 as const, id: 'daily', definition: { kind: 'builtin' as const, id: 'usage_daily' }, bindings },
+        const options = { descriptor, instance: { v: 1 as const, id: 'flow', definition: { kind: 'builtin' as const, id: 'usage_flow' }, bindings },
             providedContext: composeWidgetGroupContextV1({ providedContext: context,
                 groupBindings: { period: { kind: 'value', value: { startMs: 2000 } } } }), viewerValues: {} };
         expect(resolveConfiguredWidgetTargetInputV1(options)).toMatchObject({ status: 'ready', input: {

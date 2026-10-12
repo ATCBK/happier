@@ -9,6 +9,9 @@ import { InputPathSchema } from '../inputs/inputPredicates.js';
 import { resolveEffectiveInputFields, writeInputPath } from '../inputs/inputFieldRuntime.js';
 import { ConnectedAccountPurposeIdSchema } from '../connect/connectedAccountPurposeIdentity.js';
 import { WidgetDefinitionV1Schema } from './widgetDefinitionV1.js';
+import { UiSurfaceNetworkRequestV1Schema } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
+import { USAGE_BUILTIN_WIDGET_IDS_V1 } from './builtinWidgetDescriptorV1.js';
+import { USAGE_QUERY_INPUT_FIELDS } from '../inputs/usageQuery.js';
 
 const id = z.string().trim().min(1);
 export const WidgetDefinitionRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
@@ -42,6 +45,8 @@ export function resetWidgetInputBindingsV1(bindings: WidgetInputBindingsV1, path
 export const WidgetInstanceV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1), id, definition: WidgetDefinitionRefV1Schema,
   bindings: WidgetInputBindingsV1Schema, displayName: id.optional(),
+  /** Guest-frame egress only; the renderer's installed authority remains the ceiling. */
+  networkOverride: UiSurfaceNetworkRequestV1Schema.optional(),
 }).strict());
 export type WidgetInstanceV1 = z.infer<typeof WidgetInstanceV1Schema>;
 
@@ -96,11 +101,12 @@ export type WidgetBindingResolutionInputV1 = Readonly<{
 function projectWidgetBindingsV1(options: Pick<WidgetBindingResolutionInputV1, 'instance' | 'fields' | 'context' | 'viewerValues'> &
   Partial<Pick<WidgetBindingResolutionInputV1, 'validateValue' | 'resolvePaths'>>) {
   let instance = WidgetInstanceV1StoredSchema.parse(options.instance);
-  // Earlier in-program Sources copies retained accounting inputs that inventory cannot answer.
-  // Project those six paths out of binding admission only; never mutate the saved Artifact or
-  // relax rejection of another undeclared path. Applicable scope still uses ordinary admission.
-  if (instance.definition.kind === 'builtin' && instance.definition.id === 'usage_sources') {
-    const retired = ['period', 'projects', 'session', 'costBasis', 'metric', 'breakdown'];
+  // Earlier in-program Usage copies declared the whole query, including unused presentation
+  // inputs (and accounting scope on Sources). Keep saved intent but resolve only consumed fields;
+  // unrelated undeclared paths still fail normal binding admission.
+  const definition = instance.definition;
+  if (definition.kind === 'builtin' && USAGE_BUILTIN_WIDGET_IDS_V1.some(id => id === definition.id)) {
+    const retired = USAGE_QUERY_INPUT_FIELDS.filter(field => !options.fields.some(declared => declared.path === field.path)).map(field => field.path);
     const bindings = Object.fromEntries(Object.entries(instance.bindings).filter(([path]) => !retired.includes(path)));
     instance = { ...instance, bindings };
   }

@@ -4,10 +4,10 @@ import type { WidgetConnectedAccountPurposeBindingV1 } from './widgetConnectedAc
 import type { WidgetSizeDeclarationV1 } from './widgetPresentationV1.js';
 export { WidgetConnectedAccountPurposeBindingV1Schema, type WidgetConnectedAccountPurposeBindingV1 } from './widgetConnectedAccountPurposeBindingV1.js';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue, type PluginJsonSchemaValidator } from '../plugins/actions/jsonSchemaValidation.js';
-import { resolveWidgetBindingsV1, type WidgetBindingResolutionInputV1, type WidgetBindingResolutionV1, type WidgetInstanceV1 } from './widgetInstanceV1.js';
+import { resolveWidgetBindingsV1, type WidgetInputBindingsV1, type WidgetBindingResolutionInputV1, type WidgetBindingResolutionV1, type WidgetInstanceV1 } from './widgetInstanceV1.js';
 import type { JsonValue } from '../json/strictJsonValue.js';
 import { WorkspaceRefV1Schema, type WorkspaceRefV1 } from '../workspaces/workspaceRefV1.js';
-import { resolveWorkspaceRefV1, workspaceAddressFromRefV1 } from '../workspaces/workspaceRefResolutionV1.js';
+import { resolveWorkspaceRefV1, workspaceAddressFromRefV1, type WorkspaceRefResolutionContextV1 } from '../workspaces/workspaceRefResolutionV1.js';
 
 export type WidgetInputDescriptorV1 = Readonly<{
     sizeDeclaration?: WidgetSizeDeclarationV1;
@@ -23,6 +23,18 @@ export type ConfiguredWidgetInputsV1 = Readonly<{
     viewerValues: WidgetBindingResolutionInputV1['viewerValues'];
     validateValue?: WidgetBindingResolutionInputV1['validateValue'];
 }>;
+
+/** Declared literal defaults fill only unbound fields; the normal binder still admits them. */
+export function proposeWidgetInputDefaultBindingsV1(descriptor: WidgetInputDescriptorV1, initial: WidgetInputBindingsV1 = {}): WidgetInputBindingsV1 {
+    const bindings = { ...initial };
+    for (const field of descriptor.inputs?.fields ?? []) {
+        if (Object.hasOwn(bindings, field.path) || field.connectedAccountOptions === true || field.widget === 'secret') continue;
+        let schema = descriptor.inputSchema;
+        for (const segment of field.path.split('.')) schema = schema?.properties?.[segment];
+        if (schema?.default !== undefined) bindings[field.path] = { kind: 'value', value: schema.default };
+    }
+    return bindings;
+}
 
 // Declaration objects have immutable schema identity; authority is checked anew below.
 const validators = new WeakMap<PluginJsonSchemaV2, PluginJsonSchemaValidator>();
@@ -47,11 +59,13 @@ export function readWidgetInputTargetV1(descriptor: WidgetInputDescriptorV1): Wi
 }
 
 /**
- * Whether a surface can host a widget with this target. A checkout (workspace) target needs a surface
- * that supplies the checkout — a Project's areas; no other surface can fill or choose it.
+ * A checkout target needs a Project. Core pages host app reads; their query-scope slots do not
+ * admit an executable Session target. Home, Project and plugin areas retain explicit Session pins.
  */
 export function isWidgetTargetHostableV1(descriptor: WidgetInputDescriptorV1, surface: string): boolean {
-    return readWidgetInputTargetV1(descriptor).kind !== 'workspace' || surface === 'project';
+    const target = readWidgetInputTargetV1(descriptor);
+    if (target.kind === 'workspace') return surface === 'project';
+    return target.kind !== 'session' || surface !== 'corePage';
 }
 
 /** Discover only declared target intent before reaching its own Resource/purpose authority. */
@@ -91,16 +105,18 @@ export function validateWidgetWorkspaceInputV1(input: Readonly<{
     value: JsonValue;
     serverId: string;
     contextValues: readonly JsonValue[];
-}>): Readonly<{ status: 'valid'; checkout: WorkspaceRefV1 }>
+}>, context: WorkspaceRefResolutionContextV1 = {}): Readonly<{ status: 'valid'; checkout: WorkspaceRefV1 }>
     | Readonly<{ status: 'invalid' | 'denied'; reasonCode: string }> {
     const selected = WorkspaceRefV1Schema.safeParse(input.value);
     if (!selected.success) return { status: 'invalid', reasonCode: 'widget_workspace_selection_invalid' };
-    if (selected.data.serverId !== input.serverId) return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+    const selectedServerId = context.normalizeServerId?.(selected.data.serverId) ?? selected.data.serverId;
+    const scopeServerId = context.normalizeServerId?.(input.serverId) ?? input.serverId;
+    if (selectedServerId !== scopeServerId) return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
     const refs = input.contextValues.flatMap(value => {
         const ref = WorkspaceRefV1Schema.safeParse(value);
         return ref.success ? [ref.data] : [];
     });
-    const admitted = resolveWorkspaceRefV1(refs, workspaceAddressFromRefV1(selected.data));
+    const admitted = resolveWorkspaceRefV1(refs, workspaceAddressFromRefV1(selected.data), context);
     return admitted.kind === 'resolved' ? { status: 'valid', checkout: admitted.ref }
         : { status: 'denied', reasonCode: 'widget_target_identity_mismatch' };
 }

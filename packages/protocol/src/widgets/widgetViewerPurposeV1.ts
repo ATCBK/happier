@@ -1,4 +1,5 @@
 import { hasValidPluginConnectedAccountPurposeBindingsV2 } from '../plugins/actions/v2.js';
+import { createProtocolStoredReadSchema } from '../plugins/actions/protocolComposableSchema.js';
 import type { PluginProjectedResourceV2 } from '../daemon/contributionRegistryProjection.js';
 import type { AccountProfile } from '../account/profile.js';
 import type { QualifiedConnectedAccountPurposeBindingsV1 } from '../connect/connectedAccountPurposeBindings.js';
@@ -17,6 +18,7 @@ export type WidgetViewerPurposeResolutionV1 = Readonly<{
 }>;
 
 type PurposeDescriptor = WidgetInputDescriptorV1 & Readonly<{ resources?: readonly PluginContributionIdentityV1[] }>;
+const StoredQualifiedConnectedAccountRefSchema = createProtocolStoredReadSchema(QualifiedConnectedAccountRefSchema);
 
 /** Supplied selections must match the current viewer purpose or an active personal connection. */
 export function isWidgetConnectedAccountSelectionEligibleV1(input: Readonly<{
@@ -34,7 +36,7 @@ export function isWidgetConnectedAccountSelectionEligibleV1(input: Readonly<{
     }
     if (!input.field.connectedAccountOptions || input.surface.owner.kind === 'sessionBoard') return false;
     if (input.binding?.kind === 'value') {
-        const pinned = QualifiedConnectedAccountRefSchema.safeParse(input.binding.value);
+        const pinned = StoredQualifiedConnectedAccountRefSchema.safeParse(input.binding.value);
         if (!pinned.success || !sameQualifiedConnectedAccountRef(pinned.data, input.selection)) return false;
     }
     return input.profile?.connectedAccountsV4.some(account => sameQualifiedConnectedAccountRef(account.ref, input.selection)

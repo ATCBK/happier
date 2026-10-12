@@ -8,7 +8,10 @@ import { lazyDefinition } from '../lazyZodSchema.js';
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import { WorkspaceRefV1WriteSchema } from '../workspaces/workspaceRefV1.js';
 import type { WidgetLayoutWidgetV1 } from './widgetLayoutItemV1.js';
-import { USAGE_QUERY_INPUT_FIELDS, UsageQuerySchema, UsageSourceInventoryScopeSchema } from '../inputs/usageQuery.js';
+import { USAGE_QUERY_INPUT_FIELDS, USAGE_MULTI_BREAKDOWN_INPUT_FIELD, UsageQuerySchema, UsageSourceInventoryScopeSchema } from '../inputs/usageQuery.js';
+import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
+import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
+import type { InputFieldHint } from '../inputs/inputFields.js';
 
 /** Native Session content identities; presentation references and configured copies share this owner. */
 export const SESSION_COMPANION_BUILTIN_ITEM_IDS = ['session_summary', 'agent_plan', 'changes', 'local_services'] as const;
@@ -19,7 +22,16 @@ export const USAGE_BUILTIN_WIDGET_IDS_V1 = ['usage_daily', 'usage_period_summary
 export type SessionBuiltinWidgetIdV1 = (typeof SESSION_COMPANION_BUILTIN_ITEM_IDS)[number];
 export type ProjectBuiltinWidgetIdV1 = (typeof PROJECT_BUILTIN_WIDGET_IDS_V1)[number];
 export type UsageBuiltinWidgetIdV1 = (typeof USAGE_BUILTIN_WIDGET_IDS_V1)[number];
-export type BuiltinWidgetIdV1 = SessionBuiltinWidgetIdV1 | ProjectBuiltinWidgetIdV1 | UsageBuiltinWidgetIdV1;
+export const MACHINE_BUILTIN_WIDGET_IDS_V1 = ['machine_vitals', 'machine_fleet', 'machine_metric', 'machine_top_consumers',
+    'machine_left_behind', 'machine_storage', 'machine_worktrees', 'machine_guard', 'machine_activity', 'machine_cleanup_suggestion'] as const;
+export type MachineBuiltinWidgetIdV1 = (typeof MACHINE_BUILTIN_WIDGET_IDS_V1)[number];
+/** Home atmosphere widgets: the Home as a planet with its machines as moons (atmosphere plan U9). */
+export const HOME_BUILTIN_WIDGET_IDS_V1 = ['your_home'] as const;
+export type HomeBuiltinWidgetIdV1 = (typeof HOME_BUILTIN_WIDGET_IDS_V1)[number];
+export type BuiltinWidgetIdV1 = SessionBuiltinWidgetIdV1 | ProjectBuiltinWidgetIdV1 | UsageBuiltinWidgetIdV1 | MachineBuiltinWidgetIdV1 | HomeBuiltinWidgetIdV1;
+/** Saved executable declarations accept only identities owned by this catalog. */
+export const BuiltinWidgetIdV1Schema = z.enum([...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...PROJECT_BUILTIN_WIDGET_IDS_V1,
+    ...USAGE_BUILTIN_WIDGET_IDS_V1, ...MACHINE_BUILTIN_WIDGET_IDS_V1, ...HOME_BUILTIN_WIDGET_IDS_V1]);
 
 /** Missing default Overview only: render without writing, then retain the whole layout on its first edit. */
 export function projectOverviewDefaultPlacementsV1(): WidgetLayoutWidgetV1[] {
@@ -37,11 +49,11 @@ const nativeMetadata = {
     changes: { title: 'Changes', titleKey: 'widgetGlances.changesTitle', icon: 'git-branch' },
     local_services: { title: 'Local services', titleKey: 'widgetGlances.localServicesTitle', icon: 'hard-drives' },
     project_about: { title: 'About', titleKey: 'projects.widgets.about', icon: 'info' },
-    project_code: { title: 'Code', titleKey: 'projects.pages.code', icon: 'folder' },
+    project_code: { title: 'Code', titleKey: 'projects.pages.code', icon: 'code' },
     project_readme: { title: 'README', titleKey: 'projects.widgets.readme', icon: 'file-text' },
     project_checkouts: { title: 'Checkouts', titleKey: 'projects.widgets.checkouts', icon: 'git-branch' },
-    project_scripts: { title: 'Scripts', titleKey: 'projects.pages.scripts', icon: 'terminal' },
-    project_sessions: { title: 'Sessions', titleKey: 'projects.widgets.sessions', icon: 'stack' },
+    project_scripts: { title: 'Scripts', titleKey: 'projects.pages.scripts', icon: 'play' },
+    project_sessions: { title: 'Sessions', titleKey: 'projects.widgets.sessions', icon: 'chats-circle' },
     project_changes: { title: 'Local changes', titleKey: 'projects.widgets.localChanges', icon: 'git-branch' },
     usage_daily: { title: 'Daily usage', titleKey: 'usage.widgets.usage_daily', descriptionKey: 'usage.board.page.purposeDaily', icon: 'chart-bar' },
     usage_period_summary: { title: 'Period summary', titleKey: 'usage.widgets.usage_period_summary', descriptionKey: 'usage.board.page.purposeSummary', icon: 'squares-four' },
@@ -64,9 +76,20 @@ const nativeMetadata = {
     usage_recap: { title: 'Recap', titleKey: 'usage.widgets.usage_recap', descriptionKey: 'usage.board.page.purposeRecap', icon: 'sparkle' },
     usage_footprint: { title: 'Footprint', titleKey: 'usage.widgets.usage_footprint', descriptionKey: 'usage.board.page.purposeFootprint', icon: 'leaf' },
     usage_sources: { title: 'Sources', titleKey: 'usage.widgets.usage_sources', descriptionKey: 'usage.board.page.purposeSources', icon: 'stack' },
+    machine_vitals: { title: 'Vitals', titleKey: 'machines.widgets.machine_vitals', descriptionKey: 'machines.widgets.body.purpose.machine_vitals', icon: 'pulse' },
+    machine_fleet: { title: 'Machines', titleKey: 'machines.widgets.machine_fleet', descriptionKey: 'machines.widgets.body.purpose.machine_fleet', icon: 'desktop' },
+    machine_metric: { title: 'Metric', titleKey: 'machines.widgets.machine_metric', descriptionKey: 'machines.widgets.body.purpose.machine_metric', icon: 'chart-line' },
+    machine_top_consumers: { title: 'Using the most', titleKey: 'machines.widgets.machine_top_consumers', descriptionKey: 'machines.widgets.body.purpose.machine_top_consumers', icon: 'list-bullets' },
+    machine_left_behind: { title: 'Left behind', titleKey: 'machines.widgets.machine_left_behind', descriptionKey: 'machines.widgets.body.purpose.machine_left_behind', icon: 'clock' },
+    machine_storage: { title: 'Storage', titleKey: 'machines.widgets.machine_storage', descriptionKey: 'machines.widgets.body.purpose.machine_storage', icon: 'hard-drives' },
+    machine_worktrees: { title: 'Worktrees', titleKey: 'machines.widgets.machine_worktrees', descriptionKey: 'machines.widgets.body.purpose.machine_worktrees', icon: 'git-branch' },
+    machine_guard: { title: 'Guard', titleKey: 'machines.widgets.machine_guard', descriptionKey: 'machines.widgets.body.purpose.machine_guard', icon: 'shield' },
+    machine_activity: { title: 'Activity', titleKey: 'machines.widgets.machine_activity', descriptionKey: 'machines.widgets.body.purpose.machine_activity', icon: 'clock' },
+    machine_cleanup_suggestion: { title: 'Suggestion', titleKey: 'machines.widgets.machine_cleanup_suggestion', descriptionKey: 'machines.widgets.body.purpose.machine_cleanup_suggestion', icon: 'sparkle' },
+    your_home: { title: 'Your Home', titleKey: 'homeWidgets.yourHomeTitle', descriptionKey: 'homeWidgets.yourHomeDescription', icon: 'house' },
 } as const;
 
-const inputs: InputHints = { fields: [{ path: 'session', title: 'Session', description: 'The session it shows; it reads that session where it runs.', widget: 'json', inputType: { hostType: 'session' }, required: true, optionsSourceId: 'sessions' }] };
+const inputs: InputHints = { fields: [{ path: 'session', title: 'Session', prompt: 'Which session?', description: 'The session it shows; it reads that session where it runs.', widget: 'json', inputType: { hostType: 'session' }, required: true, optionsSourceId: 'sessions' }] };
 const sessionInputs: WidgetInputDescriptorV1 = {
     inputs,
     inputSchema: { type: 'object', properties: { session: { type: 'object', properties: {
@@ -78,20 +101,72 @@ const workspaceInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse
     checkout: WorkspaceRefV1WriteSchema,
 }).strict().toJSONSchema({ io: 'input', target: 'draft-7' })));
 const workspaceInputs: WidgetInputDescriptorV1 = {
-    inputs: { fields: [{ path: 'checkout', title: 'Checkout', widget: 'json', inputType: { hostType: 'workspace' }, required: true }] },
+    inputs: { fields: [{ path: 'checkout', title: 'Checkout', prompt: 'Which workspace?', widget: 'json', inputType: { hostType: 'workspace' }, required: true }] },
     inputSchema: workspaceInputSchema,
 };
-const usageInputs: WidgetInputDescriptorV1 = {
-    inputs: { fields: USAGE_QUERY_INPUT_FIELDS.map(field => ({ ...field, required: true })) },
+/** Presentation inputs belong only to bodies that actually consume them. Query scope stays shared. */
+const usagePresentationInputs: Readonly<Partial<Record<UsageBuiltinWidgetIdV1, readonly ('metric' | 'breakdown')[]>>> = {
+    usage_daily: ['metric'], usage_period_summary: ['metric'], usage_flow: ['metric', 'breakdown'],
+    usage_breakdowns: ['metric', 'breakdown'], usage_project_ledger: ['metric'], usage_session_value: ['metric'],
+    usage_outcomes: ['metric'], usage_recap: ['metric'],
+};
+const usageInputSchema = lazyDefinition(() => PluginJsonSchemaV2Schema.parse(UsageQuerySchema.toJSONSchema({ io: 'input', target: 'draft-7' })));
+const usageInputs = (id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 => ({
+    inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow'
+        || usagePresentationInputs[id]?.some(path => path === field.path))
+        .map(field => ({ ...(id === 'usage_breakdowns' && field.path === 'breakdown' ? USAGE_MULTI_BREAKDOWN_INPUT_FIELD : field),
+            required: field.required ?? true })) },
     // The per-field picker projections and complete input schema share one UsageQuery owner;
     // target admission remains an app read, not a Usage Session id projection.
-    inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(UsageQuerySchema.toJSONSchema({ io: 'input', target: 'draft-7' }))),
-};
+    inputSchema: usageInputSchema,
+});
 const sourceInventoryInputs: WidgetInputDescriptorV1 = {
     inputs: { fields: USAGE_QUERY_INPUT_FIELDS.filter(field => ['agents', 'machines', 'sources'].includes(field.path))
-        .map(field => ({ ...field, required: true })) },
+        .map(field => ({ ...field, required: field.required ?? true })) },
     inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(UsageSourceInventoryScopeSchema.toJSONSchema({ io: 'input', target: 'draft-7' }))),
 };
+
+const machineField: InputFieldHint = { path: 'machine', title: 'Machine', prompt: 'Which machine?', widget: 'select',
+    inputType: { hostType: 'machine' }, contextMode: 'follow', required: true };
+const volumeField: InputFieldHint = { path: 'volume', title: 'Volume', widget: 'select', contextMode: 'follow',
+    optionsSourceId: 'machines.volumes.available' };
+const machineChoiceLabels: Readonly<Record<string, string>> = { cpu: 'CPU', memory: 'Memory', disk: 'Disk', disk_free: 'Disk free',
+    network: 'Network', '1h': '1 hour', '24h': '24 hours', '7d': '7 days', machine: 'Machine', session: 'Session',
+    sparklines: 'Sparklines', bars: 'Bars', numbers: 'Numbers', rings: 'Rings' };
+const choices = (values: readonly string[]) => values.map(value => ({ value, label: machineChoiceLabels[value] ?? value }));
+function machineWidgetContract(id: MachineBuiltinWidgetIdV1): WidgetInputDescriptorV1 & { sizeDeclaration: WidgetSizeDeclarationV1 } {
+    let fields: InputFieldHint[] = [{ ...machineField, ...(id === 'machine_activity' ? { required: false } : {}) }];
+    let schema: z.ZodType = z.object({ machine: id === 'machine_activity' ? MachineTargetV1Schema.optional() : MachineTargetV1Schema }).strict();
+    if (id === 'machine_fleet') {
+        fields = [{ path: 'style', title: 'Style', widget: 'select', contextMode: 'own', options: choices(['sparklines', 'bars', 'numbers', 'rings']) },
+            { path: 'metrics', title: 'Metrics', widget: 'multiselect', contextMode: 'own', options: choices(['cpu', 'memory', 'disk', 'network']) }];
+        schema = z.object({ style: z.enum(['sparklines', 'bars', 'numbers', 'rings']).optional(),
+            metrics: z.array(z.enum(['cpu', 'memory', 'disk', 'network'])).optional() }).strict();
+    } else if (id === 'machine_metric') {
+        const disk = { op: 'eq' as const, path: 'metric', value: 'disk_free' };
+        fields.push({ path: 'metric', title: 'Metric', widget: 'select', contextMode: 'own', options: choices(['cpu', 'memory', 'disk_free', 'network']) },
+            { path: 'range', title: 'Range', widget: 'select', contextMode: 'own', options: choices(['1h', '24h', '7d']) },
+            { ...volumeField, visibleWhen: disk }, { path: 'warnAbove', title: 'Warn above', widget: 'number', contextMode: 'own' });
+        schema = z.object({ machine: MachineTargetV1Schema, metric: z.enum(['cpu', 'memory', 'disk_free', 'network']).optional(),
+            range: z.enum(['1h', '24h', '7d']).optional(), volume: z.string().min(1).optional(), warnAbove: z.number().nonnegative().optional() }).strict();
+    } else if (id === 'machine_storage') {
+        fields.push(volumeField);
+        schema = z.object({ machine: MachineTargetV1Schema, volume: z.string().min(1).optional() }).strict();
+    } else if (id === 'machine_top_consumers') {
+        const session = { op: 'eq' as const, path: 'scope', value: 'session' };
+        fields.push({ path: 'scope', title: 'Scope', widget: 'select', contextMode: 'own', options: choices(['machine', 'session']) },
+            { path: 'session', title: 'Session', widget: 'json', contextMode: 'follow', visibleWhen: session, requiredWhen: session });
+        schema = z.object({ machine: MachineTargetV1Schema, scope: z.enum(['machine', 'session']).optional(),
+            session: VoiceTrackedSessionAddressV1Schema.optional() }).strict();
+    } else if (id === 'machine_worktrees') {
+        fields.push({ path: 'project', title: 'Project', widget: 'text', contextMode: 'follow' });
+        schema = z.object({ machine: MachineTargetV1Schema, project: z.string().min(1).optional() }).strict();
+    }
+    const fourSizes = id === 'machine_left_behind' || id === 'machine_worktrees' || id === 'machine_cleanup_suggestion';
+    const defaultSize = id === 'machine_fleet' ? 'wide' : id === 'machine_vitals' || id === 'machine_left_behind' || id === 'machine_worktrees' ? 'small' : 'medium';
+    return { inputs: { fields }, inputSchema: lazyDefinition(() => PluginJsonSchemaV2Schema.parse(schema.toJSONSchema({ io: 'input', target: 'draft-7' }))),
+        sizeDeclaration: { sizes: fourSizes ? ['small', 'medium', 'wide', 'full'] : nativeSizeDeclaration.sizes, defaultSize } };
+}
 
 /** Descriptor projection only: execution, data and Actions stay with the existing native domains. */
 type NativeDescriptor = WidgetInputDescriptorV1 & Readonly<{
@@ -113,9 +188,17 @@ export const BUILTIN_WIDGET_DESCRIPTORS_V1 = Object.freeze([...SESSION_COMPANION
     sizeDeclaration: nativeSizeDeclaration, key: `builtin:${id}`, target: readWidgetInputTargetV1(workspaceInputs).kind === 'session' ? 'session' : 'app',
     homeDefault: 'available' as const, availability: 'available' as const,
 })), ...USAGE_BUILTIN_WIDGET_IDS_V1.map((id): NativeDescriptor => Object.freeze({
-    ...(id === 'usage_sources' ? sourceInventoryInputs : usageInputs), ...nativeMetadata[id], definition: { kind: 'builtin' as const, id },
+    ...(id === 'usage_sources' ? sourceInventoryInputs : usageInputs(id)), ...nativeMetadata[id], definition: { kind: 'builtin' as const, id },
     sizeDeclaration: nativeSizeDeclaration, key: `builtin:${id}`, target: 'app',
     homeDefault: 'available', availability: 'available',
+})), ...MACHINE_BUILTIN_WIDGET_IDS_V1.map((id): NativeDescriptor => Object.freeze({
+    ...machineWidgetContract(id), ...nativeMetadata[id], definition: { kind: 'builtin' as const, id },
+    key: `builtin:${id}`, target: 'app', homeDefault: 'available', availability: 'available',
+})), ...HOME_BUILTIN_WIDGET_IDS_V1.map((id): NativeDescriptor => Object.freeze({
+    ...nativeMetadata[id], definition: { kind: 'builtin' as const, id },
+    // An App read with no inputs, at the four sizes the lab composes.
+    sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full'], defaultSize: 'medium' } satisfies WidgetSizeDeclarationV1,
+    key: `builtin:${id}`, target: 'app', homeDefault: 'available', availability: 'available',
 }))]);
 export type BuiltinWidgetDescriptorV1 = NativeDescriptor;
 

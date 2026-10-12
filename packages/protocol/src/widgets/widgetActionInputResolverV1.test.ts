@@ -5,6 +5,10 @@ import { AccountProfileSchema } from '../account/profile.js';
 import { resolveWidgetViewerPurposeValuesV1 } from './widgetViewerPurposeV1.js';
 import type { WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
 import type { QualifiedConnectedAccountPurposeBindingsV1 } from '../connect/connectedAccountPurposeBindings.js';
+import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
+import { normalizeUsageQuery, readUsageGroupByOptions } from '../inputs/usageQuery.js';
+import { readInputPath } from '../inputs/inputPredicates.js';
+import { StrictJsonValueSchema, type JsonValue } from '../json/strictJsonValue.js';
 
 const consumer = { pluginId: 'acme.metrics', localId: 'metrics' };
 const service = { pluginId: consumer.pluginId, localId: 'cloud' };
@@ -44,6 +48,90 @@ function createUnconnectedViewerWidgetResolver() {
 }
 
 describe('current Widget field options admission', () => {
+    it('admits a scoped own-input patch without a mount, retaining runtime and changed-scope refusals', async () => {
+        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_period_summary' })!;
+        const query = normalizeUsageQuery({ metric: 'cost' });
+        const bindings = Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path,
+            field.contextMode === 'follow' ? { kind: 'context' as const, slot: field.path }
+                : { kind: 'value' as const, value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }]));
+        let context: Record<string, readonly JsonValue[]> = {};
+        const resolver = createWidgetActionInputResolverV1({
+            readDescriptor: async () => descriptor, readContext: async () => context,
+            readViewerValues: async () => ({ values: {} }), validateValue: async () => ({ status: 'valid' }),
+            resolveOptions: async () => ({ status: 'unavailable', reasonCode: 'inventory_unavailable' }),
+        });
+        const request = { ref: { surface: { serverId: 'home', accountId: 'viewer', owner: {
+            kind: 'corePage' as const, pageId: 'usage', area: 'main', layoutId: 'overview' } }, instanceId: 'usage' },
+            instance: { v: 1 as const, id: 'usage', definition: { kind: 'builtin' as const, id: 'usage_period_summary' }, bindings }, context: {} };
+        const configurationPatch = { paths: ['metric'], previousBindings: bindings };
+        expect(await resolver.resolve({ ...request, admission: 'configuration', configurationPatch }))
+            .toEqual({ status: 'ready', input: { metric: 'cost' } });
+        expect(await resolver.resolve(request)).toMatchObject({ status: 'selection_required' });
+        expect(await resolver.resolve({ ...request, admission: 'configuration', configurationPatch: { ...configurationPatch, paths: ['agents'] } }))
+            .toMatchObject({ status: 'selection_required', fields: [{ path: 'agents', reasonCode: 'widget_context_missing' }] });
+        expect(await resolver.resolve({ ...request, admission: 'configuration', configurationPatch,
+            instance: { ...request.instance, bindings: { ...bindings, metric: { kind: 'context', slot: 'metric' } } } }))
+            .toMatchObject({ status: 'invalid', fields: [{ path: 'metric', reasonCode: 'widget_context_binding_forbidden' }] });
+        expect(await resolver.resolve({ ...request, admission: 'configuration', configurationPatch,
+            instance: { ...request.instance, bindings: { ...bindings, metric: { kind: 'value', value: 'unsupported' } } } }))
+            .toMatchObject({ status: 'invalid' });
+        expect(await resolver.resolve({ ...request, admission: 'configuration', configurationPatch,
+            instance: { ...request.instance, bindings: { ...bindings, agents: { kind: 'context', slot: 'another' } } } }))
+            .toMatchObject({ status: 'selection_required', fields: [{ path: 'agents', reasonCode: 'widget_context_missing' }] });
+        expect(await resolver.resolve({ ...request, admission: 'configuration', configurationPatch,
+            groupBindings: { period: { kind: 'context', slot: 'absent' } } }))
+            .toMatchObject({ status: 'selection_required', fields: [{ path: 'period', reasonCode: 'widget_context_missing' }] });
+        context = { agents: [] };
+        expect(await resolver.resolve({ ...request, admission: 'configuration', configurationPatch }))
+            .toMatchObject({ status: 'selection_required', fields: [{ path: 'agents', reasonCode: 'widget_context_missing' }] });
+        context = { agents: [[42]] };
+        expect(await resolver.resolve({ ...request, admission: 'configuration', configurationPatch }))
+            .toMatchObject({ status: 'invalid' });
+    });
+    it('admits followed Usage scope independently of choices while enforcing own pins and missing context', async () => {
+        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_period_summary' })!;
+        const query = normalizeUsageQuery({ agents: ['claude'] });
+        const bindings = Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path,
+            field.contextMode === 'follow' ? { kind: 'context' as const, slot: field.path }
+                : { kind: 'value' as const, value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }]));
+        let context = Object.fromEntries(descriptor.inputs!.fields.filter(field => field.contextMode === 'follow')
+            .map(field => [field.path, [StrictJsonValueSchema.parse(readInputPath(query, field.path))]]));
+        const resolver = createWidgetActionInputResolverV1({
+            readDescriptor: async () => descriptor, readContext: async () => context,
+            readViewerValues: async () => ({ values: {} }), validateValue: async () => ({ status: 'valid' }),
+            // The genuine host options transport is unavailable; the bound page still owns its value.
+            resolveOptions: async field => field.path === 'breakdown' ? readUsageGroupByOptions(query.breakdown)
+                : { status: 'unavailable', reasonCode: 'inventory_unavailable' },
+        });
+        const request = { ref: { surface: { serverId: 'home', accountId: 'viewer',
+            owner: { kind: 'corePage' as const, pageId: 'usage', area: 'main', layoutId: 'overview' } }, instanceId: 'usage' },
+            instance: { v: 1 as const, id: 'usage', definition: { kind: 'builtin' as const, id: 'usage_period_summary' }, bindings }, context: {} };
+        expect(await resolver.resolve(request)).toMatchObject({ status: 'ready', input: { agents: ['claude'] } });
+        expect(await resolver.resolve({ ...request, instance: { ...request.instance, bindings: { ...bindings,
+            agents: { kind: 'value', value: ['claude'] },
+        } } })).toMatchObject({ status: 'unavailable', fields: [{ path: 'agents', reasonCode: 'inventory_unavailable' }] });
+        context = { ...context, agents: [[]] };
+        expect(await resolver.resolve(request)).toMatchObject({ status: 'ready', input: { agents: [] } });
+        context = { ...context, agents: [[42]] };
+        expect(await resolver.resolve(request)).toMatchObject({ status: 'invalid' });
+        delete context.agents;
+        expect(await resolver.resolve(request)).toMatchObject({ status: 'selection_required', fields: [{ path: 'agents', reasonCode: 'widget_context_missing' }] });
+    });
+    it('rejects Session targets on core pages at configured-input admission while retaining explicit pin hosts', async () => {
+        const resolver = createWidgetActionInputResolverV1({
+            readDescriptor: async () => ({ sessionInputPath: 'session', inputs: { fields: [
+                { path: 'session', title: 'Session', widget: 'json', required: true },
+            ] } }),
+            readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
+            validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
+        });
+        const request = { ref: { surface: { serverId: 'home', accountId: 'viewer', owner: { kind: 'corePage' as const, pageId: 'usage', area: 'main' } }, instanceId: 'copy' },
+            instance: { v: 1 as const, id: 'copy', definition: { kind: 'installed' as const, surface: consumer },
+                bindings: { session: { kind: 'value' as const, value: { serverId: 'home', sessionId: 'selected' } } } }, context: {} };
+        expect(await resolver.resolve(request)).toMatchObject({ status: 'denied', fields: [{ reasonCode: 'widget_target_surface_unsupported' }] });
+        expect(await resolver.resolve({ ...request, ref: { ...request.ref, surface: { ...request.ref.surface, owner: { kind: 'home' } } } }))
+            .toEqual({ status: 'ready', input: { session: { serverId: 'home', sessionId: 'selected' } } });
+    });
     it('retains declared static options when admitting a host app-read input', async () => {
         const resolver = createWidgetActionInputResolverV1({
             readDescriptor: async () => ({ inputs: { fields: [{ path: 'query', title: 'Usage', widget: 'json',
@@ -74,7 +162,7 @@ describe('current Widget field options admission', () => {
             resolveOptions: async () => { throw new Error('Workspace schema does not declare an options inventory'); },
         });
         const checkout = { id: 'checkout', serverId: 'home', machineId: 'machine', rootPath: '/repo', createdAtMs: 1 };
-        const request = { ref: { surface: { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } }, instanceId: 'copy' },
+        const request = { ref: { surface: { serverId: 'home', accountId: 'viewer', owner: { kind: 'project' as const, projectId: 'project' } }, instanceId: 'copy' },
             instance: { v: 1 as const, id: 'copy', definition: { kind: 'builtin' as const, id: 'project_code' },
                 bindings: { checkout: { kind: 'value' as const, value: checkout } } }, context: {} };
         expect(await resolver.resolve(request)).toEqual({ status: 'ready', input: { checkout } });

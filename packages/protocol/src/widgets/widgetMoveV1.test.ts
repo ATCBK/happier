@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '../actions/actionExecutor.js';
-import { createHomeHubArtifactPortV1 } from '../home/homeHubArtifactV1.js';
+import { buildHomeHubArtifactIdV1, createHomeHubArtifactPortV1, HOME_HUB_ARTIFACT_KIND_V1 } from '../home/homeHubArtifactV1.js';
 import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.testkit.js';
 import { SessionBoardItemUpsertInputV1Schema, SessionBoardItemRemoveInputV1Schema, type SessionBoardItemUpsertInputV1 } from '../sessions/board/actions.js';
 import { applySessionBoardItemPlacementV1, applySessionBoardLayoutOperationV1 } from '../sessions/board/layoutOperations.js';
@@ -15,6 +15,10 @@ import { resolveWidgetViewerPurposeValuesV1 } from './widgetViewerPurposeV1.js';
 import type { WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
 import { buildWidgetSurfaceArtifactIdV1, createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1 } from './widgetSurfaceArtifactV1.js';
 import { flattenWidgetLayoutWidgetsV1, type WidgetLayoutItemV1 } from './widgetLayoutItemV1.js';
+import { readBuiltinWidgetDescriptorV1 } from './builtinWidgetDescriptorV1.js';
+import { getUsageQueryKey, UsageQuerySchema } from '../inputs/usageQuery.js';
+import { resolveInputOptions } from '../inputs/inputOptions.js';
+import { validateInputFieldSchema } from '../inputs/inputTypeRuntime.js';
 
 const home = { serverId: 'home', accountId: 'account', owner: { kind: 'home' } } as const;
 const board = { ...home, owner: { kind: 'sessionBoard', sessionId: 'shared' } } as const;
@@ -27,9 +31,16 @@ const revision = (version: number) => {
   return `ssr1.${encodeBase64(bytes, 'base64url')}`;
 };
 
+async function persistEmptyHome(artifact: ReturnType<typeof createWorkBoardArtifactBoundary>) {
+  // These movement tests start from an existing empty Home, not missing-Artifact bootstrap.
+  await artifact.forAccount(home.accountId).create({ artifactId: buildHomeHubArtifactIdV1(home.accountId),
+    header: { kind: HOME_HUB_ARTIFACT_KIND_V1, v: 1, title: 'Home layout' },
+    body: JSON.stringify({ v: 1, order: [], hidden: [], items: [] }) });
+}
 async function fixture(candidate: WidgetInstanceV1 = instance, widgetInputs?: ActionExecutorDeps['widgetInputs']) {
   const instance = candidate;
   const artifact = createWorkBoardArtifactBoundary();
+  await persistEmptyHome(artifact);
   const faults: { addRefusal?: boolean; readRefusal?: boolean; lostAddAck?: boolean; lostSourceAck?: boolean; sharedReadOnly?: boolean; beforeAddAck?: () => Promise<void>; beforeRemove?: () => void | Promise<void> } = {};
   const homeHubArtifacts = createHomeHubArtifactPortV1({ ...artifact.forAccount(home.accountId),
     read: async (id, options) => { const row = await artifact.transport.read(id, options); return row ? { ...row, ownerAccountId: home.accountId } : null; },
@@ -97,11 +108,49 @@ async function fixture(candidate: WidgetInstanceV1 = instance, widgetInputs?: Ac
 }
 
 describe('destination-aware widget move through canonical owners', () => {
+  it('writes a single Group by pin on Home and reads existing array pins through the same widget owner', async () => {
+    const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_flow' })!;
+    const query = UsageQuerySchema.parse({ breakdown: ['source', 'machine'] });
+    const copy: WidgetInstanceV1 = { v: 1, id: 'usage-copy', definition: { kind: 'builtin', id: 'usage_flow' },
+      bindings: Object.fromEntries(Object.entries(query).filter(([path, value]) => value !== undefined
+        && descriptor.inputs.fields.some(field => field.path === path))
+        .map(([path, value]) => [path, { kind: 'value' as const, value }])) };
+    const widgetInputs = createWidgetActionInputResolverV1({ readDescriptor: async () => descriptor,
+      readContext: async () => ({}), readViewerValues: async () => ({ values: {} }), validateValue: async (field, value) => validateInputFieldSchema({ field, value }),
+      resolveOptions: async (field, input) => {
+        // Authorized accounting transport with no current events still retains chosen scope ids.
+        const deps = { machinesList: async () => ({ items: [] }), usageActions: { query: async ({ queries }) => ({ v: 1 as const, results: queries.map(query => ({
+          key: getUsageQueryKey(query), requestedQuery: query, shownQuery: query,
+          sources: [{ source: 'accounting', status: 'available' as const }], pending: false,
+        })) }) } } satisfies Pick<ActionExecutorDeps, 'machinesList' | 'usageActions'>;
+        const result = await resolveInputOptions({ deps: { ...deps } as ActionExecutorDeps, ctx: { serverId: home.serverId }, actionId: null,
+          optionsSourceId: field.optionsSourceId!, input: { ...input }, readFailure: () => null,
+          resolveSessionId: () => null, reviewScope: () => undefined });
+        return result.ok ? result.result : { status: 'unavailable', reasonCode: result.errorCode };
+      } });
+    const f = await fixture(copy, widgetInputs);
+    const ref = { surface: home, instanceId: copy.id };
+    expect(await widgetInputs.resolve({ ref, instance: copy, context: {} })).toMatchObject({ status: 'ready', input: { breakdown: ['source', 'machine'] } });
+    const context = { surface: 'mcp' as const, bypassApprovals: true };
+    expect(await f.executor.execute('widgets.item.inputs.set', { ref, bindings: { ...copy.bindings,
+      breakdown: { kind: 'value', value: ['model'] } } }, context)).toMatchObject({ ok: true });
+    const saved = instancesOf((await f.homeHubArtifacts.read()).items).find(item => item.id === copy.id)!;
+    expect(saved.bindings.breakdown).toEqual({ kind: 'value', value: ['model'] });
+    expect(await widgetInputs.resolve({ ref, instance: saved, context: {} })).toMatchObject({ status: 'ready', input: { breakdown: ['model'] } });
+    for (const agents of [['claude', 'codex'], []]) {
+      expect(await f.executor.execute('widgets.item.inputs.set', { ref, bindings: { ...saved.bindings,
+        agents: { kind: 'value', value: agents } } }, context)).toMatchObject({ ok: true });
+      const pinned = instancesOf((await f.homeHubArtifacts.read()).items).find(item => item.id === copy.id)!;
+      expect(pinned.bindings.agents).toEqual({ kind: 'value', value: agents });
+      expect(await widgetInputs.resolve({ ref, instance: pinned, context: {} })).toMatchObject({ status: 'ready', input: { agents } });
+    }
+  });
   it.each([
     { title: 'moves a child across surfaces into the requested group and admits its following input against group context', width: 'full', size: 'medium', moved: true },
     { title: 'refuses a cross-surface child transfer that cannot fit the destination group without removing its source', width: 'half', size: 'full', moved: false },
   ] as const)('$title', async ({ width, size, moved }) => {
     const boundary = createWorkBoardArtifactBoundary();
+    await persistEmptyHome(boundary);
     const homeHubArtifacts = createHomeHubArtifactPortV1(boundary.forAccount(home.accountId), { accountId: home.accountId });
     const candidate: WidgetInstanceV1 = { ...instance, bindings: { count: { kind: 'context', slot: 'count' } } };
     await homeHubArtifacts.apply({ kind: 'widget_add', instance: candidate });

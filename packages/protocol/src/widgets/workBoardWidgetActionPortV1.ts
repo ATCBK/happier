@@ -102,6 +102,7 @@ export function createWorkBoardWidgetActionPortV1(port: Pick<WorkBoardArtifactPo
           case 'rename': domain = { ...target, kind: 'widget_rename', displayName: intent.displayName }; break;
           case 'inputs': domain = { ...target, kind: 'widget_inputs', bindings: intent.bindings, ...(intent.paths ? { paths: [...intent.paths] } : {}) }; break;
           case 'inputs_reset': domain = { ...target, kind: 'widget_inputs_reset', ...(intent.paths ? { paths: [...intent.paths] } : {}) }; break;
+          case 'network': domain = { ...target, kind: 'widget_network', network: intent.network }; break;
         }
         const result = await port.apply(domain, signal);
         const board = result.boards.find(board => board.id === target.boardId)!;

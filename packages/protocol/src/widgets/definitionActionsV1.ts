@@ -35,7 +35,7 @@ export const WidgetDefinitionActionOutputSchemasV1 = {
 /** Current sealed Session item plus admitted descriptor; this reader never removes or rewrites it. */
 export type SessionWidgetDefinitionSourceV1 = Readonly<{ definition: WidgetDefinitionDraftV1; bindings: z.infer<typeof WidgetInputBindingsV1Schema> }>;
 export type WidgetDefinitionActionDepsV1 = Readonly<{
-    widgetAccountScope?: () => Readonly<{ serverId: string; accountId: string }> | null;
+    widgetAccountScope?: () => import('./widgetActionScopeV1.js').WidgetActionAccountScopeV1 | null;
     widgetDefinitionArtifacts?: WidgetDefinitionArtifactPortV1;
     readSessionWidgetDefinitionSource?: (input: Readonly<{ session: z.infer<typeof VoiceTrackedSessionAddressV1Schema>; itemId: string; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<SessionWidgetDefinitionSourceV1 | ActionExecuteFailure>;
     describeWidgetDefinitionPlacements?: (artifactId: string, context: ActionExecutorContext) => Promise<z.infer<typeof WidgetDefinitionPlacementSummaryV1Schema>>;
