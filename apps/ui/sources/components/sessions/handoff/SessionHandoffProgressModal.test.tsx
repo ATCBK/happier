@@ -171,7 +171,7 @@ describe('SessionHandoffProgressModal', () => {
         await screen.pressByTestIdAsync('session-handoff-progress-details-toggle');
 
         expect(screen.getTextContent()).toContain('Packaging session state');
-        expect(screen.getTextContent()).toContain('1.0 KB / 4.0 KB');
+        expect(screen.getTextContent()).toContain('1.02 KB / 4.1 KB');
         expect(screen.findHostByTestId('session-handoff-progress-details-toggle')?.props.accessibilityState?.expanded).toBe(true);
     });
 
@@ -446,7 +446,7 @@ describe('SessionHandoffProgressModal', () => {
         expect(textContent).toContain('+3');
         expect(textContent).toContain('~2');
         expect(textContent).toContain('-1');
-        expect(textContent).toContain('2.0 KB');
+        expect(textContent).toContain('2.05 KB');
         expect(screen.findByTestId('session-handoff-progress-bar')?.props.accessibilityValue)
             .toEqual({ min: 0, max: 100, now: 50 });
         expect(textContent).toContain('README.md');

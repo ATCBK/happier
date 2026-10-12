@@ -13,7 +13,7 @@ import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { Typography } from '@/constants/Typography';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -300,7 +300,7 @@ function buildSummaryChips(status: SessionHandoffStatus | undefined): readonly s
         ...(typeof removedCount === 'number' ? [`-${removedCount}`] : []),
     ];
     if (typeof totalBytes === 'number' && totalBytes > 0) {
-        chips.push(formatByteSize(totalBytes));
+        chips.push(formatHappierDataBytes(totalBytes, { kind: 'storage' }));
     }
     return chips;
 }
@@ -326,7 +326,7 @@ function formatProgressStatValue(counts: ProgressStatCounts | null | undefined):
         parts.push(`${counts.files} ${t('common.files')}`);
     }
     if (typeof counts?.bytes === 'number') {
-        parts.push(formatByteSize(counts.bytes));
+        parts.push(formatHappierDataBytes(counts.bytes, { kind: 'storage' }));
     }
     return parts.length > 0 ? parts.join(' · ') : '—';
 }
@@ -769,7 +769,7 @@ export function SessionHandoffProgressModal({ onClose, setChrome, title, message
                                     ) : null}
                                     {determinateOperationProgress ? (
                                         <Text testID="session-handoff-operation-byte-progress" style={styles.currentPath}>
-                                            {formatByteSize(determinateOperationProgress.current)} / {formatByteSize(determinateOperationProgress.total)}
+                                            {formatHappierDataBytes(determinateOperationProgress.current, { kind: 'storage' })} / {formatHappierDataBytes(determinateOperationProgress.total, { kind: 'storage' })}
                                         </Text>
                                     ) : null}
                                     {operationFailed && operation.error ? (

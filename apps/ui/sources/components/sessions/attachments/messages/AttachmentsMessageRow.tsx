@@ -1,3 +1,4 @@
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -47,17 +48,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-function formatBytes(bytes: number): string {
-    const value = Number.isFinite(bytes) ? bytes : 0;
-    if (value < 1024) return `${Math.max(0, Math.floor(value))} B`;
-    const kb = value / 1024;
-    if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
-    const mb = kb / 1024;
-    if (mb < 1024) return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
-    const gb = mb / 1024;
-    return `${gb.toFixed(gb >= 100 ? 0 : 1)} GB`;
-}
-
 function resolveAttachmentIconName(mimeType?: string): IconName {
     if (!mimeType) return 'file';
     if (mimeType.startsWith('image/')) return 'image';
@@ -86,13 +76,13 @@ export const AttachmentsMessageRow = React.memo(function AttachmentsMessageRow(p
                         >
                             <Icon name={resolveAttachmentIconName(a.mimeType)} size={14} color={theme.colors.text.secondary} />
                             <Text numberOfLines={1} style={styles.attachmentText}>{a.name}</Text>
-                            <Text style={styles.attachmentMeta}>{formatBytes(a.sizeBytes)}</Text>
+                            <Text style={styles.attachmentMeta}>{formatHappierDataBytes(a.sizeBytes, { kind: 'storage' })}</Text>
                         </Pressable>
                     ) : (
                         <View key={`${a.path}:${a.name}`} style={styles.attachmentChip}>
                             <Icon name={resolveAttachmentIconName(a.mimeType)} size={14} color={theme.colors.text.secondary} />
                             <Text numberOfLines={1} style={styles.attachmentText}>{a.name}</Text>
-                            <Text style={styles.attachmentMeta}>{formatBytes(a.sizeBytes)}</Text>
+                            <Text style={styles.attachmentMeta}>{formatHappierDataBytes(a.sizeBytes, { kind: 'storage' })}</Text>
                         </View>
                     )
                 ))}
