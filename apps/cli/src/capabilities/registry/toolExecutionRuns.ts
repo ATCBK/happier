@@ -83,9 +83,11 @@ export const executionRunsCapability: Capability = {
     const reviewEngineAgentIds = selectReviewEngineAgentIds(cliEngineRegistry.contributions);
     const exactPathReviewEngineAgentIds = selectReviewEngineAgentIds(cliEngineRegistry.contributions, 'paths');
     const accountSnapshot = getActiveAccountSettingsSnapshot();
+    // Configured targets are best-effort discovery, not the daemon's protocol
+    // authority. An unobserved ACP catalog cannot withdraw built-in Run support;
+    // configured starts still require its ready authority at their own owner.
     const configuredBackends = await buildConfiguredAcpBackendInventoryItems(
-      accountSnapshot?.settings ?? null,
-      accountSnapshot?.acpCatalog,
+      accountSnapshot?.settings ?? null, accountSnapshot?.acpCatalog,
     );
     const backendIds = [...cliEngineRegistry.contributions.agentDefinitionsById.values()]
       .filter((agent) => agent.identity && listAgentExecutionTargetsV1(agent.identity).length > 0)

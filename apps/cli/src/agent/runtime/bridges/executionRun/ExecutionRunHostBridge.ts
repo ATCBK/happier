@@ -2895,6 +2895,7 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
           if (!enqueue) return { ok: false, errorCode: 'execution_run_host_action_unavailable', error: 'Canonical Session Pending admission is unavailable' };
           const host = {
             runId, input, cwd: this.cwd, runs: this.runs, controllers: this.controllers,
+            acpCatalogSnapshot: (await this.resolveAccountSettingsSnapshot?.())?.acpCatalog,
             startRun: this.start.bind(this),
             ensureRun: (id: string) => this.ensure(id, { resume: true, ...(opts?.causalPermissionAuthority ? { causalPermissionAuthority: opts.causalPermissionAuthority } : {}) }),
             waitForTerminal: (id: string, signal: AbortSignal) => this.waitForTerminal(id, { signal }),

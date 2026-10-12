@@ -6,7 +6,6 @@ import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/execut
 
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot'
 import { readAgentContributionDisplayTitle } from '@/agent/catalog/agentDisplayTitle'
-import { requireReadyAcpCatalog } from '@/agent/acp/catalog/configured/resolveBackend'
 
 function normalizeLimit(value: unknown): number | null {
   const parsed = Number(value)
@@ -40,7 +39,10 @@ export async function buildConfiguredAcpBackendInventoryItems(
   accountSettings: AccountSettings | null,
   acpCatalogSnapshot?: AcpCatalogSnapshotV1,
 ): Promise<AgentBackendInventoryItem[]> {
-  const definitions = requireReadyAcpCatalog(acpCatalogSnapshot).record.definitions
+  // Optional discovery cannot withdraw built-in choices. Configured launch
+  // admission still requires ready, current authority at its runtime owner.
+  if (acpCatalogSnapshot?.status !== 'ready') return []
+  const definitions = acpCatalogSnapshot.record.definitions
   const definitionById = new Map(definitions.map((definition) => [definition.id, definition]))
   const definitionIds = definitions.map((definition) => definition.id)
   const catalog = readAgentCatalogSnapshot()

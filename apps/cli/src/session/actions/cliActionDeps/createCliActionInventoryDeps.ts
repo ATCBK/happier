@@ -602,7 +602,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       }
     },
     reviewEnginesList: async ({ sessionId, includeDisabled, scope }) => {
-      const captured = await readAcpInventorySnapshot();
+      const captured = await readAcpCatalogSnapshot();
       const items = await (await import('./buildReviewEngineInventoryItemsLazy')).buildReviewEngineInventoryItemsLazy({
         includeDisabled,
         scope,
@@ -613,7 +613,7 @@ export function createCliActionInventoryDeps(params: Readonly<{
       return { sessionId, items };
     },
     agentsBackendsList: async (args) => {
-      const captured = await readAcpInventorySnapshot();
+      const captured = await readAcpCatalogSnapshot();
       const items = await (await import('./buildAgentBackendInventoryItemsLazy')).buildAgentBackendInventoryItemsLazy({
         limit: (args as { limit?: unknown }).limit,
         includeDisabled: (args as { includeDisabled?: boolean }).includeDisabled === true,

@@ -24,9 +24,11 @@ import type { ExecutionRunEnsureResult } from './ensureExecutionRun';
 import type { ExecutionRunActionResult, ExecutionRunManagerStartParams, ExecutionRunStartResult, ExecutionRunState } from './executionRunTypes';
 import { assertExecutionRunStructuredOutputModelAllowed } from './structuredOutputAdmission';
 import { readExecutionRunErrorCode } from './errors';
+import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
 type Host = Readonly<{
   runId: string; input: unknown; cwd: string;
+  acpCatalogSnapshot?: AcpCatalogSnapshotV1;
   runs: Map<string, ExecutionRunState>; controllers: ReadonlyMap<string, ExecutionRunController>;
   startRun: (params: ExecutionRunManagerStartParams) => Promise<ExecutionRunStartResult>;
   ensureRun: (runId: string) => Promise<ExecutionRunEnsureResult>;
@@ -148,7 +150,7 @@ export async function applyReviewWalkthroughAction(host: Host): Promise<Executio
     ? String(readScmDiffSummaryIntent(first.intentInput).cwd) : host.cwd };
   const captured = await readCapturedScmComparison({ cwd: host.cwd, comparisonId: request.comparisonId, sessionId: first.sessionId! }).catch(() => null);
   if (!captured) return failure('comparison_unavailable', 'The saved comparison is unavailable for this Session and repository.');
-  const inventory = await buildReviewEngineInventoryItems({ accountSettings: first.runtimeSettings?.accountSettings
+  const inventory = await buildReviewEngineInventoryItems({ acpCatalogSnapshot: host.acpCatalogSnapshot, accountSettings: first.runtimeSettings?.accountSettings
     ? AccountSettingsSchema.parse(first.runtimeSettings.accountSettings) : null });
   const policy = resolveReviewNarratorPolicy({ selectedEngineIds: runs.map(run =>
     inventory.find(engine => engine.backendId === run.backendId)?.value ?? run.backendId), engines: inventory });
