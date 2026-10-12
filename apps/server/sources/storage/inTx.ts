@@ -166,7 +166,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                           maxWait: boundedMaxWaitMs,
                       }
                     : {
-                          isolationLevel: options?.isolationLevel ?? "ReadCommitted",
+                          isolationLevel: options?.isolationLevel ?? "Serializable",
                           timeout: boundedTimeoutMs,
                           maxWait: boundedMaxWaitMs,
                       };
