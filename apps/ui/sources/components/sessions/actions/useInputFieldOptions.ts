@@ -4,6 +4,7 @@ import { projectInputOptionsDependencies } from '@happier-dev/protocol/inputs';
 
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { resolveUiAccountActionFallbackMachineId } from '@/sync/ops/actions/accountActionDeps';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { ResolveSessionActionFieldOptions, InputFieldOptionsContext } from './sessionActionFieldOptions';
@@ -16,6 +17,11 @@ export type InputFieldOptionsRequest = InputFieldOptionsContext & Readonly<{
     field: Pick<ActionInputFieldHint, 'path' | 'optionsSourceId' | 'options' | 'inputType' | 'connectedAccountOptions'>;
 }>;
 const NO_READS: readonly InputOptionsRead[] = Object.freeze([]);
+
+function hasLocalStaticOptions(field: InputFieldOptionsRequest['field']): boolean {
+    // Contributed types may also restrict choices through their serving Resource.
+    return field.options !== undefined && (!field.inputType || 'hostType' in field.inputType);
+}
 
 function fieldKey(field: Pick<ActionInputFieldHint, 'optionsSourceId' | 'inputType'> & { path?: string }, context?: InputFieldOptionsContext): string {
     return JSON.stringify([field.path, field.optionsSourceId, field.inputType, context?.actionId, context?.consumer,
@@ -34,14 +40,15 @@ export function useInputFieldOptions(params: Readonly<{
     /** Explicit routed Account custody; null is unavailable, never ambient fallback. */
     accountLifetime?: (ServerAccountScopeLifetime & Partial<Pick<ServerCredentialAccountScopeBinding, 'revision'>>) | null;
 }>) {
-    const scope = useActiveServerAccountScope();
+    const scope = useActiveServerAccountScope(params.serverId ?? undefined);
     const accountScope = params.accountLifetime === undefined ? scope : params.accountLifetime?.scope;
     // Pin the same incumbent Account relay for the options read and the picker mount.
     // A later transport fallback must not give a field machine-B choices beside machine-A's type.
     const optionServerId = params.serverId ?? accountScope?.serverId;
-    const machineId = params.machineId ?? (!params.sessionId && optionServerId
+    const machineId = params.machineId ?? (!params.sessionId && optionServerId && accountScope
+        && areServerProfileIdentifiersEquivalent(optionServerId, accountScope.serverId)
         && params.requests.some((request) => request.field.inputType !== undefined)
-        ? resolveUiAccountActionFallbackMachineId({ serverId: optionServerId }) : null);
+        ? resolveUiAccountActionFallbackMachineId(accountScope) : null);
     const signature = JSON.stringify([accountScope?.accountId, params.accountLifetime?.revision, optionServerId, machineId,
         params.sessionId, params.requests.map((request) => ({ ...request,
             draftInput: projectInputOptionsDependencies(request.draftInput ?? {}, request.consumer) }))]);
@@ -50,7 +57,7 @@ export function useInputFieldOptions(params: Readonly<{
         const defaultContexts = new Map<string, InputFieldOptionsContext>();
         const reads = new Map<string, InputOptionsRead>();
         for (const request of params.requests) {
-            if ((!request.field.optionsSourceId && !request.field.inputType && !request.field.connectedAccountOptions) || request.field.options?.length) continue;
+            if ((!request.field.optionsSourceId && !request.field.inputType && !request.field.connectedAccountOptions) || hasLocalStaticOptions(request.field)) continue;
             const input = { ...(request.field.optionsSourceId ? { optionsSourceId: request.field.optionsSourceId } : {}),
                 ...(request.actionId ? { actionId: request.actionId, fieldPath: request.field.path } : {}),
                 ...(request.consumer ? { consumer: request.consumer, fieldPath: request.field.path } : {}),
@@ -91,7 +98,7 @@ export function useInputFieldOptions(params: Readonly<{
         activeReads.forEach((read) => refreshInputFieldOptions(read, params.refreshKey));
     }, [activeReads, params.refreshKey]);
     const state = React.useCallback((field: InputFieldOptionsRequest['field'], context?: InputFieldOptionsContext): InputFieldOptionsState => {
-        if (field.options?.length || (!field.optionsSourceId && !field.inputType && !field.connectedAccountOptions)) return { options: field.options ?? EMPTY_INPUT_OPTIONS, status: 'ready' };
+        if (hasLocalStaticOptions(field) || (!field.optionsSourceId && !field.inputType && !field.connectedAccountOptions)) return { options: field.options ?? EMPTY_INPUT_OPTIONS, status: 'ready' };
         const effectiveContext = context ?? defaultContexts.get(JSON.stringify([field.path, field.optionsSourceId, field.inputType]));
         const key = keys.get(fieldKey(field, effectiveContext));
         const index = activeReads.findIndex((read) => read.key === key);

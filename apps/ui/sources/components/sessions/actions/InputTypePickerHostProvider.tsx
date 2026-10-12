@@ -42,7 +42,7 @@ export function InputTypePickerHostProvider(props: HostProps): React.ReactElemen
         : captureActiveServerAccountScopeLifetime());
     const sessionTarget = useSessionMachineTarget(props.sessionId ?? null, serverId);
     const machineId = props.machineId ?? sessionTarget?.machineId ?? (props.sessionId || !accountLifetime ? null
-        : resolveUiAccountActionFallbackMachineId({ serverId: accountLifetime.scope.serverId }));
+        : resolveUiAccountActionFallbackMachineId(accountLifetime.scope));
     const state = useDaemonMergedProjectionInputs({ machineId, serverId, enabled: props.enabled && !inherited });
     const current = React.useRef({ props, accountLifetime, machineId, serverId, state });
     current.current = { props, accountLifetime, machineId, serverId, state };

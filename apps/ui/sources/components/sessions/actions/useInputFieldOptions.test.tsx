@@ -59,11 +59,15 @@ afterEach(async () => {
 });
 const field = { path: 'repository', inputType: repositoryInputTypeRef };
 
-function OptionsProbe(props: Readonly<{ serverId: string; workflow: string }>) {
+function OptionsProbe(props: Readonly<{ serverId: string; workflow: string; restricted?: boolean }>) {
     const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+    const selectedField = props.restricted ? { ...field, options: [
+        { value: { repositoryId: 'example/review-assistant' }, label: 'Authored repository' },
+        { value: { repositoryId: 'outside-resource' }, label: 'Outside Resource' },
+    ] } : field;
     const options = useInputFieldOptions({ serverId: props.serverId, machineId: 'controller-a', enabled: !!binding, accountLifetime: binding,
-        requests: [{ field, consumer: { kind: 'workflow', workflow: props.workflow }, draftInput: {} }] });
-    const state = options.state(field);
+        requests: [{ field: selectedField, consumer: { kind: 'workflow', workflow: props.workflow }, draftInput: {} }] });
+    const state = options.state(selectedField);
     return <View testID="native-field.options" accessibilityLabel={state.status} accessibilityHint={state.errorCode}>
         {state.options.map(option => <Text key={option.label}>{option.label}</Text>)}
     </View>;
@@ -89,6 +93,17 @@ function reply(label: string) {
 }
 
 describe('qualified input field options scope', () => {
+    it('does not bypass serving type choices with authored static choices', async () => {
+        const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://restricted-options.example',
+            serverIdentityId: 'srv_restricted_options', accountId: 'compute-owner', currentAccount: true });
+        const workflow = await createTypedWorkflow(target, 'compute-owner');
+        rpc.read.mockResolvedValue(reply('Serving repository'));
+        const screen = await renderScreen(<OptionsProbe serverId={target} workflow={workflow} restricted />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('native-field.options')?.props.accessibilityLabel).not.toBe('loading'));
+        expect(screen.getTextContent()).not.toContain('Outside Resource');
+        expect(screen.getTextContent()).toContain('Serving repository');
+        await screen.unmount();
+    });
     it('withdraws a retired target Account response and resolves only the replacement binding', async () => {
         const target = await harness.addHome({ name: 'Compute', serverUrl: 'https://retired-options.example', serverIdentityId: 'srv_retired_options', accountId: 'original-owner' });
         await harness.addHome({ name: 'Focused', serverUrl: 'https://other-options.example', serverIdentityId: 'srv_other_options', accountId: 'focused-owner', currentAccount: true });

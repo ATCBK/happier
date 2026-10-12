@@ -12,6 +12,7 @@ import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHub
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { CapabilitiesDetectResponse } from '@happier-dev/protocol/capabilities';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { CANONICAL_AGENT_IDS } from '@/agents/registry/registryCore';
 import { buildAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
 import { useSessionActionFieldOptions, useSessionActionFieldOptionsForRowHeight } from '@/components/sessions/actions/useSessionActionFieldOptions';
@@ -27,7 +28,7 @@ type Deps = Parameters<typeof useTranscriptItemsPipeline>[0];
 const daemon = vi.hoisted(() => {
     const calls: string[] = [];
     const backends: Record<string, { available: boolean; intents: string[]; title: string }> = {};
-    return { calls, backends, channelDisabled: false };
+    return { calls, backends };
 });
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => createServerScopedMachineRpcBoundaryMock(async (request) => {
     daemon.calls.push(request.method);
@@ -35,10 +36,6 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
         protocolVersion: 1,
         results: { 'tool.executionRuns': { ok: true, checkedAt: Date.now(), data: { backends: daemon.backends } } },
     } satisfies CapabilitiesDetectResponse;
-    if (request.method === 'action.options.resolve') return {
-        actionId: null, fieldPath: null, optionsSourceId: 'notifications.channels.available',
-        options: [{ value: 'plugin/channel', label: 'Plugin channel', disabled: daemon.channelDisabled }],
-    };
     // This daemon has no external Agent UI contributions; bundled Agent choices remain real.
     if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
         return { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
@@ -52,6 +49,7 @@ let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 let fixtureIndex = 0;
 let serverId: string;
 let draft: SessionActionDraft;
+let accountSettings: StorageState['settings'];
 const engineField = { path: 'engineIds', optionsSourceId: 'review.engines.available' };
 const channelField = { path: 'channels', optionsSourceId: 'notifications.channels.available' };
 const messageItem = { id: 'm1', kind: 'message' as const, messageId: 'm1', seq: 1, createdAt: 1 };
@@ -60,6 +58,8 @@ function Source(props: React.PropsWithChildren) {
     return <AppSessionTranscriptSourceProvider sessionId="s1" serverId={serverId}>{props.children}</AppSessionTranscriptSourceProvider>;
 }
 async function writeStore(patch: Partial<StorageState>) {
+    // Model a synced Account preference change at both the HTTP and UI boundaries.
+    if (patch.settings) accountSettings = patch.settings;
     await act(async () => { getStorage().setState(patch); });
 }
 function session(machineId = 'machine-1', updatedAt = 1) {
@@ -84,6 +84,7 @@ function deps(resolveActionDraftFieldOptions: Deps['resolveActionDraftFieldOptio
         getMessageRevisionById: () => 1,
         groupingMode: 'linear',
         isLoaded: true,
+        jumpToSeq: null,
         items,
         itemsRef: { current: items },
         latestCommittedActivityKey: null,
@@ -103,7 +104,7 @@ function deps(resolveActionDraftFieldOptions: Deps['resolveActionDraftFieldOptio
         transcriptToolCallsCollapsedPreviewCountSetting: 3,
     };
 }
-async function renderPipeline(card = false) {
+async function renderPipeline(card = false, expectedStatus: 'ready' | 'failed' = 'ready') {
     let runs = 0;
     const stableDeps = deps(() => []);
     const hook = await renderHook(() => {
@@ -128,8 +129,9 @@ async function renderPipeline(card = false) {
     await vi.waitFor(() => {
         const resolver = card ? hook.getCurrent().cardResolver : hook.getCurrent().resolver;
         const field = card ? channelField : engineField;
-        expect(resolver.state?.(field)).toMatchObject({ status: 'ready' });
-        expect(resolver(field).length).toBeGreaterThan(0);
+        const state = resolver.state?.(field);
+        expect(state, JSON.stringify(state)).toMatchObject({ status: expectedStatus });
+        if (expectedStatus === 'ready') expect(resolver(field).length).toBeGreaterThan(0);
     });
     return { hook, read };
 }
@@ -144,16 +146,26 @@ async function refreshCapabilities() {
 beforeEach(async () => {
     daemon.calls.length = 0;
     daemon.backends = {};
-    daemon.channelDisabled = false;
+    accountSettings = { ...getStorage().getState().settings, backendEnabledByTargetKey: {} };
     const http = createHomeHubArtifactHttpBoundary('account-a');
     // Each test has a fresh real Home namespace, not a reset or forged cache.
     fixtureIndex += 1;
-    connection = await restoreServerAccountForTest({ serverUrl: `http://transcript-options-${fixtureIndex}.test`, accountId: 'account-a', request: http.request });
+    connection = await restoreServerAccountForTest({ serverUrl: `http://transcript-options-${fixtureIndex}.test`, accountId: 'account-a', request: async (input, init) => {
+        if (new URL(String(input)).pathname === '/v2/account/settings') {
+            return Response.json({ content: { t: 'plain', v: accountSettings }, version: 1 });
+        }
+        // An absent Account catalog is a valid fresh Account; HTTP 404 is unavailability.
+        if (new URL(String(input)).pathname === ACP_CATALOG_ROWS_ROUTE_V1) {
+            return Response.json(AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' }));
+        }
+        return http.request(input, init);
+    } });
     serverId = captureActiveServerAccountScopeLifetime()!.scope.serverId;
     draft = { id: 'd1', address: { serverId, sessionId: 's1' }, accountId: 'account-a', actionId: 'review.start', createdAt: 1,
         status: 'editing', input: { engineIds: [CANONICAL_AGENT_IDS[1]!], instructions: 'Review.', changeType: 'all', base: { kind: 'none' } } };
     const machines = [createMachineFixture({ id: 'machine-1', activeAt: Date.now() }), createMachineFixture({ id: 'machine-2', activeAt: Date.now() })];
-    await writeStore({ sessions: { s1: session() }, machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+    await writeStore({ settingsScope: { serverId, accountId: 'account-a' }, profileScope: { serverId, accountId: 'account-a' },
+        sessions: { s1: session() }, machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
         machineListByServerId: { [serverId]: machines }, settings: { ...getStorage().getState().settings, backendEnabledByTargetKey: {} } });
     await setDrafts([draft]);
 });
@@ -195,13 +207,15 @@ describe('transcript action-draft option key locality', () => {
         await vi.waitFor(() => expect(read().resolver(engineField).map(option => option.label)).toContain('Vendor Review Bot'));
         expect(read().draftKey).not.toBe(discovered.draftKey); expect(read().messageKey).toBe(baseline.messageKey); await hook.unmount();
     });
-    it('keeps row geometry when a declared notification option only changes availability', async () => {
+    it('keeps an unavailable notification draft visibly failed without changing row geometry on retry', async () => {
         draft = { ...draft, actionId: 'notifications.notify_me', input: { message: 'Ready', channels: ['plugin/channel'] } }; await setDrafts([draft]);
-        const { hook, read } = await renderPipeline(true); const baseline = read();
-        expect(baseline.cardResolver(channelField)[0]?.disabled).not.toBe(true);
-        daemon.channelDisabled = true; await act(async () => { hook.getCurrent().cardResolver.retry?.(); });
-        await vi.waitFor(() => expect(read().cardResolver(channelField)[0]?.disabled).toBe(true));
-        expect(read().resolver).toBe(baseline.resolver); expect(read().draftKey).toBe(baseline.draftKey); await hook.unmount();
+        const { hook, read } = await renderPipeline(true, 'failed'); const baseline = read();
+        // Notify me is not a UI-exposed Action. Its options must not bypass that admission.
+        // Availability-only height changes are covered by sessionActionFieldOptions.test.ts.
+        expect(baseline.cardResolver.state?.(channelField)).toMatchObject({ status: 'failed', errorCode: 'action_disabled' });
+        await act(async () => { hook.getCurrent().cardResolver.retry?.(); });
+        await vi.waitFor(() => expect(read().cardResolver.state?.(channelField)).toMatchObject({ status: 'failed', errorCode: 'action_disabled' }));
+        expect(read().draftKey).toBe(baseline.draftKey); expect(read().messageKey).toBe(baseline.messageKey); await hook.unmount();
     });
     it('does not rerender option consumers for unrelated session data and observes the real machine change', async () => {
         const { hook, read } = await renderPipeline(); const baseline = read();
