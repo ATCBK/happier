@@ -231,6 +231,18 @@ function mutableLayout(layout: SessionBoardLayoutV1) {
 }
 
 describe('SessionBoardSurface', () => {
+    it('opens Add and rerenders the split Board without an uncached external-store snapshot', async () => {
+        const report = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const populated = snapshot({ layout: POPULATED, items: [{ itemId: 'note-1', item: note('Plan') }] });
+            const screen = await renderScreen(<Harness snapshot={populated} />);
+            await openAddPopover(screen, 'session-board-add-trigger');
+            await screen.update(<Harness snapshot={populated} />);
+            expect(report.mock.calls.filter(args => args.some(value => String(value).includes('getSnapshot should be cached')))).toEqual([]);
+            await screen.unmount();
+        } finally { report.mockRestore(); }
+    });
+
     it('does not claim a last loaded version before any Board item has loaded', async () => {
         const initial = snapshot({});
         const screen = await renderScreen(

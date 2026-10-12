@@ -126,6 +126,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         paddingHorizontal: 4,
         paddingBottom: 4,
     },
+    // Beside the views' ⋯: the same bottom inset, stretched to the row so the pill centres on the ⋯ target.
+    viewsAdd: {
+        alignSelf: 'stretch',
+        justifyContent: 'center',
+        paddingBottom: 4,
+    },
     addRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
@@ -356,13 +362,15 @@ function AddControls(props: Readonly<{
         );
     }
     return (
-        <View style={stylesheet.addRow} testID={`${props.testID}-add`}>
+        <View style={stylesheet.viewsAdd} testID={`${props.testID}-add`}>
             <View ref={anchorRef} collapsable={false}>
+                {/* Bordered, never filled (lab cwidgets WB): the Board's content, or the empty card's own first step, leads. */}
                 <RoundButton
                     size="small"
+                    display="secondary"
                     testID={`${props.testID}-add-trigger`}
                     title={t('common.add')}
-                    leading={<Icon name="plus" size={16} color={theme.colors.button.primary.tint} />}
+                    leading={<Icon name="plus" size={16} color={theme.colors.text.primary} />}
                     accessibilityLabel={t('common.add')}
                     expanded={open}
                     onPress={toggle}
@@ -802,6 +810,16 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
     ) : null;
 
     const boardEmpty = isSessionBoardEmpty(snapshot);
+    // One chrome row (lab cwidgets WB): Add sits trailing beside the views and their ⋯, never on a row
+    // of its own. An empty Board's card already offers Ask the agent and Add a note, so Add shows there
+    // only when it reaches more than those two. The phone Board keeps it in the pane header.
+    const inlineAdd = mutationControls
+        && props.host !== 'mobileCockpit'
+        && !layoutCard
+        && !offlineEmptyCard
+        && (boardEmpty
+            ? !props.editor && controller.addIntents.some((intent) => intent !== 'note' && intent !== 'askAgent')
+            : true);
     const placements = activeView?.placements ?? [];
     const recovered = controller.recoveredItemIds;
     const visiblePlacementIds = props.host === 'mobileCockpit'
@@ -1196,6 +1214,7 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                         testID={`${testID}-views`}
                     />
                 </View>
+                {inlineAdd ? <AddControls controller={controller} testID={testID} {...addSource} /> : null}
                 {mutationControls ? (
                     <ViewActions
                         controller={controller}
@@ -1289,11 +1308,6 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                               * other Add source stays reachable through the one Add chooser, which on
                               * the phone lives in the pane header.
                               */}
-                            {mutationControls
-                                && props.host !== 'mobileCockpit'
-                                && controller.addIntents.some((intent) => intent !== 'note' && intent !== 'askAgent')
-                                ? <AddControls controller={controller} testID={testID} {...addSource} />
-                                : null}
                             <SurfaceStateCard
                                 testID={`${testID}-empty`}
                                 kind="empty"
@@ -1310,10 +1324,6 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                         </>
                     )) : (
                         <>
-                            {/* The Add affordance stays reachable once content exists (phone: in the header). */}
-                            {mutationControls && props.host !== 'mobileCockpit'
-                                ? <AddControls controller={controller} testID={testID} {...addSource} />
-                                : null}
                             {visiblePlacements.length === 0 && visibleRecovered.length === 0 ? (
                                 <EmptyState
                                     testID={`${testID}-empty-view`}
