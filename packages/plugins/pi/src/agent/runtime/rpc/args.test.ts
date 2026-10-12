@@ -59,10 +59,15 @@ describe('buildPiToolsForPermissionMode', () => {
 });
 
 describe('buildPiRpcArgs', () => {
+  it('trusts the user-selected project for fresh and resumed launches', () => {
+    expect(buildPiRpcArgs()).toContain('--approve');
+    expect(buildPiRpcArgs({ resumeSessionId: 'existing-session' })).toContain('--approve');
+  });
   it('builds Pi RPC argv with permission tools and normalized thinking level', () => {
     expect(buildPiRpcArgs({ permissionMode: 'read-only', thinkingLevel: 'HIGH' })).toEqual([
       '--mode',
       'rpc',
+      '--approve',
       '--tools',
       'read,grep,find,ls',
       '--thinking',
@@ -78,6 +83,7 @@ describe('buildPiRpcArgs', () => {
     })).toEqual([
       '--mode',
       'rpc',
+      '--approve',
       '--session',
       ' pi-session-1 ',
     ]);
@@ -96,6 +102,7 @@ describe('buildPiRpcArgs', () => {
       'openai-codex/*',
       '--mode',
       'rpc',
+      '--approve',
     ]);
   });
 
@@ -112,6 +119,7 @@ describe('buildPiRpcArgs', () => {
       'anthropic/*',
       '--mode',
       'rpc',
+      '--approve',
     ]);
   });
 
@@ -127,6 +135,7 @@ describe('buildPiRpcArgs', () => {
       resolvePiRequestAuthExtensionPath(agentDir),
       '--mode',
       'rpc',
+      '--approve',
     ]);
     expect(buildPiRpcArgs({
       env: {
@@ -152,6 +161,7 @@ describe('buildPiRpcArgs', () => {
       '--extension', '/tmp/happier-pi-tools-bridge.js',
       '--happier-tools-config', '/tmp/happier-pi-tools-config.json',
       '--mode', 'rpc',
+      '--approve',
     ]);
   });
 

@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-import type { AgentSessionNativeToolBridgeConfig } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentSessionMcpLaunchConfig, AgentSessionNativeToolBridgeConfig } from '@happier-dev/plugin-sdk/agents/runtime';
 import { writeAtomicTextFileIfChanged, writeSecureTempTextFileSync } from '@happier-dev/plugin-sdk/fs';
 
 import { buildPiHappierToolsExtensionSource } from './extensionSource.js';
@@ -16,6 +16,7 @@ export type PreparedPiHappierToolsExtension = Readonly<{
 export async function preparePiHappierToolsExtension(params: Readonly<{
   agentDir: string;
   config: AgentSessionNativeToolBridgeConfig;
+  mcpServers?: Readonly<Record<string, AgentSessionMcpLaunchConfig>>;
 }>): Promise<PreparedPiHappierToolsExtension> {
   const extensionPath = join(
     params.agentDir,
@@ -31,7 +32,7 @@ export async function preparePiHappierToolsExtension(params: Readonly<{
   const configPath = writeSecureTempTextFileSync({
     prefix: 'happier-pi-tools',
     suffix: '.json',
-    contents: `${JSON.stringify(params.config)}\n`,
+    contents: `${JSON.stringify({ ...params.config, mcpServers: params.mcpServers ?? {} })}\n`,
   });
   return Object.freeze({
     extensionPath,

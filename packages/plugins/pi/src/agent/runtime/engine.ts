@@ -104,7 +104,7 @@ async function openPiSession(
         const launchEnv = prepared.launchEnvironment.values;
         const agentDir = launchEnv.PI_CODING_AGENT_DIR?.trim()
           || join(resolveHomeDirFromEnvironment(launchEnv), '.pi', 'agent');
-        const toolPreparation = preparePiHappierToolsExtension({ agentDir, config });
+        const toolPreparation = preparePiHappierToolsExtension({ agentDir, config, mcpServers: request.mcpServers });
         preparedTools = await lifecycle.waitFor(
           toolPreparation,
           'Happier tools extension preparation',

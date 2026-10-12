@@ -4,6 +4,7 @@ export function buildPiHappierToolsExtensionSource(): string {
   return `// Happier Pi native tools extension. Generated; tool policy is host-owned.
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 
 const CONFIG_FLAG = ${JSON.stringify(PI_HAPPIER_TOOLS_CONFIG_FLAG)};
 const BRIDGE_OUTPUT_MAX_BYTES = 1024 * 1024;
@@ -36,6 +37,13 @@ function isConfig(value) {
     && Array.isArray(value.launch.argsPrefix)
     && value.launch.argsPrefix.every((entry) => typeof entry === "string")
     && (value.launch.env === undefined || isStringRecord(value.launch.env))
+    && (value.mcpServers === undefined || (value.mcpServers && typeof value.mcpServers === "object"
+      && !Array.isArray(value.mcpServers) && Object.values(value.mcpServers).every((server) => (
+        server && typeof server.command === "string" && server.command.trim()
+        && (server.args === undefined || (Array.isArray(server.args) && server.args.every((arg) => typeof arg === "string")))
+        && (server.env === undefined || isStringRecord(server.env))
+        && (server.enabledTools === undefined || (Array.isArray(server.enabledTools) && server.enabledTools.every((name) => typeof name === "string")))
+      ))))
   );
 }
 
@@ -193,10 +201,84 @@ function invoke(config, toolName, args, callId, signal, cwd) {
   });
 }
 
+function openMcpServer(server, cwd) {
+  const child = spawn(server.command, server.args || [], {
+    cwd, env: { ...process.env, ...(server.env || {}) }, shell: false,
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const pending = new Map();
+  let nextId = 0;
+  let failure = null;
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  const fail = (error) => {
+    failure = error;
+    for (const request of pending.values()) request.reject(error);
+    pending.clear();
+  };
+  child.once("error", fail);
+  child.once("close", () => fail(new Error("MCP server closed")));
+  const lines = createInterface({ input: child.stdout });
+  lines.on("line", (line) => {
+    let message;
+    try { message = JSON.parse(line); }
+    catch { fail(new Error("MCP server returned invalid JSON")); return; }
+    if (message.method) {
+      if (message.id !== undefined) child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: message.id,
+        ...(message.method === "ping" ? { result: {} }
+          : { error: { code: -32601, message: "Method not supported" } }) }) + "\\n");
+      return;
+    }
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    if (message.error) request.reject(new Error(String(message.error.message || "MCP request failed")));
+    else request.resolve(message.result);
+  });
+  child.stdin.on("error", fail);
+  const notify = (method, params) => {
+    if (!failure) child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\\n");
+  };
+  const request = (method, params, signal) => new Promise((resolve, reject) => {
+    if (failure) { reject(failure); return; }
+    if (signal?.aborted) { reject(new Error("MCP tool call cancelled")); return; }
+    const id = ++nextId;
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const abort = () => {
+      pending.delete(id);
+      notify("notifications/cancelled", { requestId: id, reason: "Tool call cancelled" });
+      cleanup();
+      reject(new Error("MCP tool call cancelled"));
+    };
+    pending.set(id, {
+      resolve(value) { cleanup(); resolve(value); },
+      reject(error) { cleanup(); reject(error); },
+    });
+    signal?.addEventListener("abort", abort, { once: true });
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\\n", (error) => {
+      if (error) fail(error);
+    });
+  });
+  return {
+    request, notify,
+    async close() {
+      fail(new Error("MCP session closed"));
+      lines.close();
+      child.stdin.end();
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      await closed;
+    },
+  };
+}
+
 export default function happierPiToolsExtension(pi) {
   pi.registerFlag(CONFIG_FLAG, { description: "Happier session tool configuration", type: "string" });
   let registered = false;
-  pi.on("session_start", () => {
+  const connections = [];
+  const closeConnections = async () => {
+    await Promise.all(connections.splice(0).map((connection) => connection.close()));
+  };
+  pi.on("session_shutdown", closeConnections);
+  pi.on("session_start", async () => {
     if (registered) return;
     const config = readConfig(pi);
     if (!config) return;
@@ -218,6 +300,45 @@ export default function happierPiToolsExtension(pi) {
           return toResult(await invoke(config, tool.name, args, callId, signal, cwd));
         },
       });
+    }
+    try {
+      const names = [];
+      for (const [serverName, server] of Object.entries(config.mcpServers || {})) {
+        const connection = openMcpServer(server, config.directory);
+        connections.push(connection);
+        const initialized = await connection.request("initialize", { protocolVersion: "2024-11-05",
+          capabilities: {}, clientInfo: { name: "happier-pi", version: "1" } });
+        if (initialized.protocolVersion !== "2024-11-05") throw new Error("MCP server negotiated an unsupported protocol version");
+        connection.notify("notifications/initialized", {});
+        let cursor;
+        do {
+          const catalog = await connection.request("tools/list", cursor ? { cursor } : {});
+          for (const tool of catalog.tools) {
+            if (server.enabledTools && !server.enabledTools.includes(tool.name)) continue;
+            const name = "mcp__" + serverName + "__" + tool.name;
+            names.push(name);
+            pi.registerTool({ name, label: tool.title || tool.name,
+              description: tool.description || "", parameters: tool.inputSchema,
+              async execute(_callId, args, signal, _onUpdate, ctx) {
+                if (signal?.aborted) throw new Error("MCP tool call cancelled");
+                const approved = await ctx?.ui?.confirm(name, JSON.stringify(args ?? {}), { signal });
+                if (!approved) throw new Error("MCP tool call denied");
+                const result = await connection.request("tools/call", { name: tool.name, arguments: args ?? {} }, signal);
+                if (result.isError) throw new Error((result.content || []).map((item) => item.text || "").join("\\n") || "MCP tool call failed");
+                return { content: (result.content || []).map((item) => (
+                  item.type === "text" || item.type === "image" ? item
+                    : { type: "text", text: JSON.stringify(item) }
+                )), details: { structuredContent: result.structuredContent } };
+              },
+            });
+          }
+          cursor = catalog.nextCursor;
+        } while (cursor);
+      }
+      if (names.length) pi.setActiveTools([...new Set([...pi.getActiveTools(), ...names])]);
+    } catch (error) {
+      await closeConnections();
+      throw error;
     }
   });
 }

@@ -114,6 +114,7 @@ export function buildPiRpcArgs(opts?: Readonly<{
       : []),
     '--mode',
     'rpc',
+    '--approve',
   ];
   if (tools) args.push('--tools', tools.join(','));
   const thinking = normalizePiThinkingLevel(opts?.thinkingLevel);
