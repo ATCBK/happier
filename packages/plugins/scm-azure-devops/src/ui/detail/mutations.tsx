@@ -488,7 +488,7 @@ export function AzureMutationControls({
         />
         <Stack gap="small">
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.azureDevops.ui.mutations.reactivate.description"
             fallback="This pull request is abandoned. Reactivating makes it active again and asks its reviewers again."
@@ -528,7 +528,7 @@ export function AzureMutationControls({
       />
       <Stack gap="small">
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.azureDevops.ui.mutations.complete.description"
           fallback="Work items are not transitioned and branch policy is not bypassed."
@@ -543,7 +543,7 @@ export function AzureMutationControls({
         />
         {observedSourceCommitId !== null ? null : (
           <Text
-            variant="caption"
+            variant="micro"
             tone="warning"
             valueKey="plugins.azureDevops.ui.mutations.complete.sourceUnavailable"
             fallback="Azure DevOps did not report the merge source commit of this pull request, so it cannot be completed from here."
@@ -577,7 +577,7 @@ export function AzureMutationControls({
           onChange={setReviewerIdsValue}
         />
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.azureDevops.ui.mutations.requestReview.description"
           fallback="Everyone you name is added as a reviewer. Nobody currently reviewing is removed, and no existing vote is changed."
@@ -598,7 +598,7 @@ export function AzureMutationControls({
       </Stack>
       <Stack gap="small">
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.azureDevops.ui.mutations.abandon.description"
           fallback="Azure DevOps can reactivate an abandoned pull request later."

@@ -63,6 +63,7 @@ export function projectAzurePresentObservation(input: Readonly<{
   const scopeLabel = projectedScope.value.length === 0
     ? projectTriageDisplayTextV1(entry.locator.repositoryId, MAX_TRIAGE_TEXT_UTF8_BYTES_V1)
     : projectedScope;
+  const scopeDisplayName = projectTriageDisplayTextV1(entry.locator.repositoryName, MAX_TRIAGE_TEXT_UTF8_BYTES_V1);
   const displayPath = projectTriageDisplayTextV1(
     `${scopeLabel.value} !${entry.entryId}`,
     MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
@@ -93,6 +94,7 @@ export function projectAzurePresentObservation(input: Readonly<{
     v: 1,
     title: title.value,
     scopeLabel: scopeLabel.value,
+    ...(scopeDisplayName.value.length === 0 ? {} : { scopeDisplayName: scopeDisplayName.value }),
     ...(authorLabel.length === 0 ? {} : { authorLabel }),
     ...(designation.value.length === 0 ? {} : { designation: designation.value }),
     ...(createdAtMs === null ? {} : { createdAtMs }),
@@ -111,6 +113,7 @@ export function projectAzurePresentObservation(input: Readonly<{
     ...(reviewRevision === null ? {} : { reviewRevision }),
     ...(title.truncated
       || scopeLabel.truncated
+      || scopeDisplayName.truncated
       || author?.truncated === true
       || designation.truncated
       || facts.truncated

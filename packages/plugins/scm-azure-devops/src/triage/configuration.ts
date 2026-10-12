@@ -1,4 +1,5 @@
 import type { TriageSourceInstanceConfigurationV1 } from '@happier-dev/triage-protocol/v1';
+import { createProtocolStoredReadSchema, defineProtocolLiteral, defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 
 import { normalizeAzureDevOpsBaseUrl } from './origin.js';
 import type { AzureDevOpsOrigin } from './types.js';
@@ -14,7 +15,10 @@ import type { AzureDevOpsOrigin } from './types.js';
 export type AzureSourceConfiguration = Readonly<{ baseUrl: string }>;
 
 const CONFIGURATION_VERSION = 1;
-const CONFIGURATION_KEYS: readonly string[] = ['v', 'baseUrl'];
+const AzureConfigurationRecordV1Schema = defineProtocolObject({
+  v: defineProtocolLiteral(CONFIGURATION_VERSION), baseUrl: defineProtocolString(),
+}, { policy: 'closed' });
+const storedConfiguration = createProtocolStoredReadSchema(AzureConfigurationRecordV1Schema);
 
 /**
  * The relative-only instance/scope key.
@@ -40,7 +44,7 @@ export function encodeAzureSourceConfiguration(
 /**
  * Decode a configured-instance token back into this source's own record.
  *
- * The decoder is strict in both directions: an unknown field, a second version, a
+ * Retained reads ignore retired fields. A second version, a
  * non-normalizable base, or an embedded credential yields `null`, which every caller reports as
  * `unsupportedContract` rather than guessing a route. The normalizer is the same one that
  * produced the token, so a value that would not round-trip is rejected instead of accepted with
@@ -55,14 +59,9 @@ export function decodeAzureSourceConfiguration(
   } catch {
     return null;
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-
-  const record = parsed as Readonly<Record<string, unknown>>;
-  if (record.v !== CONFIGURATION_VERSION) return null;
-  for (const key of Object.keys(record)) {
-    if (!CONFIGURATION_KEYS.includes(key)) return null;
-  }
-  if (typeof record.baseUrl !== 'string') return null;
+  const result = storedConfiguration.safeParse(parsed);
+  if (!result.success) return null;
+  const record = result.data;
 
   const normalized = normalizeAzureDevOpsBaseUrl(record.baseUrl);
   if (!normalized.ok) return null;

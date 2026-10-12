@@ -339,10 +339,10 @@ export function AzureReviewPublicationControls({ input }: Readonly<{
         }}
       />
       <Form.TextField label={text('plugins.azureDevops.ui.publication.summary', 'Review summary')} value={summary} onChange={setSummary} />
-      {verdictNeedsBody ? <Text variant="caption" tone="warning" valueKey="plugins.azureDevops.ui.publication.summaryRequired" fallback="Add a summary before publishing this verdict." /> : null}
+      {verdictNeedsBody ? <Text variant="micro" tone="warning" valueKey="plugins.azureDevops.ui.publication.summaryRequired" fallback="Add a summary before publishing this verdict." /> : null}
       {selectedRequiresVerdict && verdict === 'none' ? (
         <Text
-          variant="caption"
+          variant="micro"
           tone="warning"
           valueKey="plugins.azureDevops.ui.publication.diffLessNeedsVerdict"
           fallback="Submitting comments without a file as a review requires a verdict and summary."

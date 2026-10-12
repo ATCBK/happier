@@ -89,6 +89,16 @@ describe('Azure DevOps present observation author', () => {
 });
 
 describe('Azure DevOps present observation designation', () => {
+  it('keeps the full repository path beside its short source-owned display name', () => {
+    const observation = TriageSourceScanObservationV1Schema.parse(
+      projectAzurePresentObservation({ entry: entry(), involvement: [] }),
+    );
+    if (observation.kind !== 'present') throw new Error('expected present observation');
+    expect(observation.snapshot).toMatchObject({
+      scopeLabel: 'acme/Payments/checkout',
+      scopeDisplayName: 'checkout',
+    });
+  });
   it('publishes the pull request id the way Azure DevOps writes it', () => {
     expect(projectAzurePresentObservation({ entry: entry(), involvement: [] }).snapshot.designation).toBe('!17');
   });
@@ -112,10 +122,15 @@ describe('Azure DevOps source configuration token', () => {
     expect(JSON.parse(token.token)).toEqual({ v: 1, baseUrl: 'https://dev.azure.com/acme' });
   });
 
-  it('rejects a token carrying a credential, an unknown field, or a non-https base', () => {
+  it('reads unknown retained token fields without changing its configured route or encoded output', () => {
+    const token = JSON.stringify({ v: 1, baseUrl: 'https://dev.azure.com/acme', retired: true });
+    expect(decodeAzureSourceConfiguration({ v: 1, token })).toEqual({ baseUrl: 'https://dev.azure.com/acme' });
+    expect(JSON.parse(encodeAzureSourceConfiguration(origin()).token)).toEqual({ v: 1, baseUrl: 'https://dev.azure.com/acme' });
+  });
+
+  it('rejects a token carrying a credential in its route or a non-https base', () => {
     for (const raw of [
       '{"v":1,"baseUrl":"https://user:pat@dev.azure.com/acme"}',
-      '{"v":1,"baseUrl":"https://dev.azure.com/acme","token":"secret"}',
       '{"v":1,"baseUrl":"http://dev.azure.com/acme"}',
       '{"v":2,"baseUrl":"https://dev.azure.com/acme"}',
       'not-json',

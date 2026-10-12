@@ -14,7 +14,7 @@
  * stays `renderSurface`.
  */
 
-import { createTriageSourceSettingsSurface } from '@happier-dev/triage-sources';
+import { createTriageSourceSettingsSurface } from '@happier-dev/triage-sources/ui';
 
 import { AZURE_DEVOPS_PLUGIN_ID } from '../../azureDevopsContracts.js';
 import { AZURE_DEVOPS_TRIAGE_ACTION_IDS } from '../../triage/actions.js';

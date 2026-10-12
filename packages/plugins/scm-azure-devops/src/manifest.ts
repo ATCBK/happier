@@ -188,6 +188,10 @@ export const AZURE_DEVOPS_PLUGIN = definePlugin({
   displayName: 'Azure DevOps SCM hosting provider',
   description: 'Detects Azure DevOps remotes, provides Azure Repos operations,'
     + ' and brings its pull requests into PRs & Issues.',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' },
   runtime: { apiVersion: 1 },
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
@@ -282,7 +286,7 @@ export const AZURE_DEVOPS_PLUGIN = definePlugin({
       { locale: 'ru', messages: { ...AZURE_DEVOPS_UI_TRANSLATIONS.ru, 'plugins.azureDevops.settings.group': 'Azure DevOps', 'plugins.azureDevops.settings.sources': 'PR и задачи', 'plugins.azureDevops.settings.sources.subtitle': 'Выберите учетные записи и проекты Azure DevOps, которые будут отображаться в разделе PR и задач.' } },
       { locale: 'pl', messages: { ...AZURE_DEVOPS_UI_TRANSLATIONS.pl, 'plugins.azureDevops.settings.group': 'Azure DevOps', 'plugins.azureDevops.settings.sources': 'PR-y i zgłoszenia', 'plugins.azureDevops.settings.sources.subtitle': 'Wybierz konta i projekty Azure DevOps wyświetlane w sekcji PR-ów i zgłoszeń.' } },
       { locale: 'es', messages: { ...AZURE_DEVOPS_UI_TRANSLATIONS.es, 'plugins.azureDevops.settings.group': 'Azure DevOps', 'plugins.azureDevops.settings.sources': 'PR e incidencias', 'plugins.azureDevops.settings.sources.subtitle': 'Elige qué cuentas y proyectos de Azure DevOps aparecen en PR e incidencias.' } },
-      { locale: 'fr', messages: { ...AZURE_DEVOPS_UI_TRANSLATIONS.fr, 'plugins.azureDevops.settings.group': 'Azure DevOps', 'plugins.azureDevops.settings.sources': 'PR et tickets', 'plugins.azureDevops.settings.sources.subtitle': 'Choisissez les comptes et projets Azure DevOps affichés dans PR et tickets.' } },
+      { locale: 'fr', messages: { ...AZURE_DEVOPS_UI_TRANSLATIONS.fr, 'plugins.azureDevops.settings.group': 'Azure DevOps', 'plugins.azureDevops.settings.sources': 'PR et tickets', 'plugins.azureDevops.settings.sources.subtitle': 'Choisis les comptes et projets Azure DevOps affichés dans PR et tickets.' } },
       { locale: 'it', messages: { ...AZURE_DEVOPS_UI_TRANSLATIONS.it, 'plugins.azureDevops.settings.group': 'Azure DevOps', 'plugins.azureDevops.settings.sources': 'PR e segnalazioni', 'plugins.azureDevops.settings.sources.subtitle': 'Scegli gli account e i progetti Azure DevOps da mostrare in PR e segnalazioni.' } },
       { locale: 'pt', messages: { ...AZURE_DEVOPS_UI_TRANSLATIONS.pt, 'plugins.azureDevops.settings.group': 'Azure DevOps', 'plugins.azureDevops.settings.sources': 'PRs e problemas', 'plugins.azureDevops.settings.sources.subtitle': 'Escolha as contas e os projetos Azure DevOps apresentados em PRs e problemas.' } },
       { locale: 'de', messages: { ...AZURE_DEVOPS_UI_TRANSLATIONS.de, 'plugins.azureDevops.settings.group': 'Azure DevOps', 'plugins.azureDevops.settings.sources': 'PRs & Tickets', 'plugins.azureDevops.settings.sources.subtitle': 'Wähle aus, welche Azure-DevOps-Konten und -Projekte unter PRs & Tickets angezeigt werden.' } },

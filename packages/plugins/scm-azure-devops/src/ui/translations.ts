@@ -56,8 +56,8 @@ export const AZURE_DEVOPS_UI_TRANSLATIONS = Object.freeze({
     ...AZURE_DEVOPS_ADDITIONAL_UI_TRANSLATIONS.fr,
     ...AZURE_DEVOPS_PUBLICATION_UI_TRANSLATIONS.fr,
     'plugins.azureDevops.account.title': 'Compte Azure DevOps', 'plugins.azureDevops.account.description': 'Déploiement Azure DevOps et jeton d’accès personnel utilisés pour lire les demandes de tirage.',
-    'plugins.azureDevops.auth.base.title': 'URL Azure DevOps', 'plugins.azureDevops.auth.base.description': 'https://dev.azure.com/votre-organisation pour Azure DevOps Services, ou l’URL de votre collection Azure DevOps Server.',
-    'plugins.azureDevops.auth.token.title': 'Jeton d’accès personnel', 'plugins.azureDevops.auth.token.description': 'Utilisez Code (lecture) pour consulter. Les actions qui modifient Azure DevOps nécessitent Code (lecture et écriture).', 'plugins.azureDevops.auth.manual.title': 'Jeton d’accès personnel Azure DevOps',
+    'plugins.azureDevops.auth.base.title': 'URL Azure DevOps', 'plugins.azureDevops.auth.base.description': 'https://dev.azure.com/votre-organisation pour Azure DevOps Services, ou l’URL de ta collection Azure DevOps Server.',
+    'plugins.azureDevops.auth.token.title': 'Jeton d’accès personnel', 'plugins.azureDevops.auth.token.description': 'Utilise Code (lecture) pour consulter. Les actions qui modifient Azure DevOps nécessitent Code (lecture et écriture).', 'plugins.azureDevops.auth.manual.title': 'Jeton d’accès personnel Azure DevOps',
   }),
   it: Object.freeze({
     ...AZURE_DEVOPS_RENDER_UI_TRANSLATIONS.it,

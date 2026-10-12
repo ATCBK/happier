@@ -270,7 +270,7 @@ export const AZURE_DEVOPS_RENDER_UI_TRANSLATIONS = Object.freeze({
     "plugins.azureDevops.ui.partial": "Affiche ce qui a été lu jusqu'à présent",
     "plugins.azureDevops.ui.pagePositionUnsafe": "Azure DevOps a renvoyé une position de page suivante qui ne pouvait pas être conservée de façon sûre. La lecture s'est donc arrêtée ici.",
     "plugins.azureDevops.ui.shortened": "Certains détails ont été raccourcis",
-    "plugins.azureDevops.ui.shortened.description": "Ouvrez la demande de fusion dans Azure DevOps pour lire le texte complet.",
+    "plugins.azureDevops.ui.shortened.description": "Ouvre la demande de fusion dans Azure DevOps pour lire le texte complet.",
     "plugins.azureDevops.ui.noFacts": "Aucun faits projectés",
     "plugins.azureDevops.ui.noFacts.description": "Cette observation ne contient pas de faits affichables.",
     "plugins.azureDevops.ui.facts": "Faits",

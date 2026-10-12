@@ -164,7 +164,7 @@ function SettledReadEvidence({
       )}
       {state.value.omittedRowCount === 0 ? null : (
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.azureDevops.ui.rowsUnreadable"
           fallback="{count} row(s) in this response could not be understood."
@@ -209,12 +209,12 @@ function PagedFooter({
 }>): React.ReactElement {
   return (
     <Stack gap="small">
-      <Text variant="caption" tone="neutral" valueKey={summaryKey} fallback={summary} values={summaryValues} />
+      <Text variant="micro" tone="neutral" valueKey={summaryKey} fallback={summary} values={summaryValues} />
       {state.omittedRowCount === 0
         ? null
         : (
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.azureDevops.ui.rowsUnreadable"
             fallback="{count} row(s) on the pages read could not be understood."
@@ -404,7 +404,7 @@ function OverviewPanel({
         {story || pendingFields.length === 0 ? null : (
           <Stack gap="small">
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.azureDevops.ui.pendingPanels.description"
               fallback="Answered in the panels beside this one, not on the list row:"
@@ -515,7 +515,7 @@ function FilesPanel({
           <PageFailureBanner state={state} />
           <SettledReadEvidence state={iterations} />
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey={currentIterationId === undefined
               ? 'plugins.azureDevops.ui.noComparisonIteration'
@@ -644,7 +644,7 @@ function PoliciesPanel({ input }: Readonly<{ input: TriageDetailSurfaceInputV1 }
             ]}
         />
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.azureDevops.ui.statusInformational.description"
           fallback="A status is informational unless a policy evaluation above marks it required."
@@ -1009,7 +1009,7 @@ function ActivityStreamPanel({
             />
           )}
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.azureDevops.ui.threadsShown"
             fallback="{shown} of {total} thread(s) shown."
