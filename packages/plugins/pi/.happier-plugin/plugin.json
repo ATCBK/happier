@@ -156,7 +156,7 @@
             },
             "sources": [
               {
-                "contentSearch": false,
+                "contentSearch": true,
                 "instances": [
                   {
                     "constants": {},
@@ -179,6 +179,10 @@
                     {
                       "field": "agentDir",
                       "kind": "field"
+                    },
+                    {
+                      "field": "sessionsRoot",
+                      "kind": "field"
                     }
                   ]
                 },
@@ -200,6 +204,13 @@
                       "kind": "string",
                       "max": 10000,
                       "min": 1,
+                      "name": "sessionsRoot",
+                      "nullish": true
+                    },
+                    {
+                      "kind": "string",
+                      "max": 10000,
+                      "min": 1,
                       "name": "sessionFile",
                       "nullish": true
                     }
@@ -213,6 +224,7 @@
         "title": "Pi"
       }
     ],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -230,6 +242,7 @@
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
       "discoverySources": [],
@@ -239,6 +252,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
@@ -280,7 +294,7 @@
               "kind": "theme",
               "token": "green"
             },
-            "ionName": "code-slash-outline"
+            "ionName": "code"
           },
           "sections": [
             {
@@ -382,7 +396,7 @@
         {
           "locale": "fr",
           "messages": {
-            "settingsAgents.plugins.pi.fields.piAgentDir.subtitle": "Racine de données Pi facultative. Laissez vide pour utiliser ~/.pi/agent.",
+            "settingsAgents.plugins.pi.fields.piAgentDir.subtitle": "Racine de données Pi facultative. Laisse vide pour utiliser ~/.pi/agent.",
             "settingsAgents.plugins.pi.fields.piAgentDir.title": "Répertoire de l’agent",
             "settingsAgents.plugins.pi.sections.storage.footer": "Ce répertoire sert uniquement aux sessions Pi lancées ou découvertes par Happier.",
             "settingsAgents.plugins.pi.sections.storage.title": "Stockage",

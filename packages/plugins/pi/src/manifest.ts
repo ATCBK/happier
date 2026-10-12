@@ -106,6 +106,7 @@ export const PI_PLUGIN = definePlugin({
           credentialKinds: [...declaration.credentialKinds],
         })),
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],
