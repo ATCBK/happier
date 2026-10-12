@@ -8,7 +8,6 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
-import { fireAndForget } from '@/utils/system/fireAndForget';
 
 /**
  * What the user asks an agent to do from Agents settings. The prompts live here, once: the
@@ -48,24 +47,30 @@ export function useOpenAgentAuthoringSession(target: Readonly<{ serverId: string
     const scope = useActiveServerAccountScope();
     const currentRef = React.useRef({ scope, target });
     currentRef.current = { scope, target };
+    const mountedRef = React.useRef(true);
+    React.useEffect(() => {
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; };
+    }, []);
     return React.useCallback((intent: AgentAuthoringIntent) => {
         if (!scope) return;
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime || !areServerAccountScopesEqual(lifetime.scope, scope)) return;
-        seedAndOpenNewSession({
-            seed: buildAgentAuthoringSessionSeed({ intent, target }),
-            scope,
-            isCurrent: () => lifetime.isCurrent()
-                && areServerAccountScopesEqual(currentRef.current.scope, scope)
-                && currentRef.current.target?.serverId === target?.serverId
-                && currentRef.current.target?.machineId === target?.machineId,
-            navigateToNewSession: ({ draftId, machineId, directory, spawnServerId, worktree }) => {
-                const result = runGuardedNavigation(() => router.push({
-                    pathname: '/new',
-                    params: buildNewSessionLaunchRouteParams({ draftId, machineId, directory, targetServerId: spawnServerId, worktree }),
-                } as never));
-                if (result !== true) fireAndForget(result, { tag: 'useOpenAgentAuthoringSession' });
-            },
+        return runGuardedNavigation(() => {
+            seedAndOpenNewSession({
+                seed: buildAgentAuthoringSessionSeed({ intent, target }),
+                scope,
+                isCurrent: () => mountedRef.current && lifetime.isCurrent()
+                    && areServerAccountScopesEqual(currentRef.current.scope, scope)
+                    && currentRef.current.target?.serverId === target?.serverId
+                    && currentRef.current.target?.machineId === target?.machineId,
+                navigateToNewSession: ({ draftId, machineId, directory, spawnServerId, worktree }) => {
+                    router.push({
+                        pathname: '/new',
+                        params: buildNewSessionLaunchRouteParams({ draftId, machineId, directory, targetServerId: spawnServerId, worktree }),
+                    } as never);
+                },
+            });
         });
     }, [router, scope, target]);
 }
