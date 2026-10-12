@@ -682,9 +682,11 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
         </View>
     );
 
-    // One pane, one scroll owner: the title, search, options and custom entry
-    // scroll together. Grid status has a reserved footer so arriving notices
-    // cannot move the cards' origin; ordinary lists retain their header notices.
+    // The title, status and search stay pinned above the one scroll owner that
+    // carries the options and custom entry (D13 engine pane): scrolling to the
+    // selected card never scrolls away what the pane is or how to search it.
+    // Grid status has a reserved footer so arriving notices cannot move the
+    // cards' origin; ordinary lists retain their header notices.
     const headerNode = (
         props.showTitle !== false
                 || props.summary
@@ -821,11 +823,10 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
             testID="model-picker-overlay"
             style={[styles.section, props.fillAvailableSpace ? styles.sectionFill : null]}
         >
+            {totalOptionCount > 0 ? headerNode : null}
             {totalOptionCount > 0 ? (
                 <SelectionList
                     testID="model-picker-overlay-selection-list"
-                    inputPlacement="body"
-                    bodyHeader={headerNode}
                     bodyFooter={customNode === null ? null : <View style={styles.bodyFooter}>{customNode}</View>}
                     inputTestID="model-picker-overlay-search"
                     rootStep={selectionRootStep}

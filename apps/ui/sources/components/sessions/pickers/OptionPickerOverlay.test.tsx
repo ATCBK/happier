@@ -51,8 +51,13 @@ describe('OptionPickerOverlay', () => {
         expect(screen.findByTestId('model-picker-overlay-notes')).not.toBeNull();
         expect(screen.findByTestId('model-picker-overlay-title-row')).toBeNull();
     });
-    it('scrolls its header, rows and custom entry together in one scroll owner (0.2 engine pane)', async () => {
+    it('pins its header and search above the one scroll owner that carries the rows and custom entry', async () => {
         const { OptionPickerOverlay } = await import('./OptionPickerOverlay');
+        const options = Array.from({ length: 12 }, (_, index) => ({
+            value: `model-${index}`,
+            label: `Model ${index}`,
+            description: `Description ${index}`,
+        }));
         const screen = await renderScreen(
             <OptionPickerOverlay
                 title="Model"
@@ -60,11 +65,8 @@ describe('OptionPickerOverlay', () => {
                 notes={['Model discovery note']}
                 fillAvailableSpace
                 multiColumn
-                options={[
-                    { value: 'model-a', label: 'Model A', description: 'A' },
-                    { value: 'model-b', label: 'Model B', description: 'B' },
-                ]}
-                selectedValue="model-a"
+                options={options}
+                selectedValue="model-0"
                 emptyText="Empty"
                 canEnterCustomValue
                 getCustomValue={(value: string) => value}
@@ -76,9 +78,12 @@ describe('OptionPickerOverlay', () => {
         const scrollOwner = screen.findByTestId('model-picker-overlay-selection-list:bodyScroll');
         expect(scrollOwner).toBeTruthy();
         const inside = (testID: string) => (scrollOwner?.findAll((node) => node.props?.testID === testID).length ?? 0) > 0;
-        expect(inside('model-picker-overlay-title-row')).toBe(true);
-        expect(inside('model-picker-overlay-summary')).toBe(true);
-        expect(inside('model-picker-overlay-option:model-a')).toBe(true);
+        expect(screen.findByTestId('model-picker-overlay-title-row')).not.toBeNull();
+        expect(screen.findByTestId('model-picker-overlay-search')).not.toBeNull();
+        expect(inside('model-picker-overlay-title-row')).toBe(false);
+        expect(inside('model-picker-overlay-summary')).toBe(false);
+        expect(inside('model-picker-overlay-search')).toBe(false);
+        expect(inside('model-picker-overlay-option:model-0')).toBe(true);
         expect(inside('model-picker-overlay-custom')).toBe(true);
     });
 
