@@ -2,8 +2,8 @@ import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
+    HAPPIER_COLLECTION_LIST_METRICS,
     HAPPIER_TREE_ROW_METRICS,
-    HappierPressable,
     HappierTreeDisclosure,
     useHappierTreeInteraction,
     type HappierTreeNode,
@@ -14,8 +14,15 @@ import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { StatusDot } from '@/components/ui/status/StatusDot';
-import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { CollectionListGroupLabel, CollectionNavigationRow } from '@/components/ui/lists/collection/CollectionList';
+import {
+    ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX,
+    ITEM_SUBTITLE_TEXT_METRICS,
+    ITEM_TITLE_TEXT_METRICS,
+} from '@/components/ui/lists/itemDensityMetrics';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
+import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
+import { useLocalSetting } from '@/sync/domains/state/storage';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -88,7 +95,7 @@ function openTreeRow(row: ProjectsTreeRow, onOpenRef: (refId: string, address?: 
     else if (row.expandable) onToggle(row.key);
 }
 
-export type ProjectsTreeHiddenItem = Readonly<{ key: string; title: string; subtitle: string }>;
+export type ProjectsTreeHiddenItem = Readonly<{ key: string; title: string; subtitle: string; refId?: string; workspaceAddress?: WorkspaceAddressV1 }>;
 export type ProjectsTreeSavedItem = Readonly<{ key: string; title: string; subtitle?: string }>;
 
 /**
@@ -194,39 +201,56 @@ export const ProjectsTree = React.memo(function ProjectsTree(props: Readonly<{
                 </>
             ) : null}
             {props.hidden && props.hidden.items.length > 0 ? (
+                // Hidden Projects (lab p-projects HIDE/HIDDEN): one disclosure row through the column's own
+                // row and turning chevron, then each hidden Project as an ordinary dimmed row with Show.
                 <View style={[styles.hidden, { borderTopColor: theme.colors.border.subtle }]}>
-                    <HappierPressable
+                    <CollectionNavigationRow
                         testID={`${testID}-hidden`}
-                        accessibilityRole="button"
+                        title={t('projects.identity.hiddenTitle')}
+                        titleQualifier={String(props.hidden.items.length)}
                         accessibilityLabel={t('projects.identity.hiddenCount', { count: props.hidden.items.length })}
-                        expanded={props.hidden.open}
-                        onPress={props.hidden.onToggle}
-                        style={(state) => [
-                            styles.hiddenHeader,
-                            focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
-                            state.pressed || state.hovered ? { backgroundColor: theme.colors.surface.pressed } : null,
-                        ]}
-                    >
-                        <Icon name="eye-slash" size={16} color={theme.colors.text.secondary} />
-                        <Text style={styles.hiddenTitle}>{t('projects.identity.hiddenTitle')}</Text>
-                        <Text style={styles.count}>{String(props.hidden.items.length)}</Text>
-                        <View style={styles.grow} />
-                        <Icon name={props.hidden.open ? 'caret-down' : 'caret-right'} size={12} color={theme.colors.text.tertiary} />
-                    </HappierPressable>
-                    {props.hidden.open ? props.hidden.items.map((item) => (
-                        <View key={item.key} testID={`${testID}-hidden-${item.key}`} style={styles.hiddenRow}>
-                            <Icon name="folder" size={16} color={theme.colors.text.tertiary} />
-                            <View style={styles.hiddenText}>
-                                <Text numberOfLines={1} style={styles.hiddenRowTitle}>{item.title}</Text>
-                                <Text numberOfLines={1} style={styles.hiddenRowSubtitle}>{item.subtitle}</Text>
+                        leftElement={(
+                            <View style={styles.leading}>
+                                <HappierTreeDisclosure
+                                    kind="branch"
+                                    expanded={props.hidden.open}
+                                    color={theme.colors.text.tertiary}
+                                    reducedMotion={reducedMotion}
+                                />
+                                <Icon name="eye-slash" size={16} color={theme.colors.text.secondary} />
                             </View>
-                            <ToolbarButton
-                                testID={`${testID}-show-${item.key}`}
-                                label={t('projects.identity.show')}
-                                accessibilityLabel={`${t('projects.identity.show')} ${item.title}`}
-                                onPress={() => props.hidden?.onShow(item.key)}
-                            />
-                        </View>
+                        )}
+                        treeItem={{ accessibilityExpanded: props.hidden.open }}
+                        dimmed
+                        selected={false}
+                        onPress={props.hidden.onToggle}
+                    />
+                    {props.hidden.open ? props.hidden.items.map((item) => (
+                        <CollectionNavigationRow
+                            key={item.key}
+                            testID={`${testID}-hidden-${item.key}`}
+                            href={item.refId ? props.hrefForRef?.(item.refId, item.workspaceAddress) ?? null : null}
+                            title={item.title}
+                            subtitle={item.subtitle}
+                            leftElement={(
+                                <View style={styles.leading}>
+                                    {disclosureColumn ? <HappierTreeDisclosure kind="leaf" expanded={false} color={theme.colors.text.tertiary} reducedMotion={reducedMotion} /> : null}
+                                    <Icon name="folder" size={16} color={theme.colors.text.tertiary} />
+                                </View>
+                            )}
+                            dimmed
+                            selected={false}
+                            rightElement={(
+                                <ToolbarButton
+                                    testID={`${testID}-show-${item.key}`}
+                                    label={t('projects.identity.show')}
+                                    accessibilityLabel={`${t('projects.identity.show')} ${item.title}`}
+                                    onPress={() => props.hidden?.onShow(item.key)}
+                                />
+                            )}
+                            // Hidden is not unreachable: the row still opens its exact checkout.
+                            onPress={() => { if (item.refId) onOpenRef(item.refId, item.workspaceAddress); }}
+                        />
                     )) : null}
                 </View>
             ) : null}
@@ -234,11 +258,51 @@ export const ProjectsTree = React.memo(function ProjectsTree(props: Readonly<{
     );
 });
 
+/** The tree's leading anatomy: the disclosure column, then the row's glyph (`styles.leading`). */
+const TREE_LEADING_GAP_PX = 8;
+const TREE_GLYPH_PX = 16;
+const PROJECTS_TREE_SKELETON_GEOMETRY = Object.freeze({
+    insetStart: HAPPIER_COLLECTION_LIST_METRICS.contentInset + HAPPIER_TREE_ROW_METRICS.disclosureBoxPx + TREE_LEADING_GAP_PX,
+    insetEnd: HAPPIER_COLLECTION_LIST_METRICS.contentInset,
+    glyphColumn: TREE_GLYPH_PX,
+    glyphSize: TREE_GLYPH_PX,
+    gap: HAPPIER_COLLECTION_LIST_METRICS.rowGlyphGap,
+});
+const PROJECTS_TREE_SKELETON_ROW_BOX = Object.freeze({
+    minHeight: HAPPIER_COLLECTION_LIST_METRICS.rowMinHeight,
+    paddingVertical: ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX.compact,
+});
+
+/**
+ * The Projects tree's first load: the shared loading rows in the tree rows' own shape — a compact
+ * navigation row with a subtitle, its glyph after the disclosure column, its title and subtitle at their
+ * line heights in the user's font scale — so the rows that land replace them without a shift.
+ */
+export const ProjectsTreeSkeletonRows = React.memo(function ProjectsTreeSkeletonRows(props: Readonly<{ rows: number; testID?: string }>) {
+    const uiFontScale = useLocalSetting('uiFontScale');
+    const lineHeights = React.useMemo(() => {
+        const scaled = (lineHeight: number) => {
+            const style = scaleTextStyle({ lineHeight }, uiFontScale) as { lineHeight?: number };
+            return style.lineHeight ?? lineHeight;
+        };
+        return [scaled(ITEM_TITLE_TEXT_METRICS.compact.lineHeight), scaled(ITEM_SUBTITLE_TEXT_METRICS.compact.lineHeight)] as const;
+    }, [uiFontScale]);
+    return (
+        <SkeletonRows
+            {...(props.testID === undefined ? {} : { testID: props.testID })}
+            rows={props.rows}
+            rowBox={PROJECTS_TREE_SKELETON_ROW_BOX}
+            lineHeights={lineHeights}
+            geometry={PROJECTS_TREE_SKELETON_GEOMETRY}
+        />
+    );
+});
+
 const styles = StyleSheet.create((theme) => ({
     leading: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: TREE_LEADING_GAP_PX,
     },
     trailing: {
         flexDirection: 'row',
@@ -254,43 +318,5 @@ const styles = StyleSheet.create((theme) => ({
         marginTop: 12,
         paddingTop: 8,
         borderTopWidth: StyleSheet.hairlineWidth || 1,
-    },
-    hiddenHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        minHeight: 36,
-        paddingHorizontal: 12,
-        marginHorizontal: 4,
-        borderRadius: 8,
-    },
-    hiddenTitle: {
-        ...Typography.rowTitle(),
-        ...Typography.default('regular'),
-        color: theme.colors.text.secondary,
-    },
-    grow: {
-        flex: 1,
-    },
-    hiddenRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        minHeight: 48,
-        paddingHorizontal: 12,
-        marginHorizontal: 4,
-    },
-    hiddenText: {
-        flex: 1,
-        minWidth: 0,
-    },
-    hiddenRowTitle: {
-        ...Typography.rowTitle(),
-        ...Typography.default('regular'),
-        color: theme.colors.text.secondary,
-    },
-    hiddenRowSubtitle: {
-        ...Typography.rowMeta(),
-        color: theme.colors.text.tertiary,
     },
 }));

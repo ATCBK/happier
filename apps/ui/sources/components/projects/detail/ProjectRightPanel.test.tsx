@@ -62,6 +62,24 @@ describe('ProjectRightPanel', () => {
         expect(router.replace).toHaveBeenCalledWith(`/projects/wr_1/code?serverId=${encodeURIComponent(runtime.serverId)}&worktreeId=%40root&mobileSurface=browse`);
         expect(screen.findHostByTestId('project-rightpanel-close')).toBeNull();
     });
+    it('says an unreachable checkout once in a phone pane, which covers the Project page and its line', async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { createMachineFixture } = await import('@/dev/testkit');
+        const { SurfaceFreshnessLine } = await import('@/components/ui/surfaces/SurfaceFreshnessLine');
+        const lastHeartbeat = Date.now();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            vi.setSystemTime(lastHeartbeat + 24 * 60 * 60 * 1000);
+            await act(async () => storage.getState().applyMachines([createMachineFixture({ id: 'm1', active: false,
+                activeAt: lastHeartbeat, seq: 2, updatedAt: Date.now() })], true, { sourceServerId: runtime.serverId }));
+            const lines = async () => (await renderPanel({ onRequestClose: () => {} })).tree.findAllByType(SurfaceFreshnessLine)
+                .map(line => line.props.testID);
+            // Beside the page (desktop) the page's own line says it; pushed over it (phone) the pane does.
+            expect(await lines()).not.toContain('project-rightpanel-reachability');
+            device.phone = true;
+            expect(await lines()).toContain('project-rightpanel-reachability');
+        } finally { vi.useRealTimers(); }
+    });
     it('preserves the selected worktree in the sibling mobile route and pane selection', async () => {
         device.phone = true;
         const screen = await renderPanel({

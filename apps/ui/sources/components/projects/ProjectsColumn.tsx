@@ -7,6 +7,7 @@ import { destinationRowTestId, useColumnDestinations } from '@/components/appShe
 import { Icon } from '@/components/ui/icons/Icon';
 import {
     CollectionList,
+    collectionListStyles,
     CollectionNavigationRow,
 } from '@/components/ui/lists/collection/CollectionList';
 import { t } from '@/text';
@@ -14,13 +15,12 @@ import { t } from '@/text';
 import { ProjectsAddMenu } from './ProjectsAddMenu';
 import { ProjectsListItemMenu } from './ProjectsListItemMenu';
 import { useProjectsListModel } from './useProjectsListModel';
-import { ProjectsTree } from './ProjectsTree';
+import { ProjectsTree, ProjectsTreeSkeletonRows } from './ProjectsTree';
 import { ProjectHideUndoNotice } from './ProjectHideUndoNotice';
-import { ProjectOpenResolutionCard, openProjectCandidate } from './ProjectOpenResolution';
+import { ProjectOpenResolutionCard, isProjectRowsPending, openProjectCandidate, useProjectRowsRetry } from './ProjectOpenResolution';
 import { ProjectActionApprovalNotice } from './ProjectActionApprovalNotice';
 import { useProjectRowCreationActions } from './ProjectSaveAsSourceSheet';
 import { buildProjectsTreeRows, type ProjectsTreeRow } from './projectsTreeRows';
-import { resolveWorkspaceRefByAddress } from '@/sync/domains/workspaces/workspaceRefs';
 import { workspaceAddressFromRefV1, type WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces';
 
 const NO_KEYS: ReadonlySet<string> = new Set();
@@ -47,8 +47,9 @@ export const ProjectsColumn = React.memo(function ProjectsColumn() {
     const model = useProjectsListModel();
     const { newSession, saveSource } = useProjectRowCreationActions(model);
     const placed = useColumnDestinations('projects');
+    const rowsRetry = useProjectRowsRetry();
     const openId = readOpenProjectId(pathname);
-    const { openWorkspace, setProjectHidden, pinnedIdSet, togglePinned, renameProject, resetProjectName, removeProject } = model;
+    const { setProjectHidden, pinnedIdSet, togglePinned, renameProject, resetProjectName, removeProject } = model;
 
     const [expandedKeys, setExpandedKeys] = React.useState<ReadonlySet<string>>(NO_KEYS);
     const [collapsedKeys, setCollapsedKeys] = React.useState<ReadonlySet<string>>(NO_KEYS);
@@ -67,11 +68,7 @@ export const ProjectsColumn = React.memo(function ProjectsColumn() {
         setExpandedKeys((current) => (open ? without(current) : withKey(current)));
         setCollapsedKeys((current) => (open ? withKey(current) : without(current)));
     }, [rows]);
-    const openRef = React.useCallback((refId: string, address?: WorkspaceAddressV1) => {
-        if (!address || address.workspaceId !== refId) return;
-        const resolution = resolveWorkspaceRefByAddress([...refsById.values()], address);
-        if (resolution.kind === 'resolved') openWorkspace(resolution.ref);
-    }, [openWorkspace, refsById]);
+    const openRef = model.openTreeRef;
     const hrefForRef = React.useCallback((refId: string, address?: WorkspaceAddressV1) => address
         ? `/projects/${encodeURIComponent(refId)}?serverId=${encodeURIComponent(address.serverId)}` : null, []);
     const projectRefByKey = React.useMemo(() => new Map(
@@ -100,21 +97,13 @@ export const ProjectsColumn = React.memo(function ProjectsColumn() {
     // Saved-not-open Sources after the tree and the "+" composition: one owner for every Projects entrance.
     const { addSources, saved, cloneRepository } = model;
     const [hiddenOpen, setHiddenOpen] = React.useState(false);
-    const hidden = React.useMemo(() => {
-        const hiddenProjects = model.hiddenTreeProjects;
-        return {
-            items: hiddenProjects.map((project) => {
-                const first = project.checkouts[0]!;
-                return { key: project.key, title: project.name, subtitle: `${first.machineName} · ${first.path}` };
-            }),
-            open: hiddenOpen,
-            onToggle: () => setHiddenOpen((open) => !open),
-            onShow: (key: string) => {
-                const group = projectRefByKey.get(key);
-                if (group) void setProjectHidden(group.projectKey, false);
-            },
-        };
-    }, [hiddenOpen, model.hiddenTreeProjects, projectRefByKey, setProjectHidden]);
+    const { hiddenItems, showHiddenProject } = model;
+    const hidden = React.useMemo(() => ({
+        items: hiddenItems,
+        open: hiddenOpen,
+        onToggle: () => setHiddenOpen((open) => !open),
+        onShow: showHiddenProject,
+    }), [hiddenItems, hiddenOpen, showHiddenProject]);
 
     return (
         <View testID="projects-column" style={styles.column}>
@@ -124,6 +113,22 @@ export const ProjectsColumn = React.memo(function ProjectsColumn() {
                 title={t('tabs.projects')}
                 // A count speaks only once there is something to count (lab `treeCol`: no "0").
                 count={model.projectCount > 0 ? model.projectCount : undefined}
+                // What just happened to a row (Hide · Undo, an approval, an ambiguous open) is pinned under
+                // the rows, so it is in view wherever the tree is scrolled (lab p-projects HIDE).
+                footer={(
+                    <>
+                        {model.projectOpenResolution ? (
+                            <ProjectOpenResolutionCard
+                                testID="projects-column:open-resolution"
+                                issue={model.projectOpenResolution}
+                                onChoose={(candidate) => { openProjectCandidate(model.openProject, candidate); }}
+                                action={{ label: t('common.close'), onPress: model.dismissProjectOpenResolution }}
+                            />
+                        ) : null}
+                        <ProjectActionApprovalNotice testID="projects-column:approval" request={model.projectActionApproval} onDismiss={model.dismissProjectActionApproval} />
+                        <ProjectHideUndoNotice testID="projects-column:hide-undo" undo={model.projectHideUndo} onDismiss={model.dismissProjectHideUndo} />
+                    </>
+                )}
                 headerAction={(
                     <ProjectsAddMenu
                         testID="projects-column:add"
@@ -145,6 +150,20 @@ export const ProjectsColumn = React.memo(function ProjectsColumn() {
                         onPress={() => placed.activate(destination)}
                     />
                 ))}
+                {/* Rows not confirmed yet: quiet rows while they load, one line with Retry when the read failed. */}
+                {model.rowsUnconfirmed && isProjectRowsPending(model.rowsUnconfirmed) ? (
+                    <ProjectsTreeSkeletonRows testID="projects-column:loading" rows={3} />
+                ) : model.rowsUnconfirmed ? (
+                    <View style={collectionListStyles.stateLine}>
+                        <ProjectOpenResolutionCard
+                            testID="projects-column:rows"
+                            issue={model.rowsUnconfirmed}
+                            line
+                            onChoose={() => {}}
+                            onRetry={rowsRetry}
+                        />
+                    </View>
+                ) : null}
                 <ProjectsTree
                     testID="projects-column:tree"
                     rows={rows}
@@ -155,16 +174,6 @@ export const ProjectsColumn = React.memo(function ProjectsColumn() {
                     hidden={hidden}
                     saved={saved}
                 />
-                {model.projectOpenResolution ? (
-                    <ProjectOpenResolutionCard
-                        testID="projects-column:open-resolution"
-                        issue={model.projectOpenResolution}
-                        onChoose={(candidate) => { openProjectCandidate(model.openProject, candidate); }}
-                        action={{ label: t('common.close'), onPress: model.dismissProjectOpenResolution }}
-                    />
-                ) : null}
-                <ProjectActionApprovalNotice testID="projects-column:approval" request={model.projectActionApproval} onDismiss={model.dismissProjectActionApproval} />
-                <ProjectHideUndoNotice testID="projects-column:hide-undo" undo={model.projectHideUndo} onDismiss={model.dismissProjectHideUndo} />
             </CollectionList>
         </View>
     );

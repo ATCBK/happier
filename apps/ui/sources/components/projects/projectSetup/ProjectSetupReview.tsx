@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageRowDividerWidth, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import type { ProjectManifestV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SurfaceCard } from '@/components/ui/cards/SurfaceCard';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -327,7 +328,13 @@ export const ProjectSetupReview = React.memo(function ProjectSetupReview(
 
 const styles = StyleSheet.create(() => ({
   facts: { gap: 14 },
-  review: { gap: 14, paddingHorizontal: 16, paddingBottom: 16 },
+  // The body starts at the row's title column: row inset + leading column + gap (lab SETUP).
+  review: {
+    gap: 14,
+    paddingLeft: PAGE_LIST_METRICS.rowPaddingHorizontalPx + PAGE_LIST_METRICS.rowLeadingColumnPx + PAGE_LIST_METRICS.rowLeadingGapPx,
+    paddingRight: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+    paddingBottom: 16,
+  },
   body: {
     ...Typography.default(),
     ...happierPageTextMetrics('rowDescription'),

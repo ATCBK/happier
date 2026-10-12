@@ -21,7 +21,7 @@ import type { ProjectOpenUse } from './projectOpenChoices';
 export type ProjectOpenWhereStatus =
   | Readonly<{ kind: 'none' }>
   | Readonly<{ kind: 'online'; platform: string; checkoutsHere: string | null }>
-  | Readonly<{ kind: 'offline'; machineName: string }>;
+  | Readonly<{ kind: 'offline' }>;
 
 /**
  * "Where" (lab `openForm` Where, `OPEN_S` cell 5): one identity row — the Machine's mark, its name
@@ -40,6 +40,17 @@ export const ProjectOpenWhereRow = React.memo(function ProjectOpenWhereRow(
 ) {
   const { theme } = useUnistyles();
   const [open, setOpen] = React.useState(false);
+  // An open menu keeps the order it opened with: a Machine coming online or going to sleep updates its
+  // line in place and never moves the row under the pointer. The next opening takes the fresh order.
+  const openedOrderRef = React.useRef<readonly string[] | null>(null);
+  if (!open) openedOrderRef.current = null;
+  else if (!openedOrderRef.current) openedOrderRef.current = props.items.map((item) => item.id);
+  const items = React.useMemo(() => {
+    const order = openedOrderRef.current;
+    if (!order) return props.items;
+    const rank = new Map(order.map((id, index) => [id, index]));
+    return [...props.items].sort((a, b) => (rank.get(a.id) ?? order.length) - (rank.get(b.id) ?? order.length));
+  }, [open, props.items]);
   const status = props.status;
   const subtitle =
     status.kind === 'online'
@@ -47,7 +58,8 @@ export const ProjectOpenWhereRow = React.memo(function ProjectOpenWhereRow(
           .filter(Boolean)
           .join(' · ')
       : status.kind === 'offline'
-        ? t('projects.open.offline', { machine: status.machineName })
+        // The title already names the Machine; its status line says only the condition, like the online line.
+        ? t('projects.open.offline')
         : undefined;
   const changeLabel =
     status.kind === 'offline'
@@ -61,7 +73,10 @@ export const ProjectOpenWhereRow = React.memo(function ProjectOpenWhereRow(
         testID="projects.open.where"
         open={open}
         onOpenChange={setOpen}
-        items={props.items}
+        items={items}
+        // The same rule as the other Machine pickers: a long inventory gets a search field.
+        search={props.items.length >= 10}
+        searchPlaceholder={t('newSession.machinePicker.searchPlaceholder')}
         selectedId={props.selectedId}
         onSelect={(id) => {
           setOpen(false);
@@ -111,6 +126,12 @@ export type ProjectOpenUseRowModel = Readonly<{
   use: ProjectOpenUse;
   title: string;
   subtitle: string | undefined;
+  /** Several checkouts to start from: the selected row's quiet Change opens them (the Where row's pattern). */
+  checkoutChoice?: Readonly<{
+    items: readonly DropdownMenuItem[];
+    selectedId: string | null;
+    onSelect: (id: string) => void;
+  }>;
 }>;
 
 /**
@@ -181,6 +202,12 @@ export const ProjectOpenUseSection = React.memo(function ProjectOpenUseSection(
                     onPress: () => props.onSelect(row.use),
                   }
                 : {})}
+            {...(selected && row.checkoutChoice
+              ? {
+                  rightElementOutsidePressable: true,
+                  rightElement: <ProjectOpenCheckoutChoice use={row.use} choice={row.checkoutChoice} />,
+                }
+              : {})}
             {...(row.use === 'clone' && selected && !showDestination
               ? {
                   rightElementOutsidePressable: true,
@@ -242,3 +269,31 @@ export const ProjectOpenUseSection = React.memo(function ProjectOpenUseSection(
     </ItemGroup>
   );
 });
+
+/** The checkout a selected existing/worktree row starts from, changed through a menu like Where's. */
+function ProjectOpenCheckoutChoice(props: Readonly<{ use: ProjectOpenUse; choice: NonNullable<ProjectOpenUseRowModel['checkoutChoice']> }>) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <DropdownMenu
+      testID={`projects.open.use.${props.use}.checkout`}
+      open={open}
+      onOpenChange={setOpen}
+      items={props.choice.items}
+      selectedId={props.choice.selectedId}
+      onSelect={(id) => {
+        setOpen(false);
+        props.choice.onSelect(id);
+      }}
+      trigger={({ toggle }) => (
+        <RoundButton
+          testID={`projects.open.use.${props.use}.checkout.change`}
+          size="small"
+          display="secondary"
+          // Nothing chosen yet among several: the same menu, asking rather than changing.
+          title={props.choice.selectedId ? t('projects.open.change') : t('common.choose')}
+          onPress={toggle}
+        />
+      )}
+    />
+  );
+}

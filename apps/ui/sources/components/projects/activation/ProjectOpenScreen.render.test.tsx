@@ -45,7 +45,8 @@ async function seedOpenDraft(draftId: string) {
         cipher: createSessionDraftCipher({ accountMode: 'plain', accountCryptoMaterial: null,
             getSessionContext: () => { throw new Error('Open has no Session'); }, randomBytes: size => new Uint8Array(size) }) });
     const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
-    storage.setState({ profileScope: scope, machines: { [machine.id]: machine }, machineListByServerId: { home: [machine] } });
+    storage.setState({ profileScope: scope, machines: { [machine.id]: machine }, machineListByServerId: { home: [machine] },
+        machineListStatusByServerId: { home: 'idle' } });
     storage.getState().activateProjectAccountRowsScope(scope);
     storage.getState().applyProjectAccountRowsForScope(scope, { scope, status: 'ready', coverage: 'complete',
         workspaceRefs: [], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
@@ -144,19 +145,17 @@ describe('Project Open rendered choices', () => {
         expect(banner?.props.details).toContain('target_mismatch');
         expect(seeded.read()?.selection.value).toEqual(selection);
     });
-    it('exposes a page header exit that returns to the origin and keeps the draft', async () => {
+    it('leaves the pushed phone page through the standard back header, not a Cancel of its own', async () => {
+        // A pushed page's exit is navigation's Back ("‹ Projects", lab p-open OPENp); Cancel belongs to a modal sheet.
+        // Leaving keeps the draft: the page never discards it on unmount.
         const draftId = '00000000-0000-4000-8000-000000000081';
         const seeded = await seedOpenDraft(draftId);
-        const { useRouter } = await import('expo-router');
-        const router = useRouter();
-        vi.mocked(router.back).mockClear();
         const screen = await renderScreen(<ProjectOpenScreen />);
         await vi.waitFor(() => expect(screen.findByTestId('projects.open.choices')).toBeTruthy());
         await act(async () => { screen.findByTestId('projects.open')!.props.onLayout({ nativeEvent: { layout: { width: 390 } } }); });
-        expect(screen.findByTestId('projects.open.cancel')).toBeTruthy();
         const before = seeded.read()?.selection.value;
-        await act(async () => { screen.pressByTestId('projects.open.cancel'); });
-        expect(router.back).toHaveBeenCalledOnce();
+        expect(screen.findByTestId('projects.open.cancel')).toBeFalsy();
+        screen.unmount();
         expect(seeded.read()?.selection.value).toEqual(before);
     });
 
@@ -238,6 +237,39 @@ describe('Project Open rendered choices', () => {
         expect(screen.findByTestId('projects.open.destination')).toBeFalsy();
         await act(async () => { screen.pressByTestId('projects.open.destination.change'); });
         expect(screen.findByTestId('projects.open.destination')).toBeTruthy();
+    });
+
+    it('starts a clone with no repository chosen at a repository address field that asks the Machine to read it', async () => {
+        // "Clone a repository…" opens Open with only the clone intent: the address is the first thing to give.
+        const draftId = '00000000-0000-4000-8000-000000000081';
+        const { machine } = await seedOpenDraft(draftId);
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { writeProjectOpenDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const scope = { serverId: 'home', accountId: 'account' };
+        const setMachine = (online: boolean) => {
+            const next = { ...machine, active: online, activeAt: online ? Date.now() : Date.now() - 3_600_000 };
+            storage.setState({ machines: { [machine.id]: next }, machineListByServerId: { home: [next] } });
+        };
+        setMachine(false);
+        writeProjectOpenDraft({ scope, draftId, patch: { selection: { serverId: 'home',
+            materialization: { kind: 'clone', destinationParentPath: '', destinationDirectoryName: '' } } } });
+        const { FieldValueItem } = await import('@/components/ui/forms/FieldValueItem');
+        const screen = await renderScreen(<ProjectOpenScreen />);
+        const address = () => screen.findAllByType(FieldValueItem).find(node => node.props.testID === 'projects.open.subject.address');
+        await vi.waitFor(() => expect(address()).toBeDefined());
+        storage.setState({ machineListStatusByServerId: { home: 'loading' } });
+        // The typed address waits for Machine inventory rather than reporting false absence.
+        await act(async () => { address()!.props.onCommit('github.com/octocat/Hello-World'); });
+        await vi.waitFor(() => expect(address()!.props.value).toBe('github.com/octocat/Hello-World'));
+        expect(address()!.props.error).toBeNull();
+        await act(async () => { storage.setState({ machineListStatusByServerId: { home: 'idle' } }); });
+        // Settled offline inventory now supplies the real answer without retyping the address.
+        await vi.waitFor(() => expect(address()!.props.error).toBe(t('projects.sources.addressNoMachine')));
+        // Choosing where to clone asks that Machine to read the address again; the Home's 503 is now the answer.
+        await act(async () => { setMachine(true); });
+        const where = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'projects.open.where');
+        await act(async () => { where!.props.onSelect(machine.id); });
+        await vi.waitFor(() => expect(address()!.props.error).toBe(t('projects.sources.backendUnavailable')));
     });
 
     it('chooses the branch from a field select whose Other entry asks for any ref', async () => {

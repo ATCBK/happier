@@ -172,7 +172,7 @@ export function buildProjectsTreeRows(input: Readonly<{
                 kind: 'project',
                 title: project.name,
                 titleQualifier: project.teamLabel ?? null,
-                subtitle: selected ? `${only.machineName} · ${only.path}` : `${only.machineName} · ${only.label}`,
+                subtitle: `${only.machineName} · ${selected ? only.path : checkoutWhere(only)}`,
                 machineId: only.machineId,
                 glyph: 'project',
                 expandable: false,
@@ -254,7 +254,31 @@ export function buildProjectsTreeRows(input: Readonly<{
 }
 
 /** What the tree needs of a machine: its name, home and presence (Machine rows own these facts). */
-export type ProjectsTreeMachineFacts = Readonly<{ name: string; homeDir: string | null; online: boolean }>;
+/**
+ * The Hidden group's rows (lab p-projects HIDDEN): each hidden Project once, said where its first
+ * checkout lives, and opening that exact checkout. The column and the phone list both draw these.
+ */
+export function buildProjectsTreeHiddenItems(projects: readonly ProjectsTreeProject[]): ReadonlyArray<Readonly<{
+    key: string; title: string; subtitle: string; refId: string; workspaceAddress?: WorkspaceAddressV1;
+}>> {
+    return projects.flatMap((project) => {
+        const first = project.checkouts[0];
+        if (!first) return [];
+        return [{ key: project.key, title: project.name, subtitle: `${first.machineName} · ${first.path}`, refId: first.refId,
+            ...(first.workspaceAddress ? { workspaceAddress: first.workspaceAddress } : {}) }];
+    });
+}
+
+/** `online` is null while presence is unknown (a Machine this Home does not list): never guessed. */
+export type ProjectsTreeMachineFacts = Readonly<{ name: string; homeDir: string | null; online: boolean | null }>;
+
+/**
+ * A one-row Project's second line after its Machine: the branch when it is known, otherwise where the
+ * checkout lives (lab RULES 6, "MacBook Pro · ~/scratch"), never the folder name its title already says.
+ */
+function checkoutWhere(checkout: ProjectsTreeCheckout): string {
+    return checkout.branch ? checkout.label : checkout.path;
+}
 
 function folderName(rootPath: string): string {
     const parts = rootPath.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
@@ -271,7 +295,8 @@ export function buildProjectsTreeProjects<TRef extends Readonly<{
 }>>(input: Readonly<{
     groups: ReadonlyArray<Readonly<{ projectKey: Readonly<{ projectKey: string }>; items: readonly TRef[] }>>;
     projectName: (ref: TRef) => string;
-    machine: (machineId: string) => ProjectsTreeMachineFacts | null;
+    /** Every referenced Machine has a name from the machine-name owner, even one this Home no longer lists. */
+    machine: (machineId: string) => ProjectsTreeMachineFacts;
     /** Only current authorized catalog rows from the same Home/Account as these accepted refs. */
     sources?: readonly Pick<ProjectSourceV1, 'id' | 'name' | 'audience'>[];
     teamName?: (teamId: string) => string | null;
@@ -295,13 +320,13 @@ export function buildProjectsTreeProjects<TRef extends Readonly<{
                 ...(ref.serverId ? { workspaceAddress: { serverId: ref.serverId, workspaceId: ref.id,
                     machineId: ref.machineId, rootPath: ref.rootPath } } : {}),
                 machineId: ref.machineId,
-                machineName: machine?.name ?? ref.machineId,
+                machineName: machine.name,
                 label: facts?.branch ?? folderName(ref.rootPath),
                 branch: facts?.branch ?? null,
                 isWorktree: facts?.isWorktree ?? null,
-                path: formatPathRelativeToHome(ref.rootPath, machine?.homeDir ?? undefined),
+                path: formatPathRelativeToHome(ref.rootPath, machine.homeDir ?? undefined),
                 attention: facts?.attention ?? null,
-                offline: machine ? !machine.online : undefined,
+                offline: machine.online === null ? undefined : !machine.online,
             };
         });
         return [{
@@ -339,7 +364,7 @@ export function buildProjectsPhoneTreeRows(input: Readonly<{
         const single = checkouts.length === 1 ? checkouts[0]! : null;
         const offlineMachines = machines.filter((group) => group.every((checkout) => checkout.offline === true)).length;
         const subtitle = single
-            ? `${single.machineName} · ${single.label}`
+            ? `${single.machineName} · ${checkoutWhere(single)}`
             : machines.length === 1
                 ? `${machines[0]![0]!.machineName} · ${input.describe.checkoutCount(checkouts.length)}`
                 : [input.describe.machineCount(machines.length), offlineMachines > 0 ? input.describe.offlineCount(offlineMachines) : null]
@@ -360,7 +385,8 @@ export function buildProjectsPhoneTreeRows(input: Readonly<{
             expanded,
             refId: single?.refId ?? null,
             workspaceAddress: single?.workspaceAddress,
-            count: single ? null : checkouts.length,
+            // Collapsed, the second line already says how many; the count beside it belongs to the open Project.
+            count: single || !expanded ? null : checkouts.length,
             attention: single ? single.attention : expanded ? null : mostUrgent(checkouts),
             offline: single?.offline,
             selected: single?.refId === input.openRefId,

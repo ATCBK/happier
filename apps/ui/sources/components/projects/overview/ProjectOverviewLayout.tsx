@@ -4,7 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
-import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 
 /**
  * The Overview's side area keeps one reading width (lab `p-overview`: 272 beside the main area, 40
@@ -12,20 +12,24 @@ import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
  * width (944), so on a wide pane the two areas sit side by side with the main area's readable minimum.
  */
 const ASIDE_WIDTH_PX = 272;
-const AREA_GAP_PX = 40;
+export const PROJECT_OVERVIEW_AREA_GAP_PX = 40;
+const AREA_GAP_PX = PROJECT_OVERVIEW_AREA_GAP_PX;
 /** The narrowest main area that still reads as a column of widgets (a Code table, a chart). */
 const MAIN_MIN_WIDTH_PX = 480;
 
-export type ProjectOverviewArrangement = 'columns' | 'stacked';
+export type ProjectOverviewArrangement = 'columns' | 'pairs' | 'stacked';
+
+/** Below the two areas side by side, the side area still holds two of its own columns (lab `p-overview` FIT). */
+const ASIDE_PAIRS_MIN_WIDTH_PX = ASIDE_WIDTH_PX * 2 + AREA_GAP_PX;
 
 /** Side by side while the measured page holds both areas; otherwise the side area comes first (D32 FIT). */
 export function resolveProjectOverviewArrangement(
   width: number | null,
 ): ProjectOverviewArrangement {
   if (width === null) return 'columns';
-  return width >= MAIN_MIN_WIDTH_PX + AREA_GAP_PX + ASIDE_WIDTH_PX
-    ? 'columns'
-    : 'stacked';
+  if (width >= MAIN_MIN_WIDTH_PX + AREA_GAP_PX + ASIDE_WIDTH_PX) return 'columns';
+  // Stacked, the side area's short widgets would stretch thin across the page: they pair up instead.
+  return width >= ASIDE_PAIRS_MIN_WIDTH_PX ? 'pairs' : 'stacked';
 }
 
 /**
@@ -61,7 +65,7 @@ export const ProjectOverviewLayout = React.memo(function ProjectOverviewLayout(
   return (
     // The Overview is a dashboard page: the wide page column (944), one scroll owner, the page insets.
     <ItemList pageColumn="wide" testID={`${testID}.page`}>
-      <WideColumn>
+      <PageContentColumn style={styles.wideColumn}>
         <View testID={testID} onLayout={onLayout} style={styles.page}>
           <View style={styles.head}>
             {props.bar}
@@ -72,37 +76,25 @@ export const ProjectOverviewLayout = React.memo(function ProjectOverviewLayout(
               <View testID={`${testID}.phone`} style={styles.stack}>
                 {props.phone}
               </View>
-            ) : arrangement === 'columns' ? (
-              <View style={styles.columns}>
-                <View testID={`${testID}.main`} style={styles.main}>
-                  {props.main}
-                </View>
-                <View testID={`${testID}.aside`} style={styles.aside}>
-                  {props.aside}
-                </View>
-              </View>
             ) : (
-              <View style={styles.stack}>
-                <View testID={`${testID}.aside`}>{props.aside}</View>
-                <View testID={`${testID}.main`}>{props.main}</View>
+              <View style={arrangement === 'columns' ? styles.columns : styles.stack}>
+                {(arrangement === 'columns' ? ['main', 'aside'] as const : ['aside', 'main'] as const).map(area => (
+                  <View key={area} testID={`${testID}.${area}`}
+                    style={arrangement === 'columns' ? area === 'main' ? styles.main : styles.aside : undefined}>
+                    {props[area]}
+                  </View>
+                ))}
               </View>
             ))}
         </View>
-      </WideColumn>
+      </PageContentColumn>
     </ItemList>
   );
 });
 
-/** The page's content column, on the same edges as every page header and section. */
-function WideColumn(props: Readonly<{ children: React.ReactNode }>) {
-  const maxWidth = useLayoutMaxWidthStyle();
-  return <View style={[styles.wideColumn, maxWidth]}>{props.children}</View>;
-}
-
 const styles = StyleSheet.create(() => ({
+  // The page column, on the same edges as every page header and section, with the sheets' inset.
   wideColumn: {
-    width: '100%',
-    alignSelf: 'center',
     paddingHorizontal: PAGE_LIST_METRICS.sheetInsetPx,
     paddingTop: PAGE_LIST_METRICS.sectionGapPx,
   },

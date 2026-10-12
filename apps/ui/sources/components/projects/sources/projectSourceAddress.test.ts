@@ -3,12 +3,14 @@ import { ProjectSourceRepositorySelectorV1Schema } from '@happier-dev/protocol/p
 import { describeProjectSourceRow, formatProjectSourceAddress } from './projectSourceAddress';
 
 describe('Source address presentation', () => {
-    it.each([undefined, '.', './', ''])('describes whole-repository selections consistently (%j)', subdir => {
+    // A list row speaks only what tells Sources apart: the whole repository is the quiet default (lab p-sources LIST,
+    // "happier-dev/happier · v0.3"); a folder is named only when one is chosen.
+    it.each([undefined, '.', './', ''])('leaves a whole-repository selection unsaid in a row (%j)', subdir => {
         const repository = ProjectSourceRepositorySelectorV1Schema.parse({
             provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
             repository: { nameWithOwner: 'group/repo' }, protocol: 'https',
         });
-        expect(describeProjectSourceRow({ repository, subdir }, 'Whole repository')).toBe('group/repo · Whole repository');
+        expect(describeProjectSourceRow({ repository, subdir })).toBe('group/repo');
     });
     it('shows the canonical deployment path and repository identity without transport authoring', () => {
         const repository = ProjectSourceRepositorySelectorV1Schema.parse({

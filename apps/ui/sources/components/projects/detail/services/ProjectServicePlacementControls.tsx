@@ -32,6 +32,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { useServerScopedMachine } from '@/sync/store/hooks';
 import { withDefaultActionExecuteContext } from '@/sync/ops/actions/defaultActionExecutor';
 import { executeProjectWorkerActionV1 } from '@/sync/ops/actions/projectWorkerActions';
+import { isActionApprovalRequiredForHome } from '@/sync/domains/settings/actionsSettings';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import type { ServiceRow } from '@/sync/domains/local/services/serviceRow';
@@ -281,12 +282,13 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
     purpose: 'service-start',
     workspace: placement.address,
     ...(props.declaration?.memoryDemand ? { memoryDemand: props.declaration.memoryDemand } : {}),
-    onResolved: target => setMove(current => current?.phase === 'resolving'
-      && current.destination.kind === 'workers'
-      && current.destination.destination.kind === 'pool'
-      && current.destination.destination.poolId === target.poolId
-      ? { phase: 'confirm', destination: current.destination, selectedMachineId: target.machineId }
-      : current),
+    onResolved: target => {
+      if (requestedMove?.phase === 'resolving' && requestedMove.destination.kind === 'workers'
+        && requestedMove.destination.destination.kind === 'pool'
+        && requestedMove.destination.destination.poolId === target.poolId) {
+        void reviewMove(requestedMove.destination, target.machineId);
+      }
+    },
   });
   const moveRequest = React.useRef<AbortController | null>(null);
   React.useEffect(() => {
@@ -420,7 +422,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
     setPickerOpen(false);
     if (!ready || !custodyKnown || !portable || placement.busy || moving) return;
     if (actual) {
-      // A running service never moves on selection: a different target asks first, the same one is a no-op.
+      // A different target follows the person's Action policy; the same target is a no-op.
       if (!placement.canMove || choiceMatchesActual(choice, actual, props.source.machineId)) return;
       if (choice.kind === 'workers' && choice.destination.kind === 'pool') {
         if (!selectedPool || choice.destination.selection !== 'automatic') {
@@ -431,15 +433,27 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
         void poolSelection.selectPool(selectedPool);
         return;
       }
-      setMove({ phase: 'confirm', destination: choice,
-        selectedMachineId: choice.kind === 'primary' ? props.source.machineId : choice.destination.machineId });
+      void reviewMove(choice, choice.kind === 'primary' ? props.source.machineId : choice.destination.machineId);
       return;
     }
     if (!placement.canSaveNextStart || projectExecutionChoicesEqualV1(choice, ready.placement.runsOn)) return;
     void placement.save({ ...ready.placement, runsOn: choice });
   };
 
-  const confirmMove = async (destination: ProjectExecutionChoiceV1, selectedMachineId: string) => {
+  async function reviewMove(destination: ProjectExecutionChoiceV1, selectedMachineId: string) {
+    try {
+      const required = await isActionApprovalRequiredForHome('projects.service.relocate', { surface: 'ui' }, props.source.serverId);
+      if (!binding?.isCurrent()) return;
+      if (required) setMove({ phase: 'confirm', destination, selectedMachineId });
+      else await confirmMove(destination, selectedMachineId);
+    } catch (error) {
+      if (!binding?.isCurrent()) return;
+      setMove({ phase: 'refused', text: t('projectServices.moveUnknown'),
+        code: error instanceof Error ? error.message : 'move_failed' });
+    }
+  }
+
+  async function confirmMove(destination: ProjectExecutionChoiceV1, selectedMachineId: string) {
     if (!actual || !placement.canMove || !portable || !binding?.isCurrent() || moveRequest.current) return;
     if (!ready) {
       setMove({ phase: 'refused', text: t('projectServices.moveRefused'), code: 'service_target_selection_required' });
@@ -495,7 +509,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
       retirement.dispose();
       if (moveRequest.current === lifetime) moveRequest.current = null;
     }
-  };
+  }
 
   const fromName = actualName ?? sourceName;
 

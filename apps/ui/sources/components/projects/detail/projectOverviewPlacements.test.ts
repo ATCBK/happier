@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WidgetPlacementV1 } from '@happier-dev/protocol/widgets';
-import { mergeProjectOverviewWidgetHeads, projectOverviewWidgetAreas, readProjectOverviewWidgetAreas } from './projectOverviewWidgets';
+import { mergeProjectOverviewWidgetHeads, projectOverviewWidgetAreas, readProjectOverviewWidgetAreas } from './projectOverviewPlacements';
 
 type Placement = WidgetPlacementV1;
 const builtin = (name: string): Placement => ({ instance: { v: 1, id: name, definition: { kind: 'builtin', id: `project_${name}` }, bindings: { checkout: { kind: 'context', slot: 'checkout' } } }, frameStyle: 'plain' });

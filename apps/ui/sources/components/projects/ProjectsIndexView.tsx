@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { t } from '@/text';
 
 import { ProjectsAddMenu } from './ProjectsAddMenu';
+import { ProjectOpenResolutionCard, useProjectRowsRetry } from './ProjectOpenResolution';
 import { ProjectsListView } from './ProjectsListView';
 import { useProjectsListModel } from './useProjectsListModel';
 
@@ -24,8 +25,19 @@ const ProjectsNoneOpen = React.memo(function ProjectsNoneOpen() {
     const model = useProjectsListModel();
     // The same "+" as the column: a folder, a clone, your Sources, each Team's, Manage (plan 10 §2).
     const { addSources, cloneRepository } = model;
-    const firstSaved = model.saved?.items[0] ?? null;
-    const hasContent = model.hasAnyProjects || Boolean(firstSaved);
+    // A saved Source leads only while it is all there is; once Projects exist the page says what its
+    // copy says ("choose one from the list, or add one") and its one action is the same "+".
+    const firstSaved = model.hasAnyProjects ? null : model.saved?.items[0] ?? null;
+    const hasContent = model.hasAnyProjects || Boolean(model.saved?.items.length);
+    const rowsRetry = useProjectRowsRetry();
+    if (model.rowsUnconfirmed) {
+        return (
+            <View testID="projects-none-open" style={{ flex: 1, justifyContent: 'center' }}>
+                <ProjectOpenResolutionCard testID="projects-none-open:rows" page issue={model.rowsUnconfirmed}
+                    onChoose={() => {}} onRetry={rowsRetry} />
+            </View>
+        );
+    }
     return (
         <View testID="projects-none-open" style={{ flex: 1, justifyContent: 'center' }}>
             <EmptyState

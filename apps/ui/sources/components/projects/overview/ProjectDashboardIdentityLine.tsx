@@ -15,7 +15,7 @@ import { Typography } from '@/constants/Typography';
 export const ProjectDashboardIdentityLine = React.memo(
   function ProjectDashboardIdentityLine(
     props: Readonly<{
-      owner: Readonly<{ accountId: string; imageUrl?: string | null }>;
+      owner: Readonly<{ accountId: string; displayName?: string; imageUrl?: string | null }>;
       /** "Leeroy Brun’s dashboard", or "Release" for the owner's own shared dashboard. */
       title: string;
       /** The viewer's access ("Can read") or the owner's sharing summary. */
@@ -43,6 +43,16 @@ export const ProjectDashboardIdentityLine = React.memo(
         >
           {props.title}
         </Text>
+        {props.owner.displayName ? (
+          <>
+            <Text style={[styles.text, { color: theme.colors.text.tertiary }]}>·</Text>
+            {/* Whose dashboard it is, in words: the avatar alone keys on an opaque Account id. */}
+            <Text numberOfLines={1} testID={`${testID}.owner`}
+              style={[styles.text, styles.detail, { color: theme.colors.text.secondary }]}>
+              {props.owner.displayName}
+            </Text>
+          </>
+        ) : null}
         <Text style={[styles.text, { color: theme.colors.text.tertiary }]}>
           ·
         </Text>

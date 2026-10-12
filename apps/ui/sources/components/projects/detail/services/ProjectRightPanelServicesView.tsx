@@ -31,6 +31,8 @@ export type ProjectRightPanelServicesViewProps = Readonly<{
     onOpenServiceInBrowser?: ServiceRowOpenHandler;
     /** The Services page leads with its purpose; the rail keeps the pane chrome. Same body. */
     presentation?: 'pane' | 'page';
+    /** The Project's own way to declare a service; the empty state offers it. */
+    onAddService?: () => void;
     testID?: string;
 }>;
 
@@ -65,6 +67,7 @@ export function ProjectRightPanelServicesView(props: ProjectRightPanelServicesVi
             runtimeActionExecute={props.runtimeActionExecute}
             onOpenServiceInBrowser={props.onOpenServiceInBrowser}
             presentation={props.presentation}
+            onAddService={props.onAddService}
             renderServicePlacement={renderServicePlacement}
             testID={props.testID ?? 'project-rightpanel-services'}
         />

@@ -10,8 +10,11 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { resolveCurrentProjectAuthoringReturn } from '@/components/projects/detail/projectRouteState';
 import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
-import { describeProjectEnvironment, joinProjectFiles } from './projectScriptPresentation';
+import { describeProjectCommandSource, describeProjectEnvironment, joinProjectFiles } from './projectScriptPresentation';
 
 export type ProjectSetupAuthoringInput = Readonly<{
     workspace: WorkspaceAddressV1;
@@ -121,15 +124,18 @@ export type ProjectSetupAgentGuidanceResult = Awaited<ReturnType<typeof readProj
 export type ProjectSetupAgentGuidance = Extract<ProjectSetupAgentGuidanceResult, { kind: 'ready' }>['guidance'];
 
 /** The editable request contains a short observation, never the qualified inspection DTO. */
-function describeSetupAuthoringFacts(guidance: ProjectSetupAgentGuidance): string {
+function describeSetupAuthoringFacts(guidance: ProjectSetupAgentGuidance, machine: string): string {
     const entries = guidance.detection?.entries ?? [];
     const scripts = entries.filter(entry => entry.usage === 'script');
     const services = entries.filter(entry => entry.usage === 'service');
     const scriptSources = scripts.length > 0 ? scripts.map(entry => entry.source) : (guidance.scripts ?? []).map(script => script.source);
-    const files = joinProjectFiles([...scriptSources, ...services.map(entry => entry.source)].map(source => source.file));
+    const files = joinProjectFiles([...scriptSources, ...services.map(entry => entry.source)]
+        .map(source => describeProjectCommandSource(source).file)
+        .filter(file => file !== null));
     return [
         [t('projects.authoring.scriptsCount', { count: scriptSources.length }),
-            t('projects.authoring.servicesCount', { count: services.length }),
+            // A zero count is not an observation the agent needs.
+            ...(services.length > 0 ? [t('projects.authoring.servicesCount', { count: services.length })] : []),
             ...(files ? [t('projects.scripts.foundIn', { files })] : [])].join(' · '),
         ...(guidance.detection?.coverage === 'partial' ? [t('projects.scripts.definition.partial')] : []),
         ...(guidance.detection?.environments ?? []).map(environment => {
@@ -139,7 +145,7 @@ function describeSetupAuthoringFacts(guidance: ProjectSetupAgentGuidance): strin
         ...(guidance.tools ?? []).map(tool => `${tool.tool}${tool.version ? ` ${tool.version}` : ''}: ${t(
             tool.availability === 'available' ? 'projects.scripts.editor.toolAvailable'
                 : tool.availability === 'unavailable' ? 'projects.scripts.editor.toolUnavailable' : 'projects.scripts.editor.toolUnresolved',
-            { machine: t('projectWorkers.primary') })}`),
+            { machine })}`),
         ...(guidance.scripts ?? []).map(script => `${script.name}: ${t(
             script.execution === 'portable' ? 'projectWorkers.guideWorker' : 'projectWorkers.guidePrimary')}`),
         ...('status' in guidance.workerPreferences && guidance.workerPreferences.status === 'ready'
@@ -176,7 +182,7 @@ export async function openProjectSetupAuthoring(input: ProjectSetupAuthoringInpu
         }
         const request: SessionAuthoringOpenV1 = { seed: {
             sessionName: t('projects.authoring.draftTitle', { project: resolveWorkspaceRefDisplayName(destination.workspaceRef) }),
-            prompt: `${t('projects.authoring.prompt')}\n\n${describeSetupAuthoringFacts(observed.guidance)}`,
+            prompt: `${t('projects.authoring.prompt')}\n\n${describeSetupAuthoringFacts(observed.guidance, getMachineDisplayName(resolveServerScopedMachine(getStorage().getState(), input.workspace.serverId, input.workspace.machineId)) ?? input.workspace.machineId)}`,
             placement: { kind: 'exactTarget', serverId: input.workspace.serverId,
                 machineId: input.workspace.machineId, directory: input.workspace.rootPath },
             origin,

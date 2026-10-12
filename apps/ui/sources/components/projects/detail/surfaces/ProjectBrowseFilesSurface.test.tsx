@@ -76,9 +76,15 @@ it('keeps the shared visibility choice reachable on a Code folder page', async (
         onOpenFile={() => {}} onOpenFilePinned={() => {}} />);
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-source.ts')).toBeTruthy());
     expect(screen.findByTestId('repository-tree-row-generated.txt')).toBeNull();
-    await screen.pressByTestIdAsync('repository-tree-visibility:all');
+    // The Code page keeps one line of controls: ignored files are a View choice, not a second row.
+    expect(screen.findByTestId('repository-tree-visibility:all')).toBeNull();
+    await screen.pressByTestIdAsync('workspace-repository-tree-view');
+    await vi.waitFor(() => expect(screen.findByTestId('workspace-repository-tree-all-files')).toBeTruthy());
+    await screen.pressByTestIdAsync('workspace-repository-tree-all-files');
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-generated.txt')).toBeTruthy());
-    await screen.pressByTestIdAsync('repository-tree-visibility:project');
+    await screen.pressByTestIdAsync('workspace-repository-tree-view');
+    await vi.waitFor(() => expect(screen.findByTestId('workspace-repository-tree-all-files')).toBeTruthy());
+    await screen.pressByTestIdAsync('workspace-repository-tree-all-files');
     await vi.waitFor(() => expect(screen.findByTestId('repository-tree-row-generated.txt')).toBeNull());
 });
 

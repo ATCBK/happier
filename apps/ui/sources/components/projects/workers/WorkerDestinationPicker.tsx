@@ -67,6 +67,50 @@ export type WorkerDestinationPickerProps = Readonly<{
   footer?: React.ReactNode;
 }>;
 
+type OfflineFoldCopy = Readonly<{
+  label: (count: number) => string;
+  detail: string;
+  open: boolean;
+  onToggle: () => void;
+  icon: React.ReactNode;
+  /** The disclosure mark at the row's end (it points where the list will go). */
+  accessory: React.ReactNode;
+}>;
+
+/**
+ * Offline workers say the same thing, so several of them fold into one quiet row that lists them in
+ * place when asked. A lone offline worker keeps its own name, and a worker that is unavailable for
+ * any other reason (too small, not accepting) stays in place with that reason.
+ */
+export function foldOfflineWorkers(
+  sections: ReadonlyArray<SelectionListSectionDescriptor>,
+  isOffline: (option: SelectionListOption) => boolean,
+  copy: OfflineFoldCopy,
+): SelectionListSectionDescriptor[] {
+  return sections.map((section) => {
+    if (section.kind !== 'static') return section;
+    const folded = section.options.filter(isOffline);
+    if (folded.length < 2) return section;
+    const foldedIds = new Set(folded.map((option) => option.id));
+    const fold: SelectionListOption = {
+      id: `offline:${section.id}`,
+      label: copy.label(folded.length),
+      subtitle: copy.detail,
+      icon: copy.icon,
+      rightAccessory: copy.accessory,
+      onSelect: copy.onToggle,
+    };
+    return {
+      ...section,
+      options: [
+        ...section.options.filter((option) => !foldedIds.has(option.id)),
+        fold,
+        ...(copy.open ? folded : []),
+      ],
+    };
+  });
+}
+
 function selectedOptionId(
   selected: ProjectExecutionChoiceV1 | null,
   serverId: string,
@@ -112,6 +156,7 @@ function OpenWorkerDestinationPicker(props: WorkerDestinationPickerProps) {
     [props.sourceMachineId, scopedGroups],
   );
   const poolGroups = useMachinePoolGroups(groups);
+  const [offlineOpen, setOfflineOpen] = React.useState(false);
   const onChooseRef = React.useRef(props.onChoose);
   onChooseRef.current = props.onChoose;
   const poolSelection = props.poolSelection;
@@ -275,9 +320,24 @@ function OpenWorkerDestinationPicker(props: WorkerDestinationPickerProps) {
         (section) =>
           ({
             ...section,
-            title: props.servicePresentation ? undefined : t('projectWorkers.workersSection'),
+            // New-machine offers keep their own heading; only Machine buckets are "Workers".
+            title: props.servicePresentation
+              ? undefined
+              : section.id === 'managed-machines' ? section.title : t('projectWorkers.workersSection'),
           }) as SelectionListSectionDescriptor,
       );
+    // The list's own classification (offline and nothing else): a Machine refused for another reason keeps its named row.
+    const offlineOnlyOptionIds = new Set((list.offlineOnlyMachineIdsByServerId[serverId] ?? []).flatMap((id) => [id, `${serverId}::${id}`]));
+    const foldedMachineSections = props.servicePresentation
+      ? machineSections
+      : foldOfflineWorkers(machineSections, (option) => offlineOnlyOptionIds.has(option.id), {
+          label: (count) => t('projectWorkers.offlineWorkers', { count }),
+          detail: t('projectWorkers.offlineWorkersDetail'),
+          open: offlineOpen,
+          onToggle: () => setOfflineOpen((open) => !open),
+          icon: <Icon name="wifi-slash" size={18} color={theme.colors.text.secondary} />,
+          accessory: <Icon name={offlineOpen ? 'caret-up' : 'caret-down'} size={14} color={theme.colors.text.tertiary} />,
+        });
     const ordered: SelectionListSectionDescriptor[] = [
       ...(leading.length > 0
         ? [
@@ -289,7 +349,7 @@ function OpenWorkerDestinationPicker(props: WorkerDestinationPickerProps) {
             } as const,
           ]
         : []),
-      ...machineSections,
+      ...foldedMachineSections,
       ...poolSections,
       ...(props.trailingSections ?? []),
     ];
@@ -300,6 +360,8 @@ function OpenWorkerDestinationPicker(props: WorkerDestinationPickerProps) {
     };
   }, [
     list.rootStep,
+    list.offlineOnlyMachineIdsByServerId,
+    offlineOpen,
     props.presentPoolAsAutomatic,
     props.exactTargetOnly,
     props.servicePresentation,
@@ -343,6 +405,7 @@ function OpenWorkerDestinationPicker(props: WorkerDestinationPickerProps) {
             onSelect={(id) => {
               // Configuration opens a modal owned by the still-mounted offers.
               // Back returns to this list; only choosing the reviewed recipe closes it.
+              if (id.startsWith('offline:')) return; // Folding is not a choice; the list stays open.
               if (!managedOffers.some(offer => offer.id === id && !offer.draft)) props.onRequestClose();
             }}
             onRequestClose={props.onRequestClose}

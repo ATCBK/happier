@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable } from 'react-native';
+import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { t } from '@/text';
@@ -7,11 +7,16 @@ import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropd
 
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { Icon } from '@/components/ui/icons/Icon';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
+import { readCoarsePrimaryPointer } from '@/components/sessions/transcript/messageActions/rowActionRevealHost';
+import { useItemRowHovered } from '@/components/ui/lists/ItemRowHover';
 import { useEventCallback } from '@/hooks/ui/useEventCallback';
 
 type AppTheme = ReturnType<typeof useUnistyles>['theme'];
 
 type ProjectsListItemMenuProps = Readonly<{
+    testID?: string;
     theme: AppTheme;
     /** The checkout the row opens; `null` on a Project row with several checkouts (Hide only). */
     workspaceRef: WorkspaceRefV1 | null;
@@ -42,6 +47,7 @@ function stopPressEventPropagation(event: unknown): void {
 
 export const ProjectsListItemMenu = React.memo((props: ProjectsListItemMenuProps) => {
     const [open, setOpen] = React.useState(false);
+    const rowHovered = useItemRowHovered();
     const pinTitle = props.pinAction === 'unpin'
         ? t('projects.actions.unpin')
         : props.pinAction === 'pin'
@@ -152,18 +158,23 @@ export const ProjectsListItemMenu = React.memo((props: ProjectsListItemMenuProps
             showCategoryTitles={false}
             popoverPortalWebTarget="body"
             trigger={({ toggle }) => (
-                <Pressable
+                // Quiet until the row is engaged (lab TREE shows no menu at rest): the shared reveal slot keeps
+                // its place and stays focusable, and touch screens always show it.
+                <RowActionRevealSlot revealed={Platform.OS !== 'web' || readCoarsePrimaryPointer() || rowHovered || open}>
+                {/* The shared icon-only button and the row menu's glyph (the Sessions rows' "⋯"). */}
+                <IconButton
+                    testID={props.testID}
+                    iconName="dots-three"
+                    variant="plain"
+                    size={24}
+                    accessibilityLabel={t('common.moreActions')}
+                    tooltipHidden={open}
                     onPress={(event) => {
                         stopPressEventPropagation(event);
                         toggle();
                     }}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('common.moreActions')}
-                    hitSlop={10}
-                    style={{ width: 28, height: 28, alignItems: 'center', justifyContent: 'center' }}
-                >
-                    <Icon name="dots-three-vertical" size={14} color={props.theme.colors.text.secondary} />
-                </Pressable>
+                />
+                </RowActionRevealSlot>
             )}
         />
     );

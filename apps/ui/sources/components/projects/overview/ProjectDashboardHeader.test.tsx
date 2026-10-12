@@ -2,35 +2,62 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WidgetInstanceActionOutputSchemasV1, WidgetAreaLayoutV1Schema } from '@happier-dev/protocol/widgets';
+import { ArtifactAccessGrantSetInputV1Schema, type ArtifactAccessGrantRowV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { Modal } from '@/modal';
-import { renderScreen } from '@/dev/testkit';
+import { createDeferred, renderScreen } from '@/dev/testkit';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelNonRnModuleMocks';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { ProjectDashboardHeader, projectDashboardRouteId } from './ProjectDashboardHeader';
-import { WidgetAreaLayoutBar } from '@/components/widgets/area/WidgetAreaLayoutBar';
-import { useProjectWidgetAreaBinding } from '@/components/widgets/area/useProjectWidgetAreaBinding';
 
 installSessionDetailsPanelNonRnModuleMocks();
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 
 const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
 let unknownDelete = false;
+let refuseWrites = false;
+const writeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 let holdInventory: (() => Promise<void>) | null = null;
 let holdDelete: (() => Promise<void>) | null = null;
 let holdRead: ((path: string) => Promise<void>) | null = null;
+let holdCreate: (() => Promise<void>) | null = null;
 const deletes: string[] = [];
 const selected: (string | null)[] = [];
+let grants: ArtifactAccessGrantRowV1[] = [];
 const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init) => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') await holdInventory?.();
     if (path.startsWith('/v1/artifacts/') && (init?.method ?? 'GET') === 'GET') await holdRead?.(path);
+    if (path === '/v1/artifacts' && init?.method === 'POST') await holdCreate?.();
     if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
-        actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'widgets.area.layout.delete': ['ui'] } },
+        actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: {
+            'widgets.area.layout.create': ['ui'], 'widgets.area.layout.rename': ['ui'],
+            'widgets.area.layout.reorder': ['ui'], 'widgets.area.layout.delete': ['ui'],
+            'widgets.item.remove': ['ui'], 'artifact.access.grants.set': ['ui'],
+        } },
     } }, version: 1 });
+    // A Home that refuses the write outright (a known non-commit), as a version conflict does.
+    if (refuseWrites && path.startsWith('/v1/artifacts') && writeMethods.has(init?.method ?? 'GET')) {
+        // The Home's answers to a write that lost its race: an update says so in its body, a delete with 409.
+        if (init?.method === 'DELETE') return Response.json({ error: 'version-mismatch' }, { status: 409 });
+        const current = artifacts.read(decodeURIComponent(path.split('/')[3] ?? ''));
+        return Response.json({ success: false, error: 'version-mismatch',
+            ...(current ? { currentHeaderVersion: current.headerVersion + 1, currentHeader: current.header,
+                currentBodyVersion: current.bodyVersion + 1, currentBody: current.body } : {}) });
+    }
+    const grantMatch = /^\/v1\/artifacts\/([^/]+)\/access\/grants$/.exec(path);
+    if (grantMatch && init?.method === 'PUT') {
+        const row = artifacts.read(decodeURIComponent(grantMatch[1]!));
+        if (!row) return Response.json({ error: 'artifact_not_found' }, { status: 404 });
+        const input = ArtifactAccessGrantSetInputV1Schema.parse({ artifactId: row.id, ...JSON.parse(String(init.body)) });
+        grants = [{ principal: input.principal, accessLevel: input.accessLevel, createdByAccountId: 'account-a', createdAt: 1,
+            display: { name: 'Recipient' } }];
+        return Response.json({ artifactId: row.id, ownerAccountId: 'account-a', access: 'owner', grants, changed: true });
+    }
     if (init?.method === 'DELETE' && path.startsWith('/v1/artifacts/')) {
         deletes.push(path);
         await holdDelete?.();
@@ -38,10 +65,13 @@ const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init
     }
     return artifacts.handle(path, init);
 } });
+const { ProjectDashboardHeader, projectDashboardRouteId } = await import('./ProjectDashboardHeader');
+const { WidgetAreaLayoutBar } = await import('@/components/widgets/area/WidgetAreaLayoutBar');
+const { useProjectWidgetAreaBinding } = await import('@/components/widgets/area/useProjectWidgetAreaBinding');
 let disposeActionLoader: (() => void) | undefined;
 beforeAll(async () => { disposeActionLoader = await installRealActionExecutorModuleLoader(); });
 afterAll(() => disposeActionLoader?.());
-beforeEach(() => { artifacts.clear(); unknownDelete = false; holdInventory = null; holdDelete = null; holdRead = null; deletes.length = 0; selected.length = 0; });
+beforeEach(() => { artifacts.clear(); grants = []; unknownDelete = false; refuseWrites = false; holdInventory = null; holdDelete = null; holdRead = null; holdCreate = null; deletes.length = 0; selected.length = 0; });
 
 type MountedDashboardHeaderProps = React.ComponentProps<typeof ProjectDashboardHeader> & Readonly<{ onSelectDashboard: (id: string | null) => void }>;
 function MountedDashboardHeader(props: MountedDashboardHeaderProps) {
@@ -78,6 +108,65 @@ async function renderReleaseSelected() {
 }
 
 describe('ProjectDashboardHeader', () => {
+    it('materializes the exact missing default only on Share, preserving its preset and ordinary document sharing', async () => {
+        const show = vi.spyOn(Modal, 'show');
+        try {
+            const screen = await renderScreen(header(null));
+            const bar = () => screen.findAllByType(WidgetAreaLayoutBar)[0]!;
+            await vi.waitFor(() => expect(bar().props.actions?.share).toBeTypeOf('function'));
+            const artifactId = bar().props.selectedId;
+            expect(artifacts.list()).toEqual([]);
+            await act(async () => { await bar().props.actions.share(); });
+            expect(artifacts.read(artifactId)).not.toBeNull();
+            const layout = WidgetAreaLayoutV1Schema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!));
+            expect(layout.items.some(item => item.kind === 'widget' && item.instance.id === 'code')).toBe(true);
+            expect(show).toHaveBeenCalledWith(expect.objectContaining({ props: expect.objectContaining({ artifactId }) }));
+            const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+            const principal = { kind: 'account', accountId: 'recipient' } as const;
+            const granted = await createDefaultActionExecutor().execute('artifact.access.grants.set', {
+                artifactId, principal, accessLevel: 'view',
+            }, { surface: 'ui', serverId: runtime.serverId, expectedAccountId: 'account-a' });
+            expect(granted).toMatchObject({ ok: true, result: { changed: true, grants: [{ principal, accessLevel: 'view' }] } });
+            await act(async () => { await bar().props.actions.share(); });
+            expect(artifacts.list()).toHaveLength(1);
+            expect(selected).toEqual([]);
+        } finally { show.mockRestore(); }
+    });
+    it('does not open sharing or change selection when default materialization is refused', async () => {
+        const show = vi.spyOn(Modal, 'show');
+        try {
+            const screen = await renderScreen(header(null));
+            const bar = () => screen.findAllByType(WidgetAreaLayoutBar)[0]!;
+            await vi.waitFor(() => expect(bar().props.actions?.share).toBeTypeOf('function'));
+            show.mockClear();
+            refuseWrites = true;
+            await act(async () => { await bar().props.actions.share(); });
+            expect(artifacts.list()).toEqual([]);
+            expect(show).not.toHaveBeenCalled();
+            expect(selected).toEqual([]);
+        } finally { show.mockRestore(); }
+    });
+    it('waits for materialization acknowledgement and ignores it after the sharing destination unmounts', async () => {
+        const show = vi.spyOn(Modal, 'show');
+        const pending = createDeferred<void>();
+        const started = createDeferred<void>();
+        let sharing: Promise<void> | undefined;
+        try {
+            const screen = await renderScreen(header(null));
+            const bar = () => screen.findAllByType(WidgetAreaLayoutBar)[0]!;
+            await vi.waitFor(() => expect(bar().props.actions?.share).toBeTypeOf('function'));
+            show.mockClear();
+            holdCreate = async () => { started.resolve(); await pending.promise; };
+            await act(async () => { sharing = bar().props.actions.share(); await started.promise; });
+            expect(show).not.toHaveBeenCalled();
+            expect(artifacts.list()).toEqual([]);
+            await screen.unmount();
+            pending.resolve();
+            await sharing;
+            expect(show).not.toHaveBeenCalled();
+            expect(selected).toEqual([]);
+        } finally { pending.resolve(); await sharing; show.mockRestore(); }
+    });
     it('maps the admitted default dashboard to the null Overview route and keeps named dashboard selection exact', async () => {
         const surface = { serverId: runtime.serverId, accountId: 'account-a', owner: { kind: 'project' as const, projectId: 'project-key' } };
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -106,6 +195,26 @@ describe('ProjectDashboardHeader', () => {
         expect(selected).toEqual([null]);
         expect(artifacts.list()).toEqual(before);
     });
+    it.each([
+        ['view', []],
+        ['edit', ['rename']],
+        ['admin', ['share', 'rename']],
+        ['owner', ['share', 'rename']],
+    ] as const)('offers an attached shared dashboard only the operations its %s access admits', async (access, expected) => {
+        const surface = { serverId: runtime.serverId, accountId: 'account-owner', artifactId: 'attached-shared-dashboard',
+            owner: { kind: 'project' as const, projectId: 'project-key', layoutId: 'release' } };
+        const screen = await renderScreen(header(null, {
+            attachedDashboard: { sourceId: 'team-source', artifactId: 'attached-shared-dashboard' },
+            sharedDashboard: { artifactId: 'attached-shared-dashboard', surface, name: 'Release', access, revision: 3 },
+        }));
+        const bar = () => screen.findAllByType(WidgetAreaLayoutBar)[0]!;
+        await vi.waitFor(() => expect(bar().props.selectedId).toBe('attached-shared-dashboard'));
+        const actions = bar().props.actions;
+        const offered = actions ? ['share', 'attach', 'rename', 'moveBefore', 'moveAfter', 'delete'].filter(id => actions[id]) : [];
+        // Personal inventory authority (attach, reorder, delete) never extends to someone else's document.
+        expect(offered).toEqual(expected);
+    });
+
     it.each([null, 'release'])('creates a present empty dashboard from selection %s before the inventory hydrates', async layoutId => {
         if (layoutId) {
             const surface = { serverId: runtime.serverId, accountId: 'account-a', owner: { kind: 'project' as const, projectId: 'project-key' } };
@@ -181,17 +290,13 @@ describe('ProjectDashboardHeader', () => {
         } finally { prompt.mockRestore(); }
     });
 
-    it('does not remove a document after its confirmation outlives the selected dashboard', async () => {
-        const { screen, dashboard, actions } = await renderReleaseSelected();
-        let confirm!: (accepted: boolean) => void;
-        const prompt = vi.spyOn(Modal, 'confirm').mockImplementationOnce(() => new Promise<boolean>(resolve => { confirm = resolve; }));
+    it('delegates deletion confirmation to the canonical Action policy', async () => {
+        const { dashboard, actions } = await renderReleaseSelected();
+        const prompt = vi.spyOn(Modal, 'confirm').mockResolvedValueOnce(false);
         try {
             await act(async () => actions.props.onSelect('delete'));
-            await screen.update(header(null));
-            await act(async () => confirm(true));
-            expect(deletes).toEqual([]);
-            expect(artifacts.read(dashboard.artifactId)).not.toBeNull();
-            expect(selected).toEqual([]);
+            await vi.waitFor(() => expect(artifacts.read(dashboard.artifactId)).toBeNull());
+            expect(selected).toEqual([null]);
         } finally { prompt.mockRestore(); }
     });
 
@@ -239,7 +344,36 @@ describe('ProjectDashboardHeader', () => {
         expect(artifacts.read(dashboard.artifactId)).toBeNull();
     });
 
+    it.each(['rename', 'moveBefore', 'delete'] as const)('settles a refused %s truthfully: the dashboard stays as it was, the refusal says so once, and Retry repeats the request', async (operation) => {
+        const { readPresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
+        const { screen, dashboard, actions } = await renderReleaseSelected();
+        const prompt = vi.spyOn(Modal, 'prompt').mockResolvedValue('Shipping');
+        try {
+            refuseWrites = true;
+            await act(async () => { await actions.props.onSelect(operation); });
+            await vi.waitFor(() => expect(readPresentationNotice()).toMatchObject({ severity: 'error', undo: { label: 'common.retry' } }));
+            // A known refusal is not an unknown delete: it never claims the dashboard may be gone.
+            expect(screen.findByTestId('project-dashboards.deleteUnknown')).toBeNull();
+            expect(artifacts.read(dashboard.artifactId)).not.toBeNull();
+            expect(selected).toEqual([]);
+            refuseWrites = false;
+            await act(async () => { readPresentationNotice()!.undo!.run(); });
+            if (operation === 'rename') {
+                // Retry starts from what was asked for, not from the old name.
+                expect(prompt.mock.calls.at(-1)?.[2]).toMatchObject({ defaultValue: 'Shipping' });
+                await vi.waitFor(() => expect(screen.findAllByType(WidgetAreaLayoutBar)[0]!.props.layouts
+                    .some((option: { name: string }) => option.name === 'Shipping')).toBe(true));
+            } else if (operation === 'delete') {
+                await vi.waitFor(() => expect(artifacts.read(dashboard.artifactId)).toBeNull());
+            } else {
+                await vi.waitFor(() => expect(screen.findAllByType(WidgetAreaLayoutBar)[0]!.props.layouts
+                    .map((option: { name: string }) => option.name)).toEqual(['Release', 'Overview']));
+            }
+        } finally { prompt.mockRestore(); }
+    });
+
     it('keeps the dashboard selected and says so when the delete outcome is unknown', async () => {
+        const { readPresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
         const { screen, dashboard, actions } = await renderReleaseSelected();
         unknownDelete = true;
         await act(async () => { actions.props.onSelect('delete'); });
@@ -247,6 +381,7 @@ describe('ProjectDashboardHeader', () => {
         expect(selected).toEqual([]);
         expect(artifacts.read(dashboard.artifactId)).not.toBeNull();
         expect(deletes).toHaveLength(1);
+        expect(readPresentationNotice()?.undo).toBeUndefined();
     });
 
     it('marks a host preset this viewer has edited with the quiet dot, and leaves an untouched preset and user views plain', async () => {

@@ -4,7 +4,7 @@ import type { PaneDetailsStateView } from '@/components/appShell/panes/details/w
 import { buildActiveDetailsRouteParams, parseSessionPaneUrlState, serializeSessionPaneUrlState,
     SESSION_PANE_URL_PARAM_KEYS, type SessionPaneUrlDetailsTarget } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import type { ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
-import { StoredPluginUiNewSessionSeedOriginV1Schema, type PluginUiNewSessionSeedOriginV1 } from '@happier-dev/protocol/plugins/ui';
+import { PluginUiNewSessionSeedOriginV1Schema, StoredPluginUiNewSessionSeedOriginV1Schema, type PluginUiNewSessionSeedOriginV1 } from '@happier-dev/protocol/plugins/ui';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -16,6 +16,7 @@ import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWor
 import type { WorkspaceCodeLocation } from '@/components/projects/files/code/WorkspaceCodeBrowserView';
 import {
     resolveProjectMobileSurfaceIntent,
+    normalizeProjectMobileSurface,
     resolveProjectRoutePathForSurface,
     type ProjectPageV1,
     type ProjectRouteContext,
@@ -31,6 +32,17 @@ export function readProjectCodeRouteLocation(params: Readonly<Record<string, unk
     const path = Array.isArray(params.codePath) ? params.codePath[0] : params.codePath;
     if ((kind !== 'folder' && kind !== 'file') || typeof path !== 'string' || (kind === 'file' && path.length === 0)) return null;
     return { kind, path };
+}
+
+/** A companion route carries the same closed selection the pane owner already persists. */
+export function readProjectRouteCompanion(params: Readonly<Record<string, string | string[] | undefined>>): PluginUiNewSessionSeedOriginV1['companion'] | null {
+    let value: unknown = readProjectRouteStringParam(params.right);
+    if (params.rightDestination !== undefined) {
+        try { value = JSON.parse(readProjectRouteStringParam(params.rightDestination) ?? 'null'); }
+        catch { return null; }
+    }
+    const parsed = PluginUiNewSessionSeedOriginV1Schema.shape.companion.safeParse(value);
+    return parsed.success ? parsed.data ?? null : null;
 }
 
 export function readProjectSelectedRouteResource(details: Pick<PaneDetailsStateView, 'isOpen' | 'tabs' | 'activeTabKey'> | null | undefined) {
@@ -54,9 +66,10 @@ export type { ProjectAttachedDashboardSelection } from '@/components/workspaceCo
 
 /** Keep incomplete attached intent unavailable rather than silently opening a personal dashboard. */
 export function readProjectAttachedDashboardSelection(params: Readonly<Record<string, string | string[] | undefined>>): ProjectAttachedDashboardSelection | undefined {
-    if (params.dashboardSourceId === undefined && params.dashboardArtifactId === undefined) return undefined;
+    if (params.dashboardSourceId === undefined && params.dashboardArtifactId === undefined && params.dashboardServerId === undefined) return undefined;
     return { sourceId: readProjectRouteStringParam(params.dashboardSourceId) ?? '',
-        artifactId: readProjectRouteStringParam(params.dashboardArtifactId) ?? '' };
+        artifactId: readProjectRouteStringParam(params.dashboardArtifactId) ?? '',
+        ...(params.dashboardServerId === undefined ? {} : { serverId: readProjectRouteStringParam(params.dashboardServerId) ?? '' }) };
 }
 export const PROJECT_ROUTE_ROOT_SENTINEL = '@root';
 export const PROJECT_ROUTE_WORKTREE_ID_QUERY_PARAM = 'worktreeId';
@@ -229,12 +242,19 @@ export function buildProjectRouteHref(input: Readonly<{
     sourceSurface?: ProjectDetailsSourceSurface | null;
     initialResource?: ProjectFileRouteTarget | Readonly<{ kind: 'commit'; sha: string }> | null;
     codeLocation?: WorkspaceCodeLocation;
+    companion?: PluginUiNewSessionSeedOriginV1['companion'] | null;
     /** A newly selected Details destination replaces the old Details and initial-resource intent. */
     details?: SessionPaneUrlDetailsTarget | null;
 }> & ProjectRouteContext): string {
     const resourceParams: Record<string, string> = {};
     if (input.showWorktrees) resourceParams.showWorktrees = '1';
     const routeParams = { ...input.routeParams };
+    if (input.companion !== undefined) {
+        delete routeParams.right;
+        delete routeParams.rightDestination;
+        if (typeof input.companion === 'string') resourceParams.right = input.companion;
+        else if (input.companion) resourceParams.rightDestination = JSON.stringify(input.companion);
+    }
     if (input.codeLocation) {
         resourceParams.codePath = input.codeLocation.path;
         resourceParams.codeKind = input.codeLocation.kind;
@@ -321,6 +341,37 @@ export type ProjectAuthoringReturn =
     | Readonly<{ kind: 'ready'; origin: PluginUiNewSessionSeedOriginV1; workspaceRef: WorkspaceRefV1; href: string }>
     | Readonly<{ kind: 'unavailable'; reason: 'origin_invalid' | 'scope_unavailable' | 'workspace_unavailable' }>;
 
+/** Project route/pane facts become a closed origin, never an arbitrary href/query bag. */
+export function buildProjectNewSessionOrigin(input: Readonly<{
+    scope: ServerAccountScope;
+    workspace: PluginUiNewSessionSeedOriginV1['workspace'];
+    page: ProjectPageV1;
+    routeParams: Readonly<Record<string, string | string[] | undefined>>;
+    resource?: PluginUiNewSessionSeedOriginV1['resource'] | null;
+    companion?: PluginUiNewSessionSeedOriginV1['companion'] | string | null;
+}>): PluginUiNewSessionSeedOriginV1 | null {
+    const { routeParams } = input;
+    const mobile = readProjectRouteStringParam(routeParams.mobileSurface);
+    const surface = normalizeProjectMobileSurface(mobile) ?? undefined;
+    const codeLocation = readProjectCodeRouteLocation(routeParams);
+    const attachedDashboard = readProjectAttachedDashboardSelection(routeParams);
+    const layoutId = attachedDashboard ? null : readProjectRouteStringParam(routeParams.layoutId);
+    const comparisonId = readProjectRouteStringParam(routeParams.comparisonId);
+    const initialCommit = readProjectRouteStringParam(routeParams.initialCommit);
+    const resource = input.resource === undefined
+        ? readProjectFileRouteTarget(routeParams) ?? (initialCommit ? { kind: 'commit' as const, sha: initialCommit } : null)
+        : input.resource;
+    const companion = input.companion === undefined ? readProjectRouteCompanion(routeParams) : input.companion;
+    const parsed = PluginUiNewSessionSeedOriginV1Schema.safeParse({
+        kind: 'project', purpose: 'session', accountId: input.scope.accountId, workspace: input.workspace, page: input.page,
+        ...(surface ? { surface } : {}), ...(codeLocation ? { codeLocation } : {}),
+        ...(attachedDashboard ? { attachedDashboard } : {}), ...(layoutId ? { layoutId } : {}),
+        ...(comparisonId ? { comparisonId } : {}), ...(resource ? { resource } : {}),
+        ...(companion ? { companion } : {}),
+    });
+    return parsed.success ? parsed.data : null;
+}
+
 /** Original provenance is qualified independently of the Session's editable launch target. */
 export function resolveProjectAuthoringReturn(origin: unknown, input: Readonly<{
     scope: ServerAccountScope | null;
@@ -341,21 +392,20 @@ export function resolveProjectAuthoringReturn(origin: unknown, input: Readonly<{
             workspaceRefId: workspace.ref.id,
             serverId: workspace.ref.serverId,
             segment: captured.page,
+            surface: captured.surface,
             activeRootPath: captured.workspace.rootPath,
             defaultRootPath: workspace.ref.rootPath,
             ...(captured.comparisonId ? { comparisonId: captured.comparisonId } : {}),
+            ...(captured.layoutId ? { layoutId: captured.layoutId } : {}),
+            ...(captured.attachedDashboard ? { attachedDashboard: captured.attachedDashboard } : {}),
+            ...(captured.codeLocation ? { codeLocation: captured.codeLocation } : {}),
+            ...(captured.resource ? { initialResource: captured.resource } : {}),
+            ...(captured.companion ? { companion: captured.companion } : {}),
         }),
     };
 }
 
-/** Read only the registered private work field, never infer origin from machine/path. */
-export function readProjectSessionAuthoringOrigin(metadata: unknown): PluginUiNewSessionSeedOriginV1 | null {
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata) || !('work' in metadata)) return null;
-    const work = metadata.work;
-    if (!work || typeof work !== 'object' || Array.isArray(work) || !('authoringOriginV1' in work)) return null;
-    const parsed = StoredPluginUiNewSessionSeedOriginV1Schema.safeParse(work.authoringOriginV1);
-    return parsed.success ? parsed.data : null;
-}
+export { readProjectSessionAuthoringOrigin } from '@/sync/domains/workspaces/readProjectSessionAuthoringOrigin';
 
 export function resolveCurrentProjectAuthoringReturn(origin: unknown): ProjectAuthoringReturn {
     const lifetime = captureActiveServerAccountScopeLifetime();

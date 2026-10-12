@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
-import { buildProjectRouteHref, readProjectAttachedDashboardSelection, readProjectCodeRouteLocation, readProjectFileRouteTarget, readProjectRouteCheckoutRootPath, readProjectRouteWorktreeSelection, resolveProjectOpenHref, resolveProjectRouteHeaderTitle, resolveProjectAuthoringReturn, readProjectSessionAuthoringOrigin } from './projectRouteState';
+import { buildProjectNewSessionOrigin, buildProjectRouteHref, readProjectAttachedDashboardSelection, readProjectCodeRouteLocation, readProjectFileRouteTarget, readProjectRouteCheckoutRootPath, readProjectRouteWorktreeSelection, resolveProjectOpenHref, resolveProjectRouteHeaderTitle, resolveProjectAuthoringReturn, readProjectSessionAuthoringOrigin } from './projectRouteState';
 
 const workspaceRef: WorkspaceRefV1 = { id: 'wr_1', serverId: 'home-a', machineId: 'machine-a',
     rootPath: '/repo', label: 'Project Alpha', createdAtMs: 1, lastOpenedAtMs: null };
@@ -74,6 +74,55 @@ describe('project route state', () => {
         expect(resolveProjectAuthoringReturn(origin, { scope: { serverId: 'home-b', accountId: 'account-a' }, workspaceRefs: [workspaceRef] }).kind).toBe('unavailable');
         expect(resolveProjectAuthoringReturn(origin, { scope: { serverId: 'home-a', accountId: 'account-a' }, workspaceRefs: [] }).kind).toBe('unavailable');
         expect(resolveProjectAuthoringReturn(origin, { scope: { serverId: 'home-a', accountId: 'account-a' }, workspaceRefs: [{ ...workspaceRef, rootPath: '/replacement' }] }).kind).toBe('unavailable');
+    });
+    it('round-trips the qualified attached-dashboard Home without rebinding it to the Project Home', () => {
+        const scope = { serverId: 'home-a', accountId: 'account-a' };
+        const origin = buildProjectNewSessionOrigin({ scope, page: 'overview', workspace: {
+            serverId: workspaceRef.serverId, workspaceId: workspaceRef.id, machineId: workspaceRef.machineId, rootPath: workspaceRef.rootPath,
+        }, routeParams: { dashboardSourceId: 'team-source', dashboardArtifactId: 'shared-dashboard', dashboardServerId: 'dashboard-home' } });
+        expect(origin).toMatchObject({ attachedDashboard: { sourceId: 'team-source', artifactId: 'shared-dashboard', serverId: 'dashboard-home' } });
+        const result = resolveProjectAuthoringReturn(origin, { scope, workspaceRefs: [workspaceRef] });
+        expect(result.kind).toBe('ready');
+        if (result.kind !== 'ready') throw new Error('Qualified attached dashboard return was refused');
+        expect(Object.fromEntries(new URL(result.href, 'https://happier.test').searchParams)).toMatchObject({
+            serverId: 'home-a', dashboardServerId: 'dashboard-home', dashboardSourceId: 'team-source', dashboardArtifactId: 'shared-dashboard',
+        });
+    });
+    it.each([
+        { page: 'overview', layoutId: 'release-dashboard' },
+        { page: 'overview', attachedDashboard: { sourceId: 'team-source', artifactId: 'shared-dashboard', serverId: 'foreign-home' } },
+        { page: 'code', codeLocation: { kind: 'file', path: ' leading /LICENSE ' } },
+        { page: 'context', surface: 'tabs', companion: 'files', resource: {
+            kind: 'file', path: 'src/a.ts', anchor: { kind: 'range', filePath: 'src/a.ts', startLine: 3, endLine: 7 },
+        } },
+        { page: 'services', surface: 'browser', companion: 'browser' },
+        { page: 'overview', surface: 'scripts', companion: 'scripts' },
+        { page: 'overview', companion: { kind: 'plugin', destination: { pluginId: 'acme.preview', localId: 'project-review' }, instanceKey: 'review-a' } },
+    ])('returns to the qualified ordinary Project destination %j', destination => {
+        const origin = { kind: 'project', accountId: 'account-a', workspace: {
+            serverId: 'home-a', workspaceId: workspaceRef.id, machineId: workspaceRef.machineId, rootPath: workspaceRef.rootPath,
+        }, ...destination };
+        const result = resolveProjectAuthoringReturn(origin, {
+            scope: { serverId: 'home-a', accountId: 'account-a' }, workspaceRefs: [workspaceRef],
+        });
+        expect(result.kind).toBe('ready');
+        if (result.kind !== 'ready') throw new Error('Original Project destination was refused');
+        const url = new URL(result.href, 'https://happier.test');
+        expect(url.pathname).toBe(`/projects/${workspaceRef.id}/${destination.page}`);
+        const params = Object.fromEntries(url.searchParams);
+        expect(params).toMatchObject({ serverId: 'home-a', worktreeId: '@root' });
+        if ('layoutId' in destination) expect(params.layoutId).toBe(destination.layoutId);
+        if ('attachedDashboard' in destination) {
+            expect(params).toMatchObject({ dashboardSourceId: 'team-source', dashboardArtifactId: 'shared-dashboard', dashboardServerId: 'foreign-home' });
+            expect(readProjectAttachedDashboardSelection(params)).toEqual(destination.attachedDashboard);
+        }
+        if ('codeLocation' in destination) expect(readProjectCodeRouteLocation(params)).toEqual(destination.codeLocation);
+        if ('surface' in destination) expect(params.mobileSurface).toBe(destination.surface);
+        if ('companion' in destination) {
+            if (typeof destination.companion === 'string') expect(params.right).toBe(destination.companion);
+            else expect(JSON.parse(params.rightDestination)).toEqual(destination.companion);
+        }
+        if ('resource' in destination) expect(readProjectFileRouteTarget(params)).toEqual(destination.resource);
     });
     it.each(['overview', 'code', 'changes', 'scripts', 'services', 'context'] as const)('preserves qualified state on %s', (segment) => {
         const href = buildProjectRouteHref({ workspaceRefId: workspaceRef.id, segment,

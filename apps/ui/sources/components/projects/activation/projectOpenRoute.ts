@@ -37,9 +37,8 @@ export function readProjectOpenRouteDraft(params: Readonly<Record<string, string
         let seed: unknown;
         try { seed = JSON.parse(rawSource); } catch { return null; }
         const parsed = sourceSeedSchema.safeParse(seed);
-        return parsed.success ? { ...parsed.data, machineId: '', materialization: {
-            kind: 'clone', destinationParentPath: '', destinationDirectoryName: '',
-        } } : null;
+        // No way to open is chosen here: the Open form starts on the choices owner's default once a Machine is chosen.
+        return parsed.success ? { ...parsed.data, machineId: '' } : null;
     }
     let candidate: unknown;
     try { candidate = JSON.parse(raw); } catch { return null; }

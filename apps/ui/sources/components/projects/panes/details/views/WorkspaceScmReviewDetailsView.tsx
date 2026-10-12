@@ -3,6 +3,8 @@ import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { ReviewCommentsSessionSurface } from '@/components/reviews/ReviewCommentsSessionSurface';
+import { ReviewCommentsHeaderButton } from '@/components/reviews/ReviewCommentsHeaderButton';
+import { buildReviewCommentsHeaderLabels } from '@/components/reviews/sessionSurfaceLabels';
 import { buildWorkspaceChangedFilesData } from '@/hooks/workspaces/scm/buildWorkspaceChangedFilesData';
 import { useWorkspaceScmSnapshotController } from '@/hooks/workspaces/scm/useWorkspaceScmSnapshotController';
 import { NotSourceControlRepositoryState } from '@/components/workspaces/scm/states/NotSourceControlRepositoryState';
@@ -15,6 +17,7 @@ import type { ScmReviewUnifiedDiffFetcher } from '@/components/workspaces/scm/re
 import { useWorkspaceReviewCommentDraftHandlers } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceReviewCommentDraftHandlers';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
+import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { createPluginPermissionGrantActions } from '@/sync/domains/plugins/permissions/actions';
 import { usePluginPermissionGrants } from '@/sync/domains/plugins/permissions/usePluginPermissionGrants';
 import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
@@ -35,6 +38,7 @@ import { WorkspaceScmCommitSelectionToggleButton } from '@/components/projects/s
 import { activeReviewFileKeyForWorkspace } from '@/components/workspaces/scm/review/activeReviewFile';
 import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { WorkspaceScmReviewBody } from '@/components/projects/scm/WorkspaceScmReviewBody';
+import { InputTypePickerHostProvider } from '@/components/sessions/actions/InputTypePickerHostProvider';
 import { useWorkspaceScmDiffSummaryBinding } from '@/components/projects/scm/useWorkspaceScmDiffSummaryBinding';
 import { ScmWalkthroughView } from '@/components/sessions/files/walkthrough/ScmWalkthroughView';
 import { useCapturedScmComparison } from '@/components/sessions/files/comparison/useCapturedScmComparison';
@@ -56,7 +60,7 @@ import { useSessionMachineTarget } from '@/components/sessions/model/useSessionM
 import { useSessionScmDiffSummaryBinding } from '@/components/sessions/files/comparison/useSessionScmDiffSummaryBinding';
 import { presentStartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
 import { WorkspaceCommitsView } from '@/components/projects/scm/WorkspaceCommitsView';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { ScmComparisonProposeCommits } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import type { ScmDiffSummaryHost } from '@/sync/ops/scmDiffSummary/results';
 import { readSessionScmReviewTarget } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { openWorkspaceScmAuthoringDraft } from '@/components/projects/scm/workspaceScmAuthoring';
@@ -81,36 +85,47 @@ export type WorkspaceScmReviewDetailsViewProps = Readonly<{
     explain?: boolean;
     /** Independently authorized Session evidence; never inferred from Machine/Project access. */
     evidenceSessionId?: string;
+    evidenceSessions?: readonly Readonly<{ sessionId: string; label: string; latestTurnId?: string | null }>[];
     onShowInGit?: () => void;
-    onSelectTarget?: (target: Readonly<{ comparison: SessionScmReviewComparison; view: SessionScmReviewView; explain: boolean }>) => void;
+    /** The host's own mode control (the Project page's Review | Git), led into the comparison bar. */
+    hostSwitch?: React.ReactNode;
+    onSelectTarget?: (target: WorkspaceReviewTarget) => void;
     onAsk?: (input: Readonly<{ comparison: ScmComparison; result: ScmDiffSummaryResult | null; stop: WalkthroughStop; isCurrent: () => boolean }>) => void;
     onExplain?: (input: Readonly<{ comparison: ScmComparison; result: ScmDiffSummaryResult | null; isCurrent: () => boolean }>) => void;
 }>;
 
-type WorkspaceReviewTarget = Readonly<{ comparison: SessionScmReviewComparison; view: SessionScmReviewView; explain: boolean }>;
+type WorkspaceReviewTarget = Readonly<{ comparison: SessionScmReviewComparison; view: SessionScmReviewView; explain: boolean; evidenceSessionId?: string }>;
+
+/** The branch a working-tree review is on; other comparisons name their own endpoints. */
+function pendingComparisonBranch(comparison: Readonly<{ kind: string }>, snapshot: Readonly<{ branch: Readonly<{ head?: string | null; detached?: boolean }> }> | null | undefined): string | null {
+    if (comparison.kind !== 'workingTree' || !snapshot || snapshot.branch.detached) return null;
+    return snapshot.branch.head?.trim() || null;
+}
 
 export const WorkspaceScmReviewDetailsView = React.memo((props: WorkspaceScmReviewDetailsViewProps) => {
     const pane = useAppPaneScope(props.scopeId);
-    const hostKey = JSON.stringify([props.serverId, props.machineId, props.rootPath, props.evidenceSessionId ?? null]);
+    const hostKey = JSON.stringify([props.serverId, props.machineId, props.rootPath]);
     const { persistedReviewTabState, setPersistedReviewTabState } = useScmReviewTabState(hostKey, pane);
-    const routeKey = JSON.stringify([props.comparison, props.view, props.explain]);
+    const routeKey = JSON.stringify([props.comparison, props.view, props.explain, props.evidenceSessionId]);
     const target = React.useMemo<WorkspaceReviewTarget>(() => {
         const saved = !props.onSelectTarget && persistedReviewTabState?.workspaceReviewHost === hostKey
             && persistedReviewTabState.workspaceReviewRouteKey === routeKey
             ? readSessionScmReviewTarget(persistedReviewTabState.workspaceReviewTarget) : undefined;
         return { comparison: saved?.comparison ?? props.comparison ?? { kind: 'workingTree' },
-            view: saved?.view ?? props.view ?? 'files', explain: saved?.explain ?? props.explain === true };
-    }, [hostKey, routeKey, props.onSelectTarget, props.comparison, props.view, props.explain,
+            view: saved?.view ?? props.view ?? 'files', explain: saved?.explain ?? props.explain === true,
+            evidenceSessionId: saved?.evidenceSessionId ?? props.evidenceSessionId };
+    }, [hostKey, routeKey, props.onSelectTarget, props.comparison, props.view, props.explain, props.evidenceSessionId,
         persistedReviewTabState?.workspaceReviewHost, persistedReviewTabState?.workspaceReviewRouteKey, persistedReviewTabState?.workspaceReviewTarget]);
     const selectTarget = React.useCallback((next: WorkspaceReviewTarget) => {
         setPersistedReviewTabState({ workspaceReviewHost: hostKey, workspaceReviewRouteKey: routeKey, workspaceReviewTarget: next });
         props.onSelectTarget?.(next);
     }, [hostKey, routeKey, props.onSelectTarget, setPersistedReviewTabState]);
-    const session = useSession(props.evidenceSessionId ?? '', props.serverId);
-    const sessionMachine = useSessionMachineTarget(props.evidenceSessionId ?? null, props.serverId);
+    const session = useSession(target.evidenceSessionId ?? '', props.serverId);
+    const sessionMachine = useSessionMachineTarget(target.evidenceSessionId ?? null, props.serverId);
     const privateEvidence = target.comparison.kind === 'session' || target.comparison.kind === 'turnCheckpoint';
-    const evidenceSessionId = session && sessionMachine?.machineId === props.machineId
-        && normalizeWorkspaceRootPath(sessionMachine.basePath) === normalizeWorkspaceRootPath(props.rootPath) ? props.evidenceSessionId : undefined;
+    const admittedChoice = props.evidenceSessions?.some(choice => choice.sessionId === target.evidenceSessionId);
+    const evidenceSessionId = (props.evidenceSessions ? admittedChoice : Boolean(session)) && sessionMachine?.machineId === props.machineId
+        && normalizeWorkspaceRootPath(sessionMachine.basePath) === normalizeWorkspaceRootPath(props.rootPath) ? target.evidenceSessionId : undefined;
     const boundProps = { ...props, ...target, evidenceSessionId, onSelectTarget: selectTarget };
     return privateEvidence && evidenceSessionId ? <SessionBoundWorkspaceReview {...boundProps} evidenceSessionId={evidenceSessionId} />
         : <MachineBoundWorkspaceReview {...boundProps} />;
@@ -156,16 +171,24 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
         [activeReviewFileKey, presented],
     );
     const reviewCommentsEnabled = useFeatureEnabled('files.reviewComments') === true;
+    // Review comments open from the comparison bar (one line of chrome); their panel opens under it.
+    const [commentsOpen, setCommentsOpen] = React.useState(false);
+    const [commentsCount, setCommentsCount] = React.useState<number | null>(null);
+    const commentsLabels = React.useMemo(() => buildReviewCommentsHeaderLabels(), []);
     const scmWriteEnabled = useFeatureEnabled('scm.writeOperations') === true;
     const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(scope);
     const reviewDraftHandlers = useWorkspaceReviewCommentDraftHandlers(scope);
     const { snapshot, loading, error, refresh } = useWorkspaceScmSnapshotController(scope);
+    // The checkout's machine isn't answering: the review waits with it, in the one shared state, rather than loading without end.
+    const reachability = useCheckoutReachability(scope);
     const comparison = props.comparison ?? { kind: 'workingTree' };
     const view = props.view ?? 'files';
     const explain = props.explain === true;
     const selectTarget = (patch: Partial<WorkspaceReviewTarget>) => {
-        const next = { comparison, view, explain, ...patch };
-        if ((next.comparison.kind === 'session' || next.comparison.kind === 'turnCheckpoint') && !props.evidenceSessionId) return;
+        const next = { comparison, view, explain, evidenceSessionId: props.evidenceSessionId, ...patch };
+        if ((next.comparison.kind === 'session' || next.comparison.kind === 'turnCheckpoint')
+            && (!next.evidenceSessionId || (props.evidenceSessions
+                && !props.evidenceSessions.some(choice => choice.sessionId === next.evidenceSessionId)))) return;
         if (patch.comparison && patch.comparison.kind !== 'workingTree' && next.view === 'commits') next.view = 'files';
         props.onSelectTarget?.(next);
     };
@@ -237,11 +260,20 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
         walkthrough: bound.viewModel?.outputs?.walkthrough ?? null, analysis: bound.viewModel?.analysis ?? null,
         reviewed: marks.record, provenance: bound.viewModel?.savedResult?.walkthroughProvenance }) : null,
         [bound.capturedComparison, bound.viewModel?.outputs?.walkthrough, bound.viewModel?.analysis, bound.viewModel?.savedResult?.walkthroughProvenance, marks.record]);
-    const scopeLabel = resolveFilesComparisonLabel(comparison, null);
-    const scopeOptions = listFilesComparisonScopeOptions({ showTurnViewToggle: false, showTurnAgentReportedViewToggle: false,
-        showTurnCheckpointViewToggle: false, showSessionViewToggle: Boolean(props.evidenceSessionId) }, null, comparison,
-        { pendingFileCount: snapshot?.entries.length }).filter((option) => option.sourceKind !== 'turnCheckpoint'
-            && (option.sourceKind !== 'session' || Boolean(props.evidenceSessionId)));
+    const chosenEvidence = props.evidenceSessions?.find(choice => choice.sessionId === props.evidenceSessionId);
+    const latestTurnId = chosenEvidence?.latestTurnId ?? null;
+    const scopeLabel = comparison.kind === 'session' && chosenEvidence ? chosenEvidence.label : resolveFilesComparisonLabel(comparison, latestTurnId);
+    // Where these changes live, by name ("on fix-settings-modal"); the checkout path is already the page.
+    const scopeBranch = pendingComparisonBranch(comparison, snapshot);
+    const scopeDetail = scopeBranch ? t('scmComparison.onBranch', { branch: scopeBranch }) : null;
+    const scopeOptions = listFilesComparisonScopeOptions({ showTurnViewToggle: Boolean(latestTurnId), showTurnAgentReportedViewToggle: false,
+        showTurnCheckpointViewToggle: false, showSessionViewToggle: Boolean(props.evidenceSessionId) }, latestTurnId, comparison,
+        { pendingFileCount: snapshot?.entries.length }).filter((option) =>
+            (option.sourceKind !== 'turnCheckpoint' || Boolean(props.evidenceSessionId))
+            && (option.sourceKind !== 'session' || (!props.evidenceSessions && Boolean(props.evidenceSessionId))))
+        .map(option => option.sourceKind === 'turnCheckpoint' && props.evidenceSessionId ? { ...option, evidenceSessionId: props.evidenceSessionId } : option);
+    for (const choice of props.evidenceSessions ?? []) scopeOptions.push({ comparison: { kind: 'session' }, evidenceSessionId: choice.sessionId,
+        sourceKind: 'session', group: 'explainOnly', label: choice.label, subtitle: t('scmComparison.scopePicker.sessionDescription'), fileCount: null });
     const pendingComparison = comparison.kind === 'workingTree';
     const reviewDisabled = !bound.scope || !bound.machine || !bound.canControl
         || ((comparison.kind === 'session' || comparison.kind === 'turnCheckpoint') && !props.host.sessionId);
@@ -252,7 +284,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
     const startReview = () => {
         if (!bound.scope || !bound.machine || !bound.isCurrent()) return;
         presentStartReviewDialog({ ...(props.host.sessionId ? { sessionId: props.host.sessionId } : { machineId: props.machineId }),
-            serverId: props.serverId, cwd: props.rootPath, comparison, scopeLabel, scopeDetail: props.rootPath,
+            serverId: props.serverId, cwd: props.rootPath, comparison, scopeLabel, scopeDetail,
             defaultWalkthrough: Boolean(props.host.sessionId), onStarted: (started, walkthrough) => {
                 if (!bound.isCurrent()) return;
                 setPersistedReviewTabState({ reviewRunIds: [...started.reviewRunIds] });
@@ -352,7 +384,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
 
     return (
         <View style={{ flex: 1, minHeight: 0, minWidth: 0, backgroundColor: theme.colors.surface.base }}>
-            {authoringApproval.approvalId ? <ActionApprovalPendingNotice message={t('approvals.status.open')}
+            {authoringApproval.approvalId ? <ActionApprovalPendingNotice message={t('approvals.status.open')} summary={authoringApproval.approvalSummary}
                 testID="workspace-review-authoring-approval" onOpenApproval={() => router.push(
                     `/inbox/approvals/${encodeURIComponent(authoringApproval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}`,
                 )} /> : null}
@@ -370,29 +402,37 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                     permissionGrantStatus={pluginPermissionGrants.state.status}
                     permissionGrantError={pluginPermissionGrants.state.error}
                     onRefreshPermissionGrants={() => { void pluginPermissionGrants.refresh(); }}
-                    defaultPanelOpen={false}
+                    header="external"
+                    open={commentsOpen}
+                    onUnresolvedCountChange={setCommentsCount}
                     testID="workspace-review-comments"
                 />
             ) : null}
             {snapshot ? <SourceControlStaleSnapshotNotice error={error} onRetry={() => { void refresh(); }} testID="workspace-review-stale" /> : null}
-            <WorkspaceScmReviewBody activeReviewFile={activeReviewFile} comparison={comparison} view={view} scopeLabel={scopeLabel} scopeDetail={props.rootPath}
+            <InputTypePickerHostProvider enabled={presented} machineId={props.machineId} serverId={props.serverId}
+                contextKey={JSON.stringify([props.serverId, props.machineId, props.rootPath])}>
+            <WorkspaceScmReviewBody activeReviewFile={activeReviewFile} comparison={comparison} view={view} scopeLabel={scopeLabel} scopeDetail={scopeDetail}
+                hostSwitch={props.hostSwitch}
+                barActions={reviewCommentsEnabled ? <ReviewCommentsHeaderButton compact labels={commentsLabels} unresolvedCount={commentsCount}
+                    expanded={commentsOpen} onPress={() => setCommentsOpen(open => !open)} testID="workspace-review-comments-trigger" /> : null}
                 views={pendingComparison ? ['files', 'walkthrough', 'commits'] : ['files', 'walkthrough']}
                 commitsCount={commitPlan?.outputs?.commitPlan?.value?.groups.length ?? null}
                 onStartReview={startReview} reviewDisabled={reviewDisabled}
                 reviewDisabledReason={reviewDisabled ? t('common.unavailable') : null}
                 onProposeCommits={pendingComparison ? () => selectTarget({ view: 'commits' }) : undefined}
-                proposeCommits={pendingComparison && view !== 'commits' && !commitPlan?.outputs?.commitPlan ? <RoundButton testID="scm-comparison-propose-commits"
-                    title={t('scmComparison.proposeCommits')} onPress={() => selectTarget({ view: 'commits' })} /> : undefined}
+                proposeCommits={pendingComparison && view !== 'commits' && !commitPlan?.outputs?.commitPlan ? <ScmComparisonProposeCommits onPress={() => selectTarget({ view: 'commits' })} /> : undefined}
                 renderCommits={({ layout, renderBar }) => <WorkspaceCommitsView scope={scope}
                     comparison={comparison} branch={snapshot?.branch.detached ? null : snapshot?.branch.head ?? null} layout={layout === 'phone' ? 'phone' : 'wide'}
                     active={presented} renderBar={() => renderBar()} onShowInGit={props.onShowInGit} />}
                 filesState={comparison.kind === 'workingTree' && !comparison.comparisonId
-                    ? loading && !snapshot ? <PaneLoadingFallback />
+                    ? loading && !snapshot ? (reachability.unreachable ? <CheckoutUnreachableState reachability={reachability} testID="scm-review-unreachable" /> : <PaneLoadingFallback />)
                         : error && !snapshot ? <SourceControlUnavailableState details={error.message} errorCode={error.errorCode} onRetry={() => { void refresh(); }} />
                             : snapshot?.repo.isRepo === false ? <NotSourceControlRepositoryState /> : null
                     : !capture.comparison ? capture.loading ? <PaneLoadingFallback />
                         : <SourceControlUnavailableState details={capture.error ?? t('scmComparison.unsupportedReason')} onRetry={capture.retry} /> : null}
-                scopeOptions={scopeOptions} onSelectComparison={(next) => selectTarget({ comparison: next })}
+                scopeOptions={scopeOptions} evidenceSessionId={props.evidenceSessionId}
+                onSelectComparison={(next, evidenceSessionId) => selectTarget({ comparison: next,
+                    ...(evidenceSessionId ? { evidenceSessionId } : {}) })}
                 onSelectView={(next) => selectTarget({ view: next })} rootPath={props.rootPath}
                 fileCount={capture.comparison?.inventory.files.length ?? (snapshot ? changedFiles.allRepositoryChangedFiles.length : null)}
                 reading={reading} marksAvailable={marks.unavailableReason === null && marks.record !== null}
@@ -402,7 +442,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                 renderWalkthrough={({ layout, renderBar, onShowFiles }) => <View testID="workspace-walkthrough" style={{ flex: 1, minHeight: 0 }}>
                     <ScmWalkthroughView bound={bound} displayMachineId={props.machineId} serverId={props.serverId}
                         sessionId={props.host.sessionId} startedReviewRunIds={props.host.sessionId ? startedReviewRunIds : null}
-                        comparison={comparison} scopeLabel={scopeLabel} scopeDetail={props.rootPath} layout={layout}
+                        comparison={comparison} scopeLabel={scopeLabel} scopeDetail={scopeDetail} layout={layout}
                         renderBar={renderBar} onShowFiles={onShowFiles} onOpenFile={(path) => props.onOpenFile?.(path)}
                         onAskStop={bound.capturedComparison ? (stop) => {
                             if (!readingIsCurrent() || !bound.capturedComparison) return;
@@ -447,6 +487,7 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
                 initialScrollTop={mountedInitialReviewState.scrollTop} onScrollTopChange={onScrollTopChange}
                 initialCollapsedPaths={mountedInitialReviewState.collapsedPaths} onCollapsedPathsChange={onCollapsedPathsChange}
             />} />
+            </InputTypePickerHostProvider>
         </View>
     );
 });

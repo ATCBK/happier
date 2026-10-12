@@ -33,21 +33,26 @@ import type { CustomModalInjectedProps } from '@/modal/types';
 import {
   useActiveServerAccountScope,
   useAllMachines,
+  useProjectAccountRows,
   useWorkspaceRefs,
 } from '@/sync/domains/state/storage';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
+import { isProjectAccountRowsCensusComplete } from '@/sync/store/domains/projectAccountRows';
 import { formatResetAtTime } from '@/utils/time/formatResetAtTime';
 import {
   getMachineDisplayName,
-  isMachineOnline,
 } from '@/utils/sessions/machineUtils';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { resolveMachineActionCandidates } from '@/utils/sessions/resolveMachineActionCandidates';
 import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
+import { formatRelativeTime } from '@/utils/time/formatShortRelativeTime';
+import { useProjectSourceAddress } from '../sources/useProjectSourceAddress';
 import { formatOSPlatform } from '@/utils/sessions/sessionUtils';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { WorkspaceActivationSyncFields } from '@/components/workspaces/activation/WorkspaceActivationEditor';
 
 import { ProjectRefSelect } from '../ProjectRefSelect';
@@ -64,6 +69,7 @@ import {
   buildProjectOpenInput,
   projectOpenChoiceStateFromDraft,
   resolveProjectOpenUseOptions,
+  resolveProjectOpenDefaults,
   suggestProjectOpenDestination,
   type ProjectOpenSubject,
   type ProjectOpenUse,
@@ -145,6 +151,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
   const seed = React.useMemo(() => readProjectOpenRouteDraft(params), [params]);
   const machines = useAllMachines();
   const presenceNowMs = useMachinePresenceNowMs(machines);
+  const reachabilityRevision = useMachineReachabilityRevision();
   const checkouts = useWorkspaceRefs();
   const { state: catalog, controller: catalogController } = useProjectSources(
     props.scope,
@@ -152,8 +159,8 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
   const teamName = useProjectSourceTeamName(props.scope.serverId);
 
   const candidates = React.useMemo(
-    () => resolveMachineActionCandidates(machines, { onlineOnly: false }),
-    [machines],
+    () => resolveMachineActionCandidates(props.scope, machines, { onlineOnly: false, nowMs: presenceNowMs }),
+    [machines, props.scope, presenceNowMs, reachabilityRevision],
   );
   const machineNames = React.useMemo(() => resolveMachineDisplayNames(candidates), [candidates]);
   const [query, setQuery] = React.useState('');
@@ -173,8 +180,15 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
   const machine =
     machines.find((candidate) => candidate.id === machineId) ?? null;
   const machineHomeDir = readMachineHomeDir(machine);
-  const choiceBase = projectOpenChoiceStateFromDraft(open.draft ?? { serverId: props.scope.serverId },
+  const storedChoice = projectOpenChoiceStateFromDraft(open.draft ?? { serverId: props.scope.serverId },
     Array.isArray(checkouts) ? checkouts : [], machineHomeDir);
+  // The form stands on the choices owner's default until the person chooses: shown, and written with the
+  // next edit or the Open itself. It is only written once the census is complete, so a way chosen while
+  // the checkouts were still loading (a clone, say) never sticks as if the person had picked it.
+  const rowsCensusComplete = isProjectAccountRowsCensusComplete(useProjectAccountRows());
+  const storedDefaults = resolveProjectOpenDefaults(storedChoice);
+  const choiceBase = { ...storedChoice, ...storedDefaults };
+  const defaultsPending = Object.keys(storedDefaults).length > 0;
   const { subject, ref, branch } = choiceBase;
   const options = resolveProjectOpenUseOptions(choiceBase);
   const effectiveUse = choiceBase.use;
@@ -185,12 +199,12 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
     if (patch.machineId !== undefined) {
       next = { ...next, machineHomeDir: readMachineHomeDir(machines.find((candidate) => candidate.id === patch.machineId)) };
     }
-    // A choice that leaves exactly one way to open takes it, and a clone or copy starts at the
-    // suggested folder (or follows it to a new machine). Both answer the person's own choice; typing
-    // a folder or a branch never re-suggests over it.
+    // Each choice leaves the form on a valid way to open (kept when the person chose it), and a clone or
+    // copy starts at the suggested folder (or follows it to a new machine). Both answer the person's own
+    // choice; typing a folder or a branch never re-suggests over it.
     if (patch.destination === undefined && patch.branch === undefined) {
-      const reachable = resolveProjectOpenUseOptions(next);
-      if (reachable.length === 1 && next.use !== reachable[0]!.use) next = { ...next, use: reachable[0]!.use };
+      // The form always stands on a valid way to open (the choices owner names it), never on nothing.
+      if (rowsCensusComplete) next = { ...next, ...resolveProjectOpenDefaults(next) };
       const suggested = suggestProjectOpenDestination(choiceBase);
       if ((next.use === 'clone' || next.use === 'copy')
         && (!next.destination.trim() || next.destination === suggested)) {
@@ -200,12 +214,20 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
     open.setDraft(buildProjectOpenDraft(next));
   };
   const setSubject = (next: ProjectOpenSubject) => edit({ subject: next, checkoutId: null, checkoutAddress: null });
-  const setMachineId = (next: string) => edit({ machineId: next });
+  const setMachineId = (next: string) => {
+    edit({ machineId: next });
+    // A clone's address that did not resolve yet is read again by the Machine the person chose.
+    const pending = repositoryAddress.resolution;
+    if (!subject && pending.kind !== 'idle' && pending.kind !== 'resolved' && pending.address) void repositoryAddress.resolve(pending.address, next);
+  };
   const setRef = (next: string | null) => edit({ ref: next });
   const setSubdir = (next: string) => edit({ subdir: next });
   const setUse = (next: ProjectOpenUse) => edit({ use: next });
   const setBranch = (next: string) => edit({ branch: next });
   const setDestination = (next: string) => edit({ destination: next });
+  // "Clone a repository…": with only the clone intent and no Source yet, the address is the first field;
+  // the Machine's hosting owner reads it (the same reading as a new Source) and the repository becomes the subject.
+  const repositoryAddress = useProjectSourceAddress(props.scope, (selector) => setSubjectRef.current({ kind: 'repository', selector }));
   const setSubjectRef = React.useRef(setSubject);
   setSubjectRef.current = setSubject;
 
@@ -258,11 +280,17 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
     if (props.onClose) props.onClose();
     else router.back();
   };
-  const submitDisabled = !draft || (!(open.result && 'kind' in open.result && open.result.kind === 'opened')
-      && !buildProjectOpenInput(draft, Array.isArray(checkouts) ? checkouts : [])) || open.pending
+  // What Open would send: the stored draft, or the draft with the shown default once the rows are complete.
+  const effectiveDraft = draft && defaultsPending && rowsCensusComplete ? buildProjectOpenDraft(choiceBase) : draft;
+  const submit = () => {
+    if (effectiveDraft && effectiveDraft !== draft) open.setDraft(effectiveDraft);
+    return open.submit();
+  };
+  const submitDisabled = !effectiveDraft || (!(open.result && 'kind' in open.result && open.result.kind === 'opened')
+      && !buildProjectOpenInput(effectiveDraft, Array.isArray(checkouts) ? checkouts : [])) || open.pending
     || (open.result && 'kind' in open.result && open.result.kind === 'outcomeUnknown') === true;
-  const actionsRef = React.useRef({ cancel, submit: open.submit });
-  actionsRef.current = { cancel, submit: open.submit };
+  const actionsRef = React.useRef({ cancel, submit });
+  actionsRef.current = { cancel, submit };
   // The dialog's footer is the card's own slot; the callbacks read through a ref, so only the
   // button states re-publish the chrome.
   const dialogChrome = React.useMemo(() => (dialog ? {
@@ -313,7 +341,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
   const whereStatus: ProjectOpenWhereStatus = !machine || !machineName
     ? { kind: 'none' }
     : machinePresence.reachability === 'unreachable'
-      ? { kind: 'offline', machineName }
+      ? { kind: 'offline' }
       : machinePresence.reachability === 'reachable'
         ? {
             kind: 'online',
@@ -323,8 +351,27 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
               : null,
           }
         : { kind: 'none' };
+  // Several checkouts of the Source on this Machine: the selected existing/worktree row names one and
+  // changes which through the same menu pattern as Where (never a separate list on the page).
+  const checkoutKey = (ref: Readonly<{ machineId: string; rootPath: string; id: string }>) => `${ref.machineId}\u0000${ref.rootPath}\u0000${ref.id}`;
   const useRows = options.map((option) => ({
     use: option.use,
+    ...((option.use === 'existing' || option.use === 'worktree') && option.candidates.length > 1 ? {
+      checkoutChoice: {
+        items: option.candidates.map((candidate) => ({
+          id: checkoutKey(candidate),
+          title: formatPathRelativeToHome(candidate.rootPath, choiceBase.machineHomeDir ?? undefined),
+          ...(candidate.lastOpenedAtMs != null
+            ? { subtitle: t('projects.open.openedAgo', { when: formatRelativeTime(candidate.lastOpenedAtMs) }) } : {}),
+        })),
+        selectedId: option.from ? checkoutKey(option.from) : null,
+        onSelect: (key: string) => {
+          const candidate = option.candidates.find((ref) => checkoutKey(ref) === key);
+          if (candidate) edit({ checkoutId: candidate.id, checkoutAddress: { serverId: candidate.serverId,
+            workspaceId: candidate.id, machineId: candidate.machineId, rootPath: candidate.rootPath } });
+        },
+      },
+    } : {}),
     ...describeProjectOpenUse({
       use: option.use,
       machineName: machineName ?? '',
@@ -332,8 +379,11 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
         ? formatPathRelativeToHome(option.from.rootPath, choiceBase.machineHomeDir ?? undefined)
         : null,
       gitRef: ref ?? (subject?.kind === 'source' ? (subject.source.defaultRef ?? null) : null),
-      destination: effectiveDestination.trim()
-        ? formatPathRelativeToHome(effectiveDestination.trim(), choiceBase.machineHomeDir ?? undefined)
+      lastOpenedAtMs: option.from?.lastOpenedAtMs ?? null,
+      candidateCount: option.candidates.length,
+      // A clone says where it lands: the folder set, else the one it would suggest.
+      destination: (effectiveDestination.trim() || suggestProjectOpenDestination(choiceBase))
+        ? formatPathRelativeToHome(effectiveDestination.trim() || suggestProjectOpenDestination(choiceBase), choiceBase.machineHomeDir ?? undefined)
         : null,
     }),
   }));
@@ -377,7 +427,8 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
               title={t('projects.open.title')}
               description={t('projects.open.purpose')}
               alwaysShowTitle
-              cancelAction={!twoPanes ? { title: t('common.cancel'), onPress: cancel, testID: 'projects.open.cancel' } : undefined}
+              // A pushed page leaves through navigation's standard Back (lab OPENp "‹ Projects"); Cancel belongs to the
+              // dialog's footer and to modal sheets, never to this page's header.
             />
           )}
           <ProjectOpenSubjectSection
@@ -389,30 +440,20 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
             onChooseSource={openSourceSheet}
             onChangeRef={setRef}
             onChangeSubdir={setSubdir}
+            repositoryAddress={!subject && effectiveUse === 'clone' ? {
+              value: repositoryAddress.resolution.kind === 'idle' ? '' : repositoryAddress.resolution.address,
+              error: repositoryAddress.refusal && repositoryAddress.refusal !== 'projects.sources.loading' ? t(repositoryAddress.refusal) : null,
+              onCommit: (text) => { void repositoryAddress.resolve(text, machineId); },
+            } : null}
           />
-          {options.find(option => option.use === effectiveUse)?.candidates.length ? (
-            <ItemGroup title={t('projects.open.chooseExact')}>
-              {options.find(option => option.use === effectiveUse)?.candidates.map(candidate => (
-                <Item key={`${candidate.serverId}:${candidate.machineId}:${candidate.id}:${candidate.rootPath}`}
-                  title={candidate.label ?? candidate.rootPath} subtitle={candidate.rootPath}
-                  selected={choiceBase.checkoutAddress?.workspaceId === candidate.id
-                    && choiceBase.checkoutAddress.machineId === candidate.machineId
-                    && choiceBase.checkoutAddress.rootPath === candidate.rootPath}
-                  onPress={() => edit({ checkoutId: candidate.id, checkoutAddress: { serverId: candidate.serverId,
-                    workspaceId: candidate.id, machineId: candidate.machineId, rootPath: candidate.rootPath } })}
-                  showChevron={false} />
-              ))}
-            </ItemGroup>
-          ) : null}
           <ProjectOpenWhereRow
             items={candidates.map((candidate) => ({
               id: candidate.id,
               title: machineNames.get(candidate.id)!,
-              subtitle: isMachineOnline(candidate, presenceNowMs)
-                ? undefined
-                : t('projects.open.offline', {
-                    machine: machineNames.get(candidate.id)!,
-                  }),
+              // A choice says its state in a word; the full sentence belongs to the chosen Where row.
+              subtitle: isMachineSelectableForFleet(props.scope, candidate, presenceNowMs)
+                ? [t('status.online'), formatOSPlatform(candidate.metadata?.platform ?? undefined)].filter(Boolean).join(' · ')
+                : t('status.offline'),
               icon: (
                 <Icon
                   name="desktop"
@@ -464,7 +505,7 @@ const ProjectOpenForm = React.memo(function ProjectOpenForm(
           disabled={submitDisabled}
           loading={open.pending}
           onCancel={cancel}
-          onSubmit={() => { void open.submit(); }}
+          onSubmit={() => { void submit(); }}
         />
       )}
     </View>
@@ -545,10 +586,31 @@ function ProjectOpenSubjectSection(
     onChooseSource: () => void;
     onChangeRef: (ref: string | null) => void;
     onChangeSubdir: (subdir: string) => void;
+    /** A clone with no repository yet: the address to read. */
+    repositoryAddress: Readonly<{ value: string; error: string | null; onCommit: (text: string) => void }> | null;
   }>,
 ) {
   const { theme } = useUnistyles();
   const subject = props.subject;
+  if (!subject && props.repositoryAddress) {
+    const address = props.repositoryAddress;
+    return (
+      <ItemGroup title={t('projects.open.source')}>
+        <FieldValueItem
+          testID="projects.open.subject.address"
+          title={t('projects.open.repository')}
+          value={address.value}
+          placeholder={t('projects.sources.addressPlaceholder')}
+          fieldTestID="projects.open.subject.addressField"
+          monospace
+          autoCapitalize="none"
+          autoFocus
+          error={address.error}
+          onCommit={(text) => { address.onCommit(text); return text; }}
+        />
+      </ItemGroup>
+    );
+  }
   if (!subject) {
     return props.compact ? (
       <ItemGroup title={t('projects.open.source')}>
@@ -592,6 +654,8 @@ function ProjectOpenSubjectSection(
           testID="projects.open.subject.repository"
           title={t('projects.open.repository')}
           detail={formatProjectSourceAddress(repository)}
+          // An address is an identifier: the mono role, as on the Source's own header.
+          detailStyle={styles.address}
           showChevron={false}
         />
       ) : (
@@ -599,6 +663,7 @@ function ProjectOpenSubjectSection(
           testID="projects.open.subject.checkout"
           title={t('projects.open.repository')}
           detail={subject.kind === 'workspace' ? subject.workspace.rootPath : ''}
+          detailStyle={styles.address}
           showChevron={false}
         />
       )}
@@ -636,6 +701,10 @@ function describeProjectOpenUse(
     machineName: string;
     fromPath: string | null;
     gitRef: string | null;
+    /** When the existing checkout was last opened here, if known. */
+    lastOpenedAtMs: number | null;
+    /** How many checkouts of the Source are here; several and none chosen means the person picks one. */
+    candidateCount: number;
     /** The clone's destination, home-relative; null while none is set. */
     destination: string | null;
   }>,
@@ -644,16 +713,19 @@ function describeProjectOpenUse(
     case 'existing':
       return {
         title: t('projects.open.existing', { machine: input.machineName }),
+        // "~/src/happier · v0.3 · opened 2 days ago": which checkout, its branch, and when it was last used.
         subtitle: input.fromPath
-          ? input.gitRef
-            ? t('projects.open.existingDetail', { path: input.fromPath, ref: input.gitRef })
-            : input.fromPath
-          : undefined,
+          ? [
+              input.gitRef ? t('projects.open.existingDetail', { path: input.fromPath, ref: input.gitRef }) : input.fromPath,
+              input.lastOpenedAtMs != null ? t('projects.open.openedAgo', { when: formatRelativeTime(input.lastOpenedAtMs) }) : null,
+            ].filter(Boolean).join(' · ')
+          : input.candidateCount > 1 ? t('projects.open.chooseCheckout', { count: input.candidateCount }) : undefined,
       };
     case 'worktree':
       return {
         title: t('projects.open.worktree'),
-        subtitle: input.fromPath ? t('projects.open.worktreeDetail', { path: input.fromPath }) : undefined,
+        subtitle: input.fromPath ? t('projects.open.worktreeDetail', { path: input.fromPath })
+          : input.candidateCount > 1 ? t('projects.open.chooseCheckout', { count: input.candidateCount }) : undefined,
       };
     case 'clone':
       return {
@@ -744,4 +816,5 @@ const styles = StyleSheet.create(() => ({
   },
   footerNoteRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
   footerNote: { ...Typography.default(), flexShrink: 1 },
+  address: { ...Typography.mono() },
 }));

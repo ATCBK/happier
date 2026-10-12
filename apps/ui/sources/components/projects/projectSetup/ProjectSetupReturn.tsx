@@ -3,28 +3,34 @@ import { View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { StoredPluginUiNewSessionSeedOriginV1Schema, type PluginUiNewSessionSeedOriginV1 } from '@happier-dev/protocol/plugins/ui';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { resolveWorkspacePathBasenameV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 
 import { readProjectSessionAuthoringOrigin } from '@/components/projects/detail/projectRouteState';
+import { projectPageGlyph, projectPageLabel } from '@/components/projects/shell/ProjectShellHeader';
 import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWorkspaceRefDisplayName';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { SessionListIdentity } from '@/components/sessions/shell/SessionListIdentity';
+import { HAPPIER_PAGE_METRICS, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Icon } from '@/components/ui/icons/Icon';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { storage, useMachine } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storage';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
-import { useSessionSelector } from '@/sync/store/hooks';
+import { useSessionSelector, useServerScopedMachine } from '@/sync/store/hooks';
+import { selectProjectLastAuthoringSessionId } from '@/sync/store/selectProjectLastAuthoringSessionId';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
-import { useProjectDefinitionInspection } from './useProjectDefinitionInspection';
+import { useProjectSetupReturnInspection } from './useProjectSetupReturnInspection';
+import { projectSetupReadinessLine } from './projectSetupReadinessLine';
 import { useProjectAuthoringReturn } from './useProjectSetupAuthoring';
 
 /**
@@ -43,29 +49,6 @@ function useProjectSetupReturn(origin: PluginUiNewSessionSeedOriginV1 | null) {
   const scripts = useProjectAuthoringReturn(scriptsOrigin);
   const changes = useProjectAuthoringReturn(changesOrigin);
   return { scripts, changes };
-}
-
-/** "5 scripts · 2 services" from the checkout's definition (plan 20's passive owner), or no project file yet. */
-function useDefinitionSummary(
-  origin: PluginUiNewSessionSeedOriginV1 | null,
-): string | null {
-  const { binding } = useServerCredentialAccountScopeBinding(origin?.workspace.serverId);
-  const { read } = useProjectDefinitionInspection(
-    origin?.workspace ?? null,
-    binding?.accountId === origin?.accountId ? binding : null,
-  );
-  if (!read || 'error' in read) return null;
-  const document = read.value.definition.document;
-  if (document === null) return t('projects.widgets.noProjectFile');
-  if (document.status !== 'valid') return null;
-  const scripts = Object.keys(document.manifest.scripts ?? {}).length;
-  const services = Object.keys(document.manifest.services ?? {}).length;
-  return [
-    t('projects.authoring.scriptsCount', { count: scripts }),
-    ...(services > 0
-      ? [t('projects.authoring.servicesCount', { count: services })]
-      : []),
-  ].join(' · ');
 }
 
 /**
@@ -95,45 +78,63 @@ function ProjectSetupSessionReturnCard(
 ) {
   const { theme } = useUnistyles();
   const { scripts, changes } = useProjectSetupReturn(props.origin);
-  const summary = useDefinitionSummary(props.origin);
-  if (scripts.destination.kind !== 'ready') return null;
-  const project = resolveWorkspaceRefDisplayName(
-    scripts.destination.workspaceRef,
-  );
+  const original = useProjectAuthoringReturn(props.origin);
+  // Setup authoring returns to Scripts; Explain/Ask from a review returns to that comparison only.
+  const ordinary = props.origin.purpose === 'session' || (props.origin.page !== 'scripts' && props.origin.page !== 'changes');
+  const fromChanges = props.origin.page === 'changes';
+  const { summary, setupReadiness } = useProjectSetupReturnInspection(!ordinary && !fromChanges ? props.origin : null);
+  const facts = [summary, projectSetupReadinessLine(setupReadiness)].filter((fact): fact is string => Boolean(fact)).join(' · ');
+  const home = ordinary ? original : fromChanges ? changes : scripts;
+  if (home.destination.kind !== 'ready') return null;
+  const project = resolveWorkspaceRefDisplayName(home.destination.workspaceRef);
   return (
     <View style={styles.card} testID="project-setup-return">
       <ItemGroup>
         <Item
           testID="project-setup-return.item"
           icon={
-            <Icon name="play" size={18} color={theme.colors.text.secondary} />
+            <Icon
+              name={projectPageGlyph(props.origin.page)}
+              size={18}
+              color={theme.colors.text.secondary}
+            />
           }
-          title={`${project} · ${t('projects.pages.scripts')}`}
-          subtitle={summary ?? undefined}
+          title={`${project} · ${projectPageLabel(props.origin.page)}`}
+          subtitle={facts || undefined}
           showChevron={false}
           accessoryLayout="adaptive"
           rightElement={
             <View style={styles.actions}>
-              {changes.destination.kind === 'ready' ? (
+              {ordinary ? (
+                <RoundButton
+                  testID="project-setup-return.origin"
+                  size="small"
+                  display="secondary"
+                  title={projectPageLabel(props.origin.page)}
+                  onPress={() => { original.onReturnToProject(); }}
+                />
+              ) : changes.destination.kind === 'ready' ? (
                 <RoundButton
                   testID="project-setup-return.changes"
                   size="small"
-                  display="inverted"
+                  display={fromChanges ? 'secondary' : 'inverted'}
                   title={t('projects.authoring.reviewChanges')}
                   onPress={() => {
                     changes.onReturnToProject();
                   }}
                 />
               ) : null}
-              <RoundButton
-                testID="project-setup-return.scripts"
-                size="small"
-                display="secondary"
-                title={t('projects.authoring.returnScripts')}
-                onPress={() => {
-                  scripts.onReturnToProject();
-                }}
-              />
+              {ordinary || fromChanges ? null : (
+                <RoundButton
+                  testID="project-setup-return.scripts"
+                  size="small"
+                  display="secondary"
+                  title={t('projects.authoring.returnScripts')}
+                  onPress={() => {
+                    scripts.onReturnToProject();
+                  }}
+                />
+              )}
             </View>
           }
         />
@@ -142,13 +143,17 @@ function ProjectSetupSessionReturnCard(
   );
 }
 
-/** The draft's checkout and Machine, admitted through the same qualified-return owner as its way back. */
+/** A retained draft keeps its identity while Project rows load; return admission remains separate. */
 function useProjectSetupDraftTarget(origin: PluginUiNewSessionSeedOriginV1) {
   const scripts = useProjectAuthoringReturn(origin);
-  const machine = useMachine(origin.workspace.machineId);
-  if (scripts.destination.kind !== 'ready') return null;
+  const { binding } = useServerCredentialAccountScopeBinding(origin.workspace.serverId);
+  const machine = useServerScopedMachine(origin.workspace.serverId, origin.workspace.machineId);
+  if (scripts.destination.kind !== 'ready'
+    && (!binding?.isCurrent() || binding.accountId !== origin.accountId)) return null;
   return {
-    project: resolveWorkspaceRefDisplayName(scripts.destination.workspaceRef),
+    project: scripts.destination.kind === 'ready'
+      ? resolveWorkspaceRefDisplayName(scripts.destination.workspaceRef)
+      : resolveWorkspacePathBasenameV1(origin.workspace.rootPath) ?? origin.workspace.rootPath,
     machine: getMachineDisplayName(machine) ?? origin.workspace.machineId,
   };
 }
@@ -165,24 +170,24 @@ export const ProjectSetupDraftHeader = React.memo(
     const { theme } = useUnistyles();
     const target = useProjectSetupDraftTarget(props.origin);
     if (!target) return null;
-    const page =
-      props.origin.page === 'changes'
-        ? t('projects.pages.changes')
-        : t('projects.pages.scripts');
+    const setup = props.origin.page === 'scripts' && props.origin.purpose !== 'session';
+    const origin = t('projects.authoring.fromPage', { project: target.project, page: projectPageLabel(props.origin.page) });
     return (
       <View testID="project-setup-draft-origin" style={styles.draftHeader}>
-        <View style={styles.eyebrow}>
-          <Icon name="sparkle" size={14} color={theme.colors.text.tertiary} />
-          <Text style={[styles.eyebrowText, { color: theme.colors.text.tertiary }]}>
-            {t('projects.authoring.fromPage', { project: target.project, page })}
-          </Text>
-        </View>
-        <Text accessibilityRole="header" style={[styles.draftTitle, { color: theme.colors.text.primary }]}>
-          {t('projects.authoring.draftTitle', { project: target.project })}
-        </Text>
-        <Text style={[styles.draftDescription, { color: theme.colors.text.secondary }]}>
-          {t('projects.authoring.draftDescription')}
-        </Text>
+        {setup ? (
+          <PageHeader
+            testID="project-setup-draft-origin.header"
+            title={t('projects.authoring.draftTitle', { project: target.project })}
+            alwaysShowTitle
+            description={t('projects.authoring.draftDescription')}
+            meta={[{ key: 'origin', icon: 'sparkle', text: origin }]}
+          />
+        ) : (
+          <View style={styles.eyebrow}>
+            <Icon name="sparkle" size={14} color={theme.colors.text.tertiary} />
+            <Text style={[styles.eyebrowText, { color: theme.colors.text.tertiary }]}>{origin}</Text>
+          </View>
+        )}
       </View>
     );
   },
@@ -209,12 +214,10 @@ export const ProjectSetupDraftFootnote = React.memo(
 
 const styles = StyleSheet.create(() => ({
   card: { marginTop: 12 },
-  draftHeader: { gap: 6, paddingBottom: 20 },
-  eyebrow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  draftHeader: { paddingBottom: 16 },
+  eyebrow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx, paddingTop: HAPPIER_PAGE_METRICS.pageHeaderPaddingTopPx },
   eyebrowText: { ...Typography.default('regular'), ...happierPageTextMetrics('meta') },
-  draftTitle: { ...Typography.default('bold'), ...happierPageTextMetrics('heroTitle') },
-  draftDescription: { ...Typography.default('regular'), ...happierPageTextMetrics('pageDescription') },
-  footnote: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingTop: 12 },
+  footnote: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingTop: 12, paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx },
   authored: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 },
   authoredSession: { ...Typography.default('semiBold') },
   authoredText: { ...Typography.default('regular'), ...happierPageTextMetrics('meta'), flex: 1, minWidth: 0 },
@@ -229,18 +232,9 @@ const styles = StyleSheet.create(() => ({
 
 /** The latest Session started from setup authoring for this exact checkout, as one primitive key. */
 function useProjectLastAuthoringSessionId(workspace: WorkspaceAddressV1): string | null {
-  return storage((state) => {
-    let latest: { id: string; at: number } | null = null;
-    for (const session of Object.values(state.sessions)) {
-      if (session.metadata?.machineId !== workspace.machineId) continue;
-      const origin = readProjectSessionAuthoringOrigin(readSessionOwnerMetadataView(session));
-      if (!origin || origin.workspace.workspaceId !== workspace.workspaceId
-        || origin.workspace.serverId !== workspace.serverId) continue;
-      const at = session.updatedAt;
-      if (!latest || at > latest.at) latest = { id: session.id, at };
-    }
-    return latest?.id ?? null;
-  });
+  const { binding } = useServerCredentialAccountScopeBinding(workspace.serverId);
+  const accountId = binding?.isCurrent() ? binding.accountId : null;
+  return storage((state) => selectProjectLastAuthoringSessionId(state, workspace, accountId));
 }
 
 /**
@@ -282,7 +276,16 @@ function ProjectSetupAuthoredLineBody(props: Readonly<{ sessionId: string; compa
       testID="project-setup-authored"
       style={[styles.authored, { backgroundColor: theme.colors.surface.inset }]}
     >
-      <Icon name="sparkle" size={14} color={theme.colors.text.tertiary} />
+      {/* Who authored it: the Session's own Agent mark, as every Session row draws it. */}
+      <SessionListIdentity
+        session={session}
+        display="agentLogo"
+        serverId={origin?.workspace.serverId ?? null}
+        color={theme.colors.text.secondary}
+        avatarSize={14}
+        agentLogoSize={14}
+        connected
+      />
       <Text style={[styles.authoredText, { color: theme.colors.text.secondary }]} numberOfLines={compact ? 1 : 2}>
         {at < 0 ? text : (
           <>

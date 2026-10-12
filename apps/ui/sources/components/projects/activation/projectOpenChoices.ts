@@ -101,6 +101,27 @@ export function resolveProjectOpenUseOptions(state: ProjectOpenChoiceState): rea
   ];
 }
 
+/**
+ * The way to open a form starts on when the person has not chosen one yet (lab p-open OPEN preselects):
+ * the existing checkout on the chosen Machine, else the first reachable way. Exactly one candidate checkout
+ * is named; several are the person's choice (plans 10 ID-1, 11 OPEN-4) — the row asks and Open waits, and
+ * nothing is guessed. A choice the person made is kept, so this returns only what to fill in.
+ */
+export function resolveProjectOpenDefaults(state: ProjectOpenChoiceState): Partial<Pick<ProjectOpenChoiceState, 'use' | 'checkoutId' | 'checkoutAddress'>> {
+  const options = resolveProjectOpenUseOptions(state);
+  if (options.length === 0) return {};
+  const kept = state.use !== null && options.some(option => option.use === state.use);
+  const use = kept ? state.use! : (options.find(option => option.use === 'existing') ?? options[0]!).use;
+  const patch: Partial<Pick<ProjectOpenChoiceState, 'use' | 'checkoutId' | 'checkoutAddress'>> = kept ? {} : { use };
+  const option = options.find(candidate => candidate.use === use);
+  // The one checkout here is named even when an earlier choice pointed at another Machine's checkout.
+  if ((use === 'existing' || use === 'worktree') && option && !option.from && option.candidates.length === 1) {
+    patch.checkoutId = option.candidates[0]!.id;
+    patch.checkoutAddress = workspaceAddressFromRefV1(option.candidates[0]!);
+  }
+  return patch;
+}
+
 function splitDestination(path: string): { parent: string; name: string } | null {
   const trimmed = path.trim().replace(/[\\/]+$/u, '');
   const at = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
@@ -260,7 +281,9 @@ export function projectOpenChoiceStateFromDraft(
     use: !materialization ? null : materialization.kind === 'attach' ? 'existing' : materialization.kind === 'sync' ? 'copy' : materialization.kind,
     branch: editing?.branch ?? (materialization?.kind === 'worktree' ? materialization.checkout.displayName : ''),
     destination: editing?.destination ?? (materialization?.kind === 'clone'
-      ? `${materialization.destinationParentPath}/${materialization.destinationDirectoryName}`
+      // A clone with no folder yet has none; joining two empty parts would read as the root "/".
+      ? [materialization.destinationParentPath, materialization.destinationDirectoryName].every(part => part === '') ? ''
+        : `${materialization.destinationParentPath}/${materialization.destinationDirectoryName}`
       : materialization?.kind === 'sync' ? materialization.targetPath : ''),
   };
 }

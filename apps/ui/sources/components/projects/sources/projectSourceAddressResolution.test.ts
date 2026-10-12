@@ -6,7 +6,10 @@ import { createProjectSourceActionDeps } from '@/sync/api/projects/projectSource
 import { createUiScmAction } from '@/sync/ops/actions/scmActionDeps';
 import { storage } from '@/sync/domains/state/storage';
 import { createProjectSourcesController } from './projectSourcesController';
+import { readProjectSourceAddressMachines } from './projectSourceAddressMachines';
+import type { ProjectSourceAddressMachines } from './resolveProjectSourceAddress';
 import type { ServerFetch } from '@/sync/http/client';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 const rpc = vi.hoisted(() => vi.fn());
 // Only network transports are mocked; Action admission, SCM routing and Source serialization are real.
@@ -15,7 +18,8 @@ const scope = { serverId: 'home-a', accountId: 'account-a' };
 const selector = { provider: { id: 'example.forge/forge', kind: 'custom' as const, displayName: 'Forge', baseUrl: 'https://forge.test' },
     repository: { nameWithOwner: 'team/repo', cloneUrl: 'https://forge.test/team/repo' }, protocol: 'https' as const };
 const machines = [{ id: 'online', active: true }, { id: 'preferred', active: true }, { id: 'offline', active: false }];
-function harness() {
+const inventory = { machines, inventoryStatus: 'idle' as const };
+function harness(readAddressMachines: () => ProjectSourceAddressMachines = () => inventory) {
     const request = vi.fn<ServerFetch>().mockImplementation(async (_path, init) => {
         const { serverId: _serverId, requestKey: _requestKey, ...draft } = ProjectSourcesCreateInputV1Schema.parse(JSON.parse(String(init?.body)));
         return new Response(JSON.stringify({ ok: true,
@@ -27,15 +31,40 @@ function harness() {
     }));
     const execute = vi.fn<Parameters<typeof createProjectSourcesController>[1]>((id, input, context) =>
         executor.execute(id, input, { ...context, runtimeAccountId: scope.accountId, authority: 'present_user', bypassApprovals: true }));
-    return { controller: createProjectSourcesController(scope, execute, () => ({ machines })), execute, request };
+    return { controller: createProjectSourcesController(scope, execute, readAddressMachines), execute, request };
 }
 beforeEach(() => {
+    clearMachineRequestReachabilityForTest();
     storage.setState(storage.getInitialState(), true);
     rpc.mockReset();
     rpc.mockResolvedValue({ success: true, kind: 'resolved', selector });
 });
 
 describe('Source editor address producer', () => {
+    it('distinguishes a pending Machine list from settled absence through the real inventory reader', async () => {
+        const { controller, execute } = harness(() => readProjectSourceAddressMachines(scope.serverId));
+        storage.setState({ isDataReady: true, machines: {}, machineListByServerId: {},
+            machineListStatusByServerId: { [scope.serverId]: 'loading' } });
+        await controller.resolveAddress('forge.test/team/repo');
+        expect(controller.getSnapshot().addressSaveDisabledReason).toBe('projects.sources.loading');
+        storage.setState({ machineListStatusByServerId: { [scope.serverId]: 'error' } });
+        await controller.resolveAddress('forge.test/team/repo');
+        expect(controller.getSnapshot().addressSaveDisabledReason).toBe('projects.sources.backendUnavailable');
+        storage.setState({ isDataReady: false, machineListByServerId: { [scope.serverId]: [] },
+            machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+        await controller.resolveAddress('forge.test/team/repo');
+        expect(controller.getSnapshot().addressSaveDisabledReason).toBe('projects.sources.addressNoMachine');
+        expect(execute).not.toHaveBeenCalled();
+        controller.dispose();
+    });
+
+    it('skips a heartbeat-online Machine whose requests failed in this Account, preserving another Account', async () => {
+        recordMachineRequestFailed({ ...scope, machineId: 'preferred' });
+        recordMachineRequestFailed({ ...scope, accountId: 'other-account', machineId: 'online' });
+        const { controller, execute } = harness();
+        await controller.resolveAddress('forge.test/team/repo', { ...inventory, preferredMachineId: 'preferred' });
+        expect(execute.mock.calls[0]?.[2]?.externalActionTarget).toEqual({ kind: 'machine', machineId: 'online' });
+    });
     it('submits one controller creation draft with custom name, ref, contained folder and audience through admission', async () => {
         const { controller, request } = harness();
         controller.beginCreate();
@@ -57,7 +86,7 @@ describe('Source editor address producer', () => {
         let finish!: (value: unknown) => void;
         rpc.mockImplementation(async () => await new Promise(done => { finish = done; }));
         const { controller, execute } = harness();
-        const pending = controller.resolveAddress('forge.test/team/repo', { machines, preferredMachineId: 'preferred' });
+        const pending = controller.resolveAddress('forge.test/team/repo', { ...inventory, preferredMachineId: 'preferred' });
         expect(controller.getSnapshot().addressResolution).toMatchObject({ kind: 'resolving', machineId: 'preferred' });
         expect(execute.mock.calls[0]).toEqual(['scm.hostingRepository.resolveAddress', { address: 'forge.test/team/repo' }, expect.objectContaining({
             serverId: scope.serverId, expectedAccountId: scope.accountId, externalActionTarget: { kind: 'machine', machineId: 'preferred' },
@@ -73,12 +102,12 @@ describe('Source editor address producer', () => {
         const finishes: Array<(value: unknown) => void> = [];
         rpc.mockImplementation(async () => await new Promise(done => finishes.push(done)));
         const { controller, execute } = harness();
-        await controller.resolveAddress('forge.test/team/repo', { machines: [{ id: 'offline', active: false },
+        await controller.resolveAddress('forge.test/team/repo', { inventoryStatus: 'idle', machines: [{ id: 'offline', active: false },
             { id: 'replaced', active: true, replacedByMachineId: 'new' }] });
         expect(controller.getSnapshot().addressResolution).toMatchObject({ kind: 'no_reachable_machine' });
         await controller.save();
         expect(execute).not.toHaveBeenCalled();
-        const old = controller.resolveAddress('forge.test/old/repo', { machines, preferredMachineId: 'offline' });
+        const old = controller.resolveAddress('forge.test/old/repo', { ...inventory, preferredMachineId: 'offline' });
         expect(controller.getSnapshot().addressResolution).toMatchObject({ machineId: 'online' });
         await vi.waitFor(() => expect(finishes).toHaveLength(1));
         const latest = controller.resolveAddress('forge.test/new/repo');

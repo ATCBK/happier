@@ -1,7 +1,7 @@
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import * as React from 'react';
 import { useDestinationParams } from '@/components/appShell/workspace/DestinationInstanceHost';
-import { readProjectFileRouteTarget, readProjectRouteStringParam } from './projectRouteState';
+import { readProjectFileRouteTarget, readProjectRouteCompanion, readProjectRouteStringParam } from './projectRouteState';
 import { serializeFileTargetAnchor } from '@/utils/url/sessionFileDeepLink';
 import { createProjectCommitDetailsTab, createProjectFileDetailsTab } from './projectDetailsTabBuilders';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
@@ -15,6 +15,19 @@ export function useProjectInitialResource(pane: AppPaneScopeApi, workspaceRef: W
     const commit = readProjectRouteStringParam(params.initialCommit);
     const tab = file ? createProjectFileDetailsTab(file, fileTarget?.anchor, fileTarget?.anchorSource) : commit ? createProjectCommitDetailsTab(commit) : null;
     const canAdmit = workspaceRef !== null;
+    const companion = React.useMemo(() => readProjectRouteCompanion({ right: params.right, rightDestination: params.rightDestination }),
+        [params.right, params.rightDestination]);
+    const companionKey = companion ? JSON.stringify(companion) : null;
+    const lastCompanion = React.useRef<string | null>(null);
+    React.useEffect(() => {
+        if (!canAdmit) return;
+        if (!companionKey || !companion) { lastCompanion.current = null; return; }
+        const key = `${pane.scopeId}:${companionKey}`;
+        if (lastCompanion.current === key) return;
+        lastCompanion.current = key;
+        // Availability and unavailable selection are still owned by the sidebar registry/host.
+        pane.selectRightDestination(typeof companion === 'string' ? { kind: 'builtin', id: companion } : companion);
+    }, [canAdmit, companion, companionKey, pane.scopeId, pane.selectRightDestination]);
     const admissionKey = canAdmit && tab ? `${pane.scopeId}:${tab.key}:${anchorKey}` : null;
     const lastAdmitted = React.useRef<string | null>(null);
     React.useEffect(() => {

@@ -13,7 +13,7 @@ import { ScmChangeRow } from '@/components/workspaces/scm/changes/ScmChangeRow';
 import { ScmChangeOverflowMenu } from '@/components/workspaces/scm/changes/ScmChangeOverflowMenu';
 import { activeReviewFileKeyForWorkspace } from '@/components/workspaces/scm/review/activeReviewFile';
 import { buildSessionScmSummary } from '@/components/sessions/sourceControl/status/statusSummary';
-import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
+import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { resolveChangesGlanceFiles } from '@/components/sessions/companion/glances/glanceModels';
 import { Typography } from '@/constants/Typography';
 import { WidgetGlanceRow } from '@/components/widgets/glance/WidgetGlanceRow';
@@ -41,8 +41,6 @@ export const WorkspaceLocalChangesBody = React.memo(function WorkspaceLocalChang
     /** Promotes the exact selected path into pending-changes Files review. */
     onOpenReview?: (path?: string) => void;
     onWalkThrough?: () => void;
-    /** The machine isn't answering: the last state stays, said once with when it was true. */
-    offline?: Readonly<{ asOf: number | null; reason: string }> | null;
 }>) {
     const { theme } = useUnistyles();
     const testID = props.testID ?? 'workspace-local-changes';
@@ -53,9 +51,10 @@ export const WorkspaceLocalChangesBody = React.memo(function WorkspaceLocalChang
     const added = summary?.linesAdded ?? 0;
     const removed = summary?.linesRemoved ?? 0;
     const ahead = snapshot?.branch.ahead ?? 0;
-    const machine = useMachinePresenceSummary(props.scope.serverId, props.scope.machineId);
-    const offline = props.offline ?? (snapshot && machine.reachability === 'unreachable'
-        ? { asOf: snapshot.fetchedAt, reason: t('projects.code.offline') } : null);
+    // The machine isn't answering: the last state stays and writes wait. The page above says why once;
+    // without one, this body says it with when the state was true.
+    const reachability = useCheckoutReachability(props.scope);
+    const offline = reachability.unreachable;
     const presentation = useWidgetPresentation();
     const visibleCount = summary ? resolveChangesGlanceFiles(summary, presentation?.footprint.height === 'compact' ? 1
         : presentation?.footprint.height === 'tall' ? changedFiles.length : undefined).rows.length : 0;
@@ -67,12 +66,13 @@ export const WorkspaceLocalChangesBody = React.memo(function WorkspaceLocalChang
     const selectionCount = isAtomicCommitStrategy(controls.scmCommitStrategy)
         ? selectedPaths.size : changedFiles.filter(selected).length;
     const [selectionModeUserOn, setSelectionModeUserOn] = React.useState(false);
-    const writeEnabled = controls.scmWriteEnabled && offline == null;
+    const writeEnabled = controls.scmWriteEnabled && !offline;
     const selectionModeActive = writeEnabled && (selectionModeUserOn || selectionCount > 0);
     const reviewKey = activeReviewFileKeyForWorkspace(props.scope);
     const openChanges = props.onOpenReview ? () => props.onOpenReview?.() : null;
 
     if (!snapshot) {
+        if (offline) return <CheckoutUnreachableState reachability={reachability} testID={`${testID}-unreachable`} />;
         return controls.error ? (
             <SurfaceStateCard
                 testID={`${testID}-error`}
@@ -94,7 +94,8 @@ export const WorkspaceLocalChangesBody = React.memo(function WorkspaceLocalChang
 
     return (
         <View testID={testID} style={styles.body}>
-            {offline ? <SurfaceFreshnessLine testID={`${testID}-offline`} asOf={offline.asOf} reason={offline.reason} /> : null}
+            {offline && !reachability.announced ? <SurfaceFreshnessLine testID={`${testID}-offline`} asOf={snapshot.fetchedAt}
+                reason={t('projects.checkouts.notAnswering', { machine: reachability.machineName })} /> : null}
             {clean ? (
                 <WidgetGlanceRow testID={`${testID}-clean`} variant="fact" mark="check-circle" title={t('projects.localChanges.clean')} />
             ) : null}
@@ -144,7 +145,7 @@ export const WorkspaceLocalChangesBody = React.memo(function WorkspaceLocalChang
                             testID={`${testID}-push`}
                             label={t('projects.localChanges.push')}
                             accessibilityLabel={controls.commitAdjacentPushAction.label}
-                            disabled={controls.commitAdjacentPushAction.disabled || offline != null}
+                            disabled={controls.commitAdjacentPushAction.disabled || offline}
                             busy={controls.commitAdjacentPushAction.busy}
                             onPress={controls.commitAdjacentPushAction.onPress}
                         />
@@ -159,7 +160,7 @@ export const WorkspaceLocalChangesBody = React.memo(function WorkspaceLocalChang
                     onDraftMessageChange={controls.setCommitDraftMessage}
                     busy={controls.scmOperationBusy}
                     status={controls.scmOperationStatus}
-                    commitAllowed={controls.commitAllowed && offline == null}
+                    commitAllowed={controls.commitAllowed && !offline}
                     commitBlockedMessage={controls.commitBlockedMessage}
                     onCommitFromMessage={controls.handleCommitFromMessage}
                     selectionSummary={{ fileCount: changedFiles.length, linesAdded: added, linesRemoved: removed }}

@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { View } from 'react-native';
 
+import { PopoverScope } from '@/components/ui/popover';
+
 import { t } from '@/text';
 import { useLocalSetting, useLocalSettingMutable, useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { readProjectSelectionPreference, resolveProjectSelectionPreferenceKeys, writeProjectSelectionPreference } from '@/sync/domains/settings/projectSelectionPersistence';
@@ -29,12 +31,15 @@ import { resolveProjectRightSidebarTabs } from '@/components/appShell/rightSideb
 import { ProjectTerminalSurface } from './detail/surfaces/ProjectTerminalSurface';
 import { resolveProjectCheckoutWorkspaceRef } from '@/sync/domains/workspaces/workspaceRefs';
 import type { WorkspaceRefResolutionV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import type { WorkspaceRefUnconfirmed } from './detail/useWorkspaceRefById';
+import { ProjectAtmosphereFrame, ProjectAtmosphereLookChip } from '@/components/atmosphere/ProjectAtmosphereFrame';
+import { useAtmosphereBandBoundary } from '@/components/atmosphere/atmosphereBandBoundary';
 
 export const ProjectDetailScreen = React.memo((props: Readonly<{
     workspaceRefId: string;
     serverId?: string | null;
     /** Qualified candidate/recovery state from the route owner; U2 owns its presentation. */
-    workspaceResolution?: WorkspaceRefResolutionV1;
+    workspaceResolution?: WorkspaceRefResolutionV1 | WorkspaceRefUnconfirmed;
     layoutId?: string;
     attachedDashboard?: ProjectAttachedDashboardSelection;
     recoveryToastKey?: string | null;
@@ -57,6 +62,8 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
     const workspaceRef = useWorkspaceRefById(props.workspaceRefId, props.serverId);
     const scopeId = useDestinationPaneScopeId(buildProjectPaneScopeId(props.workspaceRefId, workspaceRef?.serverId ?? props.serverId));
     const pane = useAppPaneScope(scopeId);
+    // The page's menus and Add surfaces float inside its own column (header and body), never over the sidebar.
+    const pageColumnRef = React.useRef<View>(null);
     const workspaceRefs = useWorkspaceRefs();
     const preferenceKeys = React.useMemo(() => workspaceRef
         ? resolveProjectSelectionPreferenceKeys(workspaceRefs, workspaceRef) : null, [workspaceRef, workspaceRefs]);
@@ -273,6 +280,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
     const widePage = mainSurface === 'overview' || mainSurface === 'code';
 
     return (
+        <ProjectAtmosphereFrame project={{ serverId: workspaceRef.serverId, projectKey: workspaceRef.projectKey ?? workspaceRef.id }} focused={props.isFocused}>
         <View style={{ flex: 1 }} {...pane.overlayFocusReturnCaptureProps}>
             <AppPaneScopeHost
                 scopeId={scopeId}
@@ -289,8 +297,9 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
                 wrapScopeContent={wrapProjectScopeContent}
                 main={(
                     <ListPresentationProvider value="page">
-                        <PageColumnProvider value={widePage ? 'wide' : 'reading'} preferencePolicy={widePage ? 'ignore' : 'respect'}>
-                            <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+                        <PageColumnProvider value={widePage ? 'wide' : 'reading'}>
+                            <View ref={pageColumnRef} style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+                                <PopoverScope boundaryRef={pageColumnRef}>
                                 {/* The six-page header (12s1); phones keep the navigation bar and the page cockpit. */}
                                 {deviceType !== 'phone' ? (
                                     <ProjectShellHeaderHost
@@ -305,7 +314,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
                                             onSelect: () => pane.openBottom({ tabId: 'terminal' }) }]}
                                     />
                                 ) : props.surface === undefined || props.surface === props.page ? (
-                                    <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 }}>
+                                    <ProjectPhoneAtmosphereHeader>
                                         <ProjectPhoneCheckoutRow
                                             workspaceRef={workspaceRef}
                                             activeRootPath={resolvedActiveRootPath}
@@ -313,7 +322,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
                                             onSelectRootPath={handleSelectRootPath}
                                             onSelectWorkspace={handleSelectWorkspace}
                                         />
-                                    </View>
+                                    </ProjectPhoneAtmosphereHeader>
                                 ) : null}
                                 <ProjectCockpitShell
                                     scopeId={scopeId}
@@ -326,6 +335,7 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
                                     isFocused={props.isFocused !== false}
                                     onSelectRootPath={handleSelectRootPath}
                                 />
+                                </PopoverScope>
                             </View>
                         </PageColumnProvider>
                     </ListPresentationProvider>
@@ -333,5 +343,16 @@ export const ProjectDetailScreen = React.memo((props: Readonly<{
             />
             <ProjectWorktreeRecoveryToast recoveryToastKey={recoveryToastKey} />
         </View>
+        </ProjectAtmosphereFrame>
     );
 });
+
+function ProjectPhoneAtmosphereHeader(props: Readonly<{ children: React.ReactNode }>) {
+    const boundary = useAtmosphereBandBoundary();
+    // The Look sits on the checkout field's line (its trailing control), never on a row of its own.
+    return <View ref={boundary?.ref} onLayout={boundary?.onLayout}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 }}>
+        <View style={{ flex: 1, minWidth: 0 }}>{props.children}</View>
+        <ProjectAtmosphereLookChip />
+    </View>;
+}

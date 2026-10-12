@@ -7,7 +7,6 @@ import type { ProjectMemoryDemandV1 } from '@happier-dev/protocol/workspaces/pro
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
@@ -15,7 +14,6 @@ import { StatusPill } from '@/components/ui/status/StatusPill';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { useElapsedTime } from '@/hooks/ui/useElapsedTime';
 import { useActionOperationStopControl } from '@/components/inbox/actionOperations/useActionOperationStopControl';
 import { useProjectCommandOutputOpener } from '@/components/inbox/actionOperations/projectCommandOutputHost';
 import { ProjectCommandOutputPane } from '@/components/inbox/actionOperations/ProjectCommandOutputPane';
@@ -37,11 +35,10 @@ import type { ManagedMachineSelectionDraft } from '@/sync/domains/state/newSessi
 import type { ManagedMachineConfigurationContinuation } from '@/components/sessions/new/components/machineSelection/ManagedMachineSelectionOffers';
 
 import {
-  formatRunClock,
   presentProjectRun,
-  type ProjectRunGlyph,
   type ProjectRunPresentation,
 } from './projectScriptPresentation';
+import { RunClock, RunGlyph } from './ProjectRunMarks';
 
 export type ProjectScriptRowProps = Readonly<{
   testID: string;
@@ -79,31 +76,6 @@ export type ProjectScriptRowProps = Readonly<{
   onResumeManagedRun?: () => void;
   onRun: (choice?: ProjectExecutionChoiceV1, managed?: ManagedMachineSelectionDraft) => void;
 }>;
-
-export function RunGlyph(props: Readonly<{ glyph: ProjectRunGlyph }>) {
-  const { theme } = useUnistyles();
-  if (props.glyph === 'running')
-    return <ActivitySpinner size="small" color={theme.colors.text.secondary} />;
-  const name =
-    props.glyph === 'succeeded'
-      ? 'check-circle'
-      : props.glyph === 'failed'
-        ? 'x-circle'
-        : props.glyph === 'queued'
-          ? 'hourglass'
-          : props.glyph === 'attention'
-            ? 'warning-circle'
-            : props.glyph === 'stopped'
-              ? 'stop-circle'
-              : 'circle';
-  const color =
-    props.glyph === 'failed'
-      ? theme.colors.status.error
-      : props.glyph === 'attention'
-        ? theme.colors.state.attention.foreground
-        : theme.colors.text.secondary;
-  return <Icon name={name} size={18} color={color} />;
-}
 
 /**
  * One finite script row (lab `s-scripts` row): status glyph, name + source, `what runs · how it
@@ -523,22 +495,10 @@ function RowStatus(
           {props.command}
         </Text>
       ) : null}
-      {props.command ? (
+      {props.command && props.text ? (
         <Text style={{ color: theme.colors.text.tertiary }}>{' · '}</Text>
       ) : null}
-      <Text style={[styles.meta, { color }]}>{props.text}</Text>
-    </Text>
-  );
-}
-
-export function RunClock(props: Readonly<{ startedAt: number }>) {
-  const { theme } = useUnistyles();
-  const seconds = useElapsedTime(props.startedAt);
-  return (
-    <Text
-      style={[styles.meta, styles.clock, { color: theme.colors.text.tertiary }]}
-    >
-      {formatRunClock(seconds)}
+      {props.text ? <Text style={[styles.meta, { color }]}>{props.text}</Text> : null}
     </Text>
   );
 }
@@ -707,7 +667,6 @@ const styles = StyleSheet.create(() => ({
     ...happierPageTextMetrics('rowDescription'),
   },
   mono: { ...Typography.mono() },
-  clock: { fontVariant: ['tabular-nums'] },
   joined: {
     flexDirection: 'row',
     alignItems: 'center',

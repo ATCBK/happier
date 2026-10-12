@@ -6,7 +6,6 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { computeWorkspaceSyncPolicyDigest, WorkspaceSyncRelationshipV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
-import { forgetProjectWorkspace } from '@/sync/ops/actions/projectWorkspaceActions';
 import { readNewSessionDraftProjectionFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { SessionAuthoringOpenResultV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
@@ -14,6 +13,7 @@ import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSet
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
+const { forgetProjectWorkspace } = await import('@/sync/ops/actions/projectWorkspaceActions');
 const confirmation = vi.hoisted(() => ({ name: 'Renamed' }));
 const routerPush = vi.hoisted(() => vi.fn());
 vi.mock('@/modal', async () => {

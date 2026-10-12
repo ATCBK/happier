@@ -20,7 +20,7 @@ import { workspaceAddressFromRefV1 } from '@happier-dev/protocol/workspaces';
 import { ProjectsTree, useProjectsTreeKeyboard } from './ProjectsTree';
 import { ProjectHideUndoNotice } from './ProjectHideUndoNotice';
 import { ProjectsAddMenu } from './ProjectsAddMenu';
-import { ProjectOpenResolutionCard, openProjectCandidate } from './ProjectOpenResolution';
+import { ProjectOpenResolutionCard, openProjectCandidate, useProjectRowsRetry } from './ProjectOpenResolution';
 import { ProjectActionApprovalNotice } from './ProjectActionApprovalNotice';
 import { useProjectRowCreationActions } from './ProjectSaveAsSourceSheet';
 
@@ -37,6 +37,7 @@ export const ProjectsListView = React.memo(() => {
     const { theme } = useUnistyles();
     const model = useProjectsListModel();
     const rowCreation = useProjectRowCreationActions(model);
+    const rowsRetry = useProjectRowsRetry();
     const { groups, hasAnyProjects } = model;
     const [expandedKeys, setExpandedKeys] = React.useState<ReadonlySet<string>>(NO_KEYS);
     const [collapsedKeys, setCollapsedKeys] = React.useState<ReadonlySet<string>>(NO_KEYS);
@@ -49,11 +50,10 @@ export const ProjectsListView = React.memo(() => {
     const projectGroupsByKey = React.useMemo(() => new Map([...groups.projectGroups, ...groups.hiddenProjectGroups]
         .map(group => [group.projectKey.projectKey, group] as const)), [groups.projectGroups, groups.hiddenProjectGroups]);
     const hidden = React.useMemo(() => ({
-        items: model.hiddenTreeProjects.map(project => ({ key: project.key, title: project.name,
-            subtitle: `${project.checkouts[0]!.machineName} · ${project.checkouts[0]!.path}` })),
+        items: model.hiddenItems,
         open: hiddenOpen, onToggle: () => setHiddenOpen(open => !open),
-        onShow: (key: string) => { const group = projectGroupsByKey.get(key); if (group) void model.setProjectHidden(group.projectKey, false); },
-    }), [model.hiddenTreeProjects, hiddenOpen, model.setProjectHidden, projectGroupsByKey]);
+        onShow: model.showHiddenProject,
+    }), [model.hiddenItems, hiddenOpen, model.showHiddenProject]);
     // Saved, not open (lab p-projects TREEp): the same composition as the column's.
     const { saved } = model;
     const rows = React.useMemo(() => buildProjectsPhoneTreeRows({
@@ -89,7 +89,10 @@ export const ProjectsListView = React.memo(() => {
             testID="projects-list"
             containerStyle={{ paddingTop: 12 }}
         >
-            {!hasAnyProjects && !saved?.items.length ? (
+            {model.rowsUnconfirmed ? (
+                <ProjectOpenResolutionCard testID="projects-list:rows" issue={model.rowsUnconfirmed}
+                    onChoose={() => {}} onRetry={rowsRetry} />
+            ) : !hasAnyProjects && !saved?.items.length ? (
                 <EmptyState
                     testID="projects-list-empty"
                     scene="noProjects"
@@ -182,7 +185,7 @@ export const ProjectsListView = React.memo(() => {
                 />
             </ItemGroup>
 
-            <ProjectsTree testID="projects-list-organization" rows={[]} onOpenRef={() => {}} onToggle={() => {}} hidden={hidden} saved={saved} />
+            <ProjectsTree testID="projects-list-organization" rows={[]} onOpenRef={model.openTreeRef} onToggle={() => {}} hidden={hidden} saved={saved} />
             <ProjectActionApprovalNotice testID="projects-list:approval" request={model.projectActionApproval} onDismiss={model.dismissProjectActionApproval} />
             <ProjectHideUndoNotice testID="projects-list:hide-undo" undo={model.projectHideUndo} onDismiss={model.dismissProjectHideUndo} />
 

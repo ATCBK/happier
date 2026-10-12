@@ -61,7 +61,7 @@ const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol/actions/
 const approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
 let accountSettings: ReturnType<typeof storage.getState>['settings'] | null = null;
 let accountSettingsVersion = 0;
-afterEach(() => { approvalArtifacts.clear(); accountSettings = null; accountSettingsVersion = 0; });
+afterEach(() => { vi.useRealTimers(); approvalArtifacts.clear(); accountSettings = null; accountSettingsVersion = 0; });
 
 function snapshot(paths: readonly string[]) {
     return ScmWorkingSnapshotSchema.parse({
@@ -204,6 +204,29 @@ async function mount(rootPath = '/repo', id: 'project_changes' | 'project_checko
 }
 
 describe('Project Local Changes', () => {
+    it('dispatches the Sessions slot to the Project roster body, never a missing plugin view', async () => {
+        const { ProjectBuiltinWidgetBody } = await import('./ProjectBuiltinWidgetBody');
+        const { ProjectSessionsWidgetBody } = await import('./ProjectSessionsWidgetBody');
+        const screen = await renderScreen(<runtime.Wrapper><ProjectBuiltinWidgetBody id="project_sessions"
+            checkout={{ serverId: runtime.serverId, id: 'wr_1', machineId: 'm1', rootPath: '/repo', projectKey: 'project', createdAtMs: 1 }}
+            workspace={{ serverId: runtime.serverId, workspaceId: 'wr_1', machineId: 'm1', rootPath: '/repo' }} testID="sessions" /></runtime.Wrapper>);
+        expect(screen.findAllByType(ProjectSessionsWidgetBody)).toHaveLength(1);
+        expect(screen.findAllByType(SurfaceStateCard).filter(node => node.props.kind === 'unavailable')).toEqual([]);
+    });
+    it('names a folder without a repository where it lives on its machine, home-relative, not as a raw absolute path', async () => {
+        const { ProjectBuiltinWidgetBody } = await import('./ProjectBuiltinWidgetBody');
+        const screen = await renderScreen(<runtime.Wrapper><ProjectBuiltinWidgetBody id="project_about"
+            checkout={{ serverId: runtime.serverId, id: 'wr_1', machineId: 'm1', rootPath: '/Users/tester/scratch', projectKey: 'project', createdAtMs: 1 }}
+            workspace={{ serverId: runtime.serverId, workspaceId: 'wr_1', machineId: 'm1', rootPath: '/Users/tester/scratch' }} testID="about" /></runtime.Wrapper>);
+        await flushHookEffects();
+        const folder = screen.findHostByTestId('about.folder') ?? screen.findHostByTestId('about.inline');
+        expect(folder).not.toBeNull();
+        const text = screen.root.findAll(node => typeof node.props.children === 'string' && node.props.children.includes('scratch'))
+            .map(node => node.props.children as string);
+        expect(text).toContain('~/scratch');
+        expect(text.some(value => value.includes('/Users/tester'))).toBe(false);
+    });
+
     it('ordinary Project terminal control opens the real bottom pane without creating a Details terminal tab', async () => {
         const { WorkspaceDetailsPanel } = await import('@/components/projects/panes/WorkspaceDetailsPanel');
         const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
@@ -226,6 +249,10 @@ describe('Project Local Changes', () => {
         storage.getState().applySettingsForScope(scope, accountSettings, ++accountSettingsVersion);
         const checkout = { id: 'wr_1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', projectKey: 'project', createdAtMs: 1 };
         const workspaceScope = { serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo/worktree-a' };
+        const selectedCheckout = { ...checkout, id: 'worktree-a', rootPath: workspaceScope.rootPath };
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [checkout, selectedCheckout] });
+        boundary.pathname = '/projects/wr_1/overview';
+        boundary.routeParams = { layoutId: 'release-dashboard', mobileSurface: 'tabs', initialFile: 'src/a.ts' };
         const cacheKey = tryBuildWorkspaceCacheKey(workspaceScope);
         if (!cacheKey) throw new Error('Exact workspace scope missing');
         storage.getState().upsertWorkspaceReviewCommentDraft(cacheKey, {
@@ -260,7 +287,12 @@ describe('Project Local Changes', () => {
             .toMatchObject({ ok: true, result: { status: 'executed' } }); });
         const newDraft = listNewSessionDraftProjections(scope).find(row => !draftsBefore.some(old => old.draftId === row.draftId));
         if (!newDraft) throw new Error('Approved authoring did not retain a draft');
-        expect(readNewSessionDraftFromRepository({ scope, draftId: newDraft.draftId })).toMatchObject({ selectedMachineId: 'm1', selectedPath: workspaceScope.rootPath });
+        expect(readNewSessionDraftFromRepository({ scope, draftId: newDraft.draftId })).toMatchObject({ selectedMachineId: 'm1', selectedPath: workspaceScope.rootPath,
+            authoringOrigin: { kind: 'project', purpose: 'session', accountId: scope.accountId, page: 'overview', layoutId: 'release-dashboard',
+                surface: 'tabs', resource: { kind: 'file', path: 'src/a.ts' }, workspace: {
+                    serverId: runtime.serverId, workspaceId: selectedCheckout.id, machineId: 'm1', rootPath: workspaceScope.rootPath,
+                } },
+        });
         expect(boundary.navigate).toHaveBeenCalledOnce();
         expect(storage.getState().sessions).toEqual({});
         expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[cacheKey]).toEqual(commentsBefore);
@@ -279,6 +311,41 @@ describe('Project Local Changes', () => {
         expect(storage.getState().sessions).toEqual({});
         expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[cacheKey]).toEqual(commentsBefore);
         await screen.unmount();
+    });
+    it.each([false, true])('ordinary Project header retains its qualified selected plugin companion and instance across draft opening (closed %s)', async closed => {
+        const scope = { serverId: runtime.serverId, accountId: 'account-a' };
+        const before = listNewSessionDraftProjections(scope);
+        const checkout = { id: 'wr_1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', projectKey: 'project', createdAtMs: 1 };
+        const companion = { kind: 'plugin', destination: { pluginId: 'acme.preview', localId: 'project-review' }, instanceKey: 'review-a' } as const;
+        boundary.pathname = '/projects/wr_1/overview';
+        boundary.routeParams = { rightDestination: JSON.stringify(companion) };
+        const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+        const { useDestinationPaneScopeId } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const { buildProjectPaneScopeId } = await import('@/components/projects/detail/projectPaneScope');
+        const { ProjectShellHeaderHost } = await import('@/components/projects/shell/ProjectShellHeaderHost');
+        function SelectCompanion() {
+            const pane = useAppPaneScope(useDestinationPaneScopeId(buildProjectPaneScopeId(checkout.id, checkout.serverId)));
+            React.useEffect(() => { pane.openRight(); pane.selectRightDestination(companion); }, [pane.openRight, pane.selectRightDestination]);
+            return React.createElement('ProjectCompanionProbe', { isOpen: pane.scopeState?.right.isOpen, close: pane.closeRight });
+        }
+        const screen = await renderScreen(<runtime.Wrapper><SelectCompanion />
+            <ProjectShellHeaderHost workspaceRef={checkout} activeRootPath={checkout.rootPath} onSelectRootPath={() => {}} page="overview" />
+        </runtime.Wrapper>);
+        try {
+            expect(screen.root.findByType('ProjectCompanionProbe').props.isOpen).toBe(true);
+            if (closed) {
+                await act(async () => { screen.root.findByType('ProjectCompanionProbe').props.close(); });
+                expect(screen.root.findByType('ProjectCompanionProbe').props.isOpen).toBe(false);
+                expect(boundary.routeParams.rightDestination).toBe(JSON.stringify(companion));
+            }
+            await screen.pressByTestIdAsync('project-shell-header.newSession');
+            const opened = listNewSessionDraftProjections(scope).find(row => !before.some(old => old.draftId === row.draftId));
+            expect(opened).toBeDefined();
+            const origin = readNewSessionDraftFromRepository({ scope, draftId: opened!.draftId })?.authoringOrigin;
+            expect(origin).toMatchObject({ page: 'overview', purpose: 'session' });
+            expect(origin?.companion).toEqual(closed ? undefined : companion);
+            expect(storage.getState().sessions).toEqual({});
+        } finally { await screen.unmount(); }
     });
     it.each(['same-project', 'foreign-project', 'foreign-home'])('retains named dashboard context only for the qualified current Project (%s)', async relation => {
         const accountScope = storage.getState().profileScope;
@@ -422,6 +489,83 @@ describe('Project Local Changes', () => {
             expect(screen.findAllByType(ScmCommitComposerCard)).toEqual([]);
             expect(boundary.writes).toEqual([]);
         } finally { vi.useRealTimers(); }
+    });
+    it('says an unreachable checkout once at the page and every widget waits quietly instead of failing', async () => {
+        const scope = { serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo' };
+        storage.getState().updateWorkspaceScmSnapshot(scope, null);
+        // Presence keeps the newest heartbeat; move only the wall clock past any supported grace.
+        const lastHeartbeat = Date.now();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(lastHeartbeat + 24 * 60 * 60 * 1000);
+        await act(async () => storage.getState().applyMachines([createMachineFixture({ id: 'm1', active: false,
+            activeAt: lastHeartbeat, seq: 2, updatedAt: Date.now() })], true, { sourceServerId: runtime.serverId }));
+        const { ProjectBuiltinWidgetBody } = await import('./ProjectBuiltinWidgetBody');
+        const { CheckoutReachabilityLine, CheckoutReachabilityScope } = await import('@/components/workspaces/reachability/checkoutReachability');
+        const machine = { serverId: runtime.serverId, machineId: 'm1' };
+        const ids = ['project_code', 'project_changes', 'project_scripts', 'project_readme', 'project_checkouts'] as const;
+        const screen = await renderScreen(<runtime.Wrapper><CheckoutReachabilityScope scope={machine}>
+            <CheckoutReachabilityLine scope={machine} />
+            {ids.map(id => <ProjectBuiltinWidgetBody key={id} id={id}
+                checkout={{ serverId: runtime.serverId, id: 'wr_1', machineId: 'm1', rootPath: '/repo', projectKey: 'project', createdAtMs: 1 }}
+                workspace={{ serverId: runtime.serverId, workspaceId: 'wr_1', machineId: 'm1', rootPath: '/repo' }} testID={id} />)}
+        </CheckoutReachabilityScope></runtime.Wrapper>);
+        await flushHookEffects({ cycles: 12 });
+        // The page says it once, with when the machine was last seen and the one Retry: no widget
+        // repeats the cause in a freshness line of its own.
+        const { SurfaceFreshnessLine } = await import('@/components/ui/surfaces/SurfaceFreshnessLine');
+        const lines = screen.findAllByType(SurfaceFreshnessLine);
+        expect(lines.map(line => line.props.testID)).toEqual(['checkout-reachability']);
+        expect(lines[0].props.asOf).toBeTypeOf('number');
+        expect(lines[0].props.action).toBeDefined();
+        // No widget fails on its own.
+        const states = screen.findAllByType(SurfaceStateCard);
+        expect(states.filter(state => state.props.kind === 'error').map(state => state.props.testID)).toEqual([]);
+        expect(screen.findHostByTestId('repository-tree-root-error')).toBeNull();
+        expect(screen.findHostByTestId('project_code-footer')).toBeNull();
+        // A widget with nothing last-known inherits one quiet wait (the never-listed folder here); one with
+        // last-known content keeps it. Either way nothing offers a second Retry or fails on its own.
+        // The wait names no cause: the page's line already did. It keeps the body's shape with still
+        // placeholders and tells assistive technology what it waits for.
+        expect(states.map(state => String(state.props.testID ?? '')).filter(id => id.endsWith('-unreachable'))).toEqual([]);
+        const quietWait = screen.findHostByTestId('repository-tree-unreachable');
+        expect(String(quietWait?.props.accessibilityLabel ?? '')).toMatch(/projects\.checkouts\.waiting|Waiting for/);
+        const texts = screen.root.findAll(node => typeof node.type === 'string' && typeof node.props.children === 'string')
+            .map(node => String(node.props.children));
+        expect(texts.filter(text => /^(projects\.checkouts\.waiting|Waiting for)/.test(text))).toEqual([]);
+        expect(states.filter(state => state.props.kind === 'unavailable' && state.props.action !== undefined)
+            .map(state => state.props.testID)).toEqual([]);
+        expect(screen.findHostByTestId('project_changes-error')).toBeNull();
+        // Checkouts keeps the row and says this one is offline.
+        const here = screen.root.findAll(node => node.props.testID === 'project_checkouts.here' && node.props.fact !== undefined)[0];
+        expect(String(here?.props.fact)).toContain('offline');
+        expect(boundary.writes).toEqual([]);
+    });
+    it('keeps the Code widget the folder itself in any framed placement, sized or not', async () => {
+        const scope = { serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo' };
+        storage.getState().updateWorkspaceScmSnapshot(scope, null);
+        const lastHeartbeat = Date.now();
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(lastHeartbeat + 24 * 60 * 60 * 1000);
+        await act(async () => storage.getState().applyMachines([createMachineFixture({ id: 'm1', active: false,
+            activeAt: lastHeartbeat, seq: 2, updatedAt: Date.now() })], true, { sourceServerId: runtime.serverId }));
+        const { ProjectBuiltinWidgetBody } = await import('./ProjectBuiltinWidgetBody');
+        const { CheckoutReachabilityScope } = await import('@/components/workspaces/reachability/checkoutReachability');
+        const { WidgetFrameBodyRowsContext } = await import('@/components/widgets/frame/widgetFrameBody');
+        const machine = { serverId: runtime.serverId, machineId: 'm1' };
+        // A side-area or stacked widget has a frame but no size presentation (lab p-overview HOME).
+        const screen = await renderScreen(<runtime.Wrapper><CheckoutReachabilityScope scope={machine}>
+            <WidgetFrameBodyRowsContext.Provider value={0}>
+                <ProjectBuiltinWidgetBody id="project_code"
+                    checkout={{ serverId: runtime.serverId, id: 'wr_1', machineId: 'm1', rootPath: '/repo', projectKey: 'project', createdAtMs: 1 }}
+                    workspace={{ serverId: runtime.serverId, workspaceId: 'wr_1', machineId: 'm1', rootPath: '/repo' }} testID="project_code" />
+            </WidgetFrameBodyRowsContext.Provider>
+        </CheckoutReachabilityScope></runtime.Wrapper>);
+        await flushHookEffects({ cycles: 12 });
+        // Its page tools (filter, create, Project | All files) live on the Code page, not in the card.
+        const ids = screen.root.findAll(node => typeof node.props.testID === 'string').map(node => String(node.props.testID));
+        expect(ids.filter(id => /^(workspace-)?repository-tree-(visibility|all-files|toggle-details)/.test(id))).toEqual([]);
+        // The folder still waits quietly in the card's own shape.
+        expect(screen.findHostByTestId('repository-tree-unreachable')).not.toBeNull();
     });
     it('requires explicit native confirmation before discarding the actual checkout path', async () => {
         storage.getState().applySettingsLocal({ experiments: true, featureToggles: { 'scm.writeOperations': true }, scmCommitStrategy: 'git_staging' });

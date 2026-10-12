@@ -12,6 +12,7 @@ import {
   buildProjectOpenDraft,
   buildProjectOpenInput,
   projectOpenChoiceStateFromDraft,
+  resolveProjectOpenDefaults,
   resolveProjectOpenUseOptions,
   suggestProjectOpenDestination,
   type ProjectOpenChoiceState,
@@ -188,6 +189,31 @@ describe('Project Open choices', () => {
     expect(
       suggestProjectOpenDestination({ ...base, machineHomeDir: null }),
     ).toBe('');
+  });
+
+  it('starts on a valid way to open, and leaves the exact checkout to the person when several are here', () => {
+    const older = { ...checkout('older', 'devbox', '/home/me/src/happier'), lastOpenedAtMs: 10 };
+    const recent = { ...checkout('recent', 'devbox', '/home/me/src/happier-wt/fix'), lastOpenedAtMs: 20 };
+    const checkouts = [older, recent];
+    // Several candidates: the way is the existing checkout, but no adapter picks which one (plans 10 ID-1, 11 OPEN-4).
+    const defaults = resolveProjectOpenDefaults({ ...base, checkouts });
+    expect(defaults).toEqual({ use: 'existing' });
+    const state = { ...base, checkouts, ...defaults };
+    expect(buildProjectOpenInput(buildProjectOpenDraft(state), checkouts)).toBeNull();
+    // The person's own choice stays, and a way with no checkout here starts on a clone.
+    expect(resolveProjectOpenDefaults({ ...base, checkouts, use: 'worktree', checkoutId: 'older' })).toEqual({});
+    expect(resolveProjectOpenDefaults(base)).toEqual({ use: 'clone' });
+    expect(resolveProjectOpenDefaults({ ...base, machineId: null })).toEqual({});
+    // Exactly one candidate is preselected, even after Where moved off a checkout named on another Machine.
+    const only = checkout('only', 'devbox', '/home/me/src/happier');
+    expect(resolveProjectOpenDefaults({ ...base, checkouts: [only], checkoutId: 'elsewhere' }))
+      .toMatchObject({ use: 'existing', checkoutId: 'only', checkoutAddress: { workspaceId: 'only', machineId: 'devbox' } });
+  });
+
+  it('reads a clone with no destination yet as no destination, never the root "/"', () => {
+    const draft = OpenProjectDraftSelectionV1Schema.parse({ serverId: 'home', machineId: 'devbox',
+      materialization: { kind: 'clone', destinationParentPath: '', destinationDirectoryName: '' } });
+    expect(projectOpenChoiceStateFromDraft(draft, [], '/home/me').destination).toBe('');
   });
 
   it('reports multiple Source checkouts without picking the shortest or crossing Homes', () => {

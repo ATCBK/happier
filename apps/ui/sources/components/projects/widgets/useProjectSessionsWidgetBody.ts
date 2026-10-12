@@ -5,7 +5,6 @@ import type { SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFil
 import { useProjectSessions } from '@/sync/domains/state/storage';
 import type { ProjectSessionsState } from '@/sync/domains/session/listing/useProjectSessions';
 
-export type ProjectSessionsWidgetBodyProps = Readonly<{ sessions: ProjectSessionsState; testID: string }>;
 
 /** Call only beneath the built-in descriptor/binder's admitted checkout. */
 export function useProjectSessionsWidgetBody(checkout: WorkspaceRefV1, filters?: SessionListFilterV1): ProjectSessionsState {

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_TREE_ROW_METRICS, HappierPressable, HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 
 import { WorkspaceRepositoryTreeBrowserView } from '@/components/projects/files/WorkspaceRepositoryTreeBrowserView';
 import type { WorkspaceRepositoryDirectoryState } from '@/components/projects/files/WorkspaceRepositoryTreeList';
@@ -20,12 +20,17 @@ import type { LazyDirectoryTreeNode } from '@/hooks/ui/filesystem/lazyDirectoryT
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { tryBuildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 import { useWorkspaceEntryHistory } from '@/hooks/workspaces/files/useWorkspaceEntryHistory';
+import { useWorkspaceRepositoryDirectoryRevision } from '@/hooks/workspaces/files/useWorkspaceRepositoryDirectoryRevision';
 import { useWorkspaceScmSnapshotController } from '@/hooks/workspaces/scm/useWorkspaceScmSnapshotController';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
+import { CheckoutReachabilityLine, CheckoutReachabilityScope, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
+import { HeaderActionsScope } from '@/components/navigation/stackHeaderActions';
 
 import { CodeBrowserBar } from './CodeBrowserBar';
 import { CodeCommitStrip } from './CodeCommitStrip';
@@ -74,8 +79,6 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     revealRequest?: Readonly<{ path: string }>;
     /** The visible rows changed: what the history adapter should demand next. */
     onVisibleEntriesChange?: ((paths: readonly string[]) => void) | null;
-    /** The machine isn't answering: last-known rows stay under one freshness line. */
-    offline?: Readonly<{ asOf: number | null; reason: string; onRetry?: () => void }> | null;
     /**
      * `page` (default): the Code page. `widget`: the Overview Code widget's body (lab p-overview HOME) —
      * the same strip and table in place, no Go to file or README (the README is its own widget), and a
@@ -94,13 +97,19 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     const { location, onNavigate } = props;
     const widget = props.presentation === 'widget';
     const workspaceKey = tryBuildWorkspaceCacheKey(props.scope) ?? '';
+    // The checkout's listing revision (bumped by Refresh and by file changes the app makes): the README follows it.
+    const directoryRevision = useWorkspaceRepositoryDirectoryRevision(workspaceKey);
     const demandKey = JSON.stringify([workspaceKey, location.kind, location.path]);
     const [entryData, setEntryData] = React.useState<Readonly<{ key: string; readmePath: string | null; count: number; loaded: boolean }> | null>(null);
     const readmePath = entryData?.key === demandKey ? entryData.readmePath : null;
-    const entryCount = entryData?.key === demandKey ? entryData.count : null;
+    // A count is a fact only once the listing answered: a failed or waiting read has no "0 entries".
+    const entryCount = entryData?.key === demandKey && entryData.loaded ? entryData.count : null;
     const [visibleDemand, setVisibleDemand] = React.useState<Readonly<{ key: string; paths: readonly string[] }> | null>(null);
     const machine = useMachinePresenceSummary(props.scope.serverId, props.scope.machineId);
     const available = machine.reachability === 'reachable';
+    // The checkout's machine isn't answering: said once (here, unless the page above already does),
+    // last-known rows stay, and history waits for the machine instead of failing on its own.
+    const reachability = useCheckoutReachability(props.scope);
     const scm = useWorkspaceScmSnapshotController(available && props.history === undefined ? props.scope : null);
     const folder = location.kind === 'folder' ? location.path : location.path.slice(0, Math.max(0, location.path.lastIndexOf('/')));
     const demandedPaths = React.useMemo(() => [location.path, ...(location.kind === 'folder' && visibleDemand?.key === demandKey ? visibleDemand.paths : [])],
@@ -108,13 +117,16 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     const [historyReload, setHistoryReload] = React.useState(0);
     const facts = useWorkspaceEntryHistory({ scope: props.scope, folder, paths: demandedPaths, headOid: scm.snapshot?.branch.headOid,
         repoRootPath: scm.snapshot?.repo.rootPath,
-        enabled: props.history === undefined && available, reloadToken: historyReload });
+        // History is read against the repository the snapshot names: until it answers there is no root to
+        // read from, and the strip waits (pending) instead of calling history unavailable.
+        enabled: props.history === undefined && available && scm.snapshot != null, reloadToken: historyReload });
+    const repositoryReadFailed = props.history === undefined && scm.snapshot == null && scm.error != null;
     const readEntry = React.useCallback((path: string): CodeEntryHistoryState => {
         const entry = facts.entries.get(path);
         if (entry) return entry;
-        if (facts.status === 'unavailable' || !available) return { kind: 'unavailable', reason: facts.reason };
+        if (facts.status === 'unavailable' || !available || repositoryReadFailed) return { kind: 'unavailable', reason: facts.reason };
         return CODE_ENTRY_HISTORY_PENDING;
-    }, [facts, available]);
+    }, [facts, available, repositoryReadFailed]);
     const history = React.useMemo<WorkspaceCodeEntryHistory | null>(() => props.history !== undefined ? props.history : {
         current: readEntry(location.path), entry: readEntry,
         revision: JSON.stringify([facts.status, facts.stale, facts.headOid, [...facts.entries]]),
@@ -145,22 +157,35 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     const historyRef = React.useRef(history);
     historyRef.current = history;
     const historyRevision = history ? String(history.revision) : null;
+    // The table's commit columns take the rest of the row after the name (lab p-code BROWSE: name ≈ a
+    // third, subject, time at the end), so they are sized from the table's own width rather than the
+    // row's trailing slot, which only wraps its content.
+    const [tableWidth, setTableWidth] = React.useState<number | null>(null);
+    const onTableLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+        const next = Math.round(event.nativeEvent.layout.width);
+        setTableWidth((previous) => (previous === next ? previous : next));
+    }, []);
+    const historyColumnsWidth = tableWidth ? Math.round(tableWidth * CODE_HISTORY_COLUMNS_SHARE) : null;
+    // Names win: a table too narrow for the name column beside the commit columns (a phone, the
+    // Overview widget in a narrow column) stacks each row as the phone does — name, time at the end,
+    // subject under the name — instead of squeezing names to a letter.
+    const stackedRows = phone || (tableWidth !== null && tableWidth < CODE_TABLE_COLUMNS_MIN_WIDTH_PX);
     // Not a Git checkout (or history otherwise unknowable here): the table keeps the names and drops
     // the commit columns; the strip says why once (lab p-code STATES 2).
     const historyColumns = history != null && history.current.kind !== 'unavailable';
     const renderRowMetadata = React.useCallback((node: LazyDirectoryTreeNode) => {
         const current = historyRef.current;
         if (!current || (node.type !== 'file' && node.type !== 'directory')) return null;
-        return <CodeEntryHistoryCells testID={`${testID}-history-${node.path}`} state={current.entry(node.path)} layout={phone ? 'time' : 'columns'} />;
+        return <CodeEntryHistoryCells testID={`${testID}-history-${node.path}`} state={current.entry(node.path)} layout={stackedRows ? 'time' : 'columns'} columnsWidth={historyColumnsWidth} />;
         // `historyRevision` re-mints the renderer so the browser's row extraData changes with each answer.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [historyRevision, phone, testID]);
+    }, [historyRevision, stackedRows, testID, historyColumnsWidth]);
     const renderRowSubtitle = React.useCallback((node: LazyDirectoryTreeNode) => {
         const current = historyRef.current;
-        if (!phone || !current || (node.type !== 'file' && node.type !== 'directory')) return null;
+        if (!stackedRows || !current || (node.type !== 'file' && node.type !== 'directory')) return null;
         return <CodeEntryHistoryCells state={current.entry(node.path)} layout="subject" />;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [historyRevision, phone]);
+    }, [historyRevision, stackedRows]);
     const folderPage = React.useMemo(() => (location.kind === 'folder' ? {
         path: location.path,
         onOpenFolder: openFolder,
@@ -170,7 +195,7 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
         onVisibleNodesChange,
     } : null), [historyColumns, location.kind, location.path, onNodesChange, onVisibleNodesChange, openFolder, renderRowMetadata, renderRowSubtitle]);
 
-    const strip = history ? (
+    const strip = history && !reachability.unreachable ? (
         <CodeCommitStrip
             testID={`${testID}-strip`}
             state={history.current ?? CODE_ENTRY_HISTORY_PENDING}
@@ -180,10 +205,12 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     ) : null;
 
     const sheetStyle = [styles.sheet, resolveThemeHairlineBorderStyle(theme.colors.border.surface), phone ? styles.sheetPhone : null];
-    const historyFreshness = props.history === undefined && (facts.stale || !available) ? <SurfaceFreshnessLine
+    const historyFreshness = props.history === undefined && facts.stale && available ? <SurfaceFreshnessLine
         testID={`${testID}-history-stale`} asOf={null}
-        reason={!available ? t('projects.code.offline') : t('projects.code.historyChanged')}
+        reason={t('projects.code.historyChanged')}
         action={{ label: t('common.retry'), onPress: refreshHistory }} /> : null;
+    const reachabilityLine = reachability.unreachable && !reachability.announced
+        ? <CheckoutReachabilityLine scope={props.scope} testID={`${testID}-offline`} /> : null;
     // An unborn repository with nothing in it yet: the page invites the first commit instead of an empty table.
     const emptyRepository = available && location.kind === 'folder' && location.path === '' && entryData?.key === demandKey && entryData.loaded && entryCount === 0 && history?.current.kind === 'none';
     const emptyRepositoryState = emptyRepository ? (
@@ -196,8 +223,13 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
             action={props.onStartSession ? { label: t('projects.code.startSession'), onPress: props.onStartSession } : undefined}
         />
     ) : null;
+    // The first listing of a folder hasn't answered yet: its rows hold their place, so the sheet doesn't
+    // open from a hairline when the names land (the strip above keeps its own pending line).
+    // Pending while the Machine's presence is still resolving too: only a Machine known not to answer has its own state.
+    const listingPending = !reachability.unreachable && location.kind === 'folder' && !(entryData?.key === demandKey && entryData.loaded) && entryCount === null;
+    const listEmpty = emptyRepositoryState ?? (listingPending ? <CodeListingSkeleton testID={`${testID}-listing-pending`} /> : null);
     const folderFooter = <>
-        {widget ? (
+        {widget ? (reachability.unreachable ? null :
             <CodeWidgetFooter
                 testID={`${testID}-footer`}
                 entryCount={entryCount}
@@ -205,15 +237,37 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
                 onOpenInCode={props.onOpenInCode ? () => props.onOpenInCode?.(location) : null}
             />
         ) : readmePath ? (
-            <CodeReadmeCard testID={`${testID}-readme`} scope={props.scope} path={readmePath} onEdit={props.onEditFile} />
+            <CodeReadmeCard testID={`${testID}-readme`} scope={props.scope} path={readmePath} onEdit={props.onEditFile} reloadToken={directoryRevision} />
         ) : null}
         {historyFreshness}
     </>;
-    const body = location.kind === 'folder' ? (
-        <GlassSurface surfaceGroup="content" nested finishRole="card" testID={`${testID}-table`} style={[sheetStyle, styles.fileSheet]}>
+    // The Code page puts the browser's View and + controls in its own bar beside Go to file (lab
+    // p-code BROWSE: one line above the table), so the table opens on its latest commit, not on tools.
+    const composeFolderPage = (parts: Readonly<{ controls: React.ReactNode; body: React.ReactNode; status: React.ReactNode }>) => <>
+        <CodeBrowserBar
+            testID={`${testID}-bar`}
+            scope={props.scope}
+            rootLabel={props.rootLabel}
+            path={location.path}
+            onNavigateFolder={openFolder}
+            onOpenFile={openFile}
+            fileHref={props.fileHref}
+            compact={phone}
+            trailing={parts.controls}
+            status={parts.status}
+        />
+        {reachabilityLine}
+        <GlassSurface surfaceGroup="card" nested finishRole="card" testID={`${testID}-table`} style={[sheetStyle, styles.tableSheet]} onLayout={onTableLayout}>
+            {parts.body}
+        </GlassSurface>
+    </>;
+    const folderBrowser = (
             <WorkspaceRepositoryTreeBrowserView
                 scope={props.scope}
-                folderPage={folderPage ? { ...folderPage, listHeader: strip, listFooter: folderFooter, listEmpty: emptyRepositoryState } : null}
+                folderPage={folderPage ? { ...folderPage, listHeader: strip, listFooter: folderFooter, listEmpty,
+                    // The widget previews the folder's first entries (lab p-overview HOME); its footer counts them all and opens Code.
+                    maxRows: widget ? (phone ? CODE_WIDGET_PREVIEW_ROWS.phone : CODE_WIDGET_PREVIEW_ROWS.wide) : null,
+                    ...(widget ? {} : { compose: composeFolderPage }) } : null}
                 onOpenFile={openFile}
                 onOpenFilePinned={props.onOpenFilePinned}
                 selectedPath={props.selectedPath}
@@ -222,18 +276,32 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
                 showSearchBar={false}
                 // Code is the repository as committed pages (lab p-code): change marks belong to Changes.
                 scmSnapshot={null}
+                // Refresh also re-reads this page's own repository snapshot and history, not only the listing.
+                onRefreshScm={props.history === undefined ? refreshHistory : undefined}
             />
+    );
+    // Nothing was ever listed and the machine isn't answering: the widget keeps only its header (the
+    // page's line says why), so no empty sheet is drawn around nothing.
+    const waitingWithNothing = reachability.unreachable && entryCount === null;
+    const body = location.kind === 'folder' ? (widget && !waitingWithNothing ? (
+        <GlassSurface surfaceGroup="card" nested finishRole="card" testID={`${testID}-table`} style={[sheetStyle, styles.fileSheet]} onLayout={onTableLayout}>
+            {folderBrowser}
         </GlassSurface>
-    ) : (
-        <GlassSurface surfaceGroup="content" nested finishRole="card" testID={`${testID}-file`} style={[sheetStyle, styles.fileSheet]}>
+    ) : folderBrowser) : (
+        <GlassSurface surfaceGroup="card" nested finishRole="card" testID={`${testID}-file`} style={[sheetStyle, styles.fileSheet]}>
             {strip}
-            <WorkspaceFileDetailsView scopeId={props.paneScopeId} scope={props.scope} filePath={location.path} presentation="screen" />
+            {/* The reader sits inside the Code page, under the Project's own header: it doesn't take the pane's controls into its band. */}
+            <HeaderActionsScope scopeKey={null}>
+                <WorkspaceFileDetailsView scopeId={props.paneScopeId} scope={props.scope} filePath={location.path} presentation="screen" hostNamesFile />
+            </HeaderActionsScope>
         </GlassSurface>
     );
 
     if (widget) {
         return (
+            <CheckoutReachabilityScope scope={props.scope}>
             <View testID={testID} style={styles.fileColumn}>
+                {reachabilityLine}
                 {location.path ? (
                     <CodeBrowserBar
                         testID={`${testID}-bar`}
@@ -249,6 +317,7 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
                 {body}
                 {location.kind === 'file' ? historyFreshness : null}
             </View>
+            </CheckoutReachabilityScope>
         );
     }
 
@@ -257,7 +326,7 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     const fileMode = location.kind === 'file';
     const page = (
         <ConstrainedScreenContent style={[styles.column, styles.fileColumn]}>
-            <CodeBrowserBar
+            {fileMode ? <CodeBrowserBar
                 testID={`${testID}-bar`}
                 scope={props.scope}
                 rootLabel={props.rootLabel}
@@ -266,28 +335,53 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
                 onOpenFile={openFile}
                 fileHref={props.fileHref}
                 compact={phone}
-            />
-            {props.offline ? (
-                <SurfaceFreshnessLine
-                    testID={`${testID}-offline`}
-                    asOf={props.offline.asOf}
-                    reason={props.offline.reason}
-                    action={props.offline.onRetry ? { label: t('common.retry'), onPress: props.offline.onRetry } : undefined}
-                />
-            ) : null}
+            /> : null}
+            {fileMode ? reachabilityLine : null}
             {body}
             {fileMode ? historyFreshness : null}
         </ConstrainedScreenContent>
     );
-    return fileMode ? (
+    return <CheckoutReachabilityScope scope={props.scope}>{fileMode ? (
         <ScrollView testID={testID} style={styles.scroll} scrollEnabled={false}
             contentContainerStyle={[phone ? styles.contentPhone : styles.content, styles.fileContent]}>
             {page}
         </ScrollView>
     ) : (
         <View testID={testID} style={[styles.scroll, phone ? styles.contentPhone : styles.content]}>{page}</View>
-    );
+    )}</CheckoutReachabilityScope>;
 });
+
+/** How many entries the Overview Code widget previews (lab p-overview HOME / HOMEp). */
+const CODE_WIDGET_PREVIEW_ROWS = { wide: 8, phone: 5 } as const;
+
+/** The share of a table row the commit subject and time take; the name keeps the first third. */
+const CODE_HISTORY_COLUMNS_SHARE = 0.62;
+/**
+ * Below this table width the name's third would fall under the lab's 150 px name minimum
+ * (`minmax(150px, 34%)`, lab p-code BROWSE): 150 / (1 − 0.62) ≈ 400, plus the row's own disclosure,
+ * glyph and insets. Narrower tables stack their rows.
+ */
+const CODE_TABLE_COLUMNS_MIN_WIDTH_PX = 480;
+
+const CODE_LISTING_SKELETON_WIDTHS = ['22%', '31%', '18%', '27%', '35%', '24%'] as const;
+
+/** Rows standing in for a folder's first listing, at the table's own row height. */
+function CodeListingSkeleton(props: Readonly<{ testID: string }>) {
+    const { theme } = useUnistyles();
+    const reducedMotion = useReducedMotionPreference();
+    const heights = HAPPIER_TREE_ROW_METRICS.tableMinHeightPx;
+    const minHeight = isTouchPrimaryPointer() ? heights.touch : heights.precise;
+    return (
+        <View testID={props.testID} aria-busy>
+            {CODE_LISTING_SKELETON_WIDTHS.map((width) => (
+                <View key={width} style={[styles.skeletonRow, { minHeight }]}>
+                    <HappierSkeletonBlock width={16} height={16} radius={4} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
+                    <HappierSkeletonBlock width={width} height={10} radius={5} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
+                </View>
+            ))}
+        </View>
+    );
+}
 
 /** The widget's last line (lab p-overview HOME): how much is here, how fresh, and the way into Code. */
 function CodeWidgetFooter(props: Readonly<{
@@ -325,12 +419,23 @@ function CodeWidgetFooter(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
+    skeletonRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.margins.sm,
+        paddingHorizontal: theme.margins.lg,
+    },
+    // The widget's last line sits inside the table's card: it takes the strip's inset so its facts
+    // line up with the commit strip and the names above, not with the card's edge.
     footer: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        marginTop: 10,
-        minHeight: 24,
+        minHeight: 40,
+        paddingLeft: 14,
+        paddingRight: 8,
+        borderTopWidth: StyleSheet.hairlineWidth || 1,
+        borderTopColor: theme.colors.border.subtle,
     },
     footerFacts: {
         ...Typography.rowMeta(),
@@ -367,6 +472,11 @@ const styles = StyleSheet.create((theme) => ({
     },
     fileSheet: {
         flex: 1,
+        minHeight: 0,
+    },
+    // The folder table ends after its rows; a long folder fills the page and scrolls inside.
+    tableSheet: {
+        flexShrink: 1,
         minHeight: 0,
     },
     fileContent: {

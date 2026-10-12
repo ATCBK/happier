@@ -3,13 +3,15 @@ import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { workspaceAddressFromRefV1 } from '@happier-dev/protocol/workspaces';
 import type { WorkspaceRefResolutionV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import type { WorkspaceRefUnconfirmed } from './detail/useWorkspaceRefById';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { useAllMachines } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
@@ -18,9 +20,17 @@ import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToH
 import { resolveWorkspaceRefDisplayName } from './resolveWorkspaceRefDisplayName';
 import { useOpenProject } from './useOpenProject';
 
-/** An open that did not name exactly one saved checkout (`useOpenProject().resolution`). */
+/** The rows are still being read (a ready but partial census is still reading its remaining rows). */
+export function isProjectRowsPending(issue: WorkspaceRefUnconfirmed): boolean {
+  return issue.status === 'idle' || issue.status === 'loading' || issue.status === 'ready';
+}
+
+/**
+ * An open that did not name exactly one saved checkout (`useOpenProject().resolution`), or one the
+ * Project rows have not confirmed yet (still loading, failed, locked or partial).
+ */
 export type ProjectOpenIssue = Exclude<
-  WorkspaceRefResolutionV1,
+  WorkspaceRefResolutionV1 | WorkspaceRefUnconfirmed,
   { kind: 'resolved' }
 >;
 
@@ -40,6 +50,10 @@ export const ProjectOpenResolutionCard = React.memo(
       action?: Readonly<{ label: string; onPress: () => void }>;
       /** A centred page state (deep link) rather than an inline notice in a list. */
       page?: boolean;
+      /** One line between a column's rows (the Projects column), rather than a card. */
+      line?: boolean;
+      /** Read the Project rows again (an unconfirmed checkout whose read failed). */
+      onRetry?: () => void;
     }>,
   ) {
     const testID = props.testID ?? 'project-open-resolution';
@@ -48,9 +62,11 @@ export const ProjectOpenResolutionCard = React.memo(
       (candidate: WorkspaceRefV1) => {
         const machine =
           machines.find((entry) => entry.id === candidate.machineId) ?? null;
-        const machineName =
-          (machine ? getMachineDisplayName(machine) : null) ??
-          candidate.machineId;
+        // Candidates are told apart by their Machine's name from the naming owner, never its raw id.
+        const machineName = getMachineDisplayName(
+          machine ?? { id: candidate.machineId, absence: 'unlisted' },
+          machines,
+        );
         return `${machineName} · ${formatPathRelativeToHome(candidate.rootPath, machine?.metadata?.homeDir ?? undefined)}`;
       },
       [machines],
@@ -63,6 +79,30 @@ export const ProjectOpenResolutionCard = React.memo(
           testID: `${testID}-action`,
         }
       : undefined;
+
+    if (props.issue.kind === 'unconfirmed') {
+      // Not known to be gone: the rows have not loaded yet, or the read failed. Say which, keep the
+      // address, and offer the read again; never "isn't saved here anymore".
+      // A ready but partial census is still reading its remaining rows.
+      const pending = isProjectRowsPending(props.issue);
+      return (
+        <SurfaceStateCard
+          testID={testID}
+          kind={pending ? 'loading' : 'unavailable'}
+          layout={layout}
+          {...(props.line ? { size: 'line' as const } : {})}
+          title={pending ? t('projects.identity.rowsLoadingTitle') : t('projects.identity.rowsUnavailableTitle')}
+          reason={pending ? undefined : t('projects.identity.rowsUnavailableBody')}
+          accessibilitySemantics="status"
+          action={pending || !props.onRetry ? undefined : {
+            label: t('common.retry'),
+            onPress: props.onRetry,
+            testID: `${testID}-retry`,
+          }}
+          secondaryAction={pending ? undefined : action}
+        />
+      );
+    }
 
     if (props.issue.kind === 'ambiguous') {
       const candidates = props.issue.candidates;
@@ -135,10 +175,11 @@ export function openProjectCandidate(
  * mounted only in that state, so the opening hooks never run beside a resolved Project.
  */
 export function ProjectOpenResolutionPage(
-  props: Readonly<{ resolution: WorkspaceRefResolutionV1 | undefined }>,
+  props: Readonly<{ resolution: WorkspaceRefResolutionV1 | WorkspaceRefUnconfirmed | undefined }>,
 ) {
   const router = useRouter();
   const openProject = useOpenProject();
+  const retry = useProjectRowsRetry();
   const issue: ProjectOpenIssue =
     props.resolution && props.resolution.kind !== 'resolved'
       ? props.resolution
@@ -156,10 +197,27 @@ export function ProjectOpenResolutionPage(
             label: t('projects.identity.backToProjects'),
             onPress: () => router.push('/projects'),
           }}
+          onRetry={retry}
         />
       </View>
     </ItemList>
   );
+}
+
+/**
+ * Read this Home's Project rows again through the canonical list Action (the same read every
+ * surface uses), for a page whose checkout the rows have not confirmed.
+ */
+export function useProjectRowsRetry(): () => void {
+  const scope = useActiveServerAccountScope();
+  const serverId = scope?.serverId ?? null;
+  return React.useCallback(() => {
+    if (!serverId) return;
+    fireAndForget((async () => {
+      const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+      await createDefaultActionExecutor().execute('projects.list', { serverId }, { surface: 'ui', serverId });
+    })(), { tag: 'ProjectOpenResolution.retryRows' });
+  }, [serverId]);
 }
 
 const styles = StyleSheet.create(() => ({

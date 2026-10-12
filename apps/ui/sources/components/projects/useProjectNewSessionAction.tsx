@@ -2,13 +2,20 @@ import * as React from 'react';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { SessionAuthoringOpenResultV1Schema, type PluginUiNewSessionSeedV1 } from '@happier-dev/protocol/plugins/ui';
 
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useLocalSearchParams, usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { useActiveServerAccountScope, useWorkspaceRefs } from '@/sync/domains/state/storage';
+import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
+import { resolveProjectCheckoutWorkspaceRef } from '@/sync/domains/workspaces/workspaceRefs';
+import { workspaceAddressFromRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { buildProjectNewSessionOrigin, readProjectSelectedRouteResource, type ProjectPageV1 } from './detail/projectRouteState';
+import { buildProjectPaneScopeId } from './detail/projectPaneScope';
+import { resolveProjectCockpitRouteFromPathname } from '@/components/workspaceCockpit/project/projectCockpitState';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -16,10 +23,33 @@ import { t } from '@/text';
 const authoringExecuted = () => {};
 
 /** Both ordinary Project launchers use the admitted draft owner, never a private seed route. */
-export function useProjectNewSessionAction(target: WorkspaceScopeBase) {
+export function useProjectNewSessionAction(input: Readonly<{
+    workspaceRef: WorkspaceRefV1;
+    activeRootPath: string;
+    page?: ProjectPageV1;
+    scopeId?: string;
+}>) {
     const router = useRouter();
     const accountScope = useActiveServerAccountScope();
-    const targetKey = JSON.stringify([target.serverId, target.machineId, target.rootPath]);
+    const workspaceRefs = useWorkspaceRefs();
+    const routeParams = useLocalSearchParams<Record<string, string | string[]>>();
+    const pathname = usePathname();
+    const scopeId = useDestinationPaneScopeId(buildProjectPaneScopeId(input.workspaceRef.id, input.workspaceRef.serverId));
+    const pane = useAppPaneScope(input.scopeId ?? scopeId);
+    const target = { serverId: input.workspaceRef.serverId, machineId: input.workspaceRef.machineId, rootPath: input.activeRootPath };
+    const checkout = resolveProjectCheckoutWorkspaceRef(workspaceRefs, input.workspaceRef, input.activeRootPath);
+    const page = input.page ?? resolveProjectCockpitRouteFromPathname(pathname)?.page ?? 'overview';
+    const details = pane.scopeState?.details;
+    const selectedCompanion = pane.scopeState?.right.selectedDestination;
+    const companion = pane.scopeState?.right.isOpen
+        ? selectedCompanion?.kind === 'plugin' ? selectedCompanion : pane.scopeState.right.activeTabId
+        : undefined;
+    const origin = React.useMemo(() => accountScope && checkout ? buildProjectNewSessionOrigin({ scope: accountScope,
+        workspace: workspaceAddressFromRefV1(checkout), page, routeParams,
+        resource: details?.tabs.length ? readProjectSelectedRouteResource(details) ?? null : undefined,
+        ...(companion ? { companion } : {}),
+    }) : null, [accountScope, checkout, companion, details, page, routeParams]);
+    const targetKey = JSON.stringify([target.serverId, target.machineId, target.rootPath, origin]);
     const currentTargetKey = React.useRef(targetKey);
     currentTargetKey.current = targetKey;
     const mounted = React.useRef(true);
@@ -33,13 +63,13 @@ export function useProjectNewSessionAction(target: WorkspaceScopeBase) {
     });
     const open = React.useCallback(async () => {
         const lifetime = captureActiveServerAccountScopeLifetime();
-        if (!lifetime || !areServerProfileIdentifiersEquivalent(target.serverId, lifetime.scope.serverId)) return;
+        if (!lifetime || !origin || !areServerProfileIdentifiersEquivalent(target.serverId, lifetime.scope.serverId)) return;
         const current = () => mounted.current && lifetime.isCurrent() && currentTargetKey.current === targetKey;
         const unavailable = () => {
             if (current()) Modal.alert(t('projects.identity.newSessionUnavailable'));
         };
         const seed = { placement: { kind: 'exactTarget', serverId: target.serverId,
-            machineId: target.machineId, directory: target.rootPath } } satisfies PluginUiNewSessionSeedV1;
+            machineId: target.machineId, directory: target.rootPath }, origin } satisfies PluginUiNewSessionSeedV1;
         try {
             const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
             if (!current()) return;
@@ -56,7 +86,7 @@ export function useProjectNewSessionAction(target: WorkspaceScopeBase) {
             const outcome = SessionAuthoringOpenResultV1Schema.safeParse(result.result);
             if (!outcome.success || outcome.data.kind === 'unavailable') unavailable();
         } catch { unavailable(); }
-    }, [approval.requestApproval, target.serverId, target.machineId, target.rootPath, targetKey]);
+    }, [approval.requestApproval, target.serverId, target.machineId, target.rootPath, targetKey, origin]);
     const approvalId = approval.approvalId;
     const approvalNotice = approval.approvalPending && approvalId
         ? <ActionApprovalPendingNotice message={t('approvals.status.open')} testID="project-new-session-approval"

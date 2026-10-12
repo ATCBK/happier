@@ -17,12 +17,15 @@ import type { CodeEntryHistoryState } from './codeEntryHistoryPresentation';
  * batch for the visible rows answers; a pending entry holds a quiet bar in each column.
  *
  * `layout="columns"` is the desktop table (subject and time as columns beside the name);
- * `"time"` and `"subject"` are the phone row's two halves (time at the end, subject under the name).
+ * `"time"` and `"subject"` are a narrow table's two halves (time at the end, the subject after the
+ * name in a smaller share, so names keep their width).
  */
 export const CodeEntryHistoryCells = React.memo(function CodeEntryHistoryCells(props: Readonly<{
     testID?: string;
     state: CodeEntryHistoryState;
     layout: 'columns' | 'time' | 'subject';
+    /** The columns' width, measured by the table that owns the row; until then a share of the slot. */
+    columnsWidth?: number | null;
 }>) {
     const { theme } = useUnistyles();
     const reducedMotion = useReducedMotionPreference();
@@ -56,7 +59,7 @@ export const CodeEntryHistoryCells = React.memo(function CodeEntryHistoryCells(p
         return <View testID={props.testID} style={styles.timeCell}>{time}</View>;
     }
     return (
-        <View testID={props.testID} style={styles.columns} aria-busy={pending || undefined}>
+        <View testID={props.testID} style={[styles.columns, props.columnsWidth ? { width: props.columnsWidth } : null]} aria-busy={pending || undefined}>
             <View style={styles.subjectCell}>{subject}</View>
             <View style={styles.timeCell}>{time}</View>
         </View>
@@ -77,8 +80,13 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
         justifyContent: 'center',
     },
+    // The stacked row's subject shares the line after the name (the row's meta slot), and the name wins:
+    // the subject starts from no width and takes a smaller share of what is left, truncating first.
     subjectLine: {
-        marginTop: 1,
+        flexGrow: 0.6,
+        flexShrink: 1,
+        flexBasis: 0,
+        minWidth: 0,
     },
     timeCell: {
         width: 76,

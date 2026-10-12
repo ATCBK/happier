@@ -9,7 +9,6 @@ import type { ActionOperationProjection } from '@/sync/domains/actionOperations/
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createActionExecutor } from '@happier-dev/protocol';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
-import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { createManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
@@ -24,6 +23,7 @@ const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc.machine }));
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
 // Cold loading of the real Sync graph belongs to collection, not the behavior test's budget.
 await loadSyncSingletonForTests();
 

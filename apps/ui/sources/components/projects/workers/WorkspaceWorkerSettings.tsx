@@ -1,10 +1,7 @@
 import * as React from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import {
-  HappierPageHeader,
-  happierPageTextMetrics,
-} from '@happier-dev/plugin-ui/presentation';
+import { useUnistyles } from 'react-native-unistyles';
+import { HappierPageHeader } from '@happier-dev/plugin-ui/presentation';
 import type {
   ProjectExecutionChoiceV1,
   WorkerDestinationV1,
@@ -24,10 +21,9 @@ import { renderPageHeaderText } from '@/components/ui/layout/PageHeader';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { Text } from '@/components/ui/text/Text';
-import { Typography } from '@/constants/Typography';
 import { executeProjectWorkerActionV1 } from '@/sync/ops/actions/projectWorkerActions';
 import { t } from '@/text';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
@@ -269,7 +265,7 @@ export function WorkspaceWorkerSettings(
 
   if (state.kind !== 'ready' || !value) {
     return (
-      <View testID={testID} style={styles.page}>
+      <View testID={testID}>
         {header}
         <SurfaceStateCard
           testID={`${testID}.state`}
@@ -309,7 +305,7 @@ export function WorkspaceWorkerSettings(
   ] as const;
 
   return (
-    <View testID={testID} style={styles.page}>
+    <View testID={testID}>
       {header}
       {notice ? (
         <AttentionBanner
@@ -383,6 +379,7 @@ export function WorkspaceWorkerSettings(
             }
             showChevron={false}
             accessoryLayout="adaptive"
+            fieldAccessory
             disabled={disabled}
             accessibilityExpanded={pickerOpen}
             onPress={() => setPickerOpen(true)}
@@ -397,6 +394,8 @@ export function WorkspaceWorkerSettings(
               ),
               placeholder: t('common.choose'),
               placeholderColor: theme.colors.input.placeholder,
+              // The same column the group's other selects use.
+              fieldSpan: 'column',
             })}
           />
         </View>
@@ -514,21 +513,18 @@ export function WorkspaceWorkerSettings(
       </ItemGroup>
 
       {state.value.provenance === 'saved' ? (
-        <View style={styles.reset}>
-          <RoundButton
-            testID={`${testID}.reset`}
-            size="small"
-            display="inverted"
-            title={t('projectWorkers.reset')}
-            disabled={disabled}
-            onPress={() => { void preference.reset(); }}
-          />
-          <Text
-            style={[styles.resetNote, { color: theme.colors.text.secondary }]}
-          >
-            {t('projectWorkers.resetDetail')}
-          </Text>
-        </View>
+        <ItemGroup surface="none">
+          <SectionButtonRow footnote={t('projectWorkers.resetDetail')}>
+            <RoundButton
+              testID={`${testID}.reset`}
+              size="small"
+              display="inverted"
+              title={t('projectWorkers.reset')}
+              disabled={disabled}
+              onPress={() => { void preference.reset(); }}
+            />
+          </SectionButtonRow>
+        </ItemGroup>
       ) : null}
 
       <WorkerDestinationPicker
@@ -554,17 +550,3 @@ export function WorkspaceWorkerSettings(
     </View>
   );
 }
-
-const styles = StyleSheet.create(() => ({
-  page: { gap: 16 },
-  reset: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  resetNote: {
-    ...Typography.default(),
-    ...happierPageTextMetrics('rowDescription'),
-  },
-}));

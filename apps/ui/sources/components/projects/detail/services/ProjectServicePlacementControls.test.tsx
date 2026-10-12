@@ -79,6 +79,7 @@ async function setup(options: Readonly<{
   /** Wait for an enabled Runs on (custody known); off for states that keep it disabled. */
   waitEnabled?: boolean;
   sharedObservation?: boolean;
+  waiveMoveApproval?: boolean;
 }>) {
   const writes: WorkspaceExecutionSettingsV1[] = [];
   const poolReads: unknown[] = [];
@@ -141,7 +142,7 @@ async function setup(options: Readonly<{
   const settingsScope = storage.getState().settingsScope;
   if (!settingsScope) throw new Error('expected_settings_scope');
   storage.getState().applySettingsForScope(settingsScope, settingsParse({ ...storage.getState().settings,
-    actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'projects.service.placement.set': ['ui'], 'projects.service.relocate': ['ui'], 'machines.pools.resolve': ['ui'], 'action.operations.cancel': ['ui'] } },
+    actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'projects.service.placement.set': ['ui'], ...(options.waiveMoveApproval !== false ? { 'projects.service.relocate': ['ui'] } : {}), 'machines.pools.resolve': ['ui'], 'action.operations.cancel': ['ui'] } },
   }), (storage.getState().settingsVersion ?? 0) + 1);
   const serverId = fixture.home.id;
   const scope = { serverId, accountId: 'artifact-account' };
@@ -296,6 +297,17 @@ async function setup(options: Readonly<{
 }
 
 describe('Service Runs on through the placement and relocation Actions', () => {
+  it.each(['exact', 'automatic'] as const)('honours a UI Move waiver for an %s destination without a second confirmation', async destination => {
+    const { screen, writes, choose, choosePool } = await setup({ running: true, waiveMoveApproval: true });
+    if (destination === 'exact') await choose('hz-build-1');
+    else await choosePool('00000000-0000-4000-8000-000000000032');
+    // The real Action path currently reports the unavailable relocation producer.
+    // Reaching that result proves the waiver admitted the request, rather than
+    // leaving it stranded in a consumer-owned confirmation state.
+    await vi.waitFor(() => expect(screen.findByTestId('placement.move.refused')).toBeTruthy());
+    expect(screen.findByTestId('placement.move.confirm')).toBeNull();
+    expect(writes).toEqual([]);
+  });
   // FX12: a literally confirmed Stop publishes `stopped` before cancellable revalidation; `copying` follows only when copying begins.
   it.each([['failed', 'copying'], ['cancelled', 'copying'], ['cancelled', 'stopped']] as const)('retains the accepted Move through list/detail remounts, confirmed-Stop settlement (%s after %s) and Source retirement', async (terminalState, settledPhase) => {
     // Count live subscriptions, not calls: remounting two presentation bodies must
@@ -509,37 +521,35 @@ describe('Service Runs on through the placement and relocation Actions', () => {
     expect(screen.findByTestId('placement.move')).toBeNull();
   });
 
-  it('asks before moving a running service; Cancel and an unavailable Move both leave placement unsaved', async () => {
-    const { screen, writes, choose } = await setup({ running: true });
+  it('honours the target Home Move waiver when another Account settings projection is focused', async () => {
+    const { screen, choose } = await setup({ running: true });
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    storage.setState({ settingsScope: { serverId: 'foreign-home', accountId: 'foreign-account' },
+      settings: settingsParse({ actionsSettingsV1: { v: 1, actions: {} } }) });
+    await choose('hz-build-1');
+    await vi.waitFor(() => expect(screen.findByTestId('placement.move.refused')).toBeTruthy());
+    expect(screen.findByTestId('placement.move.confirm')).toBeNull();
+  });
+
+  it('asks by default before moving a running service and cancellation leaves placement unsaved', async () => {
+    const { screen, writes, choose } = await setup({ running: true, waiveMoveApproval: false });
     await choose('hz-build-1');
     await vi.waitFor(() =>
       expect(screen.findByTestId('placement.move')).toBeTruthy(),
     );
     await screen.pressByTestIdAsync('placement.move.cancel');
     expect(screen.findByTestId('placement.move')).toBeNull();
-    await choose('hz-build-1');
-    await vi.waitFor(() =>
-      expect(screen.findByTestId('placement.move')).toBeTruthy(),
-    );
-    await screen.pressByTestIdAsync('placement.move.confirm');
-    // The single reviewed set-plus-Move producer is not published: its real refusal is shown as is.
-    await vi.waitFor(() =>
-      expect(screen.findAllByTestId('placement.move.refused')[0]?.props.title, JSON.stringify(screen.findAllByTestId('placement.move.refused')[0]?.props.details)).toBe(
-        'projectServices.moveUnavailable',
-      ),
-    );
     expect(writes).toEqual([]);
   });
 
-  it('resolves an Automatic pool to one exact Machine before showing and executing Move review', async () => {
+  it('resolves an Automatic pool to one exact Machine before the default Move review', async () => {
     const poolId = '00000000-0000-4000-8000-000000000032';
-    const { screen, writes, poolReads, choosePool } = await setup({ running: true });
+    const { screen, writes, poolReads, choosePool } = await setup({ running: true, waiveMoveApproval: false });
     await choosePool(poolId);
     await vi.waitFor(() => expect(screen.findByTestId('placement.move')).toBeTruthy());
     expect(poolReads).toEqual([{ poolId }]);
     expect(screen.getTextContent()).toContain('pool-worker');
-    await screen.pressByTestIdAsync('placement.move.confirm');
-    await vi.waitFor(() => expect(screen.findByTestId('placement.move.refused')).toBeTruthy());
+    await screen.pressByTestIdAsync('placement.move.cancel');
     expect(JSON.stringify(remote.mock.calls)).toContain('pool-worker');
     expect(remote.mock.calls).toContainEqual([expect.objectContaining({
       machineId: 'pool-worker', payload: expect.objectContaining({

@@ -31,7 +31,7 @@ import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { t } from '@/text';
 
 import type { ProjectManifestEditorModel } from './projectManifestEditorModel';
@@ -127,7 +127,7 @@ function PhoneFormSections(props: ProjectManifestFormProps & Readonly<{ onOpen: 
     describeProjectCommandSource(declaration.source).badge ?? describeProjectCommandSource(declaration.source).reference,
     declaration.execution === 'portable' ? t('projects.scripts.anyWorker') : t('projects.scripts.editor.thisCheckout'),
     'memoryDemand' in declaration && declaration.memoryDemand
-      ? t('projects.scripts.editor.needsAbout', { size: formatByteSize(declaration.memoryDemand.bytes) })
+      ? t('projects.scripts.editor.needsAbout', { size: formatHappierDataBytes(declaration.memoryDemand.bytes, { kind: 'memory' }) })
       : null,
   ].filter(Boolean).join(' · ');
   return (
@@ -579,14 +579,13 @@ function DeclarationRow(
             {memory ? (
               <CodeChip
                 text={t('projects.scripts.editor.needsAbout', {
-                  size: formatByteSize(memory.bytes),
+                  size: formatHappierDataBytes(memory.bytes, { kind: 'memory' }),
                 })}
                 sans
               />
             ) : null}
             <SegmentedTabBar
               role="radiogroup"
-              compact
               segmentSizing="content"
               accessibilityLabel={t('projects.scripts.editor.runsOn', { name })}
               testIDPrefix={`${testID}.execution`}

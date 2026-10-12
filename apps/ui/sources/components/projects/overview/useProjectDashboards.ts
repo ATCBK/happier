@@ -9,12 +9,18 @@ import {
 } from '@happier-dev/protocol/widgets';
 import type { AnchoredListPositionV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
 import type { ActionExecuteResult, ActionId } from '@happier-dev/protocol';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 import { randomUUID } from '@/platform/randomUUID';
 import { storage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { widgetAreaLayoutBaseSurface } from '@/components/widgets/area/widgetAreaLayoutSelection';
+import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { resumeActionExecutionResult } from '@/components/approvals/actionApprovalContinuation';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
+import { t } from '@/text';
 
 export type ProjectDashboardsState = Readonly<{
   status: 'loading' | 'ready' | 'offline';
@@ -22,11 +28,17 @@ export type ProjectDashboardsState = Readonly<{
 }>;
 
 export type ProjectDashboardMutation = Readonly<
-  | { ok: true; dashboard?: WidgetAreaLayoutSummaryV1 }
-  | { ok: false; errorCode: string }
+  | { ok: true; approvalPending?: false; dashboard?: WidgetAreaLayoutSummaryV1 }
+  | { ok: true; approvalPending: true; dashboard?: never }
+  | { ok: false; errorCode: string; error?: string; details?: unknown }
 >;
 
 const LOADING_INVENTORY: ProjectDashboardsState = { status: 'loading', dashboards: [] };
+
+/** A generic failure does not establish that a named-layout write never committed. */
+export function isWidgetAreaLayoutOutcomeUnknown(errorCode: string | undefined): boolean {
+  return errorCode === undefined || errorCode === 'action_failed' || /timeout|network|unknown|disconnect|transport/i.test(errorCode);
+}
 
 /**
  * One Project's named dashboards (12s2) through the canonical `widgets.area.layout.*` Actions: the
@@ -90,6 +102,13 @@ export function useWidgetAreaLayouts(
     return () => { mounted.current = false; generation.current++; };
   }, []);
   const isCurrent = React.useCallback(() => mounted.current && currentObservation.current === observation, [observation]);
+  const interest = React.useMemo(() => ({ controller: new AbortController() }), [observation]);
+  React.useEffect(() => {
+    if (interest.controller.signal.aborted) interest.controller = new AbortController();
+    const controller = interest.controller;
+    return () => controller.abort();
+  }, [interest]);
+  const approval = useActionApprovalContinuation({ scopeKey: surfaceKey ?? '', serverId: scope?.serverId ?? '', onExecuted: () => {} });
   const baseSurface = React.useMemo(() => surface ? widgetAreaLayoutBaseSurface(surface) : null, [surface]);
   const publications = storage(useShallow(store => baseSurface ? Object.values(store.artifacts).flatMap(artifact => {
     if (!artifact.isDecrypted || artifact.ownerAccountId !== baseSurface.accountId || artifact.access !== 'owner') return [];
@@ -100,25 +119,24 @@ export function useWidgetAreaLayouts(
   }).sort() : []));
 
   const run = React.useCallback(
-    async (actionId: Extract<ActionId, `widgets.area.layout.${string}`>, args: unknown) => {
+    async (actionId: Extract<ActionId, `widgets.area.layout.${string}`>, args: unknown): Promise<ActionExecuteResult> => {
       if (!scope || !isCurrent())
         return {
           ok: false as const,
           errorCode: 'widget_area_scope_unavailable',
+          error: t('errors.operationFailed'),
         };
       const result = await execute(actionId, args, {
         surface: 'ui',
         serverId: scope.serverId,
         expectedAccountId: scope.accountId,
+        authority: 'present_user',
+        actionCaller: { kind: 'host' },
+        signal: interest.controller.signal,
       });
-      return result.ok
-        ? { ok: true as const, result: result.result }
-        : {
-            ok: false as const,
-            errorCode: result.errorCode ?? 'widget_area_unavailable',
-          };
+      return result;
     },
-    [execute, isCurrent, scope],
+    [execute, interest, isCurrent, scope],
   );
 
   const load = React.useCallback(async () => {
@@ -151,10 +169,34 @@ export function useWidgetAreaLayouts(
     async (
       actionId: Extract<ActionId, `widgets.area.layout.${string}`>,
       args: unknown,
+      /** The caller's way to repeat exactly what was asked (a rename starts again from the asked-for name). */
+      retry?: () => void,
     ): Promise<ProjectDashboardMutation> => {
-      const outcome = await run(actionId, args);
+      const refusal = (result: ActionExecuteResult): ProjectDashboardMutation => {
+        if (isCurrent()) publishPresentationNotice({ key: 'widget-area-layout:outcome', severity: 'error',
+          message: resolveActionExecutionFailureMessage(result, t('errors.operationFailed')) ?? t('errors.operationFailed'),
+          ...(retry && !result.ok && !isWidgetAreaLayoutOutcomeUnknown(result.errorCode)
+            ? { undo: { label: t('common.retry'), run: () => { if (isCurrent()) retry(); } } } : {}) });
+        return !result.ok ? result : { ok: false, errorCode: 'invalid_action_output' };
+      };
+      if (!scope || !isCurrent()) return { ok: false, errorCode: 'widget_area_scope_unavailable' };
+      let outcome: ActionExecuteResult;
+      try {
+        outcome = await resumeActionExecutionResult({ result: await run(actionId, args), actionId, actionInput: args,
+          scope, signal: interest.controller.signal, onApprovalPending: registration => {
+            if (!isCurrent()) return;
+            approval.requestApproval(registration);
+            publishPresentationNotice({ key: 'widget-area-layout:outcome', severity: 'info', message: t('widgetAdd.areaApprovalPending') });
+          } });
+      } catch (error) {
+        return refusal({ ok: false, errorCode: error instanceof Error && 'code' in error && typeof error.code === 'string'
+          ? error.code : 'widget_area_unavailable', error: t('errors.operationFailed') });
+      }
+      if (!isCurrent()) return { ok: false, errorCode: 'widget_area_scope_unavailable' };
+      if (!outcome.ok) { await load(); return refusal(outcome); }
+      const parsed = getActionSpec(actionId).outputSchema?.safeParse(outcome.result);
+      if (!parsed?.success) return refusal({ ok: false, errorCode: 'invalid_action_output', error: t('errors.operationFailed') });
       await load();
-      if (!outcome.ok) return outcome;
       const summary =
         actionId === 'widgets.area.layout.delete'
           ? null
@@ -165,47 +207,56 @@ export function useWidgetAreaLayouts(
         ? { ok: true, dashboard: summary.data }
         : { ok: true };
     },
-    [load, run],
+    [approval.requestApproval, interest, isCurrent, load, run, scope],
   );
 
   return React.useMemo(
     () => ({
       state,
+      approvalId: approval.approvalId,
+      approvalPending: approval.approvalPending,
       reload: load,
       select: (dashboard: WidgetAreaLayoutSummaryV1) => run('widgets.area.layout.select', { surface: dashboard.surface }),
-      create: (name: string, fromSurface?: WidgetSurfaceRefV1) =>
+      prepareToShare: (dashboard: WidgetAreaLayoutSummaryV1): Promise<ProjectDashboardMutation> =>
+        dashboard.isPreset && dashboard.revision === null
+          // The existing rename owner intentionally materializes a missing host preset through
+          // its one Artifact/CAS path. Retain its exact identity, name and default contents.
+          ? mutate('widgets.area.layout.rename', { surface: dashboard.surface, expectedRevision: null, name: dashboard.name })
+          : Promise.resolve({ ok: true, dashboard }),
+      create: (name: string, fromSurface?: WidgetSurfaceRefV1, retry?: () => void) =>
         surface
           ? mutate('widgets.area.layout.create', {
               surface,
               layoutId: randomUUID(),
               name,
               ...(fromSurface ? { fromSurface } : {}),
-            })
+            }, retry)
           : Promise.resolve({
               ok: false as const,
               errorCode: 'widget_area_scope_unavailable',
             }),
-      rename: (dashboard: WidgetAreaLayoutSummaryV1, name: string) =>
+      rename: (dashboard: Pick<WidgetAreaLayoutSummaryV1, 'surface' | 'revision'>, name: string, retry?: () => void) =>
         mutate('widgets.area.layout.rename', {
           surface: dashboard.surface,
           expectedRevision: dashboard.revision,
           name,
-        }),
-      remove: (dashboard: WidgetAreaLayoutSummaryV1) =>
+        }, retry),
+      remove: (dashboard: WidgetAreaLayoutSummaryV1, retry?: () => void) =>
         mutate('widgets.area.layout.delete', {
           surface: dashboard.surface,
           expectedRevision: dashboard.revision,
-        }),
+        }, retry),
       reorder: (
         dashboard: WidgetAreaLayoutSummaryV1,
         position: AnchoredListPositionV1,
+        retry?: () => void,
       ) =>
         mutate('widgets.area.layout.reorder', {
           surface: dashboard.surface,
           expectedRevision: dashboard.revision,
           position,
-        }),
+        }, retry),
     }),
-    [load, mutate, run, state, surface],
+    [approval.approvalId, approval.approvalPending, load, mutate, run, state, surface],
   );
 }

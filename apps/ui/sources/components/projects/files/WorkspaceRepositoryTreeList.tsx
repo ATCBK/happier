@@ -19,7 +19,7 @@ import { t } from '@/text';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { useScmTreeBadgeIndex } from '@/components/workspaces/files/repositoryTree/useScmTreeBadgeIndex';
 import { buildScmTreeBadgeSignature } from '@/components/workspaces/files/repositoryTree/scmTreeBadges';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { WebDropTargetView } from '@/components/workspaces/files/repositoryTree/WebDropTargetView';
 import type { RepositoryFileDropTarget } from '@/components/workspaces/files/repositoryTree/repositoryFileDropTarget';
 import type { LazyDirectoryTreeNode } from '@/hooks/ui/filesystem/lazyDirectoryTreeTypes';
@@ -151,6 +151,8 @@ type WorkspaceRepositoryTreeListProps = Readonly<{
     listEmpty?: React.ReactElement | null;
     /** `inline`: rows drawn in place inside an enclosing scroll (a turn card), see `FilesystemBrowserListProps`. */
     presentation?: 'scroll' | 'inline';
+    /** A preview of the folder (the Overview Code widget): at most this many rows are drawn; counts still see every entry. */
+    maxRows?: number | null;
     /** Changed only: the folders that start closed (a large turn opens as one page of folders). */
     initialClosedChangedPaths?: ReadonlySet<string>;
     /**
@@ -248,6 +250,8 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         });
     }, []);
     const nodes = changedOnly ? changedNodes : treeNodes;
+    const maxRows = props.maxRows ?? null;
+    const shownNodes = React.useMemo(() => (maxRows != null && nodes.length > maxRows ? nodes.slice(0, maxRows) : nodes), [maxRows, nodes]);
     const toggleDirectory = changedOnly ? toggleChangedDirectory : toggleTreeDirectory;
     const rootLoading = changedOnly ? props.scmSnapshot == null : treeRootLoading;
     const rootError = changedOnly ? null : treeRootError;
@@ -267,7 +271,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
 
     const keyboardListRef = React.useRef<import('@/components/ui/lists/virtualized/virtualizedListTypes').VirtualizedListRef>(null);
     const focusIndex = React.useCallback((index: number) => keyboardListRef.current?.scrollToIndex({ index, animated: false }), []);
-    const treeKeyboard = useFilesystemTreeKeyboard(nodes, focusIndex);
+    const treeKeyboard = useFilesystemTreeKeyboard(shownNodes, focusIndex);
     const focusedRevealRef = React.useRef<typeof props.revealRequest>(undefined);
     React.useEffect(() => {
         const request = props.revealRequest;
@@ -415,7 +419,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
         const showDetailsInline = node.type !== 'error' && rowState.detailsMode && Platform.OS === 'web';
         const detailsSize =
             node.type === 'file' && typeof node.sizeBytes === 'number'
-                ? formatByteSize(node.sizeBytes)
+                ? formatHappierDataBytes(node.sizeBytes, { kind: 'storage' })
                 : '';
         const detailsModified =
             typeof node.modifiedMs === 'number'
@@ -501,7 +505,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
             if (!rowState.detailsMode || Platform.OS === 'web') return undefined;
             const parts: string[] = [];
             if (node.type === 'file' && typeof node.sizeBytes === 'number') {
-                parts.push(formatByteSize(node.sizeBytes));
+                parts.push(formatHappierDataBytes(node.sizeBytes, { kind: 'storage' }));
             }
             if (typeof node.modifiedMs === 'number') {
                 parts.push(new Date(node.modifiedMs).toLocaleString());
@@ -659,7 +663,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
             treeRole
             presentation={props.presentation}
             listRef={keyboardListRef}
-            nodes={nodes}
+            nodes={shownNodes}
             rootLoading={rootLoading}
             showInlineLoadingHeader={props.showInlineLoadingHeader}
             listFooter={props.listFooter}
@@ -674,7 +678,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
             inlineRetryLabel={t('errors.tryAgain')}
             renderRow={renderRow}
             extraData={rowVisualExtraData}
-            initialNumToRender={Math.min(32, nodes.length)}
+            initialNumToRender={Math.min(32, shownNodes.length)}
             maxToRenderPerBatch={32}
             windowSize={7}
             removeClippedSubviews={Platform.OS !== 'web'}

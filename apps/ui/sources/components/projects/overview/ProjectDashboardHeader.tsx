@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, type LayoutChangeEvent } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { buildWidgetSurfaceArtifactIdV1, type WidgetAreaLayoutSummaryV1 } from '@happier-dev/protocol/widgets';
 
@@ -13,7 +13,6 @@ import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
 
 import { useProjectSources } from '../sources/useProjectSources';
@@ -25,8 +24,7 @@ import {
   type WidgetAreaLayoutLabels,
   type WidgetAreaLayoutOption,
 } from '@/components/widgets/area/WidgetAreaLayoutBar';
-import { resolveProjectOverviewArrangement } from './ProjectOverviewLayout';
-import { useProjectDashboards } from './useProjectDashboards';
+import { isWidgetAreaLayoutOutcomeUnknown, useProjectDashboards } from './useProjectDashboards';
 import type { ProjectAttachedDashboardSelection } from '../detail/projectRouteState';
 import type { ProjectAttachedDashboardRead } from '@/components/widgets/area/useProjectWidgetAreaBinding';
 
@@ -77,7 +75,6 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
     [props.workspaceRef, serverId],
   );
   // The mounted area owns selection; this bar sends its canonical Action only.
-  const phone = useDeviceType() === 'phone';
     const scope = useActiveServerAccountScope(serverId);
     const dashboards = useProjectDashboards({
       serverId: serverId,
@@ -101,10 +98,12 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
       const isCurrent = () => mounted.current && currentDestination.current === destination && lifetime.isCurrent();
       return isCurrent() ? { isCurrent } : null;
     }, [destination, scope]);
-    const [width, setWidth] = React.useState<number | null>(null);
     const [unconfirmedDelete, setUnconfirmedDelete] = React.useState<
       Readonly<{ name: string; destination: object }> | null
     >(null);
+    // A refused create, rename, move or delete changed nothing: the one notice owner (the dashboards
+    // hook) says why and offers Retry, which repeats the exact request (a rename re-asks with the
+    // name that was typed). Only a delete that got no answer is reported here, as possibly done.
     const [sourcesDemanded, setSourcesDemanded] = React.useState(false);
     const sources = useProjectSources(
       scope ?? { serverId: serverId, accountId: '' },
@@ -144,7 +143,7 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
       [captureDestination, dashboards, list],
     );
 
-    const create = React.useCallback(async () => {
+    const create = React.useCallback(async (draft?: string): Promise<void> => {
       const captured = captureDestination();
       if (!captured) return;
       const name = (
@@ -152,19 +151,47 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
           t('projects.dashboard.create'),
           t('projects.dashboard.createBody', { project: props.projectName }),
           {
+            ...(draft ? { defaultValue: draft } : {}),
             placeholder: t('projects.dashboard.namePlaceholder'),
             confirmText: t('common.create'),
           },
         )
       )?.trim();
       if (!name || !captured.isCurrent()) return;
-      const outcome = await dashboards.create(name);
-      if (outcome.ok && outcome.dashboard && captured.isCurrent())
-        await dashboards.select(outcome.dashboard);
+      const outcome = await dashboards.create(name, undefined, () => { void create(name); });
+      if (outcome.ok && outcome.dashboard && captured.isCurrent()) await dashboards.select(outcome.dashboard);
     }, [captureDestination, dashboards, props.projectName]);
 
+    const shared = props.attachedDashboard && props.sharedDashboard?.artifactId === props.attachedDashboard.artifactId
+      ? props.sharedDashboard : null;
     const actions = React.useMemo((): WidgetAreaLayoutActions | null => {
-      if (!selected || !scope) return null;
+      if (!scope) return null;
+      // An attached shared dashboard offers only what this viewer's own access to that document admits:
+      // edit renames it in place, owner/admin also share it. Its owner's inventory (attach, order,
+      // delete) is never this viewer's to change.
+      if (shared) {
+        const canEdit = shared.access !== 'view';
+        const canShare = shared.access === 'owner' || shared.access === 'admin';
+        if (!canEdit) return null;
+        const renameShared = async (draft?: string): Promise<void> => {
+          const captured = captureDestination();
+          if (!captured) return;
+          const name = (await Modal.prompt(t('projects.dashboard.renameTitle'), undefined, {
+            defaultValue: draft ?? shared.name, placeholder: t('projects.dashboard.namePlaceholder'), confirmText: t('common.rename'),
+          }))?.trim();
+          if (!name || name === shared.name || !captured.isCurrent()) return;
+          await dashboards.rename(shared, name, () => { void renameShared(name); });
+        };
+        return {
+          ...(canShare ? { share: () => {
+            if (!captureDestination()) return;
+            showDocumentShareSheet({ kind: 'widget-area-layout.v1', artifactId: shared.artifactId, name: shared.name,
+              subtitle: `${t('projects.dashboard.label')} · ${props.projectName}` });
+          } } : {}),
+          rename: () => renameShared(),
+        };
+      }
+      if (!selected) return null;
       const at = list.indexOf(selected);
       const previous = at > 0 ? list[at - 1] : null;
       const next = at >= 0 && at < list.length - 1 ? list[at + 1] : null;
@@ -174,12 +201,17 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
           source.createdByAccountId === scope.accountId,
       );
       return {
-        share: () => {
-          if (!captureDestination()) return;
+        share: async () => {
+          const captured = captureDestination();
+          if (!captured) return;
+          const outcome = await dashboards.prepareToShare(selected);
+          if (!captured.isCurrent()) return;
+          if (!outcome.ok) return;
+          if (outcome.approvalPending || !outcome.dashboard) return;
           showDocumentShareSheet({
             kind: 'widget-area-layout.v1',
-            artifactId: selected.artifactId,
-            name: selected.name,
+            artifactId: outcome.dashboard.artifactId,
+            name: outcome.dashboard.name,
             subtitle: `${t('projects.dashboard.label')} · ${props.projectName}`,
           });
         },
@@ -221,29 +253,34 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
           },
           onDemand: () => setSourcesDemanded(true),
         },
-        rename: async () => {
-          const captured = captureDestination();
-          if (!captured) return;
-          const name = (
-            await Modal.prompt(t('projects.dashboard.renameTitle'), undefined, {
-              defaultValue: selected.name,
-              placeholder: t('projects.dashboard.namePlaceholder'),
-              confirmText: t('common.rename'),
-            })
-          )?.trim();
-          if (name && name !== selected.name && captured.isCurrent())
-            await dashboards.rename(selected, name);
+        rename: () => {
+          const rename = async (draft?: string): Promise<void> => {
+            const captured = captureDestination();
+            if (!captured) return;
+            const name = (
+              await Modal.prompt(t('projects.dashboard.renameTitle'), undefined, {
+                defaultValue: draft ?? selected.name,
+                placeholder: t('projects.dashboard.namePlaceholder'),
+                confirmText: t('common.rename'),
+              })
+            )?.trim();
+            if (!name || name === selected.name || !captured.isCurrent()) return;
+            await dashboards.rename(selected, name, () => { void rename(name); });
+          };
+          return rename();
         },
         ...(previous
           ? {
               moveBefore: {
                 name: previous.name,
                 onPress: () => {
-                  if (!captureDestination()) return;
-                  void dashboards.reorder(selected, {
-                    anchorId: previous.artifactId,
-                    placement: 'before',
-                  });
+                  const move = async (): Promise<void> => {
+                    const captured = captureDestination();
+                    if (!captured) return;
+                    if (!captured.isCurrent()) return;
+                    await dashboards.reorder(selected, { anchorId: previous.artifactId, placement: 'before' }, () => { void move(); });
+                  };
+                  void move();
                 },
               },
             }
@@ -253,11 +290,13 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
               moveAfter: {
                 name: next.name,
                 onPress: () => {
-                  if (!captureDestination()) return;
-                  void dashboards.reorder(selected, {
-                    anchorId: next.artifactId,
-                    placement: 'after',
-                  });
+                  const move = async (): Promise<void> => {
+                    const captured = captureDestination();
+                    if (!captured) return;
+                    if (!captured.isCurrent()) return;
+                    await dashboards.reorder(selected, { anchorId: next.artifactId, placement: 'after' }, () => { void move(); });
+                  };
+                  void move();
                 },
               },
             }
@@ -268,21 +307,22 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
               onPress: async () => {
                 const captured = captureDestination();
                 if (!captured) return;
-                const confirmed = await Modal.confirm(
-                  t('projects.dashboard.deleteConfirmTitle', {
-                    name: selected.name,
-                  }),
-                  t('projects.dashboard.deleteConfirmBody'),
-                  {
-                    confirmText: t('projects.dashboard.deleteLabel'),
-                    destructive: true,
-                  },
-                );
-                if (!confirmed || !captured.isCurrent()) return;
-                const outcome = await dashboards.remove(selected);
+                await deleteSelected();
+              },
+            },
+      };
+      async function deleteSelected(): Promise<void> {
+                if (!selected) return;
+                const captured = captureDestination();
+                if (!captured) return;
+                // The canonical Action owns confirmation for the original request and Retry.
+                const outcome = await dashboards.remove(selected, () => { void deleteSelected(); });
                 if (!captured.isCurrent()) return;
+                if (outcome.ok && outcome.approvalPending) return;
                 if (!outcome.ok) {
-                  setUnconfirmedDelete({ name: selected.name, destination });
+                  // A refusal the Home answered changed nothing and was already said, with Retry; only a
+                  // request that got no answer may have deleted it.
+                  if (isWidgetAreaLayoutOutcomeUnknown(outcome.errorCode)) setUnconfirmedDelete({ name: selected.name, destination });
                   return;
                 }
                 setUnconfirmedDelete(null);
@@ -296,9 +336,7 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
                   }),
                   severity: 'info',
                 });
-              },
-            },
-      };
+      }
     }, [
       captureDestination,
       destination,
@@ -309,24 +347,16 @@ export const ProjectDashboardHeader = React.memo(function ProjectDashboardHeader
       selected,
       sources.controller,
       sources.state.rows,
+      shared,
     ]);
 
-    const narrow =
-      phone || resolveProjectOverviewArrangement(width) === 'stacked';
     return (
-      <View
-        style={styles.header}
-        onLayout={(event: LayoutChangeEvent) => {
-          const next = event.nativeEvent.layout.width;
-          setWidth((current) => (current === next ? current : next));
-        }}
-      >
+      <View style={styles.header}>
         <WidgetAreaLayoutBar
           layouts={options}
           labels={DASHBOARD_LABELS}
           selectedId={props.attachedDashboard?.artifactId ?? selected?.artifactId ?? unavailableId ?? 'default'}
           onSelect={select}
-          narrow={narrow}
           onCreate={
             scope
               ? () => {

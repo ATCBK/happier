@@ -2,13 +2,19 @@ import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { createWidgetAreaActionPortV1, createWidgetAreaLayoutArtifactPortV1, createWidgetSurfaceArtifactPortV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { createWorkBoardArtifactBoundary } from '../../../../../../packages/protocol/src/boards/workBoardArtifactV1.testkit';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { storage } from '@/sync/domains/state/storage';
-import { useWidgetAreaLayouts, type WidgetAreaLayoutsExecute } from './useProjectDashboards';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import type { WidgetAreaLayoutsExecute } from './useProjectDashboards';
+
+// Install transport boundaries before the named-layout/approval consumer graph.
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+const { storage } = await import('@/sync/domains/state/storage');
+const { useWidgetAreaLayouts } = await import('./useProjectDashboards');
 
 afterEach(standardCleanup);
 
@@ -40,6 +46,8 @@ it('refreshes mounted inventory for new and removed same-area publications throu
     const area = createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(publishingTransport, { surface: target, isCurrent: () => true }));
     const unused = async (): Promise<never> => { throw new Error('unexpected_layout_operation'); };
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope,
+        isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id,
+            context.actionsSettings ?? normalizeActionsSettingsV1({ v: 1 }), context, undefined, undefined, input),
         widgetSurfaceActions: { corePage: area },
         widgetAreaLayouts: {
             list: args => owner(args.surface).list(), create: args => owner(args.surface).create(args),
@@ -48,9 +56,15 @@ it('refreshes mounted inventory for new and removed same-area publications throu
     }));
     const context = { surface: 'ui' as const, serverId: scope.serverId, expectedAccountId: scope.accountId,
         actionCaller: { kind: 'host' as const }, authority: 'present_user' as const,
-        actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'widgets.area.layout.delete': ['ui'] } }),
+        actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+            'widgets.area.layout.create': ['ui'], 'widgets.area.layout.delete': ['ui'],
+        } }),
     };
-    const execute: WidgetAreaLayoutsExecute = (actionId, args) => executor.execute(actionId, args, context);
+    const execute: WidgetAreaLayoutsExecute = async (actionId, args) => {
+        const result = await executor.execute(actionId, args, context);
+        if (actionId === 'widgets.area.layout.create') expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+        return result;
+    };
     try {
         storage.setState({ artifacts: {} });
         const hook = await renderHook(() => useWidgetAreaLayouts({ surface, execute }));
@@ -84,6 +98,8 @@ it.each(['project', 'home', 'account', 'retired'] as const)('withdraws private i
     const area = createWidgetAreaActionPortV1(target => createWidgetSurfaceArtifactPortV1(transport, { surface: target, isCurrent: () => true }));
     const unused = async (): Promise<never> => { throw new Error('unexpected_layout_operation'); };
     const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope,
+        isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id,
+            context.actionsSettings ?? normalizeActionsSettingsV1({ v: 1 }), context, undefined, undefined, input),
         widgetSurfaceActions: { project: area },
         widgetAreaLayouts: { list: args => owner(args.surface).list(), create: args => owner(args.surface).create(args),
             delete: unused, rename: unused, reorder: unused, reset: unused, undo: unused },
@@ -91,10 +107,12 @@ it.each(['project', 'home', 'account', 'retired'] as const)('withdraws private i
     const execute: WidgetAreaLayoutsExecute = (actionId, args) => executor.execute(actionId, args, {
         surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
         actionCaller: { kind: 'host' }, authority: 'present_user',
+        actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'widgets.area.layout.create': ['ui'] } }),
     });
     try {
         storage.setState({ artifacts: {} });
-        expect(await execute('widgets.area.layout.create', { surface, layoutId: 'private-a', name: 'Private A' })).toMatchObject({ ok: true });
+        const created = await execute('widgets.area.layout.create', { surface, layoutId: 'private-a', name: 'Private A' });
+        expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
         const initialProps: { target: WidgetSurfaceRefV1 | null } = { target: surface };
         const hook = await renderHook(({ target }: { target: WidgetSurfaceRefV1 | null }) => useWidgetAreaLayouts({ surface: target, execute }),
             { initialProps });

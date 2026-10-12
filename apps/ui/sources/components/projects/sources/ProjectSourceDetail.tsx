@@ -26,7 +26,7 @@ import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -37,7 +37,7 @@ import {
   useArtifactsLoaded,
   useWorkspaceRefs,
 } from '@/sync/domains/state/storage';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { t } from '@/text';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -45,6 +45,7 @@ import { resolveWorkspaceRefByAddress } from '@/sync/domains/workspaces/workspac
 import { useViewportClass } from '@/utils/platform/useViewportClass';
 
 import { ProjectRefSelect } from '../ProjectRefSelect';
+import { useProjectDashboardDocument } from '@/components/widgets/area/useProjectDashboardDocument';
 
 import type {
   ProjectSourceDraft,
@@ -131,10 +132,12 @@ const DashboardAttachmentRow = React.memo(function DashboardAttachmentRow(
       props.serverId,
     );
   const cached = useArtifact(props.reference.artifactId);
-  const artifact = elsewhere ? null : cached;
-  const loaded = useArtifactsLoaded() || elsewhere;
+  const qualified = useProjectDashboardDocument(elsewhere ? props.reference : null, props.serverId);
+  const artifact = elsewhere ? qualified.document ? { title: qualified.document.name, isDecrypted: true, access: qualified.document.access } : null : cached;
+  const localLoaded = useArtifactsLoaded();
+  const loaded = elsewhere ? qualified.loaded : localLoaded;
   const readable = artifact !== null && artifact.isDecrypted;
-  const canOpen = !elsewhere && readable && checkouts.length > 0 && props.onOpen !== undefined;
+  const canOpen = readable && checkouts.length > 0 && props.onOpen !== undefined;
   const access =
     artifact?.access === 'edit'
       ? t('shareSheet.documents.levels.canEdit')
@@ -215,13 +218,21 @@ const SourceCheckouts = React.memo(function SourceCheckouts(
         ref.source?.sourceId === props.sourceId &&
         areServerProfileIdentifiersEquivalent(ref.serverId, props.serverId),
     );
+    // The machine-name owner names each checkout's Machine, telling same-named ones apart and saying
+    // when this Home no longer lists one; never its raw id.
+    const names = resolveMachineDisplayNames([
+      ...machines,
+      ...[...new Set(list.map((ref) => ref.machineId))]
+        .filter((id) => !machines.some((machine) => machine.id === id))
+        .map((id) => ({ id, absence: 'unlisted' as const })),
+    ]);
     return list.map((primary) => {
       const machineId = primary.machineId;
       const machine =
         machines.find((candidate) => candidate.id === machineId) ?? null;
       return {
         machineId,
-        name: getMachineDisplayName(machine) ?? machineId,
+        name: names.get(machineId) ?? getMachineDisplayName({ id: machineId, absence: 'unlisted' }),
         homeDir: machine?.metadata?.homeDir ?? undefined,
         primary,
       };
@@ -540,8 +551,9 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
           addressText.trim(),
           (machineId) =>
             getMachineDisplayName(
-              machines.find((machine) => machine.id === machineId) ?? null,
-            ) ?? machineId,
+              machines.find((machine) => machine.id === machineId) ?? { id: machineId, absence: 'unlisted' },
+              machines,
+            ),
         )
       : null;
 
@@ -840,27 +852,21 @@ export const ProjectSourceDetail = React.memo(function ProjectSourceDetail(
         />
       ) : null}
       {current && canEdit ? (
+        // Delete closes the page as the shared quiet button row, its consequence the one footnote beneath.
         <ItemGroup surface="none">
-          <SectionContentRow>
-            <View style={styles.deleteRow}>
-              <RoundButton
-                testID="projects.sources.detail.delete"
-                size="small"
-                display="destructive"
-                title={t('projects.sources.delete')}
-                loading={state.mutation === 'deleting'}
-                onPress={remove}
-              />
-              <Text
-                style={[
-                  styles.consequence,
-                  { color: theme.colors.text.secondary },
-                ]}
-              >
-                {t('projects.sources.deleteConsequence')}
-              </Text>
-            </View>
-          </SectionContentRow>
+          <SectionButtonRow
+            testID="projects.sources.detail.closing"
+            footnote={t('projects.sources.deleteConsequence')}
+          >
+            <RoundButton
+              testID="projects.sources.detail.delete"
+              size="small"
+              display="destructive"
+              title={t('projects.sources.delete')}
+              loading={state.mutation === 'deleting'}
+              onPress={remove}
+            />
+          </SectionButtonRow>
         </ItemGroup>
       ) : null}
     </ItemList>
@@ -885,11 +891,4 @@ const styles = StyleSheet.create(() => ({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   count: { ...Typography.default(), fontVariant: ['tabular-nums'] },
-  deleteRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    flexWrap: 'wrap',
-  },
-  consequence: { ...Typography.default(), flexShrink: 1 },
 }));

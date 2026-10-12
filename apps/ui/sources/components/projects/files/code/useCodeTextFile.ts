@@ -18,7 +18,7 @@ const IDLE: CodeTextFileState = { kind: 'idle' };
  * aborts it, and a late answer for an old folder never paints the new one. The last text stays
  * while the same file is read again.
  */
-export function useCodeTextFile(scope: WorkspaceScopeBase, path: string | null, reloadToken?: number): CodeTextFileState {
+export function useCodeTextFile(scope: WorkspaceScopeBase, path: string | null, reloadToken?: number | string): CodeTextFileState {
     const scopeKey = tryBuildWorkspaceCacheKey(scope) ?? '';
     const [state, setState] = React.useState<Readonly<{ key: string; value: CodeTextFileState }>>({ key: '', value: IDLE });
     const key = path ? `${scopeKey}\u0000${path}` : '';

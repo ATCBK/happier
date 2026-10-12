@@ -10,13 +10,15 @@ import type { ProjectWorkerActionOutputV1 } from '@happier-dev/protocol';
 
 import { openActionOperationDetail } from '@/components/inbox/actionOperations/openActionOperationDetail';
 import { useProjectCommandOutputOpener } from '@/components/inbox/actionOperations/projectCommandOutputHost';
-import { RunClock, RunGlyph } from '@/components/projects/projectSetup/ProjectScriptRow';
+import { RunClock, RunGlyph } from '@/components/projects/projectSetup/ProjectRunMarks';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
+import { CheckoutReachabilityLine, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Icon } from '@/components/ui/icons/Icon';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { useActiveActionOperations } from '@/sync/domains/actionOperations/useActionOperations';
@@ -25,7 +27,7 @@ import { useMachineFreshCopies, type MachineFreshCopy, type MachineFreshCopyNoti
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { useServerScopedMachine } from '@/sync/store/hooks';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { executeProjectWorkerActionV1 } from '@/sync/ops/actions/projectWorkerActions';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
@@ -38,7 +40,7 @@ type ReadyPolicy = Extract<ProjectWorkerActionOutputV1<'machines.worker.policy.g
 
 /** The Machine's own finite work policy, read and changed through `machines.worker.policy.*` (30s1). */
 export function useMachineWorkerPolicy(serverId: string, machineId: string) {
-  const setting = useObservedWorkerSetting<ReadyPolicy, ReadyPolicy['policy']>({
+  const setting = useObservedWorkerSetting<ReadyPolicy, ReadyPolicy['policy'], ProjectWorkerActionOutputV1<'machines.worker.policy.set'>>({
     serverId,
     scopeKey: JSON.stringify(['machines.worker.policy', serverId, machineId]),
     read: (accountId) =>
@@ -47,16 +49,10 @@ export function useMachineWorkerPolicy(serverId: string, machineId: string) {
         { serverId, machineId },
         { expectedAccountId: accountId },
       ),
-    observedFromReceipt: (receipt) =>
+    // A receipt that carries the policy is what the Machine now stores.
+    observedFromReceipt: (receipt): ReadyPolicy | null =>
       'policy' in receipt
-        ? ({
-            ...(receipt as {
-              policy: ReadyPolicy['policy'];
-              metadataVersion: number;
-            }),
-            status: 'ready',
-            source: 'stored',
-          } as ReadyPolicy)
+        ? { status: 'ready', source: 'stored', policy: receipt.policy, metadataVersion: receipt.metadataVersion }
         : null,
   });
   const { mutate } = setting;
@@ -179,7 +175,7 @@ function FreshCopyRow(
       : props.compact
         ? t('projectWorkers.copySynced', { time })
         : t('projectWorkers.copyLastSynced', { time });
-  const size = props.copy.sizeBytes === null ? null : formatByteSize(props.copy.sizeBytes);
+  const size = props.copy.sizeBytes === null ? null : formatHappierDataBytes(props.copy.sizeBytes, { kind: 'storage' });
   // Phone keeps the row to "Synced … · size"; where it came from moves into the opened sheet.
   const facts = [props.compact ? null : from, synced, size].filter(Boolean).join(' · ');
   const icon = <Icon name="folder" size={18} color={theme.colors.text.secondary} />;
@@ -371,8 +367,43 @@ export function MachineProjectWorkSection(
   const freshCopies = useMachineFreshCopies(props.serverId, props.machineId);
   const state = policy.state;
   const value = state.kind === 'ready' ? state.value.policy : null;
-  const disabled = !value || policy.busy;
+  // An unreachable Machine keeps its last-known policy, says so once, and takes no edits it can't receive.
+  const machineScope = React.useMemo(() => ({ serverId: props.serverId, machineId: props.machineId }), [props.serverId, props.machineId]);
+  const unreachable = useCheckoutReachability(machineScope).unreachable;
+  const disabled = !value || policy.busy || unreachable;
   const notice = describeObservedWorkerSettingNotice(policy.notice);
+  // One Run at most field: inline on wide screens, inside the phone sheet on a phone (lab MACHINEp).
+  const capacityField = (
+    <FieldValueItem
+      testID={`${testID}.capacity`}
+      fieldTestID={`${testID}.capacity.field`}
+      title={t('projectWorkers.capacity')}
+      subtitle={t('projectWorkers.capacityDetail')}
+      kind="integer"
+      allowEmpty
+      error={capacityError}
+      onDraftChange={() => setCapacityError(null)}
+      placeholder={t('projectWorkers.noLimit')}
+      disabled={disabled}
+      value={value?.runAtMost === null || value?.runAtMost === undefined ? '' : String(value.runAtMost)}
+      onCommit={(draft) => {
+        if (!value) return;
+        const trimmed = draft.trim();
+        if (trimmed === '') {
+          if (value.runAtMost !== null) void policy.save({ ...value, runAtMost: null });
+          return '';
+        }
+        const count = Number(trimmed);
+        if (!Number.isSafeInteger(count) || count < 1) {
+          // The typed draft stays so it can be corrected; nothing is written.
+          setCapacityError(t('projectWorkers.capacityInvalid'));
+          return;
+        }
+        if (count !== value.runAtMost) void policy.save({ ...value, runAtMost: count });
+        return String(count);
+      }}
+    />
+  );
 
   return (
     <>
@@ -380,6 +411,7 @@ export function MachineProjectWorkSection(
         title={t('projectWorkers.workSection')}
         description={t('projectWorkers.workSectionDetail')}
       >
+        <CheckoutReachabilityLine scope={machineScope} testID={`${testID}.reachability`} />
         {notice ? (
           <AttentionBanner
             testID={`${testID}.notice`}
@@ -408,19 +440,12 @@ export function MachineProjectWorkSection(
           />
         ) : null}
         {state.kind === 'refused' || state.kind === 'error' ? (
-          <Item
+          <SurfaceStateCard
             testID={`${testID}.unavailable`}
+            size="line"
+            kind="unavailable"
             title={t('projectWorkers.policyUnavailable')}
-            mode="info"
-            showChevron={false}
-            rightElement={
-              <RoundButton
-                size="small"
-                display="secondary"
-                title={t('common.retry')}
-                onPress={policy.refresh}
-              />
-            }
+            action={{ label: t('common.retry'), onPress: policy.refresh }}
           />
         ) : (
           <>
@@ -468,81 +493,13 @@ export function MachineProjectWorkSection(
                 >
                   {({ maxHeight }) => (
                     <FloatingOverlay maxHeight={maxHeight} surfaceChrome="theme">
-            <FieldValueItem
-                                    testID={`${testID}.capacity`}
-                                    fieldTestID={`${testID}.capacity.field`}
-                                    title={t('projectWorkers.capacity')}
-                                    subtitle={t('projectWorkers.capacityDetail')}
-                                    kind="integer"
-                                    allowEmpty
-                                    error={capacityError}
-                                    onDraftChange={() => setCapacityError(null)}
-                                    placeholder={t('projectWorkers.noLimit')}
-                                    disabled={disabled}
-                                    value={
-                                      value?.runAtMost === null || value?.runAtMost === undefined
-                                        ? ''
-                                        : String(value.runAtMost)
-                                    }
-                                    onCommit={(draft) => {
-                                      if (!value) return;
-                                      const trimmed = draft.trim();
-                                      if (trimmed === '') {
-                                        if (value.runAtMost !== null)
-                                          void policy.save({ ...value, runAtMost: null });
-                                        return '';
-                                      }
-                                      const count = Number(trimmed);
-                                      if (!Number.isSafeInteger(count) || count < 1) {
-                                        // The typed draft stays so it can be corrected; nothing is written.
-                                        setCapacityError(t('projectWorkers.capacityInvalid'));
-                                        return;
-                                      }
-                                      if (count !== value.runAtMost)
-                                        void policy.save({ ...value, runAtMost: count });
-                                      return String(count);
-                                    }}
-                                  />
+                      {capacityField}
                     </FloatingOverlay>
                   )}
                 </Popover>
               </View>
             ) : (
-            <FieldValueItem
-              testID={`${testID}.capacity`}
-              fieldTestID={`${testID}.capacity.field`}
-              title={t('projectWorkers.capacity')}
-              subtitle={t('projectWorkers.capacityDetail')}
-              kind="integer"
-              allowEmpty
-              error={capacityError}
-              onDraftChange={() => setCapacityError(null)}
-              placeholder={t('projectWorkers.noLimit')}
-              disabled={disabled}
-              value={
-                value?.runAtMost === null || value?.runAtMost === undefined
-                  ? ''
-                  : String(value.runAtMost)
-              }
-              onCommit={(draft) => {
-                if (!value) return;
-                const trimmed = draft.trim();
-                if (trimmed === '') {
-                  if (value.runAtMost !== null)
-                    void policy.save({ ...value, runAtMost: null });
-                  return '';
-                }
-                const count = Number(trimmed);
-                if (!Number.isSafeInteger(count) || count < 1) {
-                  // The typed draft stays so it can be corrected; nothing is written.
-                  setCapacityError(t('projectWorkers.capacityInvalid'));
-                  return;
-                }
-                if (count !== value.runAtMost)
-                  void policy.save({ ...value, runAtMost: count });
-                return String(count);
-              }}
-            />
+              capacityField
             )}
           </>
         )}
@@ -552,11 +509,11 @@ export function MachineProjectWorkSection(
         title={t('projectWorkers.runningHere')}
       >
         {running.length === 0 ? (
-          <Item
+          <SurfaceStateCard
             testID={`${testID}.running.empty`}
+            size="line"
+            kind="empty"
             title={t('projectWorkers.nothingRunning')}
-            mode="info"
-            showChevron={false}
           />
         ) : (
           running.map((operation) => (
@@ -600,26 +557,27 @@ export function MachineProjectWorkSection(
           />
         ))}
         {freshCopies.loading ? (
-          <Item
+          <SurfaceStateCard
             testID={`${testID}.copies.loading`}
+            size="line"
+            kind="loading"
             title={t('common.loading')}
-            mode="info"
-            showChevron={false}
           />
         ) : freshCopies.copies === null ? (
           // A settled unknown census is not evidence that there are no copies.
-          <Item
+          <SurfaceStateCard
             testID={`${testID}.copies.unavailable`}
+            size="line"
+            kind="unavailable"
             title={t('projectWorkers.freshCopiesUnavailable')}
-            mode="info"
-            showChevron={false}
+            action={{ label: t('projectWorkers.checkAgain'), onPress: freshCopies.refresh }}
           />
         ) : freshCopies.copies.length === 0 ? (
-          <Item
+          <SurfaceStateCard
             testID={`${testID}.copies.empty`}
+            size="line"
+            kind="empty"
             title={t('projectWorkers.freshCopiesEmpty')}
-            mode="info"
-            showChevron={false}
           />
         ) : (
           freshCopies.copies.map((copy) => (

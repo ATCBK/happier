@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { StyleSheet } from 'react-native-unistyles';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { ProjectExecutionChoiceResolutionV1, WorkerDestinationV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 
@@ -12,8 +11,7 @@ import {
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { Text } from '@/components/ui/text/Text';
-import { Typography } from '@/constants/Typography';
+import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
 import { t } from '@/text';
 import { describeMachineDestinationWorkerFacts } from '@/components/sessions/new/components/machineSelection/buildMachineDestinationModel';
 
@@ -136,7 +134,6 @@ export function ProjectAgentGuidanceDisclosure(
     showDivider?: boolean;
   }>,
 ) {
-  const { theme } = useUnistyles();
   const [expanded, setExpanded] = React.useState(false);
   const [read, setRead] = React.useState<Readonly<{
     key: string;
@@ -201,22 +198,8 @@ export function ProjectAgentGuidanceDisclosure(
       )}
     >
       {!expanded ? null : value.kind === 'ready' ? (
-        <View
-          style={[
-            styles.block,
-            {
-              backgroundColor: theme.colors.surface.base,
-              borderColor: theme.colors.border.subtle,
-            },
-          ]}
-        >
-          <Text
-            testID={`${props.testID}.text`}
-            selectable
-            style={[styles.mono, { color: theme.colors.text.secondary }]}
-          >
-            {value.text}
-          </Text>
+        <View testID={`${props.testID}.text`} style={styles.block}>
+          <CodeBlockView code={value.text} showHeaderRow={false} wrap showCopyButton />
         </View>
       ) : (
         <SurfaceStateCard
@@ -235,12 +218,5 @@ export function ProjectAgentGuidanceDisclosure(
 }
 
 const styles = StyleSheet.create(() => ({
-  block: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  mono: { ...Typography.mono(), ...happierPageTextMetrics('rowDescription') },
+  block: { marginHorizontal: 16, marginBottom: 12 },
 }));

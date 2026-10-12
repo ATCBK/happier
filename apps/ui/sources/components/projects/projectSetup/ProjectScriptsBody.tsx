@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPageHeader, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { WidgetFrameBodyRowsContext } from '@/components/widgets/frame/widgetFrameBody';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { ProjectExecutionChoiceV1, WorkspaceWorkerPreferenceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import { resolveProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
@@ -13,6 +14,7 @@ import type {
   ProjectNativeRefV1,
 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 import { SessionAuthoringOpenResultV1Schema } from '@happier-dev/protocol/plugins/ui';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -25,8 +27,10 @@ import {
   ItemGroupColumns,
 } from '@/components/ui/lists/ItemGroupColumns';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useLayoutMaxWidth, useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
@@ -70,7 +74,7 @@ import {
   type ProjectDefinitionInspection,
 } from './useProjectDefinitionInspection';
 import { useProjectScriptsController, type ProjectScriptsController } from './useProjectScriptsController';
-import { useProjectSetupAuthoring } from './useProjectSetupAuthoring';
+import { describeProjectAuthoringOpenFailure, useProjectSetupAuthoring } from './useProjectSetupAuthoring';
 import type { ManagedMachineConfigurationContinuation } from '@/components/sessions/new/components/machineSelection/ManagedMachineSelectionOffers';
 
 export type ProjectScriptsBodyProps = Readonly<{
@@ -120,7 +124,19 @@ export function ProjectScriptsBody({
   const [workersKey, setWorkersKey] = React.useState<string | null>(null);
   const page = presentation === 'page';
   const phone = useDeviceType() === 'phone';
-  const inspectionFailure = read && 'error' in read && read.error ? (
+  // Scripts are read on the checkout's machine: while it isn't answering, the last-known list stays and
+  // the read waits with it (said once by the page above) instead of failing on its own.
+  const reachability = useCheckoutReachability(workspace);
+  const waiting = reachability.unreachable ? (
+    <CheckoutUnreachableState
+      reachability={reachability}
+      size={read && 'value' in read ? 'line' : undefined}
+      testID={`${testID}-unreachable`}
+    />
+  ) : null;
+  // Under a last-known list the page's line already says it; on its own the list keeps one line.
+  const inspectionFailure = waiting ? (reachability.announced && read && 'value' in read ? null : waiting)
+    : (read && 'error' in read && read.error ? (
     <SurfaceStateCard
       kind="unavailable"
       size={'value' in read ? 'line' : undefined}
@@ -129,11 +145,13 @@ export function ProjectScriptsBody({
       action={{ label: t('common.retry'), onPress: retry, busy: 'value' in read && read.refreshing === true }}
       testID={`${testID}.inspection`}
     />
-  ) : null;
+  ) : null);
 
   let content: React.ReactNode;
   let ownsPhoneScroll = false;
-  if (!read || read.key !== key) {
+  if (waiting && !(read && read.key === key && 'value' in read)) {
+    content = waiting;
+  } else if (!read || read.key !== key) {
     content = (
       <SurfaceStateCard
         kind="loading"
@@ -694,6 +712,8 @@ function SetupRow(
         />
       }
       title={t('projects.scripts.setup.title')}
+      // Waiting for the person's approval: the row head carries the attention tint (lab SETUP).
+      style={reviewing ? { backgroundColor: theme.colors.state.attention.background } : undefined}
       subtitle={subtitle}
       subtitleStyle={failed && !stopping ? { color: theme.colors.status.error } : undefined}
       subtitleLines={1}
@@ -829,6 +849,7 @@ function FoundMore(
           <Item
             {...(headerProps as Readonly<Record<string, unknown>>)}
             testID={`${props.testID}.found.header`}
+            showDivider={false}
             icon={
               <Icon
                 name="magnifying-glass"
@@ -857,6 +878,7 @@ function FoundMore(
               testID={`${props.testID}.detected:${index}`}
               mode="info"
               showChevron={false}
+              showDivider={index < found.length - 1}
               icon={
                 <Icon
                   name="circle"
@@ -923,6 +945,7 @@ function ServicesFound(
     <ItemGroup surface="none">
       <Item
         testID={`${props.testID}.services.open`}
+        showDivider={false}
         icon={
           <Icon
             name="hard-drives"
@@ -958,6 +981,8 @@ function FirstRun(
   }>,
 ) {
   const { theme } = useUnistyles();
+  // Phones recompose the hero (lab FIRSTp): mark above the title, both ways forward full width.
+  const phone = useDeviceType() === 'phone';
   const authoring = useProjectSetupAuthoring({
     workspace: props.workspace,
     page: 'scripts',
@@ -970,11 +995,12 @@ function FirstRun(
   const runnable = detected.filter((entry) => entry.usage === 'script');
   // The hero and groups share the page's reading column with every section below it.
   const column = useLayoutMaxWidthStyle();
+  const columnMaxWidth = useLayoutMaxWidth();
   const files = joinProjectFiles(detected.map((entry) => entry.source.file));
   const setupButton = authoring.hasQualifiedCheckout ? (
     <RoundButton
       testID={`${props.testID}.setup`}
-      size="small"
+      size={phone && props.page ? 'normal' : 'small'}
       display={props.page ? 'secondary' : 'inverted'}
       title={
         setup.pending
@@ -988,44 +1014,46 @@ function FirstRun(
       onPress={setup.open}
     />
   ) : null;
+  // The refusal reads beside the button that failed, with the reason's own words (never one generic error).
+  const setupFailure = setup.reason ? (
+    <SurfaceStateCard
+      testID={`${props.testID}.setup.failure`}
+      size="line"
+      kind="unavailable"
+      title={t(describeProjectAuthoringOpenFailure(setup.kind, setup.reason).titleKey)}
+      diagnosticCode={setup.reason}
+    />
+  ) : null;
   return (
     <View style={[styles.column, column]}>
       {props.page ? (
-        <View
-          testID={`${props.testID}.noProjectFile`}
-          style={[
-            styles.hero,
-            { borderBottomColor: theme.colors.border.subtle },
-          ]}
-        >
-          <Icon name="play" size={22} color={theme.colors.text.secondary} />
-          <View style={styles.heroText}>
-            <Text
-              accessibilityRole="header"
-              style={[styles.heroTitle, { color: theme.colors.text.primary }]}
-            >
-              {t('projects.widgets.noProjectFile')}
-            </Text>
-            <Text
-              style={[styles.heroBody, { color: theme.colors.text.secondary }]}
-            >
-              {t('projects.widgets.noProjectFileBody', {
-                count: runnable.length,
-              })}
-            </Text>
-            <View style={styles.actions}>
+        <HappierPageHeader
+          title={t('projects.widgets.noProjectFile')}
+          description={t('projects.widgets.noProjectFileBody', { count: runnable.length })}
+          // An identity-mark slot centres on the whole text block; on a phone that indents the hero
+          // and floats the glyph mid-block, so the title leads at the column edge (lab FIRSTp) and the
+          // selected Scripts tab carries the glyph.
+          leading={phone ? undefined : <Icon name="play" size={22} color={theme.colors.text.secondary} />}
+          details={(
+            <>
+            <View style={phone ? styles.actionsPhone : styles.actions}>
               {props.onEdit ? (
                 <RoundButton
                   testID={`${props.testID}.create`}
-                  size="small"
+                  size={phone ? 'normal' : 'small'}
                   title={t('projects.scripts.createProjectFile')}
                   onPress={() => props.onEdit?.(true)}
                 />
               ) : null}
               {setupButton}
             </View>
-          </View>
-        </View>
+            {setupFailure}
+            </>
+          )}
+          columnMaxWidthPx={columnMaxWidth}
+          renderText={renderPageHeaderText}
+          testID={`${props.testID}.noProjectFile`}
+        />
       ) : runnable.length > 0 ? (
         <View testID={`${props.testID}.found`} style={styles.found}>
           <Text
@@ -1037,6 +1065,7 @@ function FirstRun(
             })}
           </Text>
           <View style={styles.actions}>{setupButton}</View>
+          {setupFailure}
         </View>
       ) : null}
       {detected.length === 0 ? (
@@ -1055,13 +1084,6 @@ function FirstRun(
         <Text style={[styles.note, { color: theme.colors.text.tertiary }]}>
           {t('projects.widgets.scriptsFoundBy', { files })}
         </Text>
-      ) : null}
-      {setup.reason ? (
-        <SurfaceStateCard
-          kind="unavailable"
-          title={t('projects.authoring.error')}
-          diagnosticCode={setup.reason}
-        />
       ) : null}
     </View>
   );
@@ -1101,8 +1123,22 @@ function DetectedGroups(
     }
     return [...byFile.entries()];
   }, [props.detection.entries, props.manifest]);
+  const { theme } = useUnistyles();
+  // A widget keeps its card's footprint (lab p-overview HOME: a few rows, never the whole list); the
+  // Scripts page lists everything. The rest is counted once under the rows.
+  const frameRows = React.useContext(WidgetFrameBodyRowsContext);
+  const rowBudget = props.page ? Number.POSITIVE_INFINITY : Math.max(WIDGET_SCRIPT_ROWS, frameRows ?? 0);
+  const total = groups.reduce((sum, [, entries]) => sum + entries.length, 0);
+  let remaining = rowBudget;
+  const shownGroups = groups.flatMap(([file, entries]) => {
+    if (remaining <= 0) return [];
+    const shown = entries.slice(0, remaining);
+    remaining -= shown.length;
+    return [[file, shown, entries.length] as const];
+  });
+  const hiddenCount = total - shownGroups.reduce((sum, [, shown]) => sum + shown.length, 0);
   let index = 0;
-  const rendered = groups.map(([file, entries]) => (
+  const rendered = shownGroups.map(([file, entries, fileTotal]) => (
     <ItemGroupColumn key={file}>
       <ItemGroup
         title={
@@ -1115,8 +1151,8 @@ function DetectedGroups(
             />
             <Text style={styles.groupMeta}>
               {groupToolLabel(entries[0]!.source, file)
-                ? t('projects.scripts.foundCount', { count: entries.length, tool: groupToolLabel(entries[0]!.source, file)! })
-                : String(entries.length)}
+                ? t('projects.scripts.foundCount', { count: fileTotal, tool: groupToolLabel(entries[0]!.source, file)! })
+                : String(fileTotal)}
             </Text>
           </View>
         }
@@ -1138,9 +1174,19 @@ function DetectedGroups(
     </ItemGroupColumn>
   ));
   return (
-    <ItemGroupColumns columns={props.page ? 2 : 1}>{rendered}</ItemGroupColumns>
+    <>
+      <ItemGroupColumns columns={props.page ? 2 : 1} paddingHorizontal={0} paddingVertical={0}>{rendered}</ItemGroupColumns>
+      {hiddenCount > 0 ? (
+        <Text testID={`${props.testID}.detected.more`} style={[styles.note, { color: theme.colors.text.tertiary }]}>
+          {t('projects.scripts.foundMore', { count: hiddenCount })}
+        </Text>
+      ) : null}
+    </>
   );
 }
+
+/** The fewest rows a Scripts widget shows (lab p-overview HOME: three scripts), more when its frame has room. */
+const WIDGET_SCRIPT_ROWS = 3;
 
 function DetectedRow(
   props: Readonly<{
@@ -1206,7 +1252,8 @@ function DetectedRow(
       command={describeProjectCommandSource(props.entry.source, props.invocation).command}
       portable={false}
       operation={operation}
-      idleText={t('projects.scripts.run.notRun')}
+      // Found-by-reading rows say nothing about runs; the page footnote says once that nothing has run.
+      idleText=""
       pending={props.controller.pendingKeys[rowKey] === true}
       failureCode={failure}
       compact={props.compact}
@@ -1239,6 +1286,7 @@ function useSetupOpening(
   const [opening, setOpening] = React.useState<Readonly<{
     key: string;
     pending: boolean;
+    kind?: string;
     reason?: string;
   }> | null>(null);
   const mine = opening?.key === key ? opening : null;
@@ -1250,15 +1298,18 @@ function useSetupOpening(
       const acknowledgement = result.ok
         ? SessionAuthoringOpenResultV1Schema.safeParse(result.result)
         : null;
+      const awaitingApproval = result.ok && ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success;
+      const kind = awaitingApproval ? 'pending' : acknowledgement?.success && acknowledgement.data.kind !== 'opened'
+        ? acknowledgement.data.kind : undefined;
       const reason = !result.ok
         ? result.errorCode
-        : !acknowledgement?.success
+        : awaitingApproval ? 'approval_required' : !acknowledgement?.success
           ? 'project_authoring_invalid_result'
           : acknowledgement.data.kind === 'opened'
             ? undefined
-            : acknowledgement.data.kind;
+            : acknowledgement.data.reason === 'aborted' ? undefined : acknowledgement.data.reason;
       if (currentKey.current === key)
-        setOpening({ key, pending: false, ...(reason ? { reason } : {}) });
+        setOpening({ key, pending: false, ...(reason ? { kind, reason } : {}) });
     } catch {
       if (currentKey.current === key)
         setOpening({ key, pending: false, reason: 'project_authoring_failed' });
@@ -1266,6 +1317,7 @@ function useSetupOpening(
   };
   return {
     pending: mine?.pending === true,
+    kind: mine?.kind,
     reason: mine?.reason ?? null,
     open,
   };
@@ -1282,24 +1334,8 @@ const styles = StyleSheet.create((theme) => ({
   strong: { ...Typography.default('semiBold') },
   column: { width: '100%', alignSelf: 'center' },
   groupTitle: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start' },
-  hero: {
-    flexDirection: 'row',
-    gap: 16,
-    paddingBottom: 20,
-    marginBottom: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  heroText: { flex: 1, minWidth: 0, gap: 6 },
-  heroTitle: {
-    ...Typography.default('semiBold'),
-    ...happierPageTextMetrics('pageTitle'),
-  },
-  heroBody: {
-    ...Typography.default(),
-    ...happierPageTextMetrics('pageDescription'),
-    maxWidth: 560,
-  },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  actionsPhone: { gap: 8, marginTop: 8 },
   found: { gap: 4 },
   foundText: {
     ...Typography.default(),
@@ -1308,7 +1344,7 @@ const styles = StyleSheet.create((theme) => ({
   note: {
     ...Typography.default(),
     ...happierPageTextMetrics('sectionDescription'),
-    paddingHorizontal: 16,
+    paddingHorizontal: PAGE_LIST_METRICS.pageTextInsetPx,
     paddingVertical: 8,
   },
   mono: { ...Typography.mono() },

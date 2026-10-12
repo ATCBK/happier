@@ -11,7 +11,10 @@ import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesVie
 installSessionFilesViewBoundaries();
 let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 await prepareSessionFilesViewTestkit();
+const CHANGED_ENTRIES = [{ path: 'src/a.ts', previousPath: null, kind: 'modified' as const, includeStatus: '', pendingStatus: 'M',
+    hasIncludedDelta: false, hasPendingDelta: true, stats: { includedAdded: 0, includedRemoved: 0, pendingAdded: 1, pendingRemoved: 1, isBinary: false } }];
 const { WorkspaceScmReviewDetailsView } = await import('./WorkspaceScmReviewDetailsView');
+const { t } = await import('@/text');
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
 
 async function mountWithRows(kind: 'exact' | 'missing' | 'ambiguous') {
@@ -127,6 +130,16 @@ describe('WorkspaceScmReviewDetailsView', () => {
         expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toEqual([]);
         expect(screen.findByTestId('scm-comparison-start-review')?.props.disabled).toBe(true);
     });
+    it('does not borrow a same-id Session carrier from another Home', async () => {
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
+            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) } : undefined });
+        fixture.storage.getState().applySessions([{ ...fixture.session, serverId: 'other-home' }]);
+        const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:qualified"
+            machineId="m1" serverId={fixture.home.id} rootPath="/repo" evidenceSessionId="s1" comparison={{ kind: 'session' }} />);
+        await flushHookEffects({ cycles: 10 });
+        expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toEqual([]);
+        expect(screen.findByTestId('scm-comparison-start-review')?.props.disabled).toBe(true);
+    });
     it('keeps the shared comparison toolbar while the first checkout snapshot is loading', async () => {
         const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
         const snapshotRead = createDeferred<unknown>();
@@ -143,7 +156,7 @@ describe('WorkspaceScmReviewDetailsView', () => {
         const captured = { id: 'explicit-files', source: { kind: 'workingTree' as const }, repository: { rootPath: '/repo' },
             endpoints: {}, inventory: { state: 'complete' as const, files: [], reasons: [] } };
         fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request => {
-            if (request.method === 'scm.status.snapshot') return { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) };
+            if (request.method === 'scm.status.snapshot') return { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries: CHANGED_ENTRIES }) };
             if (request.method === 'scm.diffSummary.capture') return ScmComparisonCaptureOutputSchema.parse({
                 success: true, comparison: captured, metadata: { source: captured.source, sourceKey: captured.id },
             });
@@ -176,5 +189,29 @@ describe('WorkspaceScmReviewDetailsView', () => {
     it.each(['missing', 'ambiguous'] as const)('leaves checkout grants unavailable when the row is %s', async kind => {
         const { grants } = await mountWithRows(kind);
         expect(grants).toEqual([]);
+    });
+    it('says an empty comparison once: no count beside the scope, no offer to explain zero files', async () => {
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
+            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) } : undefined });
+        fixture.storage.setState({ sessions: {} });
+        const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:workspace"
+            machineId="m1" serverId={fixture.home.id} rootPath="/repo" onExplain={() => {}} />);
+        await vi.waitFor(() => expect(screen.findHostByTestId('changed-files-review-empty')).toBeTruthy());
+        expect(screen.findHostByTestId('scm-comparison-explain-with-agent')).toBeNull();
+        expect(screen.getTextContent()).not.toContain(t('scmComparison.fileCount', { count: 0 }));
+    });
+    it('opens review comments from the comparison bar instead of a row above it', async () => {
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', rpc: request =>
+            request.method === 'scm.status.snapshot' ? { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo', entries: CHANGED_ENTRIES }) } : undefined });
+        fixture.storage.setState({ sessions: {} });
+        fixture.storage.getState().applySettingsLocal({ featureToggles: { 'files.reviewComments': true } });
+        const screen = await fixture.render(<WorkspaceScmReviewDetailsView scopeId="project:wr"
+            machineId="m1" serverId={fixture.home.id} rootPath="/repo" />);
+        await vi.waitFor(() => expect(screen.findHostByTestId('workspace-review-comments-trigger')).toBeTruthy());
+        // No disclosure row of its own until opened; the panel opens under the bar.
+        expect(screen.findHostByTestId('workspace-review-comments')).toBeNull();
+        await screen.pressByTestIdAsync('workspace-review-comments-trigger');
+        await vi.waitFor(() => expect(screen.findHostByTestId('workspace-review-comments')).toBeTruthy());
+        expect(screen.findHostByTestId('workspace-review-comments-header')).toBeNull();
     });
 });

@@ -1,10 +1,16 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { activeReviewFileKeyForWorkspace, readActiveReviewFile, requestActiveReviewFile } from '@/components/workspaces/scm/review/activeReviewFile';
 import { ScmLogListResponseSchema } from '@happier-dev/protocol/scm';
+import { ScmComparisonCaptureOutputSchema } from '@happier-dev/protocol/scm';
+import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { createSessionAccessFixture } from '@/dev/testkit';
+import { applyProjectAccountRowsFixture, createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 
 installSessionFilesViewBoundaries();
 await prepareSessionFilesViewTestkit();
@@ -13,6 +19,82 @@ let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 afterEach(async () => { standardCleanup(); await fixture?.dispose(); });
 
 describe('Project Changes destination', () => {
+    it('selects two admitted Session sources on the same checkout and withdraws revoked evidence without a Machine fallback', async () => {
+        let admitted = ['s1', 's2'];
+        let serverId = '';
+        let listRequests = 0;
+        const checkout = () => ({ id: 'checkout', serverId, machineId: 'm1', rootPath: '/repo', projectKey: 'anchor', createdAtMs: 1 });
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', request: async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({ features: { sessions: { filteredListing: { enabled: true } } } }));
+            if (path === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture({ workspaceRefs: serverId ? [checkout()] : [] }));
+            if (!['/v2/sessions', '/v1/sessions', '/v2/sessions/query'].includes(path)) return Response.json({}, { status: 404 });
+            listRequests += 1;
+            return Response.json({ sessions: admitted.map(id => ({ ...V2SessionRecordSchema.parse({
+                id, seq: 1, createdAt: 1, updatedAt: 2, active: false, activeAt: 2, latestTurnId: `turn-${id}`,
+                encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
+                metadata: JSON.stringify({ path: '/repo', machineId: 'm1', projectId: 'anchor', name: `Review ${id}` }),
+                metadataVersion: 1, agentState: null, agentStateVersion: 1, share: null,
+                effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities },
+                responsibleAccountId: null, responsibleAccount: null,
+            }), viewer: {
+                readState: { state: 'tracking', lastViewedSessionSeq: 1, unreadSince: null },
+                relevance: { relevant: true, reasons: ['owned_by_me'] },
+                attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
+                follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
+            } })), nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false });
+        }, rpc: request => {
+            if (request.method === 'scm.status.snapshot') return { success: true, snapshot: fileViewSnapshot({ rootPath: '/repo' }) };
+            if (request.method === 'scm.diffSummary.capture') {
+                const input = request.payload as { sessionId: string; source: { kind: 'session'; sessionId: string } | { kind: 'turnCheckpoint'; turnId: string } };
+                const comparison = { id: `captured-${input.source.kind}-${input.sessionId}`, source: input.source,
+                    repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } };
+                return ScmComparisonCaptureOutputSchema.parse({ success: true, comparison, metadata: { source: input.source, sourceKey: comparison.id } });
+            }
+            return undefined;
+        } });
+        serverId = fixture.home.id;
+        // The file-view fixture primes transfer-only features; this flow also admits filtered listing.
+        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse({ features: { sessions: { filteredListing: { enabled: true } } } }) } });
+        applyProjectAccountRowsFixture(fixture.storage, { workspaceRefs: [checkout()] });
+        const noop = () => {};
+        const screen = await fixture.render(<ProjectGitSurface scopeId="project:checkout" serverId={fixture.home.id} machineId="m1" rootPath="/repo"
+            onOpenFile={noop} onOpenFilePinned={noop} onOpenReviewAllChanges={noop} onOpenStashDetails={noop}
+            onOpenCommit={noop} onSelectWorkspacePath={noop} onRequestCreateWorktreeFromAnotherBranch={noop} onRevealInFilesTree={noop} />);
+        await flushHookEffects({ cycles: 20 });
+        const picker = () => screen.tree.root.find(node => Array.isArray(node.props.options)
+            && typeof node.props.currentLabel === 'string' && typeof node.props.onSelect === 'function');
+        await vi.waitFor(async () => {
+            await flushHookEffects();
+            expect(picker().props.options.filter((option: { evidenceSessionId?: string }) => option.evidenceSessionId)
+                .map((option: { evidenceSessionId: string }) => option.evidenceSessionId)).toEqual(['s1', 's2']);
+        });
+        expect(listRequests).toBeGreaterThan(0);
+        for (const sessionId of ['s1', 's2']) {
+            await act(async () => picker().props.onSelect({ kind: 'session' }, sessionId));
+            await flushHookEffects({ cycles: 20 });
+            expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture').at(-1)).toMatchObject({
+                targetId: 'm1', payload: { cwd: '/repo', sessionId, source: { kind: 'session', sessionId } },
+            });
+        }
+        const turn = picker().props.options.find((option: { sourceKind: string; comparison: { turnId?: string } | null }) =>
+            option.sourceKind === 'turnCheckpoint' && option.comparison?.turnId === 'turn-s2');
+        expect(turn).toMatchObject({ evidenceSessionId: 's2' });
+        await act(async () => picker().props.onSelect(turn.comparison, turn.evidenceSessionId));
+        await flushHookEffects({ cycles: 20 });
+        expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture').at(-1)).toMatchObject({
+            targetId: 'm1', payload: { cwd: '/repo', sessionId: 's2', source: { kind: 'turnCheckpoint', turnId: 'turn-s2' } },
+        });
+        admitted = ['s1'];
+        const captures = fixture.requests.filter(request => request.method === 'scm.diffSummary.capture').length;
+        const { retireSessionListQueryAddress } = await import('@/sync/domains/session/listing/sessionListQueryInvalidation');
+        await act(async () => { retireSessionListQueryAddress(fixture.home.id, 's2'); });
+        await flushHookEffects({ cycles: 20 });
+        expect(picker().props.current).toMatchObject({ kind: 'turnCheckpoint', turnId: 'turn-s2' });
+        expect(picker().props.options.some((option: { evidenceSessionId?: string }) => option.evidenceSessionId === 's2')).toBe(false);
+        expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toHaveLength(captures);
+        expect(screen.findByTestId('scm-comparison-start-review')?.props.disabled).toBe(true);
+    });
     it('restores the chosen file after Git and page/companion remount without accepting hidden-list scroll requests', async () => {
         const entries = ['src/a.ts', 'src/b.ts'].map((path) => ({ path, previousPath: null, kind: 'modified' as const,
             includeStatus: '', pendingStatus: 'M', hasIncludedDelta: false, hasPendingDelta: true,

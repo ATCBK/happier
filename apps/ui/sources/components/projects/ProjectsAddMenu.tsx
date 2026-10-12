@@ -62,12 +62,17 @@ export const ProjectsAddMenu = React.memo(function ProjectsAddMenu(props: Readon
             category,
             icon: <Icon name="git-branch" size={16} />,
         });
+        // The ways to add lead untitled (lab p-projects RULES 9); each Source group is titled by whose it is, and
+        // "Manage sources…" closes the last Source group rather than inventing a heading of its own.
+        const yourSources = (sources?.yours ?? []).map(sourceItem(t('projects.identity.yourSources')));
+        const teamSources = (sources?.teams ?? []).flatMap((team) => team.sources.map(sourceItem(team.title)));
+        const lastSourceGroup = [...yourSources, ...teamSources].at(-1)?.category ?? '';
         return [
-            ...(machines.length > 0 ? [{ ...folder, category: 'add' }] : []),
-            ...(onClone ? [{ id: 'clone', testID: `${props.testID}:clone`, title: t('projects.identity.addClone'), icon: <Icon name="download" size={16} />, category: 'add' }] : []),
-            ...(sources?.yours ?? []).map(sourceItem(t('projects.identity.yourSources'))),
-            ...(sources?.teams ?? []).flatMap((team) => team.sources.map(sourceItem(team.title))),
-            ...(sources ? [{ id: 'manage', testID: `${props.testID}:manage`, title: t('projects.identity.manageSources'), icon: <Icon name="books" size={16} />, category: 'manage' }] : []),
+            ...(machines.length > 0 ? [{ ...folder, category: '' }] : []),
+            ...(onClone ? [{ id: 'clone', testID: `${props.testID}:clone`, title: t('projects.identity.addClone'), icon: <Icon name="download" size={16} />, category: '' }] : []),
+            ...yourSources,
+            ...teamSources,
+            ...(sources ? [{ id: 'manage', testID: `${props.testID}:manage`, title: t('projects.identity.manageSources'), icon: <Icon name="books" size={16} />, category: lastSourceGroup }] : []),
         ];
     }, [full, machineItems, machines, onClone, props.testID, sources]);
     const select = React.useCallback((itemId: string) => {
@@ -90,6 +95,8 @@ export const ProjectsAddMenu = React.memo(function ProjectsAddMenu(props: Readon
                 iconName="plus"
                 accessibilityLabel={t('projects.actions.addProject')}
                 tooltip={t('projects.actions.addProject')}
+                // The open menu covers the tooltip's place; it would only peek out from under it.
+                tooltipHidden={open}
                 variant="plain"
                 hasPopup={soleMachine ? undefined : 'menu'}
                 expanded={soleMachine ? undefined : open}

@@ -183,7 +183,7 @@ describe('Project Sources controller through Source Actions', () => {
         });
         await controller.select('source-a');
         controller.edit({ name: 'Edited locally' });
-        await controller.resolveAddress('github.com/owner/repo', { machines: [] });
+        await controller.resolveAddress('github.com/owner/repo', { machines: [], inventoryStatus: 'idle' });
         expect(controller.getSnapshot().addressSaveDisabledReason).toBeNull();
         mode = 'offline';
         await controller.save();

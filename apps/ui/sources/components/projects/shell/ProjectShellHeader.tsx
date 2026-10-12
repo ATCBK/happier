@@ -1,8 +1,14 @@
 import * as React from 'react';
-import { Platform, Pressable, View, type LayoutChangeEvent } from 'react-native';
+import {
+  Platform,
+  Pressable,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   HAPPIER_FOCUS_RING_DELEGATED_STYLE,
+  HAPPIER_PAGE_METRICS,
   HAPPIER_SEGMENTED_METRICS,
   happierFocusRingStyle,
   happierPageTextMetrics,
@@ -37,6 +43,8 @@ import { useHeaderHeight } from '@/utils/platform/responsive';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 
 import type { ProjectPageV1 } from '@/components/workspaceCockpit/project/projectCockpitState';
+import { useAtmosphereBandBoundary } from '@/components/atmosphere/atmosphereBandBoundary';
+import { useAtmospherePictureShown } from '@/components/atmosphere/atmosphereStage';
 
 /** One page in the header's tabs (D44): the route's page id, its glyph and an optional quiet count. */
 export type ProjectShellPage = Readonly<{ id: ProjectPageV1; count?: string }>;
@@ -49,6 +57,11 @@ const PAGE_GLYPHS: Readonly<Record<ProjectPageV1, IconName>> = {
   services: 'hard-drives',
   context: 'stack',
 };
+
+/** A page's glyph: its tab and every reference back to that page draw the same mark. */
+export function projectPageGlyph(page: ProjectPageV1): IconName {
+  return PAGE_GLYPHS[page];
+}
 
 export function projectPageLabel(page: ProjectPageV1): string {
   switch (page) {
@@ -71,8 +84,8 @@ export function projectPageLabel(page: ProjectPageV1): string {
 export type ProjectShellCheckout = Readonly<{
   machineName: string;
   machineIcon: IconName;
-  /** The branch, or the folder name when the checkout is not on a branch. */
-  branch: string;
+  /** The branch the checkout reported; null while it is unread (its machine stands in). */
+  branch: string | null;
   /** Every exact checkout of this Project the viewer can open, the current one checked. */
   choices: readonly DropdownMenuItem[];
   onSelect: (choiceId: string) => void;
@@ -84,6 +97,14 @@ export type ProjectShellCheckout = Readonly<{
  * fit themselves by their own measurement. Not a count of tabs or a viewport class: the band's box.
  */
 const COMPACT_BAND_WIDTH_PX = 960;
+
+/**
+ * Below this measured band width one row cannot hold the identity, the chip, the actions and even the
+ * selected page's labelled tab (a 1440 window with a companion open leaves ~600): the page tabs take
+ * their own row under the identity instead of collapsing into More alone. The lab's narrowest
+ * one-row header (FIT, a 1180 window) is a band of about this width with all six labelled tabs.
+ */
+const TWO_ROW_BAND_WIDTH_PX = 720;
 
 /**
  * The Project page header (12s1, lab `p-overview` HOME/FIT): the Project's name, the checkout chip,
@@ -99,18 +120,28 @@ export const ProjectShellHeader = React.memo(function ProjectShellHeader(
     onSelectPage: (page: ProjectPageV1) => void;
     onNewSession: (() => void) | null;
     menuActions: readonly PageHeaderMenuAction[];
+    look?: React.ReactNode;
     testID?: string;
   }>,
 ) {
   const { theme } = useUnistyles();
+  const atmosphereBoundary = useAtmosphereBandBoundary();
+  // Over the atmosphere band the page tabs sit on their segmented track: legible through material,
+  // never through a halo or a pocket in the picture (atmosphere DIRECTION, reading rules).
+  const overPicture = useAtmospherePictureShown() && atmosphereBoundary != null;
   const height = useHeaderHeight();
   const maxWidthStyle = useLayoutMaxWidthStyle();
   const [bandWidth, setBandWidth] = React.useState<number | null>(null);
   const compact = bandWidth !== null && bandWidth < COMPACT_BAND_WIDTH_PX;
-  const onLayout = React.useCallback((event: LayoutChangeEvent) => {
-    const width = event.nativeEvent.layout.width;
-    setBandWidth((current) => (current === width ? current : width));
-  }, []);
+  const twoRows = bandWidth !== null && bandWidth < TWO_ROW_BAND_WIDTH_PX;
+  const onLayout = React.useCallback(
+    (event: LayoutChangeEvent) => {
+      const width = event.nativeEvent.layout.width;
+      setBandWidth((current) => (current === width ? current : width));
+      atmosphereBoundary?.onLayout(event);
+    },
+    [atmosphereBoundary],
+  );
   const tabs = React.useMemo(
     (): ReadonlyArray<SegmentedTab<ProjectPageV1>> =>
       props.pages.map((page) => ({
@@ -129,83 +160,110 @@ export const ProjectShellHeader = React.memo(function ProjectShellHeader(
   );
   const testID = props.testID ?? 'project-shell-header';
 
+  const identityNode = (
+    <View style={styles.identity}>
+      <Icon
+        name="folder"
+        size={ICON_SIZE.sm}
+        color={theme.colors.text.secondary}
+      />
+      <Text
+        numberOfLines={1}
+        style={[styles.name, { color: theme.colors.text.primary }]}
+        accessibilityRole="header"
+      >
+        {props.projectName}
+      </Text>
+    </View>
+  );
+  const chipNode = props.checkout ? (
+    <ProjectCheckoutChip
+      checkout={props.checkout}
+      compact={compact}
+      testID={`${testID}.checkout`}
+    />
+  ) : null;
+  const pageTabs = (
+    <SegmentedTabBar
+      presentation={overPicture ? 'segmented' : 'plain'}
+      // Page tabs keep their names on the track too: a segmented bar whose tabs all carry a glyph
+      // would otherwise draw glyphs alone, whatever the room.
+      iconPlacement="leading"
+      segmentSizing="content"
+      overflow={{ label: t('common.more'), testID: `${testID}.pages.more` }}
+      tabs={tabs}
+      activeTabId={props.activePage}
+      onSelectTab={props.onSelectPage}
+      accessibilityLabel={t('projects.pages.label')}
+      testIDPrefix={`${testID}.pages`}
+    />
+  );
+  const actionsNode = (
+    <View style={styles.actions}>
+      {props.look}
+      {props.onNewSession ? (
+        compact ? (
+          <IconButton
+            testID={`${testID}.newSession`}
+            iconName="plus"
+            variant="plain"
+            accessibilityLabel={t('projects.open.newSession')}
+            tooltip={t('projects.open.newSession')}
+            onPress={props.onNewSession}
+          />
+        ) : (
+          <RoundButton
+            testID={`${testID}.newSession`}
+            size="small"
+            display="secondary"
+            title={t('projects.open.newSession')}
+            leading={
+              <Icon
+                name="plus"
+                size={ICON_SIZE.xs}
+                color={theme.colors.text.primary}
+              />
+            }
+            onPress={props.onNewSession}
+          />
+        )
+      ) : null}
+      {props.menuActions.length > 0 ? (
+        <PageHeaderMenu actions={props.menuActions} testID={`${testID}.menu`} />
+      ) : null}
+    </View>
+  );
+
   return (
     <View
       testID={testID}
+      ref={atmosphereBoundary?.ref}
       onLayout={onLayout}
       style={[
         styles.band,
+        twoRows ? styles.bandTwoRows : null,
         maxWidthStyle,
         { minHeight: height, borderBottomColor: theme.colors.border.subtle },
       ]}
     >
-      <View style={styles.identity}>
-        <Icon
-          name="folder"
-          size={ICON_SIZE.sm}
-          color={theme.colors.text.secondary}
-        />
-        <Text
-          numberOfLines={1}
-          style={[styles.name, { color: theme.colors.text.primary }]}
-          accessibilityRole="header"
-        >
-          {props.projectName}
-        </Text>
-      </View>
-      {props.checkout ? (
-        <ProjectCheckoutChip
-          checkout={props.checkout}
-          compact={compact}
-          testID={`${testID}.checkout`}
-        />
-      ) : null}
-      <View style={styles.tabs}>
-        <SegmentedTabBar
-          presentation="plain"
-          overflow={{ label: t('common.more'), testID: `${testID}.pages.more` }}
-          tabs={tabs}
-          activeTabId={props.activePage}
-          onSelectTab={props.onSelectPage}
-          accessibilityLabel={t('projects.pages.label')}
-          testIDPrefix={`${testID}.pages`}
-        />
-      </View>
-      <View style={styles.actions}>
-        {props.onNewSession ? (
-          compact ? (
-            <IconButton
-              testID={`${testID}.newSession`}
-              iconName="plus"
-              variant="plain"
-              accessibilityLabel={t('projects.open.newSession')}
-              tooltip={t('projects.open.newSession')}
-              onPress={props.onNewSession}
-            />
-          ) : (
-            <RoundButton
-              testID={`${testID}.newSession`}
-              size="small"
-              display="secondary"
-              title={t('projects.open.newSession')}
-              leading={
-                <Icon
-                  name="plus"
-                  size={ICON_SIZE.xs}
-                  color={theme.colors.text.primary}
-                />
-              }
-              onPress={props.onNewSession}
-            />
-          )
-        ) : null}
-        {props.menuActions.length > 0 ? (
-          <PageHeaderMenu
-            actions={props.menuActions}
-            testID={`${testID}.menu`}
-          />
-        ) : null}
-      </View>
+      {twoRows ? (
+        <>
+          <View style={styles.bandRow}>
+            {identityNode}
+            {chipNode}
+            <View style={styles.grow} />
+            {actionsNode}
+          </View>
+          <View style={styles.pagesRow}>{pageTabs}</View>
+        </>
+      ) : (
+        <>
+          {identityNode}
+          {chipNode}
+          <View style={styles.tabs}>{pageTabs}</View>
+          {actionsNode}
+        </>
+      )}
     </View>
   );
 });
@@ -226,10 +284,13 @@ export const ProjectCheckoutChip = React.memo(function ProjectCheckoutChip(
   const { theme } = useUnistyles();
   const [open, setOpen] = React.useState(false);
   const [focusVisible, setFocusVisible] = React.useState(false);
-  const label = t('projects.checkouts.chipLabel', {
-    machine: props.checkout.machineName,
-    branch: props.checkout.branch,
-  });
+  const branch = props.checkout.branch;
+  const label = branch
+    ? t('projects.checkouts.chipLabel', {
+        machine: props.checkout.machineName,
+        branch,
+      })
+    : props.checkout.machineName;
   return (
     <DropdownMenu
       testID={`${props.testID}.menu`}
@@ -279,7 +340,7 @@ export const ProjectCheckoutChip = React.memo(function ProjectCheckoutChip(
             }),
           ]}
         >
-          {props.compact ? null : (
+          {props.compact && branch ? null : (
             <>
               <Icon
                 name={props.checkout.machineIcon}
@@ -291,31 +352,40 @@ export const ProjectCheckoutChip = React.memo(function ProjectCheckoutChip(
                 style={[
                   styles.chipText,
                   row ? styles.rowText : null,
-                  { color: theme.colors.text.secondary },
+                  // Without a branch the machine is the chip's whole name.
+                  {
+                    color: branch
+                      ? theme.colors.text.secondary
+                      : theme.colors.text.primary,
+                  },
                 ]}
               >
-                {row ? `${props.checkout.machineName} ·` : props.checkout.machineName}
+                {row && branch
+                  ? `${props.checkout.machineName} ·`
+                  : props.checkout.machineName}
               </Text>
             </>
           )}
-          {row ? null : (
+          {row || !branch ? null : (
             <Icon
               name="git-branch"
               size={ICON_SIZE.xs}
               color={theme.colors.text.secondary}
             />
           )}
-          <Text
-            numberOfLines={1}
-            style={[
-              styles.chipText,
-              styles.chipBranch,
-              row ? styles.rowText : null,
-              { color: theme.colors.text.primary },
-            ]}
-          >
-            {props.checkout.branch}
-          </Text>
+          {branch ? (
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.chipText,
+                styles.chipBranch,
+                row ? styles.rowText : null,
+                { color: theme.colors.text.primary },
+              ]}
+            >
+              {branch}
+            </Text>
+          ) : null}
           {row ? <View style={styles.grow} /> : null}
           <Icon
             name="caret-down"
@@ -353,10 +423,25 @@ const styles = StyleSheet.create(() => ({
     flexShrink: 1,
   },
   tabs: { flex: 1, minWidth: 0, marginLeft: 4 },
+  // Two rows: the identity row, then the page tabs on the band's own edges.
+  bandTwoRows: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 0,
+    paddingVertical: 4,
+  },
+  bandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+    minHeight: 44,
+  },
+  pagesRow: { flexDirection: 'row', minWidth: 0, paddingBottom: 4 },
   grow: { flex: 1 },
   // The phone row is a touch field: the platform target height, the content width, a card's radius.
   row: {
-    height: resolveMinimumInteractiveTargetSize(Platform.OS),
+    height: Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS)),
     maxWidth: '100%',
     alignSelf: 'stretch',
     borderRadius: GROUPED_SURFACE_RADIUS_PX,
@@ -374,7 +459,9 @@ const styles = StyleSheet.create(() => ({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    height: HAPPIER_SEGMENTED_METRICS.plain.paddingVerticalPx * 2 + HAPPIER_SEGMENTED_METRICS.plain.labelSlotPx,
+    height:
+      HAPPIER_SEGMENTED_METRICS.plain.paddingVerticalPx * 2 +
+      HAPPIER_SEGMENTED_METRICS.plain.labelSlotPx,
     paddingHorizontal: 9,
     borderRadius: HAPPIER_SEGMENTED_METRICS.plain.radiusPx,
     borderWidth: StyleSheet.hairlineWidth,
@@ -382,6 +469,10 @@ const styles = StyleSheet.create(() => ({
     minWidth: 0,
     maxWidth: 320,
   },
-  chipText: { ...Typography.default(), fontSize: HAPPIER_SEGMENTED_METRICS.plain.labelFontSizePx, flexShrink: 1 },
+  chipText: {
+    ...Typography.default(),
+    fontSize: HAPPIER_SEGMENTED_METRICS.plain.labelFontSizePx,
+    flexShrink: 1,
+  },
   chipBranch: { ...Typography.default('semiBold') },
 }));

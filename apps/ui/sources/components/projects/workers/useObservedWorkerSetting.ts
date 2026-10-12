@@ -35,7 +35,7 @@ type MutationReceipt = Readonly<{ status: string }>;
  * only changes on an observed outcome; a pending, unknown or conflicting write never paints the
  * attempted value as saved. Scope loss retires every pending result.
  */
-export function useObservedWorkerSetting<TReady extends ReadyObservation, TDraft = unknown>(
+export function useObservedWorkerSetting<TReady extends ReadyObservation, TDraft = unknown, TReceipt extends MutationReceipt = MutationReceipt>(
   input: Readonly<{
     serverId: string;
     /** Identity of the observed object; a new key starts a fresh observation. */
@@ -44,7 +44,7 @@ export function useObservedWorkerSetting<TReady extends ReadyObservation, TDraft
     enabled?: boolean;
     read: (accountId: string) => Promise<TReady | RefusedRead>;
     /** The current observation a receipt carries (applied/satisfied/unchanged/conflict), else null. */
-    observedFromReceipt: (receipt: MutationReceipt) => TReady | null;
+    observedFromReceipt: (receipt: TReceipt) => TReady | null;
   }>,
 ) {
   const { binding } = useServerCredentialAccountScopeBinding(input.serverId);
@@ -120,7 +120,7 @@ export function useObservedWorkerSetting<TReady extends ReadyObservation, TDraft
 
   const mutate = React.useCallback(
     async (
-      run: (accountId: string, current: TReady, options: ProjectWorkerActionOptions) => Promise<MutationReceipt>,
+      run: (accountId: string, current: TReady, options: ProjectWorkerActionOptions) => Promise<TReceipt>,
       intended?: TDraft,
     ): Promise<void> => {
       const state = observation?.key === key ? observation.state : null;

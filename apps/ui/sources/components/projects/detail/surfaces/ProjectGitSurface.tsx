@@ -4,12 +4,35 @@ import * as React from 'react';
 import { View } from 'react-native';
 
 import { WorkspaceRightPanelGitView } from '@/components/projects/scm/WorkspaceRightPanelGitView';
-import { WorkspaceScmReviewDetailsView } from '@/components/projects/panes/details/views/WorkspaceScmReviewDetailsView';
+import { WorkspaceScmReviewDetailsView, type WorkspaceScmReviewDetailsViewProps } from '@/components/projects/panes/details/views/WorkspaceScmReviewDetailsView';
 import { useScmReviewTabState } from '@/components/sessions/files/comparison/useSessionScmReviewTabState';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { t } from '@/text';
 import { useDestinationParams } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { buildSessionListReachabilityRenderableKey, useProjectSessions, useSessionListRowRenderablesForItems, useWorkspaceRefs } from '@/sync/domains/state/storage';
+import { findWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
+import { projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { normalizeWorkspaceRootPath } from '@/sync/domains/workspaces/workspaceScope';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
+
+/** Only the mounted review demands the canonical, separately admitted Project roster. */
+function ProjectReviewSurface(props: WorkspaceScmReviewDetailsViewProps) {
+    const refs = useWorkspaceRefs();
+    const checkout = findWorkspaceRefByScope(refs, props);
+    const project = React.useMemo(() => checkout ? projectWorkspaceRefV1(checkout) : null,
+        [checkout?.serverId, checkout?.projectKey, checkout?.id]);
+    const roster = useProjectSessions(project);
+    const rows = useSessionListRowRenderablesForItems(roster.items);
+    const evidenceSessions = React.useMemo(() => roster.items.flatMap(item => {
+        const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId);
+        const row = key ? rows.get(key) : null;
+        if (!row?.metadata || row.metadata.machineId !== props.machineId
+            || normalizeWorkspaceRootPath(row.metadata.path) !== normalizeWorkspaceRootPath(props.rootPath)) return [];
+        return [{ sessionId: item.sessionId, label: getSessionName(row, item.serverId), latestTurnId: row.latestTurnId }];
+    }), [roster.items, rows, props.machineId, props.rootPath]);
+    return <WorkspaceScmReviewDetailsView {...props} evidenceSessions={evidenceSessions} />;
+}
 
 export const ProjectGitSurface = React.memo((props: Readonly<{
     scopeId: string;
@@ -32,12 +55,14 @@ export const ProjectGitSurface = React.memo((props: Readonly<{
     const { persistedReviewTabState, setPersistedReviewTabState } = useScmReviewTabState(
         JSON.stringify([props.serverId, props.machineId, props.rootPath]), pane);
     const mode = persistedReviewTabState?.projectChangesMode === 'git' ? 'git' : 'review';
+    // Review | Git leads the review's own comparison bar (one line of chrome); in Git it heads Git's pane.
+    const modeSwitch = <SegmentedTabBar tabs={[{ id: 'review', label: t('files.toolbar.review') }, { id: 'git', label: t('session.rightPanel.tabs.git') }]}
+        activeTabId={mode} onSelectTab={(next) => setPersistedReviewTabState({ projectChangesMode: next })}
+        testIDPrefix="project-changes-mode" segmentSizing="content" />;
     return (
         <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-            <SegmentedTabBar tabs={[{ id: 'review', label: t('files.toolbar.review') }, { id: 'git', label: t('session.rightPanel.tabs.git') }]}
-                activeTabId={mode} onSelectTab={(next) => setPersistedReviewTabState({ projectChangesMode: next })}
-                testIDPrefix="project-changes-mode" segmentSizing="content" />
-            {mode === 'review' ? <WorkspaceScmReviewDetailsView scopeId={props.scopeId}
+            {mode === 'git' ? modeSwitch : null}
+            {mode === 'review' ? <ProjectReviewSurface scopeId={props.scopeId} hostSwitch={modeSwitch}
                 {...(routeResource?.kind === 'scmReview' ? routeResource : {})}
                 serverId={props.serverId} machineId={props.machineId} rootPath={props.rootPath}
                 onOpenFile={props.onOpenFile} onOpenFilePinned={props.onOpenFilePinned}

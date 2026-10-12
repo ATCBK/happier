@@ -2,8 +2,20 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// Install the external Socket boundary before the screen loads Sync for Account restoration.
+await vi.hoisted(async () => {
+  const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+  installDisconnectedServerSocketBoundary();
+});
+
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { buildWidgetSurfaceArtifactIdV1, buildWidgetSurfaceArtifactHeaderV1, WidgetAreaLayoutV1Schema } from '@happier-dev/protocol/widgets';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable,
+  publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -109,10 +121,13 @@ vi.mock('@/text', async () => {
 const { ProjectSourcesScreen } = await import('./ProjectSourcesScreen');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const previous = storage.getState();
+const previousAppliedServer = getAppliedActiveServerSnapshot();
+const previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
 
 afterEach(() => {
   standardCleanup();
   storage.setState(previous);
+  publishAppliedActiveServerSnapshot(previousAppliedServer, previousRuntimeAvailable);
   shared.calls = [];
   shared.sources = [];
   shared.navigation = [];
@@ -130,6 +145,7 @@ function signIn() {
     } as never,
     machineListStatusByServerId: { 'server-1': 'idle' },
   });
+  publishAppliedActiveServerSnapshot({ serverId: 'server-1', serverUrl: 'https://home.test', generation: previousAppliedServer.generation + 1 });
 }
 
 describe('Projects › Sources', () => {
@@ -147,6 +163,7 @@ describe('Projects › Sources', () => {
 
   it('saves a new Source from a typed address through the one create Action and selects it', async () => {
     signIn();
+    storage.setState({ machineListStatusByServerId: { 'server-1': 'loading' } });
     shared.sources = [
       {
         id: 'existing',
@@ -180,6 +197,10 @@ describe('Projects › Sources', () => {
     await act(async () => {
       field.props.onBlur?.();
       field.props.onSubmitEditing?.();
+    });
+    expect(shared.calls.some((call) => call.actionId === 'scm.hostingRepository.resolveAddress')).toBe(false);
+    await act(async () => {
+      storage.setState({ machineListStatusByServerId: { 'server-1': 'idle' } });
     });
     await vi.waitFor(() =>
       expect(
@@ -302,6 +323,31 @@ describe('Projects › Sources', () => {
       dashboardSourceId: 'source-1', dashboardArtifactId: 'dash' });
     expect(foreign.props.onPress).toBeUndefined();
   });
+  it('names each checkout\'s Machine through the machine-name owner, never its raw id', async () => {
+    signIn();
+    const devbox = storage.getState().machineListByServerId['server-1']![0]!;
+    storage.setState({
+      machines: { m1: devbox } as never,
+      projectAccountRows: createProjectAccountRowsFixture({ serverId: 'server-1', accountId: 'account-1' }, {
+        workspaceRefs: [
+          { id: 'here', serverId: 'server-1', machineId: 'm1', rootPath: '/repo', projectKey: 'p',
+            source: { sourceId: 'source-1', revision: 1 }, createdAtMs: 1 },
+          { id: 'gone', serverId: 'server-1', machineId: 'retired-machine-id', rootPath: '/old', projectKey: 'p',
+            source: { sourceId: 'source-1', revision: 1 }, createdAtMs: 2 },
+        ],
+      }),
+    });
+    shared.sources = [{ id: 'source-1', revision: 1, name: 'happier', audience: [], createdByAccountId: 'account-1',
+      repository: { provider: { id: 'happier.scm.forge.github/github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
+        repository: { nameWithOwner: 'happier-dev/happier' }, protocol: 'https' } }];
+    shared.routes.params = { source: 'source-1' };
+    const screen = await renderScreen(<ProjectSourcesScreen />);
+    await vi.waitFor(() => expect(screen.findByTestId('projects.sources.checkout.m1')).toBeTruthy());
+    const title = (id: string) => screen.findAllByTestId(id)[0]!.props.title;
+    expect(title('projects.sources.checkout.m1')).toBe('devbox');
+    expect(title('projects.sources.checkout.retired-machine-id')).toBe('machine.unlistedMachine');
+  });
+
   it('edits the default branch through a field select whose Other entry asks for any ref', async () => {
     signIn();
     shared.sources = [
@@ -335,5 +381,49 @@ describe('Projects › Sources', () => {
     });
     await vi.waitFor(() => expect(select()!.props.selectedId).toBe('ref:develop'));
     expect(screen.findByTestId('projects.sources.detail.save')).toBeTruthy();
+  });
+  it('opens the independently admitted foreign dashboard and retains its Home in the exact checkout route', async () => {
+    const homes = await serveAccountHomes({ homes: [
+      { key: 'foreign', serverUrl: 'https://rf10-source-foreign.example', accountId: 'foreign-viewer' },
+      { key: 'source', serverUrl: 'https://rf10-source-local.example', accountId: 'source-viewer' },
+    ], route: request => request.home === 'foreign' ? document.request(request.url, { method: request.method, headers: request.headers }) : undefined });
+    const serverId = homes.homes.source!.id;
+    const disconnect = await homes.restoreActiveConnection();
+    const foreignHome = homes.homes.foreign!.id;
+    const surface = { accountId: 'dashboard-owner', serverId: foreignHome, owner: { kind: 'project' as const, projectId: 'owners-project' } };
+    const artifactId = buildWidgetSurfaceArtifactIdV1(surface);
+    const layout = { v: 1 as const, surface, name: 'Foreign release', items: [] };
+    const document = createLayoutArtifactHttpBoundary('dashboard-owner', { artifactId, kind: 'widget-area-layout.v1', defaultLayout: layout,
+      parseLayout: value => WidgetAreaLayoutV1Schema.parse(value), buildHeader: buildWidgetSurfaceArtifactHeaderV1 });
+    document.seed(layout);
+    document.setCallerAccess('view');
+    storage.setState({ projectAccountRows: createProjectAccountRowsFixture({ serverId, accountId: 'source-viewer' }, {
+      workspaceRefs: [{ id: 'foreign-checkout', serverId, machineId: 'machine', rootPath: '/repo', createdAtMs: 1,
+        projectKey: 'personal-project', source: { sourceId: 'foreign-source', revision: 1 } }],
+    }), artifacts: { [artifactId]: { id: artifactId, title: 'Local release', isDecrypted: true, access: 'edit',
+      headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } } });
+    shared.sources = [{ id: 'foreign-source', revision: 1, name: 'Repository', audience: [], createdByAccountId: 'source-owner',
+      repository: { provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
+        repository: { nameWithOwner: 'owner/repo' }, protocol: 'https' },
+      attachments: [{ purpose: 'dashboard', ref: { kind: 'doc', artifactId, serverId: foreignHome } }] }];
+    shared.routes.params = { source: 'foreign-source' };
+    try {
+      const screen = await renderScreen(<ProjectSourcesScreen />);
+      const rowId = `projects.sources.dashboard.${foreignHome}:${artifactId}`;
+      await vi.waitFor(() => expect(screen.findAllByTestId(rowId)[0]?.props.title).toBe('Foreign release'));
+      expect(screen.findAllByTestId(rowId)[0]?.props.onPress).toBeTypeOf('function');
+      await act(async () => screen.pressByTestId(rowId));
+      const url = new URL(String(shared.navigation.at(-1)), 'https://happier.test');
+      expect(url.pathname).toBe('/projects/foreign-checkout/overview');
+      expect(Object.fromEntries(url.searchParams)).toMatchObject({ serverId, dashboardSourceId: 'foreign-source',
+        dashboardArtifactId: artifactId, dashboardServerId: foreignHome });
+      document.setCallerAccess(null);
+      await act(async () => publishHomeAccountChange(foreignHome, [artifactId], { changeKinds: ['artifact'] }));
+      await vi.waitFor(() => expect(screen.findAllByTestId(rowId)[0]?.props.onPress).toBeUndefined());
+      expect(storage.getState().artifacts[artifactId]?.title).toBe('Local release');
+      expect(document.writes).toEqual([]);
+      expect(homes.requests.filter(request => request.home === 'foreign' && request.path.startsWith('/v1/artifacts'))
+        .every(request => request.accountId === 'foreign-viewer')).toBe(true);
+    } finally { await disconnect(); homes.dispose(); }
   });
 });

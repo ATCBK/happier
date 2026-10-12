@@ -3,7 +3,6 @@ import {
   type ProjectSourceRepositorySelectorV1,
   type ProjectSourceV1,
 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
-import { t } from '@/text';
 
 /**
  * The repository address a person reads and types on a Source ("github.com/happier-dev/happier").
@@ -30,15 +29,17 @@ export function formatProjectSourceAddress(
   return host ? `${host}/${name}` : name;
 }
 
-/** "happier-dev/happier · v0.3 · apps/ios": the facts a list row needs to tell Sources apart. */
+/**
+ * "happier-dev/happier · v0.3 · apps/ios": the facts a list row needs to tell Sources apart. The whole
+ * repository is the quiet default and stays unsaid; a folder is named only when one is chosen.
+ */
 export function describeProjectSourceRow(
   source: Pick<ProjectSourceV1, 'repository' | 'defaultRef' | 'subdir'>,
-  wholeRepositoryLabel = t('projects.sources.wholeRepository'),
 ): string {
   return [
     source.repository.repository.nameWithOwner,
     source.defaultRef,
-    normalizeProjectSourceSubdirV1(source.subdir) ?? wholeRepositoryLabel,
+    normalizeProjectSourceSubdirV1(source.subdir),
   ]
     .filter(Boolean)
     .join(' · ');

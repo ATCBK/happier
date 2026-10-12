@@ -63,9 +63,14 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
   createDefaultActionExecutor: () => ({
     execute: async (actionId: string, input: any) => {
       shared.calls.push({ actionId, input });
+      if (actionId === 'projects.inspect') return { ok: true, result: shared.inspection };
+      if (actionId === 'projects.worker.preferences.get') return { ok: true, result: {
+        status: 'ready', revision: 'absent', provenance: 'default',
+        preference: { enabled: false, unavailable: 'ask', allowAdHoc: false, scriptOverrides: {} },
+      } };
       return {
         ok: true,
-        result: { kind: 'unavailable', reason: 'origin_unavailable' },
+        result: shared.responses[actionId] ?? { kind: 'unavailable', reason: 'origin_unavailable' },
       };
     },
   }),
@@ -318,6 +323,39 @@ describe('ProjectScriptsBody setup affordance', () => {
     ).toBe(true);
   });
 
+  it('says why the draft could not open with that reason\'s own words, beside the button', async () => {
+    shared.inspection = {
+      definition: { basis: { kind: 'absent' }, document: null },
+      detection,
+      importCandidates: [],
+    };
+    const screen = await render('page', 'scripts.detected:0');
+    expect(screen.findByTestId('scripts.setup.failure')).toBeNull();
+    await act(async () => {
+      await screen.pressByTestIdAsync('scripts.setup');
+    });
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.setup.failure')).toBeTruthy());
+    expect(screen.getTextContent()).toContain('projects.authoring.refused');
+  });
+
+  it('shows a deferred authoring approval as pending rather than an invalid result', async () => {
+    shared.inspection = { definition: { basis: { kind: 'absent' }, document: null }, detection, importCandidates: [] };
+    shared.responses['session.authoring.open'] = {
+      kind: 'approval_request_created', artifactId: 'approval-a', actionId: 'session.authoring.open',
+    };
+    const screen = await render('page', 'scripts.detected:0');
+    await screen.pressByTestIdAsync('scripts.setup');
+    await vi.waitFor(() => expect(screen.getTextContent()).toContain('projects.authoring.pending'));
+  });
+
+  it('leaves a retired opening silent when it was aborted', async () => {
+    shared.inspection = { definition: { basis: { kind: 'absent' }, document: null }, detection, importCandidates: [] };
+    shared.responses['session.authoring.open'] = { kind: 'unavailable', reason: 'aborted' };
+    const screen = await render('page', 'scripts.detected:0');
+    await screen.pressByTestIdAsync('scripts.setup');
+    expect(screen.findByTestId('scripts.setup.failure')).toBeNull();
+  });
+
   it('leads the Scripts page with the no-project-file hero, Create project file and its setup entry', async () => {
     shared.inspection = {
       definition: { basis: { kind: 'absent' }, document: null },
@@ -348,45 +386,34 @@ describe('ProjectScriptsBody setup affordance', () => {
     };
     const screen = await render('page', 'scripts.script:test');
     expect(screen.findByTestId('project-setup-authored')).toBeNull();
-    const origin = (workspaceId: string) => ({
+    const origin = (workspaceId: string, page: 'scripts' | 'changes' = 'scripts') => ({
       kind: 'project',
       accountId: 'account-1',
-      page: 'scripts',
+      page,
       workspace: { ...workspace, workspaceId },
     });
-    await act(async () => {
-      storage.setState({
-        sessions: {
-          other: createSessionFixture({
-            id: 'other',
-            updatedAt: 9,
-            metadata: {
-              machineId: 'm1',
-              path: '/repo',
-              host: 'h',
-              work: { authoringOriginV1: origin('w2') },
-            } as never,
-          }),
-        },
+    // Sessions publish their authoring inputs through the store's own writer, so the line follows it.
+    const authoringSession = (id: string, updatedAt: number, workspaceId: string, page: 'scripts' | 'changes' = 'scripts') =>
+      createSessionFixture({
+        id,
+        updatedAt,
+        metadata: {
+          machineId: 'm1',
+          path: '/repo',
+          host: 'h',
+          work: { authoringOriginV1: origin(workspaceId, page) },
+        } as never,
       });
+    await act(async () => {
+      storage.getState().applySessions([
+        // Explaining this checkout's changes is not authoring its project file.
+        authoringSession('explain', 7, 'w1', 'changes'),
+        authoringSession('other', 9, 'w2'),
+      ]);
     });
     expect(screen.findByTestId('project-setup-authored')).toBeNull();
     await act(async () => {
-      storage.setState({
-        sessions: {
-          ...storage.getState().sessions,
-          setup: createSessionFixture({
-            id: 'setup',
-            updatedAt: 5,
-            metadata: {
-              machineId: 'm1',
-              path: '/repo',
-              host: 'h',
-              work: { authoringOriginV1: origin('w1') },
-            } as never,
-          }),
-        },
-      });
+      storage.getState().applySessions([authoringSession('setup', 5, 'w1')]);
     });
     await vi.waitFor(() =>
       expect(screen.findByTestId('project-setup-authored')).not.toBeNull(),

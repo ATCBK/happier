@@ -201,7 +201,8 @@ const ProjectSourcesCollection = React.memo(function ProjectSourcesCollection(
       }}
       onOpenDashboard={(sourceId, reference, workspaceAddress) => {
         fireAndForget(openProject(workspaceAddress.workspaceId, { serverId: props.scope.serverId, workspaceAddress,
-          attachedDashboard: { sourceId, artifactId: reference.artifactId } }), { tag: 'ProjectSources.openDashboard' });
+          attachedDashboard: { sourceId, artifactId: reference.artifactId,
+            ...(reference.serverId === undefined ? {} : { serverId: reference.serverId }) } }), { tag: 'ProjectSources.openDashboard' });
       }}
       onDeleted={() => navigate(projectSourceRoute(null), true)}
     />

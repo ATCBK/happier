@@ -448,8 +448,8 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         props.workspaceRef.serverId,
     ]);
 
-    const newSession = useProjectNewSessionAction({ serverId: props.workspaceRef.serverId,
-        machineId: props.workspaceRef.machineId, rootPath: effectiveRootPath });
+    const newSession = useProjectNewSessionAction({ workspaceRef: props.workspaceRef,
+        activeRootPath: effectiveRootPath, scopeId: props.scopeId });
     const renderHeaderActions = React.useCallback(() => {
         return (
             <>

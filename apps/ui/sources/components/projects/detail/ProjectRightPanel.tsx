@@ -59,6 +59,7 @@ import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18
 import type { ProjectPageV1 } from './projectRouteState';
 import { useActiveServerAccountScope, useProjectAccountRows } from '@/sync/domains/state/storage';
 import { resolveProjectTerminalScope } from './projectTerminalScope';
+import { CheckoutReachabilityLine, CheckoutReachabilityScope } from '@/components/workspaces/reachability/checkoutReachability';
 
 type ProjectRightTabId = string;
 
@@ -281,7 +282,10 @@ const ProjectRightSidebarContext = React.createContext<ReturnType<typeof useProj
 
 export function ProjectRightSidebarProvider(props: React.PropsWithChildren<ProjectRightPanelProps>): React.ReactElement {
     const model = useProjectRightSidebarModel(props);
-    return <ProjectRightSidebarContext.Provider value={model}>{props.children}</ProjectRightSidebarContext.Provider>;
+    // The Project page announces its checkout's reachability once (ProjectCockpitShell); its panes inherit it.
+    return <ProjectRightSidebarContext.Provider value={model}>
+        <CheckoutReachabilityScope scope={model.workspaceScope}>{props.children}</CheckoutReachabilityScope>
+    </ProjectRightSidebarContext.Provider>;
 }
 
 export function ProjectRightSidebarRail(): React.ReactElement | null {
@@ -366,7 +370,8 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                         onPress={props.onRequestClose}
                         accessibilityLabel={t('common.close')}
                         variant="plain"
-                        size={resolveTouchTargetFloorPx() ?? 36}
+                        size={36}
+                        minimumInteractiveTargetSize={resolveTouchTargetFloorPx() ?? undefined}
                         iconName="x"
                         iconSize={16}
                     />
@@ -378,6 +383,9 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                 onClose={deviceType === 'phone' ? props.onRequestClose ?? props.model.pane.closeRight : undefined}
                 testID="project-rightpanel-header"
             />
+            {/* A phone pane is its own page over the Project, whose line it covers: it says it here, once. */}
+            {deviceType === 'phone'
+                ? <CheckoutReachabilityLine scope={workspaceScope} testID="project-rightpanel-reachability" /> : null}
             <View style={styles.body}>
                 <SurfaceStateSizeProvider size={deviceType === 'phone' ? 'phone' : 'pane'}>
                 {rightTabSelection.kind === 'unresolved' ? (

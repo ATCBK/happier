@@ -230,8 +230,9 @@ export function presentProjectRun(
     if (phase === 'queued')
       return live('queued', 'quiet', [t('projectWorkers.queuedOn', { machine }),
         queueAhead && queueAhead > 0 ? t('projectWorkers.ahead', { count: queueAhead }) : null].filter(Boolean).join(' · '));
-    if (phase === 'copying') return live('queued', 'quiet', t('projectWorkers.copying', { machine }));
-    if (phase === 'preparing' || phase === 'setup') return live('queued', 'quiet', t('projectWorkers.preparing', { machine }));
+    // Copying and preparing are work happening now (a moving mark); only waiting in line is queued.
+    if (phase === 'copying') return live('running', 'quiet', t('projectWorkers.copying', { machine }));
+    if (phase === 'preparing' || phase === 'setup') return live('running', 'quiet', t('projectWorkers.preparing', { machine }));
     return snapshot.state === 'accepted'
       ? live('queued', 'quiet', t('projects.scripts.run.accepted'))
       : live(

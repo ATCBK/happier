@@ -42,6 +42,10 @@ export const CodeBrowserBar = React.memo(function CodeBrowserBar(props: Readonly
     goToFile?: boolean;
     /** Phone layout keeps nested up navigation above a full-width Go to file field. */
     compact?: boolean;
+    /** The folder's own controls (View, +), at the end of the line after Go to file. */
+    trailing?: React.ReactNode;
+    /** One quiet status on the bar's own line (an approval waiting), so it never pushes the page down. */
+    status?: React.ReactNode;
 }>) {
     const testID = props.testID ?? 'code-browser-bar';
     const { theme } = useUnistyles();
@@ -58,8 +62,12 @@ export const CodeBrowserBar = React.memo(function CodeBrowserBar(props: Readonly
                 })}
                 renderLabel={(item) => <Text testID={item.onPress ? undefined : item.testID} numberOfLines={1} style={item.onPress ? styles.crumbLabel : styles.current}>{item.label}</Text>}
             />}
-            {props.compact ? null : <View style={styles.grow} />}
-            {props.goToFile === false ? null : <CodeGoToFile testID={`${testID}-goto`} scope={props.scope} onOpenFile={props.onOpenFile} onOpenFolder={props.onNavigateFolder} fileHref={props.fileHref} compact={props.compact} />}
+            {props.compact ? null : <View style={[styles.grow, styles.growRow]}>{props.status ? <View style={styles.status}>{props.status}</View> : null}</View>}
+            <View style={props.compact ? styles.toolsCompact : styles.tools}>
+                {props.goToFile === false ? null : <CodeGoToFile testID={`${testID}-goto`} scope={props.scope} onOpenFile={props.onOpenFile} onOpenFolder={props.onNavigateFolder} fileHref={props.fileHref} compact={props.compact} />}
+                {props.trailing}
+            </View>
+            {props.compact && props.status ? <View style={styles.statusCompact}>{props.status}</View> : null}
         </View>
     );
 });
@@ -158,11 +166,40 @@ const styles = StyleSheet.create((theme) => ({
     },
     grow: {
         flex: 1,
+        minWidth: 0,
+    },
+    growRow: {
+        flexDirection: 'row',
+        alignSelf: 'stretch',
+        alignItems: 'center',
+    },
+    // The status takes the bar's free space after the breadcrumb, ending at Go to file.
+    status: {
+        flex: 1,
+        flexDirection: 'row',
+        minWidth: 0,
+        paddingHorizontal: theme.margins.xs,
+    },
+    statusCompact: {
+        flexDirection: 'row',
+        minWidth: 0,
+    },
+    tools: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.margins.xs,
+    },
+    toolsCompact: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.margins.xs,
+        alignSelf: 'stretch',
     },
     goto: {
         width: 240,
     },
     gotoCompact: {
-        width: '100%',
+        flex: 1,
+        minWidth: 0,
     },
 }));

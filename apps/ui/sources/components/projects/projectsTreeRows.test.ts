@@ -4,7 +4,7 @@ import { buildProjectsTreeProjects, buildProjectsTreeRows, buildProjectsPhoneTre
 
 const checkout = (refId: string, machineId: string, label: string, extra: Partial<ProjectsTreeCheckout> = {}): ProjectsTreeCheckout => ({
     refId, machineId, machineName: machineId === 'devbox' ? 'devbox' : machineId === 'mbp' ? 'MacBook Pro' : machineId,
-    label, path: `~/src/${label}`, attention: null, ...extra,
+    label, branch: label, path: `~/src/${label}`, attention: null, ...extra,
 });
 const project = (key: string, checkouts: ProjectsTreeCheckout[], teamLabel: string | null = null): ProjectsTreeProject => ({ key, name: key, teamLabel, checkouts });
 const shape = (rows: ReturnType<typeof buildProjectsTreeRows>) => rows.map((row) => `${'  '.repeat(row.level)}${row.title}${row.titleQualifier ? ` (${row.titleQualifier})` : ''}${row.expandable ? (row.expanded ? ' v' : ' >') : ''}`);
@@ -17,7 +17,7 @@ describe('buildProjectsTreeRows (lab p-projects RULES)', () => {
         ];
         const projects = buildProjectsTreeProjects({
             groups: [{ projectKey: { projectKey: 'anchor' }, items: refs }],
-            projectName: () => 'first', machine: () => null,
+            projectName: () => 'first', machine: () => ({ name: 'devbox', homeDir: null, online: null }),
             sources: [{ id: 'source-a', name: 'Repository', audience: [{ principal: { kind: 'team', teamId: 'team-a' }, level: 'view' }] }],
             teamName: (teamId: string) => teamId === 'team-a' ? 'Acme' : null,
             checkoutFacts: (ref: typeof refs[number]) => ref.rootPath === '/work/first'
@@ -53,10 +53,20 @@ describe('buildProjectsTreeRows (lab p-projects RULES)', () => {
         const ref = { id: 'ref', serverId: 'home-a', machineId: 'unknown-machine', rootPath: '/work/folder',
             source: { sourceId: 'revoked-source', revision: 1 } };
         const projects = buildProjectsTreeProjects({ groups: [{ projectKey: { projectKey: 'anchor' }, items: [ref] }],
-            projectName: () => 'folder', machine: () => null, sources: [], teamName: () => 'Acme' });
+            projectName: () => 'folder', machine: () => ({ name: 'devbox', homeDir: null, online: null }), sources: [], teamName: () => 'Acme' });
         expect(projects[0]).toMatchObject({ name: 'folder', teamLabel: null, newFromSession: false });
         expect(projects[0]?.checkouts[0]).toMatchObject({ label: 'folder', branch: null, isWorktree: null, attention: null });
         expect(projects[0]?.checkouts[0]?.offline).toBeUndefined();
+    });
+
+    it('says a collapsed phone Project\'s checkout count once, in its second line, and counts beside it only when open', () => {
+        // Lab p-projects TREEp: "happier-plugins / devbox · 2 worktrees" with no count; the open "happier" carries "5".
+        const projects = [project('plugins', [checkout('p1', 'devbox', 'main'), checkout('p2', 'devbox', 'pi-agent')])];
+        const describe = { checkoutCount: (n: number) => `${n} worktrees`, machineCount: String, offlineCount: String };
+        const collapsed = buildProjectsPhoneTreeRows({ projects, openRefId: null, expandedKeys: new Set(), describe });
+        expect(collapsed[0]).toMatchObject({ subtitle: 'devbox · 2 worktrees', count: null });
+        const open = buildProjectsPhoneTreeRows({ projects, openRefId: null, expandedKeys: new Set(['plugins']), describe });
+        expect(open[0]).toMatchObject({ count: 2 });
     });
 
     it('retains exact addresses and distinct row keys when two checkouts share an id', () => {
@@ -65,7 +75,7 @@ describe('buildProjectsTreeRows (lab p-projects RULES)', () => {
             { id: 'same-id', serverId: 'home-a', machineId: 'devbox', rootPath: '/work/second' },
         ];
         const projects = buildProjectsTreeProjects({ groups: [{ projectKey: { projectKey: 'anchor' }, items: refs }],
-            projectName: () => 'Project', machine: () => null });
+            projectName: () => 'Project', machine: () => ({ name: 'devbox', homeDir: null, online: null }) });
         for (const rows of [buildProjectsTreeRows({ projects, openRefId: null, expandedKeys: new Set(['anchor']) }),
             buildProjectsPhoneTreeRows({ projects, openRefId: null, expandedKeys: new Set(['anchor']), describe: {
                 checkoutCount: String, machineCount: String, offlineCount: String,
@@ -81,6 +91,16 @@ describe('buildProjectsTreeRows (lab p-projects RULES)', () => {
         const rows = buildProjectsTreeRows({ projects: [project('website', [checkout('w1', 'mbp', 'main')])], openRefId: null, expandedKeys: new Set() });
         expect(shape(rows)).toEqual(['website']);
         expect(rows[0]).toMatchObject({ expandable: false, refId: 'w1', subtitle: 'MacBook Pro · main' });
+    });
+
+    it('says where a checkout with no known branch lives instead of repeating its folder name', () => {
+        // Lab p-projects RULES 6: "scratch / MacBook Pro · ~/scratch"; never "scratch / MacBook Pro · scratch".
+        const scratch = checkout('s1', 'mbp', 'scratch', { branch: null, path: '~/scratch' });
+        expect(buildProjectsTreeRows({ projects: [project('scratch', [scratch])], openRefId: null, expandedKeys: new Set() })[0]?.subtitle)
+            .toBe('MacBook Pro · ~/scratch');
+        expect(buildProjectsPhoneTreeRows({ projects: [project('scratch', [scratch])], openRefId: null, expandedKeys: new Set(),
+            describe: { checkoutCount: String, machineCount: String, offlineCount: String } })[0]?.subtitle)
+            .toBe('MacBook Pro · ~/scratch');
     });
 
     it('folds one machine into the Project row and lists its worktrees under it', () => {

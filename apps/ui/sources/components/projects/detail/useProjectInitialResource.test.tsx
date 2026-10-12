@@ -32,6 +32,7 @@ function Body(props: Readonly<{ onDismiss?: () => void; workspaceRef?: Workspace
         onDismissRoute: props.onDismiss ?? (() => {}), onCloseDetails: pane.closeDetails });
     const params = useDestinationParams<{ initialFile?: string }>();
     return React.createElement('ProjectResourceProbe', { scopeId: pane.scopeId, tabs: pane.scopeState?.details.tabs ?? [],
+        right: pane.scopeState?.right,
         initialFile: params.initialFile, close: () => pane.closeDetailsTab('file:src/index.ts'),
         selectFile: () => pane.openDetailsTab(createProjectFileDetailsTab('src/current.ts'), { intent: 'pinned' }),
         closeCurrent: () => pane.closeDetailsTab('file:src/current.ts'),
@@ -50,6 +51,36 @@ function ReopenHarness() {
 }
 
 describe('project initial resource admission', () => {
+    it('restores the qualified plugin selection without replaying private launch input, and rejects malformed route targets', async () => {
+        const companion = { kind: 'plugin', destination: { pluginId: 'acme.preview', localId: 'project-review' }, instanceKey: 'review-a' };
+        const renderDestination = (workspaceRef: WorkspaceRefV1 | null, target: unknown = companion) => <AppPaneProvider><DestinationInstanceHost
+            tabId="plugin-return" ref={{ kind: 'project', params: { workspaceRefId: 'project-a', serverId: 'home-a',
+                rightDestination: JSON.stringify(target) } }}
+            pathname="/projects/project-a/overview" focused visible navigation={{ push: () => {}, replace: () => {}, back: () => {}, setParams: () => {} }}>
+            <Body workspaceRef={workspaceRef} />
+        </DestinationInstanceHost></AppPaneProvider>;
+        const screen = await renderScreen(renderDestination(null));
+        expect(screen.root.findByType('ProjectResourceProbe').props.right?.isOpen).not.toBe(true);
+        await screen.update(renderDestination(acceptedRef));
+        expect(screen.root.findByType('ProjectResourceProbe').props.right).toMatchObject({ isOpen: true, selectedDestination: companion });
+        await screen.update(renderDestination(acceptedRef, { ...companion, destination: { pluginId: 'acme.other', localId: 'other' }, launchInput: { grant: true } }));
+        expect(screen.root.findByType('ProjectResourceProbe').props.right.selectedDestination).toEqual(companion);
+    });
+    it('restores a closed companion destination only after exact checkout admission on a cold return', async () => {
+        const renderDestination = (workspaceRef: WorkspaceRefV1 | null, right = 'browser') => <AppPaneProvider><DestinationInstanceHost
+            tabId="origin-return" ref={{ kind: 'project', params: { workspaceRefId: 'project-a', serverId: 'home-a', right } }}
+            pathname="/projects/project-a/services" focused visible navigation={{ push: () => {}, replace: () => {}, back: () => {}, setParams: () => {} }}>
+            <Body workspaceRef={workspaceRef} />
+        </DestinationInstanceHost></AppPaneProvider>;
+        const screen = await renderScreen(renderDestination(null));
+        expect(screen.root.findByType('ProjectResourceProbe').props.right?.isOpen).not.toBe(true);
+        await screen.update(renderDestination(acceptedRef));
+        expect(screen.root.findByType('ProjectResourceProbe').props.right).toMatchObject({ isOpen: true, activeTabId: 'browser' });
+        await screen.update(renderDestination(acceptedRef, 'files'));
+        expect(screen.root.findByType('ProjectResourceProbe').props.right).toMatchObject({ isOpen: true, activeTabId: 'files' });
+        await screen.update(renderDestination(acceptedRef, 'agents'));
+        expect(screen.root.findByType('ProjectResourceProbe').props.right).toMatchObject({ isOpen: true, activeTabId: 'files' });
+    });
     it('does not write a resource pane for an ambiguous deep link, then admits the exact qualified checkout', async () => {
         const candidates = [acceptedRef, { ...acceptedRef, serverId: 'home-b' }];
         const resolution = resolveWorkspaceRefById(candidates, 'project-a');

@@ -50,7 +50,7 @@ const [
     { t },
     { useProjectSetupAuthoring, useProjectAuthoringReturn },
     { createDefaultActionExecutor },
-    { ProjectSetupSessionReturn },
+    { ProjectSetupSessionReturn, ProjectSetupDraftHeader, ProjectSetupDraftFootnote },
 ] = await Promise.all([
     import('@/sync/domains/state/storage'),
     import('@/sync/ops/sessionDrafts/sessionDraftRepository'),
@@ -120,7 +120,81 @@ async function currentGuidance(workspace: Parameters<typeof readProjectSetupAgen
     return observed.guidance;
 }
 
+describe('Project setup return inspection data', () => {
+    it.each([
+        undefined,
+        { kind: 'unprepared', reviewedEffectDigest: 'current-effect' },
+        { kind: 'unknown', code: 'project_setup_failed' },
+        { kind: 'current', reviewedEffectDigest: 'current-effect', completedAtMs: 123 },
+    ] as const)('exposes only current inspection readiness, including absent/failed preparation (%j)', async (setupReadiness) => {
+        const { useProjectSetupReturnInspection } = await import('./useProjectSetupReturnInspection');
+        const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };
+        machineTransport.mockResolvedValue(ProjectDefinitionInspectOutputSchema.parse({
+            definition: { basis: { kind: 'absent' }, document: null },
+            detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] },
+            importCandidates: [], ...(setupReadiness ? { setupReadiness } : {}),
+        }));
+        const hook = await renderHook(() => useProjectSetupReturnInspection({ kind: 'project', accountId: 'account-a', workspace, page: 'scripts' }));
+        try {
+            await expect.poll(() => hook.getCurrent()).toMatchObject({
+                summary: t('projects.widgets.noProjectFile'), setupReadiness: setupReadiness ?? null,
+            });
+        } finally { await hook.unmount(); }
+    });
+
+    it.each([
+        { page: 'changes' },
+        { page: 'scripts', purpose: 'session' },
+    ] as const)('does not inspect setup or expose readiness for non-setup authoring (%j)', async (destination) => {
+        const { useProjectSetupReturnInspection } = await import('./useProjectSetupReturnInspection');
+        machineTransport.mockClear();
+        const hook = await renderHook(() => useProjectSetupReturnInspection({ kind: 'project', accountId: 'account-a',
+            workspace: { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' }, ...destination }));
+        try {
+            expect(hook.getCurrent()).toEqual({ summary: null, setupReadiness: null });
+            expect(machineTransport).not.toHaveBeenCalled();
+        } finally { await hook.unmount(); }
+    });
+});
+
 describe('Project setup through ordinary authoring', () => {
+    it('retains the reopened draft identity while its original Project rows are unavailable, without admitting a return', async () => {
+        const scope = { serverId, accountId: 'account-a' };
+        const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };
+        const result = await openProjectSetupAuthoring({ workspace });
+        if (!result.ok) throw new Error(result.errorCode);
+        const opened = SessionAuthoringOpenResultV1Schema.parse(result.result);
+        if (opened.kind !== 'opened') throw new Error('Expected the seeded draft');
+        const { resetSessionDraftRepositoryForTests } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        resetSessionDraftRepositoryForTests();
+        const reopened = readNewSessionDraftProjectionFromRepository({ scope, draftId: opened.draftId })?.draft;
+        if (!reopened?.authoringOrigin) throw new Error('Expected the persisted authoring origin');
+        storage.getState().clearProjectAccountRowsScope();
+        expect(resolveCurrentProjectAuthoringReturn(reopened.authoringOrigin)).toMatchObject({ kind: 'unavailable' });
+        const screen = await renderScreen(React.createElement(React.Fragment, null,
+            React.createElement(ProjectSetupDraftHeader, { origin: reopened.authoringOrigin }),
+            React.createElement(ProjectSetupDraftFootnote, { origin: reopened.authoringOrigin }),
+        ));
+        try {
+            await expect.poll(() => screen.getTextContent()).toContain(t('projects.authoring.draftTitle', { project: 'repo' }));
+            expect(screen.findHostByTestId('project-setup-draft-footnote')).not.toBeNull();
+            expect(reopened.sessionName).toBe(t('projects.authoring.draftTitle', { project: 'repo' }));
+            expect(resolveCurrentProjectAuthoringReturn(reopened.authoringOrigin)).toMatchObject({ kind: 'unavailable' });
+        } finally { await screen.unmount(); }
+    });
+    it('does not display another Account’s retained draft identity while Project rows are unavailable', async () => {
+        storage.getState().clearProjectAccountRowsScope();
+        const origin = { kind: 'project', accountId: 'other-account', page: 'scripts',
+            workspace: { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/private-project' } } as const;
+        const screen = await renderScreen(React.createElement(React.Fragment, null,
+            React.createElement(ProjectSetupDraftHeader, { origin }),
+            React.createElement(ProjectSetupDraftFootnote, { origin }),
+        ));
+        try {
+            expect(screen.findHostByTestId('project-setup-draft-origin')).toBeNull();
+            expect(screen.findHostByTestId('project-setup-draft-footnote')).toBeNull();
+        } finally { await screen.unmount(); }
+    });
     it('keeps detection facts readable and qualified ids and hashes out of the editable prompt, with a seeded Session name', async () => {
         const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };
         const scope = { serverId, accountId: 'account-a' };
@@ -144,6 +218,24 @@ describe('Project setup through ordinary authoring', () => {
             expect.soft(draft?.input).not.toContain(value);
         }
         expect.soft(draft?.sessionName).toBe(t('projects.authoring.draftTitle', { project: 'repo' }));
+    });
+    it('opens an authoring draft for literal manifest scripts with empty native detection', async () => {
+        const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };
+        const manifest = { version: 1, scripts: { test: { source: { kind: 'command', command: 'echo ready' } } } };
+        machineTransport.mockResolvedValue(ProjectDefinitionInspectOutputSchema.parse({
+            definition: { basis: { kind: 'present', hash: 'b'.repeat(64) },
+                document: { status: 'valid', bytes: JSON.stringify(manifest), original: manifest, manifest, diagnostics: [] } },
+            detection: { entries: [], environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] }, importCandidates: [],
+        }));
+        const result = await openProjectSetupAuthoring({ workspace });
+        if (!result.ok) throw new Error(result.errorCode);
+        const opened = SessionAuthoringOpenResultV1Schema.parse(result.result);
+        if (opened.kind !== 'opened') throw new Error('Draft refused');
+        const draft = readNewSessionDraftProjectionFromRepository({ scope: { serverId, accountId: 'account-a' }, draftId: opened.draftId })?.draft;
+        expect(draft?.input).toContain(t('projects.authoring.scriptsCount', { count: 1 }));
+        expect(draft?.input).toContain('test:');
+        expect(draft?.input).not.toContain(t('projects.scripts.foundIn', { files: '' }));
+        expect(draft?.input).not.toContain('undefined');
     });
     it('returns the typed inspection failure without writing a draft or navigating', async () => {
         const scope = { serverId, accountId: 'account-a' };
@@ -198,6 +290,29 @@ describe('Project setup through ordinary authoring', () => {
         } finally {
             await screen.unmount();
         }
+    });
+    it.each(['overview', 'scripts'] as const)('ordinary %s origin returns to its original dashboard/file without setup inspection', async page => {
+        const origin = { kind: 'project', purpose: 'session', accountId: 'account-a', page, layoutId: 'release-dashboard',
+            workspace: { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' },
+            surface: 'tabs', companion: 'files', resource: { kind: 'file', path: 'src/a.ts' },
+        } as const;
+        const session = createSessionFixture({ id: 'ordinary-session', metadata: {
+            path: '/edited', machineId: 'worker-b', host: 'worker.local', work: { authoringOriginV1: origin },
+        } });
+        storage.getState().applySessions([session]);
+        machineTransport.mockClear();
+        const screen = await renderScreen(React.createElement(ProjectSetupSessionReturn, { sessionId: session.id, serverId }));
+        try {
+            expect(screen.findHostByTestId('project-setup-return')).not.toBeNull();
+            expect(screen.findHostByTestId('project-setup-return.changes')).toBeNull();
+            expect(screen.findHostByTestId('project-setup-return.scripts')).toBeNull();
+            await screen.pressByTestIdAsync('project-setup-return.origin');
+            const url = new URL(String(navigation.push.mock.calls.at(-1)?.[0]), 'https://happier.test');
+            expect(url.pathname).toBe(`/projects/checkout-a/${page}`);
+            expect(Object.fromEntries(url.searchParams)).toMatchObject({ serverId, layoutId: 'release-dashboard',
+                mobileSurface: 'tabs', right: 'files', initialFile: 'src/a.ts' });
+            expect(machineTransport).not.toHaveBeenCalled();
+        } finally { await screen.unmount(); }
     });
     it('keeps an ask-each-time pool candidate advisory and ad-hoc opt-in separate from approval', async () => {
         const workspace = { serverId, workspaceId: 'checkout-a', machineId: 'machine-a', rootPath: '/repo' };

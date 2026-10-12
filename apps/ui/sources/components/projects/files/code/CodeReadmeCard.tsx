@@ -6,14 +6,12 @@ import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon } from '@/components/ui/icons/Icon';
-import { GROUPED_SURFACE_RADIUS_PX } from '@/components/ui/lists/pageListMetrics';
-import { resolveThemeHairlineBorderStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
 import { Text } from '@/components/ui/text/Text';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { t } from '@/text';
-import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 
 import { useCodeTextFile } from './useCodeTextFile';
 
@@ -25,22 +23,27 @@ export function findCodeReadmePath(entries: ReadonlyArray<Readonly<{ name: strin
 
 /**
  * The README under a Code folder's table (lab p-code BROWSE): its name, a way to edit it, and the
- * rendered text. A folder without one shows nothing — the page ends after the files.
+ * rendered text. A folder without one shows nothing — the page ends after the files. It is the last
+ * section of the table's own sheet, so the folder reads as one card that scrolls once (the lab drew it
+ * as a second card; a nested card inside the scrolling table read as a card in a card).
  */
 export const CodeReadmeCard = React.memo(function CodeReadmeCard(props: Readonly<{
     testID?: string;
     scope: WorkspaceScopeBase;
     path: string;
     onEdit?: ((path: string) => void) | null;
+    /** The checkout's directory revision: the page's Refresh (and any listing change) reads the README again. */
     reloadToken?: number;
 }>) {
     const { theme } = useUnistyles();
     const reducedMotion = useReducedMotionPreference();
     const testID = props.testID ?? 'code-readme';
-    const file = useCodeTextFile(props.scope, props.path, props.reloadToken);
+    // Retry reads the same file again; the last text stays on screen while it does.
+    const [retry, setRetry] = React.useState(0);
+    const file = useCodeTextFile(props.scope, props.path, `${props.reloadToken ?? 0}:${retry}`);
     const name = props.path.split('/').pop() ?? props.path;
     return (
-        <GlassSurface surfaceGroup="content" nested finishRole="card" testID={testID} style={[styles.card, resolveThemeHairlineBorderStyle(theme.colors.border.surface)]}>
+        <View testID={testID} style={styles.section}>
             <View style={styles.header}>
                 <Icon name="book-open" size={16} color={theme.colors.text.secondary} />
                 <Text numberOfLines={1} style={styles.name}>{name}</Text>
@@ -61,7 +64,9 @@ export const CodeReadmeCard = React.memo(function CodeReadmeCard(props: Readonly
                 {file.kind === 'ready' ? (
                     <MarkdownView testID={`${testID}-markdown`} markdown={file.text} renderCacheKey={props.path} />
                 ) : file.kind === 'error' ? (
-                    <Text style={styles.quiet}>{t('projects.code.readUnavailable')}</Text>
+                    // The same one-line state and Retry as the Overview README widget.
+                    <SurfaceStateCard testID={`${testID}-error`} size="line" kind="error" title={t('projects.code.readUnavailable')}
+                        action={{ label: t('common.retry'), onPress: () => setRetry(value => value + 1), testID: `${testID}-error-action` }} />
                 ) : (
                     <View aria-busy style={styles.skeleton}>
                         <HappierSkeletonBlock width="40%" height={18} radius={6} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
@@ -70,16 +75,14 @@ export const CodeReadmeCard = React.memo(function CodeReadmeCard(props: Readonly
                     </View>
                 )}
             </View>
-        </GlassSurface>
+        </View>
     );
 });
 
 const styles = StyleSheet.create((theme) => ({
-    card: {
-        marginTop: 28,
-        borderRadius: GROUPED_SURFACE_RADIUS_PX,
-        backgroundColor: theme.colors.edge.cardFill,
-        overflow: 'hidden',
+    section: {
+        borderTopWidth: StyleSheet.hairlineWidth || 1,
+        borderTopColor: theme.colors.border.subtle,
     },
     header: {
         minHeight: 44,
@@ -102,10 +105,6 @@ const styles = StyleSheet.create((theme) => ({
     body: {
         paddingHorizontal: 24,
         paddingVertical: 20,
-    },
-    quiet: {
-        ...Typography.rowMeta(),
-        color: theme.colors.text.secondary,
     },
     skeleton: {
         gap: 12,

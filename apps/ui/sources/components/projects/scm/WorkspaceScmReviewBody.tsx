@@ -3,11 +3,11 @@ import { View } from 'react-native';
 
 import { ScmComparisonBar, ScmComparisonExplainToggle, ScmComparisonStartReview, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { ScmComparisonHeader } from '@/components/sessions/files/comparison/ScmComparisonHeader';
-import { ScmComparisonPhoneHeader } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
+import { ScmComparisonPhoneHeader, type ScmComparisonMenuSection } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
 import { ScmComparisonScopePicker } from '@/components/sessions/files/comparison/ScmComparisonScopePicker';
 import type { FilesComparisonScopeOption } from '@/components/sessions/files/comparison/filesComparison';
 import { WalkthroughAnalysisFact, WalkthroughReviewedFact } from '@/components/sessions/files/walkthrough/WalkthroughAtoms';
-import { WalkthroughExplainNotes, WALKTHROUGH_EXPLAIN_COLUMN_WIDTH_PX } from '@/components/sessions/files/walkthrough/WalkthroughExplainNotes';
+import { WalkthroughExplainNotes, WalkthroughFileStops, WALKTHROUGH_EXPLAIN_COLUMN_WIDTH_PX } from '@/components/sessions/files/walkthrough/WalkthroughExplainNotes';
 import type { WalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import type { WalkthroughViewLayout } from '@/components/sessions/files/walkthrough/WalkthroughView';
 import { ChangedFilesLayoutSwitch } from '@/components/sessions/panes/git/display/GitDisplayMenu';
@@ -32,7 +32,8 @@ export type WorkspaceScmReviewBodyProps = Readonly<{
     scopeLabel: string;
     scopeDetail?: string | null;
     scopeOptions: readonly FilesComparisonScopeOption[];
-    onSelectComparison: (comparison: SessionScmReviewComparison) => void;
+    evidenceSessionId?: string;
+    onSelectComparison: (comparison: SessionScmReviewComparison, evidenceSessionId?: string) => void;
     onSelectView: (view: SessionScmReviewView) => void;
     onClose?: () => void;
     activeReviewFile?: Readonly<{ key: string; presented: boolean }>;
@@ -41,6 +42,8 @@ export type WorkspaceScmReviewBodyProps = Readonly<{
     changeCount?: number | null;
     reading?: WalkthroughReading | null;
     modelLabel?: string | null;
+    /** The writing Agent's mark beside "Opus 5.5 read all 14", when its run names one. */
+    analysisMark?: React.ReactNode;
     marksAvailable?: boolean;
     explain: boolean;
     onExplainChange: (value: boolean) => void;
@@ -55,9 +58,19 @@ export type WorkspaceScmReviewBodyProps = Readonly<{
     filesState?: React.ReactNode;
     renderWalkthrough: (context: ScmReviewViewContext) => React.ReactNode;
     renderCommits?: (context: ScmReviewViewContext) => React.ReactNode;
+    /**
+     * The host's mode control (the Project page's Review | Git). It leads the one comparison bar, so a
+     * host's mode and the review's views sit on one line; a stacked header keeps it on its own line above.
+     */
+    hostSwitch?: React.ReactNode;
+    /** The host's own bar actions (the review comments disclosure), first in the bar's action group. */
+    barActions?: React.ReactNode;
 }>;
 
 const REVIEW_VIEWS: readonly SessionScmReviewView[] = ['files', 'walkthrough'];
+// The host control and the view switch read as one group, divided like the view switch from the scope.
+const HOST_SWITCH_STYLE = { flexDirection: 'row', alignItems: 'center' } as const;
+const HOST_SWITCH_STACKED_STYLE = { paddingHorizontal: 12, paddingTop: 8 } as const;
 // Existing comparison geometry, shared by every host rather than decided in each adapter.
 const COMPARISON_RAIL_MIN_WIDTH_PX = 860;
 const COMPARISON_STACKED_MAX_WIDTH_PX = 560;
@@ -109,42 +122,52 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
         if (view === 'files') showFiles();
         else props.onSelectView(view);
     }, [showFiles, props.onSelectView]);
+    // An empty comparison says so once, in the review's own empty state: the bar and the stacked header
+    // keep the scope's name but don't add "0 files" beside it.
+    const countShown = (fileCount: number | null) => (fileCount === 0 ? null : fileCount);
     const renderLeading = (fileCount: number | null) => <>
+        {props.hostSwitch ? <View style={HOST_SWITCH_STYLE}>{props.hostSwitch}</View> : null}
         <ScmComparisonViewSwitch view={props.view} views={views} onSelect={selectView} commitsCount={props.commitsCount} />
         <ScmComparisonScopePicker options={props.scopeOptions} current={props.comparison} currentLabel={props.scopeLabel}
-            fileCount={fileCount} onSelect={props.onSelectComparison} />
+            currentEvidenceSessionId={props.evidenceSessionId}
+            fileCount={countShown(fileCount)} onSelect={props.onSelectComparison} />
     </>;
     const trailing = <>
+        {props.barActions}
         {props.onStartReview ? <ScmComparisonStartReview disabled={props.reviewDisabled} disabledReason={props.reviewDisabledReason}
             onPress={props.onStartReview} /> : null}
         {props.proposeCommits}
     </>;
-    const renderPhoneHeader = (fileCount: number | null, actions?: React.ReactNode) => <ScmComparisonPhoneHeader
+    // The phone menu already lists Start review and Propose commits as rows; only the view's own parts join it.
+    const renderPhoneHeader = (fileCount: number | null, actions?: React.ReactNode, sections?: readonly ScmComparisonMenuSection[]) => <ScmComparisonPhoneHeader
         view={props.view} views={views} scope={{ options: props.scopeOptions, current: props.comparison,
-            currentLabel: props.scopeLabel, fileCount, onSelect: props.onSelectComparison }}
-        onSelectView={selectView} onBack={props.onClose ?? (() => {})}
+            currentEvidenceSessionId: props.evidenceSessionId,
+            currentLabel: props.scopeLabel, fileCount: countShown(fileCount), onSelect: props.onSelectComparison }}
+        onSelectView={selectView} onBack={props.onClose}
         onStartReview={props.onStartReview ?? (() => {})} reviewDisabled={props.reviewDisabled || !props.onStartReview}
-        reviewDisabledReason={props.reviewDisabledReason} onProposeCommits={props.onProposeCommits} extraActions={<>{actions}{trailing}</>} />;
+        reviewDisabledReason={props.reviewDisabledReason} onProposeCommits={props.onProposeCommits} extraActions={actions} sections={sections} />;
     const renderBar = (actions?: React.ReactNode) => stacked
         ? renderPhoneHeader(props.fileCount ?? reading?.source.fileCount ?? null, actions)
         : <ScmComparisonBar leading={renderLeading(props.fileCount ?? null)} trailing={<>{actions}{trailing}</>} />;
     const chrome: ScmReviewComparisonChrome = {
-        renderBar: stacked ? (coverage, actions) => renderPhoneHeader(coverage.fileCount, actions) : undefined,
+        renderBar: stacked ? (coverage, actions, sections) => renderPhoneHeader(coverage.fileCount, actions, sections) : undefined,
         renderBarLeading: (coverage) => renderLeading(coverage.fileCount),
         barTrailing: trailing,
-        renderHeader: (coverage) => <><ScmComparisonHeader
+        // An empty comparison has nothing to head or explain: the review's own empty state stands alone.
+        renderHeader: (coverage) => coverage.fileCount === 0 && !reading ? null : <><ScmComparisonHeader
             viewLabel={resolveSessionScmReviewViewLabel(props.view)} scopeLabel={props.scopeLabel} scopeDetail={props.scopeDetail}
             title={reading?.title ?? null} coverage={coverage} changeCount={props.changeCount ?? reading?.source.changeCount ?? null}
             analysis={reading?.analysis ? <WalkthroughAnalysisFact parts={reading.analysis.parts} analysed={reading.analysis.analysed}
                 total={reading.analysis.total} model={props.modelLabel} stopped={reading.phase === 'cancelled' || reading.phase === 'failed'}
-                unavailableCount={reading.source.unavailableCount} /> : null}
+                unavailableCount={reading.source.unavailableCount} mark={props.analysisMark} /> : null}
             reviewed={reading && props.marksAvailable ? <WalkthroughReviewedFact count={reading.reviewedCount} total={reading.stops.length} /> : null}
             stacked={stacked} accessory={<>
                 {reading ? <ScmComparisonExplainToggle value={props.explain} onChange={props.onExplainChange} /> : null}
                 {stacked ? <ChangedFilesLayoutSwitch testIDPrefix="scm-comparison-layout" /> : null}
             </>} />
             {/* No walkthrough from the session that made these changes: Files offers one (lab p-changes FILES). */}
-            {!reading && props.onExplainDraft ? <View style={{ paddingVertical: 8 }}>
+            {/* On the header's own inset, so its mark and Explain line up with "Files" above, not the rail's edge. */}
+            {!reading && props.onExplainDraft ? <View style={{ paddingVertical: 8, paddingHorizontal: stacked ? 16 : 24 }}>
                 <SurfaceStateCard testID="scm-comparison-explain-with-agent" kind="empty" layout="inline" iconName="sparkle"
                     title={t('projects.review.noWalkthroughTitle')}
                     reason={t('projects.review.noWalkthroughBody', { count: coverage.fileCount ?? 0 })}
@@ -156,9 +179,11 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
         renderHunkNotes: props.explain && reading ? (path, hunkIndex, placement) => <WalkthroughExplainNotes
             reading={reading} path={path} hunkIndex={hunkIndex} placement={placement} onReadInWalkthrough={readInWalkthrough} /> : null,
         hunkNotesColumnWidth: WALKTHROUGH_EXPLAIN_COLUMN_WIDTH_PX,
+        renderIndexAccessory: props.explain && reading ? (path) => <WalkthroughFileStops reading={reading} path={path} /> : null,
     };
     const context: ScmReviewViewContext = { layout: stacked ? 'phone' : rail ? 'wide' : 'narrow', renderBar, onShowFiles: showFiles };
     return <View style={{ flex: 1, minHeight: 0 }} onLayout={onLayout}>
+        {stacked && props.hostSwitch ? <View style={HOST_SWITCH_STACKED_STYLE}>{props.hostSwitch}</View> : null}
         {props.view === 'walkthrough' ? props.renderWalkthrough(context)
             : props.view === 'commits' && props.renderCommits ? props.renderCommits(context)
                 : props.filesState ? <>{renderBar()}{props.filesState}</> : props.renderFiles(chrome)}

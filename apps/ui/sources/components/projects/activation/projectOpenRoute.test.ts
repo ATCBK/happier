@@ -4,9 +4,9 @@ import { buildProjectCheckoutOpenRoute, buildProjectOpenRoute, buildProjectSourc
 describe('Project Open entrance', () => {
     it('captures the exact checkout Home and branch without selecting an execution Machine', () => {
         const route = buildProjectCheckoutOpenRoute({ serverId: 'other-home', workspaceId: 'checkout' }, 'feature');
+        // No way to open is chosen for the person: Open starts on its own default once a Machine is chosen.
         expect(readProjectOpenRouteDraft(route.params)).toEqual({ serverId: 'other-home', machineId: '',
-            source: { kind: 'workspace', workspaceId: 'checkout' }, ref: 'feature',
-            materialization: { kind: 'clone', destinationParentPath: '', destinationDirectoryName: '' } });
+            source: { kind: 'workspace', workspaceId: 'checkout' }, ref: 'feature' });
         expect(readProjectOpenRouteDraft(buildProjectCheckoutOpenRoute({ serverId: 'home', workspaceId: 'checkout' }).params))
             .not.toHaveProperty('ref');
     });
@@ -28,7 +28,9 @@ describe('Project Open entrance', () => {
         expect(readProjectOpenRouteDraft(buildProjectOpenRoute(input).params)).toEqual(input);
         const route = buildProjectSourceOpenRoute('home', { id: 'source', revision: 2, name: 'Source',
             repository: input.source.selector, defaultRef: 'main', subdir: 'app', audience: [], createdByAccountId: 'account' });
-        expect(readProjectOpenRouteDraft(route.params)).toMatchObject({ serverId: 'home', machineId: '',
-            source: input.source, materialization: { kind: 'clone', destinationParentPath: '', destinationDirectoryName: '' } });
+        const seeded = readProjectOpenRouteDraft(route.params);
+        expect(seeded).toMatchObject({ serverId: 'home', machineId: '', source: input.source });
+        // A saved Source never pre-chooses a fresh clone: an existing checkout on the Machine comes first.
+        expect(seeded).not.toHaveProperty('materialization');
     });
 });

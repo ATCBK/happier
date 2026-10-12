@@ -7,8 +7,10 @@ import { readProjectSourceAddressMachines } from './projectSourceAddressMachines
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { readProjectSourcesCatalog } from './projectSourcesCatalog';
+import { useMachineListStatusForServer } from '@/sync/store/hooks';
 
-function useSourceActionExecute() {
+/** The Sources' action executor, loaded at first use (shared with Open's repository address). */
+export function useProjectSourceActionExecute() {
     const [execute] = React.useState(() => {
         // Preserve lazy evaluation at this hook's demand boundary without a CommonJS-only loader.
         const load = async () => createFrontDoorActionExecute((await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor());
@@ -20,8 +22,9 @@ function useSourceActionExecute() {
 
 /** The screen opts into catalog demand; mounting a closed picker does no work. */
 export function useProjectSources(scope: ServerAccountScope, options: Readonly<{ enabled?: boolean }> = {}) {
-    const execute = useSourceActionExecute();
+    const execute = useProjectSourceActionExecute();
     const lifetime = captureActiveServerAccountScopeLifetime();
+    const inventoryStatus = useMachineListStatusForServer(scope.serverId);
     const catalog = lifetime && areServerAccountScopesEqual(lifetime.scope, scope) ? readProjectSourcesCatalog(lifetime, execute) : null;
     const controller = React.useMemo(() => createProjectSourcesController({ serverId: scope.serverId, accountId: scope.accountId }, execute,
         () => readProjectSourceAddressMachines(scope.serverId), catalog?.read),
@@ -37,6 +40,12 @@ export function useProjectSources(scope: ServerAccountScope, options: Readonly<{
     }, [controller, options.enabled, lifetime]);
     React.useEffect(() => () => { controller.dispose(); }, [controller]);
     React.useEffect(() => {
+        if (options.enabled === false || state.addressResolution.kind !== 'waiting_for_machines'
+            || inventoryStatus === 'loading' || !lifetime?.isCurrent()
+            || !areServerAccountScopesEqual(lifetime.scope, scope)) return;
+        void controller.resolveAddress(state.addressResolution.address);
+    }, [controller, inventoryStatus, lifetime, options.enabled, scope, state.addressResolution]);
+    React.useEffect(() => {
         if (options.enabled === false) return;
         const stopDemand = catalog?.demand();
         const stopDetail = observeProjectSources(controller, { detailOnly: Boolean(catalog) });
@@ -50,7 +59,7 @@ const UNAVAILABLE_SOURCE_READ: SourceReadState = Object.freeze({ current: null, 
 
 /** One accepted Source provenance demands its existing authorized reader, not a catalog scan. */
 export function useProjectSource(lifetime: ServerAccountScopeLifetime | null, sourceId: string | null) {
-    const execute = useSourceActionExecute();
+    const execute = useProjectSourceActionExecute();
     const controller = React.useMemo(() => lifetime && sourceId
         ? createProjectSourcesController(lifetime.scope, execute) : null, [execute, lifetime, sourceId]);
     const subscribe = React.useCallback((listener: () => void) => {

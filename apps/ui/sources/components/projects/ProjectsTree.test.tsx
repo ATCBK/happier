@@ -121,4 +121,56 @@ describe('ProjectsTree (lab p-projects TREE/HIDDEN)', () => {
         await screen.pressByTestIdAsync('projects-tree-show-scratch');
         expect(onShow).toHaveBeenCalledWith('scratch');
     });
+
+    it('draws Hidden as the column\'s own disclosure row and still opens a hidden Project\'s exact checkout', async () => {
+        const onOpenRef = vi.fn();
+        const onToggle = vi.fn();
+        const address = { serverId: 'home-a', workspaceId: 'scratch-ref', machineId: 'mbp', rootPath: '/Users/l/scratch-2024' };
+        const render = (open: boolean) => (
+            <ProjectsTree
+                rows={rows}
+                onToggle={() => {}}
+                onOpenRef={onOpenRef}
+                hidden={{ items: [{ key: 'scratch', title: 'scratch-2024', subtitle: 'MacBook Pro · ~/scratch-2024', refId: 'scratch-ref', workspaceAddress: address }],
+                    open, onToggle, onShow: () => {} }}
+            />
+        );
+        const screen = await renderScreen(render(false));
+        // The disclosure announces its state wherever the row exposes it (aria-expanded on web).
+        const expanded = () => {
+            const node = screen.findAll((candidate) => candidate.props?.testID === 'projects-tree-hidden'
+                && (candidate.props['aria-expanded'] !== undefined || candidate.props.accessibilityState?.expanded !== undefined))[0];
+            return node?.props['aria-expanded'] ?? node?.props.accessibilityState?.expanded;
+        };
+        expect(expanded()).toBe(false);
+        expect(screen.findByTestId('projects-tree-hidden-scratch')).toBeNull();
+        await screen.pressByTestIdAsync('projects-tree-hidden');
+        expect(onToggle).toHaveBeenCalledTimes(1);
+        await act(async () => { screen.tree.update(render(true)); });
+        expect(expanded()).toBe(true);
+        await screen.pressByTestIdAsync('projects-tree-hidden-scratch');
+        expect(onOpenRef).toHaveBeenCalledWith('scratch-ref', address);
+    });
+});
+
+describe('ProjectsTreeSkeletonRows', () => {
+    it("stands the loading rows in the tree rows' own shape: two lines in the compact row box, after the disclosure column", async () => {
+        const { ProjectsTreeSkeletonRows } = await import('./ProjectsTree');
+        const { HAPPIER_COLLECTION_LIST_METRICS, HAPPIER_TREE_ROW_METRICS } = await import('@happier-dev/plugin-ui/presentation');
+        const { ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX, ITEM_SUBTITLE_TEXT_METRICS, ITEM_TITLE_TEXT_METRICS } = await import('@/components/ui/lists/itemDensityMetrics');
+        const screen = await renderScreen(<ProjectsTreeSkeletonRows testID="tree-loading" rows={3} />);
+        const rows = screen.root.findAll((node) => typeof node.type === 'string' && /^tree-loading:skeleton-row$/.test(String(node.props.testID)));
+        expect(rows).toHaveLength(3);
+        const style = Object.assign({}, ...[rows[0]!.props.style].flat(Infinity).filter(Boolean));
+        // The navigation row's box: its least height and the two-line row's padding.
+        expect(style.minHeight).toBe(HAPPIER_COLLECTION_LIST_METRICS.rowMinHeight);
+        expect(style.paddingTop).toBe(ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX.compact);
+        // The glyph lands where the tree's folder does: text edge + disclosure column + its gap.
+        expect(style.paddingLeft).toBe(HAPPIER_COLLECTION_LIST_METRICS.contentInset + HAPPIER_TREE_ROW_METRICS.disclosureBoxPx + 8);
+        // Title and subtitle line boxes at the compact row's line heights.
+        const lineBoxes = rows[0]!.findAll((node) => typeof node.type === 'string' && node.props.style
+            && [node.props.style].flat(Infinity).some((entry: any) => entry?.justifyContent === 'center' && typeof entry?.height === 'number'));
+        const heights = lineBoxes.map((node) => Object.assign({}, ...[node.props.style].flat(Infinity).filter(Boolean)).height);
+        expect(heights).toEqual([ITEM_TITLE_TEXT_METRICS.compact.lineHeight, ITEM_SUBTITLE_TEXT_METRICS.compact.lineHeight]);
+    });
 });

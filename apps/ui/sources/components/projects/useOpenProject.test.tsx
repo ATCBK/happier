@@ -180,6 +180,28 @@ describe('useOpenProject', () => {
         expect(hook.getCurrent().open.resolution).toMatchObject({ kind: 'invalid' });
     });
 
+    it('keeps a deep-linked checkout unconfirmed, not missing, while the Project rows have not loaded or failed', async () => {
+        const scope = { serverId: serverIdA, accountId: 'account-a' };
+        const hook = await renderHook(() => useWorkspaceRefResolutionById('wr_1'));
+        expect(hook.getCurrent()).toMatchObject({ kind: 'resolved' });
+        // A fresh device (or a retired scope) starts from an empty idle census: nothing is known yet.
+        await act(async () => {
+            storage.getState().clearProjectAccountRowsScope();
+            storage.getState().activateProjectAccountRowsScope(scope);
+        });
+        expect(hook.getCurrent()).toEqual({ kind: 'unconfirmed', status: 'idle' });
+        // The read failed: still not "isn't saved here anymore".
+        await act(async () => { storage.getState().setProjectAccountRowsStatusForScope(scope, 'error'); });
+        expect(hook.getCurrent()).toEqual({ kind: 'unconfirmed', status: 'error' });
+        // A complete authorized read that lists it resolves it again; one that does not says it is gone.
+        await act(async () => { await refreshWorkspaceRefs(); });
+        expect(hook.getCurrent()).toMatchObject({ kind: 'resolved' });
+        workspaceRefs.current = [];
+        await act(async () => { await refreshWorkspaceRefs(); });
+        expect(hook.getCurrent()).toEqual({ kind: 'missing' });
+        await hook.unmount();
+    });
+
     it('carries an explicitly selected Home through the project route', async () => {
         workspaceRefs.current.push({ ...workspaceRefs.current[0]!, serverId: serverIdB, rootPath: '/other' });
         await refreshWorkspaceRefs();

@@ -55,6 +55,7 @@ import { executeWorkspaceScmCommitUndoLast } from './executeWorkspaceScmCommit';
 import { WorkspaceScmOutcomeLine } from './WorkspaceScmOutcomeLine';
 import { WorkspaceSourceControlView, type WorkspaceSourceControlViewProps } from './WorkspaceSourceControlView';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
+import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
 export type WorkspaceRightPanelGitViewProps = WorkspaceSourceControlViewProps & Readonly<{
     onOpenCommit?: (sha: string) => void;
@@ -401,7 +402,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         router.push({ pathname: '/(app)/settings/connected-services/[serviceId]', params: { serviceId: 'github' } });
     }, []);
     const openMachineInstallables = React.useCallback(() => {
-        router.push(`/machine/${encodeURIComponent(scope.machineId)}/installables?serverId=${encodeURIComponent(scope.serverId)}` as never);
+        router.push(machinePageHref({ door: 'rail', target: { machineId: scope.machineId, serverId: scope.serverId }, page: 'installables' }) as never);
     }, [scope.machineId, scope.serverId]);
 
     if (error && !snapshot) {

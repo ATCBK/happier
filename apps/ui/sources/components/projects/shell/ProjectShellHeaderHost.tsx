@@ -2,6 +2,7 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { seedAndOpenProjectDraft } from '@/components/projects/activation/projectOpenDraftSeed';
+import { ProjectAtmosphereLookChip } from '@/components/atmosphere/ProjectAtmosphereFrame';
 import { useNavigateToProjectOpen } from '@/components/projects/activation/projectOpenPresentation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -55,7 +56,7 @@ export function useProjectShellCheckout(
 ): Readonly<{
   checkout: ProjectShellCheckout;
   changeCount: number;
-  branch: string;
+  branch: string | null;
 }> {
   const { theme } = useUnistyles();
   const navigateToOpen = useNavigateToProjectOpen();
@@ -83,7 +84,8 @@ export function useProjectShellCheckout(
     },
     [machines],
   );
-  const branch = snapshot?.branch.head ?? lastPathSegment(props.activeRootPath);
+  // Only a branch the checkout reported: a folder name is not a branch (an unread checkout shows its machine).
+  const branch = snapshot?.branch.head ?? null;
   const worktrees = snapshot?.repo.worktrees;
   const { onSelectRootPath } = props;
 
@@ -108,7 +110,7 @@ export function useProjectShellCheckout(
         : [
             {
               id: `path:${props.activeRootPath}`,
-              title: branch,
+              title: branch ?? lastPathSegment(props.activeRootPath),
               subtitle: props.activeRootPath,
               category: t('projects.checkouts.thisMachine'),
               icon: glyph('git-branch'),
@@ -221,8 +223,8 @@ export const ProjectShellHeaderHost = React.memo(
         menuActions?: readonly PageHeaderMenuAction[];
       }>,
   ) {
-    const newSession = useProjectNewSessionAction({ serverId: props.workspaceRef.serverId,
-      machineId: props.workspaceRef.machineId, rootPath: props.activeRootPath });
+    const newSession = useProjectNewSessionAction({ workspaceRef: props.workspaceRef,
+      activeRootPath: props.activeRootPath, page: props.page });
     const { navigateToSegment } = useProjectRouteActions({
       workspaceRef: props.workspaceRef,
       activeRootPath: props.activeRootPath,
@@ -257,6 +259,7 @@ export const ProjectShellHeaderHost = React.memo(
           onSelectPage={selectPage}
           onNewSession={newSession.open}
           menuActions={props.menuActions ?? []}
+          look={<ProjectAtmosphereLookChip />}
         />
         {newSession.approvalNotice}
       </>

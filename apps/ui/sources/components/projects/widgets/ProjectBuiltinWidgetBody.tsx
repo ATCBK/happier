@@ -31,7 +31,14 @@ import { resolveWorkspaceRefDisplayName } from '@/components/projects/resolveWor
 import { warmWorkspaceRepositoryDirectoryCache } from '@/sync/domains/workspaces/files/workspaceRepositoryDirectory';
 import { normalizeWorkspaceRootPath, tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { t } from '@/text';
+import { useDeviceType } from '@/utils/platform/responsive';
+import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
+import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
 import { readProjectReadmePath } from './projectReadmePath';
 import { WidgetGlanceRow } from '@/components/widgets/glance/WidgetGlanceRow';
 import { useProjectSource } from '@/components/projects/sources/useProjectSources';
@@ -45,10 +52,9 @@ import { WorkspaceLocalChangesBody } from '@/components/projects/scm/WorkspaceLo
 import { activeReviewFileKeyForWorkspace, requestActiveReviewFileForComparison } from '@/components/workspaces/scm/review/activeReviewFile';
 import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { useProjectSessionsWidgetBody, type ProjectSessionsWidgetBodyProps } from './useProjectSessionsWidgetBody';
+import { ProjectSessionsWidgetBody } from './ProjectSessionsWidgetBody';
 
-type Props = Readonly<{ id: BuiltinWidgetIdV1; workspace: WorkspaceAddressV1; checkout: WorkspaceRefV1; testID: string;
-    renderSessions?: (props: ProjectSessionsWidgetBodyProps) => React.ReactElement }>;
+type Props = Readonly<{ id: BuiltinWidgetIdV1; workspace: WorkspaceAddressV1; checkout: WorkspaceRefV1; testID: string }>;
 
 /** Native Project bodies consume only the generic binder's admitted exact checkout. */
 export function ProjectBuiltinWidgetBody(props: Props): React.ReactElement {
@@ -58,14 +64,7 @@ export function ProjectBuiltinWidgetBody(props: Props): React.ReactElement {
     if (props.id === 'project_checkouts') return <CheckoutsBody {...props} />;
     if (props.id === 'project_changes') return <ChangesBody {...props} />;
     if (props.id === 'project_scripts') return <ProjectScriptsBody workspace={props.workspace} presentation="widget" testID={props.testID} />;
-    return <SessionsBody {...props} />;
-}
-
-function SessionsBody(props: Props): React.ReactElement {
-    const sessions = useProjectSessionsWidgetBody(props.checkout);
-    if (props.renderSessions) return props.renderSessions({ sessions, testID: props.testID });
-    // The visual body is supplied by the Project host; retain its existing unavailable state otherwise.
-    return <UnavailableInstalledWidget unresolved={{ state: 'unavailable', reasonCode: `widget_${props.id}_producer_unavailable` }} testID={props.testID} />;
+    return <ProjectSessionsWidgetBody checkout={props.checkout} testID={props.testID} />;
 }
 
 function useScope(workspace: WorkspaceAddressV1): WorkspaceScopeBase {
@@ -111,6 +110,7 @@ function useProjectNavigation(workspace: WorkspaceAddressV1, checkout: Workspace
  */
 function AboutBody(props: Props): React.ReactElement {
     const scope = useScope(props.workspace);
+    const phone = useDeviceType() === 'phone';
     const viewer = useActiveServerAccountScope();
     const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer?.serverId, viewer?.accountId]);
     const admitted = lifetime?.isCurrent() && selectActiveServerAccountScopeForServer(viewer, scope.serverId) ? lifetime : null;
@@ -122,14 +122,27 @@ function AboutBody(props: Props): React.ReactElement {
     const repository = props.checkout.repositoryIdentity?.repository ?? (source ? formatProjectSourceAddress(source.repository) : null);
     const snapshot = useWorkspaceScmSnapshot(scope);
     const defaultBranch = source?.defaultRef ?? snapshot?.repo.defaultBranch ?? null;
+    // A folder without a repository is named where it lives, home-relative on its own machine (`~/code/x`).
+    const machine = useMachinePresenceSummary(scope.serverId, scope.machineId);
+    const folder = formatPathRelativeToHome(scope.rootPath, machine.homeDir ?? undefined);
+    const defaultBranchLabel = defaultBranch ? t('projects.open.defaultRef', { ref: defaultBranch }) : null;
+    const teamLabel = teamName ? t('projects.sources.sharedWithTeam', { team: teamName }) : null;
+    // A phone reads the Overview as one column (plan 12 HOMEp "About inline"): the repository and its
+    // default branch on one quiet line (the branch keeps its width, a long address truncates), and the
+    // Team beneath only when the Source is shared, so About never costs the screen three rows.
+    if (phone) {
+        return <View testID={props.testID}>
+            <WidgetGlanceRow testID={`${props.testID}.inline`} variant="fact" mark={repository ? 'book-bookmark' : 'folder'}
+                title={repository ?? folder} tag={defaultBranchLabel} fact={teamLabel} />
+        </View>;
+    }
     return <View testID={props.testID}>
         {repository
             ? <WidgetGlanceRow testID={`${props.testID}.repository`} variant="fact" mark="book-bookmark" title={repository} />
-            : <WidgetGlanceRow testID={`${props.testID}.folder`} variant="fact" mark="folder" title={scope.rootPath} mono />}
-        {defaultBranch ? <WidgetGlanceRow testID={`${props.testID}.default-branch`} variant="fact" mark="git-branch"
-            title={t('projects.open.defaultRef', { ref: defaultBranch })} /> : null}
-        {teamName ? <WidgetGlanceRow testID={`${props.testID}.team`} variant="fact" mark="users"
-            title={t('projects.sources.sharedWithTeam', { team: teamName })} /> : null}
+            : <WidgetGlanceRow testID={`${props.testID}.folder`} variant="fact" mark="folder" title={folder} />}
+        {defaultBranchLabel ? <WidgetGlanceRow testID={`${props.testID}.default-branch`} variant="fact" mark="git-branch"
+            title={defaultBranchLabel} /> : null}
+        {teamLabel ? <WidgetGlanceRow testID={`${props.testID}.team`} variant="fact" mark="users" title={teamLabel} /> : null}
     </View>;
 }
 
@@ -153,6 +166,7 @@ function ReadmeBody(props: Props): React.ReactElement {
     const scopeId = useDestinationPaneScopeId(buildProjectPaneScopeId(props.workspace.workspaceId, props.workspace.serverId));
     const key = tryBuildWorkspaceCacheKey(scope);
     const directoryRevision = useWorkspaceRepositoryDirectoryRevision(key);
+    const reachability = useCheckoutReachability(scope);
     const [read, setRead] = React.useState<Readonly<{ key: string | null; kind: 'ready'; path: string | null }> | Readonly<{ key: string | null; kind: 'error' }> | null>(null);
     const [refresh, setRefresh] = React.useState(0);
     React.useEffect(() => {
@@ -163,6 +177,8 @@ function ReadmeBody(props: Props): React.ReactElement {
         }).catch(() => { if (current) setRead({ key, kind: 'error' }); });
         return () => { current = false; };
     }, [scope, key, refresh, directoryRevision]);
+    // The README waits for its machine (lab p-code STATES 4); the page above says why.
+    if (reachability.unreachable && read?.kind !== 'ready') return <CheckoutUnreachableState reachability={reachability} testID={`${props.testID}-unreachable`} />;
     if (!read || read.key !== key) return <UnavailableInstalledWidget unresolved={{ state: 'loading', reasonCode: 'widget_project_readme_loading' }} testID={props.testID} />;
     // One state, one message, its next action beside it (the same line states as Local changes).
     if (read.kind === 'error') return <SurfaceStateCard testID={props.testID} size="line" kind="error"
@@ -185,21 +201,29 @@ function CheckoutsBody(props: Props): React.ReactElement {
     const checkout = props.checkout;
     const refs = useWorkspaceRefs();
     const machines = useAllMachines();
+    const activeAccountScope = useActiveServerAccountScope();
+    const accountScope = selectActiveServerAccountScopeForServer(activeAccountScope, scope.serverId);
+    useMachineReachabilityRevision();
+    const presenceNowMs = useMachinePresenceNowMs(machines);
     const openProject = useOpenProject();
     const projectRefs = React.useMemo(() => refs.filter(ref => sameWorkspaceProject(ref, checkout)),
         // The Project is the checkout's stored identity, not the prop object's.
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [refs, checkout.id, checkout.serverId, checkout.machineId, checkout.rootPath, checkout.projectKey]);
     const facts = useProjectsTreeCheckoutFacts(projectRefs);
-    const machineName = (machineId: string) => getMachineDisplayName(machines.find(machine => machine.id === machineId) ?? null) ?? machineId;
+    const machineOf = (machineId: string) => machines.find(machine => machine.id === machineId) ?? null;
+    const machineName = (machineId: string) => getMachineDisplayName(machineOf(machineId)) ?? machineId;
     const refAt = (machineId: string, rootPath: string) => projectRefs.find(ref => ref.machineId === machineId
         && normalizeWorkspaceRootPath(ref.rootPath) === normalizeWorkspaceRootPath(rootPath)) ?? null;
     const status = (ref: WorkspaceRefV1 | null) => (ref
         ? facts.get(projectsTreeCheckoutKey({ refId: ref.id, workspaceAddress: workspaceAddressFromRefV1(ref) })) ?? null : null);
     const fact = (machineId: string, ref: WorkspaceRefV1 | null) => {
         const attention = status(ref)?.attention ?? null;
+        // An offline machine's checkout stays listed and says so (lab p-projects: dimmed, last-known).
+        const machine = machineOf(machineId);
+        const offline = machine != null && !isMachineReachable(accountScope, machine, presenceNowMs);
         return {
-            fact: [machineName(machineId), attention === 'needs-you' ? t('projects.checkouts.needsYou')
+            fact: [machineName(machineId), offline ? t('projects.checkouts.offline') : attention === 'needs-you' ? t('projects.checkouts.needsYou')
                 : attention === 'working' ? t('projects.checkouts.working') : null].filter(Boolean).join(' · '),
             factTone: attention === 'needs-you' ? 'attention' as const : 'quiet' as const,
         };

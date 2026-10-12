@@ -133,6 +133,21 @@ function workspaceRef(id: string, machineId: string, rootPath: string): Workspac
 }
 
 describe('ProjectsColumn', () => {
+    it('does not call a Source "not open" until the Project rows have loaded', async () => {
+        // While the census is still loading, every Source would look unopened; the saved group waits with the tree.
+        workspaceRefsV1Mock = [];
+        homes.answer(serverId, `/v1/projects/sources?serverId=${encodeURIComponent(serverId)}&query=`, { body: {
+            ok: true, sources: [{ id: 'saved', revision: 1, name: 'Saved repository', createdByAccountId: 'account-1', audience: [],
+                repository: { provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
+                    repository: { nameWithOwner: 'owner/repo' }, protocol: 'https' } }], coverage: { complete: true, nextCursor: null },
+        } });
+        const { ProjectsColumn } = await import('./ProjectsColumn');
+        const screen = await renderProjects(<ProjectsColumn />);
+        await vi.waitFor(() => expect(screen.findByTestId('projects-column:tree-saved-saved')).toBeTruthy());
+        await act(async () => { storage.getState().setProjectAccountRowsStatusForScope(storage.getState().profileScope!, 'loading'); });
+        expect(screen.findByTestId('projects-column:tree-saved-saved')).toBeNull();
+    });
+
     it('shows saved Sources as content without repeating a no-projects message', async () => {
         workspaceRefsV1Mock = [];
         homes.answer(serverId, `/v1/projects/sources?serverId=${encodeURIComponent(serverId)}&query=`, { body: {
@@ -190,6 +205,45 @@ describe('ProjectsColumn', () => {
         expect(screen.findAllByTestId(alphaRowId)[0]?.props.selected).toBe(false);
     });
 
+    it('waits quietly while the Project rows load and offers Retry on one line when the read failed', async () => {
+        machinesMock = [];
+        storage.getState().applyMachines(machinesMock, true);
+        const accountScope = storage.getState().profileScope!;
+        storage.getState().activateProjectAccountRowsScope(accountScope);
+        const { ProjectsColumn } = await import('./ProjectsColumn');
+        const screen = await renderScreen(<ProjectsColumn />);
+        // Loading: the collection's quiet rows, no card and nothing to press.
+        expect(screen.findAllByTestId('projects-column:rows')).toHaveLength(0);
+        expect(screen.findAllByTestId('projects-column:rows-retry')).toHaveLength(0);
+        await act(async () => { storage.getState().setProjectAccountRowsStatusForScope(accountScope, 'error'); });
+        expect(screen.findAllByTestId('projects-column:rows-retry').length).toBeGreaterThan(0);
+    });
+
+    it('waits for the Machines before naming any row, never calling a Machine unlisted while they load', async () => {
+        machinesMock = [createMachine({ id: 'm1', host: 'studio' })];
+        workspaceRefsV1Mock = [workspaceRef('ref-a', 'm1', '/Users/tester/alpha')];
+        const { ProjectsColumn } = await import('./ProjectsColumn');
+        const screen = await renderProjects(<ProjectsColumn />);
+        // A first load: the rows are known, the Machine inventory has not arrived yet.
+        await act(async () => { storage.setState({ isDataReady: false }); storage.getState().applyMachines([], true); });
+        // The column waits quietly instead of calling every Machine unlisted.
+        expect(screen.findAllByTestId('projects-column:tree-row-ref-a')).toHaveLength(0);
+        await act(async () => { storage.getState().applyMachines(machinesMock, true); });
+        expect(String(screen.findAllByTestId('projects-column:tree-row-ref-a')[0]?.props.subtitle ?? '')).toMatch(/^studio · /);
+    });
+
+    it('names each row\'s Machine through the machine-name owner, never by its raw id', async () => {
+        machinesMock = [createMachine({ id: 'm1', host: 'studio' }), createMachine({ id: 'm2', host: 'studio' })];
+        workspaceRefsV1Mock = [workspaceRef('ref-a', 'm1', '/Users/tester/alpha'), workspaceRef('ref-x', 'retired-machine', '/Users/tester/x')];
+        const { ProjectsColumn } = await import('./ProjectsColumn');
+        const screen = await renderProjects(<ProjectsColumn />);
+        const subtitle = (id: string) => String(screen.findAllByTestId(id)[0]?.props.subtitle ?? '');
+        // Same-named Machines carry the pickers' suffix; one this Home no longer lists says so.
+        expect(subtitle('projects-column:tree-row-ref-a')).toMatch(/^studio · m1 · /);
+        expect(subtitle('projects-column:tree-row-ref-x')).toMatch(/^machine\.unlistedMachine · /);
+        expect(subtitle('projects-column:tree-row-ref-x')).not.toContain('retired-machine');
+    });
+
     it('opens the exact checkout from a leaf row', async () => {
         const { ProjectsColumn } = await import('./ProjectsColumn');
         const screen = await renderProjects(<ProjectsColumn />);
@@ -231,6 +285,24 @@ describe('Projects index', () => {
         standardCleanup();
         machinesMock = [createMachine({ id: 'm1', host: 'studio' })];
         workspaceRefsV1Mock = [workspaceRef('ref-a', 'm1', '/Users/tester/alpha')];
+    });
+
+    it('leads with the same Add as the column once Projects exist, even with a saved Source', async () => {
+        homes.answer(serverId, `/v1/projects/sources?serverId=${encodeURIComponent(serverId)}&query=`, { body: {
+            ok: true, sources: [{ id: 'saved', revision: 1, name: 'Saved repository', createdByAccountId: 'account-1', audience: [],
+                repository: { provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
+                    repository: { nameWithOwner: 'owner/repo' }, protocol: 'https' } }], coverage: { complete: true, nextCursor: null },
+        } });
+        const { AppShellColumnContext } = await import('@/components/navigation/shell/appRail/appShellColumnContext');
+        const { ProjectsIndexView } = await import('./ProjectsIndexView');
+        const { ProjectsColumn } = await import('./ProjectsColumn');
+        const screen = await renderProjects(<AppShellColumnContext.Provider value={{ present: true, columnVisible: true }}>
+            <ProjectsColumn /><ProjectsIndexView /></AppShellColumnContext.Provider>);
+        // The saved Source has arrived (the column lists it under "Saved, not open")…
+        await vi.waitFor(() => expect(screen.findByTestId('projects-column:tree-saved')).toBeTruthy());
+        // …and the page still offers the column's Add, not that Source.
+        expect(screen.findByTestId('projects-none-open:add')).toBeTruthy();
+        expect(screen.findByTestId('projects-none-open:open-source')).toBeNull();
     });
 
     it('does not repeat the list beside the Projects column: it says no project is open', async () => {

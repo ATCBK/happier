@@ -102,7 +102,9 @@ export function useProjectsSourcesComposition(openedSourceIds: ReadonlySet<strin
     const cloneRepository = React.useCallback(() => {
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime?.isCurrent()) return;
-        fireAndForget(seedAndOpenProjectDraft({ selection: { serverId: lifetime.scope.serverId }, lifetime,
+        // Open with the clone intent alone: its Source section asks for the repository address first.
+        fireAndForget(seedAndOpenProjectDraft({ selection: { serverId: lifetime.scope.serverId,
+            materialization: { kind: 'clone', destinationParentPath: '', destinationDirectoryName: '' } }, lifetime,
             navigate: navigateToOpen }), { tag: 'projects.open' });
     }, [navigateToOpen]);
 

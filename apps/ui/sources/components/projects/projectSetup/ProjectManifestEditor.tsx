@@ -22,6 +22,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { renderPageHeaderText } from '@/components/ui/layout/PageHeader';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
+import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -118,6 +119,8 @@ function ProjectManifestEditorLeaf(
   const { model } = props;
   const phone = useDeviceType() === 'phone';
   const insets = useSafeAreaInsets();
+  // The floating bottom bar overlays the screen; each surface clears it itself, so Discard and Save stay reachable.
+  const bottomChromeHeight = useSessionCockpitBottomChromeHeight();
   const snapshot = useProjectManifestEditorSnapshot(model);
   const columnMaxWidth = useLayoutMaxWidth();
   const machine = useServerScopedMachine(props.workspace.serverId, props.workspace.machineId);
@@ -159,7 +162,7 @@ function ProjectManifestEditorLeaf(
     <View style={styles.headerActions}>
       <RoundButton
         size="small"
-        display="secondary"
+        display="inverted"
         title={t('projects.scripts.editor.discard')}
         testID="project-manifest-editor.discard"
         disabled={!snapshot.dirty || snapshot.saving}
@@ -207,7 +210,6 @@ function ProjectManifestEditorLeaf(
             <SegmentedTabBar
               tabs={tabs}
               activeTabId={snapshot.mode}
-              compact
               segmentSizing="content"
               accessibilityLabel={t('projects.scripts.editor.view')}
               testIDPrefix="project-manifest-editor.mode"
@@ -313,7 +315,7 @@ function ProjectManifestEditorLeaf(
   return phone ? (
     <KeyboardAwareScreen style={styles.phone}>
       <ItemList keyboardAware keyboardShouldPersistTaps="handled" testID="project-manifest-editor.phoneScroll">{content}</ItemList>
-      <View testID="project-manifest-editor.phoneActions" style={[styles.phoneActions, { backgroundColor: theme.colors.surface.base, paddingBottom: Math.max(16, insets.bottom) }]}>
+      <View testID="project-manifest-editor.phoneActions" style={[styles.phoneActions, { backgroundColor: theme.colors.surface.base, paddingBottom: Math.max(16, insets.bottom) + bottomChromeHeight }]}>
         {actions}
       </View>
     </KeyboardAwareScreen>

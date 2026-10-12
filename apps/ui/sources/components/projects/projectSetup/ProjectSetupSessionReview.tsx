@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { useActionOperationStopControl } from '@/components/inbox/actionOperations/useActionOperationStopControl';
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
@@ -8,6 +9,7 @@ import { ApprovalDecisionFooter } from '@/components/tools/shell/approvals/Appro
 import { ApprovalPromptChrome } from '@/components/tools/shell/approvals/ApprovalPromptChrome';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { actionOperationAddressKey } from '@/sync/domains/actionOperations/qualifiedActionOperation';
@@ -290,7 +292,7 @@ export const ProjectSetupConsentReviewCard = React.memo(
 
 const styles = StyleSheet.create(() => ({
   list: { gap: 12, paddingTop: 12 },
-  body: { fontSize: 12, lineHeight: 17 },
+  body: { ...Typography.default(), ...happierPageTextMetrics('rowDescription') },
   settled: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  settledText: { fontSize: 12 },
+  settledText: { ...Typography.default(), ...happierPageTextMetrics('rowDescription') },
 }));

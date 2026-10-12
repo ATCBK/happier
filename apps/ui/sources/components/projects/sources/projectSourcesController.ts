@@ -8,22 +8,11 @@ import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { UiActionExecutorContext } from '@/sync/ops/actions/defaultActionExecutor';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import type { Machine } from '@/sync/domains/state/storageTypes';
 import { randomUUID } from '@/platform/randomUUID';
-import { ScmHostingRepositoryResolveAddressResponseV1Schema, type ScmHostingRepositoryResolveAddressResponseV1 } from '@happier-dev/protocol/scm/repositoryClone';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
-import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { formatProjectSourceAddress } from './projectSourceAddress';
+import { resolveProjectSourceAddress, type ProjectSourceAddressMachines, type ProjectSourceAddressResolution } from './resolveProjectSourceAddress';
 
-export type ProjectSourceAddressMachines = Readonly<{
-    machines: readonly Readonly<Pick<Machine, 'id' | 'active'> & Partial<Pick<Machine, 'activeAt' | 'kind' | 'revokedAt' | 'replacedByMachineId' | 'availability'>>>[];
-    preferredMachineId?: string | null;
-}>;
-export type ProjectSourceAddressResolution =
-    | Readonly<{ kind: 'idle' }>
-    | Readonly<{ kind: 'resolving'; address: string; machineId: string }>
-    | Readonly<{ kind: 'no_reachable_machine' | 'unavailable'; address: string }>
-    | (ScmHostingRepositoryResolveAddressResponseV1 & Readonly<{ address: string; machineId: string }>);
+export type { ProjectSourceAddressMachines, ProjectSourceAddressResolution } from './resolveProjectSourceAddress';
 
 export type ProjectSourceDraft = Omit<ProjectSourcesCreateInputV1, 'serverId' | 'requestKey'>;
 export type ProjectSourceCreationDraft = Readonly<{
@@ -115,7 +104,7 @@ function carryDraft(draft: ProjectSourceDraft, basis: ProjectSourceDraft, source
 
 /** One demanded catalog/editor, captured under one authenticated Home/Account. */
 export function createProjectSourcesController(scope: ServerAccountScope, execute: Execute,
-    readAddressMachines: () => ProjectSourceAddressMachines = () => ({ machines: [] }),
+    readAddressMachines: () => ProjectSourceAddressMachines = () => ({ machines: [], inventoryStatus: 'loading' }),
     readCatalog?: ReadProjectSourcesCatalog) {
     let state: ProjectSourcesState = { rows: [], query: '', audience: undefined, catalogQuery: '', catalogAudience: undefined, coverage: { complete: false, nextCursor: null }, status: 'initial',
         selectedId: null, current: null, canManage: false, detailStatus: 'initial', draft: null, creationDraft: null, conflict: null,
@@ -272,34 +261,16 @@ export function createProjectSourcesController(scope: ServerAccountScope, execut
                 publish({ addressResolution: { success: true, kind: 'invalid', address, machineId: '' }, addressSaveDisabledReason: 'projects.sources.addressInvalid' });
                 return;
             }
-            const reachable = options.machines.filter(machine => isMachineVisibleForLaunchSelection(machine)
-                && machine.availability?.kind !== 'locked' && isMachineOnline(machine));
-            const machine = reachable.find(candidate => candidate.id === options.preferredMachineId) ?? reachable[0];
-            if (!machine) {
-                publish({ addressResolution: { kind: 'no_reachable_machine', address }, addressSaveDisabledReason: 'projects.sources.addressNoMachine' });
-                return;
-            }
             const request = new AbortController(); addressRequest = request;
-            publish({ addressResolution: { kind: 'resolving', address, machineId: machine.id }, addressSaveDisabledReason: 'projects.sources.loading' });
             try {
-                const outcome = await execute('scm.hostingRepository.resolveAddress', { address }, {
-                    surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
-                    externalActionTarget: { kind: 'machine', machineId: machine.id }, signal: request.signal,
-                });
-                if (disposed || addressRequest !== request || request.signal.aborted) return;
-                if (!outcome.ok) throw new Error(outcome.errorCode);
-                const result = ScmHostingRepositoryResolveAddressResponseV1Schema.parse(outcome.result);
-                publish({ addressResolution: { ...result, address, machineId: machine.id }, addressSaveDisabledReason: result.kind === 'resolved' ? null
-                    : result.kind === 'invalid' ? 'projects.sources.addressInvalid'
-                        : result.kind === 'unknown' ? 'projects.sources.addressUnknown' : 'projects.sources.addressUnsupported' });
-                if (result.kind === 'resolved') {
-                    if (!state.selectedId && state.creationDraft) publish({ creationDraft: { ...state.creationDraft, repository: result.selector } });
-                    else controller.edit({ repository: result.selector });
+                const outcome = await resolveProjectSourceAddress({ text: address, scope, execute, machines: options, signal: request.signal,
+                    onResolving: resolution => publish({ addressResolution: resolution, addressSaveDisabledReason: 'projects.sources.loading' }) });
+                if (!outcome || disposed || addressRequest !== request || request.signal.aborted) return;
+                publish({ addressResolution: outcome.resolution, addressSaveDisabledReason: outcome.refusal });
+                if (outcome.resolution.kind === 'resolved') {
+                    if (!state.selectedId && state.creationDraft) publish({ creationDraft: { ...state.creationDraft, repository: outcome.resolution.selector } });
+                    else controller.edit({ repository: outcome.resolution.selector });
                 }
-            } catch {
-                if (!disposed && addressRequest === request && !request.signal.aborted) publish({
-                    addressResolution: { kind: 'unavailable', address }, addressSaveDisabledReason: 'projects.sources.backendUnavailable',
-                });
             } finally { if (addressRequest === request) addressRequest = null; }
         },
         async load(query = state.query, cursor?: string, audience?: ProjectSourcesListInputV1['audience']) {
