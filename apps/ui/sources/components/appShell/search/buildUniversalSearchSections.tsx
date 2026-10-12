@@ -17,6 +17,13 @@ import { ConversationHitSummary } from '@/components/sessions/external/browse/Co
 import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { splitKeybindingLabel, useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { SelectionListOptionStateContext } from '@/components/ui/selectionList/SelectionListOptionStateContext';
+import { SelectionListDetailPaneContext } from '@/components/ui/selectionList';
+import { useCodeTextFile } from '@/components/projects/files/code/useCodeTextFile';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+
+const EMPTY_WORKSPACE_SCOPE: WorkspaceScopeBase = { serverId: '', machineId: '', rootPath: '' };
 
 import type { Command } from '@/components/appShell/commandPalette/types';
 import {
@@ -58,6 +65,8 @@ import {
 /** Bounded empty-query recents. Not a ranking service — just "what you had open". */
 const EMPTY_QUERY_RECENT_LIMIT = 5;
 const DEFAULT_ROW_LIMIT = 20;
+/** Lines the inline Text in files group shows before its "All N matches" row (lab G1: "the best few"). */
+const INLINE_FILE_CONTENT_LINES = 3;
 export const EXTERNAL_CONVERSATION_SEARCH_OPTION_ID = 'external-conversations:search';
 export const ALL_FILE_MATCHES_OPTION_ID = 'fileContent:all-matches';
 
@@ -147,6 +156,16 @@ export type UniversalSearchSource =
     /** The source has no target at all here (no workspace, no admitted provider): omit it. */
     | Readonly<{ status: 'absent' }>;
 
+export type UniversalSearchFolderSuggestion = Readonly<{
+    id: string;
+    name: string;
+    subtitle?: string;
+    onSelect: () => void;
+}>;
+
+/** Rows that change the palette's scope in place; the surface keeps the palette open for them. */
+export const FILE_CONTENT_FOLDER_OPTION_PREFIX = 'fileContent:folder:';
+
 export type BuildUniversalSearchSectionsInput = Readonly<{
     query: string;
     commands: readonly Command[];
@@ -159,6 +178,11 @@ export type BuildUniversalSearchSectionsInput = Readonly<{
     files: UniversalSearchSource;
     fileContent?: UniversalSearchSource;
     fileContentScopeLabel?: string;
+    /**
+     * With no folder in scope (lab ST "No folder in scope"), the recent folders Text in files can search,
+     * most recent first; choosing one scopes the search there and keeps the query.
+     */
+    fileContentFolders?: ReadonlyArray<UniversalSearchFolderSuggestion>;
     onShowAllFileMatches?: () => void;
     source?: 'fileContent';
     commits: UniversalSearchSource;
@@ -193,15 +217,20 @@ const SNIPPET_LEAD_CHARS = 32;
  * dropped, the match marked with the Find tint every surface uses, and a long lead elided so the match
  * shows. The row's label already names `path:line`.
  */
-function FileContentSnippet({ match }: Readonly<{ match: NonNullable<UniversalSearchResult['fileContent']> }>): React.ReactElement {
+type FileContentMatch = NonNullable<UniversalSearchResult['fileContent']>;
+/** Every match on one line (the line's row marks them all), in column order. */
+type FileContentLine = FileContentMatch & Readonly<{ columns: readonly Readonly<{ column16: number; length16: number }>[] }>;
+
+function FileContentSnippet({ match }: Readonly<{ match: FileContentLine }>): React.ReactElement {
     const { theme } = useUnistyles();
     const start = Math.max(0, match.column16 - 1);
     const lead = match.text.slice(0, start).trimStart();
     const shownLead = lead.length > SNIPPET_LEAD_CHARS + 8 ? `…${lead.slice(-SNIPPET_LEAD_CHARS)}` : lead;
     const text = `${shownLead}${match.text.slice(start)}`;
-    const ranges = [{ start: shownLead.length, end: shownLead.length + match.length16, current: false }];
+    const ranges = match.columns.map((column) => ({ start: shownLead.length + column.column16 - 1 - start,
+        end: shownLead.length + column.column16 - 1 - start + column.length16, current: false }));
     return (
-        <View style={{ marginTop: 2 }}>
+        <View style={{ marginTop: theme.space.s2 }}>
             <Text useDefaultTypography={false} numberOfLines={1} style={{ ...Typography.rowMeta(), ...Typography.mono(), color: theme.colors.text.secondary }}>
                 <FindHighlightedText text={text} ranges={ranges} />
             </Text>
@@ -209,33 +238,176 @@ function FileContentSnippet({ match }: Readonly<{ match: NonNullable<UniversalSe
     );
 }
 
-/** Only the selected hit expands; context comes from the same search response (G1s). */
-function FileContentPreview({ match }: Readonly<{ match: NonNullable<UniversalSearchResult['fileContent']> }>) {
+/**
+ * Only the active hit expands, inside its own row (it replaces the one-line snippet, so the line is never
+ * shown twice); context comes from the same search response (G1s). Common indentation is dropped and the
+ * line numbers sit in one right-aligned gutter (lab `.fd-snip .ln`), so 9 → 10 never shifts the code.
+ */
+function FileContentPreview({ match, gutterDigits, tone = 'secondary', wrap = false, bandHit = false }: Readonly<{ match: FileContentLine; gutterDigits?: number; tone?: 'primary' | 'secondary'; wrap?: boolean;
+    /** The detail column also lays a quiet band under the hit line (lab G1s line 23). */
+    bandHit?: boolean }>) {
     const { theme } = useUnistyles();
     const lines = [...match.before, match.text, ...match.after];
-    const textStyle = { ...Typography.rowMeta(), ...Typography.mono(), color: theme.colors.text.secondary };
-    // One right-aligned gutter as wide as the last line number (lab `.fd-snip .ln`), so 9 → 10 never shifts the code.
-    const gutter = { minWidth: Math.ceil(String(match.line + match.after.length).length * (textStyle.fontSize ?? 12) * 0.6), textAlign: 'right' as const };
-    return <View testID="file-content-preview">
-        {lines.map((text, index) => <View key={index} style={{ flexDirection: 'row', gap: 8 }}>
+    const indent = Math.min(...lines.filter((line) => line.trim().length > 0).map((line) => line.length - line.trimStart().length));
+    const textStyle = { ...Typography.rowMeta(), ...Typography.mono(), color: tone === 'primary' ? theme.colors.text.primary : theme.colors.text.secondary };
+    const digits = gutterDigits ?? String(match.line + match.after.length).length;
+    const gutter = { minWidth: Math.ceil(digits * (textStyle.fontSize ?? 12) * 0.6), textAlign: 'right' as const };
+    return <View testID="file-content-preview" style={{ marginTop: theme.space.s2 }}>
+        {lines.map((text, index) => <View key={index} style={[{ flexDirection: 'row', gap: theme.space.s8 },
+            bandHit && index === match.before.length ? { backgroundColor: theme.colors.state.active.background, borderRadius: 4, marginHorizontal: -4, paddingHorizontal: theme.space.s4 } : null]}>
             <Text useDefaultTypography={false} style={[textStyle, gutter, { color: theme.colors.text.tertiary }]}>{match.line - match.before.length + index}</Text>
-            <Text useDefaultTypography={false} style={[textStyle, { flex: 1 }]}>
-                <FindHighlightedText text={text} ranges={index === match.before.length
-                    ? [{ start: match.column16 - 1, end: match.column16 - 1 + match.length16, current: true }] : undefined} />
+            <Text useDefaultTypography={false} numberOfLines={wrap ? undefined : 1} style={[textStyle, { flex: 1 }]}>
+                <FindHighlightedText text={text.slice(Math.min(indent, text.length - text.trimStart().length))} ranges={index === match.before.length
+                    ? match.columns.map((column) => ({ start: column.column16 - 1 - indent, end: column.column16 - 1 - indent + column.length16, current: true }))
+                    : undefined} />
             </Text>
         </View>)}
     </View>;
 }
 
+/**
+ * Whether this row shows its context inline: it is the active row, and the list has no detail column
+ * beside it (on a wide card the context lives there instead, lab G1s).
+ */
+function useRowFocused(): boolean {
+    const focused = React.useContext(SelectionListOptionStateContext)?.focused === true;
+    const inPane = React.useContext(SelectionListDetailPaneContext);
+    return focused && !inPane;
+}
+
+/** The detail column for a line hit (lab G1s `.fd-preview`): which file and line, its context, and what Return does. */
+/** Lines kept around the hit in the detail column (lab G1s shows about a dozen, the hit near the top third). */
+const DETAIL_LINES_BEFORE = 5;
+const DETAIL_LINES_AFTER = 6;
+
+/**
+ * The excerpt the detail column shows: the file read through the workspace file owner when it still has
+ * the hit on that line, else the context the search itself returned (a file edited since the search, a
+ * read that failed or is still on its way).
+ */
+function useFileContentExcerpt(match: FileContentLine, scope: WorkspaceScopeBase | null): FileContentLine {
+    const file = useCodeTextFile(scope ?? EMPTY_WORKSPACE_SCOPE, scope ? match.path : null);
+    return React.useMemo(() => {
+        if (file.kind !== 'ready') return match;
+        const lines = file.text.split(/\r?\n/);
+        if (lines[match.line - 1] !== match.text) return match;
+        return { ...match,
+            before: lines.slice(Math.max(0, match.line - 1 - DETAIL_LINES_BEFORE), match.line - 1),
+            after: lines.slice(match.line, match.line + DETAIL_LINES_AFTER) };
+    }, [file, match]);
+}
+
+function FileContentDetail({ match: hit, scope }: Readonly<{ match: FileContentLine; scope: WorkspaceScopeBase | null }>) {
+    const { theme } = useUnistyles();
+    const match = useFileContentExcerpt(hit, scope);
+    const split = Math.max(match.path.lastIndexOf('/'), match.path.lastIndexOf('\\'));
+    const name = match.path.slice(split + 1);
+    return <View testID="file-content-detail" style={{ paddingHorizontal: MENU_ROW_METRICS.paddingHorizontalPx, paddingVertical: MENU_ROW_METRICS.paddingVerticalPx, gap: theme.space.s10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: MENU_ROW_METRICS.iconMarginRightPx }}>
+            <FileIcon fileName={name} size={ICON_SIZE.sm} appearance="line" />
+            <Text numberOfLines={1} style={[Typography.rowTitle(), { flexShrink: 1, color: theme.colors.text.primary }]}>
+                <Text style={Typography.default('medium')}>{name}</Text>
+                <Text style={[Typography.default(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{`  ${match.line}`}</Text>
+            </Text>
+        </View>
+        {/* The column has room to show whole lines (lab G1s wraps them). */}
+        <FileContentPreview match={match} tone="primary" wrap bandHit />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}>
+            <KeyHint label="↵" />
+            <Text style={[Typography.rowMeta(), { color: theme.colors.text.tertiary }]}>{t('commandPalette.hints.openAtLine')}</Text>
+        </View>
+    </View>;
+}
+
+/** A Text-in-files hit's second line: the matching line, or its context while the row is active. */
+function FileContentSubtitle({ match }: Readonly<{ match: FileContentLine }>) {
+    const focused = useRowFocused();
+    return focused && (match.before.length > 0 || match.after.length > 0)
+        ? <FileContentPreview match={match} />
+        : <FileContentSnippet match={match} />;
+}
+
+/**
+ * A deep directory keeps its first two and last folders around an ellipsis (lab G1 `apps/ui/…/settings/`),
+ * so the file name stays readable at any width; web text cannot ellipsize at the head.
+ */
+function compactDirectory(directory: string): string {
+    const parts = directory.split(/[\\/]/).filter(Boolean);
+    return parts.length > 3 ? `${parts[0]}/${parts[1]}/…/${parts[parts.length - 1]}/` : directory;
+}
+
 /** File identity keeps its directory quiet, its name readable and its line tabular (lab G1). */
-function FileContentLabel({ match }: Readonly<{ match: NonNullable<UniversalSearchResult['fileContent']> }>) {
+function FileContentLabel({ match }: Readonly<{ match: FileContentMatch }>) {
     const { theme } = useUnistyles();
     const split = Math.max(match.path.lastIndexOf('/'), match.path.lastIndexOf('\\'));
     return <Text numberOfLines={1} ellipsizeMode="head" style={[Typography.rowTitle(), { color: theme.colors.text.primary }]}>
-        <Text style={[Typography.default(), { color: theme.colors.text.tertiary }]}>{match.path.slice(0, split + 1)}</Text>
+        <Text style={[Typography.default(), { color: theme.colors.text.tertiary }]}>{compactDirectory(match.path.slice(0, split + 1))}</Text>
         <Text style={Typography.default('medium')}>{match.path.slice(split + 1)}</Text>
         <Text style={[Typography.default(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{`:${match.line}`}</Text>
     </Text>;
+}
+
+/** The Text in files scope's file heading (lab G1s): type mark, name, quiet folder, match count right. */
+function FileContentGroupHeader({ path, matches }: Readonly<{ path: string; matches: number }>) {
+    const { theme } = useUnistyles();
+    const split = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+    return <View style={{ flexDirection: 'row', alignItems: 'center', gap: MENU_ROW_METRICS.iconMarginRightPx,
+        paddingHorizontal: MENU_ROW_METRICS.paddingHorizontalPx, paddingTop: MENU_ROW_METRICS.paddingVerticalPx, paddingBottom: theme.space.s2 }}>
+        <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx, alignItems: 'center' }}><FileIcon fileName={path.slice(split + 1)} size={ICON_SIZE.sm} appearance="line" /></View>
+        <Text numberOfLines={1} ellipsizeMode="head" style={[Typography.rowTitle(), { flex: 1, color: theme.colors.text.primary }]}>
+            <Text style={Typography.default('medium')}>{path.slice(split + 1)}</Text>
+            {split >= 0 ? <Text style={[Typography.default(), { color: theme.colors.text.tertiary }]}>{`  ${compactDirectory(path.slice(0, split)).replace(/\/$/, '')}`}</Text> : null}
+        </Text>
+        <Text style={[Typography.rowMeta(), Typography.tabular(), { color: theme.colors.text.tertiary }]}>{matches}</Text>
+    </View>;
+}
+
+function AllMatchesLabel({ label }: Readonly<{ label: string }>) {
+    const { theme } = useUnistyles();
+    return <Text numberOfLines={1} style={[Typography.rowMeta(), { color: theme.colors.text.secondary }]}>{label}</Text>;
+}
+
+function FileContentScopeStatus({ label }: Readonly<{ label: string }>) {
+    const { theme } = useUnistyles();
+    return <Text style={[Typography.rowMeta(), Typography.tabular(), { color: theme.colors.text.secondary,
+        paddingHorizontal: MENU_ROW_METRICS.paddingHorizontalPx, paddingTop: MENU_ROW_METRICS.paddingVerticalPx }]}>{label}</Text>;
+}
+
+/** A line under its file heading: the line number in a quiet gutter, then the code (lab G1s `.fd-snip`). */
+function FileContentLineLabel({ match, gutterDigits }: Readonly<{ match: FileContentLine; gutterDigits: number }>) {
+    const { theme } = useUnistyles();
+    const focused = useRowFocused();
+    if (focused && (match.before.length > 0 || match.after.length > 0)) {
+        return <FileContentPreview match={match} gutterDigits={gutterDigits} tone="primary" />;
+    }
+    const text = match.text.trimStart();
+    const shift = match.text.length - text.length;
+    const ranges = match.columns.map((column) => ({ start: column.column16 - 1 - shift, end: column.column16 - 1 - shift + column.length16, current: false }));
+    const style = { ...Typography.rowMeta(), ...Typography.mono() };
+    // The same right-aligned gutter as the expanded context, so the code never shifts when a row becomes active.
+    const gutter = { minWidth: Math.ceil(gutterDigits * (style.fontSize ?? 12) * 0.6), textAlign: 'right' as const };
+    return <View style={{ flexDirection: 'row', gap: theme.space.s8 }}>
+        <Text useDefaultTypography={false} style={[style, Typography.tabular(), gutter, { color: theme.colors.text.tertiary }]}>{match.line}</Text>
+        <Text useDefaultTypography={false} numberOfLines={1} style={[style, { flex: 1, color: theme.colors.text.primary }]}>
+            <FindHighlightedText text={text} ranges={ranges} />
+        </Text>
+    </View>;
+}
+
+/** Same-line matches become one line (a row per line, every match on it marked), in response order. */
+function groupFileContentLines(results: readonly UniversalSearchResult[]): Array<Readonly<{ result: UniversalSearchResult; line: FileContentLine }>> {
+    const lines: Array<{ result: UniversalSearchResult; line: FileContentLine }> = [];
+    for (const result of results) {
+        const match = result.fileContent;
+        if (!match) continue;
+        const last = lines[lines.length - 1];
+        if (last && last.line.path === match.path && last.line.line === match.line) {
+            last.line = { ...last.line, columns: [...last.line.columns, { column16: match.column16, length16: match.length16 }] };
+            continue;
+        }
+        lines.push({ result, line: { ...match, columns: [{ column16: match.column16, length16: match.length16 }] } });
+    }
+    return lines;
 }
 
 function TextInFilesShortcut() {
@@ -250,17 +422,22 @@ function agentIcon(agentId: string): () => React.ReactElement {
     return () => <AgentIcon agentId={agentId} size={ICON_SIZE.md} />;
 }
 
-/** A file's own type mark (the Files tree's), not a generic glyph. */
+/**
+ * A file's type mark exactly as the Files tree draws it (`FileIcon` at the tree's size, `line` appearance):
+ * one glyph weight and box in every palette row kind (Files rows, text-in-files headings, the preview),
+ * with the type in its tint. Live over lab (filled TSX/TS/MD badges): one FileIcon owner.
+ */
 function fileIcon(path: string): () => React.ReactElement {
     const name = path.slice(path.lastIndexOf('/') + 1);
     // A filled type tile reads larger than a line glyph; the small size matches its optical weight.
-    return () => <FileIcon fileName={name} size={ICON_SIZE.sm} />;
+    return () => <FileIcon fileName={name} size={ICON_SIZE.sm} appearance="line" />;
 }
 
 function toOption(
     result: UniversalSearchResult,
     iconName: IconName,
     onCommit: (result: UniversalSearchResult) => void,
+    fileLine?: FileContentLine,
 ): SelectionListOption {
     return {
         id: buildUniversalSearchOptionId(result.sourceId, result.scopeKey, result.id),
@@ -271,11 +448,9 @@ function toOption(
             : result.title,
         ...(result.subtitle ? { subtitle: result.subtitle } : {}),
         ...(result.fileContent ? {
-            subtitleContent: () => <FileContentSnippet match={result.fileContent!} />,
-            ...(result.fileContent.before.length || result.fileContent.after.length ? {
-                expandedContent: () => <FileContentPreview match={result.fileContent!} />,
-                hideSubtitleWhenExpanded: true,
-            } : {}),
+            subtitleContent: () => <FileContentSubtitle match={fileLine ?? { ...result.fileContent!, columns: [result.fileContent!] }} />,
+            detailContent: () => <FileContentDetail match={fileLine ?? { ...result.fileContent!, columns: [result.fileContent!] }}
+                scope={result.target.kind === 'workspaceFile' ? result.target.scope : null} />,
         } : {}),
         ...(result.conversation ? {
             subtitle: result.conversation.snippet,
@@ -308,6 +483,8 @@ function buildDynamicSection(
         preserveQuery?: boolean;
         scopeLabel?: string;
         onShowAll?: () => void;
+        /** The Text in files scope: every line, grouped under its file (lab G1s). */
+        groupByFile?: boolean;
         onCommit: (result: UniversalSearchResult) => void;
     }>,
 ): SelectionListDynamicSection[] {
@@ -334,49 +511,102 @@ function buildDynamicSection(
 
     return [{
         id: input.sourceId,
-        title: input.title,
-        rightAccessory: input.scopeLabel,
+        // In the Text in files scope the token in the field names the group; the status row leads instead.
+        ...(input.groupByFile ? {} : { title: input.title, rightAccessory: input.scopeLabel }),
         resolverKey: `${input.sourceId}|${source.resolverKey}`,
         visibleWhen: (value: string) => (input.preserveQuery ? value.length : value.trim().length) >= (input.minQueryLength ?? 1),
         resultFiltering: 'provider',
         showSkeletonsOnFirstLoad: true,
+        // The group keeps its place and says it is still looking in one quiet line (lab ST), never a block of
+        // placeholder bars taller than the results that replace them.
+        loadingHint: t('universalSearch.searchingGroup'),
+        errorHint: t('universalSearch.groupFailed', { group: input.title }),
         resultTransition: 'none',
         resolve: async (seed, signal) => {
             const resolved = await source.resolve(input.preserveQuery ? seed : seed.trim(), signal);
             const page = isUniversalSearchResolvePage(resolved)
                 ? resolved
                 : { results: resolved, emptyHint: undefined };
-            // Hits arrive grouped by file; each row names its `path:line` (Find lab G1) so any row read alone,
-            // spoken or scrolled to, still says where it lands.
-            const options: SelectionListOption[] = page.results.slice(0, input.rowLimit).map((result) => {
-                const option = toOption(result, input.iconName, input.onCommit);
-                if (!result.fileContent) return option;
-                const location = `${result.fileContent.path}:${result.fileContent.line}`;
-                return {
-                    ...option,
-                    label: location,
-                    labelContent: () => <FileContentLabel match={result.fileContent!} />,
-                    labelEllipsizeMode: 'head' as const,
-                    accessibilityLabel: `${location} ${result.fileContent.text.trim()}`,
-                };
-            });
-            if (input.sourceId === UNIVERSAL_SEARCH_SOURCE_IDS.fileContent && input.onShowAll && (options.length > 0 || page.hasMore)) {
+            // Hits arrive grouped by file; each row is one matching line and names its `path:line` (Find lab G1)
+            // so any row read alone, spoken or scrolled to, still says where it lands.
+            const lines = groupFileContentLines(page.results);
+            const options: SelectionListOption[] = lines.length === 0
+                ? page.results.slice(0, input.rowLimit).map((result) => toOption(result, input.iconName, input.onCommit))
+                : input.groupByFile
+                    ? (() => {
+                        // One gutter per file, as wide as its last shown line number.
+                        const gutterDigitsByPath = new Map<string, number>();
+                        for (const { line } of lines) {
+                            gutterDigitsByPath.set(line.path, Math.max(gutterDigitsByPath.get(line.path) ?? 1, String(line.line + line.after.length).length));
+                        }
+                        return lines.flatMap(({ result, line }, index): SelectionListOption[] => {
+                        const location = `${line.path}:${line.line}`;
+                        const lineOption: SelectionListOption = {
+                            ...toOption(result, input.iconName, input.onCommit, line),
+                            label: location,
+                            labelContent: () => <FileContentLineLabel match={line} gutterDigits={gutterDigitsByPath.get(line.path) ?? 1} />,
+                            // The code is the row's title here; the file heading above says where.
+                            subtitle: undefined, subtitleContent: undefined,
+                            // An empty mark slot keeps the code on the file name's edge.
+                            icon: () => <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx }} />,
+                            accessibilityLabel: `${location} ${line.text.trim()}`,
+                        };
+                        if (index > 0 && lines[index - 1]!.line.path === line.path) return [lineOption];
+                        const matches = lines.filter((entry) => entry.line.path === line.path)
+                            .reduce((count, entry) => count + entry.line.columns.length, 0);
+                        return [{
+                            id: `${UNIVERSAL_SEARCH_SOURCE_IDS.fileContent}:file:${line.path}`,
+                            label: line.path,
+                            // A heading, not a choice: it reads at full strength and the keyboard passes over it.
+                            disabled: true,
+                            content: <FileContentGroupHeader path={line.path} matches={matches} />,
+                        }, lineOption];
+                    });
+                    })()
+                    : lines.slice(0, input.rowLimit).map(({ result, line }) => {
+                        const location = `${line.path}:${line.line}`;
+                        return {
+                            ...toOption(result, input.iconName, input.onCommit, line),
+                            label: location,
+                            labelContent: () => <FileContentLabel match={line} />,
+                            labelEllipsizeMode: 'head' as const,
+                            accessibilityLabel: `${location} ${line.text.trim()}`,
+                        };
+                    });
+            if (input.sourceId === UNIVERSAL_SEARCH_SOURCE_IDS.fileContent && !input.groupByFile && input.onShowAll && (options.length > 0 || page.hasMore)) {
                 const files = new Set(page.results.filter(result => result.fileContent).map(result => result.fileContent!.path)).size;
                 options.push({
                     id: ALL_FILE_MATCHES_OPTION_ID,
                     testID: 'universal-search:all-file-matches',
                     label: page.hasMore ? t('universalSearch.content.moreMatches')
                         : t('universalSearch.content.allMatches', { matches: page.results.length, files }),
+                    // A summary, not a hit: set at the meta step in quiet ink, like the lab's "All 11 matches in 4 files".
+                    labelContent: () => <AllMatchesLabel label={page.hasMore ? t('universalSearch.content.moreMatches')
+                        : t('universalSearch.content.allMatches', { matches: page.results.length, files })} />,
                     rightAccessory: () => <TextInFilesShortcut />,
+                    // An empty mark slot puts "All N matches" on the text column of the lines above (lab G1).
+                    icon: () => <View style={{ width: MENU_ROW_METRICS.iconBoxSizePx }} />,
                     onSelect: input.onShowAll,
                 });
             }
+            if (input.groupByFile && lines.length > 0) {
+                // The scope's status line (lab G1s): how much was found; the token and chip already say where.
+                options.unshift({
+                    id: `${UNIVERSAL_SEARCH_SOURCE_IDS.fileContent}:status`,
+                    label: t('universalSearch.content.matchesInFiles', { matches: page.results.length, files: new Set(lines.map((entry) => entry.line.path)).size }),
+                    disabled: true,
+                    content: <FileContentScopeStatus label={t('universalSearch.content.matchesInFiles', { matches: page.results.length, files: new Set(lines.map((entry) => entry.line.path)).size })} />,
+                });
+            }
+            // Inside the Text in files scope there is nowhere further to go: an incomplete page says so.
+            const scopeHint = input.groupByFile && page.hasMore ? t('universalSearch.moreResultsAvailable') : undefined;
             return {
                 options,
                 ...(page.emptyHint !== undefined ? { emptyHint: page.emptyHint } : {}),
                 ...(page.resultHint !== undefined
                     ? { resultHint: page.resultHint }
-                    : source.resultHint !== undefined ? { resultHint: source.resultHint } : {}),
+                    : scopeHint !== undefined ? { resultHint: scopeHint }
+                        : source.resultHint !== undefined ? { resultHint: source.resultHint } : {}),
             };
         },
     }];
@@ -401,8 +631,32 @@ export function buildUniversalSearchSections(
     const rowLimit = input.rowLimit ?? DEFAULT_ROW_LIMIT;
     const onCommit = input.onCommitResult;
     const sections: SelectionListSectionDescriptor[] = [];
-    const contentSections = buildDynamicSection({ sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.fileContent, title: t('universalSearch.content.textInFiles'), source: input.fileContent ?? { status: 'absent' }, iconName: 'file', preserveQuery: true, scopeLabel: input.fileContentScopeLabel, onShowAll: input.onShowAllFileMatches, onCommit }).map((section) => ({ kind: 'dynamic' as const, ...section }));
-    if (input.source === 'fileContent') return contentSections;
+    const scopedToContent = input.source === 'fileContent';
+    const folders = input.fileContentFolders ?? [];
+    const contentSections = (input.fileContent ?? { status: 'absent' }).status === 'absent' && folders.length > 0 && !scopedToContent
+        ? [{
+            kind: 'dynamic' as const,
+            id: UNIVERSAL_SEARCH_SOURCE_IDS.fileContent,
+            title: t('universalSearch.content.textInFiles'),
+            resolverKey: `${UNIVERSAL_SEARCH_SOURCE_IDS.fileContent}|folders|${folders.map((folder) => folder.id).join('|')}`,
+            visibleWhen: (value: string) => value.length > 0,
+            resultFiltering: 'provider' as const,
+            debounceMs: 0,
+            resultTransition: 'none' as const,
+            resolve: async () => ({
+                options: folders.slice(0, INLINE_FILE_CONTENT_LINES).map((folder): SelectionListOption => ({
+                    id: `${FILE_CONTENT_FOLDER_OPTION_PREFIX}${folder.id}`,
+                    label: t('universalSearch.content.searchInFolder', { name: folder.name }),
+                    ...(folder.subtitle ? { subtitle: folder.subtitle } : {}),
+                    icon: icon('folder'),
+                    onSelect: folder.onSelect,
+                })),
+            }),
+        }]
+        : buildDynamicSection({ sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.fileContent, title: t('universalSearch.content.textInFiles'), source: input.fileContent ?? { status: 'absent' }, iconName: 'file', preserveQuery: true, scopeLabel: input.fileContentScopeLabel, onShowAll: input.onShowAllFileMatches, onCommit,
+        // Inline (lab G1) the group shows the best few lines and then "All N matches"; the scope lists every line by file.
+        ...(scopedToContent ? { groupByFile: true } : { rowLimit: INLINE_FILE_CONTENT_LINES }) }).map((section) => ({ kind: 'dynamic' as const, ...section }));
+    if (scopedToContent) return contentSections;
 
     // Construction, currentness, availability, i18n and activation of commands
     // all stay with `buildCommandPaletteCommands`.
@@ -495,23 +749,6 @@ export function buildUniversalSearchSections(
     }
 
     const projects = narrowLocalEntities(input.projects, query, EMPTY_QUERY_RECENT_LIMIT);
-    if (query.length > 0 && input.externalConversationSearch && input.externalConversationSearch.standardSearchEnabled !== false) {
-        const search = input.externalConversationSearch;
-        sections.push({
-            kind: 'static',
-            id: 'externalConversations',
-            options: [{
-                id: EXTERNAL_CONVERSATION_SEARCH_OPTION_ID,
-                testID: 'universal-search:external-conversations:search',
-                label: t('externalSessions.browseContentPaletteSearch', { query: input.query }),
-                subtitle: search.machineLabel
-                    ? t('externalSessions.browseContentOnMachine', { machine: search.machineLabel })
-                    : t('conversationSearch.scanAllMachines'),
-                icon: icon('chat-circle-dots'),
-                onSelect: () => search.onSearch(input.query),
-            }],
-        });
-    }
     if (projects.length > 0) {
         sections.push({
             kind: 'static',
@@ -552,6 +789,25 @@ export function buildUniversalSearchSections(
         sections.push({ kind: 'dynamic', ...section });
     }
 
+    if (query.length > 0 && input.externalConversationSearch && input.externalConversationSearch.standardSearchEnabled !== false) {
+        const search = input.externalConversationSearch;
+        sections.push({
+            kind: 'static',
+            id: 'externalConversations',
+            // Lab H1: the group names where the scan runs; the row is the one action.
+            title: search.machineLabel
+                ? t('externalSessions.browseContentOnMachine', { machine: search.machineLabel })
+                : t('conversationSearch.scopeAllMachinesSubtitle'),
+            options: [{
+                id: EXTERNAL_CONVERSATION_SEARCH_OPTION_ID,
+                testID: 'universal-search:external-conversations:search',
+                label: t('externalSessions.browseContentPaletteSearch', { query: input.query }),
+                icon: icon('chat-circle-dots'),
+                onSelect: () => search.onSearch(input.query),
+            }],
+        });
+    }
+
     for (const section of buildDynamicSection({
         sourceId: UNIVERSAL_SEARCH_SOURCE_IDS.files,
         title: t('universalSearch.sections.files'),
@@ -583,6 +839,9 @@ export function buildUniversalSearchSections(
             kind: 'dynamic',
             ...section,
             showSkeletonsOnFirstLoad: true,
+            loadingHint: t('universalSearch.searchingGroup'),
+            // A failing provider says so in host copy, like every built-in group; its message stays in logs.
+            errorHint: t('universalSearch.groupFailed', { group: section.title ?? section.id }),
             resultTransition: 'none',
         });
     }

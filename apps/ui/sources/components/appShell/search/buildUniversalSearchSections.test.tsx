@@ -18,6 +18,7 @@ vi.mock('@/text', async () => {
 });
 
 import type { SelectionListDynamicSection, SelectionListSectionDescriptor } from '@/components/ui/selectionList';
+import { PlanOptionRow } from '@/components/ui/selectionList/SelectionListOptionRow';
 
 import {
     buildUniversalSearchSections,
@@ -91,11 +92,18 @@ describe('buildUniversalSearchSections', () => {
         expect(content.visibleWhen?.(' ')).toBe(true);
         expect(content.visibleWhen?.('ne')).toBe(true);
         expect(content.visibleWhen?.(' a')).toBe(true);
+        // Inside the scope, an incomplete page says so (lab ST "Too many") rather than offering the scope again.
         const page = await content.resolve('needle', new AbortController().signal);
-        expect(page.options).toHaveLength(1);
-        page.options[0]?.onSelect?.();
+        expect(page.options).toHaveLength(0);
+        expect(page.resultHint).toBe('universalSearch.moreResultsAvailable');
+        // Inline, the incomplete group leads into the scope.
+        const inline = dynamicSections(buildUniversalSearchSections(input({ query: 'needle', fileContent: source, onShowAllFileMatches })))
+            .find((section) => section.id === 'fileContent')!;
+        const inlinePage = await inline.resolve('needle', new AbortController().signal);
+        expect(inlinePage.options).toHaveLength(1);
+        inlinePage.options[0]?.onSelect?.();
         expect(onShowAllFileMatches).toHaveBeenCalledOnce();
-        expect(page.resultHint).toBeUndefined();
+        expect(inlinePage.resultHint).toBeUndefined();
         const unavailable = dynamicSections(buildUniversalSearchSections(input({
             source: 'fileContent', fileContent: { status: 'unavailable', resolverKey: 'offline', hint: 'unavailable' },
         })))[0]!;
@@ -137,18 +145,56 @@ describe('buildUniversalSearchSections', () => {
         ]);
         expect(page.options[0]?.subtitleContent).toBeDefined();
         expect(page.options[0]?.labelContent).toBeTypeOf('function');
-        expect(page.options[0]?.hideSubtitleWhenExpanded).toBe(true);
-        const preview = page.options[0]?.expandedContent;
-        expect(preview).toBeTypeOf('function');
-        const screen = await renderScreen(<>{typeof preview === 'function' ? preview() : preview}</>);
+        // The context opens inside the active row in place of its one-line snippet, never as a block below it.
+        expect(page.options[0]?.expandedContent).toBeUndefined();
+        const option = page.options[0]!;
+        const screen = await renderScreen(<PlanOptionRow option={option} rootTestID="search" stepId="root"
+            isSelected={false} isFocused onSelect={() => {}} onPushStep={() => {}} />);
+        expect(screen.findByTestId('file-content-preview')).not.toBeNull();
+        // The matching line appears once: as part of the context, not also as the snippet.
+        expect(screen.getTextContent().split('literal').length - 1).toBe(1);
         expect(screen.getTextContent()).toContain('before');
         expect(screen.getTextContent()).toContain('after');
+        expect(screen.getTextContent()).toContain('literal');
+        expect(commit).not.toHaveBeenCalled();
+        await screen.update(<PlanOptionRow option={option} rootTestID="search" stepId="root"
+            isSelected={false} isFocused={false} onSelect={() => {}} onPushStep={() => {}} />);
+        expect(screen.findByTestId('file-content-preview')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('before');
         expect(screen.getTextContent()).toContain('literal');
         await screen.unmount();
         page.options[1]?.onSelect?.();
         expect(commit).toHaveBeenCalledWith(expect.objectContaining({
             target: expect.objectContaining({ anchor: { kind: 'fileLine', startLine: 9 } }),
         }));
+    });
+    // Find lab G1 / G1s: one row per matching line (every match on it marked), the inline group shows the
+    // best few lines then "All N matches", and the Text in files scope groups lines under their file.
+    function contentHit(path: string, line: number, column16: number): UniversalSearchResult {
+        return { id: `${path}:${line}:${column16}`, sourceId: 'fileContent', scopeKey: 'ws', kind: 'workspaceFile', title: path,
+            fileContent: { path, line, column16, length16: 8, text: 'const routeKey = routeKey;', before: [], after: [] },
+            target: { kind: 'workspaceFile', scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' }, path,
+                workspaceRefId: null, sessionId: null, serverId: 'home-a', accountId: 'account-a', anchor: { kind: 'fileLine', startLine: line } } };
+    }
+    const hits = [contentHit('src/a.ts', 5, 7), contentHit('src/a.ts', 5, 18), contentHit('src/a.ts', 9, 7),
+        contentHit('src/b.ts', 2, 7), contentHit('docs/c.md', 12, 7)];
+    it('shows one row per matching line and only the best few lines inline', async () => {
+        const sections = dynamicSections(buildUniversalSearchSections(input({ query: 'routeKey', onShowAllFileMatches: vi.fn(),
+            fileContent: { status: 'ready', resolverKey: 'ws', resolve: async () => hits } })));
+        const page = await sections.find((section) => section.id === 'fileContent')!.resolve('routeKey', new AbortController().signal);
+        expect(page.options.map((option) => option.label)).toEqual(['src/a.ts:5', 'src/a.ts:9', 'src/b.ts:2', 'universalSearch.content.allMatches(matches=5,files=3)']);
+    });
+    it('groups every matching line under its file in the Text in files scope', async () => {
+        const sections = dynamicSections(buildUniversalSearchSections(input({ query: 'routeKey', source: 'fileContent',
+            fileContent: { status: 'ready', resolverKey: 'ws', resolve: async () => hits } })));
+        const page = await sections[0]!.resolve('routeKey', new AbortController().signal);
+        const rows = page.options.map((option) => [option.label, option.disabled === true]);
+        expect(rows).toEqual([
+            ['universalSearch.content.matchesInFiles(matches=5,files=3)', true],
+            ['src/a.ts', true], ['src/a.ts:5', false], ['src/a.ts:9', false],
+            ['src/b.ts', true], ['src/b.ts:2', false],
+            ['docs/c.md', true], ['docs/c.md:12', false],
+        ]);
     });
     it('keeps a context-free matching line in its row without duplicating it in an expanded preview', async () => {
         const result: UniversalSearchResult = { id: 'a:4', sourceId: 'fileContent', scopeKey: 'ws', kind: 'workspaceFile', title: 'a.ts',
@@ -196,14 +242,18 @@ describe('buildUniversalSearchSections', () => {
         expect(onSearch).toHaveBeenCalledWith('body-only phrase');
     });
 
-    it('says the scan covers every machine when no single machine is in scope', () => {
-        const row = (search: { machineLabel?: string }) => {
-            const section = buildUniversalSearchSections(input({ query: 'quartz', externalConversationSearch: { ...search, onSearch: () => {} } }))
-                .find((entry) => entry.id === 'externalConversations');
-            return section && 'options' in section ? section.options[0] : undefined;
-        };
-        expect(row({ machineLabel: 'Work machine' })?.subtitle).not.toBe('conversationSearch.scanAllMachines');
-        expect(row({})?.subtitle).toBe('conversationSearch.scanAllMachines');
+    // Lab H1: the row sits under its own group that names where it searches; the row is the one action.
+    it('names where the scan runs in the group title, for one machine or every machine', () => {
+        const group = (search: { machineLabel?: string }) => buildUniversalSearchSections(input({ query: 'quartz', externalConversationSearch: { ...search, onSearch: () => {} } }))
+            .find((entry) => entry.id === 'externalConversations');
+        expect(group({ machineLabel: 'Work machine' })?.title).toBe('externalSessions.browseContentOnMachine(machine=Work machine)');
+        expect(group({})?.title).toBe('conversationSearch.scopeAllMachinesSubtitle');
+        const row = group({ machineLabel: 'Work machine' });
+        expect(row && 'options' in row ? row.options[0]?.subtitle : 'missing').toBeUndefined();
+        // The explicit scan follows the Messages already in Happier (lab H1: Sessions, Messages, then Conversations).
+        const ids = buildUniversalSearchSections(input({ query: 'quartz', externalConversationSearch: { machineLabel: 'Work machine', onSearch: () => {} },
+            transcript: { status: 'ready', resolverKey: 'm', resolve: async () => [] } })).map((section) => section.id);
+        expect(ids.indexOf('externalConversations')).toBeGreaterThan(ids.indexOf('transcript'));
     });
 
     it('presents a conversation hit by what it matched and whose conversation it is', async () => {
@@ -508,6 +558,35 @@ describe('buildUniversalSearchSections', () => {
         expect(resolved.emptyHint).toBe('Still indexing');
     });
 
+    it('offers recent folders under Text in files when no folder is in scope, and choosing one scopes the search there', async () => {
+        const onSelectHappier = vi.fn();
+        const sections = buildUniversalSearchSections(input({
+            query: 'routeKey',
+            fileContent: { status: 'absent' },
+            fileContentFolders: [
+                { id: 'happier', name: 'happier', subtitle: '~/code/happier · MacBook Pro', onSelect: onSelectHappier },
+                { id: 'website', name: 'website', subtitle: '~/code/website · MacBook Pro', onSelect: vi.fn() },
+            ],
+        }));
+        const group = dynamicSections(sections).find((section) => section.id === 'fileContent');
+        expect(group).toBeDefined();
+        expect(group!.visibleWhen?.('')).toBe(false);
+        const resolved = await group!.resolve('routeKey', new AbortController().signal);
+        expect(resolved.options.map((option) => option.subtitle)).toEqual(['~/code/happier · MacBook Pro', '~/code/website · MacBook Pro']);
+        expect(resolved.options[0]!.label).toContain('happier');
+        resolved.options[0]!.onSelect?.();
+        expect(onSelectHappier).toHaveBeenCalledTimes(1);
+
+        // A folder in scope searches it; the suggestions never compete with real matches.
+        const scoped = buildUniversalSearchSections(input({
+            query: 'routeKey',
+            fileContent: { status: 'unavailable', resolverKey: 'w|offline', hint: 'offline' },
+            fileContentFolders: [{ id: 'happier', name: 'happier', onSelect: vi.fn() }],
+        }));
+        const scopedGroup = dynamicSections(scoped).find((section) => section.id === 'fileContent');
+        expect((await scopedGroup!.resolve('routeKey', new AbortController().signal)).options).toHaveLength(0);
+    });
+
     it('omits an absent source entirely rather than rendering an empty group for it', () => {
         const sections = buildUniversalSearchSections(input({ query: 'q', files: { status: 'absent' } }));
         expect(sections.some((section) => section.id === 'files')).toBe(false);
@@ -641,6 +720,8 @@ describe('buildUniversalSearchSections', () => {
         expect(projected?.resultFiltering).toBe('provider');
         expect(projected?.showSkeletonsOnFirstLoad).toBe(true);
         expect(projected?.resultTransition).toBe('none');
+        // A plugin group that fails says so in host copy, like every built-in group (no plugin branch).
+        expect(projected?.errorHint).toBe('universalSearch.groupFailed(group=Acme issues)');
     });
 
     it('uses truthful first-load status without applying directory-drill motion to typed queries', () => {
@@ -661,6 +742,8 @@ describe('buildUniversalSearchSections', () => {
         for (const section of remote) {
             expect(section.showSkeletonsOnFirstLoad).toBe(true);
             expect(section.resultTransition).toBe('none');
+            // The first load is one quiet line, not placeholder bars.
+            expect(section.loadingHint).toBe('universalSearch.searchingGroup');
         }
     });
 

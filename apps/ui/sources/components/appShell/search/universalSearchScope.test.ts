@@ -53,6 +53,21 @@ describe('Universal Search local scope', () => {
         });
     });
 
+    it('names a workspace scope by its project name, never its absolute path', () => {
+        const choices = buildUniversalSearchScopeChoices({
+            accountIdByServerId: new Map([['home-a', 'account-a']]),
+            profiles: [{ id: 'home-a', name: 'Home A' }] as never,
+            workspaces: [
+                { id: 'unnamed', serverId: 'home-a', machineId: 'machine-a', rootPath: '/home/leeroy/code/happier', createdAtMs: 1 },
+                { id: 'named', serverId: 'home-a', machineId: 'machine-a', rootPath: '/home/leeroy/code/site', label: 'Marketing site', createdAtMs: 1 },
+            ] as never,
+            sessions: [],
+            readMachineTarget: () => null,
+        });
+
+        expect(choices.slice(1).map((choice) => choice.label)).toEqual(['happier', 'Marketing site']);
+    });
+
     it('omits Home and workspace alternatives whose exact credential Account cannot be resolved', () => {
         const choices = buildUniversalSearchScopeChoices({
             accountIdByServerId: new Map([['home-a', 'account-a']]),

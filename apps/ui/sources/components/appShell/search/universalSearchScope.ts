@@ -115,7 +115,8 @@ export function buildUniversalSearchScopeChoices(input: Readonly<{
         } satisfies UniversalSearchScopeSeed;
         choices.push({
             key: buildUniversalSearchScopeKeyFromSeed(scope),
-            label: workspace.label?.trim() || workspace.rootPath,
+            // The project's name, as the Projects list shows it; never the absolute path.
+            label: workspace.label?.trim() || workspace.rootPath.split(/[\\/]/).filter(Boolean).pop() || workspace.rootPath,
             scope,
         });
     }

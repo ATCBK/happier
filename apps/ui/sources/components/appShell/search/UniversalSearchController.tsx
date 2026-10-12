@@ -2,6 +2,10 @@ import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadat
 import * as React from 'react';
 import { openChatWithFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
 import { Platform, View } from 'react-native';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { COMMAND_SURFACE_DETAIL_PANE, type CommandSurfaceLayout } from '@/modal/components/card/commandSurfaceCard';
+import { useDeviceType } from '@/utils/platform/responsive';
+import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 
@@ -25,6 +29,7 @@ import {
     type SelectionListDynamicSectionCache,
     type SelectionListOption,
     type SelectionListFilter,
+    type SelectionListInputBehavior,
     type SelectionListStep,
 } from '@/components/ui/selectionList';
 import {
@@ -91,7 +96,9 @@ import {
     buildUniversalSearchSections,
     EXTERNAL_CONVERSATION_SEARCH_OPTION_ID,
     ALL_FILE_MATCHES_OPTION_ID,
+    FILE_CONTENT_FOLDER_OPTION_PREFIX,
     findCommandForOptionId,
+    type UniversalSearchFolderSuggestion,
     type UniversalSearchProjectEntity,
     type UniversalSearchSessionEntity,
     type UniversalSearchSettingsPageEntity,
@@ -123,6 +130,8 @@ import {
     type UniversalSearchScopeSeed,
 } from './UniversalSearchRuntimeContext';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
+import { Typography } from '@/constants/Typography';
 import {
     buildUniversalSearchScopeChoices,
     buildUniversalSearchScopeKeyFromSeed,
@@ -208,6 +217,8 @@ export type UniversalSearchControllerProps = Readonly<{
     /** Open in the Terminals scope of this session pane (Jump to a terminal, terminal lab B4). */
     terminalJump?: TerminalJumpTarget;
     presentation: 'modal' | 'route';
+    /** The frame the card needs: compact for everything, `detail` while a detail column sits beside the list. */
+    onSurfaceLayoutChange?(layout: CommandSurfaceLayout): void;
     onRequestClose(): void;
 }>;
 
@@ -225,6 +236,8 @@ function resolveInitialScope(props: Pick<UniversalSearchControllerProps, 'active
 
 export function UniversalSearchController(props: UniversalSearchControllerProps): React.ReactElement {
     const { theme } = useUnistyles();
+    const deviceType = useDeviceType();
+    const textInFilesShortcut = useKeyboardShortcutLabel('search.textInFiles');
     const [scope, setScope] = React.useState<UniversalSearchScopeSeed>(() => resolveInitialScope(props));
     const [query, setQuery] = React.useState(() => props.initialQuery ?? '');
     const [source, setSource] = React.useState<'fileContent' | undefined>(props.initialSource);
@@ -352,6 +365,9 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             return name ? [[machine.id, name] as const] : [];
         }),
     ), [machines]);
+    const machineHomeById = React.useMemo(() => new Map(
+        machines.flatMap((machine) => machine.metadata?.homeDir ? [[machine.id, machine.metadata.homeDir] as const] : []),
+    ), [machines]);
     const sessionEntities = React.useMemo<readonly UniversalSearchSessionEntity[]>(() => {
         if (!scope.serverId || !scope.accountId || !selectedCredentialIsCurrent) return [];
         const canonicalServerId = canonicalScopeServerId!;
@@ -411,9 +427,11 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             machineId: workspace.machineId,
             rootPath: workspace.rootPath,
             title: workspace.label?.trim() || workspace.rootPath.split(/[\\/]/).filter(Boolean).pop() || workspace.rootPath,
-            subtitle: workspace.rootPath,
+            // Where it lives, as session rows say it: the path from the machine's home, then the machine.
+            subtitle: [formatPathRelativeToHome(workspace.rootPath, machineHomeById.get(workspace.machineId)),
+                machineNameById.get(workspace.machineId)].filter(Boolean).join(' · '),
             lastOpenedAtMs: workspace.lastOpenedAtMs ?? workspace.createdAtMs,
-        })), [scope.accountId, scope.serverId, selectedCredentialIsCurrent, workspaceRefs]);
+        })), [machineHomeById, machineNameById, scope.accountId, scope.serverId, selectedCredentialIsCurrent, workspaceRefs]);
 
     const settingsPages = React.useMemo(() => indexSettingsSearchPages(settingsCatalog.tree), [settingsCatalog.tree]);
     const settingsById = React.useMemo(() => settingsPageNodesById(settingsCatalog.tree), [settingsCatalog.tree]);
@@ -539,16 +557,14 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     // state as a non-activatable section hint instead of issuing a doomed RPC.
     const workspaceScopeReachable = workspaceScope ? isWorkspaceScopeReachable(workspaceScope) : false;
     const workspaceSearchAvailable = workspaceActivationAvailable && selectedCredentialIsCurrent;
-    const workspaceUnavailableHint = t('newSession.machineOfflineInlineTitle');
+    // Names the machine, as the History browser does (lab ST: "MacBook Pro is offline").
+    const offlineMachineName = workspaceScope ? machineNameById.get(workspaceScope.machineId) : undefined;
+    const workspaceUnavailableHint = offlineMachineName
+        ? t('externalSessions.browseMachineOfflineTitle', { machine: offlineMachineName })
+        : t('newSession.machineOfflineInlineTitle');
     const files = React.useMemo<UniversalSearchSource>(() => {
-        if (!workspaceScope || !workspaceSearchAvailable || !selectedCredentialBinding) return { status: 'absent' };
-        if (!workspaceScopeReachable) {
-            return {
-                status: 'unavailable',
-                resolverKey: `${workspaceResolverKey}|offline`,
-                hint: workspaceUnavailableHint,
-            };
-        }
+        // An offline folder is said once, under Text in files (lab ST "Machine offline"); this group steps aside.
+        if (!workspaceScope || !workspaceSearchAvailable || !selectedCredentialBinding || !workspaceScopeReachable) return { status: 'absent' };
         return {
             status: 'ready',
             resolverKey: workspaceResolverKey,
@@ -615,14 +631,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         };
     }, [activeSession?.id, matchCase, regex, selectedCredentialBinding, source, workspaceRef?.id, workspaceResolverKey, workspaceScope, workspaceScopeReachable, workspaceSearchAvailable, workspaceUnavailableHint]);
     const commits = React.useMemo<UniversalSearchSource>(() => {
-        if (!workspaceScope || !workspaceSearchAvailable || !selectedCredentialBinding) return { status: 'absent' };
-        if (!workspaceScopeReachable) {
-            return {
-                status: 'unavailable',
-                resolverKey: `${workspaceResolverKey}|offline`,
-                hint: workspaceUnavailableHint,
-            };
-        }
+        // An offline folder is said once, under Text in files (lab ST "Machine offline"); this group steps aside.
+        if (!workspaceScope || !workspaceSearchAvailable || !selectedCredentialBinding || !workspaceScopeReachable) return { status: 'absent' };
         return {
             status: 'ready',
             resolverKey: workspaceResolverKey,
@@ -700,7 +710,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const currentScopeProfile = profiles.find((profile) => areServerProfileIdentifiersEquivalent(profile.id, scope.serverId));
     const currentScopeLabel = scopeChoices.find((choice) => choice.key === scopeKey)?.label
         ?? (currentScopeProfile ? resolveHomeDisplayLabel(currentScopeProfile, currentScopeProfile.id) : null)
-        ?? scope.rootPath
+        ?? scope.rootPath?.split(/[\\/]/).filter(Boolean).pop()
         ?? '';
     // The Home (or workspace) scope is a SelectionList filter: one chip beside the field that opens the
     // choices, the same chip every picker uses.
@@ -713,7 +723,11 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         options: scopeChoices.map((choice) => choice.scope.machineScope === 'all'
             ? { id: choice.key, label: choice.label, subtitle: t('conversationSearch.scopeAllMachinesSubtitle'),
                 icon: <Icon name="desktop" size={14} color={theme.colors.text.secondary} /> }
-            : { id: choice.key, label: choice.label }),
+            // A folder scope says where it lives, as project rows do, so two "happier" folders read apart.
+            : choice.scope.rootPath && choice.scope.machineId
+                ? { id: choice.key, label: choice.label, subtitle: [formatPathRelativeToHome(choice.scope.rootPath, machineHomeById.get(choice.scope.machineId)),
+                    machineNameById.get(choice.scope.machineId)].filter(Boolean).join(' · ') }
+                : { id: choice.key, label: choice.label }),
         selectedId: scopeKey,
         onChange: (choiceKey: string) => {
             const choice = scopeChoices.find((candidate) => candidate.key === choiceKey);
@@ -722,7 +736,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             setScope(choice.scope);
         },
         testID: 'universal-search:scope',
-    }] : undefined, [currentScopeLabel, hasScopeChoice, scope.machineScope, scopeChoices, scopeKey, theme.colors.text.secondary]);
+    }] : undefined, [currentScopeLabel, hasScopeChoice, machineHomeById, machineNameById, scope.machineScope, scopeChoices, scopeKey, theme.colors.text.secondary]);
 
     const conversationMachineId = scope.machineId ?? workspaceScope?.machineId ?? null;
     const scanAvailability = useConversationSearch({ query: { v: 1, query: '', scope: { type: 'global' }, mode: 'auto' },
@@ -755,6 +769,20 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         workspaceRef?.label?.trim() || workspaceScope.rootPath.split(/[\\/]/).filter(Boolean).pop(),
         machineNameById.get(workspaceScope.machineId) ?? workspaceScope.machineId,
     ].filter(Boolean).join(' · ') : undefined;
+    // No folder in scope: Text in files offers the recent project folders instead of guessing one.
+    const fileContentFolders = React.useMemo<ReadonlyArray<UniversalSearchFolderSuggestion>>(() => workspaceScope
+        ? []
+        : projects.map((project) => ({
+            id: project.workspaceRefId,
+            name: project.title,
+            ...(project.subtitle ? { subtitle: project.subtitle } : {}),
+            onSelect: () => {
+                setSelectedOptionId(null);
+                setScope(scopeChoices.find((choice) => choice.scope.machineId === project.machineId
+                    && choice.scope.rootPath === project.rootPath)?.scope
+                    ?? { accountId: project.accountId, serverId: project.serverId, machineId: project.machineId, rootPath: project.rootPath, sessionId: null });
+            },
+        })), [projects, scopeChoices, workspaceScope]);
     const sections = React.useMemo(() => buildUniversalSearchSections({
         query,
         commands: props.commands,
@@ -766,6 +794,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
         files,
         fileContent,
         fileContentScopeLabel,
+        fileContentFolders,
         onShowAllFileMatches: showAllFileMatches,
         source,
         commits,
@@ -783,19 +812,28 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
             },
         } : {}),
         onCommitResult: (result) => { committedResultRef.current = result; },
-    }), [beginExternalConversationSearch, canonicalScopeServerId, commits, conversationMachineId, fileContent, fileContentScopeLabel, files, machineNameById, pluginAccount.lifetime, pluginSections, projects, props.commands, query, scanAvailability.result, scope.accountId, scope.machineScope, searchSettingsPages, selectedCredentialIsCurrent, sessionEntities, sessionInventoryStatus, showAllFileMatches, source, transcript]);
+    }), [beginExternalConversationSearch, canonicalScopeServerId, commits, conversationMachineId, fileContent, fileContentFolders, fileContentScopeLabel, files, machineNameById, pluginAccount.lifetime, pluginSections, projects, props.commands, query, scanAvailability.result, scope.accountId, scope.machineScope, searchSettingsPages, selectedCredentialIsCurrent, sessionEntities, sessionInventoryStatus, showAllFileMatches, source, transcript]);
     const rootStep = React.useMemo<SelectionListStep>(() => ({
         id: 'universal-search',
         inputPlaceholder: t('commandPalette.placeholder'),
         emptyStateLabel: t('selectionList.emptyMatch'),
         sections,
         // Quiet key hints; SelectionList shows the footer only with a hardware keyboard.
-        footerHints: [
+        // In Text in files every row is a line: Return opens it there, and ⌫ on the empty field goes back
+        // to everything (lab G1s). With text hits inline, the hint names the shortcut to the scope (lab G1).
+        footerHints: source === 'fileContent' ? [
+            { id: 'move', label: '↑↓', description: t('commandPalette.hints.move') },
+            { id: 'open', label: '↵', description: t('commandPalette.hints.openAtLine') },
+            { id: 'everything', label: '⌫', description: t('universalSearch.content.everything') },
+            { id: 'close', label: 'esc', description: t('commandPalette.hints.close') },
+        ] : [
             { id: 'move', label: '↑↓', description: t('commandPalette.hints.move') },
             { id: 'open', label: '↵', description: t('commandPalette.hints.open') },
+            ...(workspaceScope && query.trim().length > 0 && textInFilesShortcut
+                ? [{ id: 'text-in-files', label: textInFilesShortcut, description: t('universalSearch.content.textInFiles') }] : []),
             { id: 'close', label: 'esc', description: t('commandPalette.hints.close') },
         ],
-    }), [sections]);
+    }), [query, sections, source, textInFilesShortcut, workspaceScope]);
 
     const leaveTerminalScope = React.useCallback(() => {
         setSelectedOptionId(null);
@@ -890,7 +928,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     }, [credentialBindings]);
 
     const handleSelect = React.useCallback((optionId: string, _option: SelectionListOption) => {
-        if (optionId === EXTERNAL_CONVERSATION_SEARCH_OPTION_ID || optionId === ALL_FILE_MATCHES_OPTION_ID) {
+        if (optionId === EXTERNAL_CONVERSATION_SEARCH_OPTION_ID || optionId === ALL_FILE_MATCHES_OPTION_ID
+            || optionId.startsWith(FILE_CONTENT_FOLDER_OPTION_PREFIX)) {
             committedResultRef.current = null;
             committedPluginActivationRef.current = null;
             setSelectedOptionId(null);
@@ -965,13 +1004,45 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     }, [credentialBindings, isBuiltInTargetCurrent, navigateToSession, openProject, paneContext, pluginScopeIsCurrent, props.commands, props.onRequestClose, readExactSessionForActivation, router]);
 
     const activeRootStep = terminalJump?.step ?? rootStep;
-    const sourceFilters = React.useMemo<readonly SelectionListFilter[]>(() => workspaceScope || source ? [{ id: 'source', label: t('tools.names.search'), valueLabel: source ? t('universalSearch.content.textInFiles') : t('universalSearch.content.everything'), options: [{ id: 'everything', label: t('universalSearch.content.everything') }, { id: 'fileContent', label: t('universalSearch.content.textInFiles') }], selectedId: source ?? 'everything', onChange: selectSource, testID: 'universal-search:source' }] : [], [selectSource, source, workspaceScope]);
+    // Find lab G1s: Text in files is a scope token that × (or ⌫ on an empty field) removes; Search over
+    // everything shows no source chip. The way in is the "All matches" row, ⌘⇧F, or its command.
+    const sourceFilters = React.useMemo<readonly SelectionListFilter[]>(() => source === 'fileContent' ? [{
+        id: 'source',
+        label: t('tools.names.search'),
+        valueLabel: t('universalSearch.content.textInFiles'),
+        icon: <Icon name="text-aa" size={12} color={theme.colors.text.secondary} />,
+        active: true,
+        onClear: () => selectSource('everything'),
+        clearAccessibilityLabel: t('universalSearch.content.everything'),
+        testID: 'universal-search:source',
+    }] : [], [selectSource, source, theme.colors.text.secondary]);
     const combinedFilters = React.useMemo(() => [...(scopeFilters ?? []), ...sourceFilters], [scopeFilters, sourceFilters]);
+    // ⌫ on an empty field drops the Text in files token, as it leaves the Terminals scope (lab G1s).
+    const sourceInputBehavior = React.useMemo<SelectionListInputBehavior | undefined>(() => source === 'fileContent' ? {
+        onBackspaceAtEnd: (input) => {
+            if (input.length > 0) return null;
+            selectSource('everything');
+            return '';
+        },
+    } : undefined, [selectSource, source]);
     const activeFilters = terminalJump ? terminalScopeChrome.filters : combinedFilters;
-    const inputSuffix = source === 'fileContent' && !terminalJump ? <View style={{ flexDirection: 'row', gap: 16 }}>
-        <IconButton testID="universal-search:match-case" icon={<Text>Aa</Text>} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={16} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.matchCase')} tooltip={t('universalSearch.content.matchCase')} checked={matchCase} selected={matchCase} onPress={() => setMatchCase((value) => !value)} />
-        <IconButton testID="universal-search:regex" icon={<Text>.*</Text>} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={16} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.regex')} tooltip={t('universalSearch.content.regex')} checked={regex} selected={regex} onPress={() => setRegex((value) => !value)} />
+    // Aa and .* read as the Find bar's toggles (lab G1s): quiet mono glyphs, no well at rest, the accent ink when on.
+    const optionGlyph = (glyph: string, on: boolean) => <Text style={[Typography.mono(), Typography.rowMeta(), { fontWeight: '600', color: on ? theme.colors.state.active.foreground : theme.colors.text.secondary }]}>{glyph}</Text>;
+    const inputSuffix = source === 'fileContent' && !terminalJump ? <View style={{ flexDirection: 'row', gap: theme.space.s4 }}>
+        <IconButton testID="universal-search:match-case" variant="plain" icon={optionGlyph('Aa', matchCase)} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={4} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.matchCase')} tooltip={t('universalSearch.content.matchCase')} checked={matchCase} onPress={() => setMatchCase((value) => !value)} />
+        <IconButton testID="universal-search:regex" variant="plain" icon={optionGlyph('.*', regex)} minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)} interactiveTargetGapPx={4} accessibilityRole="switch" accessibilityLabel={t('universalSearch.content.regex')} tooltip={t('universalSearch.content.regex')} checked={regex} onPress={() => setRegex((value) => !value)} />
     </View> : null;
+    // Full-screen on a phone-width browser (the command surface's phone presentation): the band ends with
+    // its way out, as the native Search plane's close does (lab G1sp "Cancel").
+    const phoneCancel = Platform.OS === 'web' && props.presentation === 'modal' && deviceType === 'phone'
+        // Its own box: a text link aligns to the top of a row, and the band centres its controls.
+        ? <View><TextLinkButton testID="universal-search:cancel" tone="strong" label={t('common.cancel')} onPress={props.onRequestClose} /></View>
+        : null;
+    const bandSuffix = inputSuffix || phoneCancel ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>{inputSuffix}{phoneCancel}</View> : null;
+    // Text in files and the conversation results show a detail column; everything else is the compact palette.
+    const surfaceLayout: CommandSurfaceLayout = !terminalJump && (source === 'fileContent' || externalConversationSearch !== null) ? 'detail' : 'compact';
+    const onSurfaceLayoutChange = props.onSurfaceLayoutChange;
+    React.useEffect(() => { onSurfaceLayoutChange?.(surfaceLayout); }, [onSurfaceLayoutChange, surfaceLayout]);
     const activeSelect = terminalJump ? handleTerminalJumpSelect : handleSelect;
     const listAccessibilityLabel = terminalJump ? t('terminalWorkspace.jump.title') : t('tools.names.search');
     if (externalConversationSearch?.accountLifetime.isCurrent()) {
@@ -995,7 +1066,9 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     }
     return (
         <View style={styles.root} testID="universal-search-host">
-            <SelectionList rootStep={activeRootStep} selectionMark="enter" inputValue={query} onChangeInputValue={setQuery} onSelect={activeSelect} onCommandSelect={terminalJump ? handleTerminalJumpDetails : undefined} onRequestClose={props.onRequestClose} selectedOptionId={selectedOptionId} listAccessibilityLabel={listAccessibilityLabel} filters={activeFilters} inputSuffix={inputSuffix} inputBehavior={terminalScopeChrome.inputBehavior} autoFocusInputOnWeb fillAvailableSpace dynamicSectionCache={dynamicSectionCache} />
+            <SelectionList rootStep={activeRootStep} selectionMark="enter" optionPresentation="menu" inputValue={query} onChangeInputValue={setQuery} onSelect={activeSelect} onCommandSelect={terminalJump ? handleTerminalJumpDetails : undefined} onRequestClose={props.onRequestClose} selectedOptionId={selectedOptionId} listAccessibilityLabel={listAccessibilityLabel} filters={activeFilters} inputSuffix={bandSuffix} inputBehavior={terminalJump ? terminalScopeChrome.inputBehavior : sourceInputBehavior} autoFocusInputOnWeb fillAvailableSpace dynamicSectionCache={dynamicSectionCache}
+                // Lab G1s: the code preview column belongs to the Text in files scope; inline hits open their context in the row (G1).
+                {...(source === 'fileContent' && !terminalJump ? { detailPane: COMMAND_SURFACE_DETAIL_PANE } : {})} />
         </View>
     );
 }

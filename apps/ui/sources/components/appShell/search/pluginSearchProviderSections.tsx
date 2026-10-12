@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
-import { PluginSearchQueryV1Schema, PluginSearchResultV1Schema, MAX_PLUGIN_SEARCH_ITEMS_V1 } from '@happier-dev/protocol/plugins/contributions/search-providers';
+import { PluginSearchQueryV1Schema, PluginSearchResultV1Schema } from '@happier-dev/protocol/plugins/contributions/search-providers';
 import {
     normalizePluginUiSemanticCommandV1,
     type CurrentUiContextSnapshotV1,
@@ -64,6 +64,8 @@ import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/
 export const PLUGIN_SEARCH_SECTION_ID_PREFIX = 'plugin-search:';
 /** Separates the host's section identity from the provider-local row id. */
 const PLUGIN_SEARCH_ROW_ID_SEPARATOR = '::';
+/** Preserve the host's default page request; callers may request larger pages. */
+const DEFAULT_PLUGIN_SEARCH_PAGE_SIZE = 32;
 
 export type PluginSearchActivationOutcome =
     | PluginSurfaceActionDispatchOutcome
@@ -97,9 +99,9 @@ export type BuildPluginSearchProviderSectionsInput = Readonly<{
 
 function readProviderRowLimit(rowLimit: number | undefined): number {
     if (rowLimit === undefined || !Number.isInteger(rowLimit) || rowLimit < 1) {
-        return MAX_PLUGIN_SEARCH_ITEMS_V1;
+        return DEFAULT_PLUGIN_SEARCH_PAGE_SIZE;
     }
-    return Math.min(rowLimit, MAX_PLUGIN_SEARCH_ITEMS_V1);
+    return rowLimit;
 }
 
 /**

@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { CustomModalInjectedProps } from '@/modal/types';
-import { buildCommandSurfaceCardChrome } from '@/modal/components/card/commandSurfaceCard';
+import { buildCommandSurfaceCardChrome, type CommandSurfaceLayout } from '@/modal/components/card/commandSurfaceCard';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import type { Command } from '@/components/appShell/commandPalette/types';
 import { t } from '@/text';
@@ -21,12 +21,15 @@ export type UniversalSearchModalProps = CustomModalInjectedProps & Readonly<{
 
 export function UniversalSearchModal(props: UniversalSearchModalProps): React.ReactElement {
     const title = t('tools.names.search');
+    // The controller says which frame it needs: compact for everything, wider with a detail column.
+    const [layout, setLayout] = React.useState<CommandSurfaceLayout>('compact');
     // Spotlight: the command-surface card, with the search field as its top. Esc and the backdrop close it.
     const chrome = React.useMemo(() => buildCommandSurfaceCardChrome({
         title,
         testID: 'universal-search:modal',
         closeButtonTestID: 'universal-search:close',
-    }), [title]);
+        layout,
+    }), [layout, title]);
     useModalCardChrome(props.setChrome, chrome);
     return (
         <UniversalSearchController
@@ -37,6 +40,7 @@ export function UniversalSearchModal(props: UniversalSearchModalProps): React.Re
             initialScope={props.initialScope}
             terminalJump={props.terminalJump}
             presentation="modal"
+            onSurfaceLayoutChange={setLayout}
             onRequestClose={props.onClose}
         />
     );

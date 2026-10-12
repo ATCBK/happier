@@ -15,9 +15,10 @@ import { resolveExternalSessionBrowseCandidateIdentityPresentation } from '@/com
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Item } from '@/components/ui/lists/Item';
-import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { ItemList } from '@/components/ui/lists/ItemList';
-import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { SelectionListSearchHeader } from '@/components/ui/selectionList/SelectionListSearchHeader';
+import { SelectionListSectionHeader } from '@/components/ui/selectionList/SelectionListSectionHeader';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -30,6 +31,7 @@ import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { describeConversationSearchCoverage } from './conversationSearchCoverage';
+import { COMMAND_SURFACE_DETAIL_PANE } from '@/modal/components/card/commandSurfaceCard';
 import { readExternalSessionExchange } from '@/components/sessions/external/browse/readExternalSessionExchange';
 import { projectTranscriptFindText } from '@/components/sessions/transcript/find/transcriptFindText';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
@@ -77,8 +79,8 @@ type SelectedConversationHighlight = ConversationHighlight & Readonly<{
 }>;
 
 /** Wide enough for the list and the preview side by side (the palette card); narrower, rows open directly (lab H1rp). */
-const PREVIEW_MIN_WIDTH = 720;
-const PREVIEW_WIDTH = 372;
+const PREVIEW_MIN_WIDTH = COMMAND_SURFACE_DETAIL_PANE.minListWidthPx;
+const PREVIEW_WIDTH = COMMAND_SURFACE_DETAIL_PANE.widthPx;
 
 function ActivatedResults(props: ExternalConversationSearchResultsProps) {
     const { theme } = useUnistyles();
@@ -118,26 +120,33 @@ function ActivatedResults(props: ExternalConversationSearchResultsProps) {
     const wide = width >= PREVIEW_MIN_WIDTH;
     React.useEffect(() => () => { openState.current.requestToken++; }, []);
     if (browseScope) return <ExternalSessionsBrowseScreen lockScope={browseScope} accountLifetime={props.accountLifetime} initialSearchTarget="content" initialSearchQuery={props.query} onRequestClose={props.onRequestClose} closeButton />;
+    const hitCount = search.result?.hits.length ?? 0;
+    // Lab H1r: the palette keeps its band (the query, and the way back to Search), one group named for where
+    // the scan ran, the hits as palette rows, and the preview beside them when the card is wide enough.
     return <View testID="external-conversation-results" style={[styles.root, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
-        <View style={styles.list}>
-        <ItemList>
-            <PoliteAccessibilityStatus announcement={announcement} transitionKey={`${search.loading}:${search.cancelled}:${search.result?.hits.length}`} statusTestID="external-conversation-status" />
-            {search.loading ? <ExternalSessionSearchProgress label={t('conversationSearch.searching')} onStop={search.cancel} testID="external-conversation-progress" stopTestID="external-conversation-stop" /> : null}
-            <ItemGroup title={allMachines ? t('conversationSearch.scanAllMachines') : t('externalSessions.browseContentOnMachine', { machine: props.machineLabel })} description={t('conversationSearch.queryDescription', { query: props.query })}
-                action={<RoundButton title={t('externalSessions.browseContentBack')} size="small" display="inverted" onPress={props.onBack} />}>
-                {noneFound ? <SectionContentRow><Text testID="external-conversation-none" style={styles.status}>{noneFound}</Text></SectionContentRow> : null}
-                {search.cancelled ? <SectionContentRow><Text style={styles.status}>{t('externalSessions.browseContentStopped')}</Text></SectionContentRow> : null}
-                {coverage ? <SectionContentRow><Text testID="external-conversation-coverage" style={styles.status}>{coverage}</Text></SectionContentRow> : null}
-                {search.error ? <SectionContentRow><Text style={styles.status}>{t('externalSessions.browseFailedToLoad')}</Text><RoundButton title={t('common.retry')} size="small" display="secondary" onPress={search.reload} /></SectionContentRow> : null}
-            </ItemGroup>
-            {sources.map((source) => source.supported
-                ? <ContentSource key={source.key} {...props} target={{ ...props.target, machineId: source.machineId }} source={source} search={search} offline={search.result?.machines.find(machine => machine.machineId === source.machineId)?.status === 'offline'} openState={openState.current} linkingKey={linkingKey} onLinkingChange={setLinkingKey} onShow={() => setBrowseScope({ ...props.target, machineId: source.machineId, providerId: source.agentId, source: source.source })}
-                    machineLabel={machineName(source.machineId)} showMachine={allMachines} wide={wide}
-                    highlightedKey={wide ? highlight?.key ?? null : null} wantsFirstHighlight={wide && highlight === null} onHighlight={setHighlight} />
-                : <ItemGroup key={source.key} title={source.label} description={source.detail}><SectionContentRow><Text testID={`external-conversation-unsupported:${source.key}`} style={styles.status}>{source.capability === false ? t('externalSessions.browseContentNotSearchable') : t('externalSessions.browseContentUpdateRequired', { machine: props.machineLabel })}</Text></SectionContentRow></ItemGroup>)}
-        </ItemList>
+        <SelectionListSearchHeader testID="external-conversation-band" value={props.query.trim()} onChangeText={() => {}} placeholder=""
+            inputReadOnly inputAccessibilityLabel={t('conversationSearch.queryDescription', { query: props.query.trim() })}
+            canPop backLabel={t('tools.names.search')} onPopStep={props.onBack} />
+        <PoliteAccessibilityStatus announcement={announcement} transitionKey={`${search.loading}:${search.cancelled}:${search.result?.hits.length}`} statusTestID="external-conversation-status" />
+        {search.loading ? <ExternalSessionSearchProgress label={t('conversationSearch.searching')} onStop={search.cancel} testID="external-conversation-progress" stopTestID="external-conversation-stop" /> : null}
+        <View style={styles.body}>
+            <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+                <SelectionListSectionHeader title={allMachines ? t('conversationSearch.scopeAllMachinesSubtitle') : t('externalSessions.browseContentOnMachine', { machine: props.machineLabel })}
+                    count={hitCount > 0 ? hitCount : undefined} />
+                {noneFound ? <Text testID="external-conversation-none" style={styles.status}>{noneFound}</Text> : null}
+                {search.cancelled ? <Text style={styles.status}>{t('externalSessions.browseContentStopped')}</Text> : null}
+                {search.error ? <View style={styles.statusRow}><Text style={styles.statusInline}>{t('externalSessions.browseFailedToLoad')}</Text><TextLinkButton size="meta" tone="strong" label={t('common.retry')} onPress={search.reload} /></View> : null}
+                {sources.map((source) => source.supported
+                    ? <ContentSource key={source.key} {...props} target={{ ...props.target, machineId: source.machineId }} source={source} search={search} offline={search.result?.machines.find(machine => machine.machineId === source.machineId)?.status === 'offline'} openState={openState.current} linkingKey={linkingKey} onLinkingChange={setLinkingKey} onShow={() => setBrowseScope({ ...props.target, machineId: source.machineId, providerId: source.agentId, source: source.source })}
+                        machineLabel={machineName(source.machineId)} showMachine={allMachines} wide={wide}
+                        highlightedKey={wide ? highlight?.key ?? null : null} wantsFirstHighlight={wide && highlight === null} onHighlight={setHighlight} />
+                    : <Text key={source.key} testID={`external-conversation-unsupported:${source.key}`} style={styles.status}>{[source.label, source.capability === false ? t('externalSessions.browseContentNotSearchable') : t('externalSessions.browseContentUpdateRequired', { machine: props.machineLabel })].join(' · ')}</Text>)}
+                {/* How much was covered closes the list (lab H1r "Searched 3,102 conversations"). */}
+                {coverage ? <Text testID="external-conversation-coverage" style={styles.status}>{coverage}</Text> : null}
+            </ScrollView>
+            {/* The preview column opens with the first hit; an empty half-card would only say nothing is there yet. */}
+            {wide && hitCount > 0 ? <SelectedConversationPreview highlight={highlight} query={props.query} disabled={linkingKey !== null} /> : null}
         </View>
-        {wide ? <SelectedConversationPreview highlight={highlight} query={props.query} disabled={linkingKey !== null} /> : null}
     </View>;
 }
 
@@ -272,18 +281,20 @@ function ContentSource(props: ExternalConversationSearchResultsProps & Readonly<
     const busy = results.loading || results.loadingMore || Boolean(results.preparation);
     const mixed = results.candidates.some(candidate => candidate.searchMode === 'indexed')
         && results.candidates.some(candidate => candidate.searchMode === 'standard');
-    return <ItemGroup title={source.label} description={[props.showMachine ? props.machineLabel : null, source.detail,
-        mixed ? t('conversationSearch.mixedResults') : null].filter(Boolean).join(' · ') || undefined}
-        action={props.wide ? undefined : <RoundButton title={t('externalSessions.browseContentShow')} size="small" display="inverted" titleNumberOfLines="complete" onPress={props.onShow} />}>
+    // Rows only: the agent's mark on each row says whose conversation it is, so a source draws no heading,
+    // and a source with nothing to show draws nothing.
+    if (results.candidates.length === 0 && !results.nextCursor) return null;
+    return <View testID={`external-conversation-source:${source.key}`}>
         {results.candidates.map((candidate) => {
+            // The row's mark names the Agent and the group names the machine; the line keeps the project.
             const identity = resolveExternalSessionBrowseCandidateIdentityPresentation({ remoteSessionId: candidate.remoteSessionId, title: candidate.title,
-                path: readExternalSessionBrowseCandidatePath(candidate.details), agentLabel: source.label, machineLabel: props.machineLabel, thread: candidate.thread });
+                path: readExternalSessionBrowseCandidatePath(candidate.details), machineLabel: props.showMachine ? props.machineLabel : null, thread: candidate.thread });
             const key = readExternalSessionBrowseCandidateKey(candidate);
             const match = candidate.match;
             const linking = props.linkingKey === key;
             const open = match ? () => openCandidate(candidate) : undefined;
             const highlightThis = match && props.highlightedKey !== null ? () => props.onHighlight(describe(candidate)) : undefined;
-            return <Item key={key}
+            return <View key={key} style={styles.menuRow}><Item rowRole="menu"
                 testID={match ? `external-conversation-open:${candidate.remoteSessionId}` : undefined}
                 title={identity.title}
                 icon={<AgentIcon agentId={source.agentId} size={ICON_SIZE.md} />}
@@ -297,29 +308,40 @@ function ContentSource(props: ExternalConversationSearchResultsProps & Readonly<
                 rightElement={linking ? <ActivitySpinner size={ICON_SIZE.sm} />
                     : candidate.linkedSessionId ? <StatusPill variant="neutral" label={t('externalSessions.browseLinked')} hideDot labelVariant="phrase" /> : undefined}
                 bottomElement={<ConversationHitSummary snippet={candidate.match?.snippet ?? t('externalSessions.browseContentNotSearchable')}
-                    query={props.query} where={identity.secondaryLabel} atMs={candidate.updatedAtMs} testID={`external-session-candidate-match:${candidate.remoteSessionId}`} />} />;
+                    query={props.query} where={identity.secondaryLabel} atMs={candidate.updatedAtMs} testID={`external-session-candidate-match:${candidate.remoteSessionId}`} />} /></View>;
         })}
-        {results.nextCursor && !busy && !results.cancelled ? <SectionContentRow><RoundButton testID={`external-conversation-more:${source.key}`} title={t('externalSessions.browseContentMore')} size="small" display="secondary" disabled={props.offline} onPress={results.loadMore} /></SectionContentRow> : null}
-    </ItemGroup>;
+        {mixed ? <Text style={styles.status}>{t('conversationSearch.mixedResults')}</Text> : null}
+        {(results.nextCursor && !busy && !results.cancelled) || !props.wide ? <View style={styles.statusRow}>
+            {results.nextCursor && !busy && !results.cancelled ? <TextLinkButton testID={`external-conversation-more:${source.key}`} size="meta" tone="strong" label={t('externalSessions.browseContentMore')} disabled={props.offline} onPress={results.loadMore} /> : null}
+            {/* Narrow cards have no preview: the source's full listing is one quiet link away. */}
+            {!props.wide ? <TextLinkButton size="meta" label={t('externalSessions.browseContentShow')} onPress={props.onShow} /> : null}
+        </View> : null}
+    </View>;
 }
 
 const styles = StyleSheet.create((theme) => ({
-    root: { flex: 1, minHeight: 0, flexDirection: 'row', backgroundColor: theme.colors.surface.base },
+    root: { flex: 1, minHeight: 0, flexDirection: 'column', backgroundColor: theme.colors.surface.base },
+    body: { flex: 1, minHeight: 0, flexDirection: 'row' },
     list: { flex: 1, minWidth: 0, minHeight: 0 },
+    listContent: { paddingBottom: theme.space.s8 },
+    // Hits sit on the palette's menu rows: inset from the card edge with the shared rounded highlight.
+    menuRow: { marginHorizontal: MENU_ROW_METRICS.insetPx, borderRadius: MENU_ROW_METRICS.radiusPx, overflow: 'hidden' },
+    statusRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 },
+    statusInline: { ...Typography.rowMeta(), color: theme.colors.text.secondary },
     // The preview column (lab H1r `.fd-preview`): title, where it lives, the matched message, then the
     // two ways out and what opening does.
-    preview: { width: PREVIEW_WIDTH, flexShrink: 0, minHeight: 0, gap: 8, paddingHorizontal: 16, paddingTop: 18, paddingBottom: 16,
+    preview: { width: PREVIEW_WIDTH, flexShrink: 0, minHeight: 0, gap: theme.space.s8, paddingHorizontal: theme.space.s16, paddingTop: theme.space.s16, paddingBottom: theme.space.s16,
         borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: theme.colors.border.default },
-    previewHeading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    previewHeading: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     previewTitle: { ...Typography.rowTitle(), flex: 1, color: theme.colors.text.primary },
-    previewMessage: { marginTop: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, backgroundColor: theme.colors.surface.inset },
+    previewMessage: { marginTop: theme.space.s6, paddingHorizontal: 14, paddingVertical: theme.space.s10, borderRadius: 12, backgroundColor: theme.colors.surface.inset },
     previewGrow: { flex: 1, minHeight: 12 },
     // One rhythm down the exchange (lab `.fd-preview`: 8 between who and what, 13/19 message text).
-    previewMessages: { gap: 12, paddingBottom: 4 },
+    previewMessages: { gap: theme.space.s12, paddingBottom: theme.space.s4 },
     previewText: { ...Typography.rowMeta(), color: theme.colors.text.primary },
-    previewActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    previewActions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8 },
     previewEmpty: { marginTop: 'auto', marginBottom: 'auto', textAlign: 'center' },
     meta: { ...Typography.rowMeta(), color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
     // Coverage and progress are context, not content: one quiet line.
-    status: { ...Typography.rowMeta(), color: theme.colors.text.secondary },
+    status: { ...Typography.rowMeta(), color: theme.colors.text.secondary, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 },
 }));

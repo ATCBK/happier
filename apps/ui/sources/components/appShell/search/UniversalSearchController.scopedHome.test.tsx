@@ -19,6 +19,7 @@ const harness = vi.hoisted(() => ({
     machineRpc: vi.fn(),
     routerPush: vi.fn(),
     memoryMachine: null as null | { serverId: string; machine: { id: string } },
+    workspaceRefs: [] as unknown[],
     modalAlert: vi.fn(),
     featureEnabled: { search: true, 'memory.search': false } as Record<string, boolean>,
     fetchAllSessionMetadata: vi.fn(async () => {}),
@@ -183,6 +184,7 @@ vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     return createStorageModuleStub({
         useSetting: () => [],
+        useWorkspaceRefs: () => harness.workspaceRefs,
         storage: { getState: () => ({
             sessions: {},
             machines: {},
@@ -347,7 +349,6 @@ function pluginSearchProjection(input: Readonly<{
 afterEach(() => {
     harness.selectionListProps = null;
     harness.sessionListRows = [];
-    harness.homeCredentialMutationListeners.clear();
     harness.portableIdentity = false;
     harness.singleHome = false;
     harness.settingsCatalog = { tree: [], search: () => [] };
@@ -358,6 +359,7 @@ afterEach(() => {
     harness.activeAccountLifetime = null;
     harness.featureEnabled = { search: true, 'memory.search': false };
     harness.memoryMachine = null;
+    harness.workspaceRefs = [];
     harness.machineRpc.mockReset();
     vi.clearAllMocks();
     standardCleanup();
@@ -1007,6 +1009,57 @@ describe('UniversalSearchController exact Home scope', () => {
         const scopeFilter = harness.selectionListProps?.filters?.find((filter) => filter.id === 'scope');
         if (!scopeFilter) throw new Error('Scope filter missing from Search');
         expect(scopeFilter.valueLabel).toBe('Home B');
+    });
+
+    // Find lab G1s: "Text in files" is a removable scope token (× returns to everything), not a
+    // two-option dropdown; without it Search shows no source chip at all (G1).
+    it('shows Text in files as a removable token only while that scope is on', async () => {
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        const workspaceScope = { accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: 'machine-b', rootPath: '/home/leeroy/code/happier' };
+
+        await renderScreen(
+            <UniversalSearchController
+                commands={[]}
+                initialQuery="routeKey"
+                initialSource="fileContent"
+                initialScope={workspaceScope}
+                activeSessionId={null}
+                presentation="modal"
+                onRequestClose={vi.fn()}
+            />,
+        );
+
+        const token = harness.selectionListProps?.filters?.find((filter) => filter.id === 'source');
+        if (!token) throw new Error('Text in files token missing');
+        expect(token.options).toBeUndefined();
+        expect(token.onClear).toBeTypeOf('function');
+        await act(async () => { token.onClear?.(); });
+
+        expect(harness.selectionListProps?.filters?.some((filter) => filter.id === 'source')).toBe(false);
+        expect(harness.selectionListProps?.inputValue).toBe('routeKey');
+    });
+
+    // Find lab ST "Machine offline": one line, under Text in files, not the same sentence in every group.
+    it('says once that the folder\'s machine is offline', async () => {
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        const workspaceScope = { accountId: 'account-1', serverId: 'home-b', sessionId: null, machineId: 'machine-offline', rootPath: '/home/leeroy/code/happier' };
+        harness.workspaceRefs = [{ id: 'ws-happier', serverId: 'home-b', machineId: 'machine-offline', rootPath: '/home/leeroy/code/happier', label: 'happier', createdAtMs: 1 }];
+
+        await renderScreen(
+            <UniversalSearchController
+                commands={[]}
+                initialQuery="routeKey"
+                initialScope={workspaceScope}
+                activeSessionId={null}
+                presentation="modal"
+                onRequestClose={vi.fn()}
+            />,
+        );
+
+        const ids = harness.selectionListProps?.rootStep.sections.map((section) => section.id) ?? [];
+        expect(ids).toContain('fileContent');
+        expect(ids).not.toContain('files');
+        expect(ids).not.toContain('commits');
     });
 
     it('keeps the result query when the scope filter changes the Home', async () => {

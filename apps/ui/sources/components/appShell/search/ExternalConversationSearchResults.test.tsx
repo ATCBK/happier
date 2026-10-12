@@ -98,7 +98,7 @@ function sourceKey() {
     const option = resolveExternalSessionBrowseSourceOptions({
         accountScope: { serverId: boundary.serverId, accountId: 'account-a' },
         providerId: 'codex', machineId: 'machine-1', projection: projection(true),
-        profile: null, settings: { connectedServicesProfileLabelByKey: {} }, activeServerId: boundary.serverId,
+        profile: null, labelsByKey: {}, activeServerId: boundary.serverId,
     })[0];
     if (!option) throw new Error('Projected source fixture did not materialize');
     return JSON.stringify(['machine-1', option.key]);
@@ -207,6 +207,18 @@ describe('activated external conversation results', () => {
         expect(screen.findHostByTestId('external-conversation-none')).not.toBeNull();
         expect(screen.findHostByTestId('external-conversation-progress')).toBeNull();
         expect(screen.getTextContent()).not.toContain('externalSessions.browseNoSearchResults');
+    });
+
+    // Lab H1r: the palette keeps the query in its band, and a source with nothing to show draws no heading.
+    it('keeps the query in a band with the way back, and lists no empty source', async () => {
+        boundary.list.mockResolvedValue({ ok: true, candidates: [], contentCoverage: 'complete' });
+        const input = props();
+        const screen = await renderScreen(<ExternalConversationSearchResults {...input} />);
+        await flushHookEffects({ cycles: 4, turns: 2 });
+        expect(screen.findHostByTestId('external-conversation-band:input')?.props.value).toBe('body-only phrase');
+        expect(screen.findHostByTestId(`external-conversation-source:${sourceKey()}`)).toBeNull();
+        await screen.pressByTestIdAsync('external-conversation-band:leading:back-chip');
+        expect(input.onBack).toHaveBeenCalledTimes(1);
     });
 
     it('never sends content to an older source or displays metadata rows as matches', async () => {

@@ -2,17 +2,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
+import type { PluginSurfaceContributedActionTransport } from '@/components/plugins/surfaces/pluginSurfaceActionDispatch';
+import type { PluginSurfaceOpenHandler } from '@/components/plugins/surfaces/openPluginSurface';
 
 import {
     buildPluginSearchProviderSections,
     PLUGIN_SEARCH_SECTION_ID_PREFIX,
+    type BuildPluginSearchProviderSectionsInput,
 } from './pluginSearchProviderSections';
 
-const dispatchSemanticCommand = vi.hoisted(() => vi.fn());
+// Real semantic routing, launch admission and Action dispatch run above this
+// injected machine transport. No plugin process or network is opened here.
+const executeAction = vi.fn<PluginSurfaceContributedActionTransport>();
+const openSurface = vi.fn<PluginSurfaceOpenHandler>();
 
-vi.mock('@/components/plugins/surfaces/dispatchPluginResolvedSemanticCommand', () => ({
-    dispatchPluginResolvedSemanticCommand: dispatchSemanticCommand,
-}));
+function actionResult(result: Extract<Awaited<ReturnType<PluginSurfaceContributedActionTransport>>, { supported: true }>['result']) {
+    return { supported: true as const, result };
+}
 
 const SCOPED = Object.freeze({
     serverId: 'server-1',
@@ -60,29 +66,32 @@ function projection(overrides: Partial<PluginUiProjectionModel> = {}): PluginUiP
                 occurrenceId: 'happier-triage-occurrence-7',
                 title: 'PRs & Issues',
                 icon: 'action',
-                scopes: ['global'],
-                surfaces: ['ui'],
-                execution: { target: 'daemon' },
+                scopes: ['global' as const],
+                surfaces: ['ui' as const],
+                execution: { target: 'daemon' as const },
                 dangerLevel: 'safe',
                 available: true,
             }),
         }),
         ...overrides,
-    }) as PluginUiProjectionModel;
+    });
 }
 
-function sections(overrides: Record<string, unknown> = {}) {
+function sections(overrides: Partial<BuildPluginSearchProviderSectionsInput> = {}) {
     return buildPluginSearchProviderSections({
         projection: projection(),
         scopedLaunchFacts: SCOPED,
         rowLimit: 8,
         onCommitActivation: vi.fn(),
+        execute: executeAction,
+        openSurface,
         ...overrides,
-    } as Parameters<typeof buildPluginSearchProviderSections>[0]);
+    });
 }
 
 beforeEach(() => {
-    dispatchSemanticCommand.mockReset();
+    executeAction.mockReset();
+    openSurface.mockReset();
 });
 
 describe('buildPluginSearchProviderSections', () => {
@@ -129,7 +138,7 @@ describe('buildPluginSearchProviderSections', () => {
         expect(new Set([first, nextOccurrence, otherMachine, otherServer]).size).toBe(4);
     });
 
-    it('admits exact source-backed providers and rebinds when their source custody changes', () => {
+    it('queries exact source-backed providers and rebinds when their source custody changes', async () => {
         const current = projection();
         const sourceOrigin = (registeredRootId: string) => ({
             ...hostOrigin('happier.triage', 'machine-1', 7),
@@ -160,6 +169,26 @@ describe('buildPluginSearchProviderSections', () => {
         const scopedLaunchFacts = { ...SCOPED, serverId: 'server-machine-1' };
         const first = sections({ projection: withSource('root-a'), scopedLaunchFacts });
         expect(first).toHaveLength(1);
+        executeAction.mockResolvedValue(actionResult({
+            ok: true,
+            result: {
+                items: [{ id: 'source-entry', title: 'Development result', command: { kind: 'executeAction', action: 'search' } }],
+                truncated: false,
+            },
+        }));
+        await expect(first[0]!.resolve('development', new AbortController().signal)).resolves.toMatchObject({
+            options: [expect.objectContaining({ label: 'Development result' })],
+        });
+        expect(executeAction.mock.calls[0]).toEqual([
+            'machine-1',
+            expect.objectContaining({
+                serverId: 'server-machine-1',
+                qualifiedActionId: 'happier.triage/search',
+                expectedContributorOccurrenceId: 'happier-triage-occurrence-7',
+                input: { query: 'development', limit: 8 },
+                executionSurface: 'ui',
+            }),
+        ]);
         const peerUpdate = sections({ projection: withSource('root-a', 'root-a', 8), scopedLaunchFacts });
         expect(peerUpdate[0]!.resolverKey).toBe(first[0]!.resolverKey);
         const replacement = sections({ projection: withSource('root-b'), scopedLaunchFacts });
@@ -182,7 +211,7 @@ describe('buildPluginSearchProviderSections', () => {
                     available: false,
                 }),
             }),
-        } as Partial<PluginUiProjectionModel>);
+        });
         expect(sections({ projection: unavailable })).toHaveLength(0);
         // Uninstalled: the descriptor is gone with the projection it came from.
         expect(sections({
@@ -242,7 +271,7 @@ describe('buildPluginSearchProviderSections', () => {
     });
 
     it('queries the declared Action through the one dispatcher and renders its rows', async () => {
-        dispatchSemanticCommand.mockResolvedValue({
+        executeAction.mockResolvedValue(actionResult({
             ok: true,
             result: {
                 items: [{
@@ -253,19 +282,19 @@ describe('buildPluginSearchProviderSections', () => {
                 }],
                 truncated: true,
             },
-        });
+        }));
         const controller = new AbortController();
         const resolved = await sections()[0]!.resolve('  pr  ', controller.signal);
-        expect(dispatchSemanticCommand).toHaveBeenCalledTimes(1);
-        const call = dispatchSemanticCommand.mock.calls[0]![0];
-        expect(call.callerPluginId).toBe('happier.triage');
-        expect(call.command).toEqual({
-            kind: 'executeAction',
-            action: { pluginId: 'happier.triage', localId: 'search' },
+        const [machineId, call] = executeAction.mock.calls[0]!;
+        expect(machineId).toBe('machine-1');
+        expect(call).toMatchObject({
+            qualifiedActionId: 'happier.triage/search',
+            expectedContributorOccurrenceId: 'happier-triage-occurrence-7',
+            executionSurface: 'ui',
+            serverId: 'server-1',
             input: { query: 'pr', limit: 8 },
         });
         expect(call.signal).toBe(controller.signal);
-        expect(call.scopedLaunchFacts).toEqual(SCOPED);
         expect(resolved.options).toHaveLength(1);
         expect(resolved.options[0]!.id).toBe(
             `${PLUGIN_SEARCH_SECTION_ID_PREFIX}happier.triage:entries::entry-1`,
@@ -313,19 +342,19 @@ describe('buildPluginSearchProviderSections', () => {
                     execution: { target: 'daemon' }, dangerLevel: 'safe', available: true, hostOrigin: secondOrigin,
                 }),
             }),
-        } as Partial<PluginUiProjectionModel>);
-        dispatchSemanticCommand.mockImplementation(async ({ callerPluginId, command }) => ({
+        });
+        executeAction.mockImplementation(async (_machineId, { qualifiedActionId, input }) => actionResult({
             ok: true,
-            result: command.kind === 'executeAction' && command.input
+            result: input
                 ? {
                     items: [{
-                        id: `${callerPluginId}-entry`,
-                        title: `${callerPluginId} entry`,
+                        id: `${qualifiedActionId}-entry`,
+                        title: `${qualifiedActionId} entry`,
                         command: { kind: 'executeAction', action: 'search' },
                     }],
                     truncated: false,
                 }
-                : undefined,
+                : null,
         }));
 
         const onCommitActivation = vi.fn();
@@ -337,37 +366,39 @@ describe('buildPluginSearchProviderSections', () => {
                 interactionEnabled: true,
             },
             onCommitActivation,
+            execute: executeAction,
         });
         expect(built).toHaveLength(2);
         const resolved = await Promise.all(
             built.map((section) => section.resolve('entry', new AbortController().signal)),
         );
 
-        expect(dispatchSemanticCommand.mock.calls.map(([call]) => call.scopedLaunchFacts)).toEqual([
-            { serverId: 'server-machine-a', machineId: 'machine-a', interactionEnabled: true },
-            { serverId: 'server-machine-b', machineId: 'machine-b', interactionEnabled: true },
+        expect(executeAction.mock.calls.map(([machineId, call]) => ({ machineId, serverId: call.serverId }))).toEqual([
+            { serverId: 'server-machine-a', machineId: 'machine-a' },
+            { serverId: 'server-machine-b', machineId: 'machine-b' },
+        ]);
+        expect(resolved.map(result => result.options[0]?.label)).toEqual([
+            'acme.first/search entry', 'acme.second/search entry',
         ]);
 
         resolved[1]!.options[0]!.onSelect?.();
-        await onCommitActivation.mock.calls[0]![0]();
-        const activation = dispatchSemanticCommand.mock.calls[2]![0];
-        expect(activation.scopedLaunchFacts).toEqual({
+        await expect(onCommitActivation.mock.calls[0]![0]()).resolves.toEqual({ ok: true, result: null });
+        const [machineId, activation] = executeAction.mock.calls[2]!;
+        expect(machineId).toBe('machine-b');
+        expect(activation).toMatchObject({
             serverId: 'server-machine-b',
-            machineId: 'machine-b',
-            interactionEnabled: true,
+            qualifiedActionId: 'acme.second/search',
+            expectedContributorOccurrenceId: 'acme-second-occurrence-22',
+            executionSurface: 'ui',
         });
-        expect(activation.command).toEqual({
-            kind: 'executeAction',
-            action: { pluginId: 'acme.second', localId: 'search' },
-        });
-        expect(activation.projection.actionsById['acme.second/search']?.hostOrigin).toEqual(secondOrigin);
+        expect(activation.input).toBeUndefined();
     });
 
     it('fails the section locally on malformed provider output', async () => {
-        dispatchSemanticCommand.mockResolvedValue({
+        executeAction.mockResolvedValue(actionResult({
             ok: true,
             result: { items: [{ id: 'entry-1', title: 'Fix', command: { kind: 'openLink', url: 'https://x' } }], truncated: false },
-        });
+        }));
         await expect(sections()[0]!.resolve('pr', new AbortController().signal)).rejects.toThrow(
             /plugin_search_result_invalid/,
         );
@@ -394,8 +425,8 @@ describe('buildPluginSearchProviderSections', () => {
                     execution: { target: 'daemon' }, dangerLevel: 'safe', available: true,
                 }),
             }),
-        } as Partial<PluginUiProjectionModel>);
-        dispatchSemanticCommand.mockImplementation(async ({ callerPluginId }) => callerPluginId === 'happier.triage'
+        });
+        executeAction.mockImplementation(async (_machineId, { qualifiedActionId }) => actionResult(qualifiedActionId === 'happier.triage/search'
             ? {
                 ok: true,
                 result: {
@@ -412,7 +443,7 @@ describe('buildPluginSearchProviderSections', () => {
                     items: [{ id: 'healthy', title: 'Healthy', command: { kind: 'executeAction', action: 'open' } }],
                     truncated: false,
                 },
-            });
+            }));
         const built = sections({ projection: siblingProjection });
         const duplicate = built.find((section) => section.id.includes('happier.triage'))!;
         const healthy = built.find((section) => section.id.includes('acme.healthy'))!;
@@ -425,34 +456,25 @@ describe('buildPluginSearchProviderSections', () => {
         });
     });
 
-    it('fails only an overbound plugin provider before dispatch while a built-in sibling remains usable', async () => {
-        const overbound = 'x'.repeat(257);
-        const composed = [
-            ...sections(),
-            {
-                id: 'transcript',
-                title: 'Transcript',
-                resolverKey: 'healthy-transcript',
-                resultFiltering: 'provider' as const,
-                resolve: async () => ({
-                    options: [{ id: 'transcript::healthy', label: 'Healthy built-in result' }],
-                }),
-            },
-        ];
-        const plugin = composed.find((section) => section.id.startsWith(PLUGIN_SEARCH_SECTION_ID_PREFIX))!;
-        const transcript = composed.find((section) => section.id === 'transcript')!;
-
-        await expect(plugin.resolve(overbound, new AbortController().signal)).rejects.toThrow(
-            /plugin_search_query_invalid/,
-        );
-        expect(dispatchSemanticCommand).not.toHaveBeenCalled();
-        await expect(transcript.resolve(overbound, new AbortController().signal)).resolves.toMatchObject({
-            options: [expect.objectContaining({ label: 'Healthy built-in result' })],
-        });
+    it('preserves long queries, display labels and the host caller row limit', async () => {
+        const query = '😀'.repeat(300);
+        executeAction.mockResolvedValue(actionResult({ ok: true, result: {
+            items: Array.from({ length: 100 }, (_, index) => ({
+                id: `entry-${index}`, title: query, subtitle: query,
+                command: { kind: 'executeAction', action: 'open' },
+            })),
+            truncated: false,
+        } }));
+        const result = await sections({ rowLimit: 80 })[0]!.resolve(query, new AbortController().signal);
+        expect(executeAction.mock.calls[0]?.[1].input).toEqual({ query, limit: 80 });
+        expect(result.options).toHaveLength(80);
+        expect(result.options[0]).toMatchObject({ label: query, subtitle: query });
+        expect(result.options[79]?.id).toBe('plugin-search:happier.triage:entries::entry-79');
+        expect(result.resultHint).toBe('More results are available. Refine your search.');
     });
 
     it('reports host-side row truncation even when the provider forgot to mark it', async () => {
-        dispatchSemanticCommand.mockResolvedValue({
+        executeAction.mockResolvedValue(actionResult({
             ok: true,
             result: {
                 items: [
@@ -461,7 +483,7 @@ describe('buildPluginSearchProviderSections', () => {
                 ],
                 truncated: false,
             },
-        });
+        }));
         const resolved = await sections({ rowLimit: 1 })[0]!.resolve(
             'pr',
             new AbortController().signal,
@@ -471,7 +493,7 @@ describe('buildPluginSearchProviderSections', () => {
     });
 
     it('fails the section locally on a typed dispatch failure', async () => {
-        dispatchSemanticCommand.mockResolvedValue({ ok: false, code: 'unavailable', reason: 'plugin_ui_action_unavailable' });
+        executeAction.mockResolvedValue(actionResult({ ok: false, code: 'plugin_ui_action_unavailable' }));
         await expect(sections()[0]!.resolve('pr', new AbortController().signal)).rejects.toThrow(
             /plugin_ui_action_unavailable/,
         );
@@ -481,12 +503,12 @@ describe('buildPluginSearchProviderSections', () => {
         const controller = new AbortController();
         controller.abort();
         await expect(sections()[0]!.resolve('pr', controller.signal)).rejects.toThrow();
-        expect(dispatchSemanticCommand).not.toHaveBeenCalled();
+        expect(executeAction).not.toHaveBeenCalled();
     });
 
     it('does not publish query rows after the captured Account lifetime retires', async () => {
-        let resolveQuery!: (value: unknown) => void;
-        dispatchSemanticCommand.mockImplementationOnce(() => new Promise((resolve) => {
+        let resolveQuery!: (value: Awaited<ReturnType<PluginSurfaceContributedActionTransport>>) => void;
+        executeAction.mockImplementationOnce(() => new Promise((resolve) => {
             resolveQuery = resolve;
         }));
         let current = true;
@@ -497,10 +519,10 @@ describe('buildPluginSearchProviderSections', () => {
         };
         const section = sections({ accountLifetime, accountLifetimeRevision: 1 })[0]!;
         const pending = section.resolve('private', new AbortController().signal);
-        await vi.waitFor(() => expect(dispatchSemanticCommand).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(executeAction).toHaveBeenCalledTimes(1));
 
         current = false;
-        resolveQuery({
+        resolveQuery(actionResult({
             ok: true,
             result: {
                 items: [{
@@ -510,13 +532,13 @@ describe('buildPluginSearchProviderSections', () => {
                 }],
                 truncated: false,
             },
-        });
+        }));
 
         await expect(pending).resolves.toEqual({ options: [] });
     });
 
     it('commits without dispatching, then activates through the incumbent semantic-command owner', async () => {
-        dispatchSemanticCommand.mockResolvedValueOnce({
+        executeAction.mockResolvedValueOnce(actionResult({
             ok: true,
             result: {
                 items: [{
@@ -526,40 +548,40 @@ describe('buildPluginSearchProviderSections', () => {
                 }],
                 truncated: false,
             },
-        }).mockResolvedValueOnce({ ok: true });
+        }));
+        openSurface.mockResolvedValue({ ok: true });
         const onCommitActivation = vi.fn();
         const built = buildPluginSearchProviderSections({
             projection: projection(),
             scopedLaunchFacts: SCOPED,
             rowLimit: 8,
             onCommitActivation,
-        } as Parameters<typeof buildPluginSearchProviderSections>[0]);
+            execute: executeAction,
+            openSurface,
+        });
         const resolved = await built[0]!.resolve('pr', new AbortController().signal);
         resolved.options[0]!.onSelect?.();
-        expect(dispatchSemanticCommand).toHaveBeenCalledTimes(1);
+        expect(executeAction).toHaveBeenCalledTimes(1);
+        expect(openSurface).not.toHaveBeenCalled();
         expect(onCommitActivation).toHaveBeenCalledTimes(1);
         const outcome = await onCommitActivation.mock.calls[0]![0]();
-        expect(dispatchSemanticCommand).toHaveBeenCalledTimes(2);
-        expect(dispatchSemanticCommand.mock.calls[1]![0]).toMatchObject({
-            callerPluginId: 'happier.triage',
-            command: {
-                kind: 'openSurface',
-                destination: { pluginId: 'happier.triage', localId: 'triage' },
-                input: { v: 1 },
-                subPath: '',
-            },
+        expect(executeAction).toHaveBeenCalledTimes(1);
+        expect(openSurface.mock.calls[0]![0]).toEqual({
+            destination: { pluginId: 'happier.triage', localId: 'triage' },
+            input: { v: 1 },
+            subPath: '',
         });
         expect(outcome).toEqual({ ok: true });
     });
 
     it('refuses activation once the admitting generation is gone', async () => {
-        dispatchSemanticCommand.mockResolvedValue({
+        executeAction.mockResolvedValue(actionResult({
             ok: true,
             result: {
                 items: [{ id: 'entry-1', title: 'Fix', command: { kind: 'executeAction', action: 'open-entry' } }],
                 truncated: false,
             },
-        });
+        }));
         const onCommitActivation = vi.fn();
         let current = true;
         const accountLifetime = {
@@ -574,28 +596,29 @@ describe('buildPluginSearchProviderSections', () => {
             accountLifetime,
             accountLifetimeRevision: 1,
             onCommitActivation,
-        } as Parameters<typeof buildPluginSearchProviderSections>[0]);
+            execute: executeAction,
+        });
         const resolved = await built[0]!.resolve('pr', new AbortController().signal);
         current = false;
         resolved.options[0]!.onSelect?.();
-        expect(dispatchSemanticCommand).toHaveBeenCalledTimes(1);
+        expect(executeAction).toHaveBeenCalledTimes(1);
         const outcome = await onCommitActivation.mock.calls[0]![0]();
         expect(outcome).toEqual({
             ok: false,
             code: 'stale_surface',
             reason: 'plugin_ui_generation_retired',
         });
-        expect(dispatchSemanticCommand).toHaveBeenCalledTimes(1);
+        expect(executeAction).toHaveBeenCalledTimes(1);
     });
 
     it('does not accept a replacement Account lifetime merely because its scope strings are identical', async () => {
-        dispatchSemanticCommand.mockResolvedValueOnce({
+        executeAction.mockResolvedValueOnce(actionResult({
             ok: true,
             result: {
                 items: [{ id: 'entry-1', title: 'Private result', command: { kind: 'executeAction', action: 'open-entry' } }],
                 truncated: false,
             },
-        });
+        }));
         const onCommitActivation = vi.fn();
         let admittingLifetimeCurrent = true;
         const admittingLifetime = {
@@ -609,7 +632,8 @@ describe('buildPluginSearchProviderSections', () => {
             accountLifetime: admittingLifetime,
             accountLifetimeRevision: 4,
             onCommitActivation,
-        } as Parameters<typeof buildPluginSearchProviderSections>[0]);
+            execute: executeAction,
+        });
         const resolved = await built[0]!.resolve('private', new AbortController().signal);
 
         admittingLifetimeCurrent = false;
@@ -626,7 +650,7 @@ describe('buildPluginSearchProviderSections', () => {
             code: 'stale_surface',
             reason: 'plugin_ui_generation_retired',
         });
-        expect(dispatchSemanticCommand).toHaveBeenCalledTimes(1);
+        expect(executeAction).toHaveBeenCalledTimes(1);
     });
 
     it('replaces and removes provider sections across update, disable, and uninstall lifecycle changes', () => {
