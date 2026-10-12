@@ -9,6 +9,7 @@ import { ensureSessionDirectory } from '@/daemon/startup/ensureSessionDirectory'
 import {
   SPAWN_SESSION_ERROR_CODES,
   type SpawnSessionOptions,
+  type SpawnSessionResult,
 } from '@/session/shared/spawnSessionContract';
 import { logger } from '@/ui/logger';
 import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
@@ -106,6 +107,20 @@ describe('createSpawnNewSessionLifecycleActionHandler', () => {
       .toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST });
   });
 
+  it('forwards a validated tool policy to the daemon launch and rejects malformed policy before spawning', async () => {
+    const spawnSession = vi.fn(async (_options: SpawnSessionOptions) => ({ type: 'success' as const, sessionId: 'policy-session' }));
+    const handler = createSpawnNewSessionLifecycleActionHandler({ spawnSession });
+    const policy = { allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' };
+    const input = { directory: '/tmp/project',
+      backendTarget: { kind: 'backend', backendId: 'test-agent', configuredBackendId: 'test-agent', sourceKind: 'configured' },
+      ...policy };
+    await expect(handler(input)).resolves.toMatchObject({ type: 'success' });
+    expect(spawnSession.mock.calls[0]?.[0]).toMatchObject(policy);
+    await expect(handler({ ...input, unlistedTools: 'allow' })).resolves.toMatchObject({
+      type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+    });
+    expect(spawnSession).toHaveBeenCalledTimes(1);
+  });
   it('creates a Bot through admitted daemon spawn controls before Agent startup without an instruction document', async () => {
     const identity = { bot: { kind: 'bot' }, createdAsBot: true };
     let initialMetadata: unknown;
@@ -270,6 +285,8 @@ describe('createSpawnNewSessionLifecycleActionHandler', () => {
         },
         modelSelection: null,
         profileId: 'profile-shared',
+        allowedTools: ['mcp__wilson-intake__*'],
+        unlistedTools: 'deny',
         identity: { bot: { kind: 'bot' }, createdAsBot: true },
         memoryEnabled: false,
         secretReferenceOverlay,
@@ -304,6 +321,8 @@ describe('createSpawnNewSessionLifecycleActionHandler', () => {
       sessionCreationTag,
       sessionCreationCorrespondence,
       profileId: 'profile-shared',
+      allowedTools: ['mcp__wilson-intake__*'],
+      unlistedTools: 'deny',
       secretReferenceOverlay,
       initialTitle: 'Atomic initial title',
       identity: { bot: { kind: 'bot' }, createdAsBot: true },
@@ -319,10 +338,12 @@ describe('createSpawnNewSessionLifecycleActionHandler', () => {
       sessionCreationTag, sessionCreationCorrespondence })).resolves.toMatchObject({ type: 'success' });
     expect(spawnSession.mock.calls.at(-1)?.[0]).not.toHaveProperty('identity');
     expect(spawnSession.mock.calls.at(-1)?.[0]).not.toHaveProperty('memoryEnabled');
+    expect(spawnSession.mock.calls.at(-1)?.[0]).not.toHaveProperty('allowedTools');
+    expect(spawnSession.mock.calls.at(-1)?.[0]).not.toHaveProperty('unlistedTools');
   });
 
   it('fails closed before spawn when duplicate launch references disagree with immutable correspondence', async () => {
-    const spawnSession = vi.fn();
+    const spawnSession = vi.fn(async () => ({ type: 'success' as const, sessionId: 'unexpected-policy-spawn' }));
     const handler = createSpawnNewSessionLifecycleActionHandler({ spawnSession });
     const sessionCreationTag = deriveSessionCreationTagV1({
       callerCreationNamespace: 'user',
@@ -340,6 +361,8 @@ describe('createSpawnNewSessionLifecycleActionHandler', () => {
         },
         modelSelection: null,
         profileId: 'profile-original',
+        allowedTools: ['mcp__wilson-intake__*'],
+        unlistedTools: 'deny',
         secretReferenceOverlay: {
           v: 1,
           bindings: {
@@ -362,6 +385,8 @@ describe('createSpawnNewSessionLifecycleActionHandler', () => {
     });
 
     for (const conflicting of [
+      { allowedTools: ['Bash'], unlistedTools: 'deny' as const },
+      { allowedTools: correspondence.recipe.allowedTools, unlistedTools: 'ask' as const },
       {
         profileId: 'profile-other',
         secretReferenceOverlay: correspondence.recipe.secretReferenceOverlay,
@@ -601,11 +626,12 @@ describe('createSpawnNewSessionLifecycleActionHandler', () => {
     expect(spawnSession).not.toHaveBeenCalled();
   });
 
-  it('forwards startup instructions for the supported resume-session path', async () => {
-    const spawnSession = vi.fn(async (_options: SpawnSessionOptions) => ({
-      type: 'success',
-      sessionId: 'session-voice',
-    } as const));
+  it.each<{ phase: string; result: SpawnSessionResult }>([
+    { phase: 'already-running runner', result: { type: 'success', sessionId: 'session-voice' } },
+    { phase: 'accepted launch', result: { type: 'success', spawnNonce: 'resume-start', sessionIdStatus: 'pending' } },
+    { phase: 'directory consent', result: { type: 'requestToApproveDirectoryCreation', directory: '/tmp/voice' } },
+  ])('forwards startup instructions for the supported resume-session path and retains $phase custody', async ({ result }) => {
+    const spawnSession = vi.fn(async (_options: SpawnSessionOptions) => result);
     const handler = createSpawnNewSessionLifecycleActionHandler({ spawnSession });
     const agentSessionStartupInstructionsV1 = {
       v: 1,
@@ -618,8 +644,9 @@ describe('createSpawnNewSessionLifecycleActionHandler', () => {
       type: 'resume-session',
       sessionId: 'session-voice',
       directory: '/tmp/voice',
+      spawnNonce: 'resume-start',
       agentSessionStartupInstructionsV1,
-    })).resolves.toEqual({ type: 'success' });
+    })).resolves.toEqual(result);
 
     expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
       existingSessionId: 'session-voice',
@@ -657,7 +684,7 @@ describe('createSpawnNewSessionLifecycleActionHandler', () => {
         sessionId: 'managed-session',
         directory: allocation.directory,
         approvedNewDirectoryCreation: true,
-      })).resolves.toEqual({ type: 'success' });
+      })).resolves.toEqual({ type: 'success', sessionId: 'managed-session' });
       await expect(access(allocation.directory)).resolves.toBeUndefined();
     } finally {
       await rm(activeServerDir, { recursive: true, force: true });

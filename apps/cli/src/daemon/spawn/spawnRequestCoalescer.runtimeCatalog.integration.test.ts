@@ -81,6 +81,18 @@ const providerBindingSecurityChangeConfirmation = {
 };
 
 describe('computeDaemonSpawnRequestKey', () => {
+  it('keeps distinct skill selections separate and normalizes selection order', () => {
+    const request = (skillIds: string[]) => ({
+      directory: '/workspace',
+      capabilitySelection: {
+        skills: { v: 1 as const, forceIncludeSkillIds: skillIds, forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
+      },
+    });
+    expect(computeDaemonSpawnRequestKey(request(['lint'])).key)
+      .not.toBe(computeDaemonSpawnRequestKey(request(['review'])).key);
+    expect(computeDaemonSpawnRequestKey(request(['lint', 'review'])).key)
+      .toBe(computeDaemonSpawnRequestKey(request(['review', 'lint'])).key);
+  });
   it('does not reuse an unkeyed ordinary launch for a Bot or another explicit memory choice', () => {
     const ordinary = { directory: '/workspace' };
     const bot = { ...ordinary, identity: { bot: { kind: 'bot' as const }, createdAsBot: true as const } };

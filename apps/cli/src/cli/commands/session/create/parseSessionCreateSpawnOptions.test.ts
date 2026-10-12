@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { parseSessionCreateSpawnOptions } from './parseSessionCreateSpawnOptions';
 
 describe('parseSessionCreateSpawnOptions', () => {
+  it('accepts repeated capability names for resolution at the Action transport boundary', () => {
+    const parsed = parseSessionCreateSpawnOptions([
+      'create', '--path', '/workspace', '--skill', 'lint', '--skill', 'review',
+      '--no-skill', 'native-helper', '--mcp', 'docs', '--no-mcp', 'linear',
+    ]);
+    expect(parsed.spawnRequest).toMatchObject({
+      capabilitySelectionNames: { skills: { include: ['lint', 'review'], exclude: ['native-helper'] }, mcp: { include: ['docs'], exclude: ['linear'] } },
+    });
+  });
   it('parses runtime-v2 session create flags into the CLI spawn request', () => {
     const connectedServices = {
       v: 1,

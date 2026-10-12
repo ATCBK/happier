@@ -72,6 +72,12 @@ function plainSessionRow(id: string, metadata: Record<string, unknown>) {
 }
 
 describe('commitDaemonLaunchSession', () => {
+  it('commits selection-bearing launches before child startup so selections travel through metadata', () => {
+    const capabilitySelection = {
+      skills: { v: 1 as const, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
+    };
+    expect(daemonLaunchRequiresCommittedSession({ directory: '/workspace', capabilitySelection })).toBe(true);
+  });
   beforeEach(() => {
     network.fetchSessionByIdCompat.mockReset();
     network.fetchAccountEncryptionCurrentness.mockReset().mockResolvedValue({

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { parseSessionCreateSpawnOptions } from './parseSessionCreateSpawnOptions';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -41,7 +42,30 @@ function createDeps(
 }
 
 describe('normalizeSessionCreateSpawnRequest', () => {
+  it('resolves repeated capability names to catalog IDs and rejects missing names with not_found', async () => {
+    const deps = {
+      ...createDeps(),
+      readCapabilityCatalogs: async () => ({
+        mcp: [{ id: 'server-docs', name: 'docs' }, { id: 'server-linear', name: 'linear' }],
+        skills: [{ id: 'skill-lint', name: 'lint' }, { id: 'skill-review', name: 'review' }],
+      }),
+    };
+    const request = {
+      directory: '/workspace', backendTargetKey: null,
+      capabilitySelectionNames: { skills: { include: ['lint', 'lint'], exclude: ['review'] }, mcp: { include: ['docs'], exclude: ['linear'] } },
+    };
+    const resolved = await normalizeSessionCreateSpawnRequest(request, deps);
+    expect(resolved.input).toMatchObject({ capabilitySelection: {
+      mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['server-docs'], forceExcludeServerIds: ['server-linear'] },
+      skills: { v: 1, forceIncludeSkillIds: ['skill-lint'], forceExcludeSkillIds: ['skill-review'], excludeNativeSkillNames: [] },
+    } });
+    expect(resolved.input).not.toHaveProperty('capabilitySelectionNames');
+    await expect(normalizeSessionCreateSpawnRequest({ ...request,
+      capabilitySelectionNames: { skills: { include: ['missing'], exclude: [] }, mcp: { include: [], exclude: [] } },
+    }, deps)).rejects.toMatchObject({ code: 'not_found', kind: 'skill', name: 'missing' });
+  });
   it.each([
+    'acpBackend:chosen',
     'agent:happier.agent.custom-acp/custom-acp:definition:chosen',
     'backend:chosen:configured:chosen',
   ])('preserves the configured definition through ordinary Session spawn admission: %s', async (backendTargetKey) => {
@@ -57,14 +81,25 @@ describe('normalizeSessionCreateSpawnRequest', () => {
     });
   });
 
-  it('resolves a qualified bundled target through its declared identity rather than its routing-id spelling', async () => {
-    const normalized = await normalizeSessionCreateSpawnRequest({
-      directory: '/repo/project', backendTargetKey: 'agent:happier.agent.claude/claude',
-    }, createDeps({ readAgentDefinitions: () => readAgentCatalogSnapshot().agentDefinitionsById.values() }));
+  it.each([
+    ['--agent', 'claude'],
+    ['--backend', 'agent:claude'],
+    ['--backend', 'agent:happier.agent.claude/claude'],
+  ])('normalizes the parsed bundled Agent selection to its declared identity: %s %s', async (flag, selection) => {
+    const parsed = parseSessionCreateSpawnOptions([
+      'create', '--path', '/repo/project', flag, selection,
+      '--model', 'claude-sonnet-4-6', '--reasoning-effort', 'low',
+    ]);
+    const normalized = await normalizeSessionCreateSpawnRequest(parsed.spawnRequest,
+      createDeps({ readAgentDefinitions: () => readAgentCatalogSnapshot().agentDefinitionsById.values() }));
     expect(normalized.agentId).toBe('claude');
     expect(normalized.input.agentTarget).toEqual({
       kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
     });
+    expect(normalized.input.modelSelection?.ref).toMatchObject({
+      agentTargetKey: 'agent:happier.agent.claude/claude', modelId: 'claude-sonnet-4-6',
+    });
+    expect(normalized.input.configuration?.options.reasoning_effort).toEqual({ value: 'low', updatedAtMs: 100 });
   });
   it('normalizes permission aliases and rejects unknown modes before Action dispatch', async () => {
     const normalized = await normalizeSessionCreateSpawnRequest({
