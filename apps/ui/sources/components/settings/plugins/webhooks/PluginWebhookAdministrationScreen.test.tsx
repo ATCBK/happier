@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     PluginWebhookAccountStatusResultV1Schema,
@@ -7,7 +8,7 @@ import {
     PluginWebhookEndpointCredentialConfigureResultV1Schema,
 } from '@happier-dev/protocol';
 
-import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { PluginWebhookAdministrationHttpClient } from '@/sync/api/plugins/webhooks/endpointActions';
 
 const resolveExecutionOrigin = vi.hoisted(() => vi.fn(() => null));
@@ -126,6 +127,162 @@ function createClient(): PluginWebhookAdministrationHttpClient {
 }
 
 describe('PluginWebhookAdministrationScreen', () => {
+    it('publishes acknowledged revocation before rereading unrelated endpoint queues', async () => {
+        const client = createClient();
+        const initialStatus = await client.readStatus({ pageSize: 100, deadLetterPageSize: 100 });
+        const endpoint = initialStatus.endpoints[0]!;
+        const revalidation = createDeferred<void>();
+        vi.mocked(client.readStatus).mockResolvedValueOnce(initialStatus)
+            .mockImplementation(() => revalidation.promise.then(() => initialStatus));
+        vi.mocked(client.executeAction).mockResolvedValueOnce({
+            kind: 'revoked', webhookEndpointId: endpoint.webhookEndpointId, revision: 2,
+        });
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        const { PluginWebhookAdministrationScreen } = await import('./PluginWebhookAdministrationScreen');
+        const screen = await renderScreen(<PluginWebhookAdministrationScreen client={client} />);
+        try {
+            screen.pressByTestId(`settings.plugins.webhooks.endpoint.${endpoint.webhookEndpointId}.revoke`);
+            await vi.waitFor(() => expect(client.executeAction).toHaveBeenCalled());
+            await vi.waitFor(() => expect(client.readStatus).toHaveBeenCalledTimes(3));
+            await act(async () => { await Promise.resolve(); });
+            const revoke = screen.findHostByTestId(`settings.plugins.webhooks.endpoint.${endpoint.webhookEndpointId}.revoke`)!;
+            expect(Boolean(revoke.props.accessibilityState?.busy)).toBe(false);
+            expect(Boolean(revoke.props.disabled)).toBe(true);
+        } finally {
+            revalidation.resolve();
+            await screen.unmount();
+        }
+    });
+
+    it.each(['configureCredential', 'movePending'] as const)('settles acknowledged %s while status admission revalidates', async operation => {
+        const client = createClient();
+        const initialStatus = await client.readStatus({ pageSize: 100, deadLetterPageSize: 100 });
+        const endpoint = { ...initialStatus.endpoints[0]!, readiness: 'credentialDisclosureLost' as const,
+            pendingTargetTransfer: { eligibleDeliveryCount: 2 } };
+        const revalidation = createDeferred<void>();
+        vi.mocked(client.readStatus).mockResolvedValueOnce({ ...initialStatus, endpoints: [endpoint] })
+            .mockImplementation(() => revalidation.promise.then(() => ({ ...initialStatus, endpoints: [{
+                ...initialStatus.endpoints[0]!, revision: operation === 'configureCredential' ? 2 : 1,
+            }] })));
+        vi.mocked(client.executeAction).mockResolvedValueOnce(operation === 'configureCredential' ? {
+            kind: 'configured', webhookEndpointId: endpoint.webhookEndpointId, revision: 2, credentialVersionId: 'current-credential',
+        } : { moved: 2, skippedClaimed: 0, nextCursor: null, done: true });
+        const { PluginWebhookAdministrationScreen } = await import('./PluginWebhookAdministrationScreen');
+        const screen = await renderScreen(<PluginWebhookAdministrationScreen client={client} />);
+        try {
+            await act(async () => screen.pressByTestId(`settings.plugins.webhooks.endpoint.${endpoint.webhookEndpointId}.${operation}`));
+            await vi.waitFor(() => expect(client.readStatus).toHaveBeenCalledTimes(3));
+            await act(async () => { await Promise.resolve(); });
+            const control = screen.findHostByTestId(`settings.plugins.webhooks.endpoint.${endpoint.webhookEndpointId}.${operation}`)!;
+            expect(Boolean(control.props.accessibilityState?.busy)).toBe(false);
+            expect(Boolean(control.props.disabled)).toBe(true);
+            expect(screen.getTextContent()).toContain('credentialDisclosureLost');
+        } finally {
+            revalidation.resolve();
+            await screen.unmount();
+        }
+    });
+
+    it.each(['replay', 'discard'] as const)('publishes acknowledged %s before rereading unrelated endpoint queues', async operation => {
+        const client = createClient();
+        const initialStatus = await client.readStatus({ pageSize: 100, deadLetterPageSize: 100 });
+        const revalidation = createDeferred<void>();
+        vi.mocked(client.readStatus).mockResolvedValueOnce(initialStatus).mockImplementation(() => revalidation.promise.then(() => ({
+            ...initialStatus, deadLetters: [],
+        })));
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        const { PluginWebhookAdministrationScreen } = await import('./PluginWebhookAdministrationScreen');
+        const screen = await renderScreen(<PluginWebhookAdministrationScreen client={client} />);
+        try {
+            screen.pressByTestId(`settings.plugins.webhooks.delivery.delivery-dead.${operation}`);
+            await vi.waitFor(() => expect(client[operation === 'replay' ? 'replayDelivery' : 'discardDelivery']).toHaveBeenCalled());
+            await vi.waitFor(() => expect(screen.findByTestId(`settings.plugins.webhooks.delivery.delivery-dead.${operation}`)).toBeNull());
+            expect(screen.findByTestId('settings.plugins.webhooks.endpoint.wh_ep_AAECAwQFBgcICQoLDA0ODw.revoke')).not.toBeNull();
+        } finally {
+            revalidation.resolve();
+            await screen.unmount();
+        }
+    });
+
+    it('does not restore an acknowledged delivery from an earlier pending status read', async () => {
+        const client = createClient();
+        const initialStatus = await client.readStatus({ pageSize: 100, deadLetterPageSize: 100 });
+        const earlierRead = createDeferred<void>();
+        const revalidation = createDeferred<void>();
+        const acknowledgement = createDeferred<void>();
+        vi.mocked(client.replayDelivery).mockImplementationOnce(() => acknowledgement.promise.then(() =>
+            PluginWebhookDeliveryReplayResultV1Schema.parse({ kind: 'requeued', revision: 4 })));
+        vi.mocked(client.readStatus).mockClear().mockResolvedValueOnce(initialStatus)
+            .mockImplementationOnce(() => earlierRead.promise.then(() => initialStatus))
+            .mockImplementation(() => revalidation.promise.then(() => ({ ...initialStatus, deadLetters: [] })));
+        const { PluginWebhookAdministrationScreen } = await import('./PluginWebhookAdministrationScreen');
+        const screen = await renderScreen(<PluginWebhookAdministrationScreen client={client} />);
+        try {
+            screen.pressByTestId('settings.plugins.webhooks.delivery.delivery-dead.replay');
+            await vi.waitFor(() => expect(client.replayDelivery).toHaveBeenCalled());
+            screen.pressByTestId('settings.plugins.webhooks.refresh');
+            await vi.waitFor(() => expect(client.readStatus).toHaveBeenCalledTimes(2));
+            await act(async () => { acknowledgement.resolve(); });
+            await vi.waitFor(() => expect(client.readStatus).toHaveBeenCalledTimes(3));
+            await act(async () => { earlierRead.resolve(); });
+            await vi.waitFor(() => expect(screen.findByTestId('settings.plugins.webhooks.delivery.delivery-dead.replay')).toBeNull());
+        } finally {
+            acknowledgement.resolve();
+            earlierRead.resolve();
+            revalidation.resolve();
+            await screen.unmount();
+        }
+    });
+
+    it.each(['rotate', 'finishRotation'] as const)('publishes acknowledged credential %s before rereading endpoint queues', async operation => {
+        const client = createClient();
+        const initialStatus = await client.readStatus({ pageSize: 100, deadLetterPageSize: 100 });
+        const endpoint = { ...initialStatus.endpoints[0]!, ...(operation === 'finishRotation' ? { credentialRotation: {
+            previousCredentialVersionId: 'previous-credential', previousAcceptUntilMs: 100,
+        } } : {}) };
+        const revalidatedEndpoint = { ...initialStatus.endpoints[0]!, revision: 2,
+            ...(operation === 'rotate' ? { credentialRotation: {
+                previousCredentialVersionId: 'new-previous', previousAcceptUntilMs: 200,
+            } } : {}) };
+        const revalidation = createDeferred<void>();
+        vi.mocked(client.readStatus).mockResolvedValueOnce({ ...initialStatus, endpoints: [endpoint] })
+            .mockImplementation(() => revalidation.promise.then(() => ({ ...initialStatus, endpoints: [revalidatedEndpoint] })));
+        vi.mocked(client.executeAction).mockResolvedValue({ kind: 'retired', webhookEndpointId: endpoint.webhookEndpointId, revision: 3 })
+            .mockResolvedValueOnce(operation === 'rotate' ? {
+            kind: 'rotated', webhookEndpointId: endpoint.webhookEndpointId, revision: 2,
+            credentialVersionId: 'current-credential', previousCredentialVersionId: 'new-previous', previousAcceptUntilMs: 200,
+        } : { kind: 'retired', webhookEndpointId: endpoint.webhookEndpointId, revision: 2 });
+        const { PluginWebhookAdministrationScreen } = await import('./PluginWebhookAdministrationScreen');
+        const screen = await renderScreen(<PluginWebhookAdministrationScreen client={client} />);
+        try {
+            screen.pressByTestId(`settings.plugins.webhooks.endpoint.${endpoint.webhookEndpointId}.${operation === 'rotate' ? 'rotateCredential' : operation}`);
+            await vi.waitFor(() => expect(client.executeAction).toHaveBeenCalled());
+            await vi.waitFor(() => expect(client.readStatus).toHaveBeenCalledTimes(3));
+            await act(async () => { await Promise.resolve(); });
+            if (operation === 'rotate') {
+                const rotate = screen.findHostByTestId(`settings.plugins.webhooks.endpoint.${endpoint.webhookEndpointId}.rotateCredential`)!;
+                expect(Boolean(rotate.props.accessibilityState?.busy)).toBe(false);
+                expect(Boolean(rotate.props.disabled)).toBe(true);
+                const finishId = `settings.plugins.webhooks.endpoint.${endpoint.webhookEndpointId}.finishRotation`;
+                expect(screen.findHostByTestId(finishId)).not.toBeNull();
+                expect(Boolean(screen.findHostByTestId(finishId)!.props.disabled)).toBe(true);
+                await act(async () => { revalidation.resolve(); });
+                await vi.waitFor(() => expect(Boolean(screen.findHostByTestId(finishId)?.props.disabled)).toBe(false));
+                screen.pressByTestId(`settings.plugins.webhooks.endpoint.${endpoint.webhookEndpointId}.finishRotation`);
+                await vi.waitFor(() => expect(client.executeAction).toHaveBeenCalledWith('plugin.webhook.endpoint.credential.finishRotation', {
+                    webhookEndpointId: endpoint.webhookEndpointId, expectedRevision: 2, expectedPreviousCredentialVersionId: 'new-previous',
+                }));
+            } else {
+                expect(screen.findHostByTestId(`settings.plugins.webhooks.endpoint.${endpoint.webhookEndpointId}.finishRotation`)).toBeNull();
+            }
+        } finally {
+            revalidation.resolve();
+            await screen.unmount();
+        }
+    });
+
     it('renders endpoint and bounded dead-letter status without a raw delivery body', async () => {
         const client = createClient();
         const { PluginWebhookAdministrationScreen } = await import('./PluginWebhookAdministrationScreen');

@@ -25,9 +25,20 @@ import { useActivePluginAccountAvailabilityReleaseClassifier } from '@/sync/doma
 import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { t } from '@/text';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 type AccountStatus = Awaited<ReturnType<PluginWebhookAdministrationHttpClient['readStatus']>>;
-type EndpointStatus = AccountStatus['endpoints'][number];
+type EndpointStatus = AccountStatus['endpoints'][number] & Readonly<{
+    /** A local observation of an acknowledged revoke, never a fabricated server timestamp. */
+    revocationAcknowledged?: true;
+}>;
+type AccountStatusObservation = Omit<AccountStatus, 'endpoints'> & Readonly<{ endpoints: readonly EndpointStatus[] }>;
+type EndpointAcknowledgement = Readonly<{
+    revision: number;
+    targetMaterialization?: EndpointStatus['targetMaterialization'];
+    credentialRotation?: EndpointStatus['credentialRotation'];
+    revocationAcknowledged?: true;
+}>;
 type DeadLetterStatus = AccountStatus['deadLetters'][number];
 type ReleaseClassifier = (materialization: PluginMachineMaterializationV1) => PluginMachineReleaseClassificationV1;
 
@@ -80,7 +91,9 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
     endpoint: EndpointStatus;
     client: PluginWebhookAdministrationHttpClient;
     classifyRelease: ReleaseClassifier;
+    statusCurrent: boolean;
     refresh: () => Promise<void>;
+    onAcknowledged: (endpointId: string, acknowledgement: EndpointAcknowledgement) => void;
 }>) {
     const { endpoint } = props;
     const selection = usePluginMachineExecutionOriginSelection({
@@ -89,10 +102,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
     });
     const operationKeys = React.useRef(new Map<string, string>());
     const [busyAction, setBusyAction] = React.useState<string | null>(null);
-    const [recentPreviousCredentialVersionId, setRecentPreviousCredentialVersionId] = React.useState<string | null>(null);
-    const previousCredentialVersionId = recentPreviousCredentialVersionId
-        ?? endpoint.credentialRotation?.previousCredentialVersionId
-        ?? null;
+    const previousCredentialVersionId = endpoint.credentialRotation?.previousCredentialVersionId ?? null;
 
     const stableOperationKey = React.useCallback((operation: string): string => {
         const existing = operationKeys.current.get(operation);
@@ -133,7 +143,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
         setBusyAction('revoke');
         const operation = `revoke:${endpoint.revision}`;
         try {
-            PluginWebhookEndpointRevokeResultV1Schema.parse(await props.client.executeAction(
+            const result = PluginWebhookEndpointRevokeResultV1Schema.parse(await props.client.executeAction(
                 'plugin.webhook.endpoint.revoke',
                 {
                     webhookEndpointId: endpoint.webhookEndpointId,
@@ -142,7 +152,8 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 },
             ));
             operationKeys.current.delete(operation);
-            await props.refresh();
+            props.onAcknowledged(result.webhookEndpointId, { revision: result.revision, revocationAcknowledged: true });
+            fireAndForget(props.refresh());
         } catch {
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
@@ -179,6 +190,10 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 throw new Error(result.kind);
             }
             operationKeys.current.delete(operation);
+            props.onAcknowledged(result.webhookEndpointId, {
+                revision: result.revision,
+                targetMaterialization: result.targetMaterialization,
+            });
             const movePending = await Modal.confirm(
                 t('settingsPlugins.webhookAdministration.movePendingTitle'),
                 t('settingsPlugins.webhookAdministration.movePendingBody'),
@@ -190,7 +205,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                     targetMaterialization: result.targetMaterialization,
                 });
             }
-            await props.refresh();
+            fireAndForget(props.refresh());
         } catch {
             await props.refresh().catch(() => undefined);
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
@@ -207,7 +222,9 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 endpointRevision: endpoint.revision,
                 targetMaterialization: endpoint.targetMaterialization,
             });
-            await props.refresh();
+            // A completed move acknowledges the operation, not a fresh queue census.
+            props.onAcknowledged(endpoint.webhookEndpointId, { revision: endpoint.revision });
+            fireAndForget(props.refresh());
         } catch {
             await props.refresh().catch(() => undefined);
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
@@ -225,6 +242,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                     expectedRevision: endpoint.revision,
                 }),
             );
+            props.onAcknowledged(result.webhookEndpointId, { revision: result.revision });
             if (result.oneTimeGeneratedSecret) {
                 await Modal.alertAsync(
                     t('settingsPlugins.webhookAdministration.credentialSecretTitle'),
@@ -233,7 +251,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                     }),
                 );
             }
-            await props.refresh();
+            fireAndForget(props.refresh());
         } catch {
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
@@ -248,7 +266,10 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 'plugin.webhook.endpoint.credential.rotate',
                 { webhookEndpointId: endpoint.webhookEndpointId, expectedRevision: endpoint.revision },
             ));
-            setRecentPreviousCredentialVersionId(result.previousCredentialVersionId);
+            props.onAcknowledged(result.webhookEndpointId, { revision: result.revision, credentialRotation: {
+                previousCredentialVersionId: result.previousCredentialVersionId,
+                previousAcceptUntilMs: result.previousAcceptUntilMs,
+            } });
             if (result.oneTimeGeneratedSecret) {
                 await Modal.alertAsync(
                     t('settingsPlugins.webhookAdministration.credentialSecretTitle'),
@@ -257,7 +278,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                     }),
                 );
             }
-            await props.refresh();
+            fireAndForget(props.refresh());
         } catch {
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
@@ -277,8 +298,11 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 }),
             );
             if (result.kind !== 'retired' && result.kind !== 'alreadyRetired') throw new Error(result.kind);
-            setRecentPreviousCredentialVersionId(null);
-            await props.refresh();
+            props.onAcknowledged(endpoint.webhookEndpointId, {
+                revision: result.revision,
+                credentialRotation: undefined,
+            });
+            fireAndForget(props.refresh());
         } catch {
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
@@ -341,7 +365,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                     ? t('settingsPlugins.webhookAdministration.originSelected')
                     : t('settingsPlugins.webhookAdministration.originUnavailable')}
                 onPress={() => { void retarget(); }}
-                disabled={!selection.canExecute || selectedTargetIsCurrent}
+                disabled={!props.statusCurrent || busyAction !== null || !selection.canExecute || selectedTargetIsCurrent}
                 loading={busyAction === 'retarget'}
                 showChevron={false}
             />
@@ -353,7 +377,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                         count: endpoint.pendingTargetTransfer.eligibleDeliveryCount,
                     })}
                     onPress={() => { void resumePendingMove(); }}
-                    disabled={busyAction !== null}
+                    disabled={!props.statusCurrent || busyAction !== null}
                     loading={busyAction === 'movePending'}
                     showChevron={false}
                 />
@@ -364,7 +388,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                     title={t('settingsPlugins.webhookAdministration.configureCredential')}
                     onPress={() => { void configureCredential(); }}
                     loading={busyAction === 'configure'}
-                    disabled={busyAction !== null}
+                    disabled={!props.statusCurrent || busyAction !== null}
                     showChevron={false}
                 />
             ) : null}
@@ -374,7 +398,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                     title={t('settingsPlugins.webhookAdministration.rotateCredential')}
                     onPress={() => { void rotateCredential(); }}
                     loading={busyAction === 'rotate'}
-                    disabled={busyAction !== null}
+                    disabled={!props.statusCurrent || busyAction !== null}
                     showChevron={false}
                 />
             ) : null}
@@ -385,7 +409,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                     subtitle={t('settingsPlugins.webhookAdministration.finishRotationSubtitle')}
                     onPress={() => { void finishCredentialRotation(); }}
                     loading={busyAction === 'finishRotation'}
-                    disabled={busyAction !== null}
+                    disabled={!props.statusCurrent || busyAction !== null}
                     showChevron={false}
                 />
             ) : null}
@@ -394,7 +418,7 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
                 title={t('settingsPlugins.webhookAdministration.revoke')}
                 onPress={() => { void revoke(); }}
                 loading={busyAction === 'revoke'}
-                disabled={busyAction !== null || endpoint.revokedAt !== undefined}
+                disabled={!props.statusCurrent || busyAction !== null || endpoint.revokedAt !== undefined || endpoint.revocationAcknowledged === true}
                 destructive
                 showChevron={false}
             />
@@ -404,8 +428,10 @@ const WebhookEndpointSection = React.memo(function WebhookEndpointSection(props:
 
 const WebhookDeadLetterSection = React.memo(function WebhookDeadLetterSection(props: Readonly<{
     delivery: DeadLetterStatus;
+    statusCurrent: boolean;
     client: PluginWebhookAdministrationHttpClient;
     refresh: () => Promise<void>;
+    onAcknowledged: (deliveryId: string) => void;
 }>) {
     const [busy, setBusy] = React.useState<'replay' | 'discard' | null>(null);
     const unresolved = describeAutomationAdmissionUnresolved(props.delivery);
@@ -417,7 +443,8 @@ const WebhookDeadLetterSection = React.memo(function WebhookDeadLetterSection(pr
                 expectedRevision: props.delivery.revision,
             });
             if (result.kind !== 'requeued') throw new Error(result.kind);
-            await props.refresh();
+            props.onAcknowledged(props.delivery.deliveryId);
+            fireAndForget(props.refresh());
         } catch {
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
@@ -437,7 +464,8 @@ const WebhookDeadLetterSection = React.memo(function WebhookDeadLetterSection(pr
                 expectedRevision: props.delivery.revision,
             });
             if (result.kind !== 'discarded') throw new Error(result.kind);
-            await props.refresh();
+            props.onAcknowledged(props.delivery.deliveryId);
+            fireAndForget(props.refresh());
         } catch {
             await Modal.alertAsync(t('common.error'), t('settingsPlugins.webhookAdministration.operationFailed'));
         } finally {
@@ -481,7 +509,7 @@ const WebhookDeadLetterSection = React.memo(function WebhookDeadLetterSection(pr
                 title={t('settingsPlugins.webhookAdministration.replay')}
                 onPress={() => { void replay(); }}
                 loading={busy === 'replay'}
-                disabled={busy !== null}
+                disabled={!props.statusCurrent || busy !== null}
                 showChevron={false}
             />
             <Item
@@ -489,7 +517,7 @@ const WebhookDeadLetterSection = React.memo(function WebhookDeadLetterSection(pr
                 title={t('common.discard')}
                 onPress={() => { void discard(); }}
                 loading={busy === 'discard'}
-                disabled={busy !== null}
+                disabled={!props.statusCurrent || busy !== null}
                 destructive
                 showChevron={false}
             />
@@ -510,10 +538,31 @@ export const PluginWebhookAdministrationScreen = React.memo(function PluginWebho
     // administer and the read would only surface as a load failure.
     const webhooksAvailable = useFeatureEnabled('plugins.webhooks');
     const classifyRelease = useActivePluginAccountAvailabilityReleaseClassifier();
-    const [status, setStatus] = React.useState<AccountStatus | null>(null);
+    const [status, setStatus] = React.useState<AccountStatusObservation | null>(null);
     const [loading, setLoading] = React.useState(true);
     const [error, setError] = React.useState(false);
+    const activeRead = React.useRef<object | null>(null);
+    const acknowledgeDelivery = React.useCallback((deliveryId: string) => {
+        activeRead.current = null;
+        setLoading(true);
+        setStatus(current => {
+            if (current === null) return current;
+            const deadLetters = current.deadLetters.filter(delivery => delivery.deliveryId !== deliveryId);
+            return deadLetters.length === current.deadLetters.length ? current : { ...current, deadLetters };
+        });
+    }, []);
+    const acknowledgeEndpoint = React.useCallback((endpointId: string, acknowledgement: EndpointAcknowledgement) => {
+        activeRead.current = null;
+        setLoading(true);
+        setStatus(current => current === null ? current : {
+            ...current,
+            endpoints: current.endpoints.map(endpoint => endpoint.webhookEndpointId !== endpointId
+                || endpoint.revision > acknowledgement.revision ? endpoint : { ...endpoint, ...acknowledgement }),
+        });
+    }, []);
     const refresh = React.useCallback(async () => {
+        const request = {};
+        activeRead.current = request;
         setLoading(true);
         try {
             const first = await client.readStatus({ pageSize: 100, deadLetterPageSize: 100 });
@@ -528,18 +577,20 @@ export const PluginWebhookAdministrationScreen = React.memo(function PluginWebho
                 endpoints.push(...next.endpoints);
                 cursor = next.nextEndpointCursor;
             }
+            if (activeRead.current !== request) return;
             setStatus({ ...first, endpoints, nextEndpointCursor: null });
             setError(false);
         } catch {
-            setError(true);
+            if (activeRead.current === request) setError(true);
         } finally {
-            setLoading(false);
+            if (activeRead.current === request) setLoading(false);
         }
     }, [client]);
 
     React.useEffect(() => {
         if (!webhooksAvailable) return;
         void refresh();
+        return () => { activeRead.current = null; };
     }, [refresh, webhooksAvailable]);
 
     if (!webhooksAvailable) {
@@ -598,17 +649,21 @@ export const PluginWebhookAdministrationScreen = React.memo(function PluginWebho
                 <WebhookEndpointSection
                     key={endpoint.webhookEndpointId}
                     endpoint={endpoint}
+                    statusCurrent={!loading && !error}
                     client={client}
                     classifyRelease={classifyRelease}
                     refresh={refresh}
+                    onAcknowledged={acknowledgeEndpoint}
                 />
             ))}
             {status?.deadLetters.length ? status.deadLetters.map((delivery) => (
                 <WebhookDeadLetterSection
                     key={delivery.deliveryId}
                     delivery={delivery}
+                    statusCurrent={!loading && !error}
                     client={client}
                     refresh={refresh}
+                    onAcknowledged={acknowledgeDelivery}
                 />
             )) : null}
         </ItemList>
