@@ -461,9 +461,9 @@ function BitbucketReviewPublicationControls({
   return (
     <Stack gap="small">
       <Text variant="label" valueKey="plugins.bitbucket.ui.mutations.review.title" fallback="Review publication" />
-      {status === 'loading' ? <Text variant="caption" tone="neutral" valueKey="plugins.bitbucket.ui.mutations.review.loadingProposals" fallback="Reading linked review proposals…" /> : null}
+      {status === 'loading' ? <Text variant="micro" tone="neutral" valueKey="plugins.bitbucket.ui.mutations.review.loadingProposals" fallback="Reading linked review proposals…" /> : null}
       {status === 'failed' ? <Banner tone="danger" title="Review proposals are unavailable" titleKey="plugins.bitbucket.ui.mutations.review.proposalsUnavailable" /> : null}
-      {status === 'ready' && proposals.length === 0 ? <Text variant="caption" tone="neutral" valueKey="plugins.bitbucket.ui.mutations.review.noProposals" fallback="No proposed review comments are linked to this pull request." /> : null}
+      {status === 'ready' && proposals.length === 0 ? <Text variant="micro" tone="neutral" valueKey="plugins.bitbucket.ui.mutations.review.noProposals" fallback="No proposed review comments are linked to this pull request." /> : null}
       {proposals.length > 0 ? (
         <Form.Select
           label={text('plugins.bitbucket.ui.mutations.review.comments', 'Review comments')}
@@ -714,7 +714,7 @@ export function BitbucketMutationControls({
           }}
         />
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.bitbucket.ui.mutations.merge.strategyRequired"
           fallback="Choose a merge strategy. Bitbucket writes it into this repository's history permanently."
@@ -741,7 +741,7 @@ export function BitbucketMutationControls({
         />
         {observedHeadCommit !== undefined ? null : (
           <Text
-            variant="caption"
+            variant="micro"
             tone="warning"
             valueKey="plugins.bitbucket.ui.mutations.merge.headUnavailable"
             fallback="Bitbucket did not report the source commit of this pull request, so it cannot be merged from here."
@@ -761,7 +761,7 @@ export function BitbucketMutationControls({
       </Stack>}
       {!affordances.decline ? null : <Stack gap="small">
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.bitbucket.ui.mutations.decline.description"
           fallback="Bitbucket cannot reopen a declined pull request."
@@ -929,7 +929,7 @@ export function BitbucketCommentResolutionControls({
     <Stack gap="small">
       {comment.resolution !== 'unknown' ? null : (
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.bitbucket.ui.mutations.comment.resolutionUnknown"
           fallback="Bitbucket did not report whether this thread is resolved."

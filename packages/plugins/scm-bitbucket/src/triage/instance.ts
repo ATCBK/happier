@@ -1,6 +1,12 @@
 import { MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1 } from '@happier-dev/triage-protocol/v1';
+import { createProtocolStoredReadSchema, defineProtocolLiteral, defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 
 import { readBitbucketBracedUuid } from './identity.js';
+
+const BitbucketConfigurationRecordV1Schema = defineProtocolObject({
+  v: defineProtocolLiteral(1), workspaceUuid: defineProtocolString(),
+}, { policy: 'closed' });
+const storedConfiguration = createProtocolStoredReadSchema(BitbucketConfigurationRecordV1Schema);
 
 /**
  * The Bitbucket Cloud configured-instance record.
@@ -41,8 +47,8 @@ export function encodeBitbucketConfiguration(
 }
 
 /**
- * The strict versioned decoder. A token this source did not produce — a different version, a
- * different shape, an unbraced UUID, or oversize bytes — decodes to `null`, and every caller maps
+ * The retained versioned decoder ignores retired fields. A different version,
+ * malformed known shape, an unbraced UUID, or oversize bytes decodes to `null`, and every caller maps
  * that to `unsupportedContract` rather than guessing a workspace.
  */
 export function decodeBitbucketConfiguration(
@@ -63,14 +69,11 @@ export function decodeBitbucketConfiguration(
   } catch {
     return null;
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-
-  const record = parsed as Record<string, unknown>;
-  if (record.v !== 1) return null;
+  const result = storedConfiguration.safeParse(parsed);
+  if (!result.success) return null;
+  const record = result.data;
   const workspaceUuid = readBitbucketBracedUuid(record.workspaceUuid);
   if (workspaceUuid === null) return null;
-  // Closed record: an unknown member means these are not this decoder's bytes.
-  if (Object.keys(record).length !== 2) return null;
 
   return { v: 1, workspaceUuid };
 }

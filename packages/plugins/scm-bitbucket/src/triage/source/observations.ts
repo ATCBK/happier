@@ -358,6 +358,7 @@ export function toBitbucketPresentObservation(
   const title = projectLine(entry.title, MAX_TRIAGE_TEXT_UTF8_BYTES_V1);
   const summary = projectLine(entry.summary, MAX_TRIAGE_TEXT_UTF8_BYTES_V1);
   const scopeLabel = projectLine(readScopeLabelSource(entry), MAX_TRIAGE_TEXT_UTF8_BYTES_V1);
+  const scopeDisplayName = projectLine(entry.repository.name, MAX_TRIAGE_TEXT_UTF8_BYTES_V1);
   // Who opened it, by the name Bitbucket shows: one bounded display line, never an identity.
   const authorLabel = projectLine(readActorLabel(entry.author), MAX_TRIAGE_TEXT_UTF8_BYTES_V1);
   // The pull request id as Bitbucket writes it ("#42"); presentation only.
@@ -375,6 +376,7 @@ export function toBitbucketPresentObservation(
     || (title?.truncated ?? false)
     || (summary?.truncated ?? false)
     || (scopeLabel?.truncated ?? false)
+    || (scopeDisplayName?.truncated ?? false)
     || (authorLabel?.truncated ?? false)
     || (designation?.truncated ?? false);
 
@@ -385,6 +387,7 @@ export function toBitbucketPresentObservation(
     // The repository UUID is the last resort and is always a valid single line, so a required
     // field is never published blank.
     scopeLabel: scopeLabel?.value ?? entry.repository.uuid,
+    ...(scopeDisplayName === null ? {} : { scopeDisplayName: scopeDisplayName.value }),
     ...(authorLabel === null ? {} : { authorLabel: authorLabel.value }),
     ...(designation === null ? {} : { designation: designation.value }),
     ...(entry.createdAtMs === null ? {} : { createdAtMs: entry.createdAtMs }),

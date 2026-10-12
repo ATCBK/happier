@@ -215,7 +215,7 @@ export const BITBUCKET_RENDER_UI_TRANSLATIONS = Object.freeze({
     "plugins.bitbucket.ui.buildsTruncated.description": "Bitbucket contient plus d’états de build que cette page ne peut en afficher ; aucun total n’est donc indiqué.",
     "plugins.bitbucket.ui.partial": "Affiche ce qui a été lu jusqu'à présent",
     "plugins.bitbucket.ui.shortened": "Certains détails ont été raccourcis",
-    "plugins.bitbucket.ui.shortened.description": "Ouvrez la demande de fusion dans Bitbucket pour lire le texte complet.",
+    "plugins.bitbucket.ui.shortened.description": "Ouvre la demande de fusion dans Bitbucket pour lire le texte complet.",
     "plugins.bitbucket.ui.noFacts": "Aucun faits projectés",
     "plugins.bitbucket.ui.noFacts.description": "Cette observation ne contient pas de faits affichables.",
     "plugins.bitbucket.ui.facts": "Faits",

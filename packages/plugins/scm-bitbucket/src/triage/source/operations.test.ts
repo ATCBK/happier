@@ -17,7 +17,7 @@ import pullRequestSelf from '../fixtures/pullRequestSelf.json' with { type: 'jso
 import reviewPage from '../fixtures/pullRequestsReviewPage.json' with { type: 'json' };
 import repositoriesPage from '../fixtures/workspaceRepositoriesPage.json' with { type: 'json' };
 import workspacesPage from '../fixtures/userWorkspacesPage.json' with { type: 'json' };
-import { encodeBitbucketConfiguration } from '../instance.js';
+import { decodeBitbucketConfiguration, encodeBitbucketConfiguration } from '../instance.js';
 import {
   buildBitbucketScanContinuationScope,
   decodeBitbucketScanContinuation,
@@ -48,6 +48,15 @@ const VIEWER_UUID = '{9f1c2a44-5d0e-4c8b-8b0a-1d7e6f3a2c19}';
 const SOURCE_CONTRIBUTION = Object.freeze({
   pluginId: 'happier.scm.forge.bitbucket',
   localId: 'bitbucket-forge',
+});
+
+it('reads unknown retained Bitbucket configuration fields and preserves canonical encoded output', () => {
+  const canonical = { v: 1 as const, workspaceUuid: WORKSPACE_UUID };
+  const read = decodeBitbucketConfiguration({ v: 1, token: JSON.stringify({ ...canonical, retired: true }) });
+  expect(read).toEqual(canonical);
+  if (read === null) throw new Error('stored configuration was unreadable');
+  expect(encodeBitbucketConfiguration(read)).toMatchObject({ ok: true, token: JSON.stringify(canonical) });
+  expect(decodeBitbucketConfiguration({ v: 1, token: JSON.stringify({ ...canonical, workspaceUuid: 'invalid', retired: true }) })).toBeNull();
 });
 
 function configurationToken(workspaceUuid: string): string {
@@ -1169,6 +1178,10 @@ describe('Bitbucket detail projection', () => {
     });
 
     const overview = projectBitbucketDetailOverview(detailInput);
+    expect(detailInput.observation.snapshot).toMatchObject({
+      scopeLabel: 'example-workspace/deploy-tools',
+      scopeDisplayName: pullRequestSelf.destination.repository.name,
+    });
 
     expect(overview).toMatchObject({
       title: 'Bound the deployment poller to its invocation deadline',

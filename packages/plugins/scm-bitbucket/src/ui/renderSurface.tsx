@@ -158,10 +158,10 @@ function PagedFooter({
 }>): React.ReactElement {
   return (
     <Stack gap="small">
-      <Text variant="caption" tone="neutral" valueKey={summaryKey} fallback={summary} values={summaryValues} />
+      <Text variant="micro" tone="neutral" valueKey={summaryKey} fallback={summary} values={summaryValues} />
       {state.omittedRowCount === 0 ? null : (
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.bitbucket.ui.rowsUnreadable"
           fallback="{count} provider row(s) could not be included in this result."
@@ -170,7 +170,7 @@ function PagedFooter({
       )}
       {state.incomplete === null ? null : (
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.bitbucket.ui.paginationIncomplete"
           fallback="Bitbucket offered another page, but this build could not carry its position, so this list stops here."
@@ -328,7 +328,7 @@ function OverviewPanel({
         )}
         {description === null ? null : (
           <Stack gap="small">
-            <Text variant="caption" tone="neutral" valueKey="plugins.bitbucket.ui.description" fallback="Description" />
+            <Text variant="micro" tone="neutral" valueKey="plugins.bitbucket.ui.description" fallback="Description" />
             <Markdown value={description} />
           </Stack>
         )}
@@ -345,7 +345,7 @@ function OverviewPanel({
         {story || pendingFields.length === 0 ? null : (
           <Stack gap="small">
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.bitbucket.ui.pendingPanels.description"
               fallback="Answered in the panels beside this one, not on the list row:"
@@ -552,7 +552,7 @@ function BuildsPanel({
               ? null
               : (
                 <Text
-                  variant="caption"
+                  variant="micro"
                   tone="neutral"
                   valueKey="plugins.bitbucket.ui.buildsTruncated.description"
                   fallback="Bitbucket has more build statuses than this page holds, so no totals are shown for them."
@@ -712,7 +712,7 @@ function ActivityStreamPanel({
           <BitbucketCommentResolutionControls input={input} comment={row} />
           {row.parentId === undefined ? null : (
             <Text
-              variant="caption"
+              variant="micro"
               valueKey="plugins.bitbucket.ui.replyToComment"
               fallback="Reply to comment {id}"
               values={{ id: row.parentId }}
