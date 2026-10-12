@@ -16,6 +16,9 @@ import { subscribeSessionListQueryHomeInvalidation } from '@/sync/domains/sessio
 import { fetchAndApplySessions } from './sessionSnapshot';
 import { handleDeleteSessionSocketUpdate } from './syncSessions';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
+import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
+import { selectSessionReportSubtree } from '@/components/sessions/work/reportSubtree';
 
 const PLAIN_ACCOUNT_CURRENTNESS = {
     mode: 'plain',
@@ -142,7 +145,10 @@ describe('fetchAndApplySessions exact-Home retirement fence', () => {
 
     it('opens unopened report summaries from one encrypted list page without visiting a child', async () => {
         const encryption = await Encryption.create(new Uint8Array(32).fill(4));
-        const child = { ...await encryptedRow(encryption, 'child'), reportsTo: { sessionId: 'lead' } };
+        const nowMs = Date.now();
+        const child = { ...await encryptedRow(encryption, 'child'), reportsTo: { sessionId: 'lead' },
+            active: true, activeAt: nowMs, updatedAt: nowMs,
+            pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 0, pendingRequestObservedAt: nowMs };
         const grandchild = { ...await encryptedRow(encryption, 'grandchild'), reportsTo: { sessionId: 'child' } };
         const unrelated = await encryptedRow(encryption, 'unrelated');
         const request = vi.fn(async () => queryPage([unrelated, child, grandchild]));
@@ -151,7 +157,16 @@ describe('fetchAndApplySessions exact-Home retirement fence', () => {
             const rows = storage.getState().sessionListRowsByServerId['home-a']!;
             expect([getSessionName(rows.child!), getSessionName(rows.grandchild!)]).toEqual(['child', 'grandchild']);
             expect(rows.unrelated?.metadata).toBeNull();
+            expect(rows.child?.encryptedContentAvailability).toBe('ready');
         });
+        // HTTP metadata acquisition and live presence are distinct boundaries. An online
+        // socket observation makes the fresh permission actionable on every consumer.
+        storage.getState().applyServerScopedSessionListRowPatches('home-a', [{ sessionId: 'child', patch: { presence: 'online' } }]);
+        const rows = storage.getState().sessionListRowsByServerId['home-a']!;
+        const report = selectSessionReportSubtree(storage.getState().sessions, 'lead', 'home-a', storage.getState().sessionListRowsByServerId)[0]!;
+        const statusOf = (source: Parameters<typeof readSessionWorkStatusFacts>[0]) => resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(source, nowMs) });
+        expect(statusOf(rows.child!).bucket).toBe('needs_you');
+        expect(statusOf(report)).toEqual(statusOf(rows.child!));
         expect(storage.getState().sessions.child).toBeUndefined();
         expect(request).toHaveBeenCalledTimes(1);
     });

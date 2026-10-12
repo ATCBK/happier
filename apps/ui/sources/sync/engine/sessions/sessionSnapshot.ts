@@ -806,6 +806,24 @@ function buildHydratedSessionRenderablePatch(
         // earlier hydration must not keep `metadataUnavailable` beside readable metadata.
         patch.metadataUnavailable = hydratedRenderable.metadataUnavailable;
     }
+    // Content availability is the decryption owner's verdict, not implied by a display name.
+    // Query reads publish summaries rather than Session entities, so carry that verdict here too.
+    if (tupleCurrentness.metadataCurrent
+        && hydratedRenderable.encryptedContentAvailability !== undefined
+        && hydratedRenderable.encryptedContentAvailability !== currentRenderable.encryptedContentAvailability) {
+        patch.encryptedContentAvailability = hydratedRenderable.encryptedContentAvailability;
+    }
+    if (tupleCurrentness.metadataCurrent) {
+        const patchSummary = <K extends 'workState' | 'workflowHeadline' | 'agentActivityHeadline' | 'guardState'>(field: K) => {
+            if (JSON.stringify(hydratedRenderable[field] ?? null) !== JSON.stringify(currentRenderable[field] ?? null)) {
+                patch[field] = hydratedRenderable[field];
+            }
+        };
+        patchSummary('workState');
+        patchSummary('workflowHeadline');
+        patchSummary('agentActivityHeadline');
+        patchSummary('guardState');
+    }
 
     const shouldPatchPendingFlags =
         tupleCurrentness.agentStateCurrent
@@ -817,6 +835,7 @@ function buildHydratedSessionRenderablePatch(
         );
     if (shouldPatchPendingFlags) {
         patch.agentStateVersion = hydratedRenderable.agentStateVersion;
+        patch.pendingRequestObservedAt = hydratedRenderable.pendingRequestObservedAt;
         if (typeof hydratedRenderable.hasPendingPermissionRequests === 'boolean') {
             patch.hasPendingPermissionRequests = hydratedRenderable.hasPendingPermissionRequests;
         }

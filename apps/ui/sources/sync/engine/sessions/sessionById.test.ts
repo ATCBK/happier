@@ -345,6 +345,56 @@ describe('fetchAndApplySessionById', () => {
     expect(applySessions).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['unparseable', 'not-json'],
+    ['missing', JSON.stringify({})],
+  ])('does not scan whole lists for concurrent negotiated-current detail reads with %s projections', async (_label, body) => {
+    // The live Usage evidence reader issued 154 exact reads together. A failed
+    // current response must not multiply that work into 154 whole-list scans.
+    const sessionIds = Array.from({ length: 154 }, (_, index) => `current-${index}`);
+    const request = vi.fn(async (path: string) => {
+      if (path === '/v2/sessions?limit=200') {
+        return new Response(JSON.stringify({ sessions: [], nextCursor: null, hasNext: false }), { status: 200 });
+      }
+      return new Response(body, { status: 200 });
+    });
+    const applySessions = vi.fn();
+    const results = await Promise.all(sessionIds.map(sessionId => fetchAndApplySessionById({
+      sessionId,
+      credentials: { token: 'token' },
+      accountCurrentness: PLAIN_ACCOUNT_CURRENTNESS,
+      encryption: PLAINTEXT_ACCOUNT_SESSION_ENCRYPTION,
+      sessionDataKeys: new Map<string, Uint8Array>(),
+      request,
+      applySessions,
+      log: { log: () => {} },
+      accessProjectionVersion: 1,
+      includeTurnsProjection: false,
+    })));
+
+    expect(results.every(result => !result.ok && result.errorCode === 'invalid_response')).toBe(true);
+    expect(applySessions).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([path]) => path)).toEqual(sessionIds.map(sessionId =>
+      `/v2/sessions/${sessionId}?accessProjectionVersion=1`,
+    ));
+
+    const sessionId = sessionIds[0]!;
+    request.mockImplementation(async () => new Response(JSON.stringify({ session: {
+      id: sessionId, createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
+      encryptionMode: 'plain', dataEncryptionKey: null, metadataVersion: 1,
+      metadata: JSON.stringify({ readStateV1: null }), agentStateVersion: 1,
+      agentState: null, share: null, responsibleAccountId: null, responsibleAccount: null,
+      effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
+        capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'owner' }) },
+    } }), { status: 200 }));
+    await expect(fetchAndApplySessionById({
+      sessionId, credentials: { token: 'token' }, accountCurrentness: PLAIN_ACCOUNT_CURRENTNESS,
+      encryption: PLAINTEXT_ACCOUNT_SESSION_ENCRYPTION, sessionDataKeys: new Map<string, Uint8Array>(),
+      request, applySessions, log: { log: () => {} }, accessProjectionVersion: 1, includeTurnsProjection: false,
+    })).resolves.toMatchObject({ ok: true, session: { id: sessionId } });
+    expect(applySessions).toHaveBeenCalledWith([expect.objectContaining({ id: sessionId })]);
+  });
+
   it('fails closed instead of hiding a malformed current access projection behind the legacy list fallback', async () => {
     const applySessions = vi.fn();
     const request = vi.fn(async (path: string) => {

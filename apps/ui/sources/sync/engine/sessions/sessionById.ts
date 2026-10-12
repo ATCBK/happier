@@ -435,7 +435,11 @@ export async function fetchAndApplySessionById(params: Readonly<{
 
   const parsed = parseCompatSessionByIdResponse(body);
   if (!parsed?.session) {
-    if (params.sessionKey !== undefined) return { ok: false, session: null, errorCode: 'invalid_response' };
+    // A negotiated current projection cannot recover its authority from an
+    // unqualified list. Failed detail bodies must not fan out into full scans.
+    if (params.accessProjectionVersion === 1 || params.sessionKey !== undefined) {
+      return { ok: false, session: null, errorCode: 'invalid_response' };
+    }
     if (hasExplicitCurrentOrResponsibilitySessionProjection(body)) {
       return { ok: false, session: null, errorCode: 'invalid_response' };
     }
