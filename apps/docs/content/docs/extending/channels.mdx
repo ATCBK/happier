@@ -142,6 +142,10 @@ Comments on that issue or pull request arrive as channel messages, and replies
 are posted back as comments on it. In the current development source, Channels
 splits long replies at the GitHub provider's declared limit of 65,536 Unicode
 code points per comment, preserving the complete reply in one delivery record.
+This uses the setup facts saved with the connection: older GitHub connections
+without the declared limit do not receive core splitting. New connections and
+successful connection transfers save the current limit; Retest checks readiness
+without refreshing setup facts.
 The provider replaces `@` with `＠` to suppress notification mentions without
 growing a chunk beyond that limit. GitHub's API still decides whether to accept
 each comment. GitHub has no webhook delivery in this preview: inbound
