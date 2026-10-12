@@ -100,6 +100,55 @@ describe('DetailsTabHeader', () => {
         }
     });
 
+    it('moves the view controls beneath the band when they would collide with its actions', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('@/components/ui/text/Text');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 40 } } });
+        const screen = await renderScreen(
+            <DetailsTabHeader testID="hdr" title="SettingsModal.tsx" meta={[{ key: 'status', text: 'Modified' }]}
+                actions={<Text testID="icons">icons</Text>} controls={<Text testID="ctl">Pending · Diff | File</Text>} />,
+        );
+        const inBand = () => (screen.findHostByTestId('hdr')?.findAll((node) => node.props.testID === 'ctl').length ?? 0) > 0;
+        const measure = async (root: number) => {
+            await act(async () => {
+                screen.findHostByTestId('hdr.root')!.props.onLayout(layout(root));
+                screen.findHostByTestId('hdr.actions')!.props.onLayout(layout(300));
+                screen.findHostByTestId('hdr.controls')!.props.onLayout(layout(170));
+            });
+        };
+        await measure(1200);
+        expect(inBand()).toBe(true);
+        // A narrower pane: the chips would paint over the icons, so they take their own row.
+        await measure(520);
+        expect(inBand()).toBe(false);
+        expect(screen.findByTestId('ctl')).not.toBeNull();
+        expect(screen.findByTestId('icons')).not.toBeNull();
+    });
+
+    it('keeps the title readable by moving wide actions beneath it in a narrow pane', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('@/components/ui/text/Text');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 40 } } });
+        const screen = await renderScreen(
+            <DetailsTabHeader testID="hdr" title="SettingsModal.tsx" actions={<Text testID="icons">icons</Text>} />,
+        );
+        const inBand = () => (screen.findHostByTestId('hdr')?.findAll((node) => node.props.testID === 'icons').length ?? 0) > 0;
+        const measure = async (root: number) => {
+            await act(async () => {
+                screen.findHostByTestId('hdr.root')!.props.onLayout(layout(root));
+                screen.findHostByTestId('hdr.actions')!.props.onLayout(layout(300));
+            });
+        };
+        await measure(1200);
+        expect(inBand()).toBe(true);
+        // The icons would leave the file name a few letters ("d."): they take the row beneath the title.
+        await measure(420);
+        expect(inBand()).toBe(false);
+        expect(screen.findByTestId('icons')).not.toBeNull();
+        await measure(1200);
+        expect(inBand()).toBe(true);
+    });
+
     it('does not offer a busy action again', async () => {
         const onSave = vi.fn();
         const screen = await renderScreen(

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
@@ -107,29 +107,57 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
     ) : null);
     // The pane's own controls (⤢, close), when the pane showing this tab has no bar of its own.
     const paneControls = useClaimedStackHeaderActions({ scopeOnly: true });
+    // The view controls sit on the facts line while they leave the facts at least as much room as they
+    // take; a narrower band would push them over its actions, so they take their own row beneath it.
+    const [band, setBand] = React.useState({ root: 0, actions: 0, controls: 0 });
+    const measure = (key: keyof typeof band) => (event: LayoutChangeEvent) => {
+        const width = Math.round(event.nativeEvent.layout.width);
+        setBand((current) => current[key] === width ? current : { ...current, [key]: width });
+    };
+    const lineRoom = band.root - metrics.paddingStartPx - metrics.paddingEndPx - band.actions;
+    // The actions keep their place beside the title while they leave it at least as much room as they
+    // take; in a narrower pane they would cut the name to a few letters, so they move to the row beneath.
+    const actionsBelow = !phone && band.root > 0 && band.actions > 0 && lineRoom < band.actions;
+    const controlsBelow = !phone && Boolean(props.controls) && band.root > 0 && (actionsBelow || lineRoom < band.controls * 2);
+    const controls = props.controls ? (
+        <View testID={`${testID}.controls`} style={styles.controlsMeasure} onLayout={measure('controls')}>{props.controls}</View>
+    ) : null;
     // A phone recomposes: only `⋯` stays beside the title; the toggles and buttons move beneath it.
+    // Measured at its natural one-row width in the band; beneath the title the row may wrap, so it is not re-measured there.
+    const wideActions = props.actions || buttons ? (
+        <View testID={`${testID}.actions`} style={actionsBelow ? [styles.bandActions, styles.actionsWrap] : styles.bandActions}
+            onLayout={actionsBelow ? undefined : measure('actions')}>
+            {props.actions}
+            {buttons}
+        </View>
+    ) : null;
     const bandActions = phone
         ? (menu ?? undefined)
-        : props.actions || buttons || menu || paneControls ? (
+        : wideActions || menu || paneControls ? (
             <View style={styles.bandActions}>
-                {props.actions}
-                {buttons}
+                {actionsBelow ? null : wideActions}
                 {menu}
                 {paneControls}
             </View>
         ) : undefined;
     const phoneToolbar = phone && (props.controls || props.actions || buttons || paneControls) ? (
         <View style={styles.controls}>
-            {props.controls}
+            {controls}
             <View style={styles.grow} />
             {props.actions}
             {buttons}
             {paneControls}
         </View>
+    ) : controlsBelow || actionsBelow ? (
+        <View style={styles.controls}>
+            {controlsBelow ? controls : null}
+            <View style={styles.grow} />
+            {actionsBelow ? wideActions : null}
+        </View>
     ) : null;
 
     return (
-        <View testID={`${testID}.root`} style={[styles.root, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
+        <View testID={`${testID}.root`} onLayout={measure('root')} style={[styles.root, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
             <PaneHeader
                 testID={testID}
                 title={props.title}
@@ -137,7 +165,7 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                 titleControl={props.titleControl}
                 titleTextStyle={props.titleTextStyle}
                 titleNumberOfLines={phone ? null : 1}
-                lineTrailing={!phone ? props.controls : undefined}
+                lineTrailing={!phone && !controlsBelow ? controls : undefined}
                 lineEnd={props.metaTrailing}
                 line={segments.length > 0 || props.metaLeading ? {
                     segments,
@@ -173,31 +201,41 @@ const stylesheet = StyleSheet.create((theme) => ({
     bandActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     liveFacts: {
         flexDirection: 'row',
         alignItems: 'center',
         flexShrink: 1,
         minWidth: 0,
-        gap: 4,
+        gap: theme.space.s4,
     },
     metaSeparator: {
         ...Typography.default(),
         color: theme.colors.text.secondary,
     },
     below: {
-        gap: 4,
-        paddingBottom: 6,
+        gap: theme.space.s4,
+        paddingBottom: theme.space.s6,
     },
     controls: {
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
     grow: {
         flex: 1,
+    },
+    actionsWrap: {
+        flexWrap: 'wrap',
+        flexShrink: 1,
+        justifyContent: 'flex-end',
+    },
+    controlsMeasure: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 0,
     },
     body: {
         ...Typography.default(),

@@ -3,6 +3,7 @@ import { View } from 'react-native';
 
 import { AppScopePaneHost } from '../AppScopePaneHost';
 import { PaneHeader, type PaneHeaderContent } from '../PaneHeader';
+import { PopoverScope } from '@/components/ui/popover';
 
 /** Content a destination opens in its details pane. Tabs are the content's own business. */
 export type DetailsPaneContent = Readonly<{
@@ -41,13 +42,17 @@ export const DetailsPaneHost = React.memo(function DetailsPaneHost(props: Detail
     const testID = props.testID ?? 'details-pane';
     const details = props.details;
     const onClose = props.onCloseDetails;
+    // The details pane (header and body) is the boundary its menus and Add surfaces float inside.
+    const paneBoundaryRef = React.useRef<View>(null);
     const destinationDetails = React.useMemo(() => (details ? {
         pane: (
             <View
+                ref={paneBoundaryRef}
                 testID={testID}
                 style={{ flex: 1, minHeight: 0, minWidth: 0 }}
                 accessibilityLabel={details.accessibilityLabel ?? details.header?.title}
             >
+                <PopoverScope boundaryRef={paneBoundaryRef}>
                 {details.header ? (
                     <PaneHeader
                         testID={`${testID}.header`}
@@ -59,6 +64,7 @@ export const DetailsPaneHost = React.memo(function DetailsPaneHost(props: Detail
                     />
                 ) : null}
                 <View style={{ flex: 1, minHeight: 0, minWidth: 0 }}>{details.content}</View>
+                </PopoverScope>
             </View>
         ),
         onClose,

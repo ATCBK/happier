@@ -22,6 +22,7 @@ import {
 import { DetailsTabChromeProvider, useDetailsTabUnsavedKeys } from './detailsTabChrome';
 import { HeaderActionsScope, useStackHeaderActionsClaimed, useStackHeaderActionsPublisher } from '@/components/navigation/stackHeaderActions';
 import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
+import { PopoverScope } from '@/components/ui/popover';
 
 type ScrollPropagationEvent = Readonly<{ stopPropagation?: () => void }>;
 
@@ -200,6 +201,8 @@ export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps
                 ? { onWheel: stopScrollEventPropagationOnWeb, onTouchMove: stopScrollEventPropagationOnWeb }
                 : {})}
         >
+            {/* The tab group (its strip and body) is the boundary its menus and Add surfaces float inside. */}
+            <PopoverScope boundaryRef={rootRef}>
             {showStrip ? <View style={[styles.header, { paddingTop: headerPaddingTop, backgroundColor }]}>
                 {props.renderHeaderLeadingActions ? props.renderHeaderLeadingActions() : null}
                 {!forceEmptyState ? (
@@ -259,6 +262,7 @@ export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps
                 </View>
                 </DiffPresentationWidthProvider>
             )}
+            </PopoverScope>
         </ViewWithWheel>
     );
 });

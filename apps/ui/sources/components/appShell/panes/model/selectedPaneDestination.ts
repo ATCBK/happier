@@ -1,7 +1,7 @@
 import {
     PluginUiDestinationReferenceV1Schema,
     type PluginUiDestinationReferenceV1,
-} from '@happier-dev/protocol/plugins/contributions/ui/surfaceRegistry';
+} from '@happier-dev/protocol/plugins/ui';
 import {
     PluginUiInstanceKeyV1Schema,
     type PluginUiInstanceKeyV1,

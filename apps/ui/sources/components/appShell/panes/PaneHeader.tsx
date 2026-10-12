@@ -74,10 +74,12 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
     const testID = props.testID ?? 'pane-header';
     const large = props.size === 'large';
     const line = props.line ?? (props.subtitle ? { segments: [props.subtitle] } : null);
+    const hasTitle = props.title.trim().length > 0 || Boolean(props.leading) || Boolean(props.titleControl);
     return (
         <View testID={testID} style={[large ? styles.large : [styles.band, { height }], { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
             <View style={styles.titleBlock}>
-                <View style={styles.titleRow}>
+                {/* A host that already names the thing (a breadcrumb ending on it) passes no title: the live line stands alone. */}
+                {hasTitle ? <View style={styles.titleRow}>
                 {props.leading ? <View style={styles.identityMark}>{props.leading}</View> : null}
                 {props.titleControl ?? (
                 <Text
@@ -91,7 +93,7 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
                     {props.title}
                 </Text>
                 )}
-                </View>
+                </View> : null}
                 {(line && (line.segments.length > 0 || line.leading)) || props.lineTrailing ? (
                     <View style={[styles.line, large ? styles.largeLine : null]}>
                         {line?.leading ? <View style={[styles.lineLeading, line.segments.length === 0 ? styles.leadingOnly : null]}>{line.leading}</View> : null}
@@ -136,7 +138,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 0,
         paddingLeft: HEADER_BAND_HORIZONTAL_PADDING_PX,
         paddingRight: HEADER_BAND_HORIZONTAL_PADDING_PX / 2,
-        gap: 2,
+        gap: theme.space.s2,
         backgroundColor: theme.colors.surface.base,
     },
     large: {
@@ -144,9 +146,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'flex-start',
         flexShrink: 0,
         paddingHorizontal: HEADER_BAND_HORIZONTAL_PADDING_PX,
-        paddingTop: 12,
-        paddingBottom: 12,
-        gap: 8,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s12,
+        gap: theme.space.s8,
         backgroundColor: theme.colors.surface.base,
     },
     titleBlock: {
@@ -154,9 +156,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
         justifyContent: 'center',
     },
-    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 },
+    titleRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minWidth: 0 },
     titleText: { flexShrink: 1, minWidth: 0 },
-    identityMark: { flexShrink: 0, alignSelf: 'flex-start', marginTop: 2 },
+    identityMark: { flexShrink: 0, alignSelf: 'flex-start', marginTop: theme.space.s2 },
     lineTrailing: { flexShrink: 0, marginLeft: 'auto' },
     largeTitle: {
         ...pageTitleTypography(),
@@ -166,10 +168,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         minWidth: 0,
-        gap: 4,
+        gap: theme.space.s4,
     },
     largeLine: {
-        marginTop: 4,
+        marginTop: theme.space.s4,
     },
     lineLeading: {
         flexShrink: 0,
@@ -214,6 +216,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
     },
 }));
