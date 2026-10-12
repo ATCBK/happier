@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 
+import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
+
 import type { WorkspaceSyncSidecarBroker } from '@/workspaces/sync/workspaceSyncSidecarLifecycle';
 import {
   listenWorkspaceSyncBroker,
@@ -47,16 +49,44 @@ export async function createDaemonWorkspaceSyncBroker(
   input: CreateDaemonWorkspaceSyncBrokerInput,
 ): Promise<WorkspaceSyncSidecarBroker> {
   const listen = input.listenBroker ?? listenWorkspaceSyncBroker;
-  const broker = await listen({
-    // Every daemon launch owns a fresh endpoint. A path left by another
-    // process is never unlinked merely because this launch wants to bind.
-    socketPath: join(input.brokerDir, `control-${input.brokerInstanceId}.sock`),
-    brokerInstanceId: input.brokerInstanceId,
-    launchNonce: input.launchNonce,
-    launchSecret: input.launchSecret,
-    openExternalStream: input.openExternalStream,
-    validatePeerIdentity: input.peerIdentityValidator.validate,
-  });
+  // AF_UNIX paths are bounded by sockaddr_un (104 bytes on macOS). The
+  // CLI-home and TMPDIR are unbounded; reuse the private temp owner under the
+  // short native parent, as both control and data sockets share this directory.
+  const runtimeDirectory = process.platform === 'win32'
+    ? undefined
+    : createHappierTempDir({ purpose: 'wsb', root: '/tmp' });
+  const cleanupAfter = async (work: () => Promise<void>): Promise<void> => {
+    try {
+      await work();
+    } catch (error) {
+      try {
+        if (runtimeDirectory) await removeHappierTempDirAsync(runtimeDirectory);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'workspace sync broker runtime cleanup failed');
+      }
+      throw error;
+    }
+    if (runtimeDirectory) await removeHappierTempDirAsync(runtimeDirectory);
+  };
+  let broker: BrokerHandle;
+  try {
+    broker = await listen({
+      // Every daemon launch owns a fresh endpoint. A path left by another
+      // process is never unlinked merely because this launch wants to bind.
+      socketPath: runtimeDirectory
+        ? join(runtimeDirectory, 'b.sock')
+        : join(input.brokerDir, `control-${input.brokerInstanceId}.sock`),
+      brokerInstanceId: input.brokerInstanceId,
+      launchNonce: input.launchNonce,
+      launchSecret: input.launchSecret,
+      openExternalStream: input.openExternalStream,
+      validatePeerIdentity: input.peerIdentityValidator.validate,
+    });
+  } catch (error) {
+    await cleanupAfter(async () => { throw error; });
+    throw error;
+  }
+  const close = () => cleanupAfter(async () => await broker.close());
   const bootstrapDescriptor = Buffer.from(JSON.stringify({
     protocol: 1,
     brokerEndpoint: broker.socketPath,
@@ -70,12 +100,12 @@ export async function createDaemonWorkspaceSyncBroker(
     setExpectedSidecarPid: (pid) => input.peerIdentityValidator.setExpectedSidecarPid(pid),
     waitForReady: async (pid) => {
       if (!Number.isSafeInteger(pid) || pid < 1) {
-        await broker.close();
+        await close();
         throw new BrokerProtocolError('unauthorized', 'invalid workspace sync sidecar pid');
       }
       await broker.whenReady;
       if (broker.authenticatedSidecarPid !== pid) {
-        await broker.close();
+        await close();
         throw new BrokerProtocolError('unauthorized', 'workspace sync sidecar pid did not match the spawned process');
       }
     },
@@ -83,6 +113,6 @@ export async function createDaemonWorkspaceSyncBroker(
       command,
       signal ? { signal } : undefined,
     ),
-    close: async () => await broker.close(),
+    close,
   };
 }

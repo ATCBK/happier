@@ -1,7 +1,6 @@
 import { ApiClient } from '@/api/api';
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
 import type { MachineMetadata } from '@/api/types';
-import { startCaffeinate } from '@/integrations/caffeinate';
 import { acquireDaemonLock, readStoredCredentials } from '@/persistence';
 import { logger } from '@/ui/logger';
 import { authAndPrepareDaemonMachineIfNeeded } from '@/ui/auth';
@@ -103,10 +102,6 @@ export async function prepareDaemonBootstrapContext(
     const deviceLocalSecretStorage = await readOrCreateDeviceLocalSecretStorage({
         path: configuration.deviceLocalSecretKeyFile,
     });
-    const caffeinateStarted = startCaffeinate();
-    if (caffeinateStarted) {
-        logger.debug('[DAEMON RUN] Sleep prevention enabled');
-    }
 
     return {
         daemonLockHandle,

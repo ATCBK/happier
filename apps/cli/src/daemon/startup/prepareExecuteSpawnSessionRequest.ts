@@ -28,6 +28,8 @@ import { AcpCatalogUnavailableError, resolveConfiguredAcpBackendFromAccountSetti
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { resolvePreparedSessionDirectory } from './resolvePreparedSessionDirectory';
 import { isRequesterLaunchAdmissionCurrent } from '../lifecycle/requesterWorkAttribution';
+import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
+import { resolveSessionRuntimeSnapshot } from '../sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
 
 /**
  * A requested Agent that is not installed in the current catalog is an invalid
@@ -48,6 +50,7 @@ type BackendIdentitySuccess = Extract<
 >;
 
 export type PreparedExecuteSpawnSessionRequest = Readonly<{
+    memoryHighBytes: number | null;
     normalizedExistingSessionId: string;
     effectiveResume: string;
     effectiveBackendTargetV2: BackendIdentitySuccess['effectiveBackendTargetV2'];
@@ -72,9 +75,13 @@ export type PreparedExecuteSpawnSessionRequest = Readonly<{
     | 'agentModeUpdatedAt'
     | 'modelSelection'
     | 'runtimeDescriptorV1'
+    | 'connectedServices'
+    | 'connectedServicesUpdatedAt'
+    | 'connectedServiceMaterializationIdentityV1'
 >;
 
 export type PrepareExecuteSpawnSessionRequestInput = Readonly<{
+    readMachineResourcesPolicy?: import('@/processes/toolIdleTimeouts').MachineResourcesPolicyReader;
     options: SpawnSessionOptions;
     /** Account snapshot admitted by the daemon caller; never read from ambient UI/global state. */
     accountSettings?: Readonly<Record<string, unknown>>;
@@ -325,7 +332,20 @@ export async function prepareExecuteSpawnSessionRequest(
         };
     }
 
+    // Resume RPCs need not carry private launch identity. Read it from the
+    // admitted Session owner, using the same selection rules as tracked resumes.
+    const connectedServiceOptions = normalizedExistingSessionId
+        ? resolveSessionRuntimeSnapshot({
+            incomingOptions: options,
+            persistedMetadata: ownerMetadata
+                ? ownerMetadata.connectedServices ?? {}
+                : sessionAttachPayload?.snapshot?.metadata ?? null,
+        }).spawnOptions
+        : options;
+    const resources = params.request.readMachineResourcesPolicy?.();
     return {
+        memoryHighBytes: resolveSessionMemoryCeilingBytes(effectiveSessionAttachPayload?.snapshot?.metadata,
+            resources?.status === 'ready' ? resources.policy.guard : undefined),
         directory,
         directoryKind,
         ...(sessionCreationTag ? { sessionCreationTag } : {}),
@@ -344,6 +364,12 @@ export async function prepareExecuteSpawnSessionRequest(
         daemonSpawnHooks,
         environmentVariablesValidation,
         persistedProviderResumeState,
+        ...(connectedServiceOptions.connectedServices
+            ? { connectedServices: connectedServiceOptions.connectedServices } : {}),
+        ...(connectedServiceOptions.connectedServicesUpdatedAt !== undefined
+            ? { connectedServicesUpdatedAt: connectedServiceOptions.connectedServicesUpdatedAt } : {}),
+        ...(connectedServiceOptions.connectedServiceMaterializationIdentityV1
+            ? { connectedServiceMaterializationIdentityV1: connectedServiceOptions.connectedServiceMaterializationIdentityV1 } : {}),
         ...runtimeSelection,
     };
 }

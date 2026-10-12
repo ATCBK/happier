@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   inspectDaemonRunningStateAndCleanupStaleState: vi.fn(),
   stopDaemon: vi.fn(),
   readOrCreateDeviceLocalSecretStorage: vi.fn(),
-  startCaffeinate: vi.fn(),
   acquireDaemonLock: vi.fn(),
   readStoredCredentials: vi.fn(),
   loggerDebug: vi.fn(),
@@ -32,10 +31,6 @@ vi.mock('@/api/api', () => ({
 
 vi.mock('@/api/machine/ensureMachineRegistered', () => ({
   ensureMachineRegistered: mocks.ensureMachineRegistered,
-}));
-
-vi.mock('@/integrations/caffeinate', () => ({
-  startCaffeinate: mocks.startCaffeinate,
 }));
 
 vi.mock('@/persistence', () => ({
@@ -89,7 +84,6 @@ describe('prepareDaemonBootstrapContext', () => {
       sealJson: vi.fn(),
       openJson: vi.fn(),
     });
-    mocks.startCaffeinate.mockReturnValue(false);
   });
 
   it('lets a self-restart replacement continue takeover without synchronous machine preflight', async () => {

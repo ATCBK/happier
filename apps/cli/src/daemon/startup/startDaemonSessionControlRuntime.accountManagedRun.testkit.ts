@@ -73,6 +73,8 @@ vi.mock('@/ui/logger', () => ({ logger: { debug: () => {}, info: () => {}, warn:
  * fabricated by this fixture. */
 export async function createAttachedManagedRunFixture(input: Readonly<{ directory?: string; issuedRequester?: boolean;
   resolveRunAuthority?(request: SessionExecutionRunBrokerAuthorityRequestV1): SessionExecutionRunBrokerAuthorityResponseV1;
+  browserStartup?: Pick<Parameters<typeof startDaemonSessionControlRuntime>[0],
+    'browserSidecarControlAdapterFactory' | 'resolveServerFeaturesSnapshot' | 'onBrowserControlRoutesReady'>;
 }> = {}) {
   boundary.resolveRunAuthority = input.resolveRunAuthority ?? null;
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-attached-managed-run-'));
@@ -128,6 +130,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
     const spawnResourceCleanupByPid = new Map<number, () => void | Promise<void>>();
     const connectedServiceRuntimeRegistry = new ConnectedServiceRuntimeRegistry();
     daemon = await startDaemonSessionControlRuntime({ machineId: fixture.machineId, serverId: 'home', serverBaseUrl: 'https://home.test',
+      ...input.browserStartup,
       externalActionAccountId: 'account', credentials, api: {} as never,
       resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
       ...(input.issuedRequester ? { resolveRequesterSessionRuntimeContext: async (sessionId: string) =>
@@ -161,7 +164,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
       pidToTrackedSession, pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
       getApiMachineForSessions: () => null, spawnResourceCleanupByPid, sessionAttachCleanupByPid: new Map(),
       connectedServicesRestartRequestedPids: new Set(), beforeShutdown: async () => {}, onHappySessionWebhook: async () => {},
-      requestShutdown: () => {}, processEnv: {} });
+      requestShutdown: () => {}, processEnv: { NODE_ENV: 'test' } });
     if (input.issuedRequester) {
       const issuedToken = `e30.${Buffer.from(JSON.stringify({ sub: 'account', jti: 'issued-requester' })).toString('base64url')}.fixture`;
       const home = vi.spyOn(axios, 'get').mockImplementation(async (url: string, config) => {
@@ -195,7 +198,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
         activeServerDir: fixture.happyHomeDir, connectedServicesMaterializationBaseDir: join(fixture.happyHomeDir, 'issued-connected-services'),
         resolveQualifiedConnectedAccountV4Support: () => 'advertised', coordinatorInput: {
           machineId: fixture.machineId, machineIdProvider: () => fixture.machineId, runtimeId: 'issued-runtime', happyHomeDir: fixture.happyHomeDir,
-          logger: { debug: () => {}, info: () => {}, warn: () => {} }, processEnv: {
+          logger: { debug: () => {}, info: () => {}, warn: () => {} }, processEnv: { NODE_ENV: 'test',
             HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0', HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
           pidToTrackedSession, connectedServiceRuntimeRegistry,
           connectedServiceAuthGroupPreTurnSwitchCoordinator: daemon.connectedServiceAuthGroupPreTurnSwitchCoordinator,
@@ -216,7 +219,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
       context: { token: 'a'.repeat(43), sessionId: 'parent-session' }, operation });
     const proof = { executionRunId: 'run-private', executionRunOccurrenceId: 'run-occurrence', agentId: fixture.agentId, modelId: 'example',
       runtimeBindingBasis: basis, expectedAccountSettingsScopeKey: requester?.readAccountSettingsSnapshot().scopeKey ?? snapshot.scopeKey };
-    return { directory, fixture, attempt: authorization.attempt, authorization: authorization.attempt.authorization, credentials, snapshot, proof,
+    return { directory, fixture, runtime: daemon, control: boundary.control, attempt: authorization.attempt, authorization: authorization.attempt.authorization, credentials, snapshot, proof,
       dispatch, dispatchRequest, context, tracked, spawnResourceCleanupByPid,
       capabilityCleanupFilesystem: {
         refuse: () => { boundary.refusedCapabilityRoot = join(directory, 'request-auth'); },

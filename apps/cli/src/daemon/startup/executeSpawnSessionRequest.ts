@@ -1,5 +1,6 @@
 import type { PersistedTakeoverAdmissionWaiter } from '../spawn/persistedTakeoverAdmission';
 import { configuration } from '@/configuration';
+import type { SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 import { createSessionInitialAccessFile } from '../spawn/sessionInitialAccessFile';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import type { ConnectedServiceBindingsV2 } from '@happier-dev/protocol';
@@ -104,6 +105,7 @@ import {
 import type { DaemonPluginChangeService } from '@/plugins/daemon/changeService';
 import { isRequesterLaunchAdmissionCurrent } from '../lifecycle/requesterWorkAttribution';
 import type { RequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
+import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
 
 type SpawnCredentials = NonNullable<Parameters<typeof resolveSpawnBackendIdentity>[0]['credentials']>;
 type SpawnApi = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['api'];
@@ -111,6 +113,8 @@ type SpawnAccountUsageStore = Parameters<typeof resolveConnectedServiceAuthForSp
 type SpawnAuthGroupSwitchCoordinator = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['authGroupSwitchCoordinator'];
 type SpawnPredictiveSwitchGuard = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['predictiveSwitchGuard'];
 export type ExecuteSpawnSessionRequestParams = Readonly<{
+    readMachineResourcesPolicy?: import('@/processes/toolIdleTimeouts').MachineResourcesPolicyReader;
+    readSpawnFailureLimits?: SpawnFailureLimitsReader;
     options: SpawnSessionOptions;
     requesterSessionRuntimeContext?: RequesterSessionRuntimeContext;
     retainedTerminalRecovery?: 'adopt';
@@ -330,6 +334,11 @@ export async function executeSpawnSessionRequest(
             directoryKind: prepared.directoryKind,
             ...(prepared.runtimeDescriptorV1 ? { runtimeDescriptorV1: prepared.runtimeDescriptorV1 } : {}),
             ...(prepared.sessionCreationTag ? { sessionCreationTag: prepared.sessionCreationTag } : {}),
+            ...(prepared.connectedServices ? { connectedServices: prepared.connectedServices } : {}),
+            ...(prepared.connectedServicesUpdatedAt !== undefined
+                ? { connectedServicesUpdatedAt: prepared.connectedServicesUpdatedAt } : {}),
+            ...(prepared.connectedServiceMaterializationIdentityV1
+                ? { connectedServiceMaterializationIdentityV1: prepared.connectedServiceMaterializationIdentityV1 } : {}),
         };
         const managedDirectoryOwner = prepared.directoryKind === 'managed'
             ? createManagedSessionDirectories()
@@ -1012,6 +1021,7 @@ export async function executeSpawnSessionRequest(
                 });
             }
             const childEnvironment = await prepareDaemonSpawnChildEnvironment({
+                readMachineResourcesPolicy: params.readMachineResourcesPolicy,
                 options: effectiveOptionsForSpawn,
                 existingSessionMetadata: launchSessionAttachPayload?.snapshot?.metadata ?? null,
                 resolvedAgentId: catalogAgentId,
@@ -1161,7 +1171,13 @@ export async function executeSpawnSessionRequest(
                 errorMessage: 'Session handoff launch custody unavailable',
             });
             childLaunchSubmitted = true;
+            const launchResources = params.readMachineResourcesPolicy?.();
             let spawnResult = await routeSpawnModeAndWaitForWebhook({
+                memoryHighBytes: launchResources
+                    ? resolveSessionMemoryCeilingBytes(launchSessionAttachPayload?.snapshot?.metadata,
+                        launchResources.status === 'ready' ? launchResources.policy.guard : undefined)
+                    : prepared.memoryHighBytes,
+                readSpawnFailureLimits: params.readSpawnFailureLimits,
                 initialAccessFilePath: initialAccessFile?.path,
                 terminalRequest,
                 terminalPresentation,

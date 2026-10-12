@@ -124,6 +124,7 @@ export type ProductionDaemonWorkspaceSyncFactories = Readonly<{
 }>;
 
 export type ProductionDaemonWorkspaceSyncRuntime = Readonly<{
+  readProcessRoots: ReturnType<typeof createDaemonWorkspaceSyncRuntime>['readProcessRoots'];
   activity: import('@/daemon/lifecycle/managedActivity').LiveWorkProducerV1;
   handoffAdapter: WorkspaceSyncHandoffAdapter;
   workspaceSync: MachineWorkspaceSyncRpcService;
@@ -1697,6 +1698,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     targetAuthority.activity ?? missingActivity];
   return {
     handoffAdapter: runtime.handoffAdapter,
+    readProcessRoots: () => runtime.readProcessRoots(),
     activity: {
       read: async () => {
         const observations = await Promise.all(activitySources.map(source => source.read()));

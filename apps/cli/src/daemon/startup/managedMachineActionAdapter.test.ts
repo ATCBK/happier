@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema, normalizeActionsSettingsV1, createActionExecutor, deriveSessionCreationTagV1, ExternalActionExecutionAuthorizationRequestV1Schema, type ActionExecuteResult, type ActionExecutorContext, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1, AccountApiTokensListActionOutputV1Schema } from '@happier-dev/protocol/auth/accountApiTokens';
+import { ACCOUNT_SECURITY_PATH_V1, AccountSecurityGetResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 
 import { configuration } from '@/configuration';
 import { updateSettings, writeStoredCredentialsForServerId, readStoredCredentialsForServerId, removeStoredCredentialsForServerId, sameStoredCredentials } from '@/persistence';
@@ -22,7 +23,8 @@ import { createConnectedAccountRequestAuthSubjectRegistry } from '../connectedSe
 import { createManagedProviderOperationAuthority } from '../connectedServices/purposeBindings/managedProviderOperationAuthority';
 import { createDaemonManagedMachineActionAdapter, createManagedSessionStartApprovalObserver } from './managedMachineActionAdapter';
 import { createDaemonSessionAccountActionExecutor } from '../agentRuntime/createDaemonSessionAccountActionExecutor';
-import { dispatchManagedSessionStart, prepareExternalActionRequesterAccountAuthorization, projectExternalActionRequesterHttpAuthorization, verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
+import { dispatchManagedMachineEnvironment, dispatchManagedSessionStart, prepareExternalActionRequesterAccountAuthorization, projectExternalActionRequesterHttpAuthorization, verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import nacl from 'tweetnacl';
@@ -40,6 +42,7 @@ import { buildApprovalExecutionOriginV1 } from '@happier-dev/protocol/actions/ac
 import { signExternalActionApprovalInputV1, verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { refreshTerminalPresentUserPolicy } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -105,7 +108,9 @@ async function storeHome(homeServerIdentityId: string) {
 function adapter(withAuthority = true, executeSessionStart?: Parameters<typeof createDaemonManagedMachineActionAdapter>[0]['executeSessionStart'],
     preflightSessionStart?: Parameters<typeof createDaemonManagedMachineActionAdapter>[0]['preflightSessionStart'],
     privateKey: string | Uint8Array = 'not-used-by-passive-discovery', accountCredentials = credentials,
-    observeSessionStartApproval?: Parameters<typeof createDaemonManagedMachineActionAdapter>[0]['observeSessionStartApproval']) {
+    observeSessionStartApproval?: Parameters<typeof createDaemonManagedMachineActionAdapter>[0]['observeSessionStartApproval'],
+    executeEnvironmentSetup?: Parameters<typeof createDaemonManagedMachineActionAdapter>[0]['executeEnvironmentSetup'],
+    observeActionExecution?: Parameters<typeof createDaemonManagedMachineActionAdapter>[0]['observeActionExecution']) {
     // The module-loading boundary has no installed plugin. The empty catalog
     // itself is produced by the real contribution registry owner.
     const registry = { contributes: createResolvedContributionRegistry({}) } as ResolvedExecutablePluginRuntimeRegistry;
@@ -113,6 +118,8 @@ function adapter(withAuthority = true, executeSessionStart?: Parameters<typeof c
         ...(executeSessionStart ? { executeSessionStart } : {}),
         ...(preflightSessionStart ? { preflightSessionStart } : {}),
         ...(observeSessionStartApproval ? { observeSessionStartApproval } : {}),
+        ...(executeEnvironmentSetup ? { executeEnvironmentSetup } : {}),
+        ...(observeActionExecution ? { observeActionExecution } : {}),
         installationIdentity: { installationId: 'installation', privateKey },
         ...(withAuthority ? { managedProviderOperationAuthority: authority } : {}),
         resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
@@ -594,6 +601,168 @@ describe('daemon managed Machine Action factory', () => {
         expect(requests.some(path => path.endsWith('/submit'))).toBe(false);
     });
 
+    it('preserves Account Voice automation through parent Ask approval replay into signed managed setup', async () => {
+        const token = `fixture.${Buffer.from(JSON.stringify({ sub: 'account', tokenEpoch: 0,
+            provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
+        const ownCredentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
+        setActiveAccountSettingsSnapshot({ source: 'network', settings: AccountSettingsSchema.parse({}), rawSettings: {},
+            settingsVersion: 1, loadedAtMs: Date.now(), settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(ownCredentials) });
+        const signing = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(38));
+        const input = { selection: { kind: 'preset' as const, homeId: 'srv_home', id: 'preset', revision: 4 },
+            controller: { machineId: 'controller', installationId: 'installation' }, retention: { kind: 'until-delete' as const }, wakeOnAcceptedMessage: false };
+        let machine = ManagedMachineV1Schema.parse({ id: 'managed', homeId: 'srv_home', custodianAccountId: 'account',
+            controller: input.controller, preset: { id: 'preset', revision: 4 }, enrolledMachineId: 'actual-guest',
+            launch: { provider: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, name: 'guest', choices: {} },
+            allocation: 'bound', resource: { contributionRef: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
+            creationState: 'active', desired: 'start', desiredWhen: 'now', intentRevision: 0,
+            retention: input.retention, wakeOnAcceptedMessage: false,
+            environmentSetup: { environment: { setupScript: 'echo reviewed' }, state: 'pending' } });
+        type ArtifactWire = { id: string; header: string; body: string; dataEncryptionKey: string;
+            headerVersion: number; bodyVersion: number; seq: number; createdAt: number; updatedAt: number; provenance?: unknown };
+        let artifact: ArtifactWire | undefined;
+        const storedApproval = () => {
+            if (!artifact) throw new Error('Voice acquisition approval was not persisted');
+            const content = decodePlainArtifactStoredContent(artifact.body);
+            return StoredApprovalRequestSchema.parse(JSON.parse(String(content && typeof content === 'object' ? Reflect.get(content, 'body') : null)));
+        };
+        let approvalCreated!: () => void;
+        const persisted = new Promise<void>(resolve => { approvalCreated = resolve; });
+        let approvalWaitRead!: () => void;
+        const liveApprovalWait = new Promise<void>(resolve => { approvalWaitRead = resolve; });
+        let approved = false;
+        const controllerPaths: string[] = [];
+        const setupContexts: ActionExecutorContext[] = [];
+        let childHeaders: unknown;
+        // Home and private Artifact HTTP are the substituted boundaries. Policy,
+        // approval transitions/replay, signatures, the adapter and driver stay real.
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+            if (path === ACCOUNT_SECURITY_PATH_V1) return { status: 200, data: AccountSecurityGetResponseV1Schema.parse({ v: 1,
+                encryptionMode: 'plain', terminalPresentUserPolicy: 'allowed', nativeEmail: null,
+                password: { status: 'not_enrolled', revision: null } }) };
+            if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+            if (artifact && path === `/v1/artifacts/${artifact.id}`) {
+                // The real coordinator registers its live waiter before this
+                // initial durable read. Decide only after that boundary.
+                if (storedApproval().status === 'open') approvalWaitRead();
+                return { status: 200, data: { ...artifact,
+                    ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none' } };
+            }
+            throw new Error(`Unexpected Voice approval GET ${path}`);
+        });
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body, config) => {
+            const path = new URL(String(url)).pathname;
+            if (path.endsWith('/execution-authorization')) {
+                const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+                return { status: 200, data: { v: 1, token: 'voice-parent-proof', binding: { accountId: 'account',
+                    custodianAccountId: 'account', authentication: { kind: 'account', tokenEpoch: 0 }, accountEncryptionMode: 'plain',
+                    serverIdentityId: 'srv_home', machineId: 'controller', installationId: 'installation', actionId: 'machines.managed.acquire',
+                    requestId: 'voice-acquire', target: { kind: 'machine', machineId: 'controller' },
+                    requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope) } } };
+            }
+            if (path.endsWith('/verify')) return { status: 200, data: { ok: true } };
+            if (path === '/v1/artifacts' || artifact && path === `/v1/artifacts/${artifact.id}`) {
+                const record = body as { id?: string; header: string; body: string; dataEncryptionKey?: string;
+                    expectedHeaderVersion?: number; expectedBodyVersion?: number; provenance?: unknown };
+                if (path === '/v1/artifacts') {
+                    if (!record.id || !record.dataEncryptionKey) throw new Error('Missing canonical approval Artifact fields');
+                    artifact = { id: record.id, header: record.header, body: record.body, dataEncryptionKey: record.dataEncryptionKey,
+                        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, provenance: record.provenance };
+                    approvalCreated();
+                    return { status: 200, data: { id: record.id, headerVersion: 1, bodyVersion: 1 } };
+                }
+                if (!artifact) throw new Error('No approval Artifact to update');
+                expect(record.expectedHeaderVersion).toBe(artifact.headerVersion);
+                expect(record.expectedBodyVersion).toBe(artifact.bodyVersion);
+                artifact = { ...artifact, header: record.header, body: record.body, provenance: record.provenance,
+                    headerVersion: artifact.headerVersion + 1, bodyVersion: artifact.bodyVersion + 1,
+                    seq: artifact.seq + 1, updatedAt: artifact.updatedAt + 1 };
+                if (storedApproval().status === 'approved') approved = true;
+                for (const socket of approvalWire.sockets) socket.wake();
+                return { status: 200, data: { success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion } };
+            }
+            if (path === '/v1/actions/machines.environment.apply') {
+                expect(approved).toBe(true);
+                childHeaders = config?.headers;
+                const request = ChildRequestSchema.parse(body);
+                expect(request.managedContinuation).toEqual({ managedId: machine.id, creationRequestId: 'voice-acquire', expectedIntentRevision: 0 });
+                expect(request.envelope).not.toHaveProperty('sessionSpawnAdmission');
+                machine = ManagedMachineV1Schema.parse({ ...machine, environmentSetup: { ...machine.environmentSetup!, state: 'succeeded' } });
+                return { status: 200, data: { v: 1, actionId: 'machines.environment.apply', requestId: request.envelope.requestId,
+                    execution: { ok: true, result: { operationId: 'actual-setup' } } } };
+            }
+            if (path.startsWith('/v1/machines/managed/')) {
+                expect(approved).toBe(true);
+                controllerPaths.push(path);
+                return { status: 200, data: path.endsWith('/admit') ? { machine, replayed: true }
+                    : path === '/v1/machines/managed/actions/get' ? machine : { machine } };
+            }
+            throw new Error(`Unexpected Voice approval POST ${path}`);
+        });
+        const root = await prepareExternalActionRequesterAccountAuthorization({ actionId: 'machines.managed.acquire', input, requestId: 'voice-acquire',
+            target: { kind: 'machine', machineId: 'controller' }, machineId: 'controller', accountId: 'account', accountEncryptionMode: 'plain',
+            tokenEpochHint: 0, token, serverId: configuration.activeServerId, serverIdentityId: 'srv_home', serverHttpBaseUrl: serverUrl,
+            installationId: 'installation', privateKey: signing.secretKey });
+        if (!root) throw new Error('Original Voice Account proof was not admitted');
+        const managed = adapter(true, undefined, undefined, signing.secretKey, ownCredentials, undefined, async (current, context) => {
+            setupContexts.push(context);
+            const authorization = context.externalActionExecutionAuthorization;
+            if (!authorization) throw new Error('Approved acquisition lost its original proof');
+            return dispatchManagedMachineEnvironment({ input: { homeId: current.homeId, machineId: current.enrolledMachineId!,
+                presetId: current.preset!.id, presetRevision: current.preset!.revision }, authority: context.authority,
+                authorization, serverId: configuration.activeServerId, serverHttpBaseUrl: serverUrl,
+                continuation: { managedId: current.id, creationRequestId: authorization.binding.requestId, expectedIntentRevision: current.intentRevision },
+                installationId: 'installation', privateKey: signing.secretKey, signal: context.signal });
+        });
+        const currentness = createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account', machineId: 'controller', serverId: configuration.activeServerId,
+            resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({ serverUrl, resolveCurrentMachineId: () => 'controller' }),
+            resolveTarget: createDaemonExternalActionTargetResolver({ credentials: ownCredentials }), listAccountApiTokens: unavailable,
+            externalActionMachinePublicKey: signing.publicKey,
+            verifyExternalExecutionAuthorization: args => verifyExternalActionExecutionAuthorizationCurrent({ ...args,
+                privateKey: signing.secretKey, installationId: 'installation', serverHttpBaseUrl: serverUrl }) });
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'account', generateOperationId: () => 'voice-parent' });
+        let executor: ReturnType<typeof createCliActionExecutor> | undefined;
+        const execution = operations.observeExecution({ actionId: 'machines.managed.acquire', input, actionRequestId: 'voice-acquire', execute: async operation => {
+            executor = createCliActionExecutor({ sessionId: 'voice-approval-replay', token, credentials: ownCredentials,
+                serverId: configuration.activeServerId, serverIdentityId: 'srv_home', serverHttpBaseUrl: serverUrl, mode: 'plain', ctx: null,
+                pluginActionExecutionOwner: 'current_process', managedMachineAction: managed, isApprovalExecutionOriginCurrent: currentness,
+                hostActionApprovalLifetime: { operationId: operation.operationAcceptance!.operationId, signal: operation.signal } });
+            // Voice reaches the daemon through native Account/UI admission;
+            // its captured automation ceiling, not a Voice physical surface,
+            // is the authority that the managed parent must retain.
+            return executor.execute('machines.managed.acquire', input, { ...operation, surface: 'ui', authority: 'account_automation',
+                actionCaller: { kind: 'host' }, runtimeAccountId: 'account', actionRequestId: 'voice-acquire',
+                serverId: configuration.activeServerId, serverIdentityId: 'srv_home', externalActionExecutionAuthorization: root,
+                externalActionTarget: root.binding.target, signExternalActionApprovalInput: args => signExternalActionApprovalInputV1({
+                    authorizationToken: root.token, actionId: args.actionId, input: args.input, target: args.target, privateKey: signing.secretKey }) });
+        } });
+        await Promise.race([Promise.all([persisted, liveApprovalWait]), execution.then(result => {
+            throw new Error(`Voice acquisition settled before Ask: ${JSON.stringify(result)}`);
+        })]);
+        const request = storedApproval();
+        if (request.v !== 2) throw new Error('Original Voice authority requires the canonical immutable approval origin');
+        expect(request).toMatchObject({ status: 'open', actionId: 'machines.managed.acquire', approval: { flow: 'blocking' },
+            executionOriginV1: { authority: 'account_automation', surface: 'ui', caller: { kind: 'host' } } });
+        expect(request.executionOriginV1).not.toHaveProperty('sessionInputSource');
+        expect(root.binding).not.toHaveProperty('sessionActionOrigin');
+        expect(controllerPaths).toEqual([]);
+        expect(setupContexts).toEqual([]);
+        if (!executor || !artifact) throw new Error('Live parent approval owner was not captured');
+        // This factory owns a stored terminal credential, not the UI's signed
+        // Account admission. Approve through its real present-user CLI surface.
+        expect(await refreshTerminalPresentUserPolicy({ token, serverHttpBaseUrl: serverUrl }),
+            'Human CLI approval requires observed Account allowance and no machine opt-out').toBe('allowed');
+        const decision = await executor.execute('approval.request.decide', { artifactId: artifact.id, decision: 'approve' },
+            { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' }, runtimeAccountId: 'account' });
+        expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true });
+        expect(await execution).toMatchObject({ ok: true, result: { managedId: 'managed', operation: { operationId: 'voice-parent' } } });
+        expect(await operations.handlers.getV2({ operationId: 'voice-parent', waitForTerminal: true })).toMatchObject({ kind: 'found', operation: { state: 'succeeded' } });
+        expect(setupContexts).toMatchObject([{ authority: 'account_automation', surface: 'ui', actionRequestId: 'voice-acquire',
+            externalActionExecutionAuthorization: { token: root.token, binding: { requestId: 'voice-acquire' } } }]);
+        expect(childHeaders).toMatchObject({ [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' });
+    });
+
     it('uses ordinary exact-Machine availability for a fresh guest instead of the controller receiver', async () => {
         // HTTP is the real remote Machine availability boundary. A missing
         // guest must not be replaced by the locally available controller.
@@ -1015,10 +1184,46 @@ describe('daemon managed Machine Action factory', () => {
         }
     });
 
+    it('owns an acquisition operation when an approved detached Ask reaches the native adapter without a live parent', async () => {
+        const selection = { kind: 'one-off' as const, homeId: 'srv_home', controller: { machineId: 'controller', installationId: 'installation' },
+            launch: { provider: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, name: 'guest', choices: {} },
+            retention: { kind: 'until-delete' as const }, wakeOnAcceptedMessage: false };
+        const machine = ManagedMachineV1Schema.parse({ id: 'managed', homeId: 'srv_home', custodianAccountId: 'account', launch: selection.launch,
+            controller: selection.controller, allocation: 'bound', resource: { contributionRef: selection.launch.provider, schemaVersion: 1, value: {} },
+            creationState: 'active', desired: 'start', desiredWhen: 'now', intentRevision: 0,
+            enrolledMachineId: 'actual-guest', retention: selection.retention, wakeOnAcceptedMessage: false });
+        // Home admission is the network boundary; the native adapter, driver and operation owner are real.
+        vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { machine, replayed: true } });
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'account', generateOperationId: () => 'detached-acquire' });
+        const managedMachineAction = adapter(true, undefined, undefined, nacl.sign.keyPair().secretKey, credentials,
+            undefined, undefined, request => operations.observeExecution(request));
+        await expect(managedMachineAction({ actionId: 'machines.managed.acquire', input: { selection },
+            context: { actionRequestId: 'original-cli-ask', surface: 'cli', authority: 'present_user', serverId: configuration.activeServerId },
+        })).resolves.toEqual({ managedId: 'managed', operation: { operationId: 'detached-acquire' } });
+        expect(await operations.handlers.getV2({ operationId: 'detached-acquire', waitForTerminal: true })).toMatchObject({ kind: 'found', operation: {
+            state: 'succeeded', domainRef: { kind: 'managedMachine', id: 'managed' },
+        } });
+    });
+
     it('refuses an unavailable managed-operation authority before admitting any compute', async () => {
         const post = vi.spyOn(axios, 'post');
         await expect(adapter(false)({ actionId: 'machines.provisioners.list', input: { homeId: 'srv_home' },
             context: { actionRequestId: 'request' } })).rejects.toMatchObject({ code: 'admission_unavailable' });
+        expect(post).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unbound operation scope without recursively attempting acquisition', async () => {
+        const post = vi.spyOn(axios, 'post');
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => null });
+        const managedMachineAction = adapter(true, undefined, undefined, nacl.sign.keyPair().secretKey, credentials,
+            undefined, undefined, request => operations.observeExecution(request));
+        await expect(managedMachineAction({ actionId: 'machines.managed.acquire', input: {
+            selection: { kind: 'one-off', homeId: 'srv_home', controller: { machineId: 'controller', installationId: 'installation' },
+                launch: { provider: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, name: 'guest', choices: {} },
+                retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false },
+        },
+            context: { actionRequestId: 'unbound-ask', surface: 'cli', authority: 'present_user' },
+        })).rejects.toMatchObject({ code: 'admission_unavailable' });
         expect(post).not.toHaveBeenCalled();
     });
 
@@ -1077,13 +1282,18 @@ describe('daemon managed Machine Action factory', () => {
         await expect(managedMachineAction({ actionId: 'machines.provisioners.list', input: { homeId: 'srv_home' },
             context: { actionRequestId: 'request' } })).rejects.toMatchObject({ code: 'controller_unavailable' });
     });
-    it.each(['cli', 'agent', 'mcp'] as const)('invokes installed provisioner checks and managed retention through the real %s executor', async surface => {
+    it.each([
+        ['cli', false], ['agent', false], ['mcp', false],
+        ['cli', true], ['agent', true], ['mcp', true],
+    ] as const)('invokes installed provisioner checks and managed retention through the real %s executor (unbound observer: %s)', async (surface, withUnboundObserver) => {
         const native = nativeFixture({ privateNative: true });
         const signing = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => null });
         const managedMachineAction = createDaemonManagedMachineActionAdapter({ credentials,
             machineId: 'controller', serverBaseUrl: serverUrl, serverId: configuration.activeServerId,
             installationIdentity: { installationId: 'installation', privateKey: signing.secretKey },
             managedProviderOperationAuthority: authority,
+            ...(withUnboundObserver ? { observeActionExecution: (request: Parameters<typeof operations.observeExecution>[0]) => operations.observeExecution(request) } : {}),
             resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
                 serverUrl, resolveCurrentMachineId: () => 'controller',
             }),

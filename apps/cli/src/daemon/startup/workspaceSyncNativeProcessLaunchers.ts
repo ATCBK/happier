@@ -8,7 +8,7 @@ import { isAbsolute } from 'node:path';
 import { Duplex, Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 
-import { killProcessTree as defaultKillProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { createProcessTreeTerminator, terminateProcessTree as defaultTerminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import {
   createManagedChildProcess as defaultCreateManagedChildProcess,
   type ManagedChildProcess,
@@ -18,11 +18,13 @@ import {
   createWindowsJobCustodyName as defaultCreateWindowsJobCustodyName,
   removeProcessCustodyHandshakeFile as defaultRemoveProcessCustodyHandshakeFile,
   resolveProcessCustodyRuntimeExecutable as defaultResolveProcessCustodyRuntimeExecutable,
-  terminateProcessCustodyByJob as defaultTerminateProcessCustodyByJob,
   waitForProcessCustodyHandshake as defaultWaitForProcessCustodyHandshake,
   type ProcessCustodySpawnSpec,
 } from '@/subprocess/supervision/processCustody';
 import { logger } from '@/utils/logger';
+import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
+import { buildCgroupProcessLaunchSpec, prepareCgroupProcessLaunchScope } from '../platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
+import { createHappierLinuxScopeName } from '../platform/linux/systemdUserResourceGovernor';
 import type { LaunchWorkspaceSyncLocalAgent } from './createDaemonWorkspaceSyncRuntime';
 import type { SpawnWorkspaceSyncSidecar } from '@/workspaces/sync/workspaceSyncSidecarLifecycle';
 
@@ -36,7 +38,7 @@ type NativeProcessLauncherDependencies = Readonly<{
   platform?: NodeJS.Platform;
   spawn?: SpawnNativeProcess;
   createManagedChildProcess?: (child: ChildProcess) => ManagedChildProcess;
-  killProcessTree?: (
+  terminateProcessTree?: (
     child: ChildProcess,
     options?: Readonly<{ graceMs?: number; ownedProcessGroup?: boolean }>,
   ) => Promise<void>;
@@ -45,7 +47,7 @@ type NativeProcessLauncherDependencies = Readonly<{
   createProcessCustodyHandshakePath?: () => string;
   waitForProcessCustodyHandshake?: typeof defaultWaitForProcessCustodyHandshake;
   removeProcessCustodyHandshakeFile?: (handshakePath: string) => Promise<void>;
-  terminateProcessCustodyByJob?: typeof defaultTerminateProcessCustodyByJob;
+  processTreeSystemBoundary?: Parameters<typeof createProcessTreeTerminator>[0];
   logStderr?: (label: 'workspace-sync-sidecar' | 'workspace-sync-agent', byteLength: number) => void;
 }>;
 
@@ -116,7 +118,7 @@ export function createWorkspaceSyncNativeProcessLaunchers(
   const platform = dependencies.platform ?? process.platform;
   const spawn = dependencies.spawn ?? nodeSpawn;
   const createManagedChildProcess = dependencies.createManagedChildProcess ?? defaultCreateManagedChildProcess;
-  const killProcessTree = dependencies.killProcessTree ?? defaultKillProcessTree;
+  const terminateProcessTree = dependencies.terminateProcessTree ?? defaultTerminateProcessTree;
   const resolveProcessCustodyRuntimeExecutable = dependencies.resolveProcessCustodyRuntimeExecutable
     ?? defaultResolveProcessCustodyRuntimeExecutable;
   const createWindowsJobCustodyName = dependencies.createWindowsJobCustodyName
@@ -127,8 +129,7 @@ export function createWorkspaceSyncNativeProcessLaunchers(
     ?? defaultWaitForProcessCustodyHandshake;
   const removeProcessCustodyHandshakeFile = dependencies.removeProcessCustodyHandshakeFile
     ?? defaultRemoveProcessCustodyHandshakeFile;
-  const terminateProcessCustodyByJob = dependencies.terminateProcessCustodyByJob
-    ?? defaultTerminateProcessCustodyByJob;
+  const terminateOwnedProcessTree = createProcessTreeTerminator({ ...dependencies.processTreeSystemBoundary, platform });
   const logStderr = dependencies.logStderr ?? ((label, byteLength) => {
     logger.debug(`[${label}] stderr drained`, { byteLength });
   });
@@ -145,23 +146,33 @@ export function createWorkspaceSyncNativeProcessLaunchers(
     });
   };
 
-  const stopWindowsCustody = async (child: ChildProcess, custody: ProcessCustodySpawnSpec): Promise<void> => {
-    const outcome = await terminateProcessCustodyByJob({
-      executablePath: custody.executablePath,
-      jobName: custody.jobName,
+  const stopWindowsCustody = async (custody: ProcessCustodySpawnSpec): Promise<void> => {
+    const result = await terminateOwnedProcessTree({
+      targets: [],
+      containment: { kind: 'windows_job', name: custody.jobName },
+      policy: 'kill',
     });
-    if (outcome !== 'absent') {
-      // Killing the helper closes its last Job Object handle. KILL_ON_JOB_CLOSE
-      // then retires the already-contained target and every descendant.
-      await killProcessTree(child);
+    if (result.status !== 'complete') {
+      throw Object.assign(new Error('Workspace sync native process termination could not be verified'), {
+        code: 'plugin_exec_termination_incomplete', result,
+      });
     }
   };
 
   const retainedNativeProcessStops = new Set<() => Promise<void>>();
+  const prepareNativeRootLaunch = async (executablePath: string, args: readonly string[], environment: NodeJS.ProcessEnv) => {
+    const launchSpec = { filePath: executablePath, args: [...args],
+      env: Object.fromEntries(Object.entries(environment).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) };
+    const scope = platform === 'linux' ? await prepareCgroupProcessLaunchScope() : null;
+    return scope ? buildCgroupProcessLaunchSpec({ launchSpec, scope,
+      unit: createHappierLinuxScopeName(environment.HAPPIER_PROCESS_OWNER) }) : launchSpec;
+  };
   const spawnSidecar: SpawnWorkspaceSyncSidecar = async (input) => {
     assertNativeExecutablePath(input.executablePath);
     const custody = platform === 'win32' ? createWindowsCustody('sidecar') : null;
-    const child = spawn(custody?.executablePath ?? input.executablePath, custody
+    const launch = await prepareNativeRootLaunch(input.executablePath, input.args,
+      withProcessOwnerEnvironment(process.env, { kind: 'workspace_sync' }));
+    const child = spawn(custody?.executablePath ?? launch.filePath, custody
       ? [
           'run',
           `--job=${custody.jobName}`,
@@ -171,18 +182,19 @@ export function createWorkspaceSyncNativeProcessLaunchers(
           input.executablePath,
           ...withoutBrokerDescriptorArgument(input.args),
         ]
-      : [...input.args], {
+      : launch.args, {
       detached: platform !== 'win32',
       shell: false,
       stdio: custody ? ['pipe', 'ignore', 'pipe'] : ['ignore', 'ignore', 'pipe', 'pipe'],
+      env: launch.env,
       windowsHide: true,
     });
     let stopPromise: Promise<void> | null = null;
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
       const attempt = custody
-        ? stopWindowsCustody(child, custody)
-        : killProcessTree(child, processGroupOptions(platform));
+        ? stopWindowsCustody(custody)
+        : terminateProcessTree(child, processGroupOptions(platform));
       stopPromise = attempt.then(() => {
         retainedNativeProcessStops.delete(stop);
       }, (error: unknown) => {
@@ -240,7 +252,10 @@ export function createWorkspaceSyncNativeProcessLaunchers(
     assertNativeExecutablePath(input.executablePath);
     if (input.signal?.aborted) throw createAbortError();
     const custody = platform === 'win32' ? createWindowsCustody('agent') : null;
-    const child = spawn(custody?.executablePath ?? input.executablePath, custody
+    const launch = await prepareNativeRootLaunch(input.executablePath, input.args,
+      withProcessOwnerEnvironment({ ...process.env, MUTAGEN_DATA_DIRECTORY: input.dataDirectory }, { kind: 'workspace_sync' }));
+    if (input.signal?.aborted) throw createAbortError();
+    const child = spawn(custody?.executablePath ?? launch.filePath, custody
       ? [
           'run',
           `--job=${custody.jobName}`,
@@ -249,19 +264,19 @@ export function createWorkspaceSyncNativeProcessLaunchers(
           input.executablePath,
           ...input.args,
         ]
-      : [...input.args], {
+      : launch.args, {
       detached: platform !== 'win32',
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, MUTAGEN_DATA_DIRECTORY: input.dataDirectory },
+      env: launch.env,
       windowsHide: true,
     });
     let stopPromise: Promise<void> | null = null;
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
       const attempt = custody
-        ? stopWindowsCustody(child, custody)
-        : killProcessTree(child, processGroupOptions(platform));
+        ? stopWindowsCustody(custody)
+        : terminateProcessTree(child, processGroupOptions(platform));
       stopPromise = attempt.then(() => {
         retainedNativeProcessStops.delete(stop);
       }, (error: unknown) => {

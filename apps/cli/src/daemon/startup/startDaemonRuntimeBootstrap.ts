@@ -163,6 +163,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
   listScheduledQualifiedConnectedAccounts?: () => Promise<
     readonly QualifiedConnectedAccountProfileV4[]
   >;
+  subscribeConnectedAccountInvalidations?: (listener: () => void) => () => void;
   listQualifiedConnectedAccountGroupQuotaTargets?: NonNullable<
     ConstructorParameters<typeof ConnectedServiceQuotasCoordinator>[0]['qualifiedConnectedAccountRuntime']
   >['listGroupQuotaTargets'];
@@ -431,7 +432,7 @@ export async function startDaemonConnectedServiceRuntime(
     | 'connectedServiceQuotaFetcherDescriptors' | 'connectedServiceRuntimeQuotaSnapshots'
     | 'connectedServiceRuntimeRegistry' | 'consumeCommittedAuthGroupGeneration'
     | 'daemonSessionMutationCustody' | 'providerAccountUsageStore'
-    | 'listQualifiedConnectedAccountGroupQuotaTargets' | 'listScheduledQualifiedConnectedAccounts'
+    | 'listQualifiedConnectedAccountGroupQuotaTargets' | 'listScheduledQualifiedConnectedAccounts' | 'subscribeConnectedAccountInvalidations'
     | 'onQualifiedConnectedAccountCredentialUpdated' | 'qualifiedConnectedAccountEstablishedRuntimeOwner'
     | 'resolveConnectedServiceQualifiedPurposeBindingSnapshot' | 'resolveQualifiedConnectedAccountPeerClass'
     | 'resolveQualifiedConnectedAccountPeerOperationTransport'> & Readonly<{
@@ -454,6 +455,15 @@ export async function startDaemonConnectedServiceRuntime(
       true,
     );
   const connectedServiceRuntimeRegistry = params.connectedServiceRuntimeRegistry ?? new ConnectedServiceRuntimeRegistry();
+  const subscribeCoordinatorWake = (listener: () => void, invalidateInventory?: () => void): (() => void) => {
+    const onInventoryChanged = () => { invalidateInventory?.(); listener(); };
+    const cleanups = [
+      connectedServiceRuntimeRegistry.subscribeTargetRegistrations(listener),
+      params.subscribeConnectedAccountInvalidations?.(onInventoryChanged),
+      pluginReloadController.subscribe(onInventoryChanged),
+    ];
+    return () => { for (const cleanup of cleanups) cleanup?.(); };
+  };
   let connectedServiceRefreshCoordinator: ConnectedServiceRefreshCoordinator | null = null;
   let connectedServiceRefreshLoopHandle: ConnectedServiceRefreshLoopHandle = null;
   if (connectedServicesRefreshEnabled) {
@@ -505,6 +515,7 @@ export async function startDaemonConnectedServiceRuntime(
       baseDir: params.connectedServicesMaterializationBaseDir ?? resolveConnectedServicesMaterializationBaseDir(params.happyHomeDir),
       refreshWindowMs,
       refreshLeaseMs,
+      healthProbeIntervalMs: refreshTickMs,
       now: () => Date.now(),
       accountSettingsProvider: () => readAccountSettingsSnapshot()?.settings ?? null,
       processEnv: params.processEnv,
@@ -610,10 +621,11 @@ export async function startDaemonConnectedServiceRuntime(
     connectedServiceRefreshLoopHandle = startConnectedServiceRefreshLoop({
       enabled: true,
       tickMs: refreshTickMs,
+      subscribeWake: subscribeCoordinatorWake,
       coordinator: { tickOnce: async () => {
-        if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return;
+        if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return { nextAutomaticRunAfterMs: null };
         const operation = () => connectedServiceRefreshCoordinator!.tickOnce();
-        await (params.runAccountOperation ? params.runAccountOperation(operation) : operation());
+        return await (params.runAccountOperation ? params.runAccountOperation(operation) : operation());
       } },
       runImmediately: true,
       onTickError: (error) => {
@@ -653,13 +665,9 @@ export async function startDaemonConnectedServiceRuntime(
     },
   });
   if (connectedServicesQuotasEnabled) {
-    const quotasTickMs = resolvePositiveIntEnv(
-      params.processEnv.HAPPIER_CONNECTED_SERVICES_QUOTAS_TICK_MS,
-      60_000,
-      { min: 5_000, max: 30 * 60_000 },
-    );
     const {
       fetchTimeoutMs,
+      probeIntervalMs: quotasTickMs,
       discoveryEnabled,
       discoveryIntervalMs,
       failureBackoffMinMs,
@@ -737,6 +745,7 @@ export async function startDaemonConnectedServiceRuntime(
       fetchTimeoutMs,
       discoveryEnabled,
       discoveryIntervalMs,
+      probeIntervalMs: quotasTickMs,
       failureBackoffMinMs,
       failureBackoffMaxMs,
       failureBackoffJitterPct,
@@ -911,11 +920,13 @@ export async function startDaemonConnectedServiceRuntime(
       }),
       startLoop: (coordinator) => startConnectedServiceQuotasLoop({
         enabled: true,
+        runImmediately: true,
         tickMs: quotasTickMs,
+        subscribeWake: listener => subscribeCoordinatorWake(listener, () => coordinator.invalidateInventory()),
         coordinator: { tickOnce: async () => {
-          if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return;
+          if (params.isAccountRuntimeCurrent && !await params.isAccountRuntimeCurrent()) return { nextAutomaticRunAfterMs: null };
           const operation = () => coordinator.tickOnce();
-          await (params.runAccountOperation ? params.runAccountOperation(operation) : operation());
+          return await (params.runAccountOperation ? params.runAccountOperation(operation) : operation());
         } },
         onTickError: (error) => {
           params.logger.debug('[DAEMON RUN] Connected services quotas tick failed (non-fatal)', error);

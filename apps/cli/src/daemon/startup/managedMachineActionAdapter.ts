@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { createCliWorkflowTriggerActions } from '@/session/actions/workflowTriggers';
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
 import { isOriginalLocalManagedSetupContext } from '@/api/externalActionExecutionAuthorization';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 import { prepareExternalActionRequesterAccountAuthorization, type ExternalActionMachineRequestSigningKey } from '@/api/externalActionExecutionAuthorization';
 import type { StoredCredentials } from '@/persistence';
@@ -140,24 +141,13 @@ async function withBoundDriver<T>(params: ManagedMachineActionAdapterParams, sig
 
 /** Explicit callers and automatic host policy work consume the same bound native owner. */
 export function createDaemonManagedMachineActionAdapter(params: ManagedMachineActionAdapterParams) {
-    const actionAdapter: NonNullable<ActionExecutorDeps['managedMachineAction']> = async ({ actionId, input, context, signal }) => {
+    const executeNativeAction: NonNullable<ActionExecutorDeps['managedMachineAction']> = async ({ actionId, input, context, signal }) => {
         const requestId = context.actionRequestId;
         if (!requestId) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
         // This identity is stamped by the accepted in-process FIN invocation;
         // the public Action/RPC payload cannot supply it. Home independently
         // checks the signed installation's persisted Run assignment and cause.
         const runId = context.executionRunWorkflowRunId;
-        if (runId && !context.operationAcceptance) {
-            if (!params.observeActionExecution) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
-            const observed = await params.observeActionExecution({ actionId, input, actionRequestId: requestId,
-                execute: async operation => {
-                    const lifetime = signal ? AbortSignal.any([operation.signal, signal]) : operation.signal;
-                    const result = await actionAdapter({ actionId, input, context: { ...context, ...operation, signal: lifetime }, signal: lifetime });
-                    const failure = ActionExecuteFailureSchema.safeParse(result);
-                    return failure.success ? failure.data : { ok: true, result };
-                } });
-            return observed.ok ? observed.result : observed;
-        }
         if (runId && !context.externalActionExecutionAuthorization) {
             const installation = params.installationIdentity;
             const origin = await params.resolveCurrentMachineExecutionOriginContext?.(signal);
@@ -289,6 +279,28 @@ export function createDaemonManagedMachineActionAdapter(params: ManagedMachineAc
             const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'binding_outcome_unknown';
             return { ok: false, errorCode: 'managed_binding_move_incomplete', error: 'managed_binding_move_incomplete', details: { machine, code } };
         }
+    };
+    const actionAdapter: NonNullable<ActionExecutorDeps['managedMachineAction']> = async request => {
+        const { actionId, input, context, signal } = request;
+        const runId = context.executionRunWorkflowRunId;
+        const observe = params.observeActionExecution;
+        // Detached Ask replay has no live parent's ports. Bind once through the
+        // existing operation owner; ordinary calls may have no observed scope.
+        if (!context.operationAcceptance && (runId || (getActionSpec(actionId).operation && observe))) {
+            if (!context.actionRequestId || !observe) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
+            const observed = await observe({ actionId, input, actionRequestId: context.actionRequestId,
+                execute: async operation => {
+                    if (runId && !operation.operationAcceptance) throw Object.assign(new Error('admission_unavailable'), { code: 'admission_unavailable' });
+                    const lifetime = signal ? AbortSignal.any([operation.signal, signal]) : operation.signal;
+                    // The driver retains all native admission requirements,
+                    // including acceptance for acquisition and lifecycle effects.
+                    const result = await executeNativeAction({ ...request, context: { ...context, ...operation, signal: lifetime }, signal: lifetime });
+                    const failure = ActionExecuteFailureSchema.safeParse(result);
+                    return failure.success ? failure.data : { ok: true, result };
+                } });
+            return observed.ok ? observed.result : observed;
+        }
+        return await executeNativeAction(request);
     };
     return Object.assign(actionAdapter, {
         executePolicy: async (request: ManagedMachinePolicyRequest): Promise<ActionExecuteResult> => {

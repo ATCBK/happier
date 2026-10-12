@@ -125,12 +125,9 @@ vi.mock('@/settings/accountSettings/refreshAccountSettingsForMinimumVersion', ()
   refreshAccountSettingsForMinimumVersion: hoisted.refreshAccountSettingsForMinimumVersion,
 }));
 
-vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', () => ({
+vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/settings/accountSettings/activeAccountSettingsSnapshot')>(),
   getActiveAccountSettingsSnapshot: hoisted.getActiveAccountSettingsSnapshot,
-}));
-
-vi.mock('@/terminal/runtime/terminalConfig', () => ({
-  resolveTerminalRequestFromSpawnOptions: vi.fn(() => null),
 }));
 
 vi.mock('@/terminal/runtime/envVarSanitization', () => ({
@@ -336,6 +333,7 @@ function createAdmittedRuntimeRegistry(
 ) {
   return {
     contributes,
+    pluginDiagnosticsByPluginId: {},
     agentRuntimesByAgentId: new Map(
       Object.entries(ownersByBackendId).map(([agentId, pluginId]) => [agentId, {
         pluginId,
@@ -352,9 +350,11 @@ function createAdmittedRuntimeRegistry(
         retirementSignal: new AbortController().signal,
         isCurrent: () => true,
         createAgentRuntimeSurfaceInvocationContext: vi.fn(async () => ({} as never)),
-        createRuntime: vi.fn(async () => {
-          throw new Error('Unexpected Agent runtime creation in spawn fixture');
-        }),
+        // Terminal presentation reads the admitted Agent surface before spawn.
+        // This native boundary has no presentation and must never open a Session.
+        createRuntime: vi.fn(async () => ({ sessions: {
+          open: async () => { throw new Error('Unexpected native Session open in spawn fixture'); },
+        } })),
       }]),
     ),
     runtimeCapabilitiesByPluginId: new Map(
@@ -2438,6 +2438,34 @@ describe('executeSpawnSessionRequest', () => {
     expect(resolveSpawnChildEnvironment).toHaveBeenCalledWith(expect.objectContaining({
       happyHomeDir: '/tmp/happier-home',
     }));
+
+    let discoveryPending = true;
+    let spawnedWhileDiscoveryPending = false;
+    let releaseDiscovery: () => void = () => {};
+    const discovery = new Promise<void>((resolve) => { releaseDiscovery = resolve; });
+    // An unresolved discovery operation is still optional. The established
+    // spawn must return before discovery settles.
+    const release = setTimeout(() => releaseDiscovery(), 500);
+    const spawnStartedAt = performance.now();
+    try {
+      const result = await executeSpawnSessionRequest({ ...params,
+        controlPluginDevelopment: async () => {
+          await discovery;
+          discoveryPending = false;
+          throw new Error('Optional discovery unavailable');
+        },
+      });
+      spawnedWhileDiscoveryPending = discoveryPending;
+      console.info('[r9-latency] spawn with optional discovery pending', {
+        durationMs: Math.round(performance.now() - spawnStartedAt), discoveryPending,
+      });
+      expect(result).toMatchObject({ type: 'success', sessionId: 'session-1' });
+      expect(spawnedWhileDiscoveryPending).toBe(true);
+    } finally {
+      clearTimeout(release);
+      releaseDiscovery();
+      await discovery;
+    }
   });
 
   it('injects daemon-owned server selection into spawned session child env', async () => {
@@ -4151,8 +4179,8 @@ describe('executeSpawnSessionRequest', () => {
         acpCatalogSettingsV1: {
           v: 2,
           backends: [{
-            id: 'review-bot', name: 'review-bot', title: 'Review Bot', command: 'review-bot',
-            args: [], env: {}, transportProfile: 'generic',
+            id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
+             env: {}, transportProfile: 'generic',
             capabilities: { supportsLoadSession: true }, createdAt: 1, updatedAt: 1,
           }],
         },
@@ -4241,8 +4269,8 @@ describe('executeSpawnSessionRequest', () => {
           acpCatalogSettingsV1: {
             v: 2,
             backends: [{
-              id: 'review-bot', name: 'review-bot', title: 'Review Bot', command: 'review-bot',
-              args: [], env: {}, transportProfile: 'generic',
+              id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
+               env: {}, transportProfile: 'generic',
               capabilities: { supportsLoadSession: true }, createdAt: 1, updatedAt: 1,
             }],
           },

@@ -52,7 +52,7 @@ vi.mock('@/api/client/qualifiedConnectedAccountApi', async (importOriginal) => (
 }));
 
 vi.mock('../connectedServices/quotas/startConnectedServiceQuotasLoop', () => ({
-  startConnectedServiceQuotasLoop: vi.fn(() => ({ stop: vi.fn(), pause: vi.fn(), resume: vi.fn() })),
+  startConnectedServiceQuotasLoop: vi.fn(() => ({ stop: vi.fn(), pause: vi.fn(), resume: vi.fn(), wake: vi.fn() })),
 }));
 vi.mock('@/settings/accountSettings/warmActiveAccountSettingsSnapshot', () => ({
   warmActiveAccountSettingsSnapshotBestEffort: vi.fn(async () => true),

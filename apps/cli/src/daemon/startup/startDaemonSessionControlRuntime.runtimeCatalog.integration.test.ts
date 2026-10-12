@@ -1,4 +1,5 @@
 import { createPersistedTakeoverAdmissionWaiter } from '../spawn/persistedTakeoverAdmission';
+import { createDaemonAdmissionDrain } from '../lifecycle/admissionDrain';
 import { waitForSessionWebhook } from '../spawn/waitForSessionWebhook';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -1831,7 +1832,7 @@ describe('startDaemonSessionControlRuntime', () => {
     it.each(['allow', 'ask', 'revoked', 'changed-root', 'revoked-after-ask'] as const)('runs shared finite wake RPC with requester custody (%s)', async scenario => {
         await runPrivateManagedRequesterFixture(true, false, scenario);
     });
-    async function runManagedPolicyFixture(policy: 'disabled' | 'approve' | 'reject' | 'cancel' | 'changed-policy' | 'explicit-delete-waiver' | 'event-driven-policy' | 'creation-cleanup' | 'resource-replacement' | 'wake-native-refused' | 'wake-native-unknown') {
+    async function runManagedPolicyFixture(policy: 'disabled' | 'approve' | 'reject' | 'cancel' | 'changed-policy' | 'explicit-delete-waiver' | 'event-driven-policy' | 'creation-cleanup' | 'resource-replacement' | 'wake-native-refused' | 'wake-native-unknown' | 'guard-cleanup-ask' | 'deferred-acquire') {
         const acceptedWake = policy === 'wake-native-refused' || policy === 'wake-native-unknown';
         const socketPolicy = policy === 'event-driven-policy' || policy === 'creation-cleanup' || policy === 'resource-replacement';
         if (socketPolicy) {
@@ -2124,6 +2125,7 @@ describe('startDaemonSessionControlRuntime', () => {
         const apiMachine = new ApiMachineClient(token, { id: machine.controller.machineId, encryptionMode: 'plain',
             metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
         onTestFinished(async () => { await apiMachine.shutdown(); });
+        const guardAdmissionDrain = createDaemonAdmissionDrain();
         const runtime = await startDaemonSessionControlRuntime({ machineId: machine.controller.machineId, credentials, api: {} as never,
             serverBaseUrl: serverUrl, serverId: configuration.activeServerId,
             connectedServicesMaterializationBaseDir: taskDir, getConnectedServiceRefreshCoordinator: () => null,
@@ -2132,6 +2134,7 @@ describe('startDaemonSessionControlRuntime', () => {
             getApiMachineForSessions: () => apiMachine,
             spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(), connectedServicesRestartRequestedPids: new Set(),
             externalActionAccountId: machine.custodianAccountId, managedProviderOperationAuthority: authority,
+            ...(policy === 'guard-cleanup-ask' ? { admissionDrain: guardAdmissionDrain } : {}),
             resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: homeId, machineId: machine.controller.machineId }),
             readManagedMachinePolicyCurrent: async (managedId, signal) => (await readManagedMachinePolicyCensus({ homeId,
                 controller: machine.controller, custodianAccountId: machine.custodianAccountId, privateKey: installation.privateKey,
@@ -2146,6 +2149,43 @@ describe('startDaemonSessionControlRuntime', () => {
             origin: { kind: 'session-input' as const, session: { homeId, sessionId: 'session-policy-gate' },
                 pendingRequestId: 'pending-policy-gate', requestedAt: 1 }, reason: 'admitted-work' as const };
         try {
+            if (policy === 'deferred-acquire') {
+                const ingress = runtime.externalActionIngressOwner;
+                if (!ingress) throw new Error('Expected the installed credentialed Action ingress');
+                const request = await ingress.executor.execute('machines.managed.acquire', {
+                    selection: { kind: 'one-off', homeId, controller: machine.controller, launch: machine.launch,
+                        retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false },
+                }, { surface: 'cli', serverId: configuration.activeServerId, actionRequestId: 'deferred-acquire-request' });
+                expect(request).toMatchObject({ ok: true, result: {
+                    kind: 'approval_request_created', actionId: 'machines.managed.acquire',
+                } });
+                expect(approvals).toMatchObject([{ actionId: 'machines.managed.acquire', status: 'open' }]);
+                expect(nativeEffects).toEqual([]);
+                // The real Artifact and operation owners are independent: a
+                // deferred Ask is not an executed native acquisition receipt.
+                expect(ActionOperationListV1ResponseSchema.parse(await apiMachine.getPeerMediationMachineRpcHandlerManager()
+                    .invokeLocal(ACTION_OPERATION_RPC_METHODS_V2.list, {})).items).toEqual([]);
+                return;
+            }
+            if (policy === 'guard-cleanup-ask') {
+                const guardAsk = await runtime.executeGuardLeftBehindAction({ mode: 'ask', refs: ['confirmed-exact-ref'], sessionId: 'ended-session' });
+                expect(guardAsk, JSON.stringify(guardAsk))
+                    .toMatchObject({ ok: true, result: { artifactId: expect.any(String) } });
+                expect(approvals).toMatchObject([{ actionId: 'machines.processes.leftBehind.cleanUp',
+                    actionArgs: { serverId: configuration.activeServerId, machineId: machine.controller.machineId, refs: ['confirmed-exact-ref'] },
+                    executionOriginV1: { accountId: machine.custodianAccountId, serverIdentityId: homeId,
+                        authority: 'account_automation', caller: { kind: 'host' }, sessionId: 'ended-session' } }]);
+                expect(nativeEffects).toEqual([]);
+                guardAdmissionDrain.beginShutdown();
+                expect(await runtime.executeGuardLeftBehindAction({ mode: 'ask', refs: ['confirmed-exact-ref'] }))
+                    .toMatchObject({ ok: false, errorCode: 'scope-retired' });
+                expect(approvals).toHaveLength(1);
+                await apiMachine.shutdown();
+                expect(await runtime.executeGuardLeftBehindAction({ mode: 'ask', refs: ['confirmed-exact-ref'] }))
+                    .toMatchObject({ ok: false, errorCode: 'scope-retired' });
+                expect(approvals).toHaveLength(1);
+                return;
+            }
             if (policy === 'resource-replacement') {
                 let settledPolicies = 0;
                 const unavailable: unknown[] = [];
@@ -2417,6 +2457,13 @@ describe('startDaemonSessionControlRuntime', () => {
 
     it('reconstructs managed policy from real Account edges and reconnect', async () => {
         await runManagedPolicyFixture('event-driven-policy');
+    });
+    it('binds Guard cleanup Ask to the actual installed Account factory and retires it with that receiver', async () => {
+        await runManagedPolicyFixture('guard-cleanup-ask');
+    });
+
+    it('keeps a deferred acquisition Ask out of native operation settlement before approval', async () => {
+        await runManagedPolicyFixture('deferred-acquire');
     });
 
     it('runs signed canceled creation cleanup behind one real Ask while leaving manual retirement and until-delete peers alone', async () => {

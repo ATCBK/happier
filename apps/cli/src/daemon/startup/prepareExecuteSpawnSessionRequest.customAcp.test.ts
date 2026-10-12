@@ -16,7 +16,7 @@ afterAll(async () => { await runtime?.dispose(); });
 function readyCatalog(): AcpCatalogSnapshotV1 {
   return { status: 'ready', revision: 4, record: AcpCatalogRecordV1Schema.parse({ v: 1,
     definitions: ['review-a', 'review-b'].map(id => ({ id, name: id, title: id,
-      command: `command-${id}`, args: [id], env: {}, createdAt: 1, updatedAt: 2,
+      launch: { kind: 'command' as const, command: `command-${id}`, args: [id] }, env: {}, createdAt: 1, updatedAt: 2,
       capabilities: { supportsLoadSession: true, supportsModes: 'unknown', supportsModels: 'unknown',
         supportsConfigOptions: 'unknown', promptImageSupport: 'no' } })) }) };
 }

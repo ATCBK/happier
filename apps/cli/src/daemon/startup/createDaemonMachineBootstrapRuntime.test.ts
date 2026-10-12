@@ -479,6 +479,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     const close = vi.fn(async () => undefined);
     const setProviderBrokerIngressLive = vi.fn(async () => undefined);
     const startProviderBrokerApplication = vi.fn(async () => ({
+      accountConnectionIngress: false,
       resolveProviderBrokerApplicationTarget,
       resolveExternalProviderBrokerApplicationTarget,
       checkRunnerCredentialSelectionCurrentness,
@@ -504,7 +505,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       machineId: 'registered-machine',
       apiMachine: expect.anything(),
     });
-    expect(setProviderBrokerIngressLive).toHaveBeenCalledWith(true);
+    expect(setProviderBrokerIngressLive).toHaveBeenCalledWith(true, false);
     await expect(withOwner.peerMediationMachineRpc?.resolveProviderBrokerApplicationTarget?.(input))
       .resolves.toEqual({ port: 47_001, localCapability: 'local-capability' });
     expect(resolveProviderBrokerApplicationTarget).toHaveBeenCalledWith(input);
@@ -802,7 +803,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
         stopDirectPeerServer: async () => {},
         stopTailscaleTransferServeLifecycle: async () => {},
         stopControlServer: async () => {},
-        stopCaffeinate: async () => {},
+        stopKeepAwake: async () => {},
         daemonLockHandle: null,
         releaseDaemonLock: async () => {},
       });

@@ -52,6 +52,7 @@ import {
 import type { ManagedWorkspaceSync, WorkspaceSyncRelationshipPreparation } from '@/workspaces/sync/workspaceSyncTypes';
 import type { WorkspaceSyncRelationshipOwner } from '@/workspaces/sync/workspaceSyncRelationshipOwner';
 import type { Duplex } from 'node:stream';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
 
 type InstalledPaths = Readonly<{ currentPath: string; resolvedCurrentPath: string | null }>;
 type ArtifactPaths = Readonly<{ managerPath: string; agentPath: string }>;
@@ -129,6 +130,7 @@ export type DaemonWorkspaceSyncRuntime = Readonly<{
   openRootedAgent: WorkspaceSyncLocalAgentStreamOpen;
   start(): Promise<void>;
   stop(): Promise<void>;
+  readProcessRoots(): readonly HappierProcessRootSource[];
   whenProjectsSettled(target?: Readonly<{
     graphRevision: number | 'absent';
     scopeKey?: string;
@@ -256,6 +258,7 @@ export function createDaemonWorkspaceSyncRuntime(
       ));
       return matches.length === 1 ? matches[0]! : null;
     },
+    resolveAllRelationshipDefinitions: () => getSnapshot()?.relationships ?? null,
     prepareRelationshipTarget: dependencies.prepareRelationshipTarget,
     ...(dependencies.recoverCopyOnceTarget ? { recoverCopyOnceTarget: dependencies.recoverCopyOnceTarget } : {}),
     ...(dependencies.borrowLinkedSourceRoot ? { borrowLinkedSourceRoot: dependencies.borrowLinkedSourceRoot } : {}),
@@ -429,6 +432,7 @@ export function createDaemonWorkspaceSyncRuntime(
     managedWorkspaceSync: controller,
     openExternalStream: async (input) => await controller.openExternalStream(input),
     openRootedAgent,
+    readProcessRoots: () => lifecycle.readProcessRoots(),
     start,
     stop,
     whenProjectsSettled,

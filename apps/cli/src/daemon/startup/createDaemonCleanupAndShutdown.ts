@@ -1,9 +1,7 @@
-import { stopCaffeinate } from '@/integrations/caffeinate';
-
 import { cleanupAndShutdown as runCleanupAndShutdown } from '../lifecycle/cleanupAndShutdown';
 
 export function createDaemonCleanupAndShutdown(
-    params: Omit<Parameters<typeof runCleanupAndShutdown>[0], 'source' | 'errorMessage' | 'stopCaffeinate'> & Readonly<{
+    params: Omit<Parameters<typeof runCleanupAndShutdown>[0], 'source' | 'errorMessage'> & Readonly<{
         markShutdownInitiated: () => void;
     }>,
 ) {
@@ -16,7 +14,6 @@ export function createDaemonCleanupAndShutdown(
             ...params,
             source,
             errorMessage,
-            stopCaffeinate,
         });
     };
 }

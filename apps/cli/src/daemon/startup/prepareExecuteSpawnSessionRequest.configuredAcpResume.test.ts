@@ -3,6 +3,7 @@ import { createCustomAcpAdmissionRuntimeFixture } from './customAcpAdmission.tes
 
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import { AcpCatalogRecordV1Schema, type AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { MachineResourcesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 
 vi.mock('@/ui/logger', () => ({
     logger: {
@@ -30,8 +31,7 @@ function accountSettingsWithConfiguredBackend(supportsLoadSession: boolean) {
                 id: CONFIGURED_BACKEND_ID,
                 name: CONFIGURED_BACKEND_ID,
                 title: 'Review Bot',
-                command: 'review-bot-acp',
-                args: ['--stdio'],
+                launch: { kind: 'command' as const, command: 'review-bot-acp', args: ['--stdio'] },
                 env: {},
                 transportProfile: 'generic',
                 capabilities: {
@@ -57,9 +57,11 @@ async function prepareConfiguredAcpResume(params: Readonly<{
     accountSettings?: Readonly<Record<string, unknown>>;
     backendId?: string;
     acpCatalogSnapshot?: AcpCatalogSnapshotV1;
+    readMachineResourcesPolicy?: import('@/processes/toolIdleTimeouts').MachineResourcesPolicyReader;
 }>) {
     return await prepareExecuteSpawnSessionRequest({
         request: {
+            readMachineResourcesPolicy: params.readMachineResourcesPolicy,
             options: {
                 directory: '/tmp/configured-acp-resume',
                 machineId: 'machine-1',
@@ -81,6 +83,12 @@ async function prepareConfiguredAcpResume(params: Readonly<{
 }
 
 describe('prepareExecuteSpawnSessionRequest Account-configured ACP resume admission', () => {
+    it('carries the current Machine soft ceiling into a native resume launch without a Session fetch', async () => {
+        const policy = MachineResourcesPolicyV1Schema.parse({ v: 1, guard: { sessionMemoryCeiling: { bytes: 1048576 } } });
+        const result = await prepareConfiguredAcpResume({ accountSettings: {}, acpCatalogSnapshot: readyCatalog(true),
+            readMachineResourcesPolicy: () => ({ status: 'ready', source: 'stored', revision: 1, policy }) });
+        expect(result).toMatchObject({ effectiveResume: PROVIDER_SESSION_ID, memoryHighBytes: 1048576 });
+    });
     it('admits native resume when the resolved Account declaration proves load-session support', async () => {
         const result = await prepareConfiguredAcpResume({
             accountSettings: {}, acpCatalogSnapshot: readyCatalog(true),

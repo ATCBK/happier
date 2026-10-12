@@ -12,7 +12,7 @@ import { logger } from '@/ui/logger';
 import { startAutomationWorker, type AutomationWorkerHandle } from '../automation/automationWorker';
 import { startMemoryWorker, type MemoryWorkerHandle } from '../memory/memoryWorker';
 import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from '../voiceInference/voiceInferenceWorker';
-import { createDaemonPublicVoiceModelPackRuntime } from '../voiceInference/publicModelPacks/runtime';
+import { createDaemonPublicVoiceModelPackRuntime, type DaemonPublicVoiceModelPackRuntime } from '../voiceInference/publicModelPacks/runtime';
 import { resolveVoiceInferencePaths } from '../voiceInference/voiceInferencePaths';
 import { configuration } from '@/configuration';
 import { watchLastCliUpdateResult } from '@happier-dev/cli-common/firstPartyRuntime';
@@ -26,6 +26,7 @@ import type { DaemonPeerMediationObservabilityEmitter } from '../peer/mediation/
 import type { StoredCredentials } from '@/persistence';
 import type { NormalizedLocalServiceInventorySnapshot } from '../local/services/inventory/scanner';
 import type { LocalServicesDaemonRuntime } from '../local/services/runtime';
+import type { MachineResourceSummary } from '../resources/machineResourceSummary';
 import packageJson from '../../../package.json';
 import type { PersistedTakeoverAdmissionWaiter } from '../spawn/persistedTakeoverAdmission';
 import type {
@@ -187,6 +188,7 @@ export function createDaemonMachineBootstrapRuntime(
       attachApiMachine: (connectedApiMachine: NonNullable<MachineSyncRuntime['apiMachine']>) => Promise<void>;
     }> | null;
     spawnSession: BootstrapRuntime['spawnSession'];
+    onActivationRejected?: BootstrapRuntime['onActivationRejected'];
     stopSession: BootstrapRuntime['stopSession'];
     sessionRunnerStatus?: BootstrapRuntime['sessionRunnerStatus'];
     awaitAgentSessionOpen: BootstrapRuntime['awaitAgentSessionOpen'];
@@ -210,12 +212,15 @@ export function createDaemonMachineBootstrapRuntime(
     cancelTemporaryThrottleRecovery?: BootstrapRuntime['cancelTemporaryThrottleRecovery'];
     setDaemonServerWorkOnline: BootstrapRuntime['setDaemonServerWorkOnline'];
     onMachineConnectionOnline: NonNullable<BootstrapRuntime['onMachineConnectionOnline']>;
+    orphanedDeadDaemonSessions?: BootstrapRuntime['orphanedDeadDaemonSessions'];
     reconcileConnectedServicesProjection: Parameters<ApiMachineClient['onConnectedServicesProjection']>[0];
     subscribeConnectedAccountInvalidations?: BootstrapRuntime['subscribeConnectedAccountInvalidations'];
     isShuttingDown: BootstrapRuntime['isShuttingDown'];
     admissionDrain?: DaemonAdmissionDrain;
     managedActivity?: Pick<ManagedActivityRpcOwner, 'activity' | 'admissionDrain'>;
     isPublicationQuiescing?: () => boolean;
+    readSpawnFailureLimits?: ApiMachineClientLifecycleDependencies['readSpawnFailureLimits'];
+    ownerRemainder?: ApiMachineClientLifecycleDependencies['ownerRemainder'];
     getServerFeaturesSnapshot?: BootstrapRuntime['getServerFeaturesSnapshot'];
     resolvePeerMediationTrustRoots?: () => readonly DirectRouteGrantTrustRoot[];
     refreshServerFeaturesSnapshot?: ApiMachineClientLifecycleDependencies['resolveServerFeaturesSnapshot'];
@@ -229,6 +234,7 @@ export function createDaemonMachineBootstrapRuntime(
     peerMediationObservabilityEmitter?: DaemonPeerMediationObservabilityEmitter;
     readLocalServiceInventorySnapshot?: () => Promise<NormalizedLocalServiceInventorySnapshot | null>;
     localServiceSummary?: Pick<LocalServicesDaemonRuntime, 'getSummary' | 'subscribeSummary' | 'refreshInventoryNow'>;
+    machineResourceSummary?: MachineResourceSummary;
     managedCatalogRuntime?: BootstrapRuntime['managedCatalogRuntime'];
     resolveManagedPurposeBindingIntent?: BootstrapRuntime['resolveManagedPurposeBindingIntent'];
     openTeamDirect?: BootstrapRuntime['openTeamDirect'];
@@ -236,6 +242,7 @@ export function createDaemonMachineBootstrapRuntime(
     openAccountConnectionManagedConsumerSource?: ExecutionRunManagedProviderSourceOpener;
     createAgentCatalogObservation?: BootstrapRuntime['createAgentCatalogObservation'];
     onAutomationWorkerStarted?: (worker: AutomationWorkerHandle) => void;
+    onPublicVoiceModelPackRuntimeReady?: (runtime: DaemonPublicVoiceModelPackRuntime | null) => void;
     /** Live canonical Workflow feature decision. Missing/unknown remains disabled. */
     isWorkflowFeatureEnabled?: () => boolean;
     prepareApiMachineForSessions?: (apiMachine: ApiMachineClient) => void;
@@ -290,6 +297,7 @@ export function createDaemonMachineBootstrapRuntime(
   let connectedApiMachine: ApiMachineClient | null = null;
   let unsubscribeLocalServiceSummary: (() => void) | null = null;
   let unsubscribeLocalServiceConnection: (() => void) | null = null;
+  let unsubscribeResourcePublication: (() => void) | null = null;
   let providerBrokerApplication: Awaited<ReturnType<NonNullable<
     typeof params.startProviderBrokerApplication
   >>> | null = null;
@@ -356,6 +364,8 @@ export function createDaemonMachineBootstrapRuntime(
     daemonServerWorkScheduler: params.daemonServerWorkScheduler,
     setDaemonServerWorkOnline: params.setDaemonServerWorkOnline,
     onMachineConnectionOnline: params.onMachineConnectionOnline,
+    orphanedDeadDaemonSessions: params.orphanedDeadDaemonSessions,
+    isPublicationQuiescing: params.isPublicationQuiescing,
     reconcileConnectedServicesProjection: params.reconcileConnectedServicesProjection,
     recoverWorkflowRuns: async (trigger) => {
       await workflowRecovery?.(trigger);
@@ -408,6 +418,8 @@ export function createDaemonMachineBootstrapRuntime(
             ...(params.serviceLabel ? { serviceLabel: params.serviceLabel } : null),
           }, {
             isDaemonQuiescing: params.isPublicationQuiescing ?? params.isShuttingDown,
+            readSpawnFailureLimits: params.readSpawnFailureLimits,
+            ownerRemainder: params.ownerRemainder,
             ...(params.requesterServerId && params.resolveRequesterSessionRuntimeContext && params.releaseRequesterSessionRuntimeContext ? {
               requesterSessionRuntime: { serverId: params.requesterServerId,
                 resolve: params.resolveRequesterSessionRuntimeContext, release: params.releaseRequesterSessionRuntimeContext,
@@ -439,6 +451,9 @@ export function createDaemonMachineBootstrapRuntime(
               : {}),
       });
       connectedApiMachine = apiMachine;
+      unsubscribeResourcePublication?.();
+      unsubscribeResourcePublication = params.machineResourceSummary?.attachPublication(apiMachine,
+        () => connectedApiMachine !== apiMachine || (params.isPublicationQuiescing ?? params.isShuttingDown)()) ?? null;
       unsubscribeLocalServiceSummary?.();
       unsubscribeLocalServiceConnection?.();
       const localServices = params.localServiceSummary;
@@ -583,33 +598,35 @@ export function createDaemonMachineBootstrapRuntime(
         env: process.env,
         serverSnapshot: params.getServerFeaturesSnapshot?.(),
       }).state !== 'enabled') {
+        params.onPublicVoiceModelPackRuntimeReady?.(null);
         return null;
       }
       try {
+        const publicModelPacks = accountId ? createDaemonPublicVoiceModelPackRuntime({
+          accountId, machineId: runtimeMachineId, happyHomeDir: configuration.happyHomeDir,
+          paths: resolveVoiceInferencePaths(),
+        }) : undefined;
+        params.onPublicVoiceModelPackRuntimeReady?.(publicModelPacks ?? null);
         return await startVoiceInferenceWorker({
-          ...(accountId
-            ? {
-                publicModelPacks: createDaemonPublicVoiceModelPackRuntime({
-                  accountId,
-                  machineId: runtimeMachineId,
-                  happyHomeDir: configuration.happyHomeDir,
-                  paths: resolveVoiceInferencePaths(),
-                }),
-              }
-            : {}),
+          ...(publicModelPacks ? { publicModelPacks } : {}),
         });
       } catch (error) {
+        params.onPublicVoiceModelPackRuntimeReady?.(null);
         logger.warn('[DAEMON RUN] Failed to start voice inference worker (best-effort)', error);
         return null;
       }
     },
     spawnSession: params.spawnSession,
+    ...(params.onActivationRejected ? { onActivationRejected: params.onActivationRejected } : {}),
     stopSession: params.stopSession,
     ...(params.sessionRunnerStatus ? { sessionRunnerStatus: params.sessionRunnerStatus } : {}),
     awaitAgentSessionOpen: params.awaitAgentSessionOpen,
     isSessionAlreadyRunning: params.isSessionAlreadyRunning,
     loadLocalSessionMetadataForHandoff: params.loadLocalSessionMetadataForHandoff,
     beforeShutdown: async () => {
+      params.onPublicVoiceModelPackRuntimeReady?.(null);
+      unsubscribeResourcePublication?.();
+      unsubscribeResourcePublication = null;
       unsubscribeLocalServiceSummary?.();
       unsubscribeLocalServiceSummary = null;
       unsubscribeLocalServiceConnection?.();

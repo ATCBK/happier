@@ -39,6 +39,8 @@ export async function readManagedMachinePolicyCensus(input: Readonly<{
 /** Scheduling only: the existing native driver owns policy admission, approval and selected waits. */
 export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
     apiMachine?: Pick<ApiMachineClient, 'onUpdate' | 'onConnectionStateChange'>;
+    /** Local controller prerequisites only; census and native admission still decide authority. */
+    isAvailable?: () => boolean;
     readCensus(signal: AbortSignal): Promise<ManagedMachinePolicyCensus>;
     executePolicy: ReturnType<typeof createDaemonManagedMachineActionAdapter>['executePolicy'];
     onSettled?: () => void;
@@ -104,6 +106,10 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
             while (changed && !stopped) {
                 changed = false;
                 try {
+                    if (params.isAvailable?.() === false) {
+                        for (const entry of active.values()) entry.cancel.abort();
+                        continue;
+                    }
                     const census = await params.readCensus(lifetime.signal);
                     lifetime.signal.throwIfAborted();
                     reconcile(census);

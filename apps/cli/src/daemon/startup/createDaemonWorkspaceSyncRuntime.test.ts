@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { deriveWorkspaceSyncEndpointId } from '@/workspaces/sync/transport/workspaceSyncBrokerProtocol';
 import { computeWorkspaceSyncPolicyDigest } from '@/workspaces/sync/workspaceSyncTypes';
+import { createManagedActivityInventory } from '@/daemon/lifecycle/managedActivity';
+import { projectMachineWorkSummary } from '@/daemon/machines/machineWorkSummary';
 import {
   createDaemonWorkspaceSyncRuntime,
   type DaemonWorkspaceSyncRuntimeDependencies,
@@ -188,14 +190,26 @@ function boundaries(options: Readonly<{
 describe('createDaemonWorkspaceSyncRuntime', () => {
   it('reconciles an authoritative empty Project snapshot before the graph row exists', async () => {
     const harness = boundaries();
-    const runtime = createDaemonWorkspaceSyncRuntime({
-      ...harness.deps,
-      getProjectSnapshot: () => snapshot([], 'absent'),
-    });
-    await runtime.start();
-    await runtime.whenProjectsSettled({ graphRevision: 'absent', scopeKey: 'account-1' });
-    expect(harness.command).not.toHaveBeenCalledWith(expect.objectContaining({ t: 'create' }), expect.anything());
-    await runtime.stop();
+    harness.publishSnapshot(snapshot([], 'absent'));
+    const runtime = createDaemonWorkspaceSyncRuntime(harness.deps);
+    const inventory = createManagedActivityInventory({ producers: [runtime.managedWorkspaceSync.activity!] });
+    const readSummary = async () => projectMachineWorkSummary({ inventory: await inventory.read(),
+      target: { serverId: 'server-1', machineId: 'machine-1', installationId: 'installation' },
+      custodianAccountId: 'alice', requesterIdentities: new Map() });
+    try {
+      await runtime.start();
+      await runtime.whenProjectsSettled({ graphRevision: 'absent', scopeKey: 'account-1' });
+      expect(await readSummary()).toEqual({ kind: 'current', requesters: [] });
+      harness.publishSnapshot(null);
+      expect(await readSummary()).toEqual({ kind: 'unavailable' });
+      harness.publishSnapshot(snapshot([], 'absent'));
+      await runtime.whenProjectsSettled({ graphRevision: 'absent', scopeKey: 'account-1' });
+      expect(await readSummary()).toEqual({ kind: 'current', requesters: [] });
+      expect(harness.command).not.toHaveBeenCalledWith(expect.objectContaining({ t: 'create' }), expect.anything());
+    } finally {
+      inventory.dispose();
+      await runtime.stop();
+    }
   });
 
   it('refuses an unavailable Project snapshot before starting the engine', async () => {
@@ -559,7 +573,9 @@ describe('createDaemonWorkspaceSyncRuntime', () => {
   it('reconciles the current settings through the controller after a supervised sidecar restart', async () => {
     vi.useFakeTimers();
     const harness = boundaries();
-    let currentSnapshot: ReturnType<typeof snapshot> | null = null;
+    // Canonical startup requires authoritative Project rows, including an empty
+    // graph. The relationships arrive later, during sidecar crash recovery.
+    let currentSnapshot: ReturnType<typeof snapshot> | null = { ...snapshot(), relationships: [] };
     const exits: Array<(event: { type: 'exited'; code: number }) => void> = [];
     const brokerEvents: string[] = [];
     const brokerCommands: Array<ReturnType<typeof vi.fn>> = [];

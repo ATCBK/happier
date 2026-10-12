@@ -20,6 +20,8 @@ import { withHerdrApi } from '@/integrations/herdr/herdrApi.testkit';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { publishReportedTerminalControlServiceability } from './publishReportedTerminalControlServiceability';
 import { startDaemonControlServer } from '../controlServer';
+import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
+import type { TrackedSession } from '../types';
 
 const boundary = vi.hoisted(() => ({
     metadata: {} as Record<string, unknown>,
@@ -85,6 +87,44 @@ afterEach(() => {
 });
 
 describe('startup borrowed-terminal reattachment', () => {
+    it('keeps exact guest Process Stop within physical custody without custodian Home mutation', async () => {
+        const fixtureHome = await mkdtemp(join(tmpdir(), 'happier-03-guest-process-stop-'));
+        envScope.patch({ HAPPIER_HOME_DIR: fixtureHome });
+        reloadConfiguration();
+        const pid = 2_147_482_910;
+        const tracked: TrackedSession = { pid, happySessionId: 'guest-process-stop', startedBy: 'daemon', processStartTimeMs: 100 };
+        const stage = vi.fn(async () => {});
+        const runtime = await startDaemonSessionControlRuntime({
+            machineId: 'machine-guest-process-stop', serverId: configuration.activeServerId,
+            serverBaseUrl: configuration.apiServerUrl,
+            credentials: { token: 'token-custodian', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } },
+            api: {} as never,
+            daemonSessionMutationCustody: { stageTranscriptMessage: async () => { throw new Error('Unexpected recording attachment'); },
+                stageTranscriptEvent: async () => ({ persisted: true, delivered: false }), stage },
+            connectedServicesMaterializationBaseDir: join(fixtureHome, 'connected-services'),
+            getConnectedServiceRefreshCoordinator: () => null, getConnectedServiceQuotasCoordinator: () => null,
+            pidToTrackedSession: new Map([[pid, tracked]]), pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(),
+            pidToSpawnWebhookTimeout: new Map(), getApiMachineForSessions: () => null,
+            spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
+            connectedServicesRestartRequestedPids: new Set(),
+            startupTerminalRecovery: { disconnectedTerminalHostCandidates: [], unresolvedTerminalHostSessionIds: [] },
+            beforeShutdown: async () => {}, onHappySessionWebhook: async () => {}, requestShutdown: () => {}, processEnv: {},
+        });
+        try {
+            vi.mocked(fetchSessionByIdCompat).mockClear();
+            stage.mockClear();
+            // The retired native generation cannot be signaled. Even this refusal
+            // must not borrow the custodian's token to alter guest Home state.
+            await runtime.processActionLifecycle.stopExactSession({ sessionId: tracked.happySessionId!, pid,
+                start: { startTimeMs: 100 } });
+            expect(fetchSessionByIdCompat).not.toHaveBeenCalled();
+            expect(stage).not.toHaveBeenCalled();
+        } finally {
+            await runtime.stopControlServer();
+            await rm(fixtureHome, { recursive: true, force: true });
+        }
+    });
+
     it.each(['alive', 'unknown'] as const)('retains owned provider hook artifacts after controller exit with %s host evidence', async (hostEvidence) => {
         const fixtureHome = await mkdtemp(join(tmpdir(), 'happier-03-retained-hooks-'));
         envScope.patch({ HAPPIER_HOME_DIR: fixtureHome });

@@ -86,9 +86,10 @@ it.each(['retained', 'removed'] as const)('skips connected credential reconcilia
         const control = vi.mocked(startDaemonControlServer).mock.calls.at(-1)?.[0];
         const mcpClosed = await control!.agentRuntimeDaemonServices!.dispatch({
             operation: { kind: 'mcp.request_auth.close', requestId: 'close-mcp', materializationId: 'retired-mcp' },
-        } as Parameters<NonNullable<typeof control>['agentRuntimeDaemonServices']['dispatch']>[0], {
+        } as Parameters<NonNullable<NonNullable<typeof control>['agentRuntimeDaemonServices']>['dispatch']>[0], {
             sessionId: activeSessionId, trackedSession: active,
-        } as Parameters<NonNullable<typeof control>['agentRuntimeDaemonServices']['dispatch']>[1]);
+            retainedAgent: { pluginId: 'happier.agent.claude' },
+        } as Parameters<NonNullable<NonNullable<typeof control>['agentRuntimeDaemonServices']>['dispatch']>[1]);
         expect(mcpClosed).toEqual({ ok: true, result: { kind: 'mcp.request_auth.closed' } });
         await control!.onHappySessionWebhook(retiredSessionId, metadata);
         // Enqueue the active target after the asynchronous follow-up. Its terminal
