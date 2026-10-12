@@ -55,6 +55,7 @@ import {
     createFileHomeConnectionDescriptorContinuityStore,
     createHomeConnectionDescriptorContentKey,
     createSimpleCacheHomeConnectionDescriptorContinuityStore,
+    createHomeConnectionDescriptorContinuityStoreForServer,
     resolveHomeConnectionDescriptorContinuityPath,
     type HomeConnectionDescriptorContinuityStore,
 } from "./homeConnectionDescriptorContinuity";
@@ -415,6 +416,101 @@ describe("home connection descriptor production read path", () => {
         renameGate.captures.length = 0;
         restart();
         await Promise.all(dataDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+    });
+
+    it("advances a shared-DB Home's private descriptor across a port change without adopting another publisher's revision", async () => {
+        const oldOrigin = "http://qa.localhost:3016";
+        const newOrigin = "http://qa.localhost:3023";
+        const oldEnv = { ...env, HAPPIER_DB_PROVIDER: "postgres",
+            HAPPIER_STACK_SHARED_DB_SOURCE_STACK: "dev",
+            HAPPIER_CANONICAL_SERVER_URL: oldOrigin, HAPPIER_PUBLIC_SERVER_URL: oldOrigin };
+        let sharedRevision = 32;
+        const dependencies = {
+            // Only the database boundary is substituted; publication and private-file storage are real.
+            readSimpleCache: async () => JSON.stringify({ revision: sharedRevision,
+                contentKey: `v1:n:${"b".repeat(64)}` }),
+            compareAndSetSimpleCache: async () => { throw new Error("Must not mutate shared continuity"); },
+        };
+        const oldDescriptor = await readHomeConnectionDescriptor({
+            env: oldEnv,
+            continuityStore: createHomeConnectionDescriptorContinuityStoreForServer(oldEnv, dependencies)!,
+            visibility: "authenticated", resolveIrohEndpointState: inactiveIroh,
+        });
+        expect(oldDescriptor).toMatchObject({ canonicalServerUrl: oldOrigin, revision: 1 });
+        restart();
+        sharedRevision = 99;
+        const movedEnv = { ...oldEnv, HAPPIER_CANONICAL_SERVER_URL: newOrigin, HAPPIER_PUBLIC_SERVER_URL: newOrigin };
+        const moved = await readHomeConnectionDescriptor({
+            env: movedEnv,
+            continuityStore: createHomeConnectionDescriptorContinuityStoreForServer(movedEnv, dependencies)!,
+            visibility: "authenticated", resolveIrohEndpointState: inactiveIroh,
+        });
+        expect(moved).toEqual({ ...oldDescriptor, canonicalServerUrl: newOrigin, revision: 2,
+            endpoints: [{ kind: "https", url: newOrigin }] });
+        restart();
+        expect(await readHomeConnectionDescriptor({ env: movedEnv,
+            continuityStore: createHomeConnectionDescriptorContinuityStoreForServer(movedEnv, dependencies)!,
+            visibility: "authenticated", resolveIrohEndpointState: inactiveIroh,
+        })).toEqual(moved);
+    });
+
+    it.each([null, 1, 40])("publishes from private continuity independently of shared history (private revision: %s)", async (privateRevision) => {
+        const oldOrigin = "http://qa.localhost:3016";
+        const newOrigin = "http://qa.localhost:3023";
+        const movedEnv = { ...env, HAPPIER_DB_PROVIDER: "postgres",
+            HAPPIER_STACK_SHARED_DB_SOURCE_STACK: "dev",
+            HAPPIER_CANONICAL_SERVER_URL: newOrigin, HAPPIER_PUBLIC_SERVER_URL: newOrigin };
+        const previous = { revision: 32, contentKey: createHomeConnectionDescriptorContentKey({
+            homeServerIdentityId: "srv_home", canonicalServerUrl: oldOrigin,
+            endpoints: [{ kind: "https", url: oldOrigin }],
+        }) };
+        // This is retained database state from the previous publisher, not a client-supplied floor.
+        const currentContentKey = createHomeConnectionDescriptorContentKey({
+            homeServerIdentityId: "srv_home", canonicalServerUrl: newOrigin,
+            endpoints: [{ kind: "https", url: newOrigin }],
+        });
+        const path = join(dataDir, "runtime", "home.descriptor.json");
+        if (privateRevision !== null) {
+            await mkdir(dirname(path), { recursive: true });
+            await writeFile(path, JSON.stringify({ revision: privateRevision, contentKey: currentContentKey }));
+        }
+        let shared = previous;
+        const dependencies = {
+            readSimpleCache: async () => JSON.stringify(shared),
+            compareAndSetSimpleCache: async () => { throw new Error("Must not mutate shared continuity"); },
+        };
+        const store = createHomeConnectionDescriptorContinuityStoreForServer(movedEnv, dependencies)!;
+        const moved = await readHomeConnectionDescriptor({ env: movedEnv, continuityStore: store,
+            visibility: "authenticated", resolveIrohEndpointState: inactiveIroh });
+        expect(moved).toEqual({ v: 1, homeServerIdentityId: "srv_home", canonicalServerUrl: newOrigin,
+            revision: privateRevision ?? 1, endpoints: [{ kind: "https", url: newOrigin }] });
+        restart();
+        // Shared publication is never this private Home's history.
+        shared = { revision: 99, contentKey: `v1:n:${"b".repeat(64)}` };
+        const reloadedStore = createHomeConnectionDescriptorContinuityStoreForServer(movedEnv, dependencies)!;
+        expect(await readCommittedHomeConnectionDescriptor({ env: movedEnv, continuityStore: reloadedStore,
+            resolveIrohEndpointState: inactiveIroh })).toEqual(moved);
+        expect(await readHomeConnectionDescriptor({ env: movedEnv, continuityStore: reloadedStore,
+            visibility: "authenticated", resolveIrohEndpointState: inactiveIroh })).toEqual(moved);
+    });
+
+    it.each(["unavailable", "malformed"])("publishes private continuity while shared history is %s", async (failure) => {
+        const movedEnv = { ...env, HAPPIER_DB_PROVIDER: "postgres",
+            HAPPIER_STACK_SHARED_DB_SOURCE_STACK: "dev",
+            HAPPIER_PUBLIC_SERVER_URL: "https://home.example.test" };
+        const store = createHomeConnectionDescriptorContinuityStoreForServer(movedEnv, {
+            readSimpleCache: async () => {
+                if (failure === "unavailable") throw new Error("temporary database outage");
+                return "{malformed";
+            },
+            compareAndSetSimpleCache: async () => { throw new Error("Must not mutate shared continuity"); },
+        })!;
+        const read = () => readRequiredAuthenticatedHomeConnectionDescriptor({ env: movedEnv,
+            continuityStore: store, resolveIrohEndpointState: inactiveIroh });
+        const descriptor = await read();
+        expect(descriptor).toMatchObject({ revision: 1 });
+        expect(JSON.parse(await readFile(join(dataDir, "runtime", "home.descriptor.json"), "utf8")))
+            .toEqual({ revision: 1, contentKey: createHomeConnectionDescriptorContentKey(descriptor) });
     });
 
     it("allocates the outer revision and keeps it across retirement to loopback HTTP ingress", async () => {

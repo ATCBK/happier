@@ -204,6 +204,49 @@ describe('Home connection descriptor continuity', () => {
         await expect(malformed!.read()).rejects.toThrow();
     });
 
+    it('keeps shared-DB consumers private across reloads without changing the source continuity', async () => {
+        const fixture = await mkdtemp(join(tmpdir(), 'home-descriptor-shared-db-'));
+        fixtures.push(fixture);
+        const values = new Map<string, string>();
+        // The shared database is the system boundary; both consumers use real file storage.
+        const dependencies = {
+            readSimpleCache: async (key: string) => values.get(key) ?? null,
+            compareAndSetSimpleCache: async (key: string, expectedValue: string | null, value: string) => {
+                if ((values.get(key) ?? null) !== expectedValue) return false;
+                values.set(key, value);
+                return true;
+            },
+        };
+        const source = createHomeConnectionDescriptorContinuityStoreForServer({
+            HAPPIER_DB_PROVIDER: 'postgres',
+            HAPPIER_SERVER_LIGHT_DATA_DIR: join(fixture, 'source'),
+        }, dependencies)!;
+        const sourceContinuity = { revision: 8, contentKey: `v1:n:${'a'.repeat(64)}` };
+        await source.write(sourceContinuity);
+        const consumerEnv = (name: string) => ({
+            HAPPIER_DB_PROVIDER: 'postgres',
+            HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'dev',
+            HAPPIER_SERVER_LIGHT_DATA_DIR: join(fixture, name),
+        });
+        const first = createHomeConnectionDescriptorContinuityStoreForServer(consumerEnv('first'), dependencies)!;
+        const second = createHomeConnectionDescriptorContinuityStoreForServer(consumerEnv('second'), dependencies)!;
+        await expect(first.read()).resolves.toBeNull();
+        await expect(second.read()).resolves.toBeNull();
+        const firstContinuity = { revision: 1, contentKey: `v1:n:${'b'.repeat(64)}` };
+        const secondContinuity = { revision: 1, contentKey: `v1:n:${'c'.repeat(64)}` };
+        await expect(first.write(firstContinuity)).resolves.toMatchObject({ status: 'committed' });
+        await expect(second.write(secondContinuity)).resolves.toMatchObject({ status: 'committed' });
+        await expect(createHomeConnectionDescriptorContinuityStoreForServer(consumerEnv('first'), dependencies)!.read())
+            .resolves.toEqual(firstContinuity);
+        await expect(createHomeConnectionDescriptorContinuityStoreForServer(consumerEnv('second'), dependencies)!.read())
+            .resolves.toEqual(secondContinuity);
+        await expect(source.read()).resolves.toEqual(sourceContinuity);
+        expect(createHomeConnectionDescriptorContinuityStoreForServer({
+            HAPPIER_DB_PROVIDER: 'postgres',
+            HAPPIER_STACK_SHARED_DB_SOURCE_STACK: 'dev',
+        }, dependencies)).toBeNull();
+    });
+
     it('uses existing file-backed state for general and managed Personal Homes', () => {
         expect(createHomeConnectionDescriptorContinuityStoreForServer({
             HAPPIER_DB_PROVIDER: 'sqlite',

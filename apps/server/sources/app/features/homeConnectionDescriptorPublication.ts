@@ -55,7 +55,7 @@ export type HomeDescriptorPublicationFacts = Readonly<{
     canonicalServerUrl: string | undefined;
     /** Explicitly configured public server URL (actual ingress fact); null means none. */
     publicServerUrl: string | null;
-    /** Explicit outer-revision floor published by the connectivity owner, when present. */
+    /** Explicit relocation revision floor, when present. */
     minimumOuterRevisionExclusive: number | null;
     persistedOuterRevisionOwner: HomeConnectionDescriptorContinuity | null;
     iroh: HomeIrohEndpointState;
@@ -120,7 +120,7 @@ function contentKeyCarriesIrohEndpoint(contentKey: string | undefined): boolean 
  * Monotonic outer revision calculation. Production primes the in-process
  * state from the durable outer continuity fact before composing a descriptor.
  * Effective endpoint-set changes publish a strictly greater revision. Only
- * the explicit relocation floor may raise the canonical outer frontier.
+ * an explicit relocation or legacy storage-transfer floor may raise the canonical outer frontier.
  */
 function nextMonotonicOuterRevision(params: Readonly<{
     contentKey: string;
@@ -499,8 +499,6 @@ async function readHomeConnectionDescriptorTransaction(params: Readonly<{
         canonicalServerUrl: params.publicationIdentity?.canonicalServerUrl
             ?? resolveConfiguredCanonicalServerUrl(env),
         publicServerUrl: resolveConfiguredPublicServerUrl(env) ?? null,
-        // An explicit floor belongs only to the relocation owner, not to an
-        // ordinary publication read.
         minimumOuterRevisionExclusive: params.minimumOuterRevisionExclusive ?? null,
         persistedOuterRevisionOwner: prime.persisted,
         iroh,

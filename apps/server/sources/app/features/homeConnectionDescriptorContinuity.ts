@@ -51,7 +51,8 @@ export function resolveHomeConnectionDescriptorContinuityPath(irohEndpointKeyPat
  * general file-backed server uses its already-owned light data directory.
  * Full PostgreSQL/MySQL servers use the existing namespaced `simpleCache`
  * owner, so the same full relay can publish as both Home and Account Service
- * without fabricating Personal Home filesystem state.
+ * without fabricating Personal Home filesystem state. Explicit Stack shared-DB
+ * consumers retain their own descriptor continuity in their private data directory.
  */
 type HomeConnectionDescriptorContinuityStoreDependencies = Readonly<{
     readSimpleCache: (key: string, tx?: Tx) => Promise<string | null>;
@@ -79,19 +80,18 @@ export function createHomeConnectionDescriptorContinuityStoreForServer(
     }
 
     const dbProvider = String(env.HAPPIER_DB_PROVIDER ?? env.HAPPY_DB_PROVIDER ?? '').trim();
-    if (dbProvider === 'postgres' || dbProvider === 'mysql') {
+    const sharedDbConsumer = Boolean(env.HAPPIER_STACK_SHARED_DB_SOURCE_STACK?.trim());
+    if (!sharedDbConsumer && (dbProvider === 'postgres' || dbProvider === 'mysql')) {
         return createSimpleCacheHomeConnectionDescriptorContinuityStore(dependencies);
     }
-    if (dbProvider === 'sqlite' || dbProvider === 'pglite') {
+    if (sharedDbConsumer || dbProvider === 'sqlite' || dbProvider === 'pglite') {
         const dataDir = resolveManagedServerLightPathEnvValue(
             env,
             'HAPPIER_SERVER_LIGHT_DATA_DIR',
             'HAPPY_SERVER_LIGHT_DATA_DIR',
         ).trim();
         if (!dataDir) return null;
-        return createFileHomeConnectionDescriptorContinuityStore(
-            join(dataDir, 'runtime', 'home.descriptor.json'),
-        );
+        return createFileHomeConnectionDescriptorContinuityStore(join(dataDir, 'runtime', 'home.descriptor.json'));
     }
     return null;
 }
@@ -158,11 +158,7 @@ function serializeContinuity(continuity: HomeConnectionDescriptorContinuity): st
     if (normalized.contentKey !== continuity.contentKey) {
         throw new HomeConnectionDescriptorContinuityMalformedError();
     }
-    const serialized = JSON.stringify(normalized);
-    if (serialized.length > SIMPLE_CACHE_VALUE_MAX_LENGTH) {
-        throw new HomeConnectionDescriptorContinuityMalformedError();
-    }
-    return serialized;
+    return JSON.stringify(normalized);
 }
 
 function sameContinuity(
@@ -189,8 +185,7 @@ function resolveSameGenerationResult(
     if (sameContinuity(current, candidate)) {
         return { status: 'unchanged', continuity: current };
     }
-    // An A10 continuity record may predate the A12 EndpointId field. Enriching
-    // that same descriptor generation is the only allowed equal-revision write.
+    // An A10 continuity record may predate the A12 EndpointId field.
     if (current.irohEndpointId === undefined && candidate.irohEndpointId !== undefined) {
         return null;
     }
@@ -232,6 +227,10 @@ export function createSimpleCacheHomeConnectionDescriptorContinuityStore(
         write: async (continuity, tx) => {
             const normalized = parseHomeConnectionDescriptorContinuity(continuity);
             const nextValue = serializeContinuity(normalized);
+            // Only this database boundary has MySQL's varchar(191) budget.
+            if (nextValue.length > SIMPLE_CACHE_VALUE_MAX_LENGTH) {
+                throw new HomeConnectionDescriptorContinuityMalformedError();
+            }
             while (true) {
                 const observedRaw = await dependencies.readSimpleCache(HOME_CONNECTION_DESCRIPTOR_CONTINUITY_CACHE_KEY, tx);
                 const observed = observedRaw === null ? null : parseSerializedContinuity(observedRaw);
