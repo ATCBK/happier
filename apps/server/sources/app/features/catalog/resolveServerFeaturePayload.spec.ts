@@ -534,24 +534,27 @@ describe("resolveServerFeaturePayload", () => {
         expect(payload.capabilities.machines.peerMediation.tcpTunnelRelayAuthorizationMintVersions).toEqual([2]);
     });
 
-    it("advertises peer mediation and direct transfer for a fresh managed Personal Home", () => {
+    it.each([undefined, "generic", "personal-home", "team", "dev", "qa", "preview"])("advertises derived peer mediation, direct transfer and preview readiness for Home purpose %s", (purpose) => {
         const payload = resolveServerFeaturePayload({
-            HAPPIER_MANAGED_RELAY_PURPOSE: "personal-home",
+            HAPPIER_MANAGED_RELAY_PURPOSE: purpose,
             HANDY_MASTER_SECRET: "fresh-personal-home-master-secret",
-        } as NodeJS.ProcessEnv, [resolveMachineTransferFeature, resolvePeerMediationFeature]);
+            HAPPIER_FEATURE_TEAMS__ENABLED: "1",
+            HAPPIER_FEATURE_MACHINES_TUNNEL_SERVER_ROUTED__ENABLED: "true",
+            HAPPIER_FEATURE_MACHINES_TUNNEL_ALLOWED_PORTS: "3000",
+        } as NodeJS.ProcessEnv, [resolveMachineTransferFeature, resolvePeerMediationFeature, resolveLocalServicesFeature]);
 
         expect(readServerEnabledBit(payload, "machines.peerMediation")).toBe(true);
         expect(readServerEnabledBit(payload, "machines.transfer.directPeer")).toBe(true);
         expect(payload.capabilities.machines.peerMediation.grantSigningKeys).toHaveLength(1);
+        expect(payload.capabilities.localServices.preview.pmsRelayReady).toBe(true);
     });
 
     it("keeps released direct transfer independent when the canonical peer-mediation signer is unavailable", () => {
         const genericPayload = resolveServerFeaturePayload({
             HAPPIER_MANAGED_RELAY_PURPOSE: "generic",
-            HANDY_MASTER_SECRET: "generic-home-master-secret",
         } as NodeJS.ProcessEnv, [resolveMachineTransferFeature, resolvePeerMediationFeature]);
         const partialExplicitPayload = resolveServerFeaturePayload({
-            HAPPIER_MANAGED_RELAY_PURPOSE: "personal-home",
+            HAPPIER_MANAGED_RELAY_PURPOSE: "generic",
             HANDY_MASTER_SECRET: "personal-home-master-secret",
             HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID: "partial-operator-key",
         } as NodeJS.ProcessEnv, [resolveMachineTransferFeature, resolvePeerMediationFeature]);

@@ -22,7 +22,6 @@ import {
 } from "@happier-dev/protocol";
 
 import { FEATURE_ENV_KEYS } from "@/app/features/catalog/featureEnvSchema";
-import { isPersonalHomeRuntimePurpose } from '@/app/runtime/personalHomeRuntimePurpose';
 import {
     createEd25519PublicKeyId,
     createEd25519SigningKeyPairFromSeed,
@@ -159,8 +158,7 @@ export function resolvePeerMediationGrantSigningConfig(
         env[FEATURE_ENV_KEYS.peerMediationRouteGrantSigningPublicKey],
         env[FEATURE_ENV_KEYS.peerMediationRouteGrantSigningExpiresAt],
     ];
-    if (explicitFields.every((value) => value === undefined)
-        && isPersonalHomeRuntimePurpose(env.HAPPIER_MANAGED_RELAY_PURPOSE)) {
+    if (explicitFields.every((value) => value === undefined)) {
         const masterSecret = (env.HANDY_MASTER_SECRET ?? "").trim();
         if (masterSecret) {
             const keyPair = createEd25519SigningKeyPairFromSeed(

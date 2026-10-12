@@ -348,9 +348,9 @@ describe("mintDirectRouteGrantV1", () => {
         }));
     });
 
-    it("derives a stable usable signer for a managed Personal Home from its persisted master secret", () => {
+    it.each([undefined, "generic", "personal-home", "team", "dev", "qa", "preview"])("derives a stable usable signer from the persisted master secret for Home purpose %s", (purpose) => {
         const env = {
-            HAPPIER_MANAGED_RELAY_PURPOSE: "personal-home",
+            HAPPIER_MANAGED_RELAY_PURPOSE: purpose,
             HANDY_MASTER_SECRET: "personal-home-route-grant-master-secret",
         } as NodeJS.ProcessEnv;
 
@@ -359,7 +359,7 @@ describe("mintDirectRouteGrantV1", () => {
 
         expect(first).toEqual(expect.objectContaining({ ok: true }));
         expect(restored).toEqual(expect.objectContaining({ ok: true }));
-        if (!first.ok || !restored.ok) throw new Error("expected derived Personal Home signer");
+        if (!first.ok || !restored.ok) throw new Error("expected derived Home signer");
         expect(restored.keyId).toBe(first.keyId);
         expect(restored.capability.publicKey).toBe(first.capability.publicKey);
         expect(restored.secretKey).toEqual(first.secretKey);
@@ -412,11 +412,11 @@ describe("mintDirectRouteGrantV1", () => {
         expect(routeGrantPublicKey).not.toEqual(accountDirectoryPublicKey);
     });
 
-    it("keeps explicit route-grant signing config authoritative for a managed Personal Home", () => {
+    it("keeps explicit route-grant signing config authoritative over a generic Home's master secret", () => {
         const explicitSeed = new Uint8Array(32).fill(12);
         const explicitKeyPair = tweetnacl.sign.keyPair.fromSeed(explicitSeed);
         const resolved = resolvePeerMediationGrantSigningConfig({
-            HAPPIER_MANAGED_RELAY_PURPOSE: "personal-home",
+            HAPPIER_MANAGED_RELAY_PURPOSE: "generic",
             HANDY_MASTER_SECRET: "personal-home-route-grant-master-secret",
             HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID: "operator-key",
             HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY: toBase64Url(explicitSeed),
@@ -430,43 +430,39 @@ describe("mintDirectRouteGrantV1", () => {
         }));
     });
 
-    it("fails closed on partial explicit config instead of deriving a Personal Home signer", () => {
+    it("fails closed on partial or invalid explicit config instead of deriving a generic Home signer", () => {
         const resolved = resolvePeerMediationGrantSigningConfig({
-            HAPPIER_MANAGED_RELAY_PURPOSE: "personal-home",
+            HAPPIER_MANAGED_RELAY_PURPOSE: "generic",
             HANDY_MASTER_SECRET: "personal-home-route-grant-master-secret",
             HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID: "operator-key",
         } as NodeJS.ProcessEnv);
 
         expect(resolved).toEqual({ ok: false, reasonCode: "missing_private_key" });
         expect(resolvePeerMediationGrantSigningConfig({
-            HAPPIER_MANAGED_RELAY_PURPOSE: "personal-home",
+            HAPPIER_MANAGED_RELAY_PURPOSE: "generic",
             HANDY_MASTER_SECRET: "personal-home-route-grant-master-secret",
             HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID: "operator-key",
             HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY: `${"A".repeat(43)}$`,
         } as NodeJS.ProcessEnv)).toEqual({ ok: false, reasonCode: "invalid_private_key" });
+        for (const field of [
+            "HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID",
+            "HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY",
+            "HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PUBLIC_KEY",
+            "HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_EXPIRES_AT",
+        ]) {
+            expect(resolvePeerMediationGrantSigningConfig({
+                HANDY_MASTER_SECRET: "generic-home-master-secret",
+                [field]: "",
+            })).toEqual({ ok: false, reasonCode: "missing_key_id" });
+        }
     });
 
-    it("does not derive a signer outside the managed Personal Home runtime purpose", () => {
+    it.each([undefined, "generic", "personal-home", "team"])("keeps signing unavailable without a valid master secret for Home purpose %s", (purpose) => {
         expect(resolvePeerMediationGrantSigningConfig({
-            HAPPIER_MANAGED_RELAY_PURPOSE: "generic",
-            HANDY_MASTER_SECRET: "generic-home-master-secret",
+            HAPPIER_MANAGED_RELAY_PURPOSE: purpose,
         } as NodeJS.ProcessEnv)).toEqual({ ok: false, reasonCode: "missing_key_id" });
         expect(resolvePeerMediationGrantSigningConfig({
-            HANDY_MASTER_SECRET: "unscoped-master-secret",
-        } as NodeJS.ProcessEnv)).toEqual({ ok: false, reasonCode: "missing_key_id" });
-        expect(resolvePeerMediationGrantSigningConfig({
-            HAPPIER_MANAGED_RELAY_PURPOSE: "generic",
-            HAPPIER_FEATURE_TEAMS__ENABLED: "1",
-            HANDY_MASTER_SECRET: "teams-shared-home-master-secret",
-        } as NodeJS.ProcessEnv)).toEqual({ ok: false, reasonCode: "missing_key_id" });
-    });
-
-    it("keeps managed Personal Home signing unavailable without a valid master secret", () => {
-        expect(resolvePeerMediationGrantSigningConfig({
-            HAPPIER_MANAGED_RELAY_PURPOSE: "personal-home",
-        } as NodeJS.ProcessEnv)).toEqual({ ok: false, reasonCode: "missing_key_id" });
-        expect(resolvePeerMediationGrantSigningConfig({
-            HAPPIER_MANAGED_RELAY_PURPOSE: "personal-home",
+            HAPPIER_MANAGED_RELAY_PURPOSE: purpose,
             HANDY_MASTER_SECRET: "   ",
         } as NodeJS.ProcessEnv)).toEqual({ ok: false, reasonCode: "missing_key_id" });
     });
