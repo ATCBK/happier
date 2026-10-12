@@ -1,4 +1,3 @@
-import { Appearance } from 'react-native';
 import * as SystemUI from 'expo-system-ui';
 import { StyleSheet, UnistylesRuntime } from 'react-native-unistyles';
 
@@ -7,22 +6,20 @@ import {
     resolveEffectiveThemeRuntimeBackground,
     resolveThemeRuntimeStartupThemes,
     resolveThemeRuntimeVisualTheme,
+    readSystemTheme,
+    initializeThemeRuntimeAppearance,
 } from './theme/profiles/themeProfileRuntime';
 import { fireAndForget } from './utils/system/fireAndForget';
 import { themeStyleSelectionFromSurfaceFinish } from './theme/themeStyleScales';
 
 type AppThemeName = 'light' | 'dark';
 
-const normalizeColorScheme = (colorScheme: ReturnType<typeof Appearance.getColorScheme>): AppThemeName => {
-    return colorScheme === 'dark' ? 'dark' : 'light';
-};
-
 const themeRuntimeLocalState = loadThemeRuntimeLocalState();
 const themePreference = themeRuntimeLocalState.themePreference;
 const startupThemes = resolveThemeRuntimeStartupThemes({
     themeProfiles: themeRuntimeLocalState.themeProfiles,
     themePreference,
-    systemTheme: normalizeColorScheme(Appearance.getColorScheme()),
+    systemTheme: readSystemTheme(),
     style: themeStyleSelectionFromSurfaceFinish(themeRuntimeLocalState),
 });
 const appThemes = startupThemes.themes;
@@ -36,7 +33,7 @@ const breakpoints = {
 };
 
 const getInitialTheme = (): AppThemeName => {
-    return resolveThemeRuntimeVisualTheme(themePreference, normalizeColorScheme(Appearance.getColorScheme()));
+    return resolveThemeRuntimeVisualTheme(themePreference, readSystemTheme());
 };
 
 const settings = {
@@ -74,21 +71,9 @@ const setRootBackgroundColor = () => {
         return;
     }
 
-    applyRootBackgroundColor(normalizeColorScheme(Appearance.getColorScheme()));
+    applyRootBackgroundColor(readSystemTheme());
 };
 
 setRootBackgroundColor();
 
-if (themePreference === 'adaptive') {
-    Appearance.addChangeListener(({ colorScheme }) => {
-        const themeName = normalizeColorScheme(colorScheme);
-        UnistylesRuntime.setTheme(themeName);
-
-        if (isDesktopActivityOverlayWindow()) {
-            UnistylesRuntime.setRootViewBackgroundColor('transparent');
-            return;
-        }
-
-        applyRootBackgroundColor(themeName);
-    });
-}
+initializeThemeRuntimeAppearance({ ...themeRuntimeLocalState, style: themeStyleSelectionFromSurfaceFinish(themeRuntimeLocalState) }, appThemes);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const platformBoundary = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'web' }));
 
 const setRootViewBackgroundColorMock = vi.fn();
 const setThemeMock = vi.fn();
@@ -6,7 +7,7 @@ const setBackgroundColorAsyncMock = vi.fn(async () => {});
 const loadThemePreferenceMock = vi.fn(() => 'light');
 const configureMock = vi.fn();
 const appearanceGetColorSchemeMock = vi.fn(() => 'light');
-const appearanceAddChangeListenerMock = vi.fn(() => ({ remove: vi.fn() }));
+const appearanceAddChangeListenerMock = vi.fn((_listener: (event: { colorScheme: 'light' | 'dark' | null }) => void) => ({ remove: vi.fn() }));
 const windowStub = {
     location: {
         href: 'http://localhost/',
@@ -17,15 +18,18 @@ const windowStub = {
 vi.mock('expo-system-ui', () => ({
     setBackgroundColorAsync: setBackgroundColorAsyncMock,
 }));
+vi.mock('expo-status-bar', () => ({ setStatusBarStyle: vi.fn() }));
 
 vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
+    const { createReactNativeNativeMock, createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    const overrides = {
         Appearance: {
             getColorScheme: () => appearanceGetColorSchemeMock(),
             addChangeListener: appearanceAddChangeListenerMock,
         },
-    });
+    };
+    return platformBoundary.os === 'web' ? createReactNativeWebMock(overrides)
+        : createReactNativeNativeMock({ platformOS: 'ios' }, overrides);
 });
 
 vi.mock('react-native-unistyles', async () => {
@@ -54,6 +58,7 @@ vi.mock('./sync/domains/state/persistence', () => ({
 describe('unistyles overlay background bootstrap', () => {
     beforeEach(() => {
         vi.resetModules();
+        platformBoundary.os = 'ios';
         vi.stubGlobal('window', windowStub);
         setRootViewBackgroundColorMock.mockReset();
         setThemeMock.mockReset();
@@ -125,5 +130,49 @@ describe('unistyles overlay background bootstrap', () => {
         expect(setThemeMock).toHaveBeenCalledWith('light');
         expect(setRootViewBackgroundColorMock).toHaveBeenCalledWith(expect.any(String));
         expect(setBackgroundColorAsyncMock).toHaveBeenCalledWith(expect.any(String));
+    });
+
+    it('observes OS changes for a blocking fallback before theme bootstrap and reuses that observer', async () => {
+        const { subscribeSystemTheme } = await import('./theme/profiles/themeProfileRuntime');
+        const reader = vi.fn();
+        const unsubscribe = subscribeSystemTheme(reader);
+        expect(appearanceAddChangeListenerMock).toHaveBeenCalledTimes(1);
+        const listener = appearanceAddChangeListenerMock.mock.calls[0]?.[0];
+        listener?.({ colorScheme: 'dark' });
+        expect(reader).toHaveBeenCalledOnce();
+        await import('./unistyles');
+        expect(appearanceAddChangeListenerMock).toHaveBeenCalledTimes(1);
+        unsubscribe();
+        listener?.({ colorScheme: 'light' });
+        expect(reader).toHaveBeenCalledOnce();
+    });
+
+    it('keeps web adaptive paint on the explicit theme notification path across scheme flips', async () => {
+        platformBoundary.os = 'web';
+        loadThemePreferenceMock.mockReturnValue('adaptive');
+        await import('./unistyles.web');
+        const listener = appearanceAddChangeListenerMock.mock.calls[0]?.[0];
+        expect(listener).toEqual(expect.any(Function));
+        for (const colorScheme of ['dark', 'light', 'dark'] as const) {
+            listener({ colorScheme });
+            expect(setThemeMock).toHaveBeenLastCalledWith(colorScheme);
+        }
+        expect(appearanceAddChangeListenerMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('follows the current preference after booting explicit, then choosing adaptive and explicit again', async () => {
+        await import('./unistyles');
+        const { applyThemeRuntimeSelection } = await import('./theme/profiles/themeProfileRuntime');
+        const themeProfiles = { profiles: [], activeProfileIds: { light: null, dark: null } };
+        applyThemeRuntimeSelection({ themePreference: 'adaptive', themeProfiles, style: null });
+        const listener = appearanceAddChangeListenerMock.mock.calls[0]?.[0];
+        expect(listener).toEqual(expect.any(Function));
+        listener({ colorScheme: 'dark' });
+        expect(setThemeMock).toHaveBeenLastCalledWith('dark');
+        applyThemeRuntimeSelection({ themePreference: 'light', themeProfiles, style: null });
+        setThemeMock.mockClear();
+        listener({ colorScheme: 'dark' });
+        expect(setThemeMock).not.toHaveBeenCalled();
+        expect(appearanceAddChangeListenerMock).toHaveBeenCalledTimes(1);
     });
 });

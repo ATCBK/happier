@@ -28,11 +28,11 @@ describe('raised edge colours', () => {
         expect(light?.locations).toEqual([0.3, 1]);
         expect(dark?.locations).toEqual([0, 0.7]);
         expect(light?.colors.map(alpha)).toEqual([0, 0.024]);
-        expect(dark?.colors.map(alpha)).toEqual([0.045, 0.01]);
+        expect(dark?.colors.map(alpha)).toEqual([0.025, 0.025 * (2 / 9)]);
         expect(lightTheme.colors.edge.primaryFinishGradient?.colors.map(alpha)).toEqual([0.14, 0]);
-        expect(darkTheme.colors.edge.primaryFinishGradient?.colors.map(alpha)).toEqual([0, 0.12]);
+        expect(darkTheme.colors.edge.primaryFinishGradient?.colors.map(alpha)).toEqual([0, 0.025 * (8 / 3)]);
         expect(lightTheme.colors.edge.secondaryFinishGradient?.colors.map(alpha)).toEqual([0, 0.025]);
-        expect(darkTheme.colors.edge.secondaryFinishGradient?.colors.map(alpha)).toEqual([0.04, 0]);
+        expect(darkTheme.colors.edge.secondaryFinishGradient?.colors.map(alpha)).toEqual([0.025 * (8 / 9), 0]);
         for (const theme of [lightTheme, darkTheme]) {
             const fills = theme.colors.button.primary.gradient?.colors ?? [theme.colors.button.primary.background];
             for (const fill of fills) {
@@ -45,7 +45,27 @@ describe('raised edge colours', () => {
         // A glass coat keeps the backdrop: the finish adds low-alpha ink, never an opaque fill.
         const glass = 'rgba(240, 240, 240, 0.3)';
         expect(alpha(compositeRaisedEdgeColor(glass, light!.colors[1]))).toBeCloseTo(0.317, 3);
-        expect(alpha(compositeRaisedEdgeColor(glass, dark!.colors[0]))).toBeCloseTo(0.045 + 0.3 * (1 - 0.045), 2);
+        expect(alpha(compositeRaisedEdgeColor(glass, dark!.colors[0]))).toBeCloseTo(0.025 + 0.3 * (1 - 0.025), 2);
+    });
+
+    it('keeps the dark finish in the card surface hue with only a small lift over Flat', () => {
+        const tinted = resolveThemeProfile({ mode: 'dark', profile: profile('dark', { 'surface.base': '#251C16', 'text.primary': '#A9B1D6' }) });
+        for (const theme of [darkTheme, tinted]) {
+            const surface = Color(theme.colors.edge.cardFill);
+            const ink = Color(theme.colors.effect.surfaceFinish);
+            expect(ink.hue()).toBeCloseTo(surface.hue(), -1);
+            // The owner rounds the ink to 8-bit channels, which moves low saturation slightly.
+            expect(Math.abs(ink.saturationl() - surface.saturationl())).toBeLessThan(1.5);
+            expect(ink.lightness()).toBeCloseTo(80, 0);
+            expect(ink.alpha()).toBe(0.025);
+            const [r, g, b] = Color(compositeRaisedEdgeColor(theme.colors.edge.cardFill, theme.colors.edge.finishGradient!.colors[0])).rgb().array();
+            expect(r).toBeGreaterThan(g!);
+            expect(g).toBeGreaterThanOrEqual(b!);
+            const baseChannels = surface.rgb().array();
+            for (const [index, channel] of [r!, g!, b!].entries()) {
+                expect(channel - baseChannels[index]!).toBeLessThanOrEqual(4);
+            }
+        }
     });
 
     it('keeps existing paint exact when finish strength is transparent and honors profile ink without clamping', () => {
@@ -56,10 +76,16 @@ describe('raised edge colours', () => {
         const { finishGradient, primaryFinishGradient, secondaryFinishGradient, ...existingPaint } = flat.colors.edge;
         const { finishGradient: ignoredFinish, primaryFinishGradient: ignoredPrimary, secondaryFinishGradient: ignoredSecondary, ...oldPaint } = lightTheme.colors.edge;
         expect(existingPaint).toEqual(oldPaint);
-        const tinted = resolveThemeProfile({ mode: 'dark', profile: profile('dark', { 'text.primary': '#A9B1D6' }) });
-        expect(tinted.colors.edge.finishGradient?.colors[0]).toBe('rgba(169, 177, 214, 0.045)');
         const strong = resolveThemeProfile({ mode: 'light', profile: profile('light', { 'effect.surfaceFinish': 'rgba(122, 162, 247, 0.5)' }) });
         expect(strong.colors.edge.finishGradient?.colors[1]).toBe('rgba(122, 162, 247, 0.5)');
+        const darkStrong = resolveThemeProfile({ mode: 'dark', profile: profile('dark', { 'effect.surfaceFinish': 'rgba(122, 162, 247, 0.5)' }) });
+        expect(darkStrong.colors.edge.finishGradient?.colors[0]).toBe('rgba(122, 162, 247, 0.5)');
+        expect(darkStrong.colors.edge.secondaryFinishGradient?.colors.map(alpha)).toEqual([0.5 * (8 / 9), 0]);
+        const darkFlat = resolveThemeProfile({ mode: 'dark', profile: profile('dark', { 'effect.surfaceFinish': 'transparent' }) });
+        const { finishGradient: darkFinish, primaryFinishGradient: darkPrimary, secondaryFinishGradient: darkSecondary, ...darkExistingPaint } = darkFlat.colors.edge;
+        const { finishGradient: oldDarkFinish, primaryFinishGradient: oldDarkPrimary, secondaryFinishGradient: oldDarkSecondary, ...darkOldPaint } = darkTheme.colors.edge;
+        expect([darkFinish, darkPrimary, darkSecondary]).toEqual([null, null, null]);
+        expect(darkExistingPaint).toEqual(darkOldPaint);
     });
 
     it('composites the edge ink over the border as the eye sees it', () => {
@@ -87,6 +113,20 @@ describe('raised edge colours', () => {
         expect(lightTheme.colors.edge.fill).toBe(lightTheme.colors.surface.base);
     });
 
+    it('steps dark cards and floating surfaces up in the page\'s warm hue, cards at the authored raised surface', () => {
+        const card = Color(darkTheme.colors.edge.cardFill);
+        const floating = Color(darkTheme.colors.edge.floatingFill);
+        // 0.2's ladder: page #191717 → raised #221C1C, a warm step that keeps the hue.
+        expect(card.rgb().string()).toBe(Color(darkTheme.colors.surface.elevated).rgb().string());
+        for (const fill of [card, floating]) {
+            const [r, g, b] = fill.rgb().array();
+            expect(r! - g!).toBeGreaterThanOrEqual(5);
+            expect(g).toBe(b);
+        }
+        expect(floating.hue()).toBeCloseTo(card.hue(), 0);
+        expect(floating.lightness() - card.lightness()).toBeGreaterThan(1.5);
+        expect(floating.lightness() - card.lightness()).toBeLessThan(4);
+    });
     it('layers dark surfaces by small steps of light — navigation < page < card < floating — and keeps one paper on light', () => {
         const step = (color: string) => luminance(color, darkTheme.colors.background.canvas);
         expect(step(darkTheme.colors.surface.base)).toBeGreaterThan(step(darkTheme.colors.background.canvas));

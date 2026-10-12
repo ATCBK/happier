@@ -42,7 +42,17 @@ html {
  * report script focus after a click as visible), and kept for keyboard focus. Rings the app paints
  * itself decide through the same owner.
  * No `!important`: an inline keyboard ring always wins.
+ *
+ * The keyboard ring is one family (DESIGN-17 R6): a control that paints no ring of its own gets the
+ * same ring the shared owner (`happierFocusRingStyle`: 2px `border.focus`, 2px gap) paints inline,
+ * never the browser's own 1px ring beside it. A control that draws its ring on a child keeps its
+ * inline `outline: none` (`HAPPIER_FOCUS_RING_DELEGATED_STYLE`), and text inputs keep RNW's inline reset.
  */
+:focus-visible {
+    outline: 2px solid var(--colors-border-focus);
+    outline-offset: 2px;
+}
+
 :focus:not(:focus-visible),
 html[data-happier-input-modality="pointer"] :focus {
     outline: none;

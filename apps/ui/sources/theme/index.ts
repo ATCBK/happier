@@ -576,10 +576,12 @@ const darkThemeBase = {
             icon: '#EFEFEF',
         },
         segmentedControl: {
-            trackBackground: '#201A1A',
+            // The track is a 7% ink step over the page and the chosen segment a clear lift above it
+            // (lab `phone-P4`/`inbox-I1` dark), so the control reads as one filled object on every surface.
+            trackBackground: '#2A2828',
             trackGradient: undefined,
-            activeBackground: '#2A2222',
-            activeGradient: createVerticalGradient(['#2A2222', '#242020']),
+            activeBackground: '#3A3232',
+            activeGradient: createVerticalGradient(['#3A3232', '#363030']),
         },
         radio: {
             active: '#9EB9FF',

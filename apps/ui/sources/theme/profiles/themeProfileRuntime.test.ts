@@ -248,8 +248,8 @@ describe('theme profile runtime', () => {
 
         expect(updateTheme).toHaveBeenCalledWith('light', expect.any(Function));
         expect(updateTheme).toHaveBeenCalledWith('dark', expect.any(Function));
-        expect(setAdaptiveThemes).toHaveBeenCalledWith(true);
-        expect(setTheme).not.toHaveBeenCalled();
+        expect(setAdaptiveThemes).toHaveBeenCalledWith(false);
+        expect(setTheme).toHaveBeenCalledWith('light');
         expect(setRootViewBackgroundColor).toHaveBeenCalledWith('#f8f6ef');
     });
 

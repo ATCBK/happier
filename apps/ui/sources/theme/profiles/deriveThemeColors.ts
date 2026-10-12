@@ -65,7 +65,7 @@ export const deriveThemeColors = (theme: Theme, baseTheme: Theme, explicitOverri
     const raisedEdgeInk = deriveRaisedEdgeInkForProfile(theme, baseTheme);
     const finishInk = explicitOverrides.has('effect.surfaceFinish')
         ? theme.colors.effect.surfaceFinish
-        : deriveSurfaceFinishInk(theme.colors.text.primary, theme.dark);
+        : deriveSurfaceFinishInk(theme.colors, theme.dark);
     // Existing profiles authored the shared foreground. Keep that choice exact unless they
     // explicitly set the new text role, even when its value equals the default.
     const statusText = (variant: 'success' | 'warning' | 'attention' | 'danger' | 'info' | 'neutral') => (

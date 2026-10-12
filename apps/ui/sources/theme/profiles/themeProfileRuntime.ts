@@ -200,7 +200,35 @@ export const resolveThemeRuntimeStartupThemes = (
     }
 };
 
-const getSystemTheme = (): AppThemeName => (Appearance.getColorScheme() === 'dark' ? 'dark' : 'light');
+export const readSystemTheme = (): AppThemeName => (Appearance.getColorScheme() === 'dark' ? 'dark' : 'light');
+
+let currentRuntimeSelection: Readonly<{ themes: ThemeRuntimeThemes; input: ApplyThemeRuntimeSelectionInput }> | null = null;
+let appearanceSubscription: ReturnType<typeof Appearance.addChangeListener> | null = null;
+const systemThemeSubscribers = new Set<() => void>();
+/** OS readers subscribe here, never register another platform listener. */
+export const subscribeSystemTheme = (listener: () => void): (() => void) => {
+    systemThemeSubscribers.add(listener);
+    observeSystemTheme();
+    return () => { systemThemeSubscribers.delete(listener); };
+};
+
+function observeSystemTheme(): void {
+    if (appearanceSubscription) return;
+    appearanceSubscription = Appearance.addChangeListener(({ colorScheme }) => {
+        for (const listener of systemThemeSubscribers) listener();
+        const current = currentRuntimeSelection;
+        if (!current || current.input.themePreference !== 'adaptive') return;
+        const systemTheme = colorScheme === 'dark' ? 'dark' : 'light';
+        applyThemesToUnistyles(current.themes, { ...current.input, systemTheme });
+        setStatusBarStyle(resolveStatusBarStyleForThemePreference('adaptive', systemTheme), true);
+    });
+}
+
+/** Both platform bootstraps and later previews/commits share this one OS observer. */
+export const initializeThemeRuntimeAppearance = (input: ApplyThemeRuntimeSelectionInput, themes: ThemeRuntimeThemes): void => {
+    currentRuntimeSelection = { input, themes };
+    observeSystemTheme();
+};
 
 const resolveRuntimePlatform = (input: ApplyThemeRuntimeSelectionInput): string => input.platform ?? Platform.OS;
 
@@ -235,7 +263,7 @@ const applyThemesToUnistyles = (
 ): void => {
     const runtime = input.unistylesRuntime ?? defaultUnistylesRuntimeAdapter;
     const platform = resolveRuntimePlatform(input);
-    const systemTheme = input.systemTheme ?? getSystemTheme();
+    const systemTheme = input.systemTheme ?? readSystemTheme();
     const visualTheme = resolveThemeRuntimeVisualTheme(input.themePreference, systemTheme);
 
     // updateTheme notifies every theme subscriber and rebuilds the web CSS sheet even when the
@@ -264,24 +292,19 @@ const applyThemesToUnistyles = (
         updateChangedTheme('dark');
     }
 
-    if (input.themePreference === 'adaptive') {
-        recordThemeRuntimeBreadcrumb(input, { phase: 'set-adaptive-themes', platform, systemTheme, visualTheme });
-        runtime.setAdaptiveThemes(true);
-    } else {
-        runtime.setAdaptiveThemes(false);
-        recordThemeRuntimeBreadcrumb(input, {
-            phase: 'set-theme',
-            platform,
-            systemTheme,
-            visualTheme,
-            themeName: input.themePreference,
-        });
-        runtime.setTheme(input.themePreference);
-    }
+    // Explicit switching notifies token hooks and CSS together. Delegating adaptive switching
+    // to Unistyles as well would give the OS flip a second, competing theme owner.
+    runtime.setAdaptiveThemes(false);
+    recordThemeRuntimeBreadcrumb(input, { phase: 'set-theme', platform, systemTheme, visualTheme, themeName: visualTheme });
+    runtime.setTheme(visualTheme);
 
     // Mounted web roots subscribe to the actual theme and resolved material presentation.
     // Imperative web writes here would race that owner and flatten native glass backing.
     if (isNativeRuntimePlatform(platform)) {
+        if (typeof window !== 'undefined' && window.location?.pathname.replace(/\/+$/u, '') === '/desktop/activity-overlay') {
+            runtime.setRootViewBackgroundColor('transparent');
+            return;
+        }
         const background = resolveEffectiveThemeRuntimeBackground({
             themes,
             themePreference: input.themePreference,
@@ -317,6 +340,7 @@ export const applyThemeRuntimeSelection = (input: ApplyThemeRuntimeSelectionInpu
 
     try {
         applyThemesToUnistyles(themes, input);
+        if (!input.unistylesRuntime) currentRuntimeSelection = { input, themes };
         return themes;
     } catch (error) {
         warnThemeRuntimeFallback(error);
@@ -327,6 +351,7 @@ export const applyThemeRuntimeSelection = (input: ApplyThemeRuntimeSelectionInpu
                 warnThemeRuntimeFallback(fallbackError);
             }
         }
+        if (!input.unistylesRuntime) currentRuntimeSelection = { input, themes: canonicalBaseThemes };
         return canonicalBaseThemes;
     }
 };
@@ -344,12 +369,12 @@ export const previewThemeSelection = (
     themePreference: ThemePreference,
     themeProfiles: ThemeProfilesLocalStateV1,
 ): void => {
-    applyResolvedThemeRuntimeSelection({ themePreference, themeProfiles }, getSystemTheme());
+    applyResolvedThemeRuntimeSelection({ themePreference, themeProfiles }, readSystemTheme());
 };
 
 /** The single selection mutation, transition, runtime and status-bar owner. */
 export const commitThemeSelection = (input: CommitThemeSelectionInput): Promise<void> => {
-    const systemTheme = input.systemTheme ?? getSystemTheme();
+    const systemTheme = input.systemTheme ?? readSystemTheme();
     return defaultRunThemePreferenceChange({
         currentPreference: input.currentPreference,
         nextPreference: input.nextPreference,

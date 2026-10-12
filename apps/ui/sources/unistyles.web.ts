@@ -1,24 +1,23 @@
-import { Appearance } from 'react-native';
 import { StyleSheet, UnistylesRuntime } from 'react-native-unistyles';
 
 import { loadThemeRuntimeLocalState } from './sync/domains/state/persistence';
 import {
     resolveThemeRuntimeStartupThemes,
     resolveThemeRuntimeVisualTheme,
+    readSystemTheme,
+    initializeThemeRuntimeAppearance,
 } from './theme/profiles/themeProfileRuntime';
+import { themeStyleSelectionFromSurfaceFinish } from './theme/themeStyleScales';
 
 type AppThemeName = 'light' | 'dark';
-
-const normalizeColorScheme = (colorScheme: ReturnType<typeof Appearance.getColorScheme>): AppThemeName => {
-    return colorScheme === 'dark' ? 'dark' : 'light';
-};
 
 const themeRuntimeLocalState = loadThemeRuntimeLocalState();
 const themePreference = themeRuntimeLocalState.themePreference;
 const startupThemes = resolveThemeRuntimeStartupThemes({
     themeProfiles: themeRuntimeLocalState.themeProfiles,
     themePreference,
-    systemTheme: normalizeColorScheme(Appearance.getColorScheme()),
+    systemTheme: readSystemTheme(),
+    style: themeStyleSelectionFromSurfaceFinish(themeRuntimeLocalState),
 });
 const appThemes = startupThemes.themes;
 
@@ -31,19 +30,10 @@ const breakpoints = {
 };
 
 const getInitialTheme = (): AppThemeName => {
-    return resolveThemeRuntimeVisualTheme(themePreference, normalizeColorScheme(Appearance.getColorScheme()));
+    return resolveThemeRuntimeVisualTheme(themePreference, readSystemTheme());
 };
 
-const settings =
-    themePreference === 'adaptive'
-        ? {
-            adaptiveThemes: true,
-            CSSVars: true,
-        }
-        : {
-            initialTheme: getInitialTheme(),
-            CSSVars: true,
-        };
+const settings = { initialTheme: getInitialTheme(), CSSVars: true };
 
 StyleSheet.configure({
     settings,
@@ -56,3 +46,4 @@ const setRootBackgroundColor = () => {
 };
 
 setRootBackgroundColor();
+initializeThemeRuntimeAppearance({ ...themeRuntimeLocalState, style: themeStyleSelectionFromSurfaceFinish(themeRuntimeLocalState) }, appThemes);
