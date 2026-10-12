@@ -375,6 +375,24 @@ describe('registerMachineTerminalRpcHandlers', () => {
     } finally { await h.dispose(); }
   });
 
+  it('honours the raw API setup waiver before opening a fresh Project shell without remembered trust', async () => {
+    const h = await finiteHarness({ setup: true, waived: true, setupWaived: true });
+    Object.assign(h.runtime, { secretEnvironment: { settingsSecretsReadKeys: [], accountSettings: {
+      actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'projects.prepare': ['api'] } },
+    } } });
+    let refusal: unknown;
+    try {
+      const opened = Promise.resolve(h.handlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!({ terminalKey: 'waived-shell',
+        workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } }, h.ingress))
+        .then(result => { if (result && typeof result === 'object' && 'ok' in result && result.ok === false) refusal = result; return result; });
+      await expect.poll(() => h.provider.spawned.length > 0 ? 'setup_started' : refusal).toBe('setup_started');
+      h.provider.spawned[0]!.pty.exit(0);
+      await expect(opened).resolves.toMatchObject({ ok: true });
+      expect(h.provider.spawned).toHaveLength(2);
+      expect(h.post.mock.calls.filter(([url]) => String(url).endsWith('/project-trust/mutate'))).toEqual([]);
+    } finally { await h.dispose(); }
+  });
+
   it('lists only the currently admitted Project namespace when accepted Projects share a root and logical key', async () => {
     const h = await finiteHarness();
     const provider = new FakeInteractivePtyProvider();
