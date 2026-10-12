@@ -1,8 +1,6 @@
 import { WorkspaceRefV1WriteSchema, type WorkspaceAddressV1, type WorkspaceProjectFactsV1, type WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { resolveWorkspaceRefV1, enrichWorkspaceRefV1, resolveWorkspaceProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 
-import { getPathRemainderWithinBase } from '@/session/handoff/paths/sessionHandoffPathNormalization';
-
 function normalizeIdentifier(value: string): string {
     return value.trim();
 }
@@ -21,9 +19,7 @@ export function resolveWorkspaceRefForMachineRoot(
     workspaceRefs: readonly WorkspaceRefV1[],
     scope: Readonly<{ serverId?: string; machineId: string; rootPath: string }>,
 ): WorkspaceRefV1 | null {
-    const result = resolveWorkspaceRefV1(workspaceRefs, { ...scope, serverId: scope.serverId ?? '' }, {
-        rootsEqual: (left, right) => getPathRemainderWithinBase(left, right) === '',
-    });
+    const result = resolveWorkspaceRefV1(workspaceRefs, { ...scope, serverId: scope.serverId ?? '' });
     return result.kind === 'resolved' ? result.ref : null;
 }
 
@@ -51,9 +47,7 @@ export function materializeWorkspaceRefForMachineRoot(
     if (!serverId || !machineId || !rootPath) {
         throw Object.assign(new Error('Workspace scope is incomplete'), { code: 'workspace_ref_invalid' });
     }
-    const resolution = resolveWorkspaceRefV1(workspaceRefs, { serverId, machineId, rootPath }, {
-        rootsEqual: (left, right) => getPathRemainderWithinBase(left, right) === '',
-    });
+    const resolution = resolveWorkspaceRefV1(workspaceRefs, { serverId, machineId, rootPath });
     if (resolution.kind === 'ambiguous') {
         throw Object.assign(new Error('Workspace scope has multiple Account identities'), { code: 'workspace_ref_ambiguous' });
     }

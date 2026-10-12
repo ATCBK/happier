@@ -5,7 +5,6 @@ import { isCanonicalAbsoluteObservationFilePath } from '@happier-dev/protocol/se
 import { normalizeWorkspaceRootPathV1, resolveWorkspacePathBasenameV1, resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
-import { getPathRemainderWithinBase } from '@/session/handoff/paths/sessionHandoffPathNormalization';
 import { mutateProjectAccountOrganization, readProjectAccountRows } from '@/workspaces/projectAccountRows';
 
 export type NativeUsageProjectWitness = Readonly<{ rootPath: string; label?: string }>;
@@ -33,7 +32,7 @@ export function createNativeUsageProjectResolver(input: NativeUsageProjectResolv
             signal.throwIfAborted();
             const workspace = resolveWorkspaceRefV1(snapshot.workspaceRefs, {
                 serverId: input.authority.serverId, machineId: input.authority.machineId, rootPath: project.rootPath,
-            }, { rootsEqual: (left, right) => getPathRemainderWithinBase(left, right) === '' });
+            });
             if (workspace.kind === 'resolved') {
                 return { projectKey: workspace.ref.projectKey ?? workspace.ref.id, workspaceId: workspace.ref.id };
             }

@@ -27,7 +27,6 @@ import { AccountSettingsEncryptionMaterialUnavailableError, hasUsableAccountSett
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveWorkspaceRefById } from '@/workspaces/workspaceRefsV1';
 import { resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
-import { getPathRemainderWithinBase } from '@/session/handoff/paths/sessionHandoffPathNormalization';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 export type OpenedProjectAccountRow = Readonly<{ key: ProjectAccountRowKeyV1; revision: number; payload: ProjectAccountRowPayloadV1 | null }>;
@@ -343,9 +342,7 @@ export function createProjectAccountSnapshotMutation(authority: StoredCredential
       const retained = before.workspaceRefs.filter(ref => ref.serverId === input.serverId).map(ref => ({ ...ref, serverId: homeId }));
       for (const ref of next.workspaceRefs) {
         if (ref.serverId !== homeId || resolveWorkspaceRefById(before.workspaceRefs, ref.id, homeId)) continue;
-        const resolution = resolveWorkspaceRefV1(retained, { serverId: homeId, machineId: ref.machineId, rootPath: ref.rootPath }, {
-          rootsEqual: (left, right) => getPathRemainderWithinBase(left, right) === '',
-        });
+        const resolution = resolveWorkspaceRefV1(retained, { serverId: homeId, machineId: ref.machineId, rootPath: ref.rootPath });
         if (resolution.kind !== 'missing') throw rowError('project_home_reconciliation_required');
       }
     }
