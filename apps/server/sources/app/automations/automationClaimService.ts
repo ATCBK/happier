@@ -6,6 +6,7 @@ import { isPrismaErrorCode } from "@/storage/prisma";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { readMachineAvailabilityStateInTx } from "@/app/machines/machineStateGuards";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import {
     AutomationV3WorkerClaimResponseSchema,
     AutomationV3WorkerClaimReceiptRunSchema,
@@ -857,6 +858,9 @@ export async function claimAutomationRun(params: {
 }): Promise<AutomationClaimResult> {
     const recipeFeaturePolicy = params.recipeFeaturePolicy ?? await resolveAutomationRecipeFeaturePolicy();
     const execute = async (): Promise<AutomationClaimResult> => await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId,
+            runWhere: { accountId: params.accountId, assignments: { some: { machineId: params.machineId } },
+                state: { notIn: [...AUTOMATION_RUN_TERMINAL_STATES] } } });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status === "account_not_found") {
             return { run: null, accountCurrentness: null };
@@ -1195,6 +1199,7 @@ export async function heartbeatAutomationRun(params: {
 
 }): Promise<{ ok: boolean; leaseExpiresAt: Date | null }> {
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return { ok: false, leaseExpiresAt: null };
 

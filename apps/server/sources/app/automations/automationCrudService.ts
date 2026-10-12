@@ -7,6 +7,7 @@ import { isPrismaErrorCode } from "@/storage/prisma";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { invalidateSessionReviewProjectionsForAutomationInTx } from './sessionReviewProjectionInvalidation';
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
@@ -165,6 +166,10 @@ import type {
     AutomationTriggerKind,
     AutomationUpsertInput,
 } from "./automationTypes";
+
+function requestedWorkflowRunSourceIds(triggers: readonly (AutomationTriggerDefinitionInput | AutomationTriggerDefinition | undefined)[]): string[] {
+    return triggers.flatMap(trigger => trigger?.kind === "runLifecycle" && trigger.source.kind === "workflow_run" ? [trigger.source.runId] : []);
+}
 
 async function assertAutomationTemplateMatchesCurrentAccountModeTx(
     tx: Tx,
@@ -1040,6 +1045,13 @@ async function tryRejoinAutomationCreateTx(params: Readonly<{
     accountId: string;
     input: AutomationCurrentUpsertInput;
 }>): Promise<AutomationListItem | null> {
+    await acquireWorkflowPublicationLocksInTx(params.tx, { accountId: params.accountId,
+        automationIds: [params.input.automationId],
+        runSourceTriggerWhere: { automationId: params.input.automationId },
+        runIds: requestedWorkflowRunSourceIds(params.input.triggers.map(item => item.trigger)),
+        machineIds: (params.input.assignments ?? []).map(assignment => assignment.machineId),
+        sessionIds: params.input.scopeSessionId ? [params.input.scopeSessionId] : [],
+    });
     const fence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
         params.accountId,
@@ -1064,6 +1076,9 @@ async function tryRejoinAutomationTriggerCreateTx(params: Readonly<{
     automationId: string;
     request: AutomationTriggerCreateSemanticInput;
 }>): Promise<AutomationListItem | null> {
+    await acquireWorkflowPublicationLocksInTx(params.tx, { accountId: params.accountId,
+        automationIds: [params.automationId], runIds: requestedWorkflowRunSourceIds([params.request.trigger]),
+        runSourceTriggerWhere: { automationId: params.automationId } });
     const fence = await acquireAccountEncryptionTransitionFenceInTx(
         params.tx,
         params.accountId,
@@ -4027,6 +4042,8 @@ export async function clearAutomationRunHistory(params: {
     automationId: string;
 }): Promise<ClearAutomationRunHistoryResult> {
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId],
+            runWhere: { accountId: params.accountId, automationId: params.automationId } });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             params.accountId,
@@ -4651,6 +4668,14 @@ export async function createAutomationInTx(tx: Tx, params: Readonly<{
     newbornSession?: AutomationSessionBirthContext;
 }>): Promise<AutomationListItem> {
     const triggerInputs = resolveAutomationCreateTriggerInputs(params.input);
+    await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId,
+        automationIds: isAutomationCurrentUpsertInput(params.input) ? [params.input.automationId] : [],
+        ...(isAutomationCurrentUpsertInput(params.input)
+            ? { runSourceTriggerWhere: { automationId: params.input.automationId } } : {}),
+        runIds: requestedWorkflowRunSourceIds(triggerInputs.map(item => item.trigger)),
+        machineIds: (params.input.assignments ?? []).map(assignment => assignment.machineId),
+        sessionIds: params.input.scopeSessionId ? [params.input.scopeSessionId] : [],
+    });
     if (isAutomationCurrentUpsertInput(params.input)) {
         const rejoined = await tryRejoinAutomationCreateTx({
             tx,
@@ -4894,6 +4919,9 @@ export async function updateAutomation(params: {
     retainedLegacyTemplateRecovery?: boolean;
 }): Promise<AutomationListItem | null> {
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId],
+            runSourceTriggerWhere: { automationId: params.automationId },
+            machineIds: (params.input.assignments ?? []).map(assignment => assignment.machineId) });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return null;
         const existing = await loadAutomationTx(tx, {
@@ -5318,6 +5346,10 @@ export async function reconcileAutomationDefinition(params: Readonly<{
     );
 
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId],
+            runSourceTriggerWhere: { automationId: params.automationId },
+            runIds: requestedWorkflowRunSourceIds(params.input.triggers.map(item => item.trigger)),
+            machineIds: params.input.assignments.map(assignment => assignment.machineId) });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             params.accountId,
@@ -5807,6 +5839,9 @@ export async function updateAutomationTrigger(params: Readonly<{
         params.trigger?.kind === "pluginEvent" ? params.trigger : null,
     );
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId,
+            automationIds: [params.automationId], runIds: requestedWorkflowRunSourceIds([params.trigger]),
+            runSourceTriggerWhere: { automationId: params.automationId } });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             params.accountId,
@@ -6014,6 +6049,7 @@ export async function deleteAutomationTrigger(params: Readonly<{
     expectedRevision: number;
 }>): Promise<AutomationListItem | null> {
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             params.accountId,
@@ -6099,6 +6135,8 @@ export async function deleteAutomationTx(tx: Tx, params: {
     automationId: string;
 
 }): Promise<Readonly<{ removedRevision: number }> | false> {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId],
+            runWhere: { accountId: params.accountId, automationId: params.automationId } });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return false;
         const existing = await loadAutomationTx(tx, {
@@ -6251,6 +6289,7 @@ export async function runAutomationNow(params: {
         throw new AutomationValidationError("Idempotency-Key must not be empty");
     }
     return await rejoinAutomationOccurrenceInsertRace(async () => await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [params.automationId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return null;
 

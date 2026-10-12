@@ -7,6 +7,7 @@ import {
     markAutomationChangedTx,
 } from "./automationCrudService";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import type { AccountEncryptionInconsistencyReason } from "@/app/encryption/accountContentKeyAdmission";
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { cancelWorkflowRunTx, WorkflowRunServiceError } from "@/app/workflows/workflowRunService";
@@ -109,6 +110,12 @@ export class AutomationMachineAssignmentRemovalFenceUnavailableError extends Err
 export async function removeAutomationMachineAssignmentsTx(
     params: AutomationMachineAssignmentRemovalParams,
 ): Promise<AutomationMachineAssignmentRemovalResult> {
+    await acquireWorkflowPublicationLocksInTx(params.tx, {
+        accountId: params.accountId, machineIds: [params.machineId],
+        automationWhere: { accountId: params.accountId, assignments: { some: { machineId: params.machineId } } },
+        runWhere: { accountId: params.accountId, assignments: { some: { machineId: params.machineId } },
+            state: { notIn: [...AUTOMATION_RUN_TERMINAL_STATES] } },
+    });
     // The Account-first fence orders this composition with every other
     // Account-fenced Automation writer before any of its writes. It is taken
     // unconditionally — including when no current definition assignment

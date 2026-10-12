@@ -23,6 +23,7 @@ import {
 import type { Prisma } from "@prisma/client";
 
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { inTx, type Tx } from "@/storage/inTx";
 
@@ -604,6 +605,7 @@ export async function admitEncryptedAutomationConversationV1(params: Readonly<{
             caller: params.caller,
         });
 
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [hostEvidence.automationId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         // The sealed arm is only meaningful for an Account whose persisted mode
         // is E2EE under the exact content key the host sealed with.
@@ -698,6 +700,7 @@ export async function admitAutomationConversationV1(params: Readonly<{
             caller: params.caller,
         });
 
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, automationIds: [input.automationId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return blocked("temporarilyUnavailable");
         // The plain Action transports plaintext sender/text/context. An

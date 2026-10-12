@@ -27,6 +27,7 @@ import {
 import type { Prisma } from "@prisma/client";
 
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import {
     validateCurrentPluginWebhookInvocationReferenceTxV1,
     type PluginWebhookInvocationReferenceValidationResultV1,
@@ -499,6 +500,8 @@ async function admitEncryptedAutomationEventV1(params: Readonly<{
             throw error;
         }
 
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId,
+            automationIds: params.hostEvidence.definitions.map(definition => definition.automationId) });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             params.accountId,
@@ -881,6 +884,8 @@ export async function admitAutomationEventV1(params: Readonly<{
 
         // The canonical Account transition fence serializes automatic-cause
         // capacity and supplies the one current mode/key/version witness.
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId,
+            automationIds: input.definitions.map(definition => definition.automationId) });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
             params.accountId,

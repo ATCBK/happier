@@ -22,6 +22,7 @@ import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { invalidateSessionReviewProjectionsForAutomationInTx } from './sessionReviewProjectionInvalidation';
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { attachAutomationWorkflowBodyTx } from "@/app/workflows/workflowRunService";
+import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import {
     resolveAutomationRecipeFeaturePolicy,
     type AutomationRecipeFeaturePolicy,
@@ -531,6 +532,8 @@ export async function admitAutomationRunsTx(params: Readonly<{
     recipeFeaturePolicy?: AutomationRecipeFeaturePolicy;
 }>): Promise<readonly AutomationRunAdmissionResult[]> {
     if (params.admissions.length === 0) return [];
+    await acquireWorkflowPublicationLocksInTx(params.tx, { accountId: params.accountId,
+        automationIds: [...new Set(params.admissions.map(request => request.automationId))] });
     const recipeFeaturePolicy = params.recipeFeaturePolicy ?? await resolveAutomationRecipeFeaturePolicy({ tx: params.tx });
     const parsedAdmissions = params.admissions.map((request) => ({
         request,

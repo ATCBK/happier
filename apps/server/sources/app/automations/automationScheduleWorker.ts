@@ -1,6 +1,7 @@
 import { inTx } from "@/storage/inTx";
 import { db } from "@/storage/db";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import { warn } from "@/utils/logging/log";
 
 import { rejoinAutomationOccurrenceInsertRace } from "./automationOccurrencePersistence";
@@ -117,6 +118,7 @@ export async function runAutomationScheduleWorkerPass(params: Readonly<{
         const expectedNextRunAt = candidate.nextRunAt;
         try {
             const admitted = await rejoinAutomationOccurrenceInsertRace(async () => await inTx(async (tx) => {
+                await acquireWorkflowPublicationLocksInTx(tx, { accountId: candidate.automation.accountId, triggerIds: [candidate.id] });
                 const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
                     tx,
                     candidate.automation.accountId,

@@ -17,6 +17,7 @@ import {
     type SessionServerStartDispatchResultV1,
 } from "@happier-dev/protocol";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import { readMachineAvailabilityStateInTx } from "@/app/machines/machineStateGuards";
 import { retireAutomationPendingInputInTx } from "@/app/session/pending/pendingMessageService";
 import { cancelWorkflowRunTx, WorkflowRunServiceError } from "@/app/workflows/workflowRunService";
@@ -329,6 +330,7 @@ export async function retainAutomationRunProducedSession(params: {
     if (result.type !== "success") return null;
 
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return null;
 
@@ -555,6 +557,7 @@ async function settleSucceededAutomationRun(params: {
 
 }): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return null;
 
@@ -774,6 +777,7 @@ async function startAutomationRunInternal(params: {
 
 }): Promise<AutomationRunStartResult | null> {
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return null;
 
@@ -1092,6 +1096,7 @@ export async function settleAutomationExecutionDispatch(params: Readonly<{
     outcome: AutomationExecutionDispatchOutcome;
 }>): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return null;
         // `started` and `outcomeUnknown` both report after the external start
@@ -1479,6 +1484,7 @@ async function failAutomationRunInternal(params: {
 
 }): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return null;
 
@@ -1913,6 +1919,7 @@ export async function cancelAutomationRun(params: {
 
 }): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
+        await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return null;
         const previousRun = await fetchRunForAccount({
