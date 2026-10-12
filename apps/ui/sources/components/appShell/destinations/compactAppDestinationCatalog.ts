@@ -58,6 +58,7 @@ import { resolveSettingsRouteTitleKey } from '@/components/settings/navigation/s
 import { readSessionDisplayTitle, sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 import { useSessionDiscussionTitleProjections } from '@/sync/ops/sessionDiscussions/useSessionDiscussionRepositorySnapshot';
 import { matchWorkspaceDestinationRoute, registeredWorkspaceRoutes } from '@/components/appShell/workspace/workspaceRoutes';
+import { useOptionalWorkspaceNavigation } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 
 /**
  * The one catalog of shell destinations (user ruling U1, 2026-09-28): the app's own destinations and
@@ -832,7 +833,7 @@ export function useActivateAppDestination(activationOwners: AppDestinationActiva
     }, []);
 }
 
-export type DestinationInstanceTitleEntry = Readonly<{ key: string; ref: DestinationRef }>;
+export type DestinationInstanceTitleEntry = Readonly<{ key: string; ref: DestinationRef; instanceKey?: string }>;
 
 
 /**
@@ -851,10 +852,15 @@ function resolveStaticInstanceTitle(catalog: readonly CompactAppDestination[], r
     if (!href) return null;
     const pathname = href.split(/[?#]/, 1)[0]!;
     if (ref.kind === 'settings') {
+        // Entity pages supply their current identity after hydration. The route's
+        // generic native-header title must not stand in for that identity.
+        if (Object.keys(matchWorkspaceDestinationRoute(pathname)?.params ?? {}).length > 0) return null;
         const key = resolveSettingsRouteTitleKey(pathname);
         if (key) return t(key);
     }
-    return resolveCurrentAppDestination(catalog, pathname)?.title ?? null;
+    const destination = resolveCurrentAppDestination(catalog, pathname);
+    return destination && (destination.kind === 'plugin' || pathname === destination.routePath)
+        ? destination.title : null;
 }
 
 function resolveProjectInstanceTitle(ref: DestinationRef, workspaceRefs: readonly WorkspaceRefV1[]): string | null {
@@ -898,6 +904,7 @@ export function useDestinationInstanceTitles(
     catalog: readonly CompactAppDestination[],
     entries: readonly DestinationInstanceTitleEntry[],
 ): ReadonlyMap<string, string> {
+    const workspace = useOptionalWorkspaceNavigation();
     const hasProjects = entries.some(entry => entry.ref.kind === 'project');
     const workspaceRefs = getStorage()(state => hasProjects ? readProjectWorkspaceRefs(state) : EMPTY_WORKSPACE_REFS);
     const sessionEntries = React.useMemo(() => entries.filter((entry) => entry.ref.kind === 'session'
@@ -916,9 +923,11 @@ export function useDestinationInstanceTitles(
     return React.useMemo(() => {
         const titles = new Map<string, string>();
         for (const entry of entries) {
+            const published = workspace?.destinationTitles?.[entry.instanceKey ?? entry.key];
+            const screenTitle = published?.ref === entry.ref ? published.title : undefined;
             const title = entry.ref.kind === 'project'
                 ? resolveProjectInstanceTitle(entry.ref, workspaceRefs)
-                : resolveStaticInstanceTitle(catalog, entry.ref);
+                : screenTitle ?? resolveStaticInstanceTitle(catalog, entry.ref);
             if (title) titles.set(entry.key, title);
         }
         sessionEntries.forEach((entry, index) => {
@@ -932,5 +941,5 @@ export function useDestinationInstanceTitles(
             if (name) titles.set(entry.key, name);
         });
         return titles;
-    }, [catalog, entries, workspaceRefs, sessionEntries, sessionTitles, discussionEntries, discussionTitles]);
+    }, [catalog, entries, workspaceRefs, sessionEntries, sessionTitles, discussionEntries, discussionTitles, workspace?.destinationTitles]);
 }

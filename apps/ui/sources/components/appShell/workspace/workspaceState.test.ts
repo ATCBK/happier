@@ -11,6 +11,12 @@ const tab = (id: string, kind = 'session', preview = false): WorkspaceTab => {
 };
 
 describe('workspace state', () => {
+    it('retires a saved title when a tab navigates to another destination', () => {
+        let state = createWorkspaceState(tab('a'));
+        state = reduceWorkspaceState(state, { type: 'setFallbackTitle', tabId: 'a', title: 'Original session' });
+        const navigated = reduceWorkspaceState(state, { type: 'setTarget', tabId: 'a', target: { kind: 'settings', params: { pageId: 'appearance' } } });
+        expect(navigated.fallbackTitlesByTabId.a).toBeUndefined();
+    });
     it('bulk closes unpinned members once, keeps the surviving MRU active and preserves original reopen positions', () => {
         let state = createWorkspaceState({ ...tab('pinned'), pinned: true });
         for (const id of ['left', 'active', 'right', 'survivor']) {

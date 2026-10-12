@@ -2034,6 +2034,10 @@ describe('declared settings owner', () => {
     });
 
     it.each([{ os: 'web', desktop: true }, { os: 'ios', desktop: false }] as const)('round-trips admitted scalar declarations on $os through the canonical schemas', async (host) => {
+            // Other declared owners (for example Voice endpoint configuration)
+            // still use their existing host trust boundary in this broad fixture.
+            humanConfirmation.confirm.mockResolvedValue(true);
+            onTestFinished(() => { humanConfirmation.confirm.mockResolvedValue(false); });
             // Desktop setting commits reach the native window, which is the only substituted boundary.
             const invoke = vi.spyOn(desktopHostBoundary, 'invokeDesktopHost').mockResolvedValue(undefined);
             onTestFinished(() => invoke.mockRestore());

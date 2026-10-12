@@ -63,6 +63,7 @@ import { createPromptDocInLibrary, createPromptBundleInLibrary, updatePromptBund
 import { resolvePromptDocCreateActionInputV1 } from '@happier-dev/protocol/prompts/library/promptDocV2';
 import { MEMORY_DOCUMENT_ACTION_IDS_V1, MemoryActionInputSchemasV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
 import { readPromptLibraryCatalogProjectionInContext, mutatePromptLibraryRoleOverrideInContext, writePromptLibraryRecordAndPublishInContext,
   requireUpdatedPromptLibraryMutation, PromptLibraryRowOperationError } from '@/sync/api/account/apiPromptLibraryCatalog';
 import type { PromptExternalLinksV1 } from '@happier-dev/protocol/prompts/library/promptExternalLinksV1';
@@ -787,7 +788,16 @@ async function settleAccountSecurityAction<T>(operation: () => Promise<T>) {
           ...(signInPurposes.length ? [t('machineRequester.signInPurposes', { purposes: [...new Set(signInPurposes)].join(', ') })] : []),
         ].join('\n\n') };
     },
-    ...(promptLibraryStore?.organization ? { artifactFolders: promptLibraryStore.organization, promptStacks: promptLibraryStore.organization } : {}),
+    ...(promptLibraryStore?.organization ? { artifactFolders: promptLibraryStore.organization, promptStacks: promptLibraryStore.organization,
+      ...(accountContext ? { skillRules: { ...promptLibraryStore.organization,
+        listSkills: async (signal?: AbortSignal) => {
+          accountContext.assertCurrent(); signal?.throwIfAborted();
+          const skills = await readSkillLibraryCatalog({ list: options => accountContext.listArtifacts(options) }, signal);
+          accountContext.assertCurrent(); signal?.throwIfAborted();
+          return skills;
+        }, ruleWriteContext: () => ({ nowMs: Date.now(), newId: randomUUID }),
+      } } : {}),
+    } : {}),
     ...(accountContext && promptLibraryStore ? { memoryLibrary: {
       serverId: accountContext.serverId, store: promptLibraryStore, randomId: randomUUID,
       isSameServerId: serverId => areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId),

@@ -4,13 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { WORKSPACE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storage';
-import { hrefForDestinationRef, resolveCompactAppDestinations } from '../destinations/compactAppDestinationCatalog';
+import { hrefForDestinationRef, resolveCompactAppDestinations, useDestinationInstanceTitles } from '../destinations/compactAppDestinationCatalog';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { DestinationInstanceHost, useDestinationInstanceKey, useDestinationParams, useDestinationRouter } from './DestinationInstanceHost';
 import type { WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
 import { WorkspaceProvider } from './WorkspaceProvider';
 import { WorkspaceShell } from './WorkspaceShell';
 import { captureMountedWorkspaceAction, invokeWorkspaceAction } from './workspaceActionRuntime';
-import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
+import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard, type ActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
+import { useActiveUnsavedChangesGuard } from '@/utils/navigation/useActiveUnsavedChangesGuard';
 import { KeyboardShortcutProvider, useKeyboardCommand, type KeyboardCommandId } from '@/keyboard';
 import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
 import { serializeWorkspaceLayout, workspaceLayoutScopeKey } from './workspacePersistence';
@@ -113,10 +115,20 @@ function NavigationProbe(props: Readonly<{ navigation: WorkspaceNavigationContex
 }
 
 function ResizeLayout() { return <Stack />; }
+function DestinationTitlesProbe(props: Readonly<{ navigation: WorkspaceNavigationContextValue; catalog: ReturnType<typeof resolveCompactAppDestinations> }>) {
+    const entries = React.useMemo(() => Object.values(props.navigation.state.tabs).map(tab => ({ key: tab.id, ref: tab.target })), [props.navigation.state.tabs]);
+    return React.createElement('DestinationTitles', { titles: useDestinationInstanceTitles(props.catalog, entries) });
+}
 function ResizeEditor() {
     const [draft, setDraft] = React.useState('');
     const params = useDestinationParams();
     return React.createElement('ResizeEditor', { draft, setDraft, params });
+}
+
+function RetainedDirtyEditor(props: Readonly<{ tabId: string; focused: boolean; guard: ActiveUnsavedChangesGuard }>) {
+    const registration = { navigation: null, guard: props.guard, tabId: props.tabId, focused: props.focused };
+    useActiveUnsavedChangesGuard(registration);
+    return null;
 }
 
 /** Real event dispatch beneath the external browser URL/history fixtures. */
@@ -130,6 +142,36 @@ function installBrowserBoundary(input: Record<string, unknown> & { history: obje
 }
 
 describe('consumed workspace navigation owner', () => {
+    it('shares live page identity across tabs, keeps inactive names fresh and retires it before a new route loads without persisting title publication', async () => {
+        boundary.pathname = '/workflows/deploy'; boundary.params = { id: 'deploy' };
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: true, friends: false } });
+        const names = new Map([['deploy', 'Deploy Lumen'], ['release', 'Release Atlas']]);
+        const element = () => <WorkspaceProvider enabled catalog={catalog}>{navigation => <>
+            {React.createElement('WorkspaceOwner', { navigation })}
+            <DestinationTitlesProbe navigation={navigation} catalog={catalog} />
+            {Object.values(navigation.state.tabs).map(tab => <DestinationInstanceHost key={tab.id} tabId={tab.id}
+                ref={tab.target} pathname={hrefForDestinationRef(catalog, tab.target) ?? ''} focused={tab.id === navigation.state.groups[navigation.state.focusedGroupId].activeTabId}
+                visible navigation={navigation.navigationForTab(tab.id)}>
+                <Stack.Screen options={{ title: 'Workflow' }} />
+                {names.has(tab.target.params.id) ? <PageHeader alwaysShowTitle title={names.get(tab.target.params.id)!} /> : null}
+            </DestinationInstanceHost>)}
+        </>}</WorkspaceProvider>;
+        const screen = await renderScreen(element());
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const titles = () => screen.root.findByType('DestinationTitles').props.titles as ReadonlyMap<string, string>;
+        const first = navigation().state.groups[navigation().state.focusedGroupId].activeTabId;
+        expect(titles().get(first)).toBe('Deploy Lumen');
+        await act(async () => { navigation().openHref('/workflows/release', { mode: 'newTab' }); });
+        const second = navigation().state.groups[navigation().state.focusedGroupId].activeTabId;
+        expect(titles().get(second)).toBe('Release Atlas');
+        names.set('deploy', 'Deploy renamed');
+        await screen.update(element());
+        expect(titles().get(first)).toBe('Deploy renamed');
+        expect(navigation().state.fallbackTitlesByTabId).toEqual({});
+        await act(async () => { navigation().openHref('/workflows/not-loaded', { tabId: second }); });
+        expect(titles().get(second)).toBeUndefined();
+        expect(titles().get(first)).toBe('Deploy renamed');
+    });
     it.each([false, true])('retains a Board source on cancelled navigation and hands it off on admission (phone=%s)', async phone => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
             externalSessions: false, inbox: false, workflows: false, friends: false,
@@ -569,6 +611,91 @@ describe('consumed workspace navigation owner', () => {
         expect(requestDecision).toHaveBeenCalledTimes(2);
         expect(navigation().state.groups[group.id].tabIds).toEqual([pinnedId]);
         expect(navigation().state.recentlyClosed).toHaveLength(3);
+    });
+    it('protects a retained inactive editor from bulk close through keep-editing, failed save and save-owned continuation', async () => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
+        let editorTabId: string | null = null;
+        let decision: 'keepEditing' | 'save' | 'discard' = 'keepEditing';
+        let saveSucceeds = false;
+        const guard: ActiveUnsavedChangesGuard = { isDirtyRef: { current: true }, requestDecision: vi.fn(async () => decision),
+            onSave: () => saveSucceeds, continueOnSave: false, tag: 'retained-dirty-editor' };
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>{navigation => {
+            const state = navigation.state;
+            const group = state.groups[state.focusedGroupId];
+            editorTabId ??= group.activeTabId;
+            return <>{React.createElement('WorkspaceOwner', { navigation })}{state.tabs[editorTabId]
+                ? <RetainedDirtyEditor tabId={editorTabId} guard={guard} focused={group.activeTabId === editorTabId} /> : null}</>;
+        }}</WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        await act(async () => { navigation().navigationForTab(editorTabId!).pushRetainingCurrent!('/inbox/approvals/request-a?serverId=home-a'); });
+        expect(guard.requestDecision).not.toHaveBeenCalled();
+        const before = navigation().state;
+        const group = before.groups[before.focusedGroupId];
+        expect(group.activeTabId).not.toBe(editorTabId);
+        await act(async () => { navigation().closeTabs(group.id, group.tabIds); });
+        expect(navigation().state).toBe(before);
+        decision = 'save';
+        await act(async () => { navigation().closeTabs(group.id, group.tabIds); });
+        expect(navigation().state).toBe(before);
+        expect(guard.isDirtyRef.current).toBe(true);
+        saveSucceeds = true;
+        await act(async () => { navigation().closeTabs(group.id, group.tabIds); });
+        expect(navigation().state).toBe(before);
+        expect(guard.isDirtyRef.current).toBe(false);
+        guard.isDirtyRef.current = true;
+        decision = 'discard';
+        await act(async () => { navigation().closeTabs(group.id, group.tabIds); });
+        expect(navigation().state.tabs[editorTabId!]).toBeUndefined();
+        expect(navigation().state.recentlyClosed).toHaveLength(2);
+    });
+    it('does not prompt a dirty active editor when only pinned or other tabs are selected', async () => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>{navigation => React.createElement('WorkspaceOwner', { navigation })}</WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        await act(async () => { navigation().openHref('/session/A2?serverId=home-a', { mode: 'newTab' }); });
+        const group = navigation().state.groups[navigation().state.focusedGroupId];
+        const inactiveId = group.tabIds.find(id => id !== group.activeTabId)!;
+        await act(async () => { navigation().dispatch({ type: 'setPinned', tabId: inactiveId, pinned: true }); });
+        const requestDecision = vi.fn(async () => 'keepEditing' as const);
+        setActiveUnsavedChangesGuard({ isDirtyRef: { current: true }, requestDecision, tag: 'surviving-active-editor' });
+        const before = navigation().state;
+        await act(async () => { navigation().closeTabs(group.id, [inactiveId]); });
+        expect(navigation().state).toBe(before);
+        await act(async () => { navigation().dispatch({ type: 'setPinned', tabId: inactiveId, pinned: false }); navigation().closeTabs(group.id, [inactiveId]); });
+        expect(navigation().state.tabs[inactiveId]).toBeUndefined();
+        expect(navigation().state.groups[group.id].activeTabId).toBe(group.activeTabId);
+        expect(requestDecision).not.toHaveBeenCalled();
+    });
+    it.each(['cancel', 'account', 'selection'] as const)('retires a held bulk-close Action when its %s changes', async transition => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
+        let editorTabId: string | null = null;
+        let resolveDecision!: (decision: 'discard') => void;
+        const guard: ActiveUnsavedChangesGuard = { isDirtyRef: { current: true }, tag: 'held-close-action',
+            requestDecision: () => new Promise(resolve => { resolveDecision = resolve; }) };
+        const element = () => <WorkspaceProvider enabled catalog={catalog}>{navigation => {
+            const state = navigation.state;
+            const group = state.groups[state.focusedGroupId];
+            editorTabId ??= group.activeTabId;
+            return <>{React.createElement('WorkspaceOwner', { navigation })}{state.tabs[editorTabId]
+                ? <RetainedDirtyEditor tabId={editorTabId} guard={guard} focused={group.activeTabId === editorTabId} /> : null}</>;
+        }}</WorkspaceProvider>;
+        const screen = await renderScreen(element());
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        await act(async () => { navigation().navigationForTab(editorTabId!).pushRetainingCurrent!('/inbox/approvals/request-a?serverId=home-a'); });
+        const abort = new AbortController();
+        const pending = invokeWorkspaceAction({ actionId: 'workspace.tabs.close_all', input: {}, signal: abort.signal });
+        await act(async () => { await Promise.resolve(); });
+        expect(typeof resolveDecision).toBe('function');
+        await act(async () => {
+            if (transition === 'cancel') abort.abort();
+            else if (transition === 'account') { boundary.scope = { serverId: 'home-a', accountId: 'bob' }; screen.update(element()); }
+            else navigation().openHref('/session/A2?serverId=home-a', { mode: 'newTab' });
+        });
+        const before = navigation().state;
+        await act(async () => { resolveDecision('discard'); });
+        expect(await pending).toMatchObject({ ok: false, errorCode: transition === 'cancel' ? 'action_cancelled'
+            : transition === 'account' ? 'workspace_unavailable' : 'workspace_navigation_cancelled' });
+        expect(navigation().state).toBe(before);
     });
     it('admits the current browser location when readiness arrives before the Expo URL mirror', async () => {
         boundary.platform = 'web';

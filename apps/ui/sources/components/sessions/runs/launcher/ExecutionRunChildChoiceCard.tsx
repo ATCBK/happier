@@ -25,38 +25,38 @@ export function ExecutionRunChildChoiceCard(
   const reason =
     props.choice.parentRouteCompatibility === 'unverified'
       ? props.parentDetail
-        ? t('runPage.childChoice.unverified', {
+        ? t('session.agentContinuation.childChoice.unverified', {
             agent,
             parent: props.parentDetail,
           })
-        : t('runPage.childChoice.unverifiedUnknown', { agent })
+        : t('session.agentContinuation.childChoice.unverifiedUnknown', { agent })
       : props.parentDetail
-        ? t('runPage.childChoice.incompatible', {
+        ? t('session.agentContinuation.childChoice.incompatible', {
             agent,
             parent: props.parentDetail,
           })
-        : t('runPage.childChoice.incompatibleUnknown', { agent });
+        : t('session.agentContinuation.childChoice.incompatibleUnknown', { agent });
   return (
     <SurfaceStateCard
       testID="execution-run-child-choice"
       kind="warning"
       layout="inline"
-      title={t('runPage.childChoice.title', { agent })}
+      title={t('session.agentContinuation.childChoice.title', { agent })}
       reason={reason}
       action={{
         testID: 'execution-run-child-choice.default',
-        label: t('runPage.childChoice.useDefault', { agent }),
+        label: t('session.agentContinuation.childChoice.useDefault', { agent }),
         onPress: props.onUseDefault,
         busy: props.starting,
         disabled: props.starting,
       }}
       secondaryAction={{
         testID: 'execution-run-child-choice.model',
-        label: t('runPage.childChoice.chooseModel'),
+        label: t('session.agentContinuation.childChoice.chooseModel'),
         onPress: props.onChooseModel,
         disabled: props.starting,
       }}
-      note={t('runPage.childChoice.keptNote')}
+      note={t('session.agentContinuation.childChoice.keptNote')}
       learnMore={{
         testID: 'execution-run-child-choice.cancel',
         label: t('common.cancel'),

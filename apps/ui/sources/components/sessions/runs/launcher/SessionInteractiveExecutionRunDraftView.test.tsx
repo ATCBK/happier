@@ -1,3 +1,4 @@
+import { projectExecutionRunChildChoiceV1 } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import * as React from 'react';
 import { Dimensions } from 'react-native';
 import { act } from 'react-test-renderer';
@@ -123,6 +124,10 @@ function record(value: unknown): Record<string, unknown> {
 }
 function started(runId = 'run_1') { return { runId, callId: `call_${runId}`, sidechainId: `side_${runId}` }; }
 function uncertain() { return { ok: false, error: 'response lost', details: { executionRunStart: { v: 1, runCreation: 'outcomeUnknown' } } }; }
+function childChoiceRefusal() {
+    return { ok: false, error: 'Choose a model for this Run', errorCode: 'execution_run_child_choice_required', details: {
+        childChoice: projectExecutionRunChildChoiceV1({ agentTargetKey: 'agent:codex' }), executionRunStart: { v: 1, runCreation: 'noRunCreated' } } };
+}
 function noRun() { return { ok: false, error: 'not started', details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } } }; }
 function run(runId: string, launchOrigin?: unknown): Run {
     return ExecutionRunPublicStateSchema.parse({ ...started(runId), intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only', status: 'running', startedAtMs: 1,
@@ -478,6 +483,39 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         const selected = canonicalTargetKey(composer().engine!.selectedOptionId!);
         expect(emittedStarts.map(startedTargetKey)).toEqual([selected, selected]);
         expect(emittedStarts[0]?.launchOrigin).toEqual(emittedStarts[1]?.launchOrigin);
+    });
+    it('asks for the Agent default when it cannot follow the session, keeps the draft, then starts fresh with that choice', async () => {
+        startResults.push(childChoiceRefusal(), started());
+        const opened = vi.fn();
+        await mount({ onRunStarted: opened });
+        await send();
+        expect(screen.findByTestId('execution-run-child-choice')).not.toBeNull();
+        expect(modal.alert).not.toHaveBeenCalled();
+        expect(outbound).toEqual([]);
+        await screen.pressByTestIdAsync('execution-run-child-choice.default');
+        await waitFor(() => expect(opened).toHaveBeenCalledWith('run_1', undefined, { title: 'Inspect this' }));
+        expect(emittedStarts).toHaveLength(2);
+        expect(emittedStarts[1]).toMatchObject({ childSelection: 'agentDefault' });
+        expect(emittedStarts[1]).not.toHaveProperty('modelSelection');
+        expect(emittedStarts[1]?.launchOrigin).toEqual(emittedStarts[0]?.launchOrigin);
+        expect(outboundText()).toContain('Inspect this');
+        expect(screen.findByTestId('execution-run-child-choice')).toBeNull();
+    });
+    it('starts with the exact model picked in the chooser, and Cancel starts nothing', async () => {
+        startResults.push(childChoiceRefusal(), childChoiceRefusal(), started());
+        await mount();
+        await send();
+        await screen.pressByTestIdAsync('execution-run-child-choice.cancel');
+        expect(screen.findByTestId('execution-run-child-choice')).toBeNull();
+        expect(emittedStarts).toHaveLength(1);
+        await send();
+        await screen.pressByTestIdAsync('execution-run-child-choice.model');
+        const shown = modal.show.mock.calls.at(-1)?.[0] as { props: { onSelect: (ref: unknown) => void } };
+        const ref = { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'gpt-6.1-luna' };
+        await act(async () => shown.props.onSelect(ref));
+        await waitFor(() => expect(emittedStarts).toHaveLength(3));
+        expect(emittedStarts[2]).toMatchObject({ modelSelection: ref });
+        expect(emittedStarts[2]).not.toHaveProperty('childSelection');
     });
     it('does not guess when correlation has multiple matches', async () => {
         startResults.push(uncertain());

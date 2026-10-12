@@ -6,7 +6,9 @@ import type { SplitCanvasHostControls } from '../splitCanvas/components/SplitCan
 import type { SharedWorkspaceTabs } from './workspaceSyncedTabs';
 import type { WorkspaceTabSyncStatus } from './useWorkspaceTabSync';
 import type { WorkspaceTabsHandoffSource } from './workspaceTabsHandoff';
-import type { CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
+import type { CompactAppDestination, DestinationRef } from '../destinations/compactAppDestinationCatalog';
+
+export type WorkspaceDestinationTitle = Readonly<{ ref: DestinationRef; title: string }>;
 
 /**
  * The phone's controls over the same owner. The phone keeps its own stack navigation: these move the
@@ -31,6 +33,9 @@ export type WorkspaceNavigationContextValue = Readonly<{
     phone?: WorkspacePhoneControls | null;
     state: WorkspaceState;
     catalog?: readonly CompactAppDestination[];
+    /** Current mounted screen identities, local to this owner and never persisted. */
+    destinationTitles?: Readonly<Record<string, WorkspaceDestinationTitle>>;
+    publishDestinationTitle?: (tabId: string, ref: DestinationRef, title: string) => () => void;
     sharedTabs?: SharedWorkspaceTabs | null;
     tabSyncStatus?: WorkspaceTabSyncStatus;
     handoffSource?: WorkspaceTabsHandoffSource | null;

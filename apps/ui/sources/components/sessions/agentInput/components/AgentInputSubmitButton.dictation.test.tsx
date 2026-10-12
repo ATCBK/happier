@@ -390,4 +390,37 @@ describe('AgentInputSubmitButton Dictation routing', () => {
         expect(japaneseButton.props.leading).toBeTruthy();
         expect(japaneseButton.props.trailing).toBeUndefined();
     });
+
+    it('offers the armed route\'s cancel beside the send, whichever shape it has, and never for an armed Agent', async () => {
+        const { AgentInputSubmitButton } = await import('./AgentInputSubmitButton');
+        const onUnarmRoute = vi.fn();
+        const render = (props: Partial<React.ComponentProps<typeof AgentInputSubmitButton>>) => create(<AgentInputSubmitButton
+            testID="composer-send"
+            sessionId="session-1"
+            disabled={false}
+            hasSendableContent
+            dictationStatus="idle"
+            armedRouteContinuation={{ sourceLabel: 'OpenRouter' }}
+            onUnarmRoute={onUnarmRoute}
+            onSend={() => {}}
+            {...props}
+        />);
+        const unarm = (renderer: ReturnType<typeof create>) => renderer.root.findAll((node) => node.props.testID === 'agent-input-route-unarm');
+        let armedPill!: ReturnType<typeof create>;
+        let emptyComposer!: ReturnType<typeof create>;
+        let armedAgent!: ReturnType<typeof create>;
+        let unarmed!: ReturnType<typeof create>;
+        await act(async () => {
+            armedPill = render({});
+            emptyComposer = render({ hasSendableContent: false, dictationPressHandler: () => {} });
+            armedAgent = render({ armedContinuationTarget: { agentId: 'codex', label: 'Codex' } });
+            unarmed = render({ armedRouteContinuation: null });
+        });
+        expect(unarm(armedPill).length).toBeGreaterThan(0);
+        expect(unarm(emptyComposer).length).toBeGreaterThan(0);
+        expect(unarm(armedAgent)).toHaveLength(0);
+        expect(unarm(unarmed)).toHaveLength(0);
+        act(() => { unarm(armedPill)[0]!.props.onPress(); });
+        expect(onUnarmRoute).toHaveBeenCalledTimes(1);
+    });
 });

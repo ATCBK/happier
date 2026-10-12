@@ -18,6 +18,8 @@ export type ValueRefRowDraft = Readonly<{
     valueRef: ValueRefV1;
 }>;
 
+export type ValueRefRow = Readonly<{ key: string; valueRef: ValueRefV1 }>;
+
 const ENV_KEY_REGEX = /^[A-Z_][A-Z0-9_]*$/;
 const HEADER_KEY_REGEX = /^[A-Za-z0-9-]+$/;
 const MACHINE_VALUE_REGEX = /^\$\{([A-Z_][A-Z0-9_]*)\}$/;
@@ -123,9 +125,21 @@ export function useValueRefRowsEditor(options: Readonly<{
     const optionsRef = React.useRef(options);
     optionsRef.current = options;
     const editor = useValueRefEditorDraft({ kind: options.kind });
-    const rows = React.useMemo(() => Object.entries(options.entries)
-        .map(([key, valueRef]) => ({ key, valueRef }))
-        .sort((a, b) => a.key.localeCompare(b.key)), [options.entries]);
+    const previousRows = React.useRef<readonly ValueRefRow[]>([]);
+    const rows = React.useMemo(() => {
+        const previousByKey = new Map(previousRows.current.map((row) => [row.key, row]));
+        const next = Object.entries(options.entries)
+            .map(([key, valueRef]) => {
+                const previous = previousByKey.get(key);
+                return previous?.valueRef === valueRef ? previous : { key, valueRef };
+            })
+            .sort((a, b) => a.key.localeCompare(b.key));
+        if (next.length === previousRows.current.length && next.every((row, index) => row === previousRows.current[index])) {
+            return previousRows.current;
+        }
+        previousRows.current = next;
+        return next;
+    }, [options.entries]);
 
     const submitEntry = React.useCallback((originalKey: string | null, rawKey: string, valueRef: ValueRefV1): ValueRefRowsResult => {
         const current = optionsRef.current;

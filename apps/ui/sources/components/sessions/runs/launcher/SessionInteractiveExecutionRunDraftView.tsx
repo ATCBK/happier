@@ -860,7 +860,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         machineId,
         serverId,
         selected: null,
-        title: t('runPage.childChoice.chooseModel'),
+        title: t('session.agentContinuation.childChoice.chooseModel'),
         fallbackLabel: t('runPage.menu.selectionChoose'),
         enabled: pendingChildChoice !== null,
     });
@@ -923,7 +923,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             {pendingChildChoice ? (
                 <ExecutionRunChildChoiceCard
                     choice={pendingChildChoice}
-                    agentTitle={childChoiceAgent?.title ?? t('runPage.childChoice.agentFallback')}
+                    agentTitle={childChoiceAgent?.title ?? t('session.agentContinuation.childChoice.agentFallback')}
                     parentDetail={childParentDetail}
                     starting={phase === 'starting'}
                     onUseDefault={() => startWithChild('agentDefault')}

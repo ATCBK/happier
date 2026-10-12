@@ -69,7 +69,9 @@ describe('useValueRefRowsEditor', () => {
             kind: 'header', entries, onChangeEntries,
         }), { initialProps: { First: first } });
         const delayedSubmit = hook.getCurrent().submitEntry;
+        const firstRow = hook.getCurrent().rows[0];
         await hook.rerender({ First: first, Second: second });
+        expect(hook.getCurrent().rows[0]).toBe(firstRow);
         expect(delayedSubmit('First', 'Second', first)).toEqual({ ok: false, error: 'duplicate_key' });
         expect(onChangeEntries).not.toHaveBeenCalled();
         expect(delayedSubmit('First', 'Renamed', first)).toEqual({ ok: true });

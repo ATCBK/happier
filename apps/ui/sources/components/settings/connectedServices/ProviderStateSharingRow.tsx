@@ -76,7 +76,6 @@ export function buildProviderConfigModeChoices(): ReadonlyArray<SegmentedChoiceO
 
 export function ProviderStateSharingRows({
     agentId,
-    agentTitle,
     capability,
     settings,
 }: ProviderStateSharingRowsProps) {

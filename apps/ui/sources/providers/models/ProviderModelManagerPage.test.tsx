@@ -117,6 +117,27 @@ async function renderConnectionPage(modelCount: number) {
 }
 
 describe('ProviderModelManagerPage', () => {
+    it('retains an off-source sheet when there are no native or listed Provider models', async () => {
+        legendListState.data = null;
+        await renderScreen(
+            <ProviderModelManager
+                scope={{ kind: 'agent', agentTargetKey: 'agent:happier.agent.claude/claude' }}
+                nativeModels={[]}
+                groups={groups}
+                showHidden={false}
+                grouping={{ ...grouping, isSourceShown: () => false }}
+                onSetVisibility={() => {}}
+                onRequestClose={() => {}}
+                page={{ header: <></>, title: '' }}
+            />,
+        );
+        const source = pageRows().find(row => row.key === `models:source:source:${connectionId}`);
+        expect(source).toBeDefined();
+        const header = await renderScreen(source!.render());
+        expect(header.getTextContent()).toContain('Custom · Work');
+        expect(pageRows().map(row => row.key)).not.toContain('models:empty');
+    });
+
     it('keeps a short connection list free of a filter toolbar: its actions sit with the summary line', async () => {
         const { controls, summary } = await renderConnectionPage(2);
 

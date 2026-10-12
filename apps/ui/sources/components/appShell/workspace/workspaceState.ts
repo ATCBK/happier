@@ -352,7 +352,8 @@ export function reduceWorkspaceState(state: WorkspaceState, action: WorkspaceAct
         case 'setTarget': {
             const tab = state.tabs[action.tabId];
             if (!tab || tab.target === action.target) return state;
-            return { ...state, tabs: { ...state.tabs, [tab.id]: { ...tab, target: action.target } } };
+            return { ...state, tabs: { ...state.tabs, [tab.id]: { ...tab, target: action.target } },
+                fallbackTitlesByTabId: withoutTabs(state.fallbackTitlesByTabId, [tab.id]) };
         }
         case 'setFallbackTitle': {
             if (!state.tabs[action.tabId] || state.fallbackTitlesByTabId[action.tabId] === action.title) return state;

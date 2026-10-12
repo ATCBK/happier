@@ -489,7 +489,7 @@ describe('AgentModelsScreen provider settings safety', () => {
     );
     expect(providerHarness.state.requests.filter(request => request.method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toEqual([]);
   });
-  it('summarizes the exact Account default on the Agent Session-default Models row without a machine', async () => {
+  it('shows the exact Account default on the Agent Session-default Model row without a machine', async () => {
     const agentTargetKey = 'agent:happier.agent.codex/codex';
     const catalog = ProviderConnectionsCatalogV1Schema.parse({
       ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
@@ -581,10 +581,12 @@ describe('AgentModelsScreen provider settings safety', () => {
     );
     await waitForHomeGovernance(() =>
       expect(
-        screen.findByTestId('settings.agents.detail.models'),
+        screen.findByTestId('settings.agents.detail.defaultModel'),
       ).not.toBeNull(),
     );
-    expect(screen.getTextContent()).toContain('Account default model');
+    await waitForHomeGovernance(() =>
+      expect(screen.getTextContent()).toContain('Account default model'),
+    );
     expect(screen.getTextContent()).toContain('My source');
     expect(screen.getTextContent()).not.toContain('Other model');
     expect(providerHarness.state.requests).toEqual([]);

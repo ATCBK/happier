@@ -15,12 +15,15 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { PROVIDER_CONNECTION_ACTION_ID_BY_OPERATION_V1 } from '@happier-dev/protocol/providers/providerActionsV1';
 
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope }));
 
 const account = createProviderSettingsAccountHarness();
+const navigation = createExpoRouterMock();
+vi.doMock('expo-router', () => navigation.module);
 let serverId = '';
 let otherServerId = '';
 await loadSyncSingletonForTests();

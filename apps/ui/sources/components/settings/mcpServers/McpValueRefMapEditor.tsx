@@ -14,6 +14,7 @@ import { t } from '@/text';
 import { ValueRefEditorModal, getValueRefEditorModalTitle } from '@/components/ui/forms/valueRefs/ValueRefEditorModal';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
+import { useValueRefRowsEditor } from '@/components/ui/forms/valueRefs/useValueRefRowsEditor';
 
 type ValueRefKind = 'env' | 'header';
 
@@ -22,7 +23,7 @@ function describeValueRef(
     secrets: readonly SavedSecret[],
     catalogEntries: readonly SavedSecretCatalogEntryV1[],
 ): string {
-    if (valueRef.t === 'literal') {
+    if (valueRef.t === 'literal' || valueRef.t === 'template') {
         return t('settings.mcpServersValueSourceLiteral');
     }
     if (valueRef.t === 'sessionAttested') return valueRef.field;
@@ -57,11 +58,17 @@ export const McpValueRefMapEditor = React.memo(function McpValueRefMapEditor(pro
     // On a configuration page the rows carry no decorative icon and "add" is the section's action.
     const page = useListPresentation() === 'page';
 
-    const rows = React.useMemo(() => {
-        return Object.entries(props.entries)
-            .map(([key, valueRef]) => ({ key, valueRef }))
-            .sort((a, b) => a.key.localeCompare(b.key));
-    }, [props.entries]);
+    const { rows, submitEntry, removeEntry } = useValueRefRowsEditor({
+        kind: props.kind, entries: props.entries, onChangeEntries: props.onChangeEntries,
+    });
+
+    const saveEntry = React.useCallback((originalKey: string | null, key: string, valueRef: ValueRefV1) => {
+        const result = submitEntry(originalKey, key, valueRef);
+        if (!result.ok && result.error === 'duplicate_key') {
+            Modal.alert(t('common.error'), t('settings.mcpServersKeyAlreadyExists'));
+        }
+        return result.ok;
+    }, [submitEntry]);
 
     const openEditor = React.useCallback((params: Readonly<{
         mode: 'add' | 'edit';
@@ -96,15 +103,10 @@ export const McpValueRefMapEditor = React.memo(function McpValueRefMapEditor(pro
             initialKey: '',
             initialValueRef: { t: 'literal', v: '' },
             onSubmit: ({ key, valueRef }) => {
-                if (props.entries[key]) {
-                    Modal.alert(t('common.error'), t('settings.mcpServersKeyAlreadyExists'));
-                    return false;
-                }
-                props.onChangeEntries({ ...props.entries, [key]: valueRef });
-                return true;
+                return saveEntry(null, key, valueRef);
             },
         });
-    }, [openEditor, props.entries, props.onChangeEntries]);
+    }, [openEditor, saveEntry]);
 
     return (
         <>
@@ -132,19 +134,10 @@ export const McpValueRefMapEditor = React.memo(function McpValueRefMapEditor(pro
                                 initialKey: key,
                                 initialValueRef: valueRef,
                                 onDelete: () => {
-                                    const { [key]: _removed, ...rest } = props.entries;
-                                    props.onChangeEntries(rest);
+                                    removeEntry(key);
                                 },
                                 onSubmit: ({ key: nextKey, valueRef: nextValueRef }) => {
-                                    if (nextKey !== key && props.entries[nextKey]) {
-                                        Modal.alert(t('common.error'), t('settings.mcpServersKeyAlreadyExists'));
-                                        return false;
-                                    }
-                                    const next: Record<string, ValueRefV1> = { ...props.entries };
-                                    delete next[key];
-                                    next[nextKey] = nextValueRef;
-                                    props.onChangeEntries(next);
-                                    return true;
+                                    return saveEntry(key, nextKey, nextValueRef);
                                 },
                             });
                         }}

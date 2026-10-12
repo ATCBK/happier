@@ -20,12 +20,10 @@ import { Text, TextInput } from '@/components/ui/text/Text';
 import { SavedSecretPickerModal } from './SavedSecretPickerModal';
 import { Icon } from '@/components/ui/icons/Icon';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
+import { useValueRefEditorDraft } from './useValueRefRowsEditor';
 
 type ValueRefKind = 'env' | 'header';
 type ValueRefSource = ValueRefV1['t'];
-
-const ENV_KEY_REGEX = /^[A-Z_][A-Z0-9_]*$/;
-const HEADER_KEY_REGEX = /^[A-Za-z0-9-]+$/;
 
 const stylesheet = StyleSheet.create((theme) => ({
     groupContent: {
@@ -50,18 +48,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-function normalizeKey(kind: ValueRefKind, raw: string): string {
-    const trimmed = raw.trim();
-    if (kind === 'env') return trimmed.toUpperCase();
-    return trimmed;
-}
-
-function validateKey(kind: ValueRefKind, key: string): boolean {
-    if (!key) return false;
-    if (kind === 'env') return ENV_KEY_REGEX.test(key);
-    return HEADER_KEY_REGEX.test(key);
-}
-
 export function getValueRefEditorModalTitle(kind: ValueRefKind): string {
     if (kind === 'env') return t('settings.mcpServersEnvEditorTitle');
     return t('settings.mcpServersHeadersEditorTitle');
@@ -82,16 +68,21 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
     const styles = stylesheet;
     const catalog = useSavedSecretCatalog(props.scope === undefined ? undefined : { scope: props.scope });
 
-    const initialSource: ValueRefSource = props.initialValueRef.t;
-
-    const [keyText, setKeyText] = React.useState(() => props.initialKey);
-    const [source, setSource] = React.useState<ValueRefSource>(initialSource);
+    const editor = useValueRefEditorDraft({ kind: props.kind, initial: { key: props.initialKey, valueRef: props.initialValueRef } });
+    const keyText = editor.draft?.key ?? props.initialKey;
+    const setKeyText = editor.setDraftKey;
+    // The existing modal presents machine references in its text field until the row renderer migrates.
+    const source: ValueRefSource = editor.draft?.source === 'machine' ? 'literal' : editor.draft?.source ?? props.initialValueRef.t;
+    const setSource = editor.setDraftSource;
     const [sourceMenuOpen, setSourceMenuOpen] = React.useState(false);
-    const [literalValue, setLiteralValue] = React.useState(() => (props.initialValueRef.t === 'literal' ? props.initialValueRef.v : ''));
-    const [secretId, setSecretId] = React.useState(() => (props.initialValueRef.t === 'savedSecret' ? props.initialValueRef.secretId : null));
-
-    const normalizedKey = React.useMemo(() => normalizeKey(props.kind, keyText), [keyText, props.kind]);
-    const keyValid = React.useMemo(() => validateKey(props.kind, normalizedKey), [normalizedKey, props.kind]);
+    const literalValue = editor.draft?.literalValue ?? '';
+    const setLiteralValue = React.useCallback((value: string) => {
+        editor.setDraftSource('literal');
+        editor.setDraftLiteralValue(value);
+    }, [editor.setDraftSource, editor.setDraftLiteralValue]);
+    const secretId = editor.draft?.secretId || null;
+    const setSecretId = editor.setDraftSecretId;
+    const { normalizedKey, keyValid } = editor;
 
     const secretName = React.useMemo(() => {
         if (!secretId) return null;
@@ -115,7 +106,7 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
         ];
     }, [theme.colors.text.secondary]);
 
-    const canSave = keyValid && (source !== 'savedSecret' || Boolean(secretId));
+    const canSave = editor.canSubmit;
 
     const pickSecret = React.useCallback(() => {
         Modal.show({
@@ -140,18 +131,12 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
             return;
         }
 
-        const valueRef: ValueRefV1 = source === 'sessionAttested'
-            ? { t: 'sessionAttested', field: props.initialValueRef.t === 'sessionAttested'
-                ? props.initialValueRef.field : 'externalPrincipalId' }
-            : source === 'literal'
-            ? { t: 'literal', v: literalValue }
-            : { t: 'savedSecret', secretId: secretId ?? '' };
-
-        const accepted = props.onSubmit({ key: normalizedKey, valueRef });
+        if (!editor.canSubmit || !editor.valueRef) return;
+        const accepted = props.onSubmit({ key: normalizedKey, valueRef: editor.valueRef });
         if (accepted !== false) {
             props.onClose();
         }
-    }, [keyValid, literalValue, normalizedKey, props, secretId, source]);
+    }, [keyValid, normalizedKey, props, editor.canSubmit, editor.valueRef]);
 
     const deleteAllowed = typeof props.onDelete === 'function';
 
@@ -177,7 +162,8 @@ export function ValueRefEditorModal(props: ValueRefEditorModalProps) {
                         items={sourceItems}
                         selectedId={source}
                         onSelect={(id) => {
-                            const next = id as ValueRefSource;
+                            if (id !== 'literal' && id !== 'savedSecret') return;
+                            const next = id;
                             setSource(next);
                             if (next !== 'savedSecret') return;
                             if (!secretId) {

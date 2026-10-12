@@ -10,6 +10,9 @@ import { WorkspaceShell } from '../WorkspaceShell';
 import { createWorkspaceState, reduceWorkspaceState, type WorkspaceState, type WorkspaceTab } from '../workspaceState';
 import { WorkspaceTitleBar } from './WorkspaceTitleBar';
 import { createWorkspaceBarGeometry, WorkspaceBarGeometryContext } from './workspaceBarGeometry';
+import { createWorkspaceNavigationAdapter } from '../workspaceNavigationAdapter';
+import { createWorkspaceActionAdapter } from '../workspaceActions';
+import { registerMountedWorkspaceAction } from '../workspaceActionRuntime';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -47,6 +50,17 @@ function tab(id: string, overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
 function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number; trailingStartPx?: number }>) {
     const [state, dispatch] = React.useReducer(reduceWorkspaceState, props.initial);
     const canvasControlsRef = React.useRef<SplitCanvasHostControls | null>(null);
+    const currentState = React.useRef(state);
+    currentState.current = state;
+    const navigation = React.useMemo(() => createWorkspaceNavigationAdapter({
+        getState: () => currentState.current, getCatalog: () => [], dispatch,
+        createId: () => 'empty', onChange: () => {}, transport: { commit: () => {} },
+    }), []);
+    React.useEffect(() => {
+        const execute = createWorkspaceActionAdapter({ getState: () => currentState.current,
+            navigation, readCanvas: () => canvasControlsRef.current, createId: () => 'empty' });
+        return registerMountedWorkspaceAction(async request => execute(request.actionId, request.input));
+    }, [navigation]);
     const [geometry] = React.useState(createWorkspaceBarGeometry);
     const value: WorkspaceNavigationContextValue = {
         active: true, state, dispatch, canvasControlsRef,
@@ -89,6 +103,25 @@ function threePanes(): WorkspaceState {
 }
 
 describe('WorkspaceTitleBar', () => {
+    it('offers close left and close all through the existing tab menu and overflow while preserving pinned tabs', async () => {
+        let state = createWorkspaceState(tab('pinned', { pinned: true }));
+        for (const id of ['left', 'middle', 'right']) state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: tab(id) });
+        const screen = await renderScreen(<Harness initial={state} clusterEndPx={200} />, {
+            createNodeMock: windowMeasurement({ 'workspace-title-bar': { x: 0, width: 1440 }, 'workspace-group-group_1': { x: 300, width: 1100 } }),
+        });
+        const middle = screen.findAllByTestId('workspace-tab-middle').find(node => typeof node.props.onLongPress === 'function');
+        await act(async () => { middle?.props.onLongPress({}); });
+        await screen.pressByTestIdAsync('workspace-tab-menu-close-left');
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)); });
+        expect(stateOf(screen).groups['group:1'].tabIds).toEqual(['pinned', 'middle', 'right']);
+        await screen.pressByTestIdAsync('workspace-overflow-group_1');
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+        await screen.pressByTestIdAsync('workspace-overflow-close-all');
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 150)); });
+        expect(stateOf(screen).groups['group:1'].tabIds).toEqual(['pinned']);
+        expect(stateOf(screen).groups['group:1'].activeTabId).toBe('pinned');
+    });
+
     it('reserves the measured trailing control span, including a resize that hides a covered pane', async () => {
         const frames = windowMeasurement({
             'workspace-title-bar': { x: 0, width: 1440 },

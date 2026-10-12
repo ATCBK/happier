@@ -7264,6 +7264,7 @@ const enSettingsAgents = {
     kindCodingAgent: 'Coding agent',
     usedByNewSessions: 'used by new sessions',
     sessionDefaultsSavedDescription: ({ agent }: { agent: string }) => `Used when a new session starts with ${agent}. Saved to your account.`,
+    defaultModelAgentDefault: 'Agent default',
     setupTitle: 'Setup and status',
     setupNoComputer: 'No machine selected. Choose one to check the CLI or sign in.',
     modelsDefaultTag: 'Default',
@@ -9463,6 +9464,18 @@ const enSession = {
     detailTitle: ({ agent }: { agent: string }) => `Continue with ${agent}`,
     sendLabel: ({ agent }: { agent: string }) => `Continue with ${agent}`,
     routeSendLabel: ({ source }: { source: string }) => `Continue via ${source}`,
+    routeUnarm: ({ source }: { source: string }) => `Cancel switch to ${source}`,
+    childChoice: {
+      title: ({ agent }: { agent: string }) => `Choose a model for ${agent}`,
+      incompatible: ({ agent, parent }: { agent: string; parent: string }) => `This session runs on ${parent}, which ${agent} can’t use.`,
+      incompatibleUnknown: ({ agent }: { agent: string }) => `${agent} can’t use this session’s model.`,
+      unverified: ({ agent, parent }: { agent: string; parent: string }) => `Happier can’t confirm ${agent} can use ${parent}.`,
+      unverifiedUnknown: ({ agent }: { agent: string }) => `Happier can’t confirm ${agent} can use this session’s model.`,
+      useDefault: ({ agent }: { agent: string }) => `Use ${agent}’s default`,
+      chooseModel: 'Choose a model',
+      keptNote: 'Your message stays here until you choose.',
+      agentFallback: 'This agent',
+    },
     detailDescription:
       'Your recent conversation carries over as text; images and files don’t. Nothing is sent until your next message.',
     detailDescriptionEmpty:

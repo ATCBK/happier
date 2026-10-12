@@ -151,7 +151,7 @@ export function createUiPromptLibraryArtifactStore(
     serverId: account.serverId,
     matchesServerId: serverId => areServerProfileIdentifiersEquivalent(serverId, account.serverId),
     assertCurrent: account.assertCurrent,
-    readCatalog: async signal => {
+    readCatalog: async (signal, key = 'folders') => {
       const { refreshPromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
       const { getPromptLibraryCatalogSnapshot, getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
       throwIfAborted(signal);
@@ -161,8 +161,8 @@ export function createUiPromptLibraryArtifactStore(
       const scope = { serverId: account.serverId, accountId: account.accountId };
       // The reviewed fresh row is usable authority; the Home CAS detects any unobserved remote edit.
       // A known-stale row is never used to construct a mutation.
-      const folders = getPromptLibraryCatalogValue(scope, 'folders');
-      if (folders.status !== 'ready' || folders.stale) await refreshPromptLibraryCatalog(scope);
+      const row = getPromptLibraryCatalogValue(scope, key);
+      if (row.status !== 'ready' || row.stale) await refreshPromptLibraryCatalog(scope);
       throwIfAborted(signal);
       account.assertCurrent();
       const projection = getPromptLibraryCatalogSnapshot(scope);

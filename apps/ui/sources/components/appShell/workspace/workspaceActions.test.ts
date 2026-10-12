@@ -20,6 +20,29 @@ vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
 });
 
 describe('workspace Action intent adapter', () => {
+    it.each([
+        ['workspace.tabs.close_others', { tabId: 'b' }, ['pin', 'b']],
+        ['workspace.tabs.close_left', { tabId: 'b' }, ['pin', 'b', 'c']],
+        ['workspace.tabs.close_right', { tabId: 'b' }, ['pin', 'a', 'b']],
+        ['workspace.tabs.close_all', { groupId: 'group:1' }, ['pin']],
+    ])('executes %s through the current pane owner while preserving pinned tabs', (name, parameters, remaining) => {
+        let state = createWorkspaceState({ id: 'pin', target: { kind: 'session', params: { id: 'pin' } }, pinned: true, preview: false });
+        for (const id of ['a', 'b', 'c']) state = reduceWorkspaceState(state, {
+            type: 'openTab', groupId: 'group:1', tab: { id, target: { kind: 'session', params: { id } }, pinned: false, preview: false },
+        });
+        const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });
+        let id = 0;
+        const navigation = createWorkspaceNavigationAdapter({ getState: () => state, getCatalog: () => catalog,
+            dispatch: action => { state = reduceWorkspaceState(state, action); }, transport: { commit: () => {} },
+            createId: () => `new:${++id}`, onChange: () => {} });
+        const execute = createWorkspaceActionAdapter({ getState: () => state, navigation, readCanvas: () => null, createId: () => `new:${++id}` });
+        const actionId = ActionIdSchema.parse(name);
+        if (!isWorkspaceActionId(actionId)) throw new Error('Expected a workspace Action');
+        expect(execute(actionId, parameters)).toEqual({ ok: true });
+        expect(state.groups['group:1'].tabIds).toEqual(remaining);
+        expect(execute(actionId, name === 'workspace.tabs.close_all' ? { groupId: 'missing' } : { tabId: 'missing' }))
+            .toMatchObject({ ok: false, errorCode: name === 'workspace.tabs.close_all' ? 'workspace_group_not_found' : 'workspace_tab_not_found' });
+    });
     it('opens an exact Project file Find through the private handoff without putting the query in navigation state', () => {
         let state = createWorkspaceState({ id: 'a', target: { kind: 'session', params: { id: 'a', serverId: 'home-a' } }, pinned: false, preview: false });
         const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });

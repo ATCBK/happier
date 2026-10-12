@@ -16,6 +16,7 @@ export const en = {
 export const workspaceTabKeyboardTranslations = {
     workspaceTabNew: 'New workspace tab',
     workspaceTabClose: 'Close workspace tab',
+    workspaceTabCloseAll: 'Close all workspace tabs',
     workspaceTabReopen: 'Reopen closed workspace tab',
     workspaceTabSelect1: 'Select workspace tab 1',
     workspaceTabSelect2: 'Select workspace tab 2',
