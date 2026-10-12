@@ -117,7 +117,14 @@ follow whatever Local voice is using.
 In 0.3 development, **Set up voice** on Home and in Voice settings guides you
 through choosing a service, fixing its prerequisites, allowing the microphone and
 trying a conversation. **Try it** starts a real conversation in place. The Try
-step completes only after a retained spoken input and reply.
+step completes only after a retained spoken input and reply. If no microphone is
+connected, the microphone step says so and offers **Check again** instead of a
+permission request.
+
+Agents can inspect these same prerequisites and next steps through the settings
+Actions in 0.3 development. The result explains Hear, Think and Speak readiness
+for Conversations, or recognition readiness for Dictation. A device or cloud
+service that does not use a computer does not require one for this check.
 
 Home's **Brief me** uses the work and attention already shown in Inbox: items that
 need you, failed work and ready work. It reports incomplete information and follows
@@ -174,7 +181,9 @@ In the 0.3 development interface, **Show live Voice as** selects **Top bar**,
 The default is Top bar on wide layouts and Island on phones. A stored Top-bar
 choice displays as Island on a phone without rewriting the stored preference.
 The Companion's Voice section stays available in each mode. Changing the container
-changes presentation, not the running conversation or its microphone.
+changes presentation, not the running conversation or its microphone. Opening the
+Island or Orb shows the Voice section anchored beside it on wide layouts and as a
+bottom sheet on phones.
 
 Conversation scope and transcript preferences synchronize with your account;
 presence placement is device-local. These settings do not change how a provider speaks
@@ -186,6 +195,17 @@ Voice and Dictation have separate composer controls. Dictation puts editable tex
 your draft; it does not send the message. Voice starts a conversation at its admitted
 global or session target. During a conversation, Mute suspends microphone input while
 End ends the attempt. Navigating to another session does not retarget End or recovery.
+
+Agents can also request Dictation for a focused editable field or its Dictation
+control in 0.3 development. Starting asks for Action approval by default and
+requires microphone permission on that device. Finishing puts recognized words
+back into that same field for editing; it never presses Send. Cancel discards
+the recording, and a field that was closed or belongs to a previous Account is
+unavailable.
+
+In 0.3 development, if the microphone is blocked, the Voice presence shows **Microphone blocked** with
+**Allow** until you allow it or dismiss the attempt; if no microphone is found, it says
+so and offers **Retry**.
 Permission requests still need a tap, and ending Voice leaves them pending.
 
 In 0.3 development, the rebindable **Start or end Voice** command defaults to
@@ -220,13 +240,19 @@ and Local voice; the controls for what voice providers can see — session summa
 recent messages, tool names, device inventory, permission requests; and
 **Voice History**.
 
+In 0.3 development, the **Privacy policy** row is also searchable and available
+to agents through the settings Actions. It opens the public policy on the client
+answering the request; it does not need your Voice computer or microphone.
+
 Local file paths and tool arguments are always excluded from Voice provider context. Current settings do not offer controls to enable either one. For stricter privacy, disable the other context categories you do not want to share, such as **Share recent messages**.
 
-In 0.3 development, diagnostic recordings under **Local speech diagnostics** in
-**Privacy & data** are off by default. Enabling them asks for explicit consent
-before recording selected speech-to-text input or text-to-speech output. The
-section shows the recording location and retention policy, with export and
-deletion controls.
+In 0.3 development, **Diagnostic recordings** in **Privacy & data** are off by
+default. Turning on **Save diagnostic audio** asks for explicit consent before
+recording selected speech-to-text input or text-to-speech output. The section
+shows the retention policy and, once your Voice computer answers, where the
+recordings are kept, with export controls; **Delete all diagnostic audio**
+appears only when there is something to delete. While the Voice computer can't
+be reached, one line says so instead.
 
 > **Development status:** **Current UI context** is a Developer Preview
 > capability whose implementation and packaged web/iOS/Android certification
