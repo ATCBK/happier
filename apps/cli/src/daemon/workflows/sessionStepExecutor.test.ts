@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as persistence from '@/persistence';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { WorkflowSessionAuthoringSelectionSchema } from '@happier-dev/protocol/workflows/workflowV1';
+import { logger } from '@/ui/logger';
 
 const readiness = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), callMachineRpc: vi.fn() }));
 vi.mock('axios', () => ({ default: { get: readiness.get, post: readiness.post, isAxiosError: () => false } }));
@@ -47,6 +49,173 @@ vi.mock('node:fs', async (importOriginal) => {
 
 
 describe('workflow Session step executor', () => {
+  it('refuses reuse when a workflow requests skills that the retained Session did not launch with', async () => {
+    const conversations = createProductionWorkflowConversationOwner({
+      machineId: 'machine-1', createFreshConversation: async () => { throw new Error('must not create'); },
+      resolveSharedRunConversation: async () => ({ sessionId: 'retained', machineId: 'machine-1', directory: '/repo' }),
+      resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => ({ sessionId: 'retained', machineId: 'machine-1', directory: '/repo', runtimeSelection: {} }),
+    });
+    const execution = WorkflowSessionAuthoringSelectionSchema.parse({ capabilitySelection: {
+      skills: { v: 1, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
+    } });
+    await expect(conversations.prepare({ runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' }, execution } as never))
+      .rejects.toMatchObject({ code: 'workflow_conversation_unavailable', details: { reason: 'capabilitySelection' } });
+  });
+  it.each(['allowedTools', 'unlistedTools'] as const)('rejects a conflicting %s recipe for an explicit retained Session', async (field) => {
+    const conversations = createProductionWorkflowConversationOwner({ machineId: 'machine-1',
+      createFreshConversation: async () => { throw new Error('must not create'); },
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => ({ sessionId: 'retained', machineId: 'machine-1', directory: '/repo',
+        runtimeSelection: { allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' } }),
+    });
+    await expect(conversations.prepare({ runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' }, execution: {
+      conversation: { kind: 'existing_session', sessionId: 'retained', machineId: 'machine-1' },
+      [field]: field === 'allowedTools' ? ['Read'] : 'ask',
+    } } as never)).rejects.toMatchObject({ code: 'workflow_conversation_unavailable', details: { reason: field } });
+  });
+
+  const reuseSelection = WorkflowSessionAuthoringSelectionSchema.parse({
+    agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+    profileId: 'reviewer', acpSessionModeId: 'plan',
+    sessionConfigOptionOverrides: { v: 1, updatedAt: 1, overrides: { reasoning: { value: 'PRIVATE_CONFIG', updatedAt: 1 } } },
+    mcpSelection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['mcp-1'], forceExcludeServerIds: [] },
+    connectedServices: { v: 2, bindingsByServiceId: {} }, transcriptStorage: 'direct',
+    terminal: { mode: 'tmux', tmux: { sessionName: 'PRIVATE_TITLE', isolated: true } },
+    windowsRemoteSessionLaunchMode: 'windows_terminal', windowsRemoteSessionConsole: 'hidden',
+    windowsTerminalWindowName: 'PRIVATE_TITLE', runtimeDescriptorV1: null,
+  });
+  it.each(Object.keys(reuseSelection))('identifies the rejected reuse field %s without disclosing configuration', async (field) => {
+    // File logging is an OS boundary; keep the refusal and serialization real.
+    const log = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    const conversations = createProductionWorkflowConversationOwner({
+      machineId: 'machine-1', createFreshConversation: async () => { throw new Error('must not create'); },
+      resolveSharedRunConversation: async () => ({ sessionId: 'retained', machineId: 'machine-1', directory: '/repo' }),
+      resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => ({ sessionId: 'retained', machineId: 'machine-1', directory: '/repo', runtimeSelection: {} }),
+    });
+    const execution = WorkflowSessionAuthoringSelectionSchema.parse({ [field]: reuseSelection[field as keyof typeof reuseSelection] });
+    const preparation = conversations.prepare({ runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' }, execution } as never);
+    await expect(preparation)
+      .rejects.toMatchObject({ code: 'workflow_conversation_unavailable', details: {
+        reason: field, expected: expect.objectContaining({ kind: expect.any(String) }), observed: { kind: 'unset' },
+      } });
+    try { await preparation; }
+    catch (error) { expect(JSON.stringify(error)).not.toMatch(/PRIVATE_CONFIG|PRIVATE_TITLE/); }
+    expect(log.mock.calls).toHaveLength(1);
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({ event: 'workflow_conversation_refused', reason: field });
+    expect(log.mock.calls[0]![0]).not.toMatch(/PRIVATE_CONFIG|PRIVATE_TITLE/);
+  });
+  it.each([
+    ['recovery_execution_missing', { invocation: { logicalInvocationRecordId: 'inv-1', recovery: { conversation: 'same_conversation' } } }],
+    ['target_kind_mismatch', { invocation: { logicalInvocationRecordId: 'inv-1', recovery: { conversation: 'same_conversation' } },
+      recoveryPreviousExecution: { kind: 'detached_run', runId: 'detached', localInputId: 'input' } }],
+    ['session_unavailable', { execution: { conversation: { kind: 'existing_session', sessionId: 'missing', machineId: 'machine-1' } } }],
+    ['producer_conversation_missing', { execution: { conversation: { kind: 'from_step', producer: { blockId: 'previous', scope: { kind: 'current' } } } } }],
+    ['origin_session_missing', { execution: { conversation: { kind: 'origin_session' } } }],
+  ])('identifies resolver refusal %s', async (reason, overrides) => {
+    const conversations = createProductionWorkflowConversationOwner({ machineId: 'machine-1',
+      createFreshConversation: async () => { throw new Error('must not create'); },
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => null,
+    });
+    await expect(conversations.prepare({ runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' }, execution: {},
+      onOriginInputOffered: async () => {}, ...overrides } as never)).rejects.toMatchObject({
+      code: 'workflow_conversation_unavailable', details: { reason },
+    });
+  });
+  it('keeps incoming model and permission choices outside the reuse refusal checks', async () => {
+    const conversations = createProductionWorkflowConversationOwner({ machineId: 'machine-1',
+      createFreshConversation: async () => { throw new Error('must not create'); },
+      resolveSharedRunConversation: async () => ({ sessionId: 'retained', machineId: 'machine-1', directory: '/repo' }),
+      resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => ({ sessionId: 'retained', machineId: 'machine-1', directory: '/repo',
+        runtimeSelection: { modelSelection: null, permissionMode: 'read_only' } }),
+    });
+    await expect(conversations.prepare({ runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' }, execution: {
+      permissionMode: 'default', modelSelection: { v: 1, updatedAt: 1,
+        ref: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'another-model' } },
+    } } as never)).resolves.toMatchObject({ existing: { sessionId: 'retained' } });
+  });
+  it('identifies absent retained delegation depth after the reuse resolver succeeds', async () => {
+    const retained = { sessionId: 'retained', machineId: 'machine-1', directory: '/repo', origin: { kind: 'run_step' as const, runId: 'run-1' } };
+    const execute = createProductionWorkflowSessionStepExecutor({ credentials: { token: 'token', encryption: null }, machineId: 'machine-1',
+      machineAdmissionTransport: vi.fn(), createFreshConversation: async () => { throw new Error('must not create'); },
+      resolveSharedRunConversation: async () => retained, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => retained,
+      sessionInput: { enqueue: async () => { throw new Error('must not admit'); }, observe: async () => { throw new Error('must not observe'); } },
+    });
+    await expect(execute({ runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' },
+      step: { result: { kind: 'text' } }, execution: {}, authorization: { admittedPermissionCeiling: 'default' },
+      workspace: { machineId: 'machine-1', directory: '/repo' },
+    } as never)).resolves.toMatchObject({ kind: 'failed', code: 'workflow_conversation_unavailable',
+      reasonDetails: { reason: 'work_depth_unavailable', expected: { kind: 'number' }, observed: { kind: 'unset' } } });
+  });
+  it.each([
+    { reason: 'origin_session_missing', code: 'workflow_conversation_unavailable', existing: null },
+    { reason: 'session_identity_mismatch', code: 'workflow_conversation_unavailable', existing: { sessionId: 'other', machineId: 'machine-1', directory: '/repo' } },
+    { reason: 'machine_mismatch', code: 'conversation_workspace_mismatch', existing: { sessionId: 'origin', machineId: 'other-machine', directory: '/repo' } },
+    { reason: 'workspace_mismatch', code: 'conversation_workspace_mismatch', existing: { sessionId: 'origin', machineId: 'machine-1', directory: '/other' } },
+  ])('identifies a prepared origin refusal $reason', async ({ reason, code, existing }) => {
+    const execute = createProductionWorkflowSessionStepExecutor({ credentials: { token: 'token', encryption: null }, machineId: 'machine-1',
+      machineAdmissionTransport: vi.fn(), createFreshConversation: async () => { throw new Error('must not create'); },
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null, resolveExistingSessionConversation: async () => null,
+      sessionInput: { enqueue: async () => { throw new Error('must not admit'); }, observe: async () => { throw new Error('must not observe'); } },
+    });
+    await expect(execute({ runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' }, originSessionId: 'origin',
+      preparedStep: { kind: 'workflow_session_conversation', existing, inputPath: 'origin_session' },
+      step: { result: { kind: 'text' } }, execution: { conversation: { kind: 'origin_session' } }, authorization: { admittedPermissionCeiling: 'default' },
+      workspace: { machineId: 'machine-1', directory: '/repo' }, onOriginInputOffered: async () => {},
+    } as never)).resolves.toMatchObject({ kind: 'failed', code, reasonDetails: { reason } });
+  });
+  it('names configuration mismatch when the requested option exists but its value differs', async () => {
+    const conversations = createProductionWorkflowConversationOwner({ machineId: 'machine-1',
+      createFreshConversation: async () => { throw new Error('must not create'); },
+      resolveSharedRunConversation: async () => ({ sessionId: 'retained', machineId: 'machine-1', directory: '/repo' }),
+      resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => ({ sessionId: 'retained', machineId: 'machine-1', directory: '/repo',
+        runtimeSelection: { sessionConfigOptionOverrides: { v: 1, updatedAt: 1,
+          overrides: { reasoning: { value: 'OTHER_PRIVATE_VALUE', updatedAt: 1 } } } } }),
+    });
+    const prepared = conversations.prepare({ runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' },
+      execution: { sessionConfigOptionOverrides: reuseSelection.sessionConfigOptionOverrides } } as never);
+    await expect(prepared).rejects.toMatchObject({ details: { reason: 'sessionConfigOptionOverrides',
+      expected: { kind: 'object', ids: ['reasoning'] }, observed: { kind: 'object', ids: ['reasoning'] } } });
+    try { await prepared; } catch (error) { expect(JSON.stringify(error)).not.toContain('PRIVATE_VALUE'); }
+  });
+  it.each([
+    ['machine_mismatch', 'other-machine', 'retained', false],
+    ['session_identity_mismatch', 'machine-1', 'other-session', true],
+    ['session_unavailable', 'machine-1', 'retained', false],
+  ])('identifies reused identity check %s', async (reason, machineId, sessionId, origin) => {
+    const retained = { sessionId, machineId, directory: '/repo' };
+    const conversations = createProductionWorkflowConversationOwner({ machineId: 'machine-1',
+      createFreshConversation: async () => { throw new Error('must not create'); },
+      resolveSharedRunConversation: async () => retained, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => reason === 'session_unavailable' ? null : retained,
+    });
+    await expect(conversations.prepare({ runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' },
+      execution: origin ? { conversation: { kind: 'origin_session' } } : {},
+      originSessionId: origin ? 'expected-origin' : undefined, onOriginInputOffered: async () => {},
+    } as never)).rejects.toMatchObject({ code: 'workflow_conversation_unavailable', details: { reason } });
+  });
+  it.each([
+    ['workspace_mismatch', 'conversation_workspace_mismatch', { sessionId: 'retained', machineId: 'machine-1', directory: '/other' }, false],
+    ['account_scope_unavailable', 'workflow_conversation_unavailable', { sessionId: 'retained', machineId: 'machine-1', directory: '/repo' }, true],
+    ['machine_mismatch', 'workflow_conversation_unavailable', null, false],
+    ['workspace_mismatch', 'workflow_conversation_unavailable', null, false],
+  ])('identifies materialization refusal %s (%s)', async (reason, code, existing, inputless) => {
+    const conversations = createProductionWorkflowConversationOwner({ machineId: 'machine-1',
+      createFreshConversation: async () => ({ sessionId: 'fresh',
+        machineId: reason === 'machine_mismatch' ? 'other-machine' : 'machine-1', directory: '/other' }),
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => null,
+    });
+    await expect(conversations.materialize({ kind: 'workflow_session_conversation', existing }, {
+      runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' }, step: { inputMode: inputless ? 'none' : 'prompt' },
+      execution: { agentTarget: reuseSelection.agentTarget }, workspace: { machineId: 'machine-1', directory: '/repo' },
+    } as never)).rejects.toMatchObject({ code, details: { reason } });
+  });
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     // HTTP and machine process launch are the external readiness boundaries;
@@ -217,7 +386,8 @@ describe('workflow Session step executor', () => {
     await expect(conversations.prepare(base)).resolves.toMatchObject({ inputPath: 'origin_session', existing: {
       sessionId: 'frozen-origin', directory: '/origin/cwd', agentTarget: { identity: { localId: 'codex' } },
     } });
-    await expect(conversations.prepare({ ...base, originSessionId: undefined })).rejects.toMatchObject({ code: 'workflow_conversation_unavailable' });
+    await expect(conversations.prepare({ ...base, originSessionId: undefined })).rejects.toMatchObject({
+      code: 'workflow_conversation_unavailable', details: { reason: 'origin_session_missing' } });
     await expect(conversations.prepare({ ...base, onOriginInputOffered: undefined })).rejects.toMatchObject({ code: 'workflow_origin_input_offer_unavailable' });
     await expect(conversations.prepare({ ...base, invocation: { ...base.invocation,
       recovery: { conversation: 'fresh_agent', input: { kind: 'original' } } } })).rejects.toMatchObject({ code: 'workflow_recovery_conversation_unsupported' });
@@ -316,12 +486,12 @@ describe('workflow Session step executor', () => {
     expect(withdrawals).toEqual([{ sessionId: 'origin', localInputId: 'exact-origin-input' }]);
   });
 
-  it('settles a deleted origin as unavailable without starting a replacement', async () => {
-    const execute = createWorkflowSessionStepExecutor({
-      credentials: { token: 'token', encryption: null },
-      prepareConversation: async () => { throw new Error('admitted input cannot be replaced'); },
-      materializeConversation: async () => { throw new Error('admitted input cannot be replaced'); },
-
+  it.each([true, false])('settles a deleted origin as unavailable without starting a replacement (rejoin: %s)', async (rejoin) => {
+    const execute = createProductionWorkflowSessionStepExecutor({
+      credentials: { token: 'token', encryption: null }, machineId: 'machine-1', machineAdmissionTransport: vi.fn(),
+      createFreshConversation: async () => { throw new Error('origin cannot be replaced'); },
+      resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
+      resolveExistingSessionConversation: async () => ({ sessionId: 'origin', machineId: 'machine-1', directory: '/repo' }),
       sessionInput: { enqueue: async () => { throw new Error('admitted input cannot be replaced'); },
         observe: async () => ({ ok: false, code: 'session_not_found' }),
       },
@@ -330,12 +500,13 @@ describe('workflow Session step executor', () => {
       runId: 'run-1', originSessionId: 'origin',
       step: { kind: 'step', id: 'a', document: { text: 'work', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
       invocation: { kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: 'a', scope: [] }, attempt: '0', logicalInvocationRecordId: 'logical-1',
-        execution: { kind: 'session', sessionId: 'origin', localInputId: 'exact-origin-input' } },
+        ...(rejoin ? { execution: { kind: 'session' as const, sessionId: 'origin', localInputId: 'exact-origin-input' } } : {}) },
       input: { text: 'work', references: [], attachments: [], values: [] }, execution: { conversation: { kind: 'origin_session' } }, executionTarget: { kind: 'session' },
       authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
-      beforeInputAdmission: async () => {}, onInputAccepted: async () => {},
-    })).resolves.toEqual({ kind: 'failed', code: 'workflow_conversation_unavailable' });
+      beforeInputAdmission: async () => {}, onInputAccepted: async () => {}, onOriginInputOffered: async () => {},
+    })).resolves.toMatchObject({ kind: 'failed', code: 'workflow_conversation_unavailable',
+      reasonDetails: { reason: 'session_unavailable', expected: { kind: 'session', ids: ['origin'] } } });
   });
 
   it('fences Session enqueue after asynchronous conversation preparation', async () => {
@@ -508,7 +679,9 @@ describe('workflow Session step executor', () => {
       runId: 'run-1', invocation: { logicalInvocationRecordId: 'inv-1' },
       execution: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } },
     };
-    await expect(conversations.prepare(params as never)).rejects.toMatchObject({ code: 'workflow_conversation_unavailable' });
+    await expect(conversations.prepare(params as never)).rejects.toMatchObject({ code: 'workflow_conversation_unavailable',
+      details: { reason: 'agentTarget', expected: { kind: 'agent', ids: ['happier.agent.claude/claude'] },
+        observed: { kind: 'agent', ids: ['happier.agent.codex/codex'] } } });
     await expect(conversations.prepare({
       ...params,
       execution: { ...params.execution, conversation: { kind: 'existing_session', sessionId: 'retained', machineId: 'machine-1' } },
@@ -1184,7 +1357,7 @@ describe('workflow Session step executor', () => {
         machineId: 'machine-1', directory: 'c:/users/alice/repo/packages/app',
         checkoutRootPath: 'c:/users/alice/repo',
       },
-    } as never)).rejects.toMatchObject({ code: 'conversation_workspace_mismatch' });
+    } as never)).rejects.toMatchObject({ code: 'conversation_workspace_mismatch', details: { reason: 'workspace_mismatch' } });
   });
 
   it('rejects an existing Session with a new worktree during conversation preflight', async () => {
@@ -1201,7 +1374,8 @@ describe('workflow Session step executor', () => {
         conversation: { kind: 'existing_session', sessionId: 'session-1', machineId: 'machine-1' },
         workspace: { kind: 'new_worktree', source: { kind: 'original' } },
       },
-    } as never)).rejects.toMatchObject({ code: 'conversation_workspace_mismatch' });
+    } as never)).rejects.toMatchObject({ code: 'conversation_workspace_mismatch', details: { reason: 'workspace_mismatch',
+      expected: { kind: 'object', ids: ['new_worktree'] } } });
     expect(resolveExistingSessionConversation).not.toHaveBeenCalled();
   });
 
@@ -1225,6 +1399,8 @@ describe('workflow Session step executor', () => {
         agentTarget,
         connectedServices: { v: 2, bindingsByServiceId: {} },
         permissionMode: 'read_only',
+        allowedTools: ['mcp__wilson-brief__*'],
+        unlistedTools: 'deny',
         sessionConfigOptionOverrides: { v: 1, updatedAt: 1, overrides: {} },
       },
       workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
@@ -1245,6 +1421,8 @@ describe('workflow Session step executor', () => {
       spawnNonce: 'workflow:run-1:inv-1',
       agentTarget,
       permissionMode: 'read-only',
+      allowedTools: ['mcp__wilson-brief__*'],
+      unlistedTools: 'deny',
       sessionConfigOptionOverrides: { v: 1, updatedAt: 1, overrides: {} },
     }));
   });

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { DaemonContributionRegistryProjectionDescribeResponseSchema, resolveRoleSelectionV1, materializeWorkflowAcceptedSnapshotV1, admitAgentStartV1, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } from '@happier-dev/protocol';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema, resolveRoleSelectionV1, materializeWorkflowAcceptedSnapshotV1, admitAgentStartV1, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, WorkflowActionFailureV1Schema } from '@happier-dev/protocol';
 import { createCredentialedWorkflowMaterializationHostV1, createWorkflowMaterializationHostV1, type WorkflowMaterializationHostDeps } from './workflowMaterializationHost';
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -12,7 +12,7 @@ const credentials = { token: 'workflow-session-admission', encryption: null } as
 const sessionId = 'c123456789012345678901234';
 
 function sessionAdmissionHost(machineId: string, readHostActionContract?: WorkflowMaterializationHostDeps['readHostActionContract'],
-  readAcpCatalog?: WorkflowMaterializationHostDeps['readAcpCatalog']) {
+  readAcpCatalog?: WorkflowMaterializationHostDeps['readAcpCatalog'], nativeSignIn: 'unknown' | 'signedOut' = 'unknown') {
   // Only authenticated HTTP and daemon RPC are replaced; Session resolution,
   // owner-metadata opening, Machine authority and the materializer stay real.
   vi.spyOn(axios, 'get').mockImplementation(async (url) => {
@@ -45,7 +45,7 @@ function sessionAdmissionHost(machineId: string, readHostActionContract?: Workfl
       };
       if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
         'cli.installed': { ok: true, data: { installed: true, version: '1', latestVersion: null,
-          update: { supported: false, command: null }, signIn: { status: 'unknown', loginSupport: 'unsupported' },
+          update: { supported: false, command: null }, signIn: { status: nativeSignIn, loginSupport: 'unsupported' },
           platform: { supported: true }, install: { available: false, mode: 'none', sizeBytes: null, guideUrl: null }, dependencies: [] } },
       } };
       throw new Error('unexpected_machine_method');
@@ -55,6 +55,55 @@ function sessionAdmissionHost(machineId: string, readHostActionContract?: Workfl
 
 describe('exact-machine workflow materialization effects', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); resetInMemoryAccountSettingsContextForTests(); });
+
+  it('keeps a connected authentication override on admission and replay despite native sign-out', async () => {
+    const connectedServices = { v: 2 as const, bindingsByServiceId: {
+      'test.agent/auth': { source: 'connected' as const, selection: 'profile' as const, profileId: 'step-profile' },
+    } };
+    const definition = { version: 1, defaults: { agentTarget: { kind: 'agent' as const,
+      identity: { pluginId: 'test.agent', localId: 'agent' } }, connectedServices: { v: 2 as const, bindingsByServiceId: {
+        'test.agent/auth': { source: 'connected' as const, selection: 'group' as const, groupId: 'workflow-pool' },
+      } } }, blocks: [{ kind: 'step' as const, id: 'reply', document: { text: 'Reply', references: [], attachments: [] },
+        execution: { connectedServices } }] };
+    const context = { source: { kind: 'inline' as const }, inputs: {}, machineId: 'run-machine',
+      executionTarget: { kind: 'session' as const },
+      workspaceTarget: { project: { machineId: 'run-machine', directory: '/repo', checkoutRootPath: '/repo' } },
+      authorization: { principal: { kind: 'host' as const } } };
+    const host = sessionAdmissionHost('run-machine', undefined, undefined, 'signedOut');
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({ ...await host({ machineId: 'run-machine', directory: '/repo' }),
+      definition, context, admission: { kind: 'user' } });
+    expect(accepted).toMatchObject({ ok: true, snapshot: { materializedLeaves: [{ selection: { connectedServices } }] } });
+    if (!accepted.ok) throw new Error(JSON.stringify(accepted));
+    const replay = await materializeWorkflowAcceptedSnapshotV1({ ...await host({ machineId: 'run-machine', directory: '/repo' }),
+      definition, context, replay: { snapshot: accepted.snapshot }, admission: { kind: 'user' } });
+    expect(replay).toMatchObject({ ok: true, snapshot: { materializedLeaves: [{ selection: { connectedServices } }] } });
+  });
+
+  it('preserves the failed Agent observation through materialization and the Workflow Action refusal', async () => {
+    const host = createWorkflowMaterializationHostV1({
+      credentials, readRoleSelection: async () => ({}), readLaunchProfile: async () => null,
+      readWorkflowDefinition: async () => null,
+      callMachineAction: async ({ method }) => method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+        ? { protocolVersion: 1, projection: { v: 2, generation: 1, agentsById: { claude: {
+          id: 'claude', identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
+          capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        } } } }
+        : { protocolVersion: 1, results: { 'cli.claude': { ok: false, error: { code: 'cli-detection-failed', message: 'private diagnostics' } } } },
+    });
+    const context = await host({ machineId: 'run-machine', directory: '/repo' });
+    const result = await materializeWorkflowAcceptedSnapshotV1({ ...context, admission: { kind: 'user' },
+      definition: { version: 1, defaults: {}, blocks: [{ kind: 'step', id: 'writer', document: { text: 'reply', references: [], attachments: [] },
+        execution: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } } }] },
+      context: { source: { kind: 'inline' }, inputs: {}, machineId: 'run-machine', executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId: 'run-machine', directory: '/repo', checkoutRootPath: '/repo' } },
+        authorization: { principal: { kind: 'host' } } },
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: 'target_unavailable', blockId: 'writer',
+      reason: 'agent_probe_failed', agentId: 'claude', errorCode: 'cli-detection-failed' } });
+    if (result.ok) throw new Error('Expected a pre-effect refusal');
+    expect(WorkflowActionFailureV1Schema.parse({ ok: false, errorCode: result.error.code, error: result.error.code, details: result.error }))
+      .toMatchObject({ details: { reason: 'agent_probe_failed', agentId: 'claude', errorCode: 'cli-detection-failed' } });
+  });
 
   it('freezes one Action catalog observation per admission, but rechecks availability on replay', async () => {
     const contract = { inputSchema: { type: 'object' }, outputSchema: { type: 'string' } };
@@ -217,22 +266,24 @@ describe('exact-machine workflow materialization effects', () => {
     expect(secondOpinion).toMatchObject({ ok: true, selection: { engine: { agentTargetKey: 'agent:test.agent/agent' } } });
     const leaf = { blockId: 'work', selection: { agentTarget: { kind: 'agent' as const, identity: { pluginId: 'test.agent', localId: 'agent' } } } };
     await expect(context.effects.resolveTargetAvailability({ ...leaf, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toBe(true);
-    await expect(context.effects.resolveTargetAvailability({ ...leaf, executionTarget: { kind: 'detached_run' } }, { sessionIds: [] })).resolves.toBe(detachedAvailable);
+    expect(await context.effects.resolveTargetAvailability({ ...leaf, executionTarget: { kind: 'detached_run' } }, { sessionIds: [] }))
+      .toEqual(detachedAvailable ? true : { code: 'target_unavailable', reason: 'detached_execution_unavailable', agentId: 'installed' });
     const nativeLeaf = { ...leaf, selection: { agentTarget: { kind: 'agent' as const, identity: { pluginId: 'native.agent', localId: 'agent' } } } };
-    await expect(context.effects.resolveTargetAvailability({ ...nativeLeaf, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toBe(false);
-    await expect(context.effects.resolveTargetAvailability({ ...nativeLeaf, executionTarget: { kind: 'detached_run' } }, { sessionIds: [] })).resolves.toBe(detachedAvailable);
+    await expect(context.effects.resolveTargetAvailability({ ...nativeLeaf, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toMatchObject({ reason: 'session_creation_unavailable', agentId: 'nativeOnly' });
+    expect(await context.effects.resolveTargetAvailability({ ...nativeLeaf, executionTarget: { kind: 'detached_run' } }, { sessionIds: [] }))
+      .toEqual(detachedAvailable ? true : { code: 'target_unavailable', reason: 'detached_execution_unavailable', agentId: 'nativeOnly' });
     for (const kind of ['session', 'detached_run'] as const) {
       await expect(context.effects.resolveTargetAvailability({ blockId: 'configured', executionTarget: { kind },
         selection: { agentTarget: { kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'selected' } },
       }, { sessionIds: [] })).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE' });
     }
-    await expect(context.effects.resolveTargetAvailability({ ...leaf, selection: { agentTarget: { kind: 'agent', identity: { pluginId: 'relay.agent', localId: 'agent' } } }, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toBe(false);
+    await expect(context.effects.resolveTargetAvailability({ ...leaf, selection: { agentTarget: { kind: 'agent', identity: { pluginId: 'relay.agent', localId: 'agent' } } }, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toMatchObject({ reason: 'selection_unavailable' });
     // Projected Action starts are not retained-Session steps, even when their
     // ambient selection names a Session already checked by the materializer.
     await expect(context.effects.resolveTargetAvailability({ ...leaf, selection: {
       agentTarget: { kind: 'agent', identity: { pluginId: 'uninstalled.agent', localId: 'agent' } },
       conversation: { kind: 'existing_session', sessionId, machineId: 'run-machine' },
-    }, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toBe(false);
+    }, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toMatchObject({ reason: 'selection_unavailable' });
     expect(calls).toEqual([RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, RPC_METHODS.CAPABILITIES_DETECT]);
   });
 
@@ -241,7 +292,7 @@ describe('exact-machine workflow materialization effects', () => {
     const resolve = createWorkflowMaterializationHostV1({
       credentials,
       acpCatalogSnapshot: { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({ v: 1,
-        definitions: [{ id: 'selected', name: 'selected', title: 'Selected', command: 'selected', createdAt: 1, updatedAt: 1 }],
+        definitions: [{ id: 'selected', name: 'selected', title: 'Selected', launch: { kind: 'command' as const, command: 'selected', args: [] }, createdAt: 1, updatedAt: 1 }],
       }) },
       readRoleSelection: async () => ({}), readLaunchProfile: async () => null, readWorkflowDefinition: async () => null,
       callMachineAction: async ({ method }) => method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
@@ -264,7 +315,7 @@ describe('exact-machine workflow materialization effects', () => {
       }, { sessionIds: [] })).resolves.toBe(true);
       await expect(context.effects.resolveTargetAvailability({ blockId: 'work', executionTarget: { kind },
         selection: { agentTarget: { kind: 'agent', identity, definitionId: 'deleted' } },
-      }, { sessionIds: [] })).resolves.toBe(false);
+      }, { sessionIds: [] })).resolves.toMatchObject({ reason: 'selection_unavailable' });
     }
   });
 
@@ -301,7 +352,7 @@ describe('exact-machine workflow materialization effects', () => {
       callMachineAction: async () => { throw new Error('machine_offline'); },
     });
     const context = await resolve({ machineId: 'offline-machine', directory: '/repo' });
-    await expect(context.effects.resolveTargetAvailability({ blockId: 'work', selection: { agentTarget: { kind: 'agent', identity: { pluginId: 'test.agent', localId: 'agent' } } }, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toBe(false);
+    await expect(context.effects.resolveTargetAvailability({ blockId: 'work', selection: { agentTarget: { kind: 'agent', identity: { pluginId: 'test.agent', localId: 'agent' } } }, executionTarget: { kind: 'session' } }, { sessionIds: [] })).resolves.toMatchObject({ reason: 'machine_check_failed' });
   });
 
   it.each(['schema_rejected', 'schema_malformed', 'core_rejected', 'schema_aborted', 'core_aborted'])
