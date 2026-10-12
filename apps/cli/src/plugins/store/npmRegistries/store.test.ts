@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -36,6 +36,13 @@ describe('npm registry profile store', () => {
       }),
     });
     expect(first.revision).toBe(1);
+
+    await writeFile(store.paths.npmRegistryProfilesFilePath, JSON.stringify({
+      ...first, retired: true,
+      profiles: first.profiles.map(profile => ({ ...profile, retired: true })),
+      mutations: first.mutations.map(receipt => ({ ...receipt, retired: true })),
+    }));
+    await expect(store.read()).resolves.toEqual(first);
 
     await expect(store.mutate({
       expectedRevision: 0,

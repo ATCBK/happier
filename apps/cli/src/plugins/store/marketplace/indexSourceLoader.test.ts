@@ -193,6 +193,13 @@ describe('loadMarketplaceIndexSource', () => {
     homes.push(home);
     await loadMarketplaceIndexSource({ resolveAddresses: testResolveAddresses, source, happyHomeDir: home, fetchImpl: async () => new Response(JSON.stringify(snapshot()), { status: 200 }), now: () => 100 });
 
+    const cacheDir = join(createPluginStateStore({ happyHomeDir: home }).paths.cacheDir, 'marketplace-index');
+    const cachePath = join(cacheDir, (await readdir(cacheDir))[0]!);
+    const retained = JSON.parse(await readFile(cachePath, 'utf8'));
+    retained.snapshot.retired = true;
+    retained.snapshot.source.retired = true;
+    await writeFile(cachePath, JSON.stringify(retained));
+
     const afterFormerStaleCutoff = 100 + 8 * 24 * 60 * 60 * 1000;
     const offline = await loadMarketplaceIndexSource({ resolveAddresses: testResolveAddresses, source, happyHomeDir: home, fetchImpl: async () => { throw new Error('offline'); }, now: () => afterFormerStaleCutoff });
     expect(offline).toMatchObject({ freshness: { state: 'stale-offline', fetchedAtMs: 100, staleSinceMs: afterFormerStaleCutoff } });

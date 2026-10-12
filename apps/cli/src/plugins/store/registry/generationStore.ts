@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { PluginAvailabilityPortableReleaseSourceClassV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 import { PluginReleaseFactsV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { PluginInstallReviewPrincipalDigestSchema, PluginInstallReviewPrincipalPresentationV1Schema } from '@happier-dev/protocol/plugins/permissions/grants';
 import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest/v2';
 import { ManagedPluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
@@ -582,7 +583,7 @@ async function readRetiredPluginGenerationMarker(
 ): Promise<z.infer<typeof RetiredPluginGenerationMarkerV1Schema> | null> {
   const expectedId = PortableStorageIdSchema.parse(immutableGenerationId);
   try {
-    const marker = RetiredPluginGenerationMarkerV1Schema.parse(JSON.parse(await readFile(
+    const marker = createStoredReadSchema(RetiredPluginGenerationMarkerV1Schema).parse(JSON.parse(await readFile(
       retiredPluginGenerationMarkerPath(paths, expectedId),
       'utf8',
     )) as unknown);
@@ -804,7 +805,7 @@ async function readGenerationRecord(
   } catch (error) {
     throw new Error('Invalid immutable plugin generation record', { cause: error });
   }
-  return ImmutablePluginGenerationRecordSchema.parse(value);
+  return createStoredReadSchema(ImmutablePluginGenerationRecordSchema).parse(value);
 }
 
 /**
@@ -963,7 +964,7 @@ export async function persistValidatedAgentSessionRunnerFactories(input: Readonl
     generation.immutableGenerationId,
   );
   try {
-    const existing = ValidatedAgentSessionRunnerFactoriesRecordV1Schema.parse(
+    const existing = createStoredReadSchema(ValidatedAgentSessionRunnerFactoriesRecordV1Schema).parse(
       JSON.parse(await readFile(path, 'utf8')) as unknown,
     );
     if (!isDeepStrictEqual(existing, validated)) {
@@ -997,7 +998,7 @@ export async function readValidatedAgentSessionRunnerFactories(input: Readonly<{
     input.paths,
     input.record.immutableGenerationId,
   );
-  const parsed = ValidatedAgentSessionRunnerFactoriesRecordV1Schema.parse(
+  const parsed = createStoredReadSchema(ValidatedAgentSessionRunnerFactoriesRecordV1Schema).parse(
     JSON.parse(await readFile(path, 'utf8')) as unknown,
   );
   const expected = ImmutablePluginGenerationRecordSchema.parse(input.record);
@@ -1552,7 +1553,8 @@ export async function persistInstallationStateRevision(input: Readonly<{
   const reference = Object.freeze({ revisionId: state.revisionId });
   try {
     const existing = await readFile(path, 'utf8');
-    if (JSON.stringify(JSON.parse(existing)) !== JSON.stringify(state)) {
+    const persistedState = PluginInstallationStateRevisionSchema.parse(JSON.parse(JSON.stringify(state)));
+    if (!isDeepStrictEqual(createStoredReadSchema(PluginInstallationStateRevisionSchema).parse(JSON.parse(existing)), persistedState)) {
       throw new Error(`Immutable installation state revision '${state.revisionId}' already exists with different content`);
     }
     return reference;
@@ -1588,7 +1590,7 @@ export async function readInstallationStateRevision(input: Readonly<{
   } catch (error) {
     throw new Error('Invalid installation state revision', { cause: error });
   }
-  const parsed = PluginInstallationStateRevisionSchema.safeParse(value);
+  const parsed = createStoredReadSchema(PluginInstallationStateRevisionSchema).safeParse(value);
   if (!parsed.success || parsed.data.revisionId !== input.reference.revisionId) {
     throw new Error('Invalid installation state revision');
   }

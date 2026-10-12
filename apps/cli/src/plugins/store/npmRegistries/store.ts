@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 
 import { NpmRegistryOriginV1Schema, NpmRegistryProfileIdV1Schema, NpmRegistryScopeV1Schema } from '@happier-dev/protocol/rpc/npmRegistryProfiles';
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 import { NPM_REGISTRY_PROFILES_LOCK_NAME, withPluginStoreLock } from '@/plugins/store/lock';
@@ -86,7 +87,7 @@ export function createNpmRegistryProfileStore(params?: Readonly<{ happyHomeDir?:
   async function readUnlocked(): Promise<NpmRegistryProfileFile> {
     try {
       const raw = await readFile(paths.npmRegistryProfilesFilePath, 'utf8');
-      const parsed = RegistryFileSchema.safeParse(JSON.parse(raw) as unknown);
+      const parsed = createStoredReadSchema(RegistryFileSchema).safeParse(JSON.parse(raw) as unknown);
       if (!parsed.success) throw new NpmRegistryProfileStoreError('invalid_store');
       return parsed.data;
     } catch (error) {

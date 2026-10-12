@@ -102,6 +102,7 @@ async function installPreparedCandidate(
 
 function createRevisionTaggedRuntimeRegistry(): ResolvedExecutablePluginRuntimeRegistry {
   return {
+    claimReleaseLessDeclarations: async () => undefined,
     contributes: {
       agents: Object.freeze([]),
             actions: Object.freeze([]),
@@ -131,7 +132,7 @@ function createRevisionTaggedRuntimeRegistry(): ResolvedExecutablePluginRuntimeR
 }
 
 describe('PluginRegistryStateStore', () => {
-  it('rejects an unreleased health bootstrap instead of retaining a dynamic migration reader', async () => {
+  it('ignores retired health keys without retaining a dynamic migration reader or rewriting the retained revision', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-registry-empty-bootstrap-migration-'));
     const store = createPluginRegistryStateStore({
       happyHomeDir,
@@ -176,7 +177,7 @@ describe('PluginRegistryStateStore', () => {
       creator: { pid: 7, instanceId: 'daemon-predecessor' },
     }), 'utf8');
 
-    await expect(store.initialize()).rejects.toThrow(/invalid installation state revision/i);
+    await expect(store.initialize()).resolves.toEqual(predecessorRevision.runtimeCatalog);
 
     const current = await readPluginRegistryCommitRecord(store.paths);
     expect(current).toMatchObject({
@@ -1627,10 +1628,13 @@ describe('PluginRegistryStateStore', () => {
   it('fails a normal start closed but recovers a plugin-recovery start from an unreadable current record', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-registry-unreadable-'));
     const paths = resolvePredecessorPluginStorePaths({ happyHomeDir });
+    const invalidRecord = JSON.parse(PREDECESSOR_PLUGIN_REGISTRY_COMMIT_RECORD_BYTES);
+    invalidRecord.installationState.revisionId = '';
+    const invalidRecordBytes = JSON.stringify(invalidRecord);
     await mkdir(paths.stateDir, { recursive: true });
     await writeFile(
       paths.registryCurrentFilePath,
-      PREDECESSOR_PLUGIN_REGISTRY_COMMIT_RECORD_BYTES,
+      invalidRecordBytes,
       'utf8',
     );
 
@@ -1641,9 +1645,9 @@ describe('PluginRegistryStateStore', () => {
       .then(() => null, (reason: unknown) => reason);
     expect((normalStart as Error).message).toContain(paths.registryCurrentFilePath);
     expect((normalStart as Error).message).toContain('installationState');
-    expect((normalStart as Error).message).toContain('digest');
+    expect((normalStart as Error).message).toContain('revisionId');
     await expect(readFile(paths.registryCurrentFilePath, 'utf8'))
-      .resolves.toBe(PREDECESSOR_PLUGIN_REGISTRY_COMMIT_RECORD_BYTES);
+      .resolves.toBe(invalidRecordBytes);
 
     const quarantined: string[] = [];
     const recovered = await createPluginRegistryStateStore({
@@ -1658,7 +1662,7 @@ describe('PluginRegistryStateStore', () => {
     expect(quarantined).toHaveLength(1);
     // The unreadable record is preserved, never deleted.
     await expect(readFile(quarantined[0]!, 'utf8'))
-      .resolves.toBe(PREDECESSOR_PLUGIN_REGISTRY_COMMIT_RECORD_BYTES);
+      .resolves.toBe(invalidRecordBytes);
     await expect(readPluginRegistryCommitRecord(paths)).resolves.toMatchObject({
       revision: 0,
       pluginOccurrenceIds: {},

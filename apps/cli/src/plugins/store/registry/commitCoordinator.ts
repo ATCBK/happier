@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile } from 'node:fs/promises';
 
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { isPidPresent } from '@happier-dev/cli-common/process';
 import { reclaimJsonOwnerFileLockSnapshot } from '@/utils/fs/jsonOwnerFileLock';
@@ -25,6 +26,7 @@ const LockRecordSchema = z.object({
   createdAtMs: z.number().int().nonnegative(),
 }).strict();
 type LockRecord = z.infer<typeof LockRecordSchema>;
+const LockRecordStoredReadSchema = createStoredReadSchema(LockRecordSchema);
 
 export type PluginRegistryCommitResult =
   | Readonly<{ status: 'committed'; record: PluginRegistryCommitRecord }>
@@ -47,7 +49,7 @@ type LockSnapshot = Readonly<{ record: LockRecord; raw: string }>;
 async function readLock(path: string): Promise<LockSnapshot | null> {
   try {
     const raw = await readFile(path, 'utf8');
-    const parsed = LockRecordSchema.safeParse(JSON.parse(raw) as unknown);
+    const parsed = LockRecordStoredReadSchema.safeParse(JSON.parse(raw) as unknown);
     return parsed.success ? { record: parsed.data, raw } : null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return null;

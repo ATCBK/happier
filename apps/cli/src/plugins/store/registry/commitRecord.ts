@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { readPortablePathSegmentViolation } from '@happier-dev/protocol/filesystem/portablePathSegment';
 
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
@@ -72,12 +73,13 @@ export const PluginRegistryCommitRecordSchema = z.object({
   }
 });
 export type PluginRegistryCommitRecord = z.infer<typeof PluginRegistryCommitRecordSchema>;
+const PluginRegistryCommitRecordStoredReadSchema = createStoredReadSchema(PluginRegistryCommitRecordSchema);
 
 function parsePluginRegistryCommitRecordFromDisk(
   filePath: string,
   value: unknown,
 ): PluginRegistryCommitRecord {
-  const parsed = PluginRegistryCommitRecordSchema.safeParse(value);
+  const parsed = PluginRegistryCommitRecordStoredReadSchema.safeParse(value);
   if (parsed.success) return parsed.data;
   throw invalidCommitRecord(filePath, projectCommitRecordIssues(parsed.error), parsed.error);
 }
@@ -170,7 +172,7 @@ export async function quarantineInvalidPluginRegistryCommitRecord(input: Readonl
   const raw = await readFile(filePath, 'utf8');
   const parsed = (() => {
     try {
-      return PluginRegistryCommitRecordSchema.safeParse(JSON.parse(raw) as unknown).success;
+      return PluginRegistryCommitRecordStoredReadSchema.safeParse(JSON.parse(raw) as unknown).success;
     } catch {
       return false;
     }

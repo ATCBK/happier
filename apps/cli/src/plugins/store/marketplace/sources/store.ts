@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { createDefaultCuratedMarketplaceSourceRegistryV1, DEFAULT_CURATED_MARKETPLACE_SOURCE_URL, MarketplaceSourceRegistryV1Schema, resolvePreferredMarketplaceSource, createMarketplaceSourceV1, normalizeMarketplaceSourceUrlV1 } from '@happier-dev/protocol/marketplace/marketplaceSourceRegistryV1';
 import type { MarketplaceSourceRegistryMutationV1, MarketplaceSourceRegistryV1, MarketplaceSourceV1 } from '@happier-dev/protocol';
@@ -67,7 +68,7 @@ export function createMarketplaceSourceRegistryStore(params?: Readonly<{
   async function readUnlocked(): Promise<MarketplaceSourceRegistryV1 | null> {
     try {
       const raw = await readFile(paths.marketplaceSourceRegistryFilePath, 'utf8');
-      const parsed = MarketplaceSourceRegistryV1Schema.safeParse(JSON.parse(raw) as unknown);
+      const parsed = createStoredReadSchema(MarketplaceSourceRegistryV1Schema).safeParse(JSON.parse(raw) as unknown);
       if (!parsed.success) {
         throw new Error('Invalid marketplace source registry file');
       }

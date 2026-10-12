@@ -192,7 +192,7 @@ describe('withPluginStoreLock', () => {
     const lockPath = join(paths.locksDir, lockName);
     const stalePid = 999_993;
     await mkdir(paths.locksDir, { recursive: true });
-    await writeFile(lockPath, JSON.stringify({ pid: stalePid, createdAtMs: 1 }), 'utf8');
+    await writeFile(lockPath, JSON.stringify({ pid: stalePid, createdAtMs: 1, retired: true }), 'utf8');
 
     const actualKill = process.kill.bind(process);
     vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
@@ -202,7 +202,7 @@ describe('withPluginStoreLock', () => {
       return actualKill(pid, signal);
     }) as typeof process.kill);
 
-    await expect(withPluginStoreLock({ paths, lockName, fn: async () => 'reclaimed' }))
+    await expect(withPluginStoreLock({ paths, lockName, signal: AbortSignal.timeout(5_000), fn: async () => 'reclaimed' }))
       .resolves.toBe('reclaimed');
     await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });

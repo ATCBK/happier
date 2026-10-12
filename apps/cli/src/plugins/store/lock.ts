@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { isPidPresent } from '@happier-dev/cli-common/process';
 import {
@@ -21,25 +23,18 @@ type PredecessorPluginStoreLockRecord = Readonly<{
 
 // Compatibility basis: the pre-consolidation plugin-store writer persisted exactly this shape.
 // Remove after supported mixed-version CLIs can no longer leave these records for a newer CLI.
-function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(record).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length
-    && actual.every((key, index) => key === expected[index]);
-}
+const PredecessorPluginStoreLockStoredReadSchema = createStoredReadSchema(z.object({
+  pid: z.number().int().positive(), createdAtMs: z.number().int().nonnegative(),
+}).strict());
 
 function parsePredecessorPluginStoreLock(raw: string): PredecessorPluginStoreLockRecord | null {
   try {
     const value = JSON.parse(raw) as unknown;
-    if (typeof value !== 'object' || value === null) return null;
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
-    if (!hasExactKeys(record, ['pid', 'createdAtMs'])) return null;
-    if (!Number.isSafeInteger(record.pid) || (record.pid as number) <= 0) return null;
-    if (!Number.isSafeInteger(record.createdAtMs) || (record.createdAtMs as number) < 0) return null;
-    return {
-      pid: record.pid as number,
-      createdAtMs: Math.trunc(record.createdAtMs as number),
-    };
+    // Current owner tokens/generation witnesses are never reinterpreted as a PID-only predecessor.
+    if (['ownerToken', 'processStartedAtMs', 'updatedAtMs', 'processWitness'].some(key => Object.hasOwn(record, key))) return null;
+    return PredecessorPluginStoreLockStoredReadSchema.parse(record);
   } catch {
     return null;
   }

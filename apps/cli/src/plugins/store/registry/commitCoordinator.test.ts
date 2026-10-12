@@ -261,7 +261,7 @@ describe('PluginRegistryCommitCoordinator', () => {
     const paths = await bootstrap(happyHomeDir);
     await mkdir(paths.stateDir, { recursive: true });
     await writeFile(paths.registryCommitLockFilePath, JSON.stringify({
-      t: 'happier_plugin_registry_commit_lock_v1', token: '00000000-0000-4000-8000-000000000001', pid: 999, instanceId: 'dead-daemon', createdAtMs: 1,
+      t: 'happier_plugin_registry_commit_lock_v1', token: '00000000-0000-4000-8000-000000000001', pid: 999, instanceId: 'dead-daemon', createdAtMs: 1, retired: true,
     }), 'utf8');
     let nowMs = 100;
     const coordinator = createPluginRegistryCommitCoordinator({
@@ -273,7 +273,7 @@ describe('PluginRegistryCommitCoordinator', () => {
     });
     const expectedCurrent = await readPluginRegistryCommitRecord(paths);
 
-    await expect(coordinator.commit({ transactionId: 'tx-stale', baseRevision: 0, expectedCurrent, buildNext: (current) => createNext(current!, 'tx-stale') }))
+    await expect(coordinator.commit({ transactionId: 'tx-stale', baseRevision: 0, expectedCurrent, signal: AbortSignal.timeout(5_000), buildNext: (current) => createNext(current!, 'tx-stale') }))
       .resolves.toMatchObject({ status: 'committed', record: { revision: 1 } });
     await expect(readFile(paths.registryCommitLockFilePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });

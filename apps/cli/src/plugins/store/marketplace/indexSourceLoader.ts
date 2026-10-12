@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { createMarketplaceNpmDiscoveryProjectionV1, deriveMarketplaceNpmCompatibilityPlatformsV1, MARKETPLACE_INDEX_PAGE_MAX_SIZE_V1, MarketplaceIndexEntryV1Schema, MarketplaceIndexSourceSnapshotV1Schema, marketplaceNpmDiscoveryProjectionEqualV1 } from '@happier-dev/protocol/marketplace/marketplaceIndexV1';
 import type { MarketplaceIndexSourceKindV1, MarketplaceIndexSourceSnapshotV1 } from '@happier-dev/protocol';
@@ -55,6 +56,7 @@ const INDEX_SOURCE_ACQUISITION_POLICY: RemoteAcquisitionDestinationPolicy = Obje
   privateNetwork: 'refuse',
 });
 const inFlight = new Map<string, Promise<MarketplaceIndexSourceSnapshotV1>>();
+const MarketplaceIndexSourceSnapshotStoredReadSchema = createStoredReadSchema(MarketplaceIndexSourceSnapshotV1Schema);
 
 type CacheRecord = Readonly<{
   t: 'happier_marketplace_index_source_cache_v1';
@@ -346,7 +348,7 @@ async function readCache(
     if (!isRecord(raw)) return { record: null, corrupt: true };
     const record = raw as Partial<CacheRecord>;
     if (record.t !== 'happier_marketplace_index_source_cache_v1' || record.sourceUrl !== source.sourceUrl || typeof record.requestUrl !== 'string' || typeof record.fetchedAtMs !== 'number' || record.fetchedAtMs > nowMs) return { record: null, corrupt: true };
-    const snapshot = MarketplaceIndexSourceSnapshotV1Schema.safeParse(record.snapshot);
+    const snapshot = MarketplaceIndexSourceSnapshotStoredReadSchema.safeParse(record.snapshot);
     if (!snapshot.success) return { record: null, corrupt: true };
     if (snapshot.data.source.id !== source.id || snapshot.data.source.kind !== source.kind || snapshot.data.source.sourceUrl !== source.sourceUrl) return { record: null, corrupt: true };
     const page = isRecord(record.communityNpmPage)

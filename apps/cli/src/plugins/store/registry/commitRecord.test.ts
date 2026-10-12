@@ -81,7 +81,7 @@ describe('PluginRegistryCommitRecord', () => {
     expect(JSON.parse(await readFile(paths.registryCurrentFilePath, 'utf8'))).toEqual(next);
   });
 
-  it('rejects the unsupported local digest-bearing commit instead of preserving a custom reader', async () => {
+  it('drops retired fields recursively when reading a commit while keeping writes strict', async () => {
     const happyHomeDir = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'happier-registry-legacy-digest-')));
     const paths = resolvePluginStorePaths({ happyHomeDir });
     const legacy = unsupportedDigestBearingCommitRecord();
@@ -89,7 +89,11 @@ describe('PluginRegistryCommitRecord', () => {
     await writeFile(paths.registryCurrentFilePath, JSON.stringify(legacy), 'utf8');
 
     expect(() => PluginRegistryCommitRecordSchema.parse(legacy)).toThrow();
-    await expect(readPluginRegistryCommitRecord(paths)).rejects.toThrow(/invalid plugin registry commit/i);
+    await expect(readPluginRegistryCommitRecord(paths)).resolves.toEqual({
+      ...legacy,
+      installationState: { revisionId: legacy.installationState.revisionId },
+      pluginOccurrenceIds: { 'com.qa.decl-surface': { immutableGenerationId: legacy.pluginOccurrenceIds['com.qa.decl-surface'].immutableGenerationId } },
+    });
   });
 
   it('names the offending file and the exact rejected field so an operator can act', async () => {
@@ -98,7 +102,9 @@ describe('PluginRegistryCommitRecord', () => {
     await mkdir(paths.stateDir, { recursive: true });
     // Verbatim bytes of a real predecessor-shaped record found on disk at
     // ~/.happier/stacks/<stack>/cli/plugins/plugins/state/plugin-registry-current.v1.json.
-    await writeFile(paths.registryCurrentFilePath, PREDECESSOR_PLUGIN_REGISTRY_COMMIT_RECORD_BYTES, 'utf8');
+    const malformed = JSON.parse(PREDECESSOR_PLUGIN_REGISTRY_COMMIT_RECORD_BYTES);
+    malformed.installationState.revisionId = '';
+    await writeFile(paths.registryCurrentFilePath, JSON.stringify(malformed), 'utf8');
 
     const error = await readPluginRegistryCommitRecord(paths).then(
       () => null,
@@ -109,7 +115,7 @@ describe('PluginRegistryCommitRecord', () => {
     const message = (error as Error).message;
     expect(message).toContain(paths.registryCurrentFilePath);
     expect(message).toContain('installationState');
-    expect(message).toContain('digest');
+    expect(message).toContain('revisionId');
   });
 
   it('reports unparseable JSON with the offending file rather than a bare rejection', async () => {

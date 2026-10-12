@@ -36,6 +36,23 @@ describe('marketplace source registry store', () => {
       .toEqual([...current.sources, ...sources]);
   });
 
+  it('drops retired stored fields before a source update and writes the canonical registry', async () => {
+    const happyHomeDir = mkdtempSync(join(tmpdir(), 'happier-marketplace-retired-fields-'));
+    tempDirs.push(happyHomeDir);
+    const store = createMarketplaceSourceRegistryStore({ happyHomeDir });
+    const current = await store.read();
+    writeFileSync(store.paths.marketplaceSourceRegistryFilePath, JSON.stringify({
+      ...current, retired: true, sources: current.sources.map(source => ({ ...source, retired: true })),
+    }));
+    await expect(store.read()).resolves.toEqual(current);
+    await store.setSourceEnabled(current.sources[0]!.id, false);
+    const written = JSON.parse(readFileSync(store.paths.marketplaceSourceRegistryFilePath, 'utf8'));
+    expect(written.retired).toBeUndefined();
+    expect(written.sources[0].retired).toBeUndefined();
+    expect(written.sources[0].enabled).toBe(false);
+    await expect(store.write({ ...current, retired: true } as typeof current)).rejects.toThrow();
+  });
+
   it('boots the canonical curated source and ignores an ambient legacy URL when the file does not exist', async () => {
     const happyHomeDir = mkdtempSync(join(tmpdir(), 'happier-marketplace-registry-'));
     tempDirs.push(happyHomeDir);
@@ -137,7 +154,7 @@ describe('marketplace source registry store', () => {
         id: 'marketplace:foreign',
         title: 'Foreign',
         sourceUrl: 'https://foreign.example.test/catalog.json',
-        enabled: true,
+        enabled: 'invalid',
         origin: 'user',
         futureAuthorityFlag: 'keep-me',
       }],

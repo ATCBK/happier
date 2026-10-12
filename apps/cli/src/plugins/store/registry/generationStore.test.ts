@@ -75,6 +75,20 @@ it('requests copy-on-write cloning for immutable generation copies while preserv
 });
 
 describe('immutable plugin generation store', () => {
+  it('normalizes retired installation fields before reads and immutable publication comparison', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-state-retired-fields-'));
+    const paths = resolvePluginStorePaths({ happyHomeDir });
+    const state = stateRevision();
+    const reference = await persistInstallationStateRevision({ paths, state });
+    const path = join(paths.stateRevisionsDir, state.revisionId, 'plugin-installations.v1.json');
+    await writeFile(path, JSON.stringify({ ...state, retired: true, plugins: {
+      'acme.plugin': { ...state.plugins['acme.plugin'], retired: true,
+        trust: { ...state.plugins['acme.plugin']!.trust, retired: true },
+      },
+    } }));
+    await expect(readInstallationStateRevision({ paths, reference })).resolves.toEqual(state);
+    await expect(persistInstallationStateRevision({ paths, state })).resolves.toEqual(reference);
+  });
   it('rejects bundled first-party authority in a managed generation factory record', () => {
     expect(ValidatedAgentSessionRunnerFactoriesRecordV1Schema.safeParse({
       t: 'happier_agent_session_runner_factories_v1',
@@ -227,7 +241,7 @@ describe('immutable plugin generation store', () => {
     expect(PluginInstallationStateRevisionSchema.safeParse(legacyState).success).toBe(false);
   });
 
-  it('rejects an unreleased digest-bearing bootstrap instead of preserving a custom-hash reader', async () => {
+  it('drops retired bootstrap digest fields without restoring a custom integrity owner', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-predecessor-bootstrap-'));
     const paths = resolvePluginStorePaths({ happyHomeDir });
     await mkdir(paths.stateDir, { recursive: true });
@@ -249,7 +263,7 @@ describe('immutable plugin generation store', () => {
     await writeFile(paths.registryCurrentFilePath, JSON.stringify(predecessorBootstrap), 'utf8');
     await expect(import('./commitRecord').then(({ readPluginRegistryCommitRecord }) => (
       readPluginRegistryCommitRecord(paths)
-    ))).rejects.toThrow(/invalid plugin registry commit/i);
+    ))).resolves.toEqual({ ...predecessorBootstrap, installationState: { revisionId: 'state-0' } });
   });
 
   it('persists canonical archive SRI acquisition integrity and rejects malformed values', async () => {
