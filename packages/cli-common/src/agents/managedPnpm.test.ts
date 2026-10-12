@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { chmod, link, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -156,6 +158,8 @@ describe('managedPnpm bootstrap race protection', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    syncBuiltinESMExports();
+    vi.unstubAllEnvs();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor);
     }
@@ -276,6 +280,21 @@ describe('managedPnpm bootstrap race protection', () => {
   it('extracts Windows zip assets in-process without requiring tar', async () => {
     if (!originalPlatformDescriptor) {
       throw new Error('Expected process.platform to be configurable for this test');
+    }
+    if (process.platform !== 'win32') {
+      // This test simulates Windows acquisition on POSIX. Keep secure-temp logic
+      // real while representing the genuine Windows system-command boundary.
+      vi.stubEnv('SystemRoot', 'C:\\Windows');
+      const sid = 'S-1-5-21-100-200-300-400';
+      vi.spyOn(childProcess, 'spawnSync').mockImplementation((command) => {
+        const stdout = String(command).endsWith('whoami.exe') ? `"fixture","${sid}"`
+          : JSON.stringify({ ownerSid: sid, protected: true, reparsePoint: false,
+            rules: [{ sid, type: 'Allow', inherited: false, rights: 'FullControl' },
+              { sid: 'S-1-5-18', type: 'Allow', inherited: false, rights: 'FullControl' }] });
+        return { pid: 0, status: 0, signal: null, stdout: Buffer.from(stdout), stderr: Buffer.alloc(0),
+          output: [null, Buffer.from(stdout), Buffer.alloc(0)] };
+      });
+      syncBuiltinESMExports();
     }
     Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
 

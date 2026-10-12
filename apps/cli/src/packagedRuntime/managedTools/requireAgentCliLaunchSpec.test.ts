@@ -8,6 +8,7 @@ import { createEnvKeyScope } from '../../testkit/env/envScope';
 import { writeTextFile } from '../../testkit/fs/fileHelpers';
 import { writeExecutableShim } from '../../testkit/fs/executableShim';
 import { createTempDir, removeTempDir } from '../../testkit/fs/tempDir';
+import { probeResolvedAgentCliVersion } from '@/capabilities/snapshots/cliSnapshot';
 import { requireAgentCliLaunchSpec } from './requireAgentCliLaunchSpec';
 import { resolveAgentCliManagedCommandPath } from './agentCliResolution';
 
@@ -103,12 +104,26 @@ describe('requireAgentCliLaunchSpec', () => {
     // The launch spec is consumed by direct child_process spawns with
     // shell: false, so a .cmd runtime wrapper must resolve to the underlying
     // managed runtime binary (runtime/node.exe), never stay a .cmd shim.
-    expect(requireAgentCliLaunchSpec('gemini')).toEqual({
+    const launch = requireAgentCliLaunchSpec('gemini');
+    expect(launch).toEqual({
       source: 'override',
       resolvedPath: agentCliPath,
       command: runtimeBinaryPath,
       args: [agentCliPath],
     });
+    // The adapter is the Windows process boundary; the host must preserve the normalized binary and argv.
+    const version = await probeResolvedAgentCliVersion({
+      agentId: 'gemini',
+      launch,
+      env: process.env,
+      runVersionCommand: async (input) => {
+        expect(input.launch.command).toBe(runtimeBinaryPath);
+        expect(input.launch.args).toEqual([agentCliPath]);
+        expect(input.args).toEqual(['--version']);
+        return { stdout: '2.1.71 (Gemini CLI)', stderr: '' };
+      },
+    });
+    expect(version).toBe('2.1.71');
   });
 
   it('wraps system node-shebang agent scripts with the configured JS runtime', async () => {

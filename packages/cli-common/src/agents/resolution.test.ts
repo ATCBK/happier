@@ -95,6 +95,25 @@ describe('resolveAgentCliCommand', () => {
     process.chdir(originalCwd);
   });
 
+  it('finds an OpenCode user-local installation outside the inherited PATH', () => {
+    if (process.platform === 'win32') return;
+
+    const root = mkdtempSync(join(tmpdir(), 'happier-opencode-user-local-'));
+    const homeDir = join(root, 'home');
+    const command = join(homeDir, '.local', 'bin', 'opencode');
+    try {
+      mkdirSync(dirname(command), { recursive: true });
+      writeFileSync(command, '#!/bin/sh\nexit 0\n', 'utf8');
+      chmodSync(command, 0o755);
+
+      expect(resolveAgentCliCommand('opencode', {
+        processEnv: { HOME: homeDir, HAPPIER_HOME_DIR: join(root, 'happier'), PATH: '' },
+      })).toEqual({ source: 'system', command });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('finds the Pi vendor launcher outside the inherited PATH and preserves source policy', () => {
     if (process.platform === 'win32') return;
 

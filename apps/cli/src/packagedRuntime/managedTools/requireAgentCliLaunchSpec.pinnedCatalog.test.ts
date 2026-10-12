@@ -35,6 +35,7 @@ describe('Agent CLI resolution from the admitted catalog', () => {
     // Publish an actual current registry without this retained external Agent.
     // No plugin is activated: unused plugin callbacks are outside this lookup contract.
     const currentRegistry = {
+      claimReleaseLessDeclarations: async () => undefined,
       contributes: createResolvedContributionRegistry({ agents: [], activationTargets: [] }),
       hookHandlersByHookId: new Map(), agentRuntimesByAgentId: new Map(), scmHostingProvidersById: new Map(),
       pluginDiagnosticsByPluginId: {}, activatedPluginIds: new Set<string>(),
