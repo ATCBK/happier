@@ -34,6 +34,8 @@ export const SHARED_PACKAGE_TEST_COMMANDS = [
   { id: 'bootstrap', args: ['workspace', '@happier-dev/bootstrap', 'test'] },
   { id: 'channels-protocol:build', args: ['workspace', '@happier-dev/channels-protocol', 'build'] },
   { id: 'channels-protocol:test', args: ['workspace', '@happier-dev/channels-protocol', 'test'] },
+  { id: 'email-transports-protocol:build', args: ['workspace', '@happier-dev/email-transports-protocol', 'build'] },
+  { id: 'email-transports-protocol:test', args: ['workspace', '@happier-dev/email-transports-protocol', 'test'] },
   { id: 'triage-protocol', args: ['workspace', '@happier-dev/triage-protocol', 'test'] },
   { id: 'triage-sources', args: ['workspace', '@happier-dev/triage-sources', 'test'] },
   { id: 'ssh-native', args: ['workspace', '@happier-dev/ssh-native', 'test'] },
