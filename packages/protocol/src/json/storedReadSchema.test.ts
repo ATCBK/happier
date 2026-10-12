@@ -3,9 +3,130 @@ import { z } from 'zod';
 import * as m from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from './storedReadSchema.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
+import { createPluginJsonSchemaZodValueAdapter } from '../plugins/actions/jsonSchemaValidation.js';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { lazyZodSchema } from '../lazyZodSchema.js';
 
 describe('stored JSON schema derivation', () => {
+    it('retains a registered lazy hidden-parser projection under optional array composition without eager construction', () => {
+        let constructions = 0;
+        const shape = z.object({ value: z.string().min(1) }).strict();
+        const canonical = defineStoredReadProjection(lazyZodSchema(() => {
+            constructions++;
+            return z.string().transform(value => shape.parse(JSON.parse(value)));
+        }), () => z.string().transform(value => createStoredReadSchema(shape).parse(JSON.parse(value))));
+        const parent = z.object({ items: z.array(canonical.optional()) }).strict();
+        const stored = createStoredReadSchema(parent);
+        expect(stored.parse({ items: [] })).toEqual({ items: [] });
+        expect(constructions).toBe(0);
+        expect(stored.parse({ items: ['{"value":"kept","retired":true}'] }))
+            .toEqual({ items: [{ value: 'kept' }] });
+        expect(() => parent.parse({ items: ['{"value":"kept","retired":true}'] })).toThrow();
+        expect(() => stored.parse({ items: ['{"value":"","retired":true}'] })).toThrow();
+        expect(constructions).toBe(1);
+    });
+
+    it('preserves declared propertyless JSON bags while projecting surrounding stored object fields', () => {
+        const schema = createPluginJsonSchemaZodValueAdapter({ type: 'object', properties: {
+            explicit: { type: 'object', additionalProperties: true }, implicit: { type: 'object' },
+            explicitEmpty: { type: 'object', properties: {}, additionalProperties: true },
+            implicitEmpty: { type: 'object', properties: {} },
+            closedEmpty: { type: 'object', properties: {}, additionalProperties: false },
+        }, required: ['explicit', 'implicit', 'explicitEmpty', 'implicitEmpty', 'closedEmpty'], additionalProperties: false });
+        const values = { explicit: { arbitrary: { kept: true } }, implicit: { other: ['kept'] },
+            explicitEmpty: { arbitrary: { kept: true } }, implicitEmpty: { other: ['kept'] }, closedEmpty: {} };
+        expect(createStoredReadSchema(schema).parse({ ...values, retired: true, closedEmpty: { retired: true } })).toEqual(values);
+        expect(schema.safeParse({ ...values, retired: true }).success).toBe(false);
+        expect(schema.safeParse({ ...values, closedEmpty: { retired: true } }).success).toBe(false);
+    });
+    it('does not interpret Object prototype members as declared stored fields', () => {
+        const schema = createPluginJsonSchemaZodValueAdapter({ type: 'object', properties: { name: { type: 'string' } },
+            required: ['name'], additionalProperties: false });
+        const annotated = { name: 'kept', constructor: {}, toString: {} };
+        expect(createStoredReadSchema(schema).parse(annotated)).toEqual({ name: 'kept' });
+        expect(schema.safeParse(annotated).success).toBe(false);
+    });
+    it('retains prototype-spelled keys when a declared JSON map owns their values', () => {
+        const schema = createPluginJsonSchemaZodValueAdapter({ type: 'object', additionalProperties: {
+            type: 'object', properties: { label: { type: 'string' } }, required: ['label'], additionalProperties: false,
+        } });
+        const canonical = JSON.parse('{"__proto__":{"label":"kept"},"constructor":{"label":"other"}}');
+        expect(schema.parse(canonical)).toEqual(canonical);
+        const annotated = JSON.parse('{"__proto__":{"label":"kept","retired":true},"constructor":{"label":"other","retired":true}}');
+        const read = createStoredReadSchema(schema).parse(annotated);
+        expect(read).toEqual(canonical);
+        expect(Object.hasOwn(read, '__proto__')).toBe(true);
+        expect(schema.safeParse(annotated).success).toBe(false);
+    });
+    it('preserves native default factories and independent mutable default values', () => {
+        let generated = 0;
+        const stored = createStoredReadSchema(z.object({
+            id: z.string().default(() => String(++generated)),
+            values: z.array(z.string()).default([]),
+        }).strict());
+        expect(stored.parse({ id: 'present', values: ['kept'] })).toEqual({ id: 'present', values: ['kept'] });
+        expect(generated).toBe(0);
+        const first = stored.parse({});
+        const second = stored.parse({});
+        expect(first.id).toBe('1');
+        expect(second.id).toBe('2');
+        first.values.push('changed');
+        expect(second.values).toEqual([]);
+        expect(stored.safeParse({ id: 123 }).success).toBe(false);
+    });
+    it('admits only present defaulted fields when projecting a stored object', () => {
+        let firstConstructions = 0;
+        let secondConstructions = 0;
+        const first = lazyZodSchema(() => {
+            firstConstructions++;
+            return z.object({ value: z.string().min(1) }).strict();
+        });
+        const second = lazyZodSchema(() => {
+            secondConstructions++;
+            return z.object({ value: z.string().min(1) }).strict();
+        });
+        const canonical = z.object({
+            first: first.default({ value: 'first' }),
+            second: second.default({ value: 'second' }),
+        }).strict();
+        const stored = createStoredReadSchema(canonical);
+        expect(stored.parse({})).toEqual({ first: { value: 'first' }, second: { value: 'second' } });
+        expect([firstConstructions, secondConstructions]).toEqual([0, 0]);
+        expect(stored.parse({ first: { value: 'kept', extra: true } })).toEqual({
+            first: { value: 'kept' }, second: { value: 'second' },
+        });
+        expect([firstConstructions, secondConstructions]).toEqual([1, 0]);
+        expect(stored.safeParse({ first: { value: '' } }).success).toBe(false);
+        expect(canonical.safeParse({ first: { value: 'kept', extra: true } }).success).toBe(false);
+    });
+    it('keeps composed Classic read projections cold until present data needs admission', () => {
+        let canonicalConstructions = 0;
+        const canonical = lazyZodSchema(() => {
+            canonicalConstructions++;
+            return z.object({ value: z.string().trim().min(1) }).strict();
+        });
+        const stored = createStoredReadSchema(canonical);
+        const optional = stored.optional();
+        const repeated = stored.array();
+        const parent = z.object({ item: optional.default({ value: 'fallback' }) }).strict();
+        expect(parent.parse({})).toEqual({ item: { value: 'fallback' } });
+        expect(canonicalConstructions).toBe(0);
+
+        expect(repeated.parse([{ value: ' kept ', extra: true }])).toEqual([{ value: 'kept' }]);
+        expect(parent.safeParse({ item: { value: '' } }).success).toBe(false);
+        expect(canonical.safeParse({ value: 'kept', extra: true }).success).toBe(false);
+        expect(canonicalConstructions).toBe(1);
+        expect(createStoredReadSchema(canonical)).toBe(stored);
+
+        const concreteRead = z.object({ value: z.string().trim().min(1) }).strip();
+        const projected = z.object({ first: stored, optional, repeated });
+        const expected = z.object({ first: concreteRead, optional: concreteRead.optional(), repeated: concreteRead.array() });
+        for (const target of ['draft-7', 'draft-2020-12'] as const) {
+            for (const io of ['input', 'output'] as const) {
+                expect(z.toJSONSchema(projected, { target, io })).toEqual(z.toJSONSchema(expected, { target, io }));
+            }
+        }
+    });
     it('drops passthrough object extras but preserves declared map data', () => {
         const input = z.object({ fields: z.record(z.string(), z.unknown()) }).passthrough();
         expect(createStoredReadSchema(input).parse({ fields: { arbitrary: { retained: true } }, extra: true }))
@@ -66,6 +187,11 @@ it('projects deferred Classic, Mini and Core readers with their concrete referen
     const mini = m.strictObject({ value: m.string().check(m.minLength(1)) });
     const miniRead = m.object({ value: m.string().check(m.minLength(1)) })
         .register(z.globalRegistry, { id: 'StoredReadMiniProjection', title: 'Mini read' });
+    const classicWithMiniRead = z.object({ value: z.string().min(1) }).strict();
+    defineStoredReadProjection(classicWithMiniRead, () => miniRead);
+    const crossClassRead = createStoredReadSchema(classicWithMiniRead);
+    expect(Reflect.get(crossClassRead, 'optional')).toBeUndefined();
+    expect(z.core.parse(crossClassRead, { value: 'kept', extra: true })).toEqual({ value: 'kept' });
     const core = new z.core.$ZodObject({
         type: 'object',
         shape: { value: new z.core.$ZodString({ type: 'string', checks: [] }) },

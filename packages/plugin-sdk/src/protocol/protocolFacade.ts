@@ -3,7 +3,7 @@
  * projects their declarations for SDK authors without creating another parser
  * or JSON-Schema owner.
  */
-import { defineProtocolArray as canonicalDefineProtocolArray, defineProtocolJsonValue as canonicalDefineProtocolJsonValue, defineProtocolLiteral as canonicalDefineProtocolLiteral, defineProtocolNumber as canonicalDefineProtocolNumber, defineProtocolObject as canonicalDefineProtocolObject, defineProtocolString as canonicalDefineProtocolString, defineProtocolUnion as canonicalDefineProtocolUnion, defineProtocolUniqueArray as canonicalDefineProtocolUniqueArray, defineProtocolUtf8String as canonicalDefineProtocolUtf8String, isProtocolComposableSchema as canonicalIsProtocolComposableSchema, ProtocolValidationError as canonicalProtocolValidationError } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { createProtocolStoredReadSchema as canonicalCreateProtocolStoredReadSchema, defineProtocolArray as canonicalDefineProtocolArray, defineProtocolJsonValue as canonicalDefineProtocolJsonValue, defineProtocolLiteral as canonicalDefineProtocolLiteral, defineProtocolNumber as canonicalDefineProtocolNumber, defineProtocolObject as canonicalDefineProtocolObject, defineProtocolString as canonicalDefineProtocolString, defineProtocolUnion as canonicalDefineProtocolUnion, defineProtocolUniqueArray as canonicalDefineProtocolUniqueArray, defineProtocolUtf8String as canonicalDefineProtocolUtf8String, isProtocolComposableSchema as canonicalIsProtocolComposableSchema, ProtocolValidationError as canonicalProtocolValidationError } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { pluginJsonValuesEqual as canonicalPluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 /**
  * Declaration-neutral SDK projection of Protocol's mutable structural JSON
@@ -94,6 +94,16 @@ export interface ProtocolComposableSchema<TInput, TOutput = TInput> {
     optional(): ProtocolComposableSchema<TInput | undefined, TOutput | undefined>;
     nullable(): ProtocolComposableSchema<TInput | null, TOutput | null>;
 }
+
+/** Persistence-only projection; operation inputs and writes keep their original schema. */
+export interface ProtocolStoredReadSchema<TOutput> {
+    parse(value: unknown): TOutput;
+    safeParse(value: unknown): ProtocolSchemaSafeParseResult<TOutput>;
+}
+
+export const createProtocolStoredReadSchema: <TInput, TOutput>(
+    schema: ProtocolComposableSchema<TInput, TOutput>,
+) => ProtocolStoredReadSchema<TOutput> = canonicalCreateProtocolStoredReadSchema;
 
 /** Extracts the authored input from a public composable schema. */
 export type ProtocolSchemaInput<TSchema> =

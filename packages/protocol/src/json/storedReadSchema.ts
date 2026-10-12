@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { lazyDefinition } from '../lazyZodSchema.js';
+import { getResolvedLazyDefinitionSource, lazyDefinition } from '../lazyZodSchema.js';
 
 const reads = new WeakMap<z.core.$ZodType, z.core.$ZodType>();
 const customReads = new WeakMap<z.core.$ZodType, () => z.core.$ZodType>();
@@ -21,8 +21,11 @@ export function createStoredReadSchema<T extends z.core.$ZodType>(schema: T): T 
   const cached = reads.get(schema);
   if (cached) return cached as T;
   // Registration after this admission must not replace the selected read contract.
-  const custom = customReads.get(schema);
-  const read = lazyDefinition(() => deriveStoredReadSchema(schema, custom));
+  const source = getResolvedLazyDefinitionSource(schema);
+  const custom = customReads.get(schema) ?? (source && customReads.get(source));
+  // Structural clones retain their source class. A custom reader may instead
+  // be a genuine Mini/Core parser and must not gain assumed Classic methods.
+  const read = lazyDefinition(() => deriveStoredReadSchema(schema, custom), schema, !custom);
   reads.set(schema, read);
   return read as T;
 }
@@ -33,37 +36,37 @@ function deriveStoredReadSchema<T extends z.core.$ZodType>(schema: T, custom: ((
     return read as T;
   }
   const def = (schema as unknown as z.core.$ZodTypes)._zod.def;
+  // Children share this same identity/lifetime owner. Eager recursive cloning
+  // would admit untouched defaults while projecting their containing object.
   let overrides: Record<string, unknown>;
   switch (def.type) {
     case 'object':
       overrides = {
-        shape: Object.fromEntries(Object.entries(def.shape).map(([key, value]) => [key, deriveStoredReadChildSchema(value)])),
+        shape: Object.fromEntries(Object.entries(def.shape).map(([key, value]) => [key, createStoredReadSchema(value)])),
         // A genuine catchall describes data fields (for example a JSON bag).
         // Closed and passthrough objects both drop undeclared fields on read.
         catchall: ['never', 'unknown', 'any'].includes(def.catchall?._zod.def.type ?? '') ? undefined
-          : def.catchall && deriveStoredReadChildSchema(def.catchall),
+          : def.catchall && createStoredReadSchema(def.catchall),
       };
       break;
-    case 'array': overrides = { element: deriveStoredReadChildSchema(def.element) }; break;
-    case 'record': overrides = { keyType: deriveStoredReadChildSchema(def.keyType), valueType: deriveStoredReadChildSchema(def.valueType) }; break;
-    case 'union': overrides = { options: def.options.map(deriveStoredReadChildSchema) }; break;
-    case 'intersection': overrides = { left: deriveStoredReadChildSchema(def.left), right: deriveStoredReadChildSchema(def.right) }; break;
-    case 'tuple': overrides = { items: def.items.map(deriveStoredReadChildSchema), rest: def.rest ? deriveStoredReadChildSchema(def.rest) : null }; break;
+    case 'array': overrides = { element: createStoredReadSchema(def.element) }; break;
+    case 'record': overrides = { keyType: createStoredReadSchema(def.keyType), valueType: createStoredReadSchema(def.valueType) }; break;
+    case 'union': overrides = { options: def.options.map(createStoredReadSchema) }; break;
+    case 'intersection': overrides = { left: createStoredReadSchema(def.left), right: createStoredReadSchema(def.right) }; break;
+    case 'tuple': overrides = { items: def.items.map(createStoredReadSchema), rest: def.rest ? createStoredReadSchema(def.rest) : null }; break;
     case 'optional': case 'nullable': case 'default': case 'prefault': case 'nonoptional': case 'readonly': case 'catch':
-      overrides = { innerType: deriveStoredReadChildSchema(def.innerType) }; break;
-    case 'pipe': overrides = { in: deriveStoredReadChildSchema(def.in), out: deriveStoredReadChildSchema(def.out) }; break;
-    case 'lazy': overrides = { getter: () => deriveStoredReadChildSchema(def.getter()) }; break;
+      overrides = { innerType: createStoredReadSchema(def.innerType) }; break;
+    case 'pipe': overrides = { in: createStoredReadSchema(def.in), out: createStoredReadSchema(def.out) }; break;
+    case 'lazy': overrides = { getter: () => createStoredReadSchema(def.getter()) }; break;
     default: return schema;
   }
-  const read = z.core.clone(schema, { ...def, ...overrides });
+  // Spreading the definition would evaluate native default/prefault getters
+  // during construction and cache their values across later reads.
+  const readDefinition = Object.defineProperties({ type: def.type }, {
+    ...Object.getOwnPropertyDescriptors(def),
+    ...Object.getOwnPropertyDescriptors(overrides),
+  });
+  const read = z.core.clone(schema, readDefinition);
   // Structural clones preserve the canonical output and parser class.
   return read as T;
-}
-
-function deriveStoredReadChildSchema<T extends z.core.$ZodType>(schema: T): T {
-  const cached = reads.get(schema);
-  if (cached) return cached as T;
-  const read = deriveStoredReadSchema(schema, customReads.get(schema));
-  if (read !== schema) reads.set(schema, read);
-  return read;
 }

@@ -17,11 +17,13 @@ export type {
     ProtocolSchemaOutput,
     ProtocolSchemaSafeParseResult,
     ProtocolStringOptions,
+    ProtocolStoredReadSchema,
     ProtocolUniqueJsonArrayOptions,
     ProtocolUtf8StringOptions,
     ProtocolValidationIssue,
 } from './protocolFacade.js';
 export {
+    createProtocolStoredReadSchema,
     defineProtocolArray,
     defineProtocolJsonValue,
     defineProtocolLiteral,

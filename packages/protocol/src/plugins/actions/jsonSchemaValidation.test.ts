@@ -14,6 +14,8 @@ import { WorkflowActionOutputSchemasV1 } from '../../workflows/actionsV1.js';
 import { PluginContributionIdentityV1Schema } from '../contributionIdentity.js';
 import { PluginTargetedContributionSelectionV1Schema } from '../ui/targetedContributions.js';
 import * as protocolComposableKernel from './jsonSchemaValidation.js';
+import { createProtocolComposableSchema, createProtocolStoredReadSchema } from './protocolComposableSchema.js';
+import { LaunchProfileIdV2ProtocolSchema } from '../../profiles/v2/profileId.js';
 import {
   compilePluginJsonSchema,
   createPluginJsonSchemaZodObjectAdapter,
@@ -44,6 +46,18 @@ function deepSortObjectKeys(value: unknown): unknown {
 }
 
 describe('plugin JSON Schema validation policy', () => {
+  it('reads nullable Launch Profile references through the canonical stored projection and retains profile normalization', () => {
+    const schema = defineProtocolObject({
+      profileId: LaunchProfileIdV2ProtocolSchema.nullable(),
+    }, { policy: 'closed' });
+    const stored = createProtocolStoredReadSchema(schema);
+
+    expect(schema.safeParse({ profileId: 'worktree', retired: true }).success).toBe(false);
+    expect(stored.parse({ profileId: '  worktree  ', retired: true })).toEqual({ profileId: 'worktree' });
+    expect(stored.parse({ profileId: null, retired: true })).toEqual({ profileId: null });
+    expect(stored.safeParse({ profileId: 7 }).success).toBe(false);
+    expect(rehydrateCanonicalProtocolComposableSchema(schema.jsonSchema)?.safeParse({ profileId: null }).success).toBe(true);
+  });
   it('admits primitive and array native roots while projecting only stored object extras', () => {
     const scalar = protocolComposableKernel.createPluginJsonSchemaZodValueAdapter({ type: 'string', enum: ['linux', 'darwin'] });
     expect(scalar.parse('linux')).toBe('linux');
@@ -562,6 +576,39 @@ describe('protocol composable schema kernel', () => {
     expect(rehydrateCanonicalProtocolComposableSchema(dropsUnknown.jsonSchema)?.safeParse(largeInput).success)
       .toBe(false);
     expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(dropsUnknown.jsonSchema), largeInput)).toBe(false);
+  });
+
+  it('preserves optional literals and ordered overlapping union normalization', () => {
+    const optional = defineProtocolUnion([
+      defineProtocolObject({ kind: defineProtocolLiteral('optional').optional(), value: defineProtocolString() }, { policy: 'closed' }),
+      defineProtocolLiteral(null),
+    ]);
+    expect(optional.parse({ value: 'without discriminator' })).toEqual({ value: 'without discriminator' });
+    expect(optional.safeParse({ kind: 'other', value: 'wrong discriminator' }).success).toBe(false);
+    const overlapping = defineProtocolUnion([
+      defineProtocolObject({ kind: defineProtocolLiteral('same'), count: defineProtocolNumber() }, { policy: 'closed' }),
+      defineProtocolObject({ kind: defineProtocolLiteral('same') }, { policy: 'additive-open/drop' }),
+      defineProtocolObject({ kind: defineProtocolLiteral('same') }, { policy: 'additive-open/preserve' }),
+    ]);
+    expect(overlapping.parse({ kind: 'same', count: 3 })).toEqual({ kind: 'same', count: 3 });
+    expect(overlapping.parse({ kind: 'same', count: 'invalid first arm', extra: true })).toEqual({ kind: 'same' });
+    const literals = defineProtocolUnion([defineProtocolLiteral(false), defineProtocolLiteral(0), defineProtocolLiteral('0')]);
+    for (const value of [false, 0, '0']) expect(literals.parse(value)).toBe(value);
+    expect(literals.safeParse(true).success).toBe(false);
+  });
+
+  it('does not infer custom parser admission from its projected literal', () => {
+    const normalizing = createProtocolComposableSchema<string, 'canonical'>(
+      { const: 'canonical' }, () => ({ success: true, data: 'canonical' }),
+    );
+    const scalar = defineProtocolUnion([normalizing, defineProtocolLiteral(null)]);
+    expect(scalar.parse('legacy')).toBe('canonical');
+    expect(defineProtocolUnion([normalizing, defineProtocolLiteral('legacy')]).parse('legacy')).toBe('canonical');
+    const object = defineProtocolUnion([
+      defineProtocolObject({ kind: normalizing }, { policy: 'closed' }),
+      defineProtocolLiteral(null),
+    ]);
+    expect(object.parse({ kind: 'legacy' })).toEqual({ kind: 'canonical' });
   });
 
   it('captures number and object policy options before callers mutate them', () => {

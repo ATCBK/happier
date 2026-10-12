@@ -38,6 +38,7 @@ import {
 // The composable-schema surface is re-exported name-for-name so this module's
 // published subpath keeps the exact contract it had before the compiler split.
 export {
+  createProtocolStoredReadSchema,
   cloneStrictPluginJsonValue,
   containsEquivalentPluginJsonValue,
   defineProtocolArray,
@@ -59,6 +60,7 @@ export {
   rehydrateCanonicalProtocolComposableSchema,
 } from './protocolComposableSchema.js';
 export type {
+  ProtocolStoredReadSchema,
   PluginJsonSchema,
   PluginJsonSchemaValidator,
   ProtocolArrayOptions,
@@ -311,12 +313,18 @@ function createPluginJsonSchemaZodAdapter<Schema extends z.ZodType>(schema: obje
       if (!value || typeof value !== 'object') return value;
       const objectMembers = members.filter((member) => member.type === 'object' || member.properties);
       if (!objectMembers.length) return value;
+      // A propertyless open object declares arbitrary JSON map data. It is not
+      // a typed object whose undeclared fields should be discarded.
+      if (objectMembers.every((member) => Object.keys(member.properties ?? {}).length === 0
+        && (member.additionalProperties === undefined || member.additionalProperties === true))) return value;
       const output: Record<string, unknown> = {};
       for (const [key, child] of Object.entries(value)) {
         const declared = objectMembers.flatMap((member) => member.properties?.[key] ? [member.properties[key]!] : []);
         const catchalls = objectMembers.flatMap((member) => typeof member.additionalProperties === 'object' ? [member.additionalProperties] : []);
         const definitions = declared.length ? declared : catchalls;
-        if (definitions.length) output[key] = project({ allOf: definitions }, child);
+        if (definitions.length) Object.defineProperty(output, key, {
+          value: project({ allOf: definitions }, child), enumerable: true, configurable: true, writable: true,
+        });
       }
       return output;
     };

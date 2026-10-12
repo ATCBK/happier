@@ -3,6 +3,32 @@ import { z } from 'zod';
 import { lazyZodSchema } from './lazyZodSchema.js';
 
 describe('lazyZodSchema', () => {
+  it('keeps a defaulted absent field cold while preserving native defaults and reverse validation', async () => {
+    let constructed = 0;
+    let defaults = 0;
+    const schema = lazyZodSchema(() => {
+      constructed++;
+      return z.object({ id: z.string().min(1) }).strict();
+    });
+    const fallback = () => ({ id: `fallback-${++defaults}` });
+    const defaulted = schema.default(fallback);
+    const parent = z.object({ item: defaulted }).strict();
+    expect(parent.parse({})).toEqual({ item: { id: 'fallback-1' } });
+    expect(await parent.parseAsync({})).toEqual({ item: { id: 'fallback-2' } });
+    expect(defaulted.optional().parse(undefined)).toEqual({ id: 'fallback-3' });
+    expect(constructed).toBe(0);
+    expect(parent.safeParse({ item: { id: '', extra: true } }).success).toBe(false);
+    expect(constructed).toBe(1);
+    expect(defaulted.safeEncode({ id: '' }).success).toBe(false);
+    expect(defaulted.unwrap()).toBeInstanceOf(z.ZodObject);
+    const expected = z.object({ item: z.object({ id: z.string().min(1) }).strict().default({ id: 'fallback' }) }).strict();
+    const projected = z.object({ item: schema.default({ id: 'fallback' }) }).strict();
+    for (const target of ['draft-7', 'draft-2020-12'] as const) {
+      for (const io of ['input', 'output'] as const) {
+        expect(z.toJSONSchema(projected, { target, io })).toEqual(z.toJSONSchema(expected, { target, io }));
+      }
+    }
+  });
   it('preserves constraints of a derived facade reused through defaults and arrays', () => {
     const base = lazyZodSchema(() => z.object({ name: z.string().nullable() }).strict());
     const account = lazyZodSchema(() => base.extend({ kind: z.literal('account'), accountId: z.string().min(1) }).strict());

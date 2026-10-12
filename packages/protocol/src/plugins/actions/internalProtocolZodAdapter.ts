@@ -8,7 +8,7 @@
  */
 import { z } from 'zod';
 import * as mini from 'zod/mini';
-import { rehydrateCanonicalProtocolComposableSchema } from './protocolComposableSchema.js';
+import { createProtocolStoredReadSchema } from './protocolComposableSchema.js';
 import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 import type {
@@ -64,28 +64,6 @@ export function asProtocolZod<TInput, TOutput>(
     };
     const adapter = createAdapter((value) => schema.safeParse(value));
 
-    const storedJsonSchema = () => {
-      // Derive the stored policy from the DSL's own projection, never a second validator.
-      // The canonical DTO is strict ordinary JSON. Keep stored parsing usable
-      // in hosts without the structured-clone Web API, with no new polyfill.
-      const projection = JSON.parse(JSON.stringify(schema.jsonSchema)) as object;
-      const openObjects = (raw: unknown): void => {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
-        const value = raw as Record<string, unknown>;
-        if (value.type === 'object' && value.properties) value.additionalProperties = true;
-        for (const key of ['properties', 'definitions', '$defs']) {
-          const children = value[key];
-          if (children && typeof children === 'object' && !Array.isArray(children)) Object.values(children).forEach(openObjects);
-        }
-        for (const key of ['anyOf', 'oneOf', 'allOf']) if (Array.isArray(value[key])) value[key].forEach(openObjects);
-        openObjects(value.items);
-      };
-      openObjects(projection);
-      const stored = rehydrateCanonicalProtocolComposableSchema(projection);
-      if (!stored) throw new Error('Stored Protocol projection is not a canonical composable schema');
-      return stored;
-    };
-
     // Zod cannot infer the portable schema hidden behind this neutral adapter.
     // Project the canonical Protocol-owned JSON Schema into exporters so public
     // authoring schemas retain the same admission constraints as runtime.
@@ -96,13 +74,8 @@ export function asProtocolZod<TInput, TOutput>(
     return defineStoredReadProjection<z.core.$ZodType<TOutput, TInput>>(adapter, () => {
       // The incumbent portable-schema owner already derives additive-open/drop
       // readers; keep its constraints rather than introducing another validator.
-      const stored = storedJsonSchema();
-      return createAdapter((value) => {
-        const projected = stored.safeParse(value);
-        // Re-admit the normalized projection through its typed canonical owner.
-        // A generic JSON projection alone cannot establish TOutput.
-        return projected.success ? schema.safeParse(projected.data) : projected;
-      });
+      const stored = createProtocolStoredReadSchema(schema);
+      return createAdapter((value) => stored.safeParse(value));
     });
   });
   protocolZodFacades.set(schema, facade);
