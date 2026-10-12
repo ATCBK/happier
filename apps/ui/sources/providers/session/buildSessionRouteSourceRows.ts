@@ -6,6 +6,8 @@ import { providerConnectionSourceLabel } from './resolveSessionRoutePresentation
 export type SessionRouteSourceRow = Readonly<{
     connectionId: string;
     label: string;
+    /** Already-admitted qualified identity for packaged artwork, absent for custom sources. */
+    contributionKey: string | null;
     /** The Provider's contributed icon name, when it has one. */
     icon: string | null;
     /** Models this Agent can pick from it; null when it offers this Agent none. */
@@ -41,6 +43,7 @@ export function buildSessionRouteSourceRows(input: Readonly<{
         if (!shown && !hidden && worksWith.length === 0) continue;
         (input.isGateway(view) ? gateways : providers).push({
             connectionId: view.connectionId,
+            contributionKey: view.contributionKey,
             label: providerConnectionSourceLabel({ providerName: view.providerName, connectionName: view.displayName,
                 connectionRole: view.role, connectionDisplayNameMode: view.displayNameMode }),
             icon: view.icon,
