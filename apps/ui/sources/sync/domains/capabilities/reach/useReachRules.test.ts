@@ -7,6 +7,8 @@ import { getStorage } from '@/sync/domains/state/storageStore';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { applyMcpServerCatalogSnapshot, resetMcpServerCatalogSnapshotsForTests } from '@/sync/store/settings/mcpServerCatalogSnapshot';
 import { resetMcpServerCatalogEngineForTests } from '@/sync/engine/settings/mcpServerCatalogEngine';
+import { applyPromptLibraryCatalogSnapshot, resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
+import { resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 
 installSettingsViewCommonModuleMocks({ storage: 'real' });
 const boundary = vi.hoisted(() => ({ execute: vi.fn() }));
@@ -24,17 +26,26 @@ beforeEach(() => {
         v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio', stdio: { command: 'server', args: [] },
             env: {}, createdAt: 1, updatedAt: 1 }], bindings: [{ ...initial, serverId: 'server' }],
     } }, true);
+    applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'ready', rows: [{ revision: 1,
+        record: { key: 'skill-rules', value: { v: 1, rules: [{ ...initial, skillId: 'server' }] } } }],
+        tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 1 }, true);
 });
 afterEach(async () => {
     await standardCleanup();
     resetMcpServerCatalogEngineForTests();
     resetMcpServerCatalogSnapshotsForTests();
+    resetPromptLibraryCatalogEngineForTests();
+    resetPromptLibraryCatalogSnapshotsForTests();
 });
-describe('MCP reach rules authoring', () => {
+describe.each(['mcp_server', 'skill'] as const)('%s reach rules authoring', kind => {
+    const item = (rules: readonly ReachRuleV1[], previous: readonly ReachRuleV1[]) => ({
+        [kind === 'skill' ? 'skillId' : 'serverId']: 'server', rules, previous,
+    });
     it('projects a replace immediately and restores the last acknowledged rules on typed refusal', async () => {
         const pending = createDeferred<unknown>();
         boundary.execute.mockReturnValueOnce(pending.promise);
-        const hook = await renderHook(() => useReachRules('mcp_server', 'server'));
+        const hook = await renderHook(() => useReachRules(kind, 'server'));
+        expect(hook.getCurrent().status).toBe('ready');
         let write!: ReturnType<ReturnType<typeof useReachRules>['change']>;
         act(() => { write = hook.getCurrent().change({ kind: 'replace', rules: [{ target: { t: 'allMachines' }, enabled: false }] }); });
         expect(hook.getCurrent().rules[0]?.enabled).toBe(false);
@@ -45,11 +56,11 @@ describe('MCP reach rules authoring', () => {
     it('serializes rapid writes from the last written value and Undo resends the returned previous rules', async () => {
         const first = createDeferred<unknown>();
         boundary.execute.mockReturnValueOnce(first.promise);
-        const hook = await renderHook(() => useReachRules('mcp_server', 'server'));
+        const hook = await renderHook(() => useReachRules(kind, 'server'));
         const off = { ...initial, enabled: false, updatedAt: 2 };
         const machine = { id: 'machine', target: { t: 'machine' as const, machineId: 'm1' }, enabled: true, createdAt: 3, updatedAt: 3 };
         boundary.execute.mockResolvedValueOnce({ ok: true, result: { ok: true, revision: 3,
-            items: [{ serverId: 'server', rules: [off, machine], previous: [off] }] } });
+            items: [item([off, machine], [off])] } });
         let one!: Promise<unknown>; let two!: Promise<unknown>;
         act(() => {
             one = hook.getCurrent().change({ kind: 'write', write: { place: { t: 'allMachines' }, state: 'off' } });
@@ -59,19 +70,23 @@ describe('MCP reach rules authoring', () => {
         expect(hook.getCurrent().rules.find(rule => rule.target.t === 'allMachines')?.enabled).toBe(false);
         expect(hook.getCurrent().rules.find(rule => rule.target.t === 'machine')?.enabled).toBe(true);
         await act(async () => { first.resolve({ ok: true, result: { ok: true, revision: 2,
-            items: [{ serverId: 'server', rules: [off], previous: [initial] }] } }); await one; await two; });
+            items: [item([off], [initial])] } }); await one; await two; });
         expect(hook.getCurrent().rules).toEqual([off, machine]);
         boundary.execute.mockResolvedValueOnce({ ok: true, result: { ok: true, revision: 4,
-            items: [{ serverId: 'server', rules: [off], previous: [off, machine] }] } });
+            items: [item([off], [off, machine])] } });
         await act(async () => { await hook.getCurrent().undoLast(); });
-        expect(boundary.execute.mock.calls.at(-1)).toEqual(['mcp.rules.set', { items: [{ serverId: 'server' }],
+        expect(boundary.execute.mock.calls.at(-1)).toEqual([kind === 'skill' ? 'skills.rules.set' : 'mcp.rules.set', {
+            items: [{ [kind === 'skill' ? 'skillId' : 'serverId']: 'server' }],
             change: { kind: 'replace', rules: [{ target: off.target, enabled: false }] } }]);
         expect(hook.getCurrent().rules).toEqual([off]);
     });
     it('keeps an unreadable catalog unavailable rather than presenting an empty ready value', async () => {
-        const hook = await renderHook(() => useReachRules('mcp_server', 'server'));
+        const hook = await renderHook(() => useReachRules(kind, 'server'));
         await act(async () => {
-            applyMcpServerCatalogSnapshot(scope, { status: 'unavailable', reason: 'invalid-stored-content' }, true);
+            if (kind === 'mcp_server') applyMcpServerCatalogSnapshot(scope, { status: 'unavailable', reason: 'invalid-stored-content' }, true);
+            else applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'partial', rows: [], tombstones: [],
+                diagnostics: [{ key: 'skill-rules', revision: 1, reason: 'invalid-stored-content' }] },
+                rawSettings: {}, sourceSettingsVersion: 1 }, true);
         });
         expect(hook.getCurrent().status).toBe('unavailable');
         expect(await hook.getCurrent().change({ kind: 'replace', rules: [] })).toEqual({ ok: false, message: 'catalog_unavailable' });

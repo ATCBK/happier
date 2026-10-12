@@ -1,4 +1,4 @@
-import type { DetectedMcpServerV1, McpServerRuleV1, McpServerCatalogEntryV1, McpValueRefV1, McpServersSettingsV1 } from '@happier-dev/protocol';
+import type { DetectedMcpServerV1, McpServerRuleV1, McpServerCatalogEntryV1, ValueRefV1, McpServersSettingsV1 } from '@happier-dev/protocol';
 import { resolveCreateReachV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 import { resolveReachV1 } from '@happier-dev/protocol/reach/resolveReachV1';
 import { applyMcpServerCatalogMutationV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
@@ -10,8 +10,8 @@ import {
     toEnvToken,
 } from './mcpCatalogNaming';
 
-function buildEnvFromDetectedEnvKeys(envKeys: readonly string[]): Record<string, McpValueRefV1> {
-    const out: Record<string, McpValueRefV1> = {};
+function buildEnvFromDetectedEnvKeys(envKeys: readonly string[]): Record<string, ValueRefV1> {
+    const out: Record<string, ValueRefV1> = {};
     for (const key of envKeys) {
         const k = String(key ?? '').trim();
         if (!k) continue;
@@ -20,8 +20,8 @@ function buildEnvFromDetectedEnvKeys(envKeys: readonly string[]): Record<string,
     return out;
 }
 
-function buildRemoteHeadersFromDetectedHeaders(params: Readonly<{ headerNames: readonly string[]; serverName: string }>): Record<string, McpValueRefV1> {
-    const out: Record<string, McpValueRefV1> = {};
+function buildRemoteHeadersFromDetectedHeaders(params: Readonly<{ headerNames: readonly string[]; serverName: string }>): Record<string, ValueRefV1> {
+    const out: Record<string, ValueRefV1> = {};
     const serverEnvToken = toEnvToken(params.serverName);
     for (const headerName of params.headerNames) {
         const k = String(headerName ?? '').trim();

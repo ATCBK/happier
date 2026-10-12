@@ -12,6 +12,22 @@ const initial = { id: 'everywhere', target: { t: 'allMachines' as const }, enabl
 const source: ReachRulesSource = { key: 'account/server', itemId: 'server', rules: [initial], revision: 1, status: 'ready', valueAvailable: true };
 
 describe('reach rule optimistic state', () => {
+    it('writes skill rules through the skill Action and Undo restores its previous value', async () => {
+        const off = { ...initial, enabled: false, updatedAt: 2 };
+        const execute = vi.fn<ExecuteReachRules>().mockResolvedValueOnce({ ok: true,
+            result: { ok: true, revision: 2, items: [{ skillId: 'lint', rules: [off], previous: [initial] }] } })
+            .mockResolvedValueOnce({ ok: true, result: { ok: true, revision: 3,
+                items: [{ skillId: 'lint', rules: [initial], previous: [off] }] } });
+        const hook = await renderHook(() => useReachRulesState({ ...source, kind: 'skill', itemId: 'lint' }, execute));
+        await act(async () => {
+            expect(await hook.getCurrent().change({ kind: 'write', write: { place: initial.target, state: 'off' } })).toEqual({ ok: true });
+        });
+        expect(hook.getCurrent().rules).toEqual([off]);
+        await act(async () => { expect(await hook.getCurrent().undoLast()).toEqual({ ok: true }); });
+        expect(execute.mock.calls.at(-1)).toEqual(['skills.rules.set', { items: [{ skillId: 'lint' }],
+            change: { kind: 'replace', rules: [{ target: initial.target, enabled: true }] } }]);
+        expect(hook.getCurrent().rules).toEqual([initial]);
+    });
     it('shows a replace immediately and rolls back with a typed refusal', async () => {
         const pending = createDeferred<ActionExecuteResult>();
         const execute = vi.fn<ExecuteReachRules>().mockReturnValueOnce(pending.promise);

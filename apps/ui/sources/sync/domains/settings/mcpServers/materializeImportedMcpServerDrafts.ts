@@ -1,7 +1,7 @@
 import type {
     McpServerRuleV1,
     McpServerCatalogEntryV1,
-    McpValueRefV1,
+    ValueRefV1,
     McpServersSettingsV1,
 } from '@happier-dev/protocol';
 import { resolveCreateReachV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
@@ -45,7 +45,7 @@ function resolveInputValueRef(params: Readonly<{
     nowMs: number;
     generateId: () => string;
     warnings: string[];
-}>): McpValueRefV1 {
+}>): ValueRefV1 {
     const mapping = params.inputMappings[params.inputId];
     if (!mapping) {
         const envVarName = toEnvToken(params.inputId);
@@ -93,8 +93,8 @@ function resolveDraftValueMap(params: Readonly<{
     nowMs: number;
     generateId: () => string;
     warnings: string[];
-}>): Record<string, McpValueRefV1> {
-    const out: Record<string, McpValueRefV1> = {};
+}>): Record<string, ValueRefV1> {
+    const out: Record<string, ValueRefV1> = {};
     for (const [key, value] of Object.entries(params.values)) {
         out[key] = value.t === 'literal'
             ? value
