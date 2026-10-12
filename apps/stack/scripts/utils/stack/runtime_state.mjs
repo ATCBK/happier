@@ -640,8 +640,16 @@ async function recordStackRuntimeStartUnlocked(
     ? { ...restWithoutProcesses.sourceRuntimeIdentities }
     : restWithoutProcesses.sourceRuntimeIdentities ?? null;
   next.sourceRuntimeLaunch = restWithoutProcesses.sourceRuntimeLaunch ?? null;
+  // An SSH lifecycle reconnect can publish an empty source selection while
+  // the old daemon still serves. Its trusted live PID retains both execution
+  // identity and stop custody until a successor is explicitly selected.
+  const retainedDaemon = isPlainObject(next.sourceRuntimeIdentities)
+    && !next.sourceRuntimeIdentities.daemon
+    && Number(reconciledExistingProcesses.daemonPid) > 1
+    && processes.daemonPid === reconciledExistingProcesses.daemonPid
+    && existing.sourceRuntimeIdentities?.daemon?.loaded;
   for (const role of ['daemon', 'server']) {
-    if (!adoptedSourceRoles.includes(role)) continue;
+    if (!adoptedSourceRoles.includes(role) && !(role === 'daemon' && retainedDaemon)) continue;
     if (isPlainObject(next.sourceRuntimeIdentities)) {
       delete next.sourceRuntimeIdentities[role];
       if (existing.sourceRuntimeIdentities?.[role]) {

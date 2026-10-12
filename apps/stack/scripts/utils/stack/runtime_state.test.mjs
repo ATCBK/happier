@@ -350,6 +350,29 @@ test('source start preserves only adopted execution identities, launch custody a
     daemon: { selected: 'daemon-new', loaded: null } };
   const oldLaunch = { entrypoint: '/old/index.mjs', cliDir: '/old', env: {} };
   const newLaunch = { entrypoint: '/new/index.mjs', cliDir: '/new', env: {} };
+  const reconnectPath = join(dir, 'reconnect.json');
+  const reconnectBase = { stackName, ownerPid: process.pid, ports: {} };
+  await recordStackRuntimeStart(reconnectPath, { ...reconnectBase,
+    sourceRuntimeIdentities: oldIdentities, sourceRuntimeLaunch: oldLaunch,
+    processes: { daemonPid: child.pid, daemonPids: [child.pid] } });
+  const reconnect = await recordStackRuntimeStart(reconnectPath, { ...reconnectBase,
+    sourceRuntimeIdentities: {}, sourceRuntimeLaunch: newLaunch });
+  assert.deepEqual(reconnect.sourceRuntimeIdentities, { daemon: oldIdentities.daemon },
+    'a retained live daemon must keep its loaded identity across an owner reconnect');
+  assert.deepEqual(reconnect.sourceRuntimeLaunch, oldLaunch, 'retirement still uses the retained daemon launch');
+  const clearedPath = join(dir, 'cleared-daemon.json');
+  await recordStackRuntimeStart(clearedPath, { ...reconnectBase,
+    sourceRuntimeIdentities: oldIdentities, sourceRuntimeLaunch: oldLaunch,
+    processes: { daemonPid: child.pid, daemonPids: [child.pid] } });
+  const cleared = await recordStackRuntimeStart(clearedPath, { ...reconnectBase,
+    sourceRuntimeIdentities: {}, sourceRuntimeLaunch: null,
+    processes: { daemonPid: null, daemonPids: [] } });
+  assert.deepEqual(cleared.sourceRuntimeIdentities, {}, 'a removed daemon does not retain an execution identity');
+  assert.equal(cleared.sourceRuntimeLaunch, null);
+  const replacement = await recordStackRuntimeStart(reconnectPath, { ...reconnectBase,
+    sourceRuntimeIdentities: newIdentities, sourceRuntimeLaunch: newLaunch });
+  assert.deepEqual(replacement.sourceRuntimeIdentities, newIdentities, 'an explicit successor is still selected');
+  assert.deepEqual(replacement.sourceRuntimeLaunch, newLaunch);
   for (const adoptedRole of ['daemon', 'server']) {
     const statePath = join(dir, `${adoptedRole}.json`);
     const base = { stackName, ownerPid: process.pid, ports: {} };
