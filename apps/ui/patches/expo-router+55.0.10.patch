@@ -1,3 +1,30 @@
+diff --git a/node_modules/expo-router/build/global-state/router-store.js b/node_modules/expo-router/build/global-state/router-store.js
+--- a/node_modules/expo-router/build/global-state/router-store.js
++++ b/node_modules/expo-router/build/global-state/router-store.js
+@@ -113,6 +113,12 @@
+             let isStale = false;
+             let state = newState;
+             while (!isStale && state) {
++                // A lazy child retains parsed partial state until its navigator
++                // registers. It is not a stale root or initialized navigator.
++                if (state !== newState && state.stale && !state.key) {
++                    console.debug('Navigation branch is awaiting navigator hydration.');
++                    break;
++                }
+                 isStale = state.stale;
+                 state =
+                     state.routes?.['index' in state && typeof state.index === 'number'
+diff --git a/node_modules/expo-router/build/global-state/routing.js b/node_modules/expo-router/build/global-state/routing.js
+--- a/node_modules/expo-router/build/global-state/routing.js
++++ b/node_modules/expo-router/build/global-state/routing.js
+@@ -362,6 +362,7 @@ function findDivergentState(_actionState, _navigationState,
+         const didActionAndCurrentStateDiverge = actionStateRoute.name !== stateRoute.name ||
+             !childState ||
+             !nextNavigationState ||
++            !nextNavigationState.key ||
+             (dynamicName &&
+                 // @ts-expect-error: TODO(@kitten): This isn't properly typed, so the index access fails
+                 actionStateRoute.params?.[dynamicName.name] !== stateRoute.params?.[dynamicName.name]);
 diff --git a/node_modules/expo-router/build/fork/createMemoryHistory.js b/node_modules/expo-router/build/fork/createMemoryHistory.js
 index 9e67d40..d0d1e91 100644
 --- a/node_modules/expo-router/build/fork/createMemoryHistory.js

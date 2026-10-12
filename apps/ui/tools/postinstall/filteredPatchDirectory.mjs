@@ -27,14 +27,16 @@ function packageExists(nodeModulesDir, packageName) {
     return fs.existsSync(path.resolve(nodeModulesDir, packageName));
 }
 
-export function createFilteredPatchDir({ patchDir, nodeModulesDir, label }) {
+export function listApplicablePatchFiles({ patchDir, nodeModulesDir }) {
     const patchFiles = listPatchFiles(patchDir);
-    if (patchFiles.length === 0) return '';
-
-    const selected = patchFiles.filter((fileName) => {
+    return patchFiles.filter((fileName) => {
         const packageName = resolvePatchTargetPackageName(fileName);
         return packageExists(nodeModulesDir, packageName);
     });
+}
+
+export function createFilteredPatchDir({ patchDir, nodeModulesDir, label }) {
+    const selected = listApplicablePatchFiles({ patchDir, nodeModulesDir });
     if (selected.length === 0) return '';
 
     // GitHub's Windows checkout is commonly on D: while os.tmpdir() is on C:. patch-package

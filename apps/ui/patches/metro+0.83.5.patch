@@ -17,3 +17,51 @@ index bd42485..417de6c 100644
      const result = await this._fileSystem.getOrComputeSha1(mixedPath);
      if (!result || !result.sha1) {
        throw new Error(`Failed to get the SHA-1 for: ${mixedPath}.
+diff --git a/node_modules/metro/src/DeltaBundler.js b/node_modules/metro/src/DeltaBundler.js
+--- a/node_modules/metro/src/DeltaBundler.js
++++ b/node_modules/metro/src/DeltaBundler.js
+@@ -25,25 +25,33 @@ class DeltaBundler {
+       this._changeEventSource,
+       options,
+     );
+-    await deltaCalculator.getDelta({
+-      reset: true,
+-      shallow: options.shallow,
+-    });
+-    const graph = deltaCalculator.getGraph();
+-    deltaCalculator.end();
+-    return graph.dependencies;
++    try {
++      await deltaCalculator.getDelta({
++        reset: true,
++        shallow: options.shallow,
++      });
++      return deltaCalculator.getGraph().dependencies;
++    } finally {
++      deltaCalculator.end();
++    }
+   }
+   async buildGraph(entryPoints, options) {
+     const deltaCalculator = new _DeltaCalculator.default(
+       new Set(entryPoints),
+       this._changeEventSource,
+       options,
+     );
+-    await deltaCalculator.getDelta({
+-      reset: true,
+-      shallow: options.shallow,
+-    });
++    try {
++      await deltaCalculator.getDelta({
++        reset: true,
++        shallow: options.shallow,
++      });
++    } catch (error) {
++      // Happier: rejected initial graphs never enter the lifecycle registry.
++      deltaCalculator.end();
++      throw error;
++    }
+     const graph = deltaCalculator.getGraph();
+     this._deltaCalculators.set(graph, deltaCalculator);
+     return graph;
+   }

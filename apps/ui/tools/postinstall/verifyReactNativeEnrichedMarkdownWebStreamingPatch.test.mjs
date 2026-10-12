@@ -56,6 +56,41 @@ test('UI dependency preflight verifies both app-local and hoisted patched copies
     }
 });
 
+test('UI dependency preflight verifies other patches even when enriched-markdown is ready', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-all-patches-preflight-'));
+    const fixture = createPatchedPackageFixture();
+    const uiPackageDir = path.join(root, 'apps', 'ui');
+    try {
+        fs.cpSync(fixture, path.join(uiPackageDir, 'node_modules/react-native-enriched-markdown'), { recursive: true });
+        fs.mkdirSync(path.join(uiPackageDir, 'patches'), { recursive: true });
+        fs.writeFileSync(path.join(uiPackageDir, 'patches', 'fixture-dependency+1.0.0.patch'),
+            'diff --git a/node_modules/fixture-dependency/index.js b/node_modules/fixture-dependency/index.js\n'
+            + '--- a/node_modules/fixture-dependency/index.js\n+++ b/node_modules/fixture-dependency/index.js\n'
+            + '@@ -1 +1 @@\n-export const patched = false;\n+export const patched = true;\n'
+            + 'diff --git a/node_modules/fixture-dependency/feature.js b/node_modules/fixture-dependency/feature.js\n'
+            + 'new file mode 100644\n--- /dev/null\n+++ b/node_modules/fixture-dependency/feature.js\n'
+            + '@@ -0,0 +1 @@\n+export const feature = true;\n');
+        for (const packageDir of [path.join(root, 'node_modules/fixture-dependency'), path.join(uiPackageDir, 'node_modules/fixture-dependency')]) {
+            fs.mkdirSync(packageDir, { recursive: true });
+            fs.writeFileSync(path.join(packageDir, 'index.js'), 'export const patched = true;\n');
+            fs.writeFileSync(path.join(packageDir, 'feature.js'), 'export const feature = true;\n');
+        }
+        assert.doesNotThrow(() => verifyUiPatchedDependencies({ uiPackageDir }));
+        const file = path.join(root, 'node_modules/fixture-dependency/index.js');
+        fs.writeFileSync(file, 'export const patched = false;\n');
+        assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }), /fixture-dependency/);
+        fs.writeFileSync(file, 'export const patched = true;\n');
+        fs.writeFileSync(path.join(uiPackageDir, 'node_modules/fixture-dependency/index.js'), 'export const patched = false;\n');
+        assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }), /fixture-dependency/);
+        fs.writeFileSync(path.join(uiPackageDir, 'node_modules/fixture-dependency/index.js'), 'export const patched = true;\n');
+        fs.writeFileSync(path.join(uiPackageDir, 'node_modules/fixture-dependency/feature.js'), 'export const feature = false;\n');
+        assert.throws(() => verifyUiPatchedDependencies({ uiPackageDir }), /fixture-dependency/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(fixture, { recursive: true, force: true });
+    }
+});
+
 function createPatchedPackageFixture() {
     const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'enriched-markdown-patch-fixture-'));
     const markersByFile = new Map();

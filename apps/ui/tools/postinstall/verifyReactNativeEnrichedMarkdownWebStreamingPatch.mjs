@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { listApplicablePatchFiles } from './filteredPatchDirectory.mjs';
 
 export function verifyUiPatchedDependencies({
     uiPackageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
@@ -19,6 +21,41 @@ export function verifyUiPatchedDependencies({
         const result = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir });
         return result.status === 'ok' ? [] : [`${packageDir}\n${formatReactNativeEnrichedMarkdownWebStreamingPatchFailure(result)}`];
     });
+    const patchDir = path.join(uiPackageDir, 'patches');
+    const require = createRequire(import.meta.url);
+    for (const cwd of [path.resolve(uiPackageDir, '../..'), uiPackageDir]) {
+        for (const patchFile of listApplicablePatchFiles({ patchDir, nodeModulesDir: path.join(cwd, 'node_modules') })) {
+            try {
+                // Reuse patch-package's own installed-patch test without applying
+                // or reversing any bytes. The postinstall remains the sole writer.
+                const { parsePatchFile } = require('patch-package/dist/patch/parse.js');
+                const { reversePatch } = require('patch-package/dist/patch/reverse.js');
+                const { executeEffects } = require('patch-package/dist/patch/apply.js');
+                const patch = parsePatchFile(fs.readFileSync(path.join(patchDir, patchFile), 'utf8'));
+                for (const effect of patch) {
+                    // Reverse dry-run checks only existence for created files.
+                    // Verify their complete patch-owned content as well.
+                    if (effect.type === 'file creation') {
+                        const contents = effect.hunk ? effect.hunk.parts[0].lines.join('\n')
+                            + (effect.hunk.parts[0].noNewlineAtEndOfFile ? '' : '\n') : '';
+                        if (fs.readFileSync(path.join(cwd, effect.path), 'utf8') !== contents) {
+                            throw new Error(`Incorrect patched contents for ${effect.path}`);
+                        }
+                    }
+                    if (effect.type !== 'mode change') continue;
+                    if (process.platform !== 'win32' && (fs.statSync(path.join(cwd, effect.path)).mode & 0o111) !== (effect.newMode & 0o111)) {
+                        throw new Error(`Incorrect patched mode for ${effect.path}`);
+                    }
+                }
+                // patch-package 8's mode-change effect calls chmod even in dryRun.
+                executeEffects(reversePatch(patch.filter(effect => effect.type !== 'mode change')), {
+                    dryRun: true, bestEffort: false, cwd,
+                });
+            } catch (error) {
+                failures.push(`${cwd}: ${patchFile}\n${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+    }
     if (failures.length > 0) throw new Error(`[ui] patched dependency preflight failed:\n${failures.join('\n\n')}`);
 }
 
