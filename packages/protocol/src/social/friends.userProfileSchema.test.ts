@@ -8,6 +8,13 @@ import {
 } from './friends.js';
 
 describe('UserProfileSchema', () => {
+  it('normalizes released names only when name is absent, preserving an explicit clear', () => {
+    const legacy = { id: 'u_legacy', firstName: ' Legacy ', lastName: ' Person ', avatar: null,
+      username: 'legacy', bio: null, status: 'friend', publicKey: null };
+    expect(UserProfileSchema.parse(legacy).name).toBe('Legacy Person');
+    expect(UserProfileSchema.parse({ ...legacy, name: ' Chosen Name ' }).name).toBe('Chosen Name');
+    expect(UserProfileSchema.parse({ ...legacy, name: null }).name).toBeNull();
+  });
   it('accepts keyless accounts (publicKey=null)', () => {
     const parsed = UserProfileSchema.parse({
       id: 'u_1',

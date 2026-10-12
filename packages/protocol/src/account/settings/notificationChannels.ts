@@ -32,6 +32,7 @@ const NotificationChannelTopicsFieldsV1Schema = lazyZodSchema(() => z.object({
   connectedServiceQuotaBlocked: z.boolean().default(true),
   connectedServiceQuotaRecovered: z.boolean().default(true),
   connectedServiceUsage: z.boolean().default(false),
+  machines: z.boolean().default(true),
 }));
 
 export const NotificationChannelTopicsStrictV1Schema = lazyZodSchema(() => z
@@ -51,6 +52,7 @@ export const NotificationChannelTopicsV1Schema = lazyZodSchema(() => z.preproces
     connectedServiceQuotaBlocked: true,
     connectedServiceQuotaRecovered: true,
     connectedServiceUsage: false,
+    machines: true,
   }));
 
 export type NotificationChannelTopicsV1 = z.infer<typeof NotificationChannelTopicsV1Schema>;

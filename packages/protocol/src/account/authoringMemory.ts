@@ -2,12 +2,28 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
-import { createStoredReadSchema } from '../json/storedReadSchema.js';
+import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 import { isAccountScopedBlobCiphertextForKind } from '../crypto/accountScopedCipherEnvelope.js';
+import { WorkflowDefinitionIdV1Schema } from '../workflows/workflowIdsV1.js';
+import { WorkflowProjectTargetV1Schema } from '../workflows/workflowWorkspaceV1.js';
 
 export const AUTHORING_MEMORY_ACCOUNT_SCOPED_BLOB_KIND_V1 = 'authoring_memory' as const;
 export const AUTHORING_MEMORY_ROUTE_V1 = '/v1/account/authoring-memory' as const;
 const PROJECT_LAST_OPENED_PREFIX = 'projectLastOpened:';
+const WORKFLOW_PROJECT_PREFIX = 'workflowProject:';
+export const WorkflowProjectTargetsByDefinitionIdV1Schema = lazyZodSchema(() => z.record(WorkflowDefinitionIdV1Schema, WorkflowProjectTargetV1Schema));
+export type WorkflowProjectTargetsByDefinitionIdV1 = z.infer<typeof WorkflowProjectTargetsByDefinitionIdV1Schema>;
+
+export function buildWorkflowProjectMemoryKeyV1(definitionId: string): string {
+  return `${WORKFLOW_PROJECT_PREFIX}${encodeURIComponent(WorkflowDefinitionIdV1Schema.parse(definitionId))}`;
+}
+export function parseWorkflowProjectMemoryKeyV1(key: string): string | null {
+  if (!key.startsWith(WORKFLOW_PROJECT_PREFIX)) return null;
+  try {
+    const id = WorkflowDefinitionIdV1Schema.safeParse(decodeURIComponent(key.slice(WORKFLOW_PROJECT_PREFIX.length)));
+    return id.success && buildWorkflowProjectMemoryKeyV1(id.data) === key ? id.data : null;
+  } catch { return null; }
+}
 const ProjectAnchorSchema = lazyZodSchema(() => z.object({
   serverId: z.string().min(1).refine(value => value === value.trim()),
   projectKey: z.string().min(1).refine(value => value === value.trim()),
@@ -33,6 +49,7 @@ export function parseProjectLastOpenedMemoryKeyV1(key: string): ProjectLastOpene
 export const AuthoringMemoryKeyV1Schema = lazyZodSchema(() => z.union([
   z.literal('recentMachinePaths'),
   z.literal('lastUsedProfile'),
+  z.string().refine(key => parseWorkflowProjectMemoryKeyV1(key) !== null, 'Workflow projects require a canonical definition identity'),
   z.string().refine(key => parseProjectLastOpenedMemoryKeyV1(key) !== null, 'Project recency requires a canonical qualified anchor'),
   z.string().startsWith('engineSelection:').refine(
     (key) => key.length > 'engineSelection:'.length && key === key.trim(),
@@ -44,11 +61,19 @@ export type AuthoringMemoryKeyV1 = z.infer<typeof AuthoringMemoryKeyV1Schema>;
 /** Preserve opaque future engine carriers; interpretation stays client-owned. */
 export const AuthoringMemoryValueV1Schema = StrictJsonValueSchema;
 export type AuthoringMemoryValueV1 = z.infer<typeof AuthoringMemoryValueV1Schema>;
-export function assertAuthoringMemoryValueForKeyV1(key: string, value: unknown): AuthoringMemoryValueV1 {
+const StoredWorkflowProjectTargetV1Schema = createStoredReadSchema(WorkflowProjectTargetV1Schema);
+function authoringMemoryValueSchemaForKeyV1(key: string, stored: boolean): z.ZodType<AuthoringMemoryValueV1> {
   AuthoringMemoryKeyV1Schema.parse(key);
   return parseProjectLastOpenedMemoryKeyV1(key)
-    ? ProjectLastOpenedMemoryValueV1Schema.parse(value)
-    : AuthoringMemoryValueV1Schema.parse(value);
+    ? ProjectLastOpenedMemoryValueV1Schema
+    : parseWorkflowProjectMemoryKeyV1(key) !== null ? (stored ? StoredWorkflowProjectTargetV1Schema : WorkflowProjectTargetV1Schema)
+    : AuthoringMemoryValueV1Schema;
+}
+export function assertAuthoringMemoryValueForKeyV1(key: string, value: unknown): AuthoringMemoryValueV1 {
+  return authoringMemoryValueSchemaForKeyV1(key, false).parse(value);
+}
+export function assertStoredAuthoringMemoryValueForKeyV1(key: string, value: unknown): AuthoringMemoryValueV1 {
+  return authoringMemoryValueSchemaForKeyV1(key, true).parse(value);
 }
 
 /** Preserve retained alias carriers together under their one canonical row identity. */
@@ -60,14 +85,28 @@ export type AuthoringMemoryEngineSelectionsV1 = z.infer<typeof AuthoringMemoryEn
 export const StoredAuthoringMemoryEngineSelectionsV1Schema = createStoredReadSchema(AuthoringMemoryEngineSelectionsV1Schema);
 
 /** E2EE opens must match the requested row before disclosing this value. */
-export const AuthoringMemoryPrivatePayloadV1Schema = lazyZodSchema(() => z.object({
+const AuthoringMemoryPrivatePayloadShapeV1Schema = lazyZodSchema(() => z.object({
   key: AuthoringMemoryKeyV1Schema,
   value: AuthoringMemoryValueV1Schema,
-}).strict().superRefine((payload, ctx) => {
-  if (parseProjectLastOpenedMemoryKeyV1(payload.key) && !ProjectLastOpenedMemoryValueV1Schema.safeParse(payload.value).success) {
-    ctx.addIssue({ code: 'custom', path: ['value'], message: 'Project recency must be a nonnegative timestamp' });
-  }
-}));
+}).strict());
+function projectStoredAuthoringMemoryPrivatePayload(schema: typeof AuthoringMemoryPrivatePayloadShapeV1Schema) {
+  return schema.transform((payload, ctx) => {
+    const value = authoringMemoryValueSchemaForKeyV1(payload.key, true).safeParse(payload.value);
+    if (!value.success) {
+      ctx.addIssue({ code: 'custom', path: ['value'], message: 'Authoring memory value does not match its row key' });
+      return z.NEVER;
+    }
+    return { key: payload.key, value: value.data };
+  });
+}
+export const AuthoringMemoryPrivatePayloadV1Schema = defineStoredReadProjection(
+  lazyZodSchema(() => AuthoringMemoryPrivatePayloadShapeV1Schema.superRefine((payload, ctx) => {
+    if (!authoringMemoryValueSchemaForKeyV1(payload.key, false).safeParse(payload.value).success) {
+      ctx.addIssue({ code: 'custom', path: ['value'], message: 'Authoring memory value does not match its row key' });
+    }
+  })),
+  () => projectStoredAuthoringMemoryPrivatePayload(createStoredReadSchema(AuthoringMemoryPrivatePayloadShapeV1Schema)),
+);
 export type AuthoringMemoryPrivatePayloadV1 = z.infer<typeof AuthoringMemoryPrivatePayloadV1Schema>;
 export const StoredAuthoringMemoryPrivatePayloadV1Schema = createStoredReadSchema(AuthoringMemoryPrivatePayloadV1Schema);
 
@@ -100,7 +139,9 @@ export function assertAuthoringMemoryContentForModeV1(
   ) {
     throw new AuthoringMemoryContentModeMismatchError();
   }
-  if (key !== undefined && content.t === 'plain') assertAuthoringMemoryValueForKeyV1(key, content.v);
+  if (key !== undefined && content.t === 'plain') {
+    return { t: 'plain', v: assertStoredAuthoringMemoryValueForKeyV1(key, content.v) };
+  }
   return content;
 }
 

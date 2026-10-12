@@ -27,9 +27,18 @@ import type { QualifiedConnectedAccountPurposeV1 } from '../../connect/connected
 import { buildQualifiedPluginContributionKey } from '../../plugins/contributionIdentity.js';
 import { resolveGeneratedSessionPresentationAgentIdV1 } from '../../agents/generated/sessionPresentationCompatV1.js';
 import { sameQualifiedConnectedAccountRef } from '../../connect/qualifiedConnectedAccountPersistence.js';
-import { sameQualifiedConnectedAccountGroupRef } from '../../connect/qualifiedConnectedAccountsV4.js';
+import { sameQualifiedConnectedAccountGroupRef } from '../../connect/qualifiedConnectedAccountProjectionsV4.js';
 
 const AgentIdSettingsKeySchema = lazyZodSchema(() => z.string().trim().min(1));
+
+/** Normalize released Agent aliases once at settings ingress; an explicit current key wins. */
+function normalizeAgentKeyedSettings<T>(values: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(values).flatMap(([agentId, value]) => {
+    const canonicalId = resolveGeneratedSessionPresentationAgentIdV1({ flavor: agentId }) ?? agentId;
+    if (canonicalId !== agentId && Object.hasOwn(values, canonicalId)) return [];
+    return [[canonicalId, value]];
+  }));
+}
 
 const ConnectedServicesDefaultAuthTeamResourceQualifierV2Shape = {
   serverId: z.string().trim().min(1),
@@ -118,10 +127,7 @@ export const BuiltInLegacyConnectedServicesDefaultAuthByAgentIdV1IngressSchema =
 export const BuiltInLegacyAdditionalConnectedServicesDefaultAuthByAgentIdV1IngressSchema = lazyZodSchema(() =>
   ConnectedServicesDefaultAuthByAgentIdV1SourceSchema.transform((value) => ({
     v: value.v,
-    bindingsByAgentId: Object.fromEntries(Object.entries(value.bindingsByAgentId).map(([agentId, bindings]) => [
-      resolveGeneratedSessionPresentationAgentIdV1({ flavor: agentId }) ?? agentId,
-      bindings,
-    ])),
+    bindingsByAgentId: normalizeAgentKeyedSettings(value.bindingsByAgentId),
   })),
 );
 
@@ -716,7 +722,12 @@ export const ConnectedServicesProviderStateSharingSettingsV1Schema = lazyZodSche
     },
     byAgentId: {},
     acknowledgedRisksByAgentId: {},
-  }));
+  })
+  .transform((value) => ({
+    ...value,
+    byAgentId: normalizeAgentKeyedSettings(value.byAgentId),
+    acknowledgedRisksByAgentId: normalizeAgentKeyedSettings(value.acknowledgedRisksByAgentId),
+  })));
 
 export type ConnectedServicesProviderStateSharingSettingsV1 = z.infer<
   typeof ConnectedServicesProviderStateSharingSettingsV1Schema

@@ -93,6 +93,21 @@ async function capturePrivateCatalogAuthority(ports: CapturePorts, currentness: 
 export type AccountSettingsHistoryCleanupResultV1 = Readonly<{ status: 'complete' }>
   | Readonly<{ status: 'cleanup-pending'; versions: readonly number[] }>;
 
+function historyCurrentnessInputs(currentness: AccountEncryptionCurrentnessResponse) {
+  return { settingsVersion: currentness.settingsVersion, mode: currentness.mode,
+    signingKeyFingerprint: currentness.signingKeyFingerprint, contentKeyFingerprint: currentness.contentKeyFingerprint };
+}
+
+/** Process-local completion evidence. Fresh head, transfer and destination reads invalidate it;
+ * the Account's unrelated event cursor is not a history input. Incomplete passes never advance it. */
+export type AccountSettingsHistoryNormalizationCheckpointV1 = {
+  completed?: Readonly<{
+    currentness: ReturnType<typeof historyCurrentnessInputs>;
+    destination: Awaited<ReturnType<typeof captureAccountSettingsHistoryDestinationAuthorityV1>>;
+    savedSecretRecovery?: AccountSettingsHistorySavedSecretRecoveryV1;
+  }>;
+};
+
 /** Fresh opened source and admitted current resources, not a persisted import ledger. */
 export type AccountSettingsHistorySavedSecretRecoveryV1 = Readonly<{
   accountId: string;
@@ -101,6 +116,18 @@ export type AccountSettingsHistorySavedSecretRecoveryV1 = Readonly<{
   /** Existing captured SavedSecret materialization owner; no credential enters the wire proof. */
   resolveResourceValue?(resourceId: string): string | null | Promise<string | null>;
 }>;
+
+/** Recovery is fresh captured source/resources, not the identity of a catalog load's closure.
+ * Resource revisions bind material; presence of a material resolver is a separate capability. */
+export function areAccountSettingsHistoryRecoveryInputsEqualV1(
+  a: AccountSettingsHistorySavedSecretRecoveryV1 | undefined,
+  b: AccountSettingsHistorySavedSecretRecoveryV1 | undefined,
+): boolean {
+  if (!a || !b) return a === b;
+  return a.accountId === b.accountId && sameStrictJsonValue(a.source, b.source)
+    && sameStrictJsonValue(a.resources, b.resources)
+    && Boolean(a.resolveResourceValue) === Boolean(b.resolveResourceValue);
+}
 
 /** Platform adapters supply captured transport, lifetime and existing crypto owners only. */
 export type AccountSettingsHistoryClientPortsV1 = Readonly<{
@@ -267,6 +294,7 @@ export async function normalizeAccountSettingsHistoryClientV1(input: Readonly<{
   /** Original source-cleanup proof; never substitute a newly captured control. */
   expectedProfileTransferRevision?: number | 'absent';
   savedSecretRecovery?: AccountSettingsHistorySavedSecretRecoveryV1;
+  checkpoint?: AccountSettingsHistoryNormalizationCheckpointV1;
 }>): Promise<AccountSettingsHistoryCleanupResultV1> {
   const { ports } = input;
   const pending = new Set<number>();
@@ -275,6 +303,24 @@ export async function normalizeAccountSettingsHistoryClientV1(input: Readonly<{
   const settingsVersion = currentness.settingsVersion;
   if (settingsVersion === undefined) return ports.unavailable(0, 'Settings currentness unavailable');
   const destination = await captureAccountSettingsHistoryDestinationAuthorityV1({ ...input, currentness });
+  const inputs = { currentness: historyCurrentnessInputs(currentness), destination };
+  if ((input.expectedProfileTransferRevision === undefined
+      || input.expectedProfileTransferRevision === destination.expectedProfileTransferRevision)
+    && input.checkpoint?.completed
+    && areAccountSettingsHistoryRecoveryInputsEqualV1(input.checkpoint.completed.savedSecretRecovery, input.savedSecretRecovery)
+    && sameStrictJsonValue(input.checkpoint.completed.currentness, inputs.currentness)
+    && sameStrictJsonValue(input.checkpoint.completed.destination, inputs.destination)) {
+    // Destination reads can overlap a Settings write, just as a full scan can.
+    // Keep the existing final authority recapture before accepting completion.
+    const confirmedCurrentness = await ports.readCurrentness();
+    const confirmedDestination = await captureAccountSettingsHistoryDestinationAuthorityV1({ ...input, currentness: confirmedCurrentness });
+    if (sameStrictJsonValue(inputs.currentness, historyCurrentnessInputs(confirmedCurrentness))
+      && sameStrictJsonValue(destination, confirmedDestination)) {
+      await assertCurrent(ports);
+      return { status: 'complete' };
+    }
+  }
+  if (input.checkpoint) input.checkpoint.completed = undefined;
   const readList = async () => {
     const response = await ports.request('/v2/account/settings/history', { method: 'GET' });
     await assertCurrent(ports);
@@ -328,15 +374,21 @@ export async function normalizeAccountSettingsHistoryClientV1(input: Readonly<{
       pending.add(snapshot.version);
     }
   }
-  const latest = await readList();
-  const known = new Set(inventory.map(snapshot => snapshot.version));
-  latest.forEach(snapshot => { if (!known.has(snapshot.version)) pending.add(snapshot.version); });
   const finalCurrentness = await ports.readCurrentness();
   const finalDestination = await captureAccountSettingsHistoryDestinationAuthorityV1({ ...input, currentness: finalCurrentness });
-  if (!sameStrictJsonValue(currentness, finalCurrentness)
+  // Read after recapture: a concurrent Settings write can retain its previous version again.
+  const latest = await readList();
+  // Retention and exact-version purge can remove a row after the initial list.
+  // Only a fresh inventory proves it gone; a still-listed 404 remains unresolved.
+  const retained = new Set(latest.map(snapshot => snapshot.version));
+  for (const version of pending) if (!retained.has(version)) pending.delete(version);
+  const known = new Set(inventory.map(snapshot => snapshot.version));
+  latest.forEach(snapshot => { if (!known.has(snapshot.version)) pending.add(snapshot.version); });
+  if (!sameStrictJsonValue(historyCurrentnessInputs(currentness), historyCurrentnessInputs(finalCurrentness))
     || finalDestination.expectedProfileTransferRevision !== destination.expectedProfileTransferRevision
     || !sameStrictJsonValue(destination.authority, finalDestination.authority)) {
     latest.forEach(snapshot => pending.add(snapshot.version));
   }
+  if (pending.size === 0 && input.checkpoint) input.checkpoint.completed = { ...inputs, savedSecretRecovery: input.savedSecretRecovery };
   return pending.size ? { status: 'cleanup-pending', versions: [...pending].sort((a, b) => a - b) } : { status: 'complete' };
 }

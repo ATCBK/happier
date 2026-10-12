@@ -2,11 +2,14 @@ import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 import * as z from 'zod/mini';
 import { z as classicZ } from 'zod';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
-import { GlassSurfaceMaterialsSchema } from './glassSurfaceMaterials.js';
+import { GlassSurfaceMaterialsSchema, GlassSurfaceMaterialsStoredSchema } from './glassSurfaceMaterials.js';
+import { HomeAtmosphereSchema, DEFAULT_HOME_ATMOSPHERE } from './homeAtmosphere.js';
+export { HomeAtmosphereSchema, ProjectAtmosphereSchema, DEFAULT_HOME_ATMOSPHERE, type HomeAtmosphere, type ProjectAtmosphere, type AtmosphereLookOverride } from './homeAtmosphere.js';
 import { DEFAULT_MACHINE_RETENTION_DEFAULTS_V1, MachineRetentionDefaultsV1Schema } from './machineRetentionDefaultsV1.js';
+import { DEFAULT_MACHINE_OFFLINE_ALERTS_V1, MachineOfflineAlertsV1Schema } from './machineOfflineAlertsV1.js';
 import { UsagePacingTargetsV1Schema, UsageQuotaNotificationsV1Schema, DEFAULT_USAGE_QUOTA_NOTIFICATIONS_V1 } from './usagePacingPreferencesV1.js';
 import { UsageCoachPreferencesV1Schema, DEFAULT_USAGE_COACH_PREFERENCES_V1 } from './usageCoachPreferencesV1.js';
-import { UsageModelPriceOverridesV1Schema } from '../../usage/usageModelPriceCatalog.js';
+import { UsageModelPriceOverridesV1Schema } from '../../usage/usageModelPriceSchemas.js';
 import { UsageNightHoursV1Schema } from '../../usage/usageWorkIntervals.js';
 
 import {
@@ -25,7 +28,7 @@ export {
 
 import { AccountSettingsPersistedObjectSchema } from './accountSettingsPersistedObject.js';
 import { LEGACY_AUTHORING_MEMORY_SETTINGS_KEYS } from './legacyAuthoringMemorySettingsV1.js';
-import { DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, SessionAgentStartAllowListsV1Schema } from './sessionAgentStartAllowListsV1.js';
+import { DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, SessionAgentStartAllowListsV1Schema, SessionAgentStartAllowListsV1StrictSchema } from './sessionAgentStartAllowListsV1.js';
 export { DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, SessionAgentStartAllowListsV1Schema, type SessionAgentStartAllowListsV1 } from './sessionAgentStartAllowListsV1.js';
 import { SessionReminderPresetsV1Schema } from './sessionReminderPresetsV1.js';
 import { buildSettingArtifacts, type SettingArtifacts } from '../../settings/registry/buildSettingArtifacts.js';
@@ -33,6 +36,7 @@ import {
   BackendTargetKeyV2InputSchema,
   buildBackendTargetKeyV2,
   readBackendTargetRefV2,
+  readBackendTargetKeyV2,
   type BackendTargetRefV2Input,
 } from '../../backends/targets/backendTargetRefV2.js';
 import { LlmTaskRunnerConfigV1Schema } from '../../llm/tasks/llmTaskRunnerConfigV1.js';
@@ -482,6 +486,18 @@ export function clearRetainedMachineTerminalHostAliases(raw: Record<string, unkn
   }));
 }
 
+function canonicalizeStoredBackendTargetMap(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const aliases: Array<readonly [string, unknown]> = [];
+  const canonical: Array<readonly [string, unknown]> = [];
+  for (const [key, entry] of Object.entries(value)) {
+    const targetKey = readBackendTargetKeyV2(key);
+    if (targetKey !== null) (targetKey === key ? canonical : aliases).push([targetKey, entry]);
+  }
+  // A retained alias cannot override an explicitly authored canonical entry.
+  return Object.fromEntries([...aliases, ...canonical]);
+}
+
 function backfillLegacyTargetKeyedAccountSettings(raw: Record<string, unknown>): Record<string, unknown> {
   const source = readSafeAccountSettingsRoot(raw);
   const next = { ...source };
@@ -513,6 +529,11 @@ function backfillLegacyTargetKeyedAccountSettings(raw: Record<string, unknown>):
       source.backendCliSourcePreferenceById,
       (value): value is 'system-first' | 'managed-first' => value === 'system-first' || value === 'managed-first',
     );
+  }
+
+  for (const key of ['backendEnabledByTargetKey', 'backendCliSourcePreferenceByTargetKey',
+    'sessionDefaultPermissionModeByTargetKey', 'newSessionDefaultPersistenceModeByTargetKeyV1'] as const) {
+    if (Object.hasOwn(next, key)) next[key] = canonicalizeStoredBackendTargetMap(next[key]);
   }
 
   const parsedAttentionDeliveryPolicy = next.attentionDeliveryPolicyV1 === undefined
@@ -558,8 +579,8 @@ type AccountCatalogDefinitionOptions = Readonly<{
   compatibility?: Readonly<{ provenance: string; removalCondition: string }>;
   /** Present malformed authority-bearing values must fail instead of recovering to a default. */
   recoverMalformed?: boolean;
-  storedRead?: boolean;
-  /** Use the canonical additive stored projection while mutation admission stays strict. */
+  /** Strict write admission when the stored schema deliberately recovers malformed fields. */
+  mutationSchema?: z.core.$ZodType;
 }>;
 
 /**
@@ -602,9 +623,7 @@ function parseAccountSettingMutationValue(schema: z.core.$ZodType, value: unknow
 }
 export function accountCatalogDefinition<TSchema extends z.core.$ZodType>(schema: TSchema, defaultValue: z.input<TSchema>, options: AccountCatalogDefinitionOptions) {
     const structuralBoundsOwner = options.structuralBoundsOwner ?? 'accountGeneric';
-    const storedSchema = options.classification === 'legacy' || options.storedRead === true
-        ? createStoredReadSchema(schema)
-        : schema;
+    const storedSchema = createStoredReadSchema(schema);
     const prepared = lazyDefinition(() => {
         // Stored objects project known fields. New inputs use the strict schema;
         // sparse changes must not treat retained additive fields as new inputs.
@@ -616,10 +635,12 @@ export function accountCatalogDefinition<TSchema extends z.core.$ZodType>(schema
         return { schema: classicZ.union([missingValueDefaultSchema, presentValueSchema]), default: parsedDefault };
     });
     const parseValue = (value: unknown, storedRead = false): AccountSettingValueParseResult => {
-        const boundIssue = inspectAccountSettingValueBounds(value, options.maximumSerializedValueBytes, structuralBoundsOwner);
+        const stored = storedRead ? parseAccountSettingMutationValue(schema, value, true) : undefined;
+        if (stored && !stored.success) return stored;
+        const boundIssue = inspectAccountSettingValueBounds(stored?.success ? stored.data : value, options.maximumSerializedValueBytes, structuralBoundsOwner);
         return boundIssue
             ? { success: false, issues: [boundIssue.message], reason: boundIssue.reason }
-            : parseAccountSettingMutationValue(schema, value, storedRead);
+            : stored ?? parseAccountSettingMutationValue(options.mutationSchema ?? schema, value);
     };
     return {
         // Preserve Zod `.default(...)` semantics: a parsed transform result is returned as-is for
@@ -816,7 +837,8 @@ const ACCOUNT_CORE_CATALOG_DEFINITIONS = {
     sessionTerminalHost: accountPreference(z.enum(['legacy', 'none', 'tmux', 'zellij', 'herdr']), 'legacy', 'session terminal defaults'),
     sessionWindowsRemoteSessionLaunchMode: accountPreference(z.enum(['hidden', 'windows_terminal', 'console']), 'hidden', 'session terminal defaults'),
     sessionWindowsTerminalWindowName: accountPreference(z.string().check(z.maxLength(256)), 'happier', 'session terminal defaults'),
-    useMachinePickerSearch: accountPreference(z.boolean(), false, 'picker presentation'),
+    // Machine lists run to dozens of machines; the picker leads with search (lab m-pick).
+    useMachinePickerSearch: accountPreference(z.boolean(), true, 'picker presentation'),
     usePathPickerSearch: accountPreference(z.boolean(), false, 'picker presentation'),
     agentInputEnterToSend: accountPreference(z.boolean(), true, 'composer presentation'),
     agentInputEnterToSendNative: accountPreference(z.boolean(), false, 'composer presentation'),
@@ -899,7 +921,15 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
     tabBarSize: accountPreference(z.enum(['compact', 'regular', 'large']), 'regular', 'application chrome'),
     glassBlurEnabled: accountPreference(z.boolean(), true, 'application chrome'),
     glassBlurIntensity: accountPreference(z.enum(['light', 'regular', 'strong']), 'regular', 'application chrome'),
-    glassSurfaceMaterials: accountPreference(z.nullable(GlassSurfaceMaterialsSchema), null, 'application chrome'),
+    glassTintIntensity: accountPreference(z.enum(['subtle', 'medium', 'strong']), 'subtle', 'application chrome'),
+    glassSurfaceMaterials: accountCatalogDefinition(z.nullable(GlassSurfaceMaterialsStoredSchema), null, {
+        semanticDomain: 'application chrome', classification: 'preference', maximumSerializedValueBytes: 4 * 1024,
+        mutationSchema: z.nullable(GlassSurfaceMaterialsSchema),
+    }),
+    homeAtmosphere: accountCatalogDefinition(HomeAtmosphereSchema, DEFAULT_HOME_ATMOSPHERE, {
+        semanticDomain: 'Home atmosphere', classification: 'preference',
+        maximumSerializedValueBytes: ACCOUNT_SETTINGS_MAX_DOCUMENT_BYTES,
+    }),
     composerSurfaceStyle: accountPreference(z.enum(['standard', 'glass']), 'glass', 'composer presentation'),
 } as const;
 const BoundedLegacyArraySchema = defineStoredReadProjection(lazyDefinition(() => z.array(BoundedLegacyJsonValueSchema).check(z.maxLength(256))), () => z.array(createStoredReadSchema(BoundedLegacyJsonValueSchema)));
@@ -1165,6 +1195,7 @@ const ACCOUNT_SCM_AND_FILES_CATALOG_DEFINITIONS = {
     filesEditorNativeCodeMirrorEnabled: accountPreference(z.boolean(), true, 'file editing'),
 } as const;
 const ACCOUNT_TRANSCRIPT_AND_TOOL_CATALOG_DEFINITIONS = {
+    agentHtmlNetworkPolicy: accountPolicy(z.catch(z.enum(['allowed', 'ask', 'off']), 'ask'), 'allowed', 'agent HTML network pre-approval'),
     toolViewDetailLevelDefault: accountPreference(z.enum(['default', 'title', 'compact', 'summary', 'full']), 'default', 'tool presentation'),
     toolViewDetailLevelDefaultLocalControl: accountPreference(z.enum(['title', 'compact', 'summary', 'full']), 'title', 'tool presentation'),
     toolViewShowDebugByDefault: accountPreference(z.boolean(), false, 'tool presentation'),
@@ -1263,6 +1294,7 @@ const ACCOUNT_SETTING_CANDIDATES = {
     }),
     codingPromptBehaviorV1: accountCatalogDefinition(z._default(CodingPromptBehaviorV1Schema, DEFAULT_CODING_PROMPT_BEHAVIOR_V1), DEFAULT_CODING_PROMPT_BEHAVIOR_V1, { semanticDomain: 'coding prompts', classification: 'preference', maximumSerializedValueBytes: 4 * 1024 }),
     sessionRemoteAlertsEnabled: accountCatalogDefinition(z.catch(z._default(z.boolean(), false), false), false, { semanticDomain: 'remote alert policy disclosure', classification: 'policy', maximumSerializedValueBytes: 5 }),
+    machineOfflineAlertsV1: accountPolicy(MachineOfflineAlertsV1Schema, DEFAULT_MACHINE_OFFLINE_ALERTS_V1, 'machine offline alert enrollment', ACCOUNT_SETTINGS_MAX_DOCUMENT_BYTES),
     attentionDeliveryPolicyV1: accountCatalogDefinition(z._default(z.catch(AttentionDeliveryPolicyV1Schema, DEFAULT_ATTENTION_DELIVERY_POLICY_V1), DEFAULT_ATTENTION_DELIVERY_POLICY_V1), DEFAULT_ATTENTION_DELIVERY_POLICY_V1, { semanticDomain: 'attention delivery', classification: 'policy', maximumSerializedValueBytes: 32 * 1024 }),
     peerMediationPreferencesV1: accountCatalogDefinition(z._default(z.catch(PeerMediationPreferencesV1Schema, DEFAULT_PEER_MEDIATION_PREFERENCES_V1), DEFAULT_PEER_MEDIATION_PREFERENCES_V1), DEFAULT_PEER_MEDIATION_PREFERENCES_V1, { semanticDomain: 'peer mediation', classification: 'policy', maximumSerializedValueBytes: 32 * 1024 }),
     usageLimitRecoverySettingsV1: accountCatalogDefinition(z._default(UsageLimitRecoverySettingsV1Schema, DEFAULT_USAGE_LIMIT_RECOVERY_SETTINGS_V1), DEFAULT_USAGE_LIMIT_RECOVERY_SETTINGS_V1, { semanticDomain: 'usage recovery', classification: 'policy', maximumSerializedValueBytes: 8 * 1024 }),
@@ -1273,14 +1305,14 @@ const ACCOUNT_SETTING_CANDIDATES = {
     usageRoutingHintsEnabled: accountPreference(z.catch(z._default(z.boolean(), true), true), true, 'usage routing hints', 8),
     usageCoachPreferencesV1: accountCatalogDefinition(UsageCoachPreferencesV1Schema, DEFAULT_USAGE_COACH_PREFERENCES_V1, {
         semanticDomain: 'usage coach preferences', classification: 'preference',
-        maximumSerializedValueBytes: ACCOUNT_SETTINGS_MAX_DOCUMENT_BYTES, storedRead: true,
+        maximumSerializedValueBytes: ACCOUNT_SETTINGS_MAX_DOCUMENT_BYTES,
     }),
     usageModelPriceOverridesV1: accountPreference(UsageModelPriceOverridesV1Schema, {}, 'usage model price overrides', ACCOUNT_SETTINGS_MAX_DOCUMENT_BYTES),
     sessionPendingQueueDrainMode: accountCatalogDefinition(z._default(SessionPendingQueueDrainModeSchema, DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE), DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE, { semanticDomain: 'pending queue delivery', classification: 'policy', maximumSerializedValueBytes: 64 }),
     sessionInactiveResumePolicy: accountCatalogDefinition(z._default(SessionInactiveResumePolicySchema, DEFAULT_SESSION_INACTIVE_RESUME_POLICY), DEFAULT_SESSION_INACTIVE_RESUME_POLICY, { semanticDomain: 'pending queue activation', classification: 'preference', maximumSerializedValueBytes: 32 }),
     sessionPendingQueueDeliveryTiming: accountCatalogDefinition(z._default(SessionPendingQueueDeliveryTimingSchema, DEFAULT_SESSION_PENDING_QUEUE_DELIVERY_TIMING), DEFAULT_SESSION_PENDING_QUEUE_DELIVERY_TIMING, { semanticDomain: 'pending queue delivery', classification: 'policy', maximumSerializedValueBytes: 64 }),
-    sessionAgentSpawnPolicyV1: accountCatalogDefinition(z._default(SessionAgentSpawnPolicyV1Schema, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1), DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, { semanticDomain: 'agent spawn policy', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false }),
-    sessionAgentStartAllowListsV1: accountCatalogDefinition(z._default(SessionAgentStartAllowListsV1Schema, DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1), DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, { semanticDomain: 'agent start allow-lists', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false }),
+    sessionAgentSpawnPolicyV1: accountCatalogDefinition(z._default(SessionAgentSpawnPolicyV1Schema, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1), DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, { semanticDomain: 'agent spawn policy', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false, mutationSchema: SessionAgentSpawnPolicyV1StrictSchema }),
+    sessionAgentStartAllowListsV1: accountCatalogDefinition(z._default(SessionAgentStartAllowListsV1Schema, DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1), DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, { semanticDomain: 'agent start allow-lists', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false, mutationSchema: SessionAgentStartAllowListsV1StrictSchema }),
     approvalReviewerEnabled: accountCatalogDefinition(z.catch(z._default(z.boolean(), false), false), false, { semanticDomain: 'approval reviewer', classification: 'policy', maximumSerializedValueBytes: 64 }),
     workDepthLimit: accountCatalogDefinition(z.catch(z._default(z.number().check(z.int(), z.nonnegative()), 4), 4), 4, { semanticDomain: 'agent delegation depth', classification: 'policy', maximumSerializedValueBytes: 64 }),
     connectedServicesDefaultAuthByAgentIdV1: accountCatalogDefinition(z._default(BuiltInLegacyConnectedServicesDefaultAuthByAgentIdV1IngressSchema, DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1), DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1, { semanticDomain: 'connected service defaults', classification: 'preference', maximumSerializedValueBytes: 16 * 1024 }),
@@ -1290,8 +1322,8 @@ const ACCOUNT_SETTING_CANDIDATES = {
         semanticDomain: 'provider default model selections', classification: 'preference',
         maximumSerializedValueBytes: ACCOUNT_SETTINGS_MAX_PROVIDER_SUBTREE_BYTES, structuralBoundsOwner: 'domainOwned',
     }),
-    machineAdministrationSelectionsV1: accountCatalogDefinition(z._default(MachineAdministrationSelectionsV1Schema, DEFAULT_MACHINE_ADMINISTRATION_SELECTIONS_V1), DEFAULT_MACHINE_ADMINISTRATION_SELECTIONS_V1, { semanticDomain: 'machine administration selections', classification: 'preference', maximumSerializedValueBytes: 64 * 1024, storedRead: true }),
-    machineRetentionDefaultsV1: accountCatalogDefinition(MachineRetentionDefaultsV1Schema, DEFAULT_MACHINE_RETENTION_DEFAULTS_V1, { semanticDomain: 'managed machine category defaults', classification: 'preference', maximumSerializedValueBytes: ACCOUNT_SETTINGS_MAX_DOCUMENT_BYTES, storedRead: true }),
+    machineAdministrationSelectionsV1: accountCatalogDefinition(z._default(MachineAdministrationSelectionsV1Schema, DEFAULT_MACHINE_ADMINISTRATION_SELECTIONS_V1), DEFAULT_MACHINE_ADMINISTRATION_SELECTIONS_V1, { semanticDomain: 'machine administration selections', classification: 'preference', maximumSerializedValueBytes: 64 * 1024 }),
+    machineRetentionDefaultsV1: accountCatalogDefinition(MachineRetentionDefaultsV1Schema, DEFAULT_MACHINE_RETENTION_DEFAULTS_V1, { semanticDomain: 'managed machine category defaults', classification: 'preference', maximumSerializedValueBytes: ACCOUNT_SETTINGS_MAX_DOCUMENT_BYTES }),
     managedMachineCreationEnabled: accountCatalogDefinition(z._default(z.boolean(), true), true, { semanticDomain: 'managed machine acquisition', classification: 'policy', maximumSerializedValueBytes: 5 }),
     workspaceFileViewerPreferencesV1: accountCatalogDefinition(z._default(z.catch(WorkspaceFileViewerPreferencesV1Schema, DEFAULT_WORKSPACE_FILE_VIEWER_PREFERENCES_V1), DEFAULT_WORKSPACE_FILE_VIEWER_PREFERENCES_V1), DEFAULT_WORKSPACE_FILE_VIEWER_PREFERENCES_V1, { semanticDomain: 'workspace file viewing', classification: 'preference', maximumSerializedValueBytes: WORKSPACE_FILE_VIEWER_PREFERENCES_V1_MAX_ENCODED_BYTES }),
 } as const;
@@ -1327,14 +1359,6 @@ export function accountSettingsParse(raw: unknown): AccountSettings {
 }
 
 
-function readAccountSettingTargetKey(target: BackendTargetRefV2Input): string {
-  // Preferences address identities, not executable routes. An external Agent
-  // key must remain readable without a host catalog that can route it.
-  if (typeof target === 'string') return BackendTargetKeyV2InputSchema.parse(target);
-  if (target.kind === 'agent') return buildBackendTargetKeyV2(target);
-  return buildBackendTargetKeyV2(readBackendTargetRefV2(target));
-}
-
 /**
  * Reads one entry out of a target-keyed Account setting map.
  *
@@ -1357,24 +1381,14 @@ export function readAccountSettingValueForBackendTarget(
   if (!record || typeof record !== 'object' || Array.isArray(record)) return undefined;
   const byKey = record as Record<string, unknown>;
 
-  let canonicalKey: string;
-  try {
-    canonicalKey = readAccountSettingTargetKey(target);
-  } catch {
-    return undefined;
-  }
+  const canonicalKey = readBackendTargetKeyV2(target);
+  if (canonicalKey === null) return undefined;
   if (Object.hasOwn(byKey, canonicalKey)) return byKey[canonicalKey];
 
   // An unparsed document may still hold the legacy spelling the catalog would
   // rewrite on its next read.
   for (const [key, value] of Object.entries(byKey)) {
-    try {
-      if (readAccountSettingTargetKey(key as BackendTargetRefV2Input) === canonicalKey) {
-        return value;
-      }
-    } catch {
-      continue;
-    }
+    if (readBackendTargetKeyV2(key) === canonicalKey) return value;
   }
   return undefined;
 }

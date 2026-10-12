@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { captureAccountSettingsHistoryDestinationAuthorityV1, normalizeAccountSettingsHistoryClientV1 } from './accountSettingsHistoryClientV1.js';
+import { captureAccountSettingsHistoryDestinationAuthorityV1, normalizeAccountSettingsHistoryClientV1,
+  type AccountSettingsHistoryNormalizationCheckpointV1 } from './accountSettingsHistoryClientV1.js';
 import { deriveSavedSecretImportResourceIdV1 } from './savedSecretMutationOwner.js';
 import { AccountSettingsV2HistoryMutationRequestSchema } from './accountSettingsApiV2.js';
 import type { AccountSettingsPersistedObject } from './accountSettings.js';
@@ -38,6 +39,124 @@ const privateAuthorityPaths = new Set(['/v1/account/entity-rows/provider-connect
   '/v1/account/entity-rows/connected-metadata/acknowledgements', '/v1/account/entity-rows/remote-hosts', NOTIFICATION_CHANNELS_ROUTE_V1]);
 
 describe('Account Settings history destination capture', () => {
+  it('does not mark a completed history scan pending when only the Account event cursor advances', async () => {
+    let accountVersion = 1;
+    const input = { destinationAuthority: { activeTransferredRoots: [] }, ports: {
+      isCurrent: () => true,
+      readCurrentness: async () => AccountEncryptionCurrentnessResponseSchema.parse({ mode: 'plain', version: accountVersion++,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1, settingsVersion: 7 }),
+      resolveTransferMaterial: () => null,
+      unavailable: (_status: number, message: string): never => { throw new Error(message); },
+      openSnapshot: (content: AccountSettingsStoredContentEnvelope): AccountSettingsPersistedObject => {
+        if (content.t !== 'plain') throw new Error('Expected Plain snapshot');
+        return content.v;
+      },
+      resealSnapshot: (raw: AccountSettingsPersistedObject): AccountSettingsStoredContentEnvelope => ({ t: 'plain', v: raw }),
+      request: async (path: string) => {
+        if (path === PROFILE_TRANSFER_ROUTE_V1) return { status: 200, data: { status: 'absent' } };
+        if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [] } };
+        if (privateAuthorityPaths.has(path)) return { status: 404, data: { error: 'not_found' } };
+        if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [{
+          version: 6, createdAt: '2026-01-01T00:00:00.000Z', contentKind: 'plain', byteLength: 20 }] } };
+        if (path === '/v2/account/settings/history/6') return { status: 200, data: { version: 6,
+          createdAt: '2026-01-01T00:00:00.000Z', content: { t: 'plain', v: { preferredLanguage: 'de' } } } };
+        throw new Error(`Unexpected history request: ${path}`);
+      },
+    } };
+    expect(await normalizeAccountSettingsHistoryClientV1(input)).toEqual({ status: 'complete' });
+  });
+
+  it('does not reuse completion when the history head moves during authority recapture', async () => {
+    let settingsVersion = 7;
+    let moveHead = false;
+    let detailReads = 0;
+    const checkpoint: AccountSettingsHistoryNormalizationCheckpointV1 = {};
+    const input = { checkpoint, destinationAuthority: { activeTransferredRoots: [] }, ports: {
+      isCurrent: () => true,
+      readCurrentness: async () => AccountEncryptionCurrentnessResponseSchema.parse({ mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1, settingsVersion }),
+      resolveTransferMaterial: () => null,
+      unavailable: (_status: number, message: string): never => { throw new Error(message); },
+      openSnapshot: (content: AccountSettingsStoredContentEnvelope): AccountSettingsPersistedObject => {
+        if (content.t !== 'plain') throw new Error('Expected Plain snapshot');
+        return content.v;
+      },
+      resealSnapshot: (raw: AccountSettingsPersistedObject): AccountSettingsStoredContentEnvelope => ({ t: 'plain', v: raw }),
+      request: async (path: string) => {
+        if (path === PROFILE_TRANSFER_ROUTE_V1) {
+          if (moveHead) { settingsVersion++; moveHead = false; }
+          return { status: 200, data: { status: 'absent' } };
+        }
+        if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [] } };
+        if (privateAuthorityPaths.has(path)) return { status: 404, data: { error: 'not_found' } };
+        if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [{
+          version: 6, createdAt: '2026-01-01T00:00:00.000Z', contentKind: 'plain', byteLength: 20 }] } };
+        if (path === '/v2/account/settings/history/6') {
+          detailReads++;
+          return { status: 200, data: { version: 6, createdAt: '2026-01-01T00:00:00.000Z',
+            content: { t: 'plain', v: { preferredLanguage: 'de' } } } };
+        }
+        throw new Error(`Unexpected history request: ${path}`);
+      },
+    } };
+    expect(await normalizeAccountSettingsHistoryClientV1(input)).toEqual({ status: 'complete' });
+    expect(await normalizeAccountSettingsHistoryClientV1(input)).toEqual({ status: 'complete' });
+    expect(detailReads).toBe(1);
+    moveHead = true;
+    expect(await normalizeAccountSettingsHistoryClientV1(input)).toEqual({ status: 'cleanup-pending', versions: [6] });
+    expect(await normalizeAccountSettingsHistoryClientV1(input)).toEqual({ status: 'complete' });
+    expect(detailReads).toBe(3);
+  });
+
+  it.each([
+    { detailStatus: 404, retained: false, reappeared: false },
+    { detailStatus: 404, retained: true, reappeared: false },
+    { detailStatus: 503, retained: true, reappeared: false },
+    { detailStatus: 404, retained: false, reappeared: true },
+  ])('reconciles a failed detail read against retained history ($detailStatus, retained=$retained, reappeared=$reappeared)', async ({ detailStatus, retained, reappeared }) => {
+    const currentness = AccountEncryptionCurrentnessResponseSchema.parse({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1, settingsVersion: 7 });
+    const snapshot = { version: reappeared ? 7 : 4, createdAt: '2026-01-01T00:00:00.000Z', contentKind: 'plain', byteLength: 20 };
+    let listReads = 0;
+    let detailReads = 0;
+    let currentnessReads = 0;
+    const input = { destinationAuthority: { activeTransferredRoots: [] }, ports: {
+      isCurrent: () => true,
+      readCurrentness: async () => ({ ...currentness, settingsVersion: currentnessReads++ === 0 ? 7 : 8 }),
+      resolveTransferMaterial: () => null,
+      unavailable: (_status: number, message: string): never => { throw new Error(message); },
+      openSnapshot: (_content: AccountSettingsStoredContentEnvelope): AccountSettingsPersistedObject => {
+        throw new Error('Failed detail reads cannot be opened');
+      },
+      resealSnapshot: (_raw: AccountSettingsPersistedObject): AccountSettingsStoredContentEnvelope => {
+        throw new Error('Failed detail reads cannot be resealed');
+      },
+      // Only the Home HTTP boundary is replaced; the maintenance owner and authority capture are real.
+      request: async (path: string) => {
+        if (path === PROFILE_TRANSFER_ROUTE_V1) return { status: 200, data: { status: 'absent' } };
+        if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [] } };
+        if (privateAuthorityPaths.has(path)) return { status: 404, data: { error: 'not_found' } };
+        if (path === '/v2/account/settings/history') {
+          const pass = listReads++;
+          // A concurrent Settings write retains its previous version again after purge.
+          return { status: 200, data: { snapshots: pass === 0 || retained || reappeared && currentnessReads >= 2 ? [snapshot] : [] } };
+        }
+        if (path === `/v2/account/settings/history/${snapshot.version}`) {
+          detailReads += 1;
+          return { status: detailStatus, data: { error: detailStatus === 404 ? 'not_found' : 'account_settings_storage_unavailable' } };
+        }
+        throw new Error(`Unexpected history request: ${path}`);
+      },
+    } };
+    expect(await normalizeAccountSettingsHistoryClientV1(input)).toEqual(retained || reappeared
+      ? { status: 'cleanup-pending', versions: [snapshot.version] } : { status: 'complete' });
+    expect(detailReads).toBe(1);
+    if (!retained && !reappeared) {
+      expect(await normalizeAccountSettingsHistoryClientV1(input)).toEqual({ status: 'complete' });
+      expect(detailReads).toBe(1);
+    }
+  });
+
   it.each(['owner', 'recipient', 'different-material', 'still-source', 'unsupported-slot', 'encrypted-slot', 'encrypted-openable', 'encrypted-different', 'dual-slot', 'dual-slot-different',
     'inherited-different-material', 'inherited-stale-source', 'inherited-no-resolver'] as const)(
     'recovers SSH history only from exact owned historical material (%s)', async state => {

@@ -72,6 +72,7 @@ import { AcpCatalogRecordV1Schema, listAcpCatalogSavedSecretRefsV1, rewriteAcpCa
 import { ProviderConnectionsCatalogV1Schema, listProviderConnectionsCatalogSavedSecretRefsV1, rewriteProviderConnectionsCatalogSavedSecretRefsV1, type ProviderConnectionsCatalogV1 } from '../../providers/connections/connectionRowsV1.js';
 import { ConnectedConfigurationCatalogV1Schema, ConnectedPurposeCatalogV1Schema, listConnectedConfigurationCatalogSavedSecretRefsV1, rewriteConnectedConfigurationCatalogSavedSecretRefsV1, type ConnectedConfigurationCatalogV1, type ConnectedPurposeCatalogV1 } from '../../connect/connectedAccountConfigurationRowsV1.js';
 import { McpServerCatalogV1Schema, listMcpServerCatalogSavedSecretRefsV1, rewriteMcpServerCatalogSavedSecretRefsV1, type McpServerCatalogV1 } from '../../mcp/servers/serverRowsV1.js';
+import { McpValueRefV1Schema } from '../../mcp/servers/settingsV1.js';
 import { NotificationChannelCatalogRecordV1Schema, type NotificationChannelCatalogRecordV1 } from './notificationChannelSchemasV1.js';
 import { listNotificationChannelSavedSecretReferenceSlotsV1, rewriteNotificationChannelSavedSecretRefsV1 } from './notificationChannelRecordV1.js';
 
@@ -2107,6 +2108,8 @@ function validateSlotBindings(value: unknown, message: string): void {
   });
 }
 
+const storedMcpValueRef = createStoredReadSchema(McpValueRefV1Schema);
+
 function validateValueRefMap(
   value: unknown,
   message: string,
@@ -2125,6 +2128,8 @@ function validateValueRefMap(
           ? typeof valueRef.secretId !== 'string'
           : valueRef.t === 'literal'
             ? typeof valueRef.v !== 'string'
+            : valueRef.t === 'sessionAttested'
+              ? !storedMcpValueRef.safeParse(candidate).success
             : true
       )
     ) {

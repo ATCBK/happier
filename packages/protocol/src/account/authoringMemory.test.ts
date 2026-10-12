@@ -2,13 +2,42 @@ import { describe, expect, it } from 'vitest';
 import {
   AuthoringMemoryContentV1Schema,
   AuthoringMemoryPrivatePayloadV1Schema,
+  StoredAuthoringMemoryPrivatePayloadV1Schema,
+  assertAuthoringMemoryValueForKeyV1,
   assertAuthoringMemoryContentForModeV1,
   buildProjectLastOpenedMemoryKeyV1,
   parseProjectLastOpenedMemoryKeyV1,
 } from './authoringMemory.js';
-import { sealAccountScopedBlobCiphertext } from '../crypto/accountScopedCipher.js';
+import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext } from '../crypto/accountScopedCipher.js';
 
 describe('authoring-memory envelopes', () => {
+  it('projects retained Workflow values only after plain or authenticated E2EE opening', () => {
+    const key = 'workflowProject:00000000-0000-4000-8000-000000000005';
+    const value = { machineId: 'machine-one', directory: '/repo', workspaceRefId: 'workspace-one' };
+    const retained = { ...value, retired: { future: true } };
+    expect(assertAuthoringMemoryContentForModeV1({ t: 'plain', v: retained }, 'plain', key))
+      .toEqual({ t: 'plain', v: value });
+    const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(7) };
+    const ciphertext = sealAccountScopedBlobCiphertext({ kind: 'authoring_memory', material,
+      payload: { key, value: retained, retired: true }, randomBytes: length => new Uint8Array(length).fill(8) });
+    const opened = openAccountScopedBlobCiphertext({ kind: 'authoring_memory', material, ciphertext });
+    expect(StoredAuthoringMemoryPrivatePayloadV1Schema.parse(opened?.value)).toEqual({ key, value });
+    expect(() => assertAuthoringMemoryValueForKeyV1(key, retained)).toThrow();
+    expect(AuthoringMemoryPrivatePayloadV1Schema.safeParse({ key, value: retained }).success).toBe(false);
+    expect(StoredAuthoringMemoryPrivatePayloadV1Schema.safeParse({ key,
+      value: { ...retained, machineId: '' } }).success).toBe(false);
+    const opaque = { future: { retired: true, arbitrary: [null, 4] } };
+    expect(StoredAuthoringMemoryPrivatePayloadV1Schema.parse({ key: 'engineSelection:future', value: opaque }))
+      .toEqual({ key: 'engineSelection:future', value: opaque });
+  });
+  it('keeps a saved Workflow project in personal authoring memory with its exact workspace binding', () => {
+    const key = 'workflowProject:00000000-0000-4000-8000-000000000005';
+    const value = { machineId: 'machine-one', directory: '/repo', workspaceRefId: 'workspace-one' };
+    expect(AuthoringMemoryPrivatePayloadV1Schema.safeParse({ key, value }).success).toBe(true);
+    expect(() => assertAuthoringMemoryContentForModeV1({ t: 'plain', v: value }, 'plain', key)).not.toThrow();
+    expect(AuthoringMemoryPrivatePayloadV1Schema.safeParse({ key, value: { machineId: 'machine-one' } }).success).toBe(false);
+    expect(AuthoringMemoryPrivatePayloadV1Schema.safeParse({ key: 'workflowProject:', value }).success).toBe(false);
+  });
   it('admits qualified Project recency and rejects invalid timestamps and noncanonical identities', () => {
     const key = 'projectLastOpened:home%3Aone:project%2Fone';
     expect(buildProjectLastOpenedMemoryKeyV1({ serverId: 'home:one', projectKey: 'project/one' })).toBe(key);

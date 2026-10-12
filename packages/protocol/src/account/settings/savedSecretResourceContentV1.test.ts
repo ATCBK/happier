@@ -37,6 +37,20 @@ function sealRawPayload(payload: unknown, resourceDataKey: Uint8Array): string {
 }
 
 describe('savedSecretResourceContentV1', () => {
+  it('opens retained plain and encrypted Secret content while keeping declared bindings and writes strict', () => {
+    const resourceDataKey = new Uint8Array(32).fill(7);
+    expect(openSavedSecretResourceStoredContentV1({ resourceId: 'resource-1', mode: 'plain',
+      storedContent: { t: 'plain', v: { ...content, retired: true }, retired: true } })).toEqual(content);
+    const payload = { v: 1, resourceId: 'resource-1', mode: 'e2ee', content: { ...content, retired: true }, retired: true };
+    const storedContent = { t: 'encrypted', c: sealRawPayload(payload, resourceDataKey), retired: true };
+    expect(openSavedSecretResourceStoredContentV1({ resourceId: 'resource-1', mode: 'e2ee', storedContent, resourceDataKey }))
+      .toEqual(content);
+    expect(openSavedSecretResourceStoredContentV1({ resourceId: 'resource-2', mode: 'e2ee', storedContent, resourceDataKey }))
+      .toBeNull();
+    expect(openSavedSecretResourceStoredContentV1({ resourceId: 'resource-1', mode: 'plain',
+      storedContent: { t: 'plain', v: { ...content, value: '' }, retired: true } })).toBeNull();
+    expect(SavedSecretResourceContentV1Schema.safeParse(payload.content).success).toBe(false);
+  });
   it('keeps the action-admitted content schemas browser-neutral while crypto retains the compatibility export', () => {
     expect(SavedSecretResourceContentV1Schema).toBe(BrowserSafeSavedSecretResourceContentV1Schema);
     expect(SavedSecretResourceStoredContentV1Schema).toBe(BrowserSafeSavedSecretResourceStoredContentV1Schema);
@@ -114,7 +128,6 @@ describe('savedSecretResourceContentV1', () => {
   it.each([
     ['wrong codec version', { v: 2, resourceId: 'resource-1', mode: 'e2ee', content }],
     ['wrong bound mode', { v: 1, resourceId: 'resource-1', mode: 'plain', content }],
-    ['unknown decrypted field', { v: 1, resourceId: 'resource-1', mode: 'e2ee', content: { ...content, extra: true } }],
   ])('rejects decrypted payloads with %s', (_label, payload) => {
     const resourceDataKey = new Uint8Array(32).fill(7);
     expect(openSavedSecretResourceStoredContentV1({

@@ -39,6 +39,7 @@ describe('notificationChannelsV1 retained source', () => {
           connectedServiceQuotaBlocked: true,
           connectedServiceQuotaRecovered: true,
           connectedServiceUsage: false,
+          machines: true,
         },
         readyIncludeMessageText: false,
         requestIncludeMessageText: true,
@@ -102,6 +103,7 @@ describe('notificationChannelsV1 retained source', () => {
           connectedServiceQuotaBlocked: false,
           connectedServiceQuotaRecovered: true,
           connectedServiceUsage: false,
+          machines: true,
         },
         readyIncludeMessageText: false,
         requestIncludeMessageText: true,
@@ -206,6 +208,7 @@ describe('notificationChannelsV1 retained source', () => {
       connectedServiceQuotaBlocked: false,
       connectedServiceQuotaRecovered: false,
       connectedServiceUsage: false,
+      machines: true,
     });
   });
 });

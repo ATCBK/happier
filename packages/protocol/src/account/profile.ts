@@ -1,7 +1,40 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
+import { readAccountNameFromLegacyProfileV1 } from './accountDisplayProfileV1.js';
+
+export const AccountNameUpdateRequestV1Schema = lazyZodSchema(() => z.object({
+  name: z.string().trim().transform(name => name || null).nullable(),
+}).strict());
+export type AccountNameUpdateRequestV1 = z.infer<typeof AccountNameUpdateRequestV1Schema>;
+
+export const AccountNameUpdateResponseV1Schema = lazyZodSchema(() => z.object({
+  name: z.string().nullable(),
+  firstName: z.string().nullable(),
+  lastName: z.string().nullable(),
+  timestamp: z.number().int().nonnegative(),
+}).strict());
+export type AccountNameUpdateResponseV1 = z.infer<typeof AccountNameUpdateResponseV1Schema>;
+
+export const AccountUsernameUpdateRequestV1Schema = lazyZodSchema(() => z.object({ username: z.string() }).strict());
+export const AccountUsernameUpdateResponseV1Schema = lazyZodSchema(() => z.object({ username: z.string() }).strict());
+export const AccountUsernameUpdateErrorV1Schema = lazyZodSchema(() => z.object({
+  error: z.enum(['invalid-username', 'username-disabled', 'friends-disabled', 'username-taken']),
+}).strict());
 
 import { ImageRefSchema } from '../common/imageRef.js';
+
+/** Self-profile read projection. Drop unrelated and future GET-profile fields before disclosure. */
+export const AccountSelfProfileV1Schema = lazyZodSchema(() => z.object({
+  id: z.string(),
+  timestamp: z.number().int().nonnegative().optional().default(0),
+  name: z.string().nullable().optional(),
+  firstName: z.string().nullable().optional().default(null),
+  lastName: z.string().nullable().optional().default(null),
+  username: z.string().nullable().optional().default(null),
+  avatar: ImageRefSchema.nullable().optional().default(null),
+}).strip().transform(profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) })));
+export type AccountSelfProfileV1 = z.infer<typeof AccountSelfProfileV1Schema>;
+
 import {
   ConnectedServiceAuthGroupIdSchema,
   ConnectedServiceCloudVendorKeySchema,
@@ -104,6 +137,7 @@ export type LinkedIdentityManagementV1 = z.infer<typeof LinkedIdentityManagement
 export const AccountProfileSchema = lazyZodSchema(() => z.object({
   id: z.string(),
   timestamp: z.number().int().min(0).optional().default(0),
+  name: z.string().nullable().optional(),
   firstName: z.string().nullable().optional().default(null),
   lastName: z.string().nullable().optional().default(null),
   username: z.string().nullable().optional().default(null),
@@ -115,7 +149,7 @@ export const AccountProfileSchema = lazyZodSchema(() => z.object({
   connectedServiceCredentialRevisionsV1: z.array(ConnectedServiceCredentialRevisionProjectionV1Schema).default([]),
   connectedAccountsV4: z.array(QualifiedConnectedAccountProfileV4Schema).default([]),
   connectedAccountGroupsV4: z.array(QualifiedConnectedAccountGroupV4Schema).default([]),
-}).passthrough());
+}).passthrough().transform(profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) })));
 
 export type AccountProfile = z.infer<typeof AccountProfileSchema>;
 

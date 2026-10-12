@@ -44,17 +44,22 @@ function projectEvent(event: AttentionDeliveryEventConfig) {
 export function deriveAccountRemoteAlertPolicyV1(settings: unknown): AccountRemoteAlertPolicyV1 | null {
   const parsed = accountSettingsParse(settings);
   const policy = parsed.attentionDeliveryPolicyV1;
-  // The same public projection carries wake muting even when Home OS alerts
-  // are opted out. It must never turn that opt-out into alert consent.
-  if (parsed.sessionRemoteAlertsEnabled !== true && policy.mutePhoneWhenComputerFocused !== true) return null;
+  const machineOfflineEnabled = parsed.machineOfflineAlertsV1.machineIds.length > 0;
+  // Wake muting and machine enrollment do not grant remote session consent.
+  // The shared projection keeps consent separate for each event family.
+  if (parsed.sessionRemoteAlertsEnabled !== true && !machineOfflineEnabled && policy.mutePhoneWhenComputerFocused !== true) return null;
   const projectEvents = (events: AttentionDeliveryPolicyV1['events']) => Object.fromEntries(
-    REMOTE_ALERT_ATTENTION_DELIVERY_EVENT_IDS.map((event) => [event, projectEvent(events[event])]),
+    REMOTE_ALERT_ATTENTION_DELIVERY_EVENT_IDS.map((event) => [event, {
+      ...projectEvent(events[event]),
+      enabled: events[event].enabled && (event === 'machine_offline' ? machineOfflineEnabled : parsed.sessionRemoteAlertsEnabled === true),
+    }]),
   );
   return AccountRemoteAlertPolicyV1Schema.parse({
     v: 1,
+    machineOffline: parsed.machineOfflineAlertsV1,
     events: projectEvents(policy.events),
     channels: { expo_push: { ...projectEvent(policy.channels.expo_push),
-      enabled: parsed.sessionRemoteAlertsEnabled === true && policy.channels.expo_push.enabled,
+      enabled: (parsed.sessionRemoteAlertsEnabled === true || machineOfflineEnabled) && policy.channels.expo_push.enabled,
       events: projectEvents(policy.channels.expo_push.events) } },
     quietHours: {
       enabled: policy.quietHours.enabled,

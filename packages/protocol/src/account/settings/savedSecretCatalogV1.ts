@@ -9,7 +9,7 @@ import {
 import { SavedSecretResourceStoredContentV1Schema } from './savedSecretResourceContentSchemaV1.js';
 import { readCanonicalPaddedBase64DecodedLength } from '../../crypto/base64.js';
 import { ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES } from '../../crypto/encryptedDataKeyEnvelopeFormatV1.js';
-import { AccountDisplayProfileV1Schema } from '../accountDisplayProfileV1.js';
+import { AccountDisplayProfileV1BaseSchema, readAccountNameFromLegacyProfileV1 } from '../accountDisplayProfileV1.js';
 import { AccountRecipientEnvelopeUnavailableReasonSchema } from '../encryptionMode.js';
 import { ContentPublicKeyFingerprintSchema } from '../../machines/identity/contentPublicKeyFingerprint.js';
 import { ACCOUNT_CONTENT_PUBLIC_KEY_BYTES_V1 } from '../../crypto/accountContentKeyBindingFormatV1.js';
@@ -28,10 +28,10 @@ export const SavedSecretCatalogMaterialStatusV1Schema = lazyZodSchema(() => z.en
 ]));
 export type SavedSecretCatalogMaterialStatusV1 = z.infer<typeof SavedSecretCatalogMaterialStatusV1Schema>;
 
-export const SavedSecretCatalogAccountSummaryV1Schema = lazyZodSchema(() => AccountDisplayProfileV1Schema.extend({
+export const SavedSecretCatalogAccountSummaryV1Schema = lazyZodSchema(() => AccountDisplayProfileV1BaseSchema.extend({
   kind: z.literal('account'),
   accountId: z.string().min(1),
-}).strict());
+}).strict().transform(profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) })));
 export type SavedSecretCatalogAccountSummaryV1 = z.infer<typeof SavedSecretCatalogAccountSummaryV1Schema>;
 
 export const SavedSecretCatalogAccessSourceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [

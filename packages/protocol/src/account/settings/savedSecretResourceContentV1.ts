@@ -1,6 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import tweetnacl from 'tweetnacl';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
 import {
@@ -102,7 +103,7 @@ export function openSavedSecretResourceStoredContentV1(
 ): SavedSecretResourceContentV1 | null {
   try {
     formatSharedSavedSecretRefV1(params.resourceId);
-    const storedContent = SavedSecretResourceStoredContentV1Schema.safeParse(params.storedContent);
+    const storedContent = createStoredReadSchema(SavedSecretResourceStoredContentV1Schema).safeParse(params.storedContent);
     if (!storedContent.success) return null;
 
     if (params.mode === 'plain') {
@@ -125,7 +126,7 @@ export function openSavedSecretResourceStoredContentV1(
     if (!opened) return null;
 
     const decoded = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(opened));
-    const payload = EncryptedSavedSecretResourcePayloadV1Schema.safeParse(decoded);
+    const payload = createStoredReadSchema(EncryptedSavedSecretResourcePayloadV1Schema).safeParse(decoded);
     if (
       !payload.success
       || payload.data.resourceId !== params.resourceId

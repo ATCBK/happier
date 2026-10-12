@@ -4,12 +4,14 @@ import { ImageRefSchema } from '../common/imageRef.js';
 import { ProfileBadgeSchema } from '../common/profileBadge.js';
 import { AccountRecipientEnvelopeReadinessSchema } from '../account/encryptionMode.js';
 import { KEYSET_CURSOR_MAX_LENGTH_V1 } from '../pagination/keysetCursorV1.js';
+import { readAccountNameFromLegacyProfileV1 } from '../account/accountDisplayProfileV1.js';
 
 export const RelationshipStatusSchema = lazyZodSchema(() => z.enum(['none', 'requested', 'pending', 'friend', 'rejected']));
 export type RelationshipStatus = z.infer<typeof RelationshipStatusSchema>;
 
-export const UserProfileSchema = lazyZodSchema(() => z.object({
+const UserProfileFieldsSchema = lazyZodSchema(() => z.object({
   id: z.string(),
+  name: z.string().nullable().optional(),
   firstName: z.string(),
   lastName: z.string().nullable(),
   avatar: ImageRefSchema.nullable(),
@@ -24,6 +26,11 @@ export const UserProfileSchema = lazyZodSchema(() => z.object({
   contentPublicKeySig: z.string().nullable().optional(),
 }));
 
+export const UserProfileSchema = lazyZodSchema(() => UserProfileFieldsSchema.transform(profile => ({
+  ...profile,
+  name: readAccountNameFromLegacyProfileV1(profile),
+})));
+
 export type UserProfile = z.infer<typeof UserProfileSchema>;
 
 export const UserResponseSchema = lazyZodSchema(() => z.object({ user: UserProfileSchema }));
@@ -31,9 +38,9 @@ export type UserResponse = z.infer<typeof UserResponseSchema>;
 
 /** Authenticated exact-user projection consumed by trusted direct-grant hosts. */
 export const UserRecipientEnvelopeResponseSchema = lazyZodSchema(() => z.object({
-  user: UserProfileSchema.extend({
+  user: UserProfileFieldsSchema.extend({
     recipientEnvelopeReadiness: AccountRecipientEnvelopeReadinessSchema,
-  }),
+  }).transform(profile => ({ ...profile, name: readAccountNameFromLegacyProfileV1(profile) })),
 }));
 export type UserRecipientEnvelopeResponse = z.infer<typeof UserRecipientEnvelopeResponseSchema>;
 

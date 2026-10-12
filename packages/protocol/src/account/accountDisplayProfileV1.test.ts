@@ -13,6 +13,7 @@ describe('AccountDisplayProfileV1', () => {
       username: 'alice',
       avatarUrl: 'https://example.test/a.png',
     })).toEqual({
+      name: 'Alice Chen',
       firstName: 'Alice',
       lastName: 'Chen',
       username: 'alice',
@@ -27,6 +28,7 @@ describe('AccountDisplayProfileV1', () => {
       username: null,
       avatarUrl: null,
     })).toEqual({
+      name: null,
       firstName: null,
       lastName: null,
       username: null,
@@ -68,6 +70,6 @@ describe('AccountDisplayProfileV1', () => {
       lastName: null,
       username: 'alice',
       avatarUrl: null,
-    })).toEqual({ firstName: null, lastName: null, username: 'alice', avatarUrl: null });
+    })).toEqual({ name: null, firstName: null, lastName: null, username: 'alice', avatarUrl: null });
   });
 });

@@ -6,6 +6,36 @@ import { resolveAttentionDeliveryPolicyDecision } from './attentionDeliveryPolic
 import * as remote from './accountRemoteAlertPolicy.js';
 
 describe('remote alert policy projection', () => {
+  it('enrolls selected machines without consenting to remote session alerts', () => {
+    const policy = remote.deriveAccountRemoteAlertPolicyV1({
+      sessionRemoteAlertsEnabled: false,
+      machineOfflineAlertsV1: { machineIds: ['machine-one'] },
+    });
+    expect(policy).not.toBeNull();
+    expect(policy).toMatchObject({
+      machineOffline: { machineIds: ['machine-one'] },
+      events: { machine_offline: { enabled: true }, ready: { enabled: false } },
+      channels: { expo_push: { enabled: true, events: { machine_offline: { enabled: true }, ready: { enabled: false } } } },
+    });
+    expect(remote.deriveAccountRemoteAlertPolicyV1({ machineOfflineAlertsV1: { machineIds: [] } })).toBeNull();
+  });
+  it('reads a retained session-only projection without granting machine enrollment', () => {
+    const current = remote.deriveAccountRemoteAlertPolicyV1({ sessionRemoteAlertsEnabled: true });
+    if (!current) throw new Error('expected enabled session policy');
+    const retained = { ...current,
+      events: Object.fromEntries(Object.entries(current.events).filter(([event]) => event !== 'machine_offline')),
+      channels: { expo_push: { ...current.channels.expo_push,
+        events: Object.fromEntries(Object.entries(current.channels.expo_push.events).filter(([event]) => event !== 'machine_offline')),
+      } },
+    };
+    Reflect.deleteProperty(retained, 'machineOffline');
+    const parsed = remote.AccountRemoteAlertPolicyV1Schema.parse(retained);
+    expect(parsed).toMatchObject({ machineOffline: { machineIds: [] }, events: { machine_offline: { enabled: false } } });
+    expect(remote.resolveAccountRemoteAlertPolicyCurrentness({ settingsVersion: 4, policy: retained }, 4))
+      .toMatchObject({ status: 'current', policy: { machineOffline: { machineIds: [] }, events: { machine_offline: { enabled: false } } } });
+    expect(remote.resolveAccountRemoteAlertPolicyCurrentness({ settingsVersion: 4, policy: retained }, 5))
+      .toEqual({ status: 'stale', policy: null });
+  });
   it('carries focus muting without enabling opted-out Home OS alerts', () => {
     const policy = remote.deriveAccountRemoteAlertPolicyV1({
       sessionRemoteAlertsEnabled: false,

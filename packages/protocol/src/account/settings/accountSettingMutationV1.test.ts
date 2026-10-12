@@ -27,6 +27,18 @@ function connectedAccountServiceConfigurationsV1Entry(
 }
 
 describe('AccountSettingMutationV1', () => {
+  it('persists machine offline enrollment through the Account preference owner', () => {
+    const result = applyAccountSettingMutationV1({ showLineNumbers: false }, {
+      operations: [{ op: 'set', key: 'machineOfflineAlertsV1', value: { machineIds: ['machine-one'] } }],
+    });
+    expect(result).toEqual({ status: 'applied', raw: {
+      showLineNumbers: false, machineOfflineAlertsV1: { machineIds: ['machine-one'] },
+    } });
+    expect(accountSettingsParse({})).toHaveProperty('machineOfflineAlertsV1', { machineIds: [] });
+    expect(applyAccountSettingMutationV1({}, {
+      operations: [{ op: 'set', key: 'machineOfflineAlertsV1', value: { machineIds: [42] } }],
+    }).status).toBe('invalid');
+  });
   it('keeps transferred entity carriers read-only while preserving their raw provenance during preference mutation', () => {
     const sources = { profiles: [], secretBindingsByProfileId: {}, promptStacksV1: { v: 1, surfaces: {
       coding: [], voice: [], profilesById: {} } }, rolesV1: { overrides: {} }, promptFoldersV1: { v: 1, folders: [] },

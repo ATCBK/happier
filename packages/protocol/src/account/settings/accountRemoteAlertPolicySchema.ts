@@ -10,6 +10,7 @@ import {
 } from './attentionDeliveryPolicy.js';
 import { ACCOUNT_SETTINGS_MAX_DOCUMENT_BYTES } from './catalog/accountSettingBounds.js';
 import { PUSH_NOTIFICATION_SOUND_IDS } from '../../push/pushNotificationActions.js';
+import { DEFAULT_MACHINE_OFFLINE_ALERTS_V1, MachineOfflineAlertsV1Schema } from './machineOfflineAlertsV1.js';
 
 // Wire admission must not load Settings derivation or the effective Action catalog.
 export const RemoteAlertSoundIdSchema = lazyZodSchema(() => z.enum([
@@ -28,8 +29,10 @@ const RemoteAlertEventPolicySchema = lazyZodSchema(() => z.object({
 }).strict());
 
 const RemoteAlertEventPolicyMapV1Shape = Object.fromEntries(
-  REMOTE_ALERT_ATTENTION_DELIVERY_EVENT_IDS.map((eventId) => [eventId, RemoteAlertEventPolicySchema]),
-) as Record<RemoteAlertAttentionDeliveryEventId, typeof RemoteAlertEventPolicySchema>;
+  REMOTE_ALERT_ATTENTION_DELIVERY_EVENT_IDS.map((eventId) => [eventId,
+    eventId === 'machine_offline' ? RemoteAlertEventPolicySchema.default({ enabled: false }) : RemoteAlertEventPolicySchema,
+  ]),
+) as Record<RemoteAlertAttentionDeliveryEventId, typeof RemoteAlertEventPolicySchema | z.ZodDefault<typeof RemoteAlertEventPolicySchema>>;
 
 export const RemoteAlertEventPolicyMapV1Schema = lazyZodSchema(() => z.object(RemoteAlertEventPolicyMapV1Shape).strict());
 export type RemoteAlertEventPolicyMapV1 = z.infer<typeof RemoteAlertEventPolicyMapV1Schema>;
@@ -63,6 +66,7 @@ export const ACCOUNT_REMOTE_ALERT_POLICY_MAX_UTF8_BYTES = ACCOUNT_SETTINGS_MAX_D
 
 export const AccountRemoteAlertPolicyV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
+  machineOffline: MachineOfflineAlertsV1Schema.default(DEFAULT_MACHINE_OFFLINE_ALERTS_V1),
   events: RemoteAlertEventPolicyMapV1Schema,
   channels: z.object({ expo_push: RemoteAlertChannelPolicyV1Schema }).strict(),
   quietHours: RemoteAlertQuietHoursV1Schema,

@@ -5,14 +5,20 @@ import { z } from 'zod';
 export const GlassSurfaceMaterialSchema = lazyZodSchema(() => z.object({
   blur: z.enum(['off', 'light', 'regular', 'strong']),
   opacity: z.number().min(0).max(1),
+  /** An authored Elements value can equal the default coat but must not follow named Tint. */
+  authoredOpacity: z.literal(true).optional(),
 }).strict());
 
 export const GlassSurfaceMaterialsSchema = lazyZodSchema(() => z.object({
   chrome: GlassSurfaceMaterialSchema,
   sidebar: GlassSurfaceMaterialSchema,
   content: GlassSurfaceMaterialSchema,
+  card: GlassSurfaceMaterialSchema,
   floating: GlassSurfaceMaterialSchema,
 }).strict());
+
+/** Retained four-layer preferences predate Elements; their coat is resolved by the preference owner. */
+export const GlassSurfaceMaterialsStoredSchema = lazyZodSchema(() => GlassSurfaceMaterialsSchema.partial({ card: true }).strip());
 
 export type GlassSurfaceMaterial = z.infer<typeof GlassSurfaceMaterialSchema>;
 export type GlassSurfaceMaterials = z.infer<typeof GlassSurfaceMaterialsSchema>;
