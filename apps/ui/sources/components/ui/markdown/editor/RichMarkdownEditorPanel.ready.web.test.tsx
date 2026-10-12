@@ -23,7 +23,7 @@ vi.mock('react-native-unistyles', async () => {
 const engine = vi.hoisted(() => {
     let release: () => void = () => {};
     const pending = new Promise<void>((resolve) => { release = resolve; });
-    return { ready: false, pending, release, current: null as Editor | null };
+    return { ready: false, pending, release, current: null as Editor | null, deferCreation: false, sawNull: false };
 });
 
 // Delay only the third-party engine boundary. Once admitted, its actual hook,
@@ -34,7 +34,8 @@ vi.mock('@tiptap/react', async (importOriginal) => {
         ...actual,
         useEditor(...args: Parameters<typeof actual.useEditor>) {
             if (!engine.ready) throw engine.pending;
-            const editor = actual.useEditor(...args);
+            const editor = actual.useEditor({ ...args[0], ...(engine.deferCreation ? { immediatelyRender: false } : {}) }, args[1]);
+            if (!editor) engine.sawNull = true;
             engine.current = editor;
             return editor;
         },
@@ -42,7 +43,75 @@ vi.mock('@tiptap/react', async (importOriginal) => {
 });
 
 describe('rich markdown ready-panel boundary (web)', () => {
+    it('mounts the footer before the editor exists and receives its first selection', async () => {
+        engine.ready = true;
+        engine.deferCreation = true;
+        engine.sawNull = false;
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const editorRef: React.MutableRefObject<CodeEditorHandle | null> = { current: null };
+        const onChange = vi.fn();
+        try {
+            await act(async () => {
+                root.render(<RichMarkdownEditorPanel resetKey="deferred" value="**Seed**" editorRef={editorRef} onChange={onChange} />);
+            });
+            // Commit the Suspense render before waiting for its lazy imports.
+            await act(async () => {
+                await vi.dynamicImportSettled();
+            });
+            expect(engine.sawNull).toBe(true);
+            expect(container.querySelector('[data-testid="file-details-rich-editor-toolbar:bold"]')?.getAttribute('aria-pressed')).toBe('true');
+            expect(editorRef.current?.getValue()).toContain('**Seed**');
+            expect(onChange).not.toHaveBeenCalled();
+        } finally {
+            await act(async () => root.unmount());
+            container.remove();
+            engine.deferCreation = false;
+        }
+    });
+
+    it.each(['framed', 'canvas'] as const)('keeps the %s toolbar safe before creation and during editor replacement', async (presentation) => {
+        engine.ready = true;
+        engine.deferCreation = true;
+        engine.sawNull = false;
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const editorRef: React.MutableRefObject<CodeEditorHandle | null> = { current: null };
+        const onChange = vi.fn();
+        const render = (resetKey: string, hideFooterToolbar: boolean) => <RichMarkdownEditorPanel
+            resetKey={resetKey} value="**Seed**" editorRef={editorRef} onChange={onChange}
+            presentation={presentation} hideFooterToolbar={hideFooterToolbar}
+        />;
+        try {
+            await act(async () => {
+                root.render(render('first', true));
+                await vi.dynamicImportSettled();
+            });
+            expect(engine.sawNull).toBe(true);
+            const first = engine.current;
+            expect(first).not.toBeNull();
+            // useEditor destroys the previous instance in its passive effect.
+            // A newly mounted toolbar subscribes in that same commit, before
+            // React processes the replacement editor snapshot.
+            await act(async () => root.render(render('second', false)));
+            expect(first?.isDestroyed).toBe(true);
+            expect(engine.current).not.toBe(first);
+            const bold = container.querySelector<HTMLElement>('[data-testid="file-details-rich-editor-toolbar:bold"]');
+            expect(bold).not.toBeNull();
+            expect(bold?.getAttribute('aria-pressed')).toBe('true');
+            expect(editorRef.current?.getValue()).toContain('**Seed**');
+            expect(onChange).not.toHaveBeenCalled();
+        } finally {
+            await act(async () => root.unmount());
+            container.remove();
+            engine.deferCreation = false;
+        }
+    });
+
     it('admits the latest draft and live controller together, retaining the editor on updates', async () => {
+        engine.ready = false;
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root = createRoot(container);

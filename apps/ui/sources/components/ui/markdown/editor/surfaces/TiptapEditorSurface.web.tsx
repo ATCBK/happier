@@ -306,7 +306,7 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
                     // Push the current state immediately so the toolbar is correct
                     // on first paint.
                     const live = editorRef.current;
-                    if (live) {
+                    if (live && !live.isDestroyed) {
                         callback(readSelectionState(live));
                     }
                     return () => {
@@ -362,7 +362,10 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
         // Track the live editor instance and wire its events.
         React.useEffect(() => {
             editorRef.current = editor ?? null;
-            if (!editor) return;
+            if (!editor || editor.isDestroyed) return;
+
+            // Subscribers can mount before creation or survive editor replacement.
+            notifySelection(editor);
 
             const onUpdate = () => handleUpdate(editor);
             const onSelectionUpdate = () => {
@@ -521,16 +524,17 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
 
         // F10: resolve the prose tokens from the SAME shared resolver the native
         // surface uses, so web + native never drift apart.
-        const editorTheme = resolveMarkdownEditorTheme(theme);
+        const canvas = props.presentation === 'canvas';
+        const editorTheme = resolveMarkdownEditorTheme(theme, canvas ? 'canvas' : 'framed');
         const backgroundColor = editorTheme.backgroundColor;
         const dividerColor = editorTheme.dividerColor;
         const textColor = editorTheme.textColor;
 
         const borderStyle = {
             flex: 1,
-            borderWidth: 1,
+            borderWidth: canvas ? 0 : 1,
             borderColor: dividerColor,
-            borderRadius: 10,
+            borderRadius: canvas ? 0 : 10,
             overflow: 'hidden' as const,
             backgroundColor,
         };
