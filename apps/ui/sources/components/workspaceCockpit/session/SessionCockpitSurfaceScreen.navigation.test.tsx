@@ -319,6 +319,9 @@ vi.mock('@/hooks/session/useUserMessageHistory', () => ({
     }),
 }));
 
+// Load the cold runtime graph after the hoisted transport boundaries, before
+// per-test setup. Each test still restores the canonical Sync require bridge.
+await loadSyncSingletonForTests();
 beforeEach(loadSyncSingletonForTests);
 
 const SCREEN_TEST_ID = 'session-transcript-navigation-screen';
