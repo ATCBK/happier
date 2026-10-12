@@ -48,7 +48,7 @@ const preparedAuthoring = {
     transcriptStorage: 'direct' as const,
     profileId: 'review-profile',
     environmentVariables: { RUNNER_MODE: 'super-secret-env-value' },
-    mcpSelection: { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: ['mcp-review'], forceExcludeServerIds: [] },
+    capabilitySelection: { mcp: { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: ['mcp-review'], forceExcludeServerIds: [] } },
     connectedServices: { v: 2 as const, bindingsByServiceId: { 'dev.happier.github/github': { source: 'native' as const } } },
     checkoutCreationDraft: { kind: 'git_worktree' as const, displayName: 'reviewed-worktree', baseRef: 'main', branchMode: 'new' as const },
     resumeSessionId: 'provider-session-reviewed',
@@ -695,7 +695,7 @@ describe('ephemeral Runner terminal endpoint presentation', () => {
     expect(review.notice.join(' ')).toContain('pas un bac à sable');
     expect(close).toMatchObject({ keepOpenLabel: 'Garder ouvert', stopLabel: 'Arrêter la session' });
     expect(failure).toMatchObject({
-      message: "La demande n’a pas pu être préparée. Vérifiez l’activation et réessayez.",
+      message: "La demande n’a pas pu être préparée. Vérifie l’activation et réessaie.",
       retryLabel: 'Réessayer',
       exitLabel: 'Quitter',
     });
