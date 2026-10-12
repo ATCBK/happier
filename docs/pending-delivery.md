@@ -125,8 +125,12 @@ Waiting for their stream observer to publish activity would deadlock delivery
 configured as `after_runtime_idle`.
 
 After a local provider stops or a remote provider relaunches, a lost observer can
-publish prelaunch idle when no unresolved provider tasks remain. Unresolved task
-evidence keeps activity unknown; it is not silently cleared. Prelaunch publication
+publish prelaunch idle when no unresolved provider tasks remain. Observer loss
+abandons the provider tasks it was tracking, because Claude Code orphans a stopped
+process's background agents and their terminal events never arrive. The abandoned
+tasks are written to the session log at the default `info` file level, activity stays unknown until the next
+prelaunch publication, and only tasks observed after the loss can make activity
+active again. Prelaunch publication
 does not install the new stream observer. Each owned local process attempt also
 uses this prelaunch publication before activating its installed scanner, including
 retries after process failure. Unified-terminal attachment retains its observation

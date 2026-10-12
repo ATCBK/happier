@@ -75,18 +75,29 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
     });
 
-    it('does not claim prelaunch idle when the stopped provider has unresolved task evidence', async () => {
-        const { adapter, reports, markUnknown } = harness();
-        await adapter.activateObservation('local-observer-installed');
+    it('does not revive tasks orphaned by a stopped provider when the relaunched runtime settles a turn', async () => {
+        const { adapter, ledger, reports, markUnknown } = harness();
+        await adapter.activateObservation('claude-agent-sdk-provider-observer-installed');
         await adapter.observeActivity({
-            activity: { type: 'started', sessionId: 's1', taskId: 'existing-task' }, evidence: 'live',
+            activity: { type: 'started', sessionId: 's1', taskId: 'background-agent' }, evidence: 'live',
         });
-        await adapter.handleRuntimeLoss('claude_process_exit');
-        const reportsBefore = [...reports];
+        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
 
-        await adapter.publishBeforeRuntimeStart('remote-provider-not-started');
-        expect(reports).toEqual(reportsBefore);
-        expect(markUnknown).toHaveBeenCalledOnce();
+        // A model/mode change relaunches the provider; Claude Code reports the previous process's
+        // background agents as orphaned, so no terminal event for them can ever arrive.
+        await adapter.handleRuntimeLoss('claude_agent_sdk_stream_finalized');
+        expect(markUnknown).toHaveBeenLastCalledWith('claude_agent_sdk_stream_finalized');
+        await adapter.publishBeforeRuntimeStart('claude-remote-provider-not-started');
+        await adapter.activateObservation('claude-agent-sdk-provider-observer-installed');
+        await adapter.publishCurrent('claude_agent_sdk_foreground_result');
+
+        expect(reports.at(-1)).toEqual({ state: 'idle', activeCount: 0 });
+        expect(ledger.hasActiveProviderTasks()).toBe(false);
+
+        await adapter.observeActivity({
+            activity: { type: 'started', sessionId: 's1', taskId: 'relaunched-agent' }, evidence: 'live',
+        });
+        expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 1 });
     });
 
     it('does not publish prelaunch inventory through an obsolete runtime binding', async () => {
@@ -250,12 +261,11 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
 
         await adapter.handleRuntimeLoss('claude_agent_sdk_stream_finalized');
 
-        // The query that owned those tasks is gone: a non-empty ledger is evidence of ignorance,
-        // not of liveness, so the session must project unknown rather than stay active forever.
+        // The query that owned those tasks is gone: they can never settle, so the ledger drops them
+        // and the session projects unknown rather than staying active forever.
         expect(markUnknown).toHaveBeenLastCalledWith('claude_agent_sdk_stream_finalized');
         expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 2 });
-        // Inventory evidence is preserved for blocker diagnostics; only the projection changes.
-        expect(ledger.hasActiveProviderTasks()).toBe(true);
+        expect(ledger.hasActiveProviderTasks()).toBe(false);
     });
 
     it('does not republish a projection after an in-flight observation loss already marked unknown', async () => {

@@ -401,6 +401,20 @@ export function createClaudeProviderActivityLedger() {
                 activity.source ?? 'system-task-started',
             );
         },
+        /**
+         * Forget every task still active when its provider observer was lost, returning them for
+         * diagnostics. Nothing can settle those tasks any more: Claude Code orphans a stopped
+         * process's background agents, so their terminal events never arrive.
+         */
+        abandonActiveProviderTasks(): ClaudeProviderTaskBlocker[] {
+            const abandoned: ClaudeProviderTaskBlocker[] = [];
+            for (const [key, entry] of tasks) {
+                if (entry.phase !== 'active') continue;
+                abandoned.push({ ...entry.identity, sources: [...entry.sources] });
+                tasks.delete(key);
+            }
+            return abandoned;
+        },
         getActiveProviderTaskBlockers(): ClaudeProviderTaskBlocker[] {
             return [...tasks.values()]
                 .filter((entry): entry is Extract<ProviderTaskRecord, { phase: 'active' }> => entry.phase === 'active')

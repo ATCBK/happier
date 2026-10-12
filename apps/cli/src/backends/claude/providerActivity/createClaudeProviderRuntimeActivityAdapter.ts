@@ -1,4 +1,5 @@
 import type { SessionRuntimeActivityContributionHandle } from '@/session/runtimeActivity/types';
+import { logger } from '@/ui/logger';
 import type {
     ClaudeProviderTaskActivity,
     createClaudeProviderActivityLedger,
@@ -105,11 +106,17 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
         async handleRuntimeLoss(reasonCode: string): Promise<void> {
             if (!isCurrentRuntime()) return;
             observationComplete = false;
+            // Tasks left in flight when the observer dies are not evidence of liveness — they are
+            // exactly the tasks whose outcome we can no longer observe. Kept in the ledger, the next
+            // turn-end publish would project them as `active` again for the rest of the process.
+            const abandoned = params.providerActivityLedger.abandonActiveProviderTasks();
+            if (abandoned.length > 0) {
+                logger.infoFile('[claudeProviderRuntimeActivity] Abandoned provider tasks after observation loss', {
+                    reasonCode,
+                    abandoned,
+                });
+            }
             if (observationState !== 'active') return;
-            // Observation loss is published as `unknown` whatever the ledger still holds. Tasks left
-            // in flight when the query dies are not evidence of liveness — they are exactly the
-            // tasks whose outcome we can no longer observe. Projecting `active` from that residue
-            // is what left a dead session claiming background work forever.
             await enqueueProjection({ state: 'unknown', activeCount: 0 }, reasonCode);
         },
     };
