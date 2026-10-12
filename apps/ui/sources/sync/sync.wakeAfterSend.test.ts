@@ -123,6 +123,11 @@ import { loadPendingOutboxForSession } from '@/sync/domains/state/pendingOutboxP
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
+import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
+import type { SessionSubmitPort } from '@/sync/domains/session/input/types';
+import { recordMachineRequestFailed, recordMachineRequestSucceeded, clearMachineRequestReachabilityForTest } from '@/sync/domains/machines/reachability/machineReachability';
 
 // Sync initializes native Markdown bindings, but these transport tests never render them.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
@@ -172,6 +177,7 @@ function createMachine(params: {
         createdAt: now,
         updatedAt: now,
         active: params.active ?? true,
+        storageMode: 'plain',
         activeAt: now,
         metadata: {
             host: params.id,
@@ -193,6 +199,27 @@ function createRpcMethodNotAvailableError(): RpcError {
 }
 
 describe('sync.sendMessage wake-after-send', () => {
+    it('uses exact Account request reachability in the real Sync submit port', async () => {
+        const { sync } = await import('./syncEngine');
+        // Test-only access to the incumbent factory; its production caller is submitMessage.
+        const submitOwner = sync as unknown as { createSessionSubmitPort(): SessionSubmitPort };
+        const accountLifetime = captureActiveServerAccountScopeLifetime();
+        expect(accountLifetime).not.toBeNull();
+        if (!accountLifetime) throw new Error('Missing test Account lifetime');
+        const machine = createMachine({ id: 'submit-reachability' });
+        storage.setState({ machines: { [machine.id]: machine } });
+        const port = submitOwner.createSessionSubmitPort();
+        const options = { serverId: accountLifetime.scope.serverId, accountLifetime };
+        try {
+            expect(port.isMachineReachable?.(machine.id, options)).toBe(true);
+            recordMachineRequestFailed({ ...accountLifetime.scope, machineId: machine.id });
+            expect(port.isMachineReachable?.(machine.id, options)).toBe(false);
+            storage.setState({ machines: { [machine.id]: { ...machine, activeAt: Date.now() + 1 } } });
+            expect(port.isMachineReachable?.(machine.id, options)).toBe(false);
+            recordMachineRequestSucceeded({ ...accountLifetime.scope, machineId: machine.id });
+            expect(port.isMachineReachable?.(machine.id, options)).toBe(true);
+        } finally { clearMachineRequestReachabilityForTest(); }
+    });
     beforeEach(async () => {
         vi.stubGlobal('indexedDB', new IDBFactory());
         storage.setState(initialStorageState, true);
@@ -207,6 +234,7 @@ describe('sync.sendMessage wake-after-send', () => {
         await activatePendingQueueScope(activeScope);
         // These direct Sync tests bypass restore; bind its applied transport and Account.
         Reflect.set(sync, 'appliedServerTarget', getActiveServerSnapshot());
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         Reflect.set(sync, 'serverID', activeScope.accountId);
         resetServerFeaturesClientForTests();
         primeServerFeaturesSnapshot({
@@ -232,9 +260,11 @@ describe('sync.sendMessage wake-after-send', () => {
         machineRpcSpy.mockReset();
         machineRpcSpy.mockResolvedValue({ type: 'success' });
         const token = `e30.${Buffer.from(JSON.stringify({ sub: activeScope.accountId })).toString('base64url')}.signature`;
+        Reflect.set(sync, 'credentials', { token });
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
         setRuntimeFetch(async (url) => {
             const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/auth/ping') return Response.json({});
             if (path.startsWith('/v1/machines/')) return Response.json({ machine: {
                 id: decodeURIComponent(path.slice('/v1/machines/'.length)),
@@ -247,6 +277,9 @@ describe('sync.sendMessage wake-after-send', () => {
     afterEach(async () => {
         const { sync } = await import('./sync');
         sync.disconnectServer();
+        await serverScopedRpcSocketPool.stopAll();
+        serverScopedRpcSocketPool.resetForTests();
+        resetScopedMachineTransportCacheForTests();
         resetRuntimeFetch();
         vi.unstubAllGlobals();
         resetServerFeaturesClientForTests();
@@ -311,6 +344,11 @@ describe('sync.sendMessage wake-after-send', () => {
         expect(markLiveTailIntent.mock.invocationCallOrder[0]).toBeLessThan(
             markOptimisticThinking.mock.invocationCallOrder[0]!,
         );
+        // The committed prompt starts a real background daemon wake. Observe its
+        // boundary before cleanup so it cannot complete in the next test's scope.
+        await vi.waitFor(() => expect(machineRpcSpy).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({ sessionId }),
+        })));
     });
 
     it('wakes the daemon after sending a message via the server commit path', async () => {
@@ -358,7 +396,7 @@ describe('sync.sendMessage wake-after-send', () => {
 
         await sync.sendMessage(sessionId, 'hello');
 
-        expect(machineRpcSpy).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(machineRpcSpy).toHaveBeenCalledTimes(1));
         expect(machineRpcSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 machineId: 'm1',
@@ -419,7 +457,7 @@ describe('sync.sendMessage wake-after-send', () => {
 
         await sync.sendMessage(sessionId, 'hello');
 
-        expect(machineRpcSpy).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(machineRpcSpy).toHaveBeenCalledTimes(1));
         expect(machineRpcSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 machineId: 'm-new',
@@ -472,12 +510,12 @@ describe('sync.sendMessage wake-after-send', () => {
             session: exactSession,
         });
 
-        expect(machineRpcSpy).toHaveBeenCalledWith(expect.objectContaining({
+        await vi.waitFor(() => expect(machineRpcSpy).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'm-exact',
             serverUrl: getActiveServerSnapshot().serverUrl,
             token: `e30.${Buffer.from(JSON.stringify({ sub: accountLifetime!.scope.accountId })).toString('base64url')}.signature`,
             payload: expect.objectContaining({ sessionId, directory: '/exact/project' }),
-        }));
+        })));
         retireActiveServerAccountScopeLifetime();
     });
 
