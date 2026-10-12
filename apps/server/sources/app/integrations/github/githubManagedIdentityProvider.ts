@@ -591,6 +591,7 @@ function createManagedGitHubIdentityProvider(
             token: null,
             presentation: {
                 username: params.preferredUsername?.trim().toLowerCase() || profile.login.toLowerCase(),
+                name: profile.name,
             },
             eligibility: {
                 eligibilityStatus: "eligible",
@@ -620,7 +621,7 @@ function createManagedGitHubIdentityProvider(
         prepareConnect,
         connect: async (params) => {
             const prepared = await prepareConnect(params);
-            await inTx(prepared.connectInTx);
+            await inTx(prepared.connectInTx, { isolationLevel: "Serializable" /* Managed GitHub identity linking composes current directory/source and provider admission. */ });
         },
         disconnect: async ({ ctx }) => await unlinkIdentity({
             accountId: ctx.uid,
