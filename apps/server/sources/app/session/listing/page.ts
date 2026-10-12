@@ -8,7 +8,9 @@ import {
     type V2SessionListCursorV2,
 } from "@happier-dev/protocol";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import type { Tx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
+import { readCurrentSessionIdsInTx, readmitSessionRowsInTx } from "@/app/session/access/sessionReadAdmission";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/session/access/sessionRecipients";
@@ -130,10 +132,12 @@ export async function findV2SessionListRows(params: FindV2SessionListRowsParams)
     };
 
     if (params.source) return await readFrom(params.source.reader, params.source.baseWhere);
-    return await inTx(async (tx) => await readFrom(
+    return await readSnapshotWithCurrentAdmission(async (tx) => await readFrom(
         tx,
         await buildSessionAccessWhere({ tx, accountId: userId, capability: "readTranscript", mode: "effective_access_v1", authentication: params.authentication }),
-    ), { readOnly: true });
+    ), async (tx, captured) => await readmitSessionRowsInTx(tx, {
+        accountId: userId, authentication: params.authentication,
+    }, captured));
 }
 
 export async function runWithSessionListProjectionFallback<T>(
@@ -377,9 +381,14 @@ export async function resolveV2SessionListCursorForVisibleRows(params: ResolveV2
         }))[0] ?? null
         : params.source
             ? await read(params.source.reader, params.source.baseWhere)
-            : await inTx(async (tx) => await read(tx, await buildSessionAccessWhere({
+            : await readSnapshotWithCurrentAdmission(async (tx) => await read(tx, await buildSessionAccessWhere({
                 tx, accountId: params.userId, capability: "readTranscript", mode: "effective_access_v1", authentication: params.authentication,
-            })), { readOnly: true });
+            })), async (tx, captured) => {
+                if (!captured) return captured;
+                const current = await readCurrentSessionIdsInTx(tx, { accountId: params.userId,
+                    sessionIds: [captured.id], authentication: params.authentication });
+                return current.has(captured.id) ? captured : null;
+            });
     if (!row) return null;
 
     return {

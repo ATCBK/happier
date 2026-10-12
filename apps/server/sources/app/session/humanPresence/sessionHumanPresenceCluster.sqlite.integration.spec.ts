@@ -62,12 +62,12 @@ describe("human presence access transitions across Redis-adapter API nodes", () 
             // could never present current `key_challenge` evidence to qualify.
             db.account.create({ data: {
                 publicKey: crypto.randomUUID(),
-                firstName: "Cluster owner",
+                name: "Cluster owner",
                 encryptionMode: "e2ee",
             } }),
             db.account.create({ data: {
                 publicKey: crypto.randomUUID(),
-                firstName: "Cluster member",
+                name: "Cluster member",
                 encryptionMode: "e2ee",
             } }),
         ]);

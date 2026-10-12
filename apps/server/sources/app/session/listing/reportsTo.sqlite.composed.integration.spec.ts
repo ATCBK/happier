@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readSessionAwarenessWorkStatusV1 } from '@happier-dev/protocol';
 
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
@@ -261,6 +262,30 @@ describe("Reports-to listing (SQLite)", () => {
             .toEqual({ total: 1, working: 0, needsYou: 0, stalled: 0 });
     });
 
+    it("keeps an inactive failed report in Recent instead of counting Needs you", async () => {
+        const { owner, lead, create } = await fixture();
+        const child = await create();
+        await db.session.update({ where: { id: child.id }, data: {
+            active: false, latestTurnStatus: "failed", latestTurnStatusObservedAt: BigInt(Date.now()),
+        } });
+        await db.sessionReportsTo.create({ data: { sessionId: child.id, leadSessionId: lead.id } });
+        const expected = { total: 1, working: 0, needsYou: 0, stalled: 0 };
+        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.reports).toEqual(expected);
+        await withAuthenticatedTestApp(registerSessionListingRoutes, async app => {
+            const response = await app.inject({ method: "GET", url: `/v2/sessions/${lead.id}?accessProjectionVersion=1`,
+                headers: { "x-test-user-id": owner.id, "x-happier-account-stored-content-protocol": "4" } });
+            expect(response.statusCode, response.body).toBe(200);
+            expect(response.json().session.reports).toEqual(expected);
+        });
+        // Runtime detachment changes display classification, never the failed turn evidence.
+        expect((await db.session.findUniqueOrThrow({ where: { id: child.id } })).latestTurnStatus).toBe('failed');
+        await db.session.update({ where: { id: child.id }, data: { active: true, lastActiveAt: new Date() } });
+        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.reports)
+            .toEqual({ ...expected, needsYou: 1 });
+        await db.session.update({ where: { id: child.id }, data: { archivedAt: new Date() } });
+        expect((await list(owner.id, lead.id))?.sessions.find(row => row.id === lead.id)?.reports).toEqual(expected);
+    });
+
     it("counts an active mid-turn report as working rather than stalled", async () => {
         const { owner, lead, create } = await fixture();
         const child = await create();
@@ -296,7 +321,7 @@ describe("Reports-to listing (SQLite)", () => {
         });
     });
 
-    it("counts needs-you by I3's session buckets and suppresses unreadable reports in every bucket", async () => {
+    it("counts active reports with unknown presence by the shared operational buckets and suppresses unreadable reports", async () => {
         const { owner, lead, create } = await fixture();
         const primaries = ["failed", "permission_required", "action_required", "working", "ready"] as const;
         for (const primary of primaries) {
@@ -314,20 +339,15 @@ describe("Reports-to listing (SQLite)", () => {
         const foreign = await fixture();
         await db.session.update({ where: { id: foreign.lead.id }, data: { active: true, latestTurnStatus: "failed" } });
         await db.sessionReportsTo.create({ data: { sessionId: foreign.lead.id, leadSessionId: lead.id } });
-        // Preserve the real UI parity assertion without compiling UI aliases
-        // and DOM declarations inside the server's TypeScript project.
-        const { resolveWorkStatusTone } = await vi.importActual<{
-            resolveWorkStatusTone: (input: { kind: "session"; facts: {
-                word: typeof primaries[number]; awareness: { runtime: "unknown";
-                    operational: { primary: typeof primaries[number]; reasons: [] } };
-            } }) => { bucket: string };
-        }>("../../../../../ui/sources/components/work/status/resolveWorkStatusTone");
-        const needsYou = primaries.filter((primary) => resolveWorkStatusTone({ kind: "session", facts: {
-            word: primary, awareness: { runtime: "unknown", operational: { primary, reasons: [] } },
-        } }).bucket === "needs_you").length;
+        const statuses = primaries.map(primary => readSessionAwarenessWorkStatusV1({ awareness: {
+            runtime: "unknown", freshness: "unknown", encryption: "plain", operational: { primary },
+        } }));
+        const expected = { total: primaries.length, working: 1, needsYou: 3, stalled: 0 };
+        expect(statuses.filter(status => status.bucket === "working")).toHaveLength(expected.working);
+        expect(statuses.filter(status => status.bucket === "needs_you")).toHaveLength(expected.needsYou);
         const page = await list(owner.id, lead.id);
         expect(page?.sessions.find((row) => row.id === lead.id)?.reports)
-            .toEqual({ total: primaries.length, working: 1, needsYou, stalled: 0 });
+            .toEqual(expected);
         expect(page?.sessions.map((row) => row.id)).not.toContain(foreign.lead.id);
     });
 

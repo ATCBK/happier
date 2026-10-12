@@ -31,6 +31,7 @@ import {
     isSessionPersonallyTrackedInTx,
 } from "@/app/session/personal/readState";
 import { inTx, type Tx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { AccountStatus, getDbProviderFromEnv, prismaRuntime as Prisma } from "@/storage/prisma";
 import { markSessionFollowsChangedForAccountsInTx, markSessionFollowsChangedInTx } from "./changes";
 import { hasCanonicalFollowProviderInputAcceptanceInTx } from "./providerInputAcceptance";
@@ -136,7 +137,7 @@ async function readableSession(tx: Tx, input: Readonly<{ accountId: string; sess
 
 /** Reads only the authenticated Account's personal choice after current Session read admission. */
 export async function getAccountSessionFollow(input: Readonly<{ accountId: string; sessionId: string; authentication: SessionAccessAuthentication }>): Promise<AccountFollowResult<GetSessionFollowResponse>> {
-    return await inTx(async tx => {
+    return await readSnapshotWithCurrentAdmission<AccountFollowResult<GetSessionFollowResponse>>(async tx => {
         if (!await activeAccount(tx, input.accountId)) return { ok: false, error: "account_inactive" };
         const session = await readableSession(tx, input);
         if (!session) return { ok: false, error: "session_not_found" };
@@ -148,7 +149,11 @@ export async function getAccountSessionFollow(input: Readonly<{ accountId: strin
             capabilities: { manageFollow: true },
             voiceInitialSnapshotPending: isVoiceInitialSnapshotPending(row),
         } };
-    }, { readOnly: true });
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        if (!await activeAccount(tx, input.accountId)) return { ok: false, error: "account_inactive" };
+        return await readableSession(tx, input) ? captured : { ok: false, error: "session_not_found" };
+    });
 }
 
 /** Replaces a personal Follow choice and seeds newly entered tracking through its canonical owner. */
@@ -192,7 +197,7 @@ export async function setAccountSessionFollow(input: Readonly<{
             follow: projectAccountSessionFollow(row),
             voiceInitialSnapshotPending: isVoiceInitialSnapshotPending(row),
         } };
-    });
+    }, { isolationLevel: "Serializable" /* Follow tracking entry and whole Voice membership replacement depend on prior membership reads. */ });
 }
 
 /** Explicit Unfollow persists suppression, including after visibility loss, without disclosing a Session. */
@@ -207,7 +212,7 @@ export async function removeAccountSessionFollow(input: Readonly<{ accountId: st
         await tx.accountSessionFollow.upsert({ where: { accountId_sessionId: key }, create: { ...key, ...suppressed }, update: suppressed });
         await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         return { ok: true, value: { changed: true } };
-    });
+    }, { isolationLevel: "Serializable" /* Follow tracking entry and whole Voice membership replacement depend on prior membership reads. */ });
 }
 
 /** Atomically replaces one Home's durable Include in Voice membership. */
@@ -264,7 +269,7 @@ export async function replaceAccountSessionVoiceInclusions(input: Readonly<{
         }
         if (changed) await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         return { ok: true, value: { changed, sessionIds } };
-    });
+    }, { isolationLevel: "Serializable" /* Follow tracking entry and whole Voice membership replacement depend on prior membership reads. */ });
 }
 
 /** Gets the four prospective operational defaults; no encrypted settings mirror exists. */
@@ -294,7 +299,7 @@ export async function setSessionAutoFollowPreferences(input: Readonly<{
             await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         }
         return { ok: true, value: preferences };
-    });
+    }, { isolationLevel: "Serializable" /* The active Account admission and prospective preference write must serialize with Account status changes. */ });
 }
 
 /**

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import Fastify from "fastify";
+import Fastify, { type InjectOptions } from "fastify";
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
+import type { SessionSystemRecordAddress } from "@happier-dev/protocol";
 
 import { auth } from "@/app/auth/auth";
 import { enableAuthentication } from "@/app/api/utils/enableAuthentication";
@@ -47,6 +48,137 @@ describe("Session SystemRecords read snapshots on SQLite", () => {
         await harness?.close();
     });
 
+    it('denies SystemRecord disclosure after share revocation during its snapshot', async () => {
+        const { withSqliteReadSnapshot } = await import('@/storage/prisma');
+        const owner = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: 'plain' } });
+        const collaborator = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: 'record-revocation', encryptionMode: 'plain', metadata: '{}' } });
+        const authentication = createPresentUserSessionAccessAuthentication();
+        const address = { owner: 'host', namespace: 'memory', kind: 'synopsis.v1', localId: 'revocation' } satisfies SessionSystemRecordAddress;
+        await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id,
+            sharedWithUserId: collaborator.id, accessLevel: 'edit' } });
+        expect((await upsertSessionSystemRecordV1({ actorUserId: collaborator.id, sessionId: session.id, authentication, address,
+            content: { t: 'plain', v: { v: 1, seqTo: 1, updatedAtMs: 1, synopsis: 'private record' } }, expectedRevision: null })).ok).toBe(true);
+        await db.sessionShare.update({ where: { sessionId_sharedWithUserId: { sessionId: session.id, sharedWithUserId: collaborator.id } },
+            data: { accessLevel: 'view' } });
+        const params = { actorUserId: collaborator.id, sessionId: session.id, authentication, address };
+        expect(await readSessionSystemRecordV1(params)).toMatchObject({ ok: true,
+            record: { content: { t: 'plain', v: { synopsis: 'private record' } } } });
+        const reader = await withSqliteReadSnapshot(async tx => tx);
+        const delegate = reader.sessionSystemRecord;
+        const original = delegate.findFirst.bind(delegate);
+        let enter!: () => void;
+        let resume!: () => void;
+        const reached = new Promise<void>(resolve => { enter = resolve; });
+        const release = new Promise<void>(resolve => { resume = resolve; });
+        let paused = false;
+        // Instrument only the real storage boundary, after the policy's admission reads.
+        Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true,
+            value: async (...args: Parameters<typeof original>) => {
+                if (!paused) { paused = true; enter(); await release; }
+                return await original(...args);
+            } });
+        const response = readSessionSystemRecordV1(params);
+        try {
+            expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+            await db.sessionShare.delete({ where: { sessionId_sharedWithUserId: { sessionId: session.id, sharedWithUserId: collaborator.id } } });
+            resume();
+            const result = await response;
+            expect(await readSessionSystemRecordV1(params)).toMatchObject({ ok: false, code: 'plugin_session_not_found' });
+            expect(result).toMatchObject({ ok: false, code: 'plugin_session_not_found' });
+        } finally {
+            resume(); await response;
+            Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true, value: original });
+        }
+    });
+
+    it('denies a V1 record when its Session storage mode changes during the content snapshot', async () => {
+        const { withSqliteReadSnapshot } = await import('@/storage/prisma');
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: 'record-mode-currentness', encryptionMode: 'plain', metadata: '{}' } });
+        const address = { owner: 'host', namespace: 'memory', kind: 'synopsis.v1', localId: 'mode-currentness' } satisfies SessionSystemRecordAddress;
+        const params = { actorUserId: account.id, sessionId: session.id, authentication: createPresentUserSessionAccessAuthentication(), address };
+        expect((await upsertSessionSystemRecordV1({ ...params, content: { t: 'plain', v: { v: 1, seqTo: 1, updatedAtMs: 1, synopsis: 'private plain bytes' } }, expectedRevision: null })).ok).toBe(true);
+        const reader = await withSqliteReadSnapshot(async tx => tx);
+        const delegate = reader.sessionSystemRecord;
+        const original = delegate.findFirst.bind(delegate);
+        let enter!: () => void;
+        let resume!: () => void;
+        const reached = new Promise<void>(resolve => { enter = resolve; });
+        const release = new Promise<void>(resolve => { resume = resolve; });
+        let paused = false;
+        Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true,
+            value: async (...args: Parameters<typeof original>) => {
+                if (!paused) { paused = true; enter(); await release; }
+                return await original(...args);
+            } });
+        const response = readSessionSystemRecordV1(params);
+        try {
+            expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+            await db.session.update({ where: { id: session.id }, data: { encryptionMode: 'e2ee' } });
+            resume();
+            const result = await response;
+            expect(await readSessionSystemRecordV1(params)).toMatchObject({ ok: false, code: 'plugin_session_record_storage_mode_mismatch' });
+            expect(result).toMatchObject({ ok: false, code: 'plugin_session_record_storage_mode_mismatch' });
+        } finally {
+            resume(); await response;
+            Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true, value: original });
+        }
+    });
+
+    it('denies a runtime-principal record after its materialized binding changes during the snapshot', async () => {
+        const { withSqliteReadSnapshot } = await import('@/storage/prisma');
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: 'plain' } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const machineId = crypto.randomUUID();
+        const installationId = crypto.randomUUID();
+        const installationPublicKey = '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo';
+        await db.machine.create({ data: { id: machineId, accountId: account.id, kind: 'ephemeral_session_runner', metadata: '{}',
+            installationId, installationPublicKey: Buffer.from(installationPublicKey, 'base64url') } });
+        await db.accessKey.create({ data: { accountId: account.id, sessionId: session.id, machineId, data: 'runner-access-key' } });
+        const activation = await db.ephemeralRunnerActivation.create({ data: {
+            id: crypto.randomUUID(), creatorAccountId: account.id, creatorTokenEpoch: account.tokenEpoch,
+            draftId: crypto.randomUUID(), sessionId: session.id, machineId, state: 'materialized', workspacePolicy: 'choose_on_endpoint',
+            homeServerIdentityId: 'srv_record_currentness', activationSigningPublicKey: installationPublicKey,
+            authoringCommitment: 'a'.repeat(43), artifact: {}, endpointFactsRecipient: { mode: 'plain', creatorAccountId: account.id },
+        } });
+        const address = { owner: 'host', namespace: 'memory', kind: 'synopsis.v1', localId: 'runtime-currentness' } satisfies SessionSystemRecordAddress;
+        expect((await upsertSessionSystemRecordV1({ actorUserId: account.id, sessionId: session.id,
+            authentication: createPresentUserSessionAccessAuthentication(), address,
+            content: { t: 'plain', v: { v: 1, seqTo: 1, updatedAtMs: 1, synopsis: 'runtime private record' } }, expectedRevision: null })).ok).toBe(true);
+        const params = { actorUserId: account.id, sessionId: session.id, address,
+            authentication: { env: process.env, authority: 'account_automation' as const, authenticationEvidence: undefined,
+                sessionRuntimePrincipal: { kind: 'ephemeral_session_runner' as const, authority: 'session_runtime' as const,
+                    accountId: account.id, activationId: activation.id, sessionId: session.id, machineId,
+                    installationId, installationPublicKey, creatorTokenEpoch: account.tokenEpoch } } };
+        expect(await readSessionSystemRecordV1(params)).toMatchObject({ ok: true, record: { content: { t: 'plain', v: { synopsis: 'runtime private record' } } } });
+        const reader = await withSqliteReadSnapshot(async tx => tx);
+        const delegate = reader.sessionSystemRecord;
+        const original = delegate.findFirst.bind(delegate);
+        let enter!: () => void;
+        let resume!: () => void;
+        const reached = new Promise<void>(resolve => { enter = resolve; });
+        const release = new Promise<void>(resolve => { resume = resolve; });
+        let paused = false;
+        Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true,
+            value: async (...args: Parameters<typeof original>) => {
+                if (!paused) { paused = true; enter(); await release; }
+                return await original(...args);
+            } });
+        const response = readSessionSystemRecordV1(params);
+        try {
+            expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+            await db.machine.update({ where: { id: machineId }, data: { installationId: `${installationId}-replaced` } });
+            resume();
+            const result = await response;
+            expect(await readSessionSystemRecordV1(params)).toMatchObject({ ok: false, code: 'plugin_session_not_found' });
+            expect(result).toMatchObject({ ok: false, code: 'plugin_session_not_found' });
+        } finally {
+            resume(); await response;
+            Object.defineProperty(delegate, 'findFirst', { configurable: true, writable: true, value: original });
+        }
+    });
+
     it("finishes authenticated host, permission and plugin reads before a blocked primary writer is released", async () => {
         const account = await db.account.create({ data: {
             ...createSignedAccountContentBinding(), encryptionMode: "plain", seq: 1,
@@ -57,7 +189,7 @@ describe("Session SystemRecords read snapshots on SQLite", () => {
         const token = await auth.createToken(account.id, undefined, { kind: "account", authority: "present_user" });
         const authentication = createPresentUserSessionAccessAuthentication();
         const baseParams = { actorUserId: account.id, sessionId: session.id, authentication };
-        const address = { owner: "host" as const, namespace: "memory", kind: "synopsis.v1", localId: "synopsis" };
+        const address = { owner: "host", namespace: "memory", kind: "synopsis.v1", localId: "synopsis" } satisfies SessionSystemRecordAddress;
         const content = { t: "plain" as const, v: { v: 1, seqTo: 1, updatedAtMs: 1, synopsis: "committed" } };
         const host = await upsertSessionSystemRecordV1({ ...baseParams, address, content, expectedRevision: null });
         expect(host.ok).toBe(true);
@@ -80,7 +212,7 @@ describe("Session SystemRecords read snapshots on SQLite", () => {
         const base = `/v2/sessions/${session.id}`;
         const headers = { authorization: `Bearer ${token}`, "x-happier-account-stored-content-protocol": "4" };
         const strictHeaders = { ...headers, "x-happier-session-system-records-protocol": "1" };
-        const reads = [
+        const reads: InjectOptions[] = [
             { url: `${base}/system-records`, query: { namespace: "memory" }, headers },
             { url: `${base}/system-records/record`, query: { namespace: "memory", localId: "synopsis" }, headers },
             { url: `${base}/system-records/latest`, query: { namespace: "memory", kind: "synopsis.v1" }, headers },

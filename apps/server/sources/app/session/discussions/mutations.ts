@@ -493,7 +493,7 @@ async function createSessionDiscussionTransaction(
             discussion,
             firstMessage,
         });
-    });
+    }, { isolationLevel: "Serializable" /* Discussion lifecycle admission and tracking-entry cursor census must serialize with participating writers. */ });
 }
 
 export async function createSessionDiscussion(
@@ -678,7 +678,7 @@ export async function postSessionDiscussionMessage(params: Readonly<{
     producer?: SessionDiscussionProducerV1;
     authentication: import("@/app/session/access/sessionAccessAuthentication").SessionAccessAuthentication;
 }>): Promise<SessionDiscussionResult<SessionDiscussionPostResponseV1>> {
-    return await inTx(async (tx) => await postSessionDiscussionMessageInTx(tx, params));
+    return await inTx(async (tx) => await postSessionDiscussionMessageInTx(tx, params), { isolationLevel: "Serializable" /* Discussion lifecycle admission and tracking-entry cursor census must serialize with participating writers. */ });
 }
 
 type DiscussionManagementIntent = "rename" | "archive" | "restore";
@@ -773,7 +773,7 @@ export async function renameSessionDiscussion(params: Readonly<{
             sessionId: params.sessionId,
             discussionId: params.discussionId,
         });
-    });
+    }, { isolationLevel: "Serializable" /* Discussion lifecycle admission and tracking-entry cursor census must serialize with participating writers. */ });
 }
 
 /** Archiving is reversible and keeps history readable; there is no hard delete. */
@@ -801,7 +801,7 @@ export async function archiveSessionDiscussion(params: Readonly<{
             sessionId: params.sessionId,
             discussionId: params.discussionId,
         });
-    });
+    }, { isolationLevel: "Serializable" /* Discussion lifecycle admission and tracking-entry cursor census must serialize with participating writers. */ });
 }
 
 export async function restoreSessionDiscussion(params: Readonly<{
@@ -828,5 +828,5 @@ export async function restoreSessionDiscussion(params: Readonly<{
             sessionId: params.sessionId,
             discussionId: params.discussionId,
         });
-    });
+    }, { isolationLevel: "Serializable" /* Discussion lifecycle admission and tracking-entry cursor census must serialize with participating writers. */ });
 }

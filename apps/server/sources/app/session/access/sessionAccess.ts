@@ -1,5 +1,5 @@
 import { db } from "@/storage/db";
-import type { Tx } from "@/storage/inTx";
+import { inTx, type Tx } from "@/storage/inTx";
 import type { Prisma } from "@prisma/client";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
@@ -399,6 +399,21 @@ export async function resolveSessionAccessForOperation(
             ? "authentication_unavailable"
             : "unavailable",
     };
+}
+
+/**
+ * Re-admit a protected read after its content snapshot has closed. Snapshot
+ * corpus admission stays with the supplied reader; this final decision must
+ * observe revocations committed while that snapshot was being read.
+ */
+export async function readCurrentSessionAccessForOperation(
+    input: Omit<Parameters<typeof resolveSessionAccessForOperation>[1], "row">,
+): Promise<SessionAccessOperationDecision> {
+    return await inTx(reader => resolveSessionAccessForOperation(reader, {
+        ...input,
+        // Even a structurally wider caller cannot reuse an earlier access row.
+        row: undefined,
+    }), { isolationLevel: "Serializable" /* Current Session admission must use one coherent Account, grant and credential snapshot. */, readOnly: true });
 }
 
 /** Evidence-independent entitlement projection for internal census/preparation only. */

@@ -3,6 +3,7 @@ import type { SessionRecipientCursor } from "@/app/session/changeTracking/markSe
 import type { Tx } from "@/storage/inTx";
 import { didSessionActivityBadgeSignalChange } from "@/app/activity/accountActivityBadge";
 import { SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 
 export async function applyPendingSessionStateChange(params: {
     tx: Tx;
@@ -20,6 +21,7 @@ export async function applyPendingSessionStateChange(params: {
     meaningfulActivityAt?: Date;
 }> {
     const { tx, sessionId, meaningfulActivityAt } = params;
+    await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
     const pendingCountDelta = typeof params.pendingCountDelta === "number" && Number.isInteger(params.pendingCountDelta)
         ? params.pendingCountDelta
         : 0;

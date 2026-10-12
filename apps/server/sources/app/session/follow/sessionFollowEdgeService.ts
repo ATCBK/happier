@@ -28,6 +28,8 @@ import {
 } from "@/app/session/access/sessionContextInjection";
 import { AccountStatus } from "@/storage/prisma";
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import {
     readCurrentSourceSessionFollowFrontier,
     readStoredSessionFollowFrontier,
@@ -39,7 +41,7 @@ import {
 } from "./providerInputAcceptance";
 import { projectSessionMessageAccountActors } from "@/app/session/messages/projectSessionMessageAccountActors";
 import { verifyCurrentMaterializedRunnerPrincipalInTx } from "@/app/ephemeralRunner/materializedRunnerPrincipalCurrentness";
-import { resolveCurrentSessionRecipientAccountIdsInTx } from "@/app/session/access/sessionRecipients";
+import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/session/access/sessionRecipients";
 import { readSessionPendingReviewRunCountsInTx } from '@/app/session/awareness/sessionReportsProjection';
 import {
     invalidateSessionRelationProjectionsInTx as invalidateSessionFollowDestinationsInTx,
@@ -79,14 +81,16 @@ const EDGE_SELECT = {
     mode: true,
 } as const;
 
-export async function projectSessionFollowSourceForRunnerInTx(
+type SessionFollowSourceRunnerInput = Readonly<{
+    principal: VerifiedEphemeralSessionRunnerPrincipal;
+    destinationSessionId: string;
+    request: SessionFollowSourceProjectionRequestV1;
+}>;
+
+async function admitSessionFollowSourceForRunnerInTx(
     tx: Tx,
-    input: Readonly<{
-        principal: VerifiedEphemeralSessionRunnerPrincipal;
-        destinationSessionId: string;
-        request: SessionFollowSourceProjectionRequestV1;
-    }>,
-): Promise<SessionFollowSourceProjectionResponseV1 | null> {
+    input: SessionFollowSourceRunnerInput,
+) {
     if (input.principal.sessionId !== input.destinationSessionId) return null;
     if (input.request.sourceSessionId === input.destinationSessionId) return null;
     if (!await verifyCurrentMaterializedRunnerPrincipalInTx(tx, input.principal)) return null;
@@ -132,7 +136,6 @@ export async function projectSessionFollowSourceForRunnerInTx(
         },
     });
     if (!source || source.archivedAt !== null || (source.encryptionMode !== "plain" && source.encryptionMode !== "e2ee")) return null;
-    const pendingReviewRuns = await readSessionPendingReviewRunCountsInTx(tx, [source.id]);
     // The Runner reports the observation it is hydrating, but those sequence
     // numbers are never read authority. Bound the lower bound by the exact
     // transaction-loaded edge frontier so a stale or malicious caller cannot
@@ -145,6 +148,16 @@ export async function projectSessionFollowSourceForRunnerInTx(
         (!snapshot && input.request.afterTranscriptSeq < edge.deliveredTranscriptSeq)
         || input.request.observedTranscriptSeq > source.seq
     ) return null;
+    return { edge, source, snapshot };
+}
+
+export async function projectSessionFollowSourceForRunnerInTx(
+    tx: Tx, input: SessionFollowSourceRunnerInput,
+): Promise<SessionFollowSourceProjectionResponseV1 | null> {
+    const admission = await admitSessionFollowSourceForRunnerInTx(tx, input);
+    if (!admission) return null;
+    const { source, snapshot } = admission;
+    const pendingReviewRuns = await readSessionPendingReviewRunCountsInTx(tx, [source.id]);
     const fetched = await tx.sessionMessage.findMany({
         where: {
             sessionId: source.id,
@@ -197,6 +210,15 @@ export async function projectSessionFollowSourceForRunnerInTx(
         })),
         hasMore,
     });
+}
+
+export async function projectSessionFollowSourceForRunner(input: SessionFollowSourceRunnerInput): Promise<SessionFollowSourceProjectionResponseV1 | null> {
+    return await readSnapshotWithCurrentAdmission<SessionFollowSourceProjectionResponseV1 | null>(
+        tx => projectSessionFollowSourceForRunnerInTx(tx, input), async (tx, captured) => {
+            if (!captured) return null;
+            const current = await admitSessionFollowSourceForRunnerInTx(tx, input);
+            return current && current.source.encryptionMode === captured.source.encryptionMode ? captured : null;
+        });
 }
 
 export type SessionFollowSourceFailure =
@@ -299,11 +321,12 @@ export async function invalidateSessionFollowDestinationsForSourceChangeInTx(
         orderBy: { destinationSessionId: "asc" },
         select: { destinationSessionId: true },
     });
-    for (const destinationSessionId of [...new Set(edges.map((edge) => edge.destinationSessionId))]) {
-        const accountIds = await resolveCurrentSessionRecipientAccountIdsInTx(tx, {
-            sessionId: destinationSessionId,
-        });
-        scheduleSessionFollowDestinationBroadcastAfterTx(tx, destinationSessionId, accountIds);
+    const destinationSessionIds = [...new Set(edges.map((edge) => edge.destinationSessionId))];
+    const recipientsBySession = await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, {
+        sessionIds: destinationSessionIds,
+    });
+    for (const destinationSessionId of destinationSessionIds) {
+        scheduleSessionFollowDestinationBroadcastAfterTx(tx, destinationSessionId, recipientsBySession.get(destinationSessionId) ?? []);
     }
 }
 
@@ -333,7 +356,7 @@ export async function listSessionFollowSources(input: Readonly<{
     destinationSessionId: string;
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionFollowSourceResult<readonly SessionFollowSourceV1[]>> {
-    return await inTx(async (tx) => {
+    return await readSnapshotWithCurrentAdmission<SessionFollowSourceResult<readonly SessionFollowSourceV1[]>>(async (tx) => {
         if (!await isActingAccountActive(tx, input.accountId)) return { ok: false, error: "account_inactive" };
         const destination = await loadSession(tx, input.destinationSessionId);
         if (!destination || !await canReadSession(tx, input.accountId, input.destinationSessionId, input.authentication)) {
@@ -352,7 +375,16 @@ export async function listSessionFollowSources(input: Readonly<{
             visible.push(projectSource(edge, source, dormant));
         }
         return { ok: true, value: visible };
-    }, { readOnly: true });
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        if (!await isActingAccountActive(tx, input.accountId)) return { ok: false, error: "account_inactive" };
+        if (!await canReadSession(tx, input.accountId, input.destinationSessionId, input.authentication)) return { ok: false, error: "session_not_found" };
+        const visible: SessionFollowSourceV1[] = [];
+        for (const source of captured.value) {
+            if (await canReadSession(tx, input.accountId, source.sourceSessionId, input.authentication)) visible.push(source);
+        }
+        return { ...captured, value: visible };
+    });
 }
 
 /**
@@ -374,6 +406,7 @@ export async function setSessionFollowSource(input: Readonly<{
         return { ok: false, error: "session_follow_same_session" };
     }
     return await inTx(async (tx) => {
+        await acquireSessionAccountCursorLocksInTx(tx, [input.sourceSessionId, input.destinationSessionId], [input.accountId]);
         if (!await isActingAccountActive(tx, input.accountId)) return { ok: false, error: "account_inactive" };
 
         const destination = await loadSession(tx, input.destinationSessionId);
@@ -448,7 +481,7 @@ export async function setSessionFollowSource(input: Readonly<{
         }) as EdgeRow;
         await invalidateSessionFollowDestinationsInTx(tx, [input.destinationSessionId]);
         return { ok: true, value: { changed: true, source: projectSource(created, source, false) } };
-    });
+    }, { isolationLevel: "Serializable" /* Follow source admission and access-change cleanup must preserve the same eligibility snapshot. */ });
 }
 
 /**
@@ -485,7 +518,7 @@ export async function removeSessionFollowSource(input: Readonly<{
             await invalidateSessionFollowDestinationsInTx(tx, [input.destinationSessionId]);
         }
         return { ok: true, value: { changed: removed.count > 0 } };
-    });
+    }, { isolationLevel: "Serializable" /* Follow source admission and access-change cleanup must preserve the same eligibility snapshot. */ });
 }
 
 /**
@@ -546,7 +579,7 @@ export async function authorizeSessionFollowSourceKeyPreparer(
     if (input.sourceSessionId === input.destinationSessionId) {
         return { ok: false, error: "session_follow_same_session" };
     }
-    return await inTx(async (tx) => await prepareSessionFollowSourceKeyPreparerInTx(tx, input));
+    return await inTx(async (tx) => await prepareSessionFollowSourceKeyPreparerInTx(tx, input), { isolationLevel: "Serializable" /* Follow source admission and access-change cleanup must preserve the same eligibility snapshot. */ });
 }
 
 export async function authorizeSessionFollowSourceKeyPreparation(input: Readonly<{
@@ -604,7 +637,7 @@ export async function authorizeSessionFollowSourceKeyPreparation(input: Readonly
             sourceSessionId: input.sourceSessionId,
             machineId: input.principal.machineId,
         } };
-    });
+    }, { isolationLevel: "Serializable" /* Follow source admission and access-change cleanup must preserve the same eligibility snapshot. */ });
 }
 
 /**

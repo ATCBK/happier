@@ -4,6 +4,8 @@ import { notifySessionTranscriptMutationAfterCommit } from '../sessionTranscript
 import { revokeMachineInTx } from '@/app/machines/machineMutations';
 import { invalidateSessionFollowDestinationsForSessionDeleteInTx } from '@/app/session/follow/sessionFollowEdgeService';
 import { invalidateSessionReportsToForSessionDeleteInTx } from '@/app/session/relations/sessionReportsToService';
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
+import { resolveSessionGrantedAccountIdsInTx } from '@/app/session/access/sessionRecipients';
 
 export class SessionDeleteConditionLostError extends Error {
     constructor() {
@@ -27,6 +29,22 @@ export async function deleteSessionTree(
     deletedReports: number;
     deletedAccessKeys: number;
 }> {
+    const [grantedAccountIds, followEdges, reportsToEdges] = await Promise.all([
+        resolveSessionGrantedAccountIdsInTx(tx, { sessionId: params.sessionId }),
+        tx.sessionFollowEdge.findMany({
+            where: { sourceSessionId: params.sessionId },
+            select: { destinationSessionId: true },
+        }),
+        tx.sessionReportsTo.findMany({
+            where: { OR: [{ sessionId: params.sessionId }, { leadSessionId: params.sessionId }] },
+            select: { sessionId: true, leadSessionId: true },
+        }),
+    ]);
+    await acquireSessionAccountCursorLocksInTx(tx, [
+        params.sessionId,
+        ...followEdges.map(edge => edge.destinationSessionId),
+        ...reportsToEdges.flatMap(edge => [edge.sessionId, edge.leadSessionId]),
+    ], grantedAccountIds);
     const sessionWhere = params.sessionDeleteWhere
         ? {
             AND: [

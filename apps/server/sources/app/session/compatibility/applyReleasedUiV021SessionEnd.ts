@@ -13,6 +13,7 @@ import {
 } from "@/app/events/eventRouter";
 import { activityCache } from "@/app/presence/sessionCache";
 import { markSessionProjectionRecipientsChanged } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import {
     applyLatestSessionTurnEndInTx,
     writeSessionRuntimeActivityObserverLossInTx,
@@ -57,6 +58,7 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
     connection?: ClientConnection;
 }>): Promise<ApplyReleasedUiV021SessionEndResult> {
     const result = await inTx(async (tx) => {
+        await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [], { includeLifecyclePublications: true });
         const session = await tx.session.findUnique({
             where: { id: params.sessionId },
             select: {

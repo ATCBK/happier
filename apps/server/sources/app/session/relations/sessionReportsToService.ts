@@ -1,9 +1,12 @@
 import { inTx, type Tx } from '@/storage/inTx';
+import { readSnapshotWithCurrentAdmission } from '@/storage/readSnapshotWithCurrentAdmission';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import type { SessionReportsToSetResultV1, SessionReportsToOptionsV1 } from '@happier-dev/protocol';
 import { resolveEffectiveSessionAccess } from '@/app/session/access/sessionAccess';
 import { evaluateCurrentSessionContextPairInTx, mayInjectSessionContextInTx } from '@/app/session/access/sessionContextInjection';
 import { acquireSessionReportsToHomeFenceInTx } from './sessionReportsToFence';
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
+import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from '@/app/session/access/sessionRecipients';
 import { invalidateSessionRelationProjectionsInTx } from './sessionRelationChanges';
 import { readCurrentSourceSessionFollowFrontier, writeSessionFollowFrontierColumns } from './sessionEdgeFrontier';
 
@@ -76,7 +79,7 @@ async function reportsToWouldCycleInTx(tx: Tx, sessionId: string, leadSessionId:
 export async function readSessionReportsToOptions(input: Readonly<{
     accountId: string; sessionId: string; candidateSessionIds: readonly string[]; authentication: SessionAccessAuthentication;
 }>): Promise<SessionReportsToOptionsV1> {
-    return inTx(async (tx) => {
+    return readSnapshotWithCurrentAdmission<SessionReportsToOptionsV1>(async (tx) => {
         const sourceAccess = await resolveEffectiveSessionAccess(tx, input);
         const existing = sourceAccess?.capabilities.readTranscript === true
             ? await tx.sessionReportsTo.findUnique({ where: { sessionId: input.sessionId }, select: { leadSessionId: true } }) : null;
@@ -96,12 +99,29 @@ export async function readSessionReportsToOptions(input: Readonly<{
             }
         }
         return { sessionId: input.sessionId, currentLeadSessionId, candidates };
-    }, { readOnly: true });
+    }, async (tx, captured) => {
+        const source = await resolveEffectiveSessionAccess(tx, input);
+        const canReadSource = source?.capabilities.readTranscript === true;
+        const lead = canReadSource && captured.currentLeadSessionId !== null
+            ? await resolveEffectiveSessionAccess(tx, { ...input, sessionId: captured.currentLeadSessionId }) : null;
+        const currentLeadSessionId = lead?.capabilities.readTranscript === true ? captured.currentLeadSessionId : null;
+        const candidates: SessionReportsToOptionsV1['candidates'] = [];
+        for (const candidate of captured.candidates) {
+            if (!candidate.allowed) { candidates.push(candidate); continue; }
+            const current = await readReportsToAdmissionInTx(tx, { ...input, leadSessionId: candidate.sessionId }, currentLeadSessionId);
+            candidates.push(current.ok ? candidate : { sessionId: candidate.sessionId, allowed: false,
+                reason: current.error === 'reports_to_forbidden' ? current.reason : 'cycle' });
+        }
+        return { ...captured, currentLeadSessionId, candidates };
+    });
 }
 
 async function mutateSessionReportsToInTx(tx: Tx, input: SessionReportsToSetInput, createdChild: boolean): Promise<SessionReportsToSetResult> {
     // Every existing-child mutation takes the Home fence before *any* read.
     if (!createdChild) await acquireSessionReportsToHomeFenceInTx(tx);
+    await acquireSessionAccountCursorLocksInTx(tx, [input.sessionId,
+        ...(input.expectedLeadSessionId ? [input.expectedLeadSessionId] : []),
+        ...(input.leadSessionId ? [input.leadSessionId] : [])]);
     const child = await tx.session.findUnique({ where: { id: input.sessionId }, select: SOURCE_SELECT });
     if (!child) return forbidden('read');
     const existing = await tx.sessionReportsTo.findUnique({ where: { sessionId: input.sessionId } });
@@ -136,7 +156,7 @@ export async function setSessionReportsToInTx(tx: Tx, input: SessionReportsToSet
     return mutateSessionReportsToInTx(tx, input, false);
 }
 export async function setSessionReportsTo(input: SessionReportsToSetInput): Promise<SessionReportsToSetResult> {
-    return inTx((tx) => setSessionReportsToInTx(tx, input));
+    return inTx((tx) => setSessionReportsToInTx(tx, input), { isolationLevel: "Serializable" /* ReportsTo access admission must serialize with access cleanup; the graph fence remains authoritative. */ });
 }
 export async function attachCreatedSessionReportsToInTx(tx: Tx, input: Omit<SessionReportsToSetInput, 'expectedLeadSessionId'>): Promise<SessionReportsToSetResult> {
     return mutateSessionReportsToInTx(tx, { ...input, expectedLeadSessionId: null }, true);
@@ -172,9 +192,18 @@ export async function applySessionArchiveTransitionToReportsToInTx(tx: Tx, input
     await invalidateSessionRelationProjectionsInTx(tx, edges.flatMap((edge) => [edge.sessionId, edge.leadSessionId]));
 }
 
-export async function invalidateSessionReportsToForSourceChangeInTx(tx: Tx, input: Readonly<{ sessionId: string }>): Promise<void> {
+/** Resolve the content-free lead invalidation audience before source publication starts. */
+export async function resolveSessionReportsToSourceChangeRecipientsInTx(tx: Tx, input: Readonly<{ sessionId: string }>): Promise<ReadonlyMap<string, readonly string[]>> {
     const parent = await tx.sessionReportsTo.findUnique({ where: { sessionId: input.sessionId }, select: { leadSessionId: true } });
-    if (parent) await invalidateSessionRelationProjectionsInTx(tx, [parent.leadSessionId]);
+    return resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, { sessionIds: parent ? [parent.leadSessionId] : [] });
+}
+
+export async function invalidateSessionReportsToForSourceChangeInTx(tx: Tx, input: Readonly<{
+    sessionId: string;
+    recipientsBySession?: ReadonlyMap<string, readonly string[]>;
+}>): Promise<void> {
+    const recipients = input.recipientsBySession ?? await resolveSessionReportsToSourceChangeRecipientsInTx(tx, input);
+    await invalidateSessionRelationProjectionsInTx(tx, recipients.keys(), recipients);
 }
 
 export async function invalidateSessionReportsToForSessionDeleteInTx(tx: Tx, input: Readonly<{ sessionId: string }>): Promise<void> {

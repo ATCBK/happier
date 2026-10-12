@@ -29,7 +29,7 @@ export async function loadSessionDiscussionAttentionForAccounts(params: Readonly
     accountIds: readonly string[];
     sessionIds?: readonly string[];
 }>): Promise<SessionDiscussionAttentionByAccount> {
-    return await inTx(async (tx) => await loadSessionDiscussionAttentionForAccountsInTx(tx, params));
+    return await inTx(async (tx) => await loadSessionDiscussionAttentionForAccountsInTx(tx, params), { isolationLevel: "Serializable" /* Discussion attention combines viewer tracking and message facts from one snapshot. */ });
 }
 
 /**

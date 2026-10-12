@@ -1,10 +1,10 @@
 import { afterTx, inTx, type Tx } from '@/storage/inTx';
 import type { Prisma } from '@prisma/client';
 import { log } from '@/utils/logging/log';
-import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from '@/app/changes/markAccountChanged';
 import { tombstoneSessionDraftForLifecycleInTx } from '@/app/account/sessionDrafts/sessionDraftService';
 import { SessionDeletedChangeHintV1Schema } from '@happier-dev/protocol/changes';
-import { resolveSessionGrantedAccountIdsInTx } from '@/app/session/access/sessionRecipients';
+import { resolveCurrentSessionRecipientAccountIdsBySessionInTx, resolveSessionGrantedAccountIdsInTx } from '@/app/session/access/sessionRecipients';
 import { deleteAutomationTx } from '@/app/automations/automationCrudService';
 
 import { deleteSessionTree, SessionDeleteConditionLostError } from './deleteSessionTree';
@@ -50,7 +50,7 @@ export async function deleteOwnedSession(
     try {
         return await inTx(async (tx) => {
             return await deleteSessionWithRecipientsInTx(tx, params);
-        });
+        }, { isolationLevel: "Serializable" /* Deletion recipient and draft census must serialize with grant and draft lifecycle writers. */ });
     } catch (error) {
         if (error instanceof SessionDeleteConditionLostError) {
             return { ok: false, error: 'conflict' };
@@ -95,6 +95,18 @@ export async function deleteSessionWithRecipientsInTx(
     );
     recipientAccountIds.add(session.accountId);
 
+    const [followEdges, reportsToEdges, runnerActivation] = await Promise.all([
+        tx.sessionFollowEdge.findMany({ where: { sourceSessionId: params.sessionId }, select: { destinationSessionId: true } }),
+        tx.sessionReportsTo.findMany({ where: { OR: [{ sessionId: params.sessionId }, { leadSessionId: params.sessionId }] },
+            select: { sessionId: true, leadSessionId: true } }),
+        tx.ephemeralRunnerActivation.findFirst({ where: { sessionId: params.sessionId, state: 'materialized' }, select: { creatorAccountId: true } }),
+    ]);
+    const relationRecipients = await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, { sessionIds: [
+        ...followEdges.map(edge => edge.destinationSessionId), ...reportsToEdges.flatMap(edge => [edge.sessionId, edge.leadSessionId]),
+    ] });
+    await acquireAccountChangePublicationLocksInTx(tx, [...recipientAccountIds, ...[...relationRecipients.values()].flat(),
+        ...(runnerActivation ? [runnerActivation.creatorAccountId] : [])]);
+
     const sessionDeleteWhere = {
         ...(params.sessionWhereGuard ?? {}),
         ...(params.ownerAccountId ? { accountId: params.ownerAccountId } : {}),
@@ -132,15 +144,8 @@ export async function deleteSessionWithRecipientsInTx(
         reason: params.reason,
         sessionDeleteWhere: Object.keys(sessionDeleteWhere).length > 0 ? sessionDeleteWhere : undefined,
         afterSessionWriteBoundary: async () => {
-            for (const accountId of recipientAccountIds) {
-                const cursor = await markAccountChanged(tx, {
-                    accountId,
-                    kind: 'session',
-                    entityId: params.sessionId,
-                    hint: deletionHint,
-                });
-                recipientCursors.push({ accountId, cursor });
-            }
+            recipientCursors.push(...await markAccountsChanged(tx, { accountIds: [...recipientAccountIds],
+                kind: 'session', entityId: params.sessionId, hint: deletionHint }));
         },
     });
 

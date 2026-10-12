@@ -17,7 +17,13 @@ import {
  */
 export async function resolveCurrentSessionRecipientAccountIdsBySessionInTx(
     tx: Tx,
-    params: Readonly<{ sessionIds: readonly string[] }>,
+    params: Readonly<{
+        sessionIds: readonly string[];
+        /** Publication fences also cover grants that the pending write can expose. */
+        includeUnpublishedGrants?: boolean;
+        /** Account reactivation must wait behind a fence for its retained grant. */
+        includeInactiveAccounts?: boolean;
+    }>,
 ): Promise<ReadonlyMap<string, readonly string[]>> {
     const sessionIds = [...new Set(params.sessionIds.filter(Boolean))];
     const recipientsBySessionId = new Map<string, Set<string>>(
@@ -35,17 +41,17 @@ export async function resolveCurrentSessionRecipientAccountIdsBySessionInTx(
     });
     const shareableSessionIds: string[] = [];
     for (const session of sessions) {
-        if (session.account.status === "active") {
+        if (params.includeInactiveAccounts || session.account.status === "active") {
             recipientsBySessionId.get(session.id)?.add(session.accountId);
         }
-        if (isSessionTranscriptShareable(session)) shareableSessionIds.push(session.id);
+        if (params.includeUnpublishedGrants || isSessionTranscriptShareable(session)) shareableSessionIds.push(session.id);
     }
 
     if (shareableSessionIds.length > 0) {
         const shares = await tx.sessionShare.findMany({
             where: {
                 sessionId: { in: shareableSessionIds },
-                sharedWithUser: { status: "active" },
+                ...(params.includeInactiveAccounts ? {} : { sharedWithUser: { status: "active" as const } }),
             },
             select: { sessionId: true, sharedWithUserId: true },
         });
@@ -54,6 +60,11 @@ export async function resolveCurrentSessionRecipientAccountIdsBySessionInTx(
         }
     }
 
+    const membershipWhere = (includeGuests: boolean) => {
+        const where = buildCurrentSessionAccessMembershipWhere(includeGuests);
+        if (params.includeInactiveAccounts) delete where.account;
+        return where;
+    };
     if (shareableSessionIds.length > 0 && isSessionCollaborationEnabled()) {
         const teamGrants = await tx.sessionTeamGrant.findMany({
             where: {
@@ -67,7 +78,7 @@ export async function resolveCurrentSessionRecipientAccountIdsBySessionInTx(
                     select: {
                         memberships: {
                             where: {
-                                ...buildCurrentSessionAccessMembershipWhere(false),
+                                ...membershipWhere(false),
                             },
                             select: { accountId: true, sessionAccessStartsAt: true },
                         },
@@ -97,7 +108,7 @@ export async function resolveCurrentSessionRecipientAccountIdsBySessionInTx(
                         memberships: {
                             where: {
                                 teamMembership: {
-                                    ...buildCurrentSessionAccessMembershipWhere(true),
+                                    ...membershipWhere(true),
                                 },
                             },
                             select: {
@@ -142,7 +153,7 @@ export async function resolveCurrentSessionRecipientAccountIdsInTx(
 export async function resolveCurrentSessionRecipientAccountIds(
     params: Readonly<{ sessionId: string }>,
 ): Promise<string[]> {
-    return inTx(tx => resolveCurrentSessionRecipientAccountIdsInTx(tx, params));
+    return inTx(tx => resolveCurrentSessionRecipientAccountIdsInTx(tx, params), { isolationLevel: "Serializable" /* Recipient entitlement and status census must use one coherent access snapshot. */ });
 }
 
 /**

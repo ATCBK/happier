@@ -1,4 +1,5 @@
 import { SESSION_WORKFLOW_RUN_SNAPSHOT_PROJECTION_VERSION } from "@happier-dev/protocol";
+import { SessionBoardLayoutOperationV1Schema, applySessionBoardLayoutOperationV1 } from "@happier-dev/protocol/sessions/board";
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
@@ -12,6 +13,7 @@ import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { deriveSessionSystemRecordAddressKeys } from "./sessionSystemRecordAddressKeys";
+import { inTx } from "@/storage/inTx";
 import { runSessionSystemRecordBackfillOperator } from "./sessionSystemRecordBackfillOperator";
 import {
     initializeSessionSystemRecordsProtocolV1Activation,
@@ -22,6 +24,8 @@ import {
     getSessionSystemRecord,
     upsertSessionSystemRecord,
     upsertSessionSystemRecordV1,
+    readSessionSystemRecordV1,
+    readPublishedSessionSurfaceItemInTx,
 } from "./sessionSystemRecordService";
 
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -82,7 +86,64 @@ describe("SessionSystemRecord CONTRACT on SQLite", () => {
         }
     });
 
-    it("creates, updates and removes transcript content without changing an unrelated Board layout", async () => {
+    it("reads, publicly projects and updates additive stored visual rows while keeping new inputs strict", async () => {
+        const { account, session } = await createAccountAndSession(`stored-visual-${randomUUID()}`);
+        const app = Fastify().withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        app.decorate("authenticate", async (request: FastifyRequest) => { request.userId = account.id; request.authAuthority = "present_user"; });
+        sessionRoutes(app);
+        const item = { v: 1, destination: "transcript", title: "Saved visual", frame: "card",
+            height: { mode: "auto", fallback: "regular" }, source: { kind: "hostedHtml",
+                source: { v: 1, entrypoint: "index.html", files: { "index.html": { mime: "text/html", contentBase64: "PGgxPkhlbGxvPC9oMT4=" } } },
+                requestedCapabilities: { network: "none" } } };
+        const url = `/v2/sessions/${session.id}/board`;
+        try {
+            const created = await app.inject({ method: "PUT", url, payload: { operation: "upsert_item", itemId: "visual",
+                expectedItemRevision: null, itemContent: { t: "plain", v: item } } });
+            expect(created.statusCode, created.body).toBe(200);
+            const row = await db.sessionSystemRecord.findFirstOrThrow({ where: { sessionId: session.id, localId: "visual" } });
+            const stored = { ...item, futureDisplayField: 1, height: { ...item.height, futureDisplayField: 1 },
+                source: { ...item.source, futureDisplayField: 1, requestedCapabilities: { ...item.source.requestedCapabilities, futureDisplayField: 1 } } };
+            const address = { owner: "host", namespace: "surface", kind: "item.v1", localId: "visual" } as const;
+            const read = () => readSessionSystemRecordV1({ authentication, actorUserId: account.id, sessionId: session.id, address });
+            const publish = () => inTx(tx => readPublishedSessionSurfaceItemInTx(tx, {
+                accountId: account.id, sessionId: session.id, itemId: "visual", encryptionMode: "plain",
+            }));
+            // Legacy unwrapped rows and current creation wrappers both enter the same loaded-row owner.
+            for (const content of [{ t: "plain", v: stored }, { t: "session_surface_record_v1", futureDisplayField: 1,
+                content: { t: "plain", v: stored, futureDisplayField: 1 }, creator: { kind: "user", futureDisplayField: 1 } }]) {
+                await db.sessionSystemRecord.update({ where: { id: row.id }, data: { content } });
+                expect(await read()).toMatchObject({ ok: true, record: { content: { t: "plain", v: item } } });
+                const published = await publish();
+                expect(published?.content).toEqual({ t: "plain", v: item });
+                expect(published?.creator).toEqual({ kind: content.t === "plain" ? "unknown" : "user" });
+            }
+            const strictRefusal = await app.inject({ method: "PUT", url, payload: { operation: "upsert_item", itemId: "visual",
+                expectedItemRevision: created.json().itemRevision, itemContent: { t: "plain", v: stored } } });
+            expect(strictRefusal.statusCode).toBe(400);
+            const updated = await app.inject({ method: "PUT", url, payload: { operation: "upsert_item", itemId: "visual",
+                expectedItemRevision: created.json().itemRevision, itemContent: { t: "plain", v: { ...item, title: "Updated" } } } });
+            expect(updated.statusCode, updated.body).toBe(200);
+            expect((await db.sessionSystemRecord.findUniqueOrThrow({ where: { id: row.id } })).content)
+                .toEqual({ t: "session_surface_record_v1", content: { t: "plain", v: { ...item, title: "Updated" } }, creator: { kind: "user" } });
+            for (const invalid of [{ ...stored, height: { mode: "fixed", size: "invalid" } },
+                { ...stored, source: { kind: "widget", instance: { v: 1, id: "other", bindings: {}, definition: { kind: "builtin", id: "usage_daily" } } } },
+                { ...stored, source: { kind: "widget", instance: { v: 1, id: "visual", definition: { kind: "builtin", id: "usage_daily" },
+                    bindings: { connection: { kind: "value", value: { service: { pluginId: "com.acme.test", localId: "cloud" }, accountId: "private" } } } } } }]) {
+                await db.sessionSystemRecord.update({ where: { id: row.id }, data: { content: { t: "plain", v: invalid } } });
+                expect(await read()).toMatchObject({ ok: false });
+                expect(await publish()).toBeNull();
+            }
+            await db.sessionSystemRecord.update({ where: { id: row.id }, data: { content: { t: "encrypted", c: "sealed" } } });
+            expect(await read()).toMatchObject({ ok: false, code: "plugin_session_record_storage_mode_mismatch" });
+            expect(await publish()).toBeNull();
+            expect(await readSessionSystemRecordV1({ authentication, actorUserId: "unrelated-account", sessionId: session.id, address }))
+                .toMatchObject({ ok: false });
+        } finally { await app.close(); }
+    });
+
+    it("pins and unpins transcript content onto an empty Board without changing the item row or revision", async () => {
         const { account, session } = await createAccountAndSession(`transcript-${randomUUID()}`);
         const app = Fastify().withTypeProvider<ZodTypeProvider>();
         app.setValidatorCompiler(validatorCompiler);
@@ -90,7 +151,7 @@ describe("SessionSystemRecord CONTRACT on SQLite", () => {
         app.decorate("authenticate", async (request: FastifyRequest) => { request.userId = account.id; request.authAuthority = "present_user"; });
         sessionRoutes(app);
         const url = `/v2/sessions/${session.id}/board`;
-        const layoutContent = { t: "plain", v: { v: 1, tabs: [{ id: "overview", title: "Overview", items: [] }] } };
+        const layoutContent = { t: "plain", v: { v: 1 as const, tabs: [] } };
         const itemContent = { t: "plain", v: { v: 1, destination: "transcript", title: "Result", frame: "frameless",
             height: { mode: "auto", fallback: "regular" }, source: { kind: "declarative", document: { version: 1, root: { kind: "markdown", text: "Hello" } } } } };
         const previousBoardEnabled = process.env.HAPPIER_FEATURE_SESSIONS_BOARD__ENABLED;
@@ -100,6 +161,29 @@ describe("SessionSystemRecord CONTRACT on SQLite", () => {
             process.env.HAPPIER_FEATURE_SESSIONS_BOARD__ENABLED = "0";
             const created = await app.inject({ method: "PUT", url, payload: { operation: "upsert_item", destination: "transcript", itemId: "visual", itemContent, expectedItemRevision: null } });
             expect(created.statusCode, created.body).toBe(200);
+            const originalItem = await db.sessionSystemRecord.findFirst({ where: { sessionId: session.id, localId: "visual" } });
+            process.env.HAPPIER_FEATURE_SESSIONS_BOARD__ENABLED = "1";
+            const placed = applySessionBoardLayoutOperationV1(layoutContent.v, SessionBoardLayoutOperationV1Schema.parse({
+                op: "item.place", itemId: "visual", tabId: "overview", tabTitle: "Overview", width: "medium",
+            }));
+            expect(placed.ok).toBe(true);
+            if (!placed.ok) throw new Error(placed.error);
+            const pinned = await app.inject({ method: "PUT", url, payload: { operation: "update_layout",
+                itemPlacementParticipant: { itemId: "visual", expectedItemRevision: created.json().itemRevision },
+                expectedLayoutRevision: layout.json().layoutRevision, layoutContent: { t: "plain", v: placed.layout } } });
+            expect(pinned.statusCode, pinned.body).toBe(200);
+            expect(pinned.json()).toMatchObject({ operation: "update_layout", outcome: "updated" });
+            expect(await db.sessionSystemRecord.findFirst({ where: { sessionId: session.id, localId: "visual" } })).toEqual(originalItem);
+            const unplaced = applySessionBoardLayoutOperationV1(placed.layout, { op: "item.unpin", itemId: "visual", tabId: "overview" });
+            expect(unplaced.ok).toBe(true);
+            if (!unplaced.ok) throw new Error(unplaced.error);
+            const unpinned = await app.inject({ method: "PUT", url, payload: { operation: "update_layout",
+                expectedLayoutRevision: pinned.json().layoutRevision, layoutContent: { t: "plain", v: unplaced.layout } } });
+            expect(unpinned.statusCode, unpinned.body).toBe(200);
+            expect(await db.sessionSystemRecord.findFirst({ where: { sessionId: session.id, localId: "visual" } })).toEqual(originalItem);
+            expect(await db.sessionSystemRecord.count({ where: { sessionId: session.id } })).toBe(2);
+            expect(unplaced.layout).toEqual({ v: 1, tabs: [{ id: "overview", title: "Overview", items: [] }] });
+            process.env.HAPPIER_FEATURE_SESSIONS_BOARD__ENABLED = "0";
             const updated = await app.inject({ method: "PUT", url, payload: { operation: "upsert_item", itemId: "visual", itemContent: { ...itemContent, v: { ...itemContent.v, title: "Changed" } }, expectedItemRevision: created.json().itemRevision } });
             expect(updated.statusCode, updated.body).toBe(200);
             const stale = await app.inject({ method: "PUT", url, payload: { operation: "upsert_item", itemId: "visual", itemContent, expectedItemRevision: created.json().itemRevision } });
@@ -108,7 +192,7 @@ describe("SessionSystemRecord CONTRACT on SQLite", () => {
             expect(removed.statusCode, removed.body).toBe(200);
             const rows = await db.sessionSystemRecord.findMany({ where: { sessionId: session.id } });
             expect(rows).toHaveLength(1);
-            expect(rows[0]?.content).toEqual(layoutContent);
+            expect(rows[0]?.content).toEqual({ t: "plain", v: unplaced.layout });
         } finally {
             if (previousBoardEnabled === undefined) delete process.env.HAPPIER_FEATURE_SESSIONS_BOARD__ENABLED;
             else process.env.HAPPIER_FEATURE_SESSIONS_BOARD__ENABLED = previousBoardEnabled;
@@ -140,7 +224,9 @@ describe("SessionSystemRecord CONTRACT on SQLite", () => {
             expect(conflict.statusCode).toBe(409);
             const rows = await db.sessionSystemRecord.findMany({ where: { sessionId: session.id } });
             expect(rows).toHaveLength(2);
-            expect(rows.find(row => row.localId === "note")?.content).toEqual(itemContent);
+            expect(rows.find(row => row.localId === "note")?.content).toEqual({
+                t: "session_surface_record_v1", content: itemContent, creator: { kind: "user" },
+            });
             const removal = { operation: "remove_item", itemId: "note", expectedItemRevision: created.json().itemRevision,
                 layoutContent: { t: "plain", v: { v: 1, tabs: [] } }, expectedLayoutRevision: created.json().layoutRevision };
             const removed = await app.inject({ method: "PUT", url: `/v2/sessions/${session.id}/board`, payload: removal });
@@ -265,7 +351,9 @@ describe("SessionSystemRecord CONTRACT on SQLite", () => {
                 itemContent, expectedItemRevision: null, placement: { layoutContent, expectedLayoutRevision: null } } });
             expect(created.statusCode).toBe(200);
             const converted = await app.inject({ method: "PUT", url, payload: { operation: "upsert_item", itemId: "note",
-                itemContent: { ...itemContent, v: { ...itemContent.v, source: { kind: "installedSurface", surface: { pluginId: "com.acme.test", localId: "dashboard" } } } },
+                itemContent: { ...itemContent, v: { ...itemContent.v, source: { kind: "widget", instance: {
+                    v: 1, id: "note", definition: { kind: "builtin", id: "session_summary" }, bindings: {},
+                } } } },
                 expectedItemRevision: created.json().itemRevision } });
             expect(converted.statusCode).toBe(409);
             expect(converted.json().error).toBe("session_board_source_conflict");

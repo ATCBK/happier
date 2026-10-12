@@ -1,6 +1,7 @@
 import { afterTx, type Tx } from "@/storage/inTx";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
+import { projectAccountNameToLegacyFieldsV1 } from "@happier-dev/protocol";
 import {
     buildSessionSharedUpdate,
     buildSessionShareRevokedUpdate,
@@ -89,6 +90,7 @@ export function projectDirectSharePersonalEvent(
 
 export type ReleasedDirectShareSenderProfile = Readonly<{
     id: string;
+    name: string | null;
     firstName: string | null;
     lastName: string | null;
     username: string | null;
@@ -143,8 +145,7 @@ export function scheduleReleasedDirectShareEvent(
                         sessionId: event.share.sessionId,
                         sharedByUser: {
                             id: params.sharedByUser?.id ?? event.share.sharedByUserId,
-                            firstName: params.sharedByUser?.firstName ?? null,
-                            lastName: params.sharedByUser?.lastName ?? null,
+                            ...projectAccountNameToLegacyFieldsV1(params.sharedByUser?.name ?? null),
                             username: params.sharedByUser?.username ?? null,
                             avatar: params.sharedByUser?.avatar ?? null,
                         },

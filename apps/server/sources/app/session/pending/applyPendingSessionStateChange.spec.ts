@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Tx } from "@/storage/inTx";
 import { applyPendingSessionStateChange } from "./applyPendingSessionStateChange";
+import { createAccountCursorRawQueryTransactionModel, createEmptySessionReportsToTransactionModel } from "@/app/api/testkit/txHarness";
 
 vi.mock("@/storage/inTx", async (importOriginal) => ({
     ...await importOriginal<typeof import("@/storage/inTx")>(),
@@ -134,7 +135,11 @@ function createConcurrentDecrementTx() {
 
     return {
         // Test boundary fake implements the Tx methods this helper reaches.
-        tx: tx as unknown as Tx,
+        tx: {
+            ...tx,
+            sessionReportsTo: createEmptySessionReportsToTransactionModel(),
+            $queryRawUnsafe: createAccountCursorRawQueryTransactionModel(tx),
+        } as unknown as Tx,
         readState: () => ({
             pendingCount: state.pendingCount,
             pendingVersion: state.pendingVersion,
@@ -233,7 +238,11 @@ function createConcurrentEnqueueAfterFailedDecrementTx() {
 
     return {
         // Test boundary fake implements the Tx methods this helper reaches.
-        tx: tx as unknown as Tx,
+        tx: {
+            ...tx,
+            sessionReportsTo: createEmptySessionReportsToTransactionModel(),
+            $queryRawUnsafe: createAccountCursorRawQueryTransactionModel(tx),
+        } as unknown as Tx,
         accountChangeUpsert,
         readState: () => ({
             pendingCount: state.pendingCount,

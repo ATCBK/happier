@@ -3,6 +3,9 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { db, initDbMysql, initDbPostgres } from "@/storage/db";
+import { inTx, type Tx } from "@/storage/inTx";
+import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { artifactHtmlBundleFromBodyV1 } from "@happier-dev/protocol/artifacts/artifactHtmlV1";
 import { mutateSessionBoard } from "@/app/session/board/service";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { deriveSessionSystemRecordAddressKeys } from "./sessionSystemRecordAddressKeys";
@@ -15,6 +18,7 @@ import {
     deleteSessionSystemRecordV1,
     upsertSessionSystemRecord,
     upsertSessionSystemRecordV1,
+    readPublishedSessionSurfaceItemInTx,
 } from "./sessionSystemRecordService";
 
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -57,8 +61,74 @@ async function deleteAccountFixture(accountId: string): Promise<void> {
     await db.account.delete({ where: { id: accountId } });
 }
 
+async function withAccountFenceInterleaving<T>(peer: () => Promise<void>, operation: () => Promise<T>) {
+    const originalTransaction = db.$transaction;
+    let publishingPeer = false;
+    // Coordinate at the genuine Prisma/PostgreSQL boundary. Domain reads,
+    // CAS, cursor statements, retries and commits remain real. The peer
+    // commits after discovery on each attempt, without sleeps/retry overrides.
+    db.$transaction = new Proxy(originalTransaction, {
+        apply(target, thisArg, args) {
+            const callback: unknown = args[0];
+            if (typeof callback !== "function" || publishingPeer) return Reflect.apply(target, thisArg, args);
+            return Reflect.apply(target, thisArg, [async (tx: Tx) => {
+                let advanced = false;
+                return Reflect.apply(callback, undefined, [new Proxy(tx, {
+                    get(owner, property, receiver) {
+                        if (property !== "$queryRawUnsafe") return Reflect.get(owner, property, receiver);
+                        return async (query: string, ...values: unknown[]) => {
+                            if (!advanced && query.includes('"Account"')
+                                && (query.includes("FOR NO KEY UPDATE") || query.includes("FOR UPDATE") || query.includes('SET "seq"'))) {
+                                advanced = true;
+                                publishingPeer = true;
+                                try { await peer(); } finally { publishingPeer = false; }
+                            }
+                            return Reflect.apply(owner.$queryRawUnsafe, owner, [query, ...values]);
+                        };
+                    },
+                })]);
+            }, args[1]]);
+        },
+    });
+    try { return await operation(); }
+    finally { db.$transaction = originalTransaction; }
+}
+
 describe("SessionSystemRecord native CONTRACT database behavior", () => {
     const provider = resolveContractProvider();
+
+    it.skipIf(provider !== "postgres")("commits a Board write while an unrelated Account cursor writer commits after its initial reads", async () => {
+        const { account, session } = await createAccountAndSession(`board-account-contention-${randomUUID()}`);
+        let peerCommitted = false;
+        let operationError: unknown;
+        try {
+            const result = await withAccountFenceInterleaving(async () => {
+                await inTx(tx => markAccountChanged(tx, { accountId: account.id, kind: "account", entityId: "unrelated-projection" }),
+                    { isolationLevel: "ReadCommitted" });
+                peerCommitted = true;
+            }, () => mutateSessionBoard({ authentication, actorUserId: account.id, sessionId: session.id,
+                mutation: { operation: "upsert_item", itemId: "visual", expectedItemRevision: null,
+                    itemContent: { t: "plain", v: { v: 1, title: "Concurrent visual", frame: "card",
+                        height: { mode: "auto", fallback: "regular" }, source: { kind: "declarative",
+                            document: { version: 1, root: { kind: "markdown", text: "Committed visual" } } } } } } }));
+            expect(peerCommitted).toBe(true);
+            expect(result).toMatchObject({ ok: true, result: { outcome: "created" } });
+            expect(await db.sessionSystemRecord.count({ where: { sessionId: session.id } })).toBe(1);
+            const changes = await db.accountChange.findMany({ where: { accountId: account.id, cursor: { gt: 0 } },
+                orderBy: { cursor: "asc" }, select: { cursor: true, entityId: true } });
+            expect(changes.map(change => change.entityId)).toEqual(["unrelated-projection", session.id]);
+            expect(changes[1].cursor).toBeGreaterThan(changes[0].cursor);
+            expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } }))
+                .toEqual({ seq: changes[1].cursor });
+        } catch (error) { operationError = error; throw error; }
+        finally {
+            try { await deleteAccountFixture(account.id); }
+            catch (cleanupError) {
+                if (operationError !== undefined) throw new AggregateError([operationError, cleanupError], "Board contention and fixture cleanup failed");
+                throw cleanupError;
+            }
+        }
+    });
 
     it("settles concurrent exact Board creation and leaves no item from a losing aggregate", async () => {
         const exactFixture = await createAccountAndSession(`board-exact-race-${randomUUID()}`);
@@ -143,7 +213,7 @@ describe("SessionSystemRecord native CONTRACT database behavior", () => {
 
             const converted = await invoke(plainFixture, { operation: "upsert_item", itemId: "note",
                 itemContent: { ...initialItem, v: { ...initialItem.v,
-                    source: { kind: "installedSurface", surface: { pluginId: "com.acme.test", localId: "dashboard" } } } },
+                    source: { kind: "hostedHtml", source: artifactHtmlBundleFromBodyV1("<p>Different source</p>") } } },
                 expectedItemRevision: created.result.itemRevision });
             expect(converted).toEqual({ ok: false, result: { error: "session_board_source_conflict" } });
 
@@ -153,16 +223,16 @@ describe("SessionSystemRecord native CONTRACT database behavior", () => {
             expect(advanced).toMatchObject({ ok: true, result: { operation: "update_layout", outcome: "updated" } });
             if (!advanced.ok || advanced.result.operation !== "update_layout") throw new Error("Expected layout update");
 
+            const beforeRollback = await db.sessionSystemRecord.findMany({ where: { sessionId: plainFixture.session.id },
+                orderBy: { localId: "asc" }, select: { localId: true, content: true, version: true } });
+
             const rolledBack = await invoke(plainFixture, { operation: "upsert_item", itemId: "note",
                 itemContent: itemContent("Must roll back"), expectedItemRevision: created.result.itemRevision,
                 placement: { layoutContent: layoutContent("Stale", ["note"]), expectedLayoutRevision: created.result.layoutRevision } });
             expect(rolledBack).toMatchObject({ ok: false, result: { error: "session_board_revision_conflict" } });
             const afterRollback = await db.sessionSystemRecord.findMany({ where: { sessionId: plainFixture.session.id },
-                orderBy: { localId: "asc" }, select: { localId: true, content: true } });
-            expect(afterRollback).toEqual([
-                { localId: "layout", content: advancedLayout },
-                { localId: "note", content: initialItem },
-            ]);
+                orderBy: { localId: "asc" }, select: { localId: true, content: true, version: true } });
+            expect(afterRollback).toEqual(beforeRollback);
 
             const stillPlaced = await invoke(plainFixture, { operation: "remove_item", itemId: "note",
                 expectedItemRevision: created.result.itemRevision, layoutContent: advancedLayout,
@@ -197,10 +267,12 @@ describe("SessionSystemRecord native CONTRACT database behavior", () => {
                 },
             });
             expect(await db.sessionSystemRecord.findMany({ where: { sessionId: encryptedFixture.session.id },
-                orderBy: { localId: "asc" }, select: { localId: true, content: true } })).toEqual([
-                { localId: "layout", content: encryptedMutation.placement.layoutContent },
-                { localId: "sealed", content: encryptedMutation.itemContent },
-            ]);
+                orderBy: { localId: "asc" }, select: { localId: true } })).toEqual([{ localId: "layout" }, { localId: "sealed" }]);
+            await expect(inTx(tx => readPublishedSessionSurfaceItemInTx(tx, { accountId: encryptedFixture.account.id,
+                sessionId: encryptedFixture.session.id, itemId: "sealed", encryptionMode: "e2ee" })))
+                .resolves.toMatchObject({ content: encryptedMutation.itemContent });
+            expect(await db.sessionSystemRecord.findFirst({ where: { sessionId: encryptedFixture.session.id, localId: "layout" },
+                select: { content: true } })).toEqual({ content: encryptedMutation.placement.layoutContent });
             await expect(invoke(encryptedFixture, { ...encryptedMutation,
                 itemContent: { t: "encrypted", c: "different-sealed-item-bytes" } })).resolves
                 .toMatchObject({ ok: false, result: { error: "session_board_revision_conflict" } });

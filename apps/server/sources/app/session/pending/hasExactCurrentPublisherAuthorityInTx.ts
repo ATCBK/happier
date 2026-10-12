@@ -2,6 +2,41 @@ import { supportsMachineSessionInputAdmissionProtocolVersion } from "@happier-de
 import { hasCurrentSessionScopedMachineAccessInTx } from "@/app/api/socket/sessionScopedBinding";
 import type { CurrentSessionPublisherAuthority } from "@/app/presence/sessionPublisherPresence";
 import type { Tx } from "@/storage/inTx";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
+
+type CurrentSessionPublisherReadAuthority =
+    | CurrentSessionPublisherAuthority
+    | (Omit<CurrentSessionPublisherAuthority, "committedFence"> & Readonly<{ publisherGeneration: bigint }>);
+
+/** Reads the current fence from the same registration, or proves an exact heartbeat when one is required. */
+export async function readExactCurrentPublisherAuthorityInTx(
+    tx: Tx,
+    authority: CurrentSessionPublisherReadAuthority,
+    actorUserId: string,
+    sessionId: string,
+    expectedRuntimeActivityRevision?: number,
+): Promise<CurrentSessionPublisherAuthority | null> {
+    if (authority.accountId !== actorUserId || authority.sessionId !== sessionId) return null;
+    if (!await hasCurrentSessionScopedMachineAccessInTx({ tx, ...authority })) return null;
+    const session = await tx.session.findUnique({
+        where: { id: sessionId },
+        select: { active: true, archivedAt: true, lastActiveAt: true, runtimeActivityRevision: true,
+            publisherGeneration: true, publisherGenerationLastActiveAt: true },
+    });
+    if (
+        !session
+        || session.active !== true
+        || session.archivedAt !== null
+        || ("committedFence" in authority
+            ? session.lastActiveAt.getTime() !== authority.committedFence.getTime()
+            : session.publisherGeneration !== authority.publisherGeneration
+                || session.publisherGenerationLastActiveAt?.getTime() !== session.lastActiveAt.getTime())
+        || (expectedRuntimeActivityRevision !== undefined
+            && session.runtimeActivityRevision !== BigInt(expectedRuntimeActivityRevision))
+    ) return null;
+    return { accountId: authority.accountId, machineId: authority.machineId, sessionId,
+        committedFence: session.lastActiveAt };
+}
 
 export async function hasExactCurrentPublisherAuthorityInTx(
     tx: Tx,
@@ -10,34 +45,29 @@ export async function hasExactCurrentPublisherAuthorityInTx(
     sessionId: string,
     expectedRuntimeActivityRevision?: number,
 ): Promise<boolean> {
-    if (authority.accountId !== actorUserId || authority.sessionId !== sessionId) return false;
-    if (!await hasCurrentSessionScopedMachineAccessInTx({ tx, ...authority })) return false;
-    const session = await tx.session.findUnique({
-        where: { id: sessionId },
-        select: { active: true, archivedAt: true, lastActiveAt: true, runtimeActivityRevision: true },
-    });
-    if (
-        !session
-        || session.active !== true
-        || session.archivedAt !== null
-        || session.lastActiveAt.getTime() !== authority.committedFence.getTime()
-    ) return false;
-    return expectedRuntimeActivityRevision === undefined
-        || session.runtimeActivityRevision === BigInt(expectedRuntimeActivityRevision);
+    return (await readExactCurrentPublisherAuthorityInTx(tx, authority, actorUserId,
+        sessionId, expectedRuntimeActivityRevision)) !== null;
 }
 
 /**
  * Takes the Session row's publisher-replacement lock without changing any
  * user-visible Session timestamp. The updatedAt equality is part of the CAS so
  * the preserved value cannot overwrite a concurrent semantic update.
+ * Metadata commits use the stable registration generation; exact-heartbeat
+ * callers (including historical takeover) retain their timestamp precondition.
  */
+type CurrentSessionPublisherCommitAuthority =
+    | (CurrentSessionPublisherAuthority & Readonly<{ publisherGeneration?: bigint }>)
+    | (Omit<CurrentSessionPublisherAuthority, "committedFence"> & Readonly<{ publisherGeneration: bigint }>);
+
 export async function fenceExactCurrentPublisherAuthorityInTx(
     tx: Tx,
-    authority: CurrentSessionPublisherAuthority,
+    authority: CurrentSessionPublisherCommitAuthority,
     actorUserId: string,
     sessionId: string,
 ): Promise<boolean> {
     if (authority.accountId !== actorUserId || authority.sessionId !== sessionId) return false;
+    await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
     if (!await hasCurrentSessionScopedMachineAccessInTx({ tx, ...authority })) return false;
     const session = await tx.session.findUnique({
         where: { id: sessionId },
@@ -46,13 +76,19 @@ export async function fenceExactCurrentPublisherAuthorityInTx(
             archivedAt: true,
             lastActiveAt: true,
             updatedAt: true,
+            publisherGeneration: true,
+            publisherGenerationLastActiveAt: true,
         },
     });
     if (
         !session
         || session.active !== true
         || session.archivedAt !== null
-        || session.lastActiveAt.getTime() !== authority.committedFence.getTime()
+        || ("committedFence" in authority
+            && session.lastActiveAt.getTime() !== authority.committedFence.getTime())
+        || (authority.publisherGeneration !== undefined
+            && (session.publisherGeneration !== authority.publisherGeneration
+                || session.publisherGenerationLastActiveAt?.getTime() !== session.lastActiveAt.getTime()))
     ) {
         return false;
     }
@@ -61,11 +97,15 @@ export async function fenceExactCurrentPublisherAuthorityInTx(
             id: sessionId,
             active: true,
             archivedAt: null,
-            lastActiveAt: authority.committedFence,
+            lastActiveAt: session.lastActiveAt,
             updatedAt: session.updatedAt,
+            ...(authority.publisherGeneration === undefined ? {} : {
+                publisherGeneration: authority.publisherGeneration,
+                publisherGenerationLastActiveAt: session.lastActiveAt,
+            }),
         },
         data: {
-            lastActiveAt: authority.committedFence,
+            lastActiveAt: session.lastActiveAt,
             updatedAt: session.updatedAt,
         },
     });

@@ -1,4 +1,5 @@
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import {
     compareSessionMessageContentAndRole,
     resolveSurvivingSessionMessageAuthorAccountIdInTx,
@@ -12,7 +13,7 @@ import type { Tx } from "@/storage/inTx";
 import {
     PendingRequestedActionV1Schema,
     deriveSessionMessageAuthorAccountIdV1,
-    parseSessionMessageDeliveryResolutionV1,
+    readStoredSessionMessageDeliveryResolutionV1,
     readSessionInputAuthority,
     serializeSessionInputRequestEqualityIntentV1,
     SessionInputAdmissionReceiptV1Schema,
@@ -49,7 +50,7 @@ export type PendingTranscriptMessage = {
 
 /** Server-internal committed receipt read; a malformed stored value projects no actor. */
 function parseCommittedInputAdmissionReceipt(value: unknown): SessionInputAdmissionReceiptV1 | null {
-    const parsed = SessionInputAdmissionReceiptV1Schema.safeParse(value);
+    const parsed = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(value);
     return parsed.success ? parsed.data : null;
 }
 
@@ -122,7 +123,9 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
         && typeof content.v === "object"
         && !Array.isArray(content.v)
         && "meta" in content.v
-        && readSessionInputAuthority(content.v.meta) !== null;
+        // Fresh settlement always carries its original request; provider
+        // delivery commits instead reuse the canonical retained Pending row.
+        && readSessionInputAuthority(content.v.meta, params.requestContentForEquality === undefined ? 'stored' : 'input') !== null;
     // A settled Pending row retains the original request digest beside its final
     // authority content. Rehashing that final envelope would change input identity.
     const retainedSettledRequestEvidence = params.requestContentForEquality === undefined
@@ -207,7 +210,7 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
         // this localId and stays a conflict.
         const existingInputAdmissionReceipt = existing.inputAdmissionReceipt == null
             ? null
-            : SessionInputAdmissionReceiptV1Schema.safeParse(existing.inputAdmissionReceipt);
+            : createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(existing.inputAdmissionReceipt);
         if (
             inputAdmissionReceipt !== undefined
             && existingInputAdmissionReceipt !== null
@@ -220,7 +223,7 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
         }
         const existingRequestEqualityEvidenceV1 = existing.requestEqualityEvidenceV1 == null
             ? null
-            : SessionInputRequestEqualityEvidenceV1Schema.safeParse(existing.requestEqualityEvidenceV1);
+            : createStoredReadSchema(SessionInputRequestEqualityEvidenceV1Schema).safeParse(existing.requestEqualityEvidenceV1);
         if (
             effectiveRequestEqualityEvidenceV1 !== undefined
             && existingRequestEqualityEvidenceV1 !== null
@@ -232,7 +235,7 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
             return { ok: false, error: "transcript-conflict", conflict: "input-admission" };
         }
 
-        const existingDeliveryResolution = parseSessionMessageDeliveryResolutionV1(existing.deliveryResolution);
+        const existingDeliveryResolution = readStoredSessionMessageDeliveryResolutionV1(existing.deliveryResolution);
         if (existing.deliveryResolution !== null && existingDeliveryResolution === null) {
             return { ok: false, error: "transcript-conflict", conflict: "delivery-resolution" };
         }
@@ -264,7 +267,7 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
         const settledAuthorAccountId = deriveSessionMessageAuthorAccountIdV1({
             messageRole: needsRoleUpdate ? messageRole : parseSessionMessageRole(existing.messageRole),
             inputAdmissionReceipt: settledInputAdmissionReceipt,
-        });
+        }, 'stored');
         if (existing.authorAccountId != null && existing.authorAccountId !== settledAuthorAccountId) {
             return { ok: false, error: "transcript-conflict", conflict: "input-admission" };
         }
@@ -319,7 +322,7 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
                 sidechainId: existing.sidechainId,
                 messageRole: parseSessionMessageRole(row.messageRole),
                 content: row.content as PrismaJson.SessionMessageContent,
-                deliveryResolution: parseSessionMessageDeliveryResolutionV1(row.deliveryResolution),
+                deliveryResolution: readStoredSessionMessageDeliveryResolutionV1(row.deliveryResolution),
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
                 inputAdmissionReceipt: parseCommittedInputAdmissionReceipt(settledInputAdmissionReceipt),
@@ -372,7 +375,7 @@ export async function createSessionMessageFromPending(tx: Tx, params: {
             sidechainId: created.sidechainId,
             messageRole: parseSessionMessageRole(created.messageRole),
             content: created.content as PrismaJson.SessionMessageContent,
-            deliveryResolution: parseSessionMessageDeliveryResolutionV1(created.deliveryResolution),
+            deliveryResolution: readStoredSessionMessageDeliveryResolutionV1(created.deliveryResolution),
             createdAt: created.createdAt,
             updatedAt: created.updatedAt,
             inputAdmissionReceipt: parseCommittedInputAdmissionReceipt(created.inputAdmissionReceipt),

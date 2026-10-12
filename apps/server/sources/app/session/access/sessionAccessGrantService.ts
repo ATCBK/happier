@@ -6,7 +6,7 @@ import { admitDirectSessionRecipientEnvelope, type DirectSessionRecipientEnvelop
 import { inTx, type Tx } from "@/storage/inTx";
 import { ShareAccessLevel, TeamMembershipStatus, TeamSessionCreationPolicy } from "@/storage/prisma";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import {
     isStructurallyValidSessionDataKeyEnvelope,
     readSessionDataKeyEnvelopeInTx,
@@ -23,7 +23,7 @@ import {
 import {
     applySessionAutoFollowForRelationshipChangeInTx,
 } from "@/app/session/follow/accountFollowService";
-import { applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
+import { acquireSessionAccessTransitionCursorLocksInTx, applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
 import {
     resolveSessionAccessGrantSubjectInTx,
     validateSessionAccessGrantAccountSubjectIdentity,
@@ -512,8 +512,6 @@ async function applyGrantTransitionEffectsInTx(
         directGrantChangedAccountId?: string;
     }>,
 ): Promise<SessionAccessGrantEffects> {
-    const effects = await applySessionAccessTransitionEffectsInTx(tx, params);
-    const accountCursors = new Map(effects.accountCursors);
     const rosterManagerAccountIds = new Set<string>();
     const currentAccess = await resolveStructuralSessionAccessForAccountsInTx(tx, {
         sessionId: params.sessionId,
@@ -522,8 +520,9 @@ async function applyGrantTransitionEffectsInTx(
     for (const [accountId, access] of currentAccess) {
         if (access?.capabilities.manageAccess) rosterManagerAccountIds.add(accountId);
     }
-    for (const accountId of rosterManagerAccountIds) {
-        const cursor = await markAccountChanged(tx, { accountId, kind: "share", entityId: params.sessionId });
+    const effects = await applySessionAccessTransitionEffectsInTx(tx, { ...params, additionalPublicationAccountIds: [...rosterManagerAccountIds] });
+    const accountCursors = new Map(effects.accountCursors);
+    for (const { accountId, cursor } of await markAccountsChanged(tx, { accountIds: [...rosterManagerAccountIds], kind: "share", entityId: params.sessionId })) {
         accountCursors.set(accountId, Math.max(accountCursors.get(accountId) ?? 0, cursor));
     }
     return { ...effects, rosterManagerAccountIds: [...rosterManagerAccountIds], accountCursors };
@@ -683,6 +682,7 @@ export async function putSessionAccessGrantInTx(
     }
 
     const affectedAccountIds = await resolveAffectedAccountIdsInTx(tx, subject);
+    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], affectedAccountIds);
     const before = await resolveStructuralSessionAccessForAccountsInTx(tx, {
         sessionId: params.sessionId,
         accountIds: affectedAccountIds,
@@ -881,6 +881,7 @@ export async function deleteSessionAccessGrantInTx(
     }
 
     const affectedAccountIds = await resolveAffectedAccountIdsInTx(tx, subject);
+    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], affectedAccountIds);
     const before = await resolveStructuralSessionAccessForAccountsInTx(tx, {
         sessionId: params.sessionId,
         accountIds: affectedAccountIds,
@@ -1032,6 +1033,7 @@ export async function setSessionAccessContextInTx(
             affectedAccountIds.add(accountId);
         }
     }
+    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], [...affectedAccountIds]);
     const before = await resolveStructuralSessionAccessForAccountsInTx(tx, {
         sessionId: params.sessionId,
         accountIds: [...affectedAccountIds],

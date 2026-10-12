@@ -59,8 +59,8 @@ describe("Session access persistence provider contract", () => {
         const suffix = randomUUID();
         const [owner, reader, outsider] = await Promise.all([
             db.account.create({ data: { publicKey: `search-owner-${suffix}`, encryptionMode: "plain" } }),
-            db.account.create({ data: { publicKey: `search-reader-${suffix}`, encryptionMode: "plain", firstName: "Zenobia" } }),
-            db.account.create({ data: { publicKey: `search-outsider-${suffix}`, encryptionMode: "plain", firstName: "Zenobia" } }),
+            db.account.create({ data: { publicKey: `search-reader-${suffix}`, encryptionMode: "plain", name: "Zenobia" } }),
+            db.account.create({ data: { publicKey: `search-outsider-${suffix}`, encryptionMode: "plain", name: "Zenobia" } }),
         ]);
         let sessionId: string | undefined;
         try {

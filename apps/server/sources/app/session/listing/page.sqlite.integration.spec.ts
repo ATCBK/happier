@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
+import { withSqliteReadSnapshot } from "@/storage/prisma";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import {
     createSessionListScopeWhere,
@@ -74,6 +75,41 @@ describe("Session listing predicate composition (SQLite)", () => {
         } });
         return { viewer, owner, shared, foreign };
     }
+
+    it('filters a revoked Session from its captured page without admitting a replacement row', async () => {
+        const { viewer, owner, shared } = await fixture();
+        const input = { userId: viewer.id, authentication, orderBy: V2_SESSION_LIST_ORDER_BY, take: 1 };
+        expect((await findV2SessionListRows(input)).map(row => row.id)).toEqual([shared.id]);
+        const reader = await withSqliteReadSnapshot(async tx => tx);
+        const delegate = reader.session;
+        const original = delegate.findMany.bind(delegate);
+        let enter!: () => void;
+        let resume!: () => void;
+        const reached = new Promise<void>(resolve => { enter = resolve; });
+        const release = new Promise<void>(resolve => { resume = resolve; });
+        let paused = false;
+        Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true,
+            value: async (...args: Parameters<typeof original>) => {
+                const rows = await original(...args);
+                if (!paused && args[0]?.select?.metadata) { paused = true; enter(); await release; }
+                return rows;
+            } });
+        const response = findV2SessionListRows(input);
+        try {
+            expect(await Promise.race([reached.then(() => 'barrier'), response.then(() => 'response')])).toBe('barrier');
+            await db.sessionShare.delete({ where: { sessionId_sharedWithUserId: { sessionId: shared.id, sharedWithUserId: viewer.id } } });
+            // A concurrently admitted row must not replace or broaden the captured page.
+            const replacement = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+            await db.sessionShare.create({ data: { sessionId: replacement.id, sharedByUserId: owner.id, sharedWithUserId: viewer.id, accessLevel: 'view' } });
+            resume();
+            const result = await response;
+            expect((await findV2SessionListRows(input)).map(row => row.id)).toEqual([replacement.id]);
+            expect(result).toEqual([]);
+        } finally {
+            resume(); await response;
+            Object.defineProperty(delegate, 'findMany', { configurable: true, writable: true, value: original });
+        }
+    });
 
     it("bounds supplemental attention scans and advances continuation over rejected candidates", async () => {
         const { viewer, owner, shared } = await fixture();

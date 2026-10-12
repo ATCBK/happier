@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import type { Tx } from "@/storage/inTx";
 import { applySessionAutoFollowForRelationshipChangeInTx } from "@/app/session/follow/accountFollowService";
 import { resolveStructuralSessionAccessForSessionsInTx, type EffectiveSessionAccess } from "./sessionAccess";
-import { applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
+import { acquireSessionAccessTransitionCursorLocksInTx, applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
 
 export type SessionAccessMembershipChange =
     | Readonly<{ kind: "teamMembership" | "teamRole"; teamId: string }>
@@ -80,6 +80,9 @@ export async function captureSessionAccessMembershipImpactsInTx(tx: Tx, input: R
     const sessionIds = predicates.length === 0 || accountIds.length === 0
         ? []
         : (await tx.session.findMany({ where: { OR: predicates }, select: { id: true } })).map(row => row.id);
+    // Native Team/Group mutations may publish their Team projection inside
+    // mutate, so acquire Session owners and readers before that first write.
+    await acquireSessionAccessTransitionCursorLocksInTx(tx, sessionIds, accountIds);
     const access = await resolveStructuralSessionAccessForSessionsInTx(tx, { sessionIds, accountIds });
     return new Map(accountIds.map(accountId => [accountId, {
         [captured]: {

@@ -9,11 +9,13 @@ import {
 } from "@happier-dev/protocol/sessions/board";
 import {
     type SessionSystemRecordContent, type SessionSystemRecordStored,
+    type SessionSystemRecordCreatorV1,
 } from "@happier-dev/protocol";
 import { inTx } from "@/storage/inTx";
 import { isPrismaErrorCode } from "@/storage/prisma";
 import { resolveSessionBoardRecordsInTx } from "@/app/session/systemRecords/sessionSystemRecordService";
 import { markSessionProjectionRecipientsChanged } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 
 type SessionBoardMutationError = SessionBoardErrorV1 | z.infer<typeof SessionBoardFeatureGateErrorV1Schema>;
@@ -26,12 +28,16 @@ type SessionBoardMutationOutcome =
     { ok: true; result: SessionBoardMutationResultV1 } | { ok: false; result: SessionBoardMutationError };
 
 async function mutateSessionBoardAttempt(
-    params: Readonly<{ actorUserId: string; sessionId: string; authentication: SessionAccessAuthentication }>,
+    params: Readonly<{ actorUserId: string; sessionId: string; authentication: SessionAccessAuthentication; creator?: SessionSystemRecordCreatorV1 }>,
     mutation: SessionBoardMutationV1,
     settleCreateRace: boolean,
 ): Promise<SessionBoardMutationOutcome> {
     try {
         return await inTx(async tx => {
+            // Board intents can read an item participant but only write layout.
+            // Take the retained publication authority before those reads, also
+            // preserving Account-before-Session order with owner metadata writers.
+            await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId]);
             const records = await resolveSessionBoardRecordsInTx(tx, { ...params, requiresLayout: sessionBoardMutationUsesLayoutV1(mutation) });
             if (!records.ok) throw new BoardMutationFailure({
                 error: records.code === "plugin_session_record_feature_disabled" ? "not_found" : "session_board_forbidden",
@@ -158,6 +164,8 @@ export async function mutateSessionBoard(params: Readonly<{
     sessionId: string;
     mutation: unknown;
     authentication: SessionAccessAuthentication;
+    /** Verified transport fact only; never taken from mutation JSON. */
+    creator?: SessionSystemRecordCreatorV1;
 }>): Promise<SessionBoardMutationOutcome> {
     const parsed = SessionBoardMutationV1Schema.safeParse(params.mutation);
     if (!parsed.success) return { ok: false, result: { error: "session_board_invalid" } };

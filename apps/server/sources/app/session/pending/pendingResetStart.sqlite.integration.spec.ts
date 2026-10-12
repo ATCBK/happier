@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Socket } from 'socket.io';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent } from '@happier-dev/protocol';
+import { ApiTokenGrantV1Schema } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
@@ -28,8 +29,9 @@ describe('Pending reset start custody (real SQLite)', () => {
         env: { HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_SERVER_IDENTITY_ID: 'srv_01234567890123456789012345678901' } }); }, 120_000);
     afterAll(async () => { if (harness) await harness.close(); });
 
-    async function fixture(supported = true) {
-        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+    async function fixture(supported = true, existingAccountId?: string) {
+        const account = existingAccountId ? await db.account.findUniqueOrThrow({ where: { id: existingAccountId } })
+            : await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
         const session = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain', active: false } });
         const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, installationId: randomUUID(),
             metadata: encodePlainMachineStoredContent({ host: 'host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
@@ -39,6 +41,11 @@ describe('Pending reset start custody (real SQLite)', () => {
         expect(await inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: account.id, sessionId: session.id, machineId: machine.id, data: 'key' }))).toMatchObject({ ok: true });
         const localId = randomUUID();
         const params = { actorUserId: account.id, authentication, sessionId: session.id, localId };
+        await db.providerAccountUsageRecord.upsert({ where: { accountId_recordId: { accountId: account.id, recordId: reset.recordId } }, update: {}, create: { accountId: account.id, recordId: reset.recordId,
+            providerId: 'openai', accountSubjectId: 'account', subjectKind: 'account', quotaScope: 'account', quotaScopeIdKey: '',
+            recordKeyJson: {}, payloadMode: 'plain_json_v1', status: 'ok',
+            history: { create: { id: `${reset.witness.id}-${account.id}`, observedAt: new Date(reset.witness.observedAtMs), payload: {} } },
+        } });
         expect(await enqueuePendingMessage({ ...params, targetMachineId: machine.id, requestedAction: { v: 1, kind: 'enqueue' },
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'existing input' } } } })).toMatchObject({ ok: true });
         const presence = createSessionPublisherPresence();
@@ -167,5 +174,68 @@ describe('Pending reset start custody (real SQLite)', () => {
         expect(await listPendingResetStartsForSource(read)).toMatchObject({ entries: [{ localId: f.params.localId, authorityCurrent: false }] });
         expect(await deletePendingMessage({ ...f.params, withdraw: true })).toMatchObject({ outcome: 'removed' });
         expect(await listPendingResetStartsForSource(read)).toEqual({ entries: [] });
+    });
+
+    it('lists owned unbound Pending across Sessions without exposing message content or consumed input', async () => {
+        const f = await fixture();
+        const anotherOwned = await fixture(true, f.params.actorUserId);
+        const foreign = await fixture();
+        const read = { actorUserId: f.params.actorUserId, authentication, source: reset.source };
+        const result = await listPendingResetStartsForSource(read);
+        expect(result.entries).toEqual([]);
+        expect(result.unboundEntries).toEqual(expect.arrayContaining([
+            { sessionId: f.session.id, localId: f.params.localId, authorityCurrent: true },
+            { sessionId: anotherOwned.session.id, localId: anotherOwned.params.localId, authorityCurrent: true },
+        ]));
+        expect(result.unboundEntries).toHaveLength(2);
+        expect(JSON.stringify(result)).not.toContain('existing input');
+        expect(JSON.stringify(result)).not.toContain(foreign.session.id);
+        expect(await materializeNextPendingMessage(anotherOwned.claim)).toMatchObject({ didMaterialize: true });
+        const denied = { ...authentication, apiTokenGrant: { v: 1 as const,
+            actions: { families: [], ids: ['session.message.send'] }, targets: { sessions: [f.session.id], machines: [] },
+            approve: false, origins: [], models: null, permissionModes: null, create: null } };
+        ApiTokenGrantV1Schema.parse(denied.apiTokenGrant);
+        expect(await listPendingResetStartsForSource({ ...read, authentication: denied })).toMatchObject({ entries: [] });
+        expect((await listPendingResetStartsForSource({ ...read, authentication: denied })).unboundEntries ?? []).toEqual([]);
+        const wrongTarget = { ...denied, apiTokenGrant: { ...denied.apiTokenGrant,
+            actions: { families: [], ids: ['session.message.send', 'session.pending.resetStart.set'] },
+            targets: { sessions: [foreign.session.id], machines: [] } } };
+        ApiTokenGrantV1Schema.parse(wrongTarget.apiTokenGrant);
+        expect((await listPendingResetStartsForSource({ ...read, authentication: wrongTarget })).unboundEntries ?? []).toEqual([]);
+        const resetOnly = { ...denied, apiTokenGrant: { ...denied.apiTokenGrant,
+            actions: { families: [], ids: ['session.pending.resetStart.set'] } } };
+        ApiTokenGrantV1Schema.parse(resetOnly.apiTokenGrant);
+        expect((await listPendingResetStartsForSource({ ...read, authentication: resetOnly })).unboundEntries).toEqual([
+            { sessionId: f.session.id, localId: f.params.localId, authorityCurrent: true },
+        ]);
+        await db.machine.update({ where: { id: f.machine.id }, data: { installationId: randomUUID() } });
+        expect(await listPendingResetStartsForSource(read)).toMatchObject({
+            unboundEntries: [{ sessionId: f.session.id, localId: f.params.localId, authorityCurrent: false }],
+        });
+    });
+
+    it('atomically admits composer reset input held from its first Pending write', async () => {
+        const f = await fixture();
+        const initialHeld = { ...held, reset: { ...reset, witness: { ...reset.witness, id: `${reset.witness.id}-${f.params.actorUserId}` } } };
+        await deletePendingMessage({ ...f.params, withdraw: true });
+        expect(await enqueuePendingMessage({ ...f.params, targetMachineId: f.machine.id, requestedAction: initialHeld,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'send at reset' } } } })).toMatchObject({ ok: true });
+        expect(await materializeNextPendingMessage(f.claim)).toMatchObject({ didMaterialize: false, deferredReason: 'waiting_for_quota_reset' });
+        const row = await db.sessionPendingMessage.findUniqueOrThrow({ where: { sessionId_localId: { sessionId: f.session.id, localId: f.params.localId } } });
+        expect(row.requestedAction).toEqual(initialHeld);
+        expect((await db.session.findUniqueOrThrow({ where: { id: f.session.id } })).pendingActivationRequestId).toBeNull();
+        const unsupported = await fixture(false);
+        const localId = randomUUID();
+        expect(await enqueuePendingMessage({ ...unsupported.params, localId, targetMachineId: unsupported.machine.id, requestedAction: held,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'do not send immediately' } } } })).toMatchObject({ ok: false });
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: unsupported.session.id, localId } })).toBe(0);
+    });
+    it('refuses an invented initial reset witness before writing any Pending input', async () => {
+        const f = await fixture();
+        const localId = randomUUID();
+        expect(await enqueuePendingMessage({ ...f.params, localId, targetMachineId: f.machine.id,
+            requestedAction: { ...held, reset: { ...reset, witness: { ...reset.witness, id: 'never-accepted' } } },
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'withhold' } } } })).toMatchObject({ ok: false });
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.session.id, localId } })).toBe(0);
     });
 });

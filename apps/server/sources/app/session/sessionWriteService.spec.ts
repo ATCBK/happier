@@ -77,6 +77,7 @@ type SessionWriteTxMock = {
     };
     sessionReportsTo: {
         findUnique: MockFunction;
+        findMany?: MockFunction;
     };
 };
 
@@ -99,6 +100,9 @@ const originalAccountQueries = new WeakMap<SessionWriteTxMock, MockFunction>();
  * the real access projector, query compiler and recipient owner still execute.
  */
 function withSessionProjectionQueries(tx: SessionWriteTxMock): SessionWriteTxMock {
+    tx.sessionReportsTo.findMany ??= vi.fn(async () => []);
+    tx.$queryRawUnsafe ??= vi.fn(async (_query: string, accountId: unknown) =>
+        typeof accountId === "string" ? [{ id: accountId }] : []);
     const sessionQuery = originalSessionQueries.get(tx) ?? tx.session.findUnique;
     const sessionListQuery = originalSessionListQueries.get(tx) ?? tx.session.findMany;
     const sessionShareListQuery = originalSessionShareListQueries.get(tx) ?? tx.sessionShare.findMany;
@@ -177,7 +181,7 @@ function withSessionProjectionQueries(tx: SessionWriteTxMock): SessionWriteTxMoc
                 && query.select?.accountId === true
                 && typeof query.select?.account === "object";
             if (!recipientProjection || storedRow === undefined) {
-                return await Reflect.apply(target, thisArg, args);
+                return await Reflect.apply(target, thisArg, args) ?? [];
             }
             if (!storedRow) return [];
             return query.where!.id!.in!.map((id) => ({

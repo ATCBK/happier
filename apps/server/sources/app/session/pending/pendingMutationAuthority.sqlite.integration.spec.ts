@@ -76,14 +76,16 @@ describe("Session mutation transaction authority (SQLite)", () => {
         const { owner, session } = await fixture();
         if (operation !== "create") {
             await db.publicSessionShare.create({
-                data: { sessionId: session.id, createdByUserId: owner.id, tokenHash: createHash("sha256").update("existing-token").digest() },
+                data: { sessionId: session.id, createdByUserId: owner.id, tokenHash: createHash("sha256").update(`existing-${session.id}`).digest() },
             });
         }
         beforeNextTransaction(() => db.session.delete({ where: { id: session.id } }));
         await withAuthenticatedTestApp(registerPublicShareOwnerRoutes, async (app) => {
-            const response = await app.inject({ method: operation === "delete" ? "DELETE" : "POST", url: `/v1/sessions/${session.id}/public-share`, headers: { "x-test-user-id": owner.id }, payload: { token: "public-token", encryptedDataKey: Buffer.from([0, ...new Array(80).fill(1)]).toString("base64") } });
+            const response = await app.inject({ method: operation === "delete" ? "DELETE" : "POST", url: `/v1/sessions/${session.id}/public-share`, headers: { "x-test-user-id": owner.id }, ...(operation === "delete" ? {} : { payload: { lookupId: `public-${session.id}`, keyDerivation: "fragment_v1", encryptedDataKey: Buffer.from([0, ...new Array(80).fill(1)]).toString("base64") } }) });
             expect(response.statusCode).toBe(403);
+            expect(response.json()).toEqual({ error: "session_access_forbidden" });
         });
+        expect(await db.session.findUnique({ where: { id: session.id } })).toBeNull();
         expect(await db.publicSessionShare.count({ where: { sessionId: session.id } })).toBe(0);
     });
 });

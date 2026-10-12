@@ -4,7 +4,8 @@ import {
     createSessionPersonalAttentionQueryInTx,
 } from "@/app/session/personal/queries";
 import { SESSION_PERSONAL_ATTENTION_SCAN_BATCH_SIZE } from "@/app/session/personal/attentionQuery";
-import { inTx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
+import { readmitSessionRowsInTx } from "@/app/session/access/sessionReadAdmission";
 import { resolveEffectiveSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import {
     requiresSessionMetadataOwnerAccountMode,
@@ -82,7 +83,7 @@ export async function createV2SessionAttentionPage(params: Readonly<{
     attentionHasNext: boolean;
 }>> {
     if (!params.source) {
-        return await inTx(async (tx) => {
+        return await readSnapshotWithCurrentAdmission(async (tx) => {
             const access = await resolveEffectiveSessionAccessWhere({
                 tx,
                 accountId: params.userId,
@@ -111,7 +112,9 @@ export async function createV2SessionAttentionPage(params: Readonly<{
                 rowAdmission: params.rowAdmission ?? attention.admitRows,
                 now,
             });
-        }, { readOnly: true });
+        }, async (tx, captured) => ({ ...captured, rows: await readmitSessionRowsInTx(tx, {
+            accountId: params.userId, authentication: params.authentication,
+        }, captured.rows) }));
     }
     const candidateLimit = params.candidateLimit ?? resolveV2SessionListInitialAttentionRowLimit();
     const examinationLimit = Math.max(candidateLimit, SESSION_PERSONAL_ATTENTION_SCAN_BATCH_SIZE);

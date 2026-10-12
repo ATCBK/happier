@@ -101,7 +101,7 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
     afterAll(async () => { await harness?.close(); });
 
     it("negotiates on the actual visible replacement, admits readable sessions, replaces and clears rooms", async () => {
-        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), firstName: "Owner" } });
+        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), name: "Owner" } });
         const other = await db.account.create({ data: { publicKey: crypto.randomUUID() } });
         // One real Socket.IO declaration deliberately exceeds the retired
         // Lane-local 16-Session ceiling. The transport's actual byte bound still
@@ -175,8 +175,8 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
     it("isolates simultaneous Session and two-discussion declarations through replacement, revocation, and deletion", async () => {
         const [owner, sessionViewer, discussionAViewer, discussionBViewer, everywhereViewer] = await Promise.all([
             "Owner", "Session viewer", "Discussion A viewer", "Discussion B viewer", "Everywhere viewer",
-        ].map(firstName => db.account.create({
-            data: { publicKey: crypto.randomUUID(), firstName, encryptionMode: "plain" },
+        ].map(name => db.account.create({
+            data: { publicKey: crypto.randomUUID(), name, encryptionMode: "plain" },
         })));
         const session = await db.session.create({ data: {
             accountId: owner.id,
@@ -352,7 +352,7 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
 
     it("does not emit a Discussion snapshot after deletion commits during projection", async () => {
         const owner = await db.account.create({ data: {
-            publicKey: crypto.randomUUID(), firstName: "Discussion deletion owner", encryptionMode: "plain",
+            publicKey: crypto.randomUUID(), name: "Discussion deletion owner", encryptionMode: "plain",
         } });
         const session = await db.session.create({ data: {
             accountId: owner.id,
@@ -432,8 +432,8 @@ describe("authenticated human presence over real memory-adapter sockets", () => 
     }, 30_000);
 
     it("names authorized guests, checks input separately, expires typing and evicts after committed revocation", async () => {
-        const [owner, editor, viewer, guest] = await Promise.all(["Owner", "Editor", "Viewer", "Named guest"].map(firstName =>
-            db.account.create({ data: { publicKey: crypto.randomUUID(), firstName, encryptionMode: "plain" } })));
+        const [owner, editor, viewer, guest] = await Promise.all(["Owner", "Editor", "Viewer", "Named guest"].map(name =>
+            db.account.create({ data: { publicKey: crypto.randomUUID(), name, encryptionMode: "plain" } })));
         const session = await db.session.create({ data: {
             accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: JSON.stringify({ t: "plain", v: {} }),
         } });

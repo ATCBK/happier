@@ -316,6 +316,7 @@ describe("external Session historical import create-race settlement", () => {
             publisherPrecondition: {
                 machineId: "machine-race",
                 committedFenceMs: 1_700_000_000_000,
+                publisherGeneration: '1',
             },
             expectedSessionMetadataVersion: 0,
             expectedSessionSeq: 0,
@@ -351,6 +352,8 @@ describe("external Session historical import create-race settlement", () => {
                     archivedAt: null,
                     lastActiveAt: committedFence,
                     updatedAt: new Date("2026-08-05T00:00:00.000Z"),
+                    publisherGeneration: 1n,
+                    publisherGenerationLastActiveAt: committedFence,
                 }),
                 updateMany: sessionUpdateMany,
             },

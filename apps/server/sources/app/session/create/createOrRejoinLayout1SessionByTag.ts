@@ -208,7 +208,7 @@ export async function createOrRejoinLayout1SessionByTag(
     sessionCreationAuthorization?: ExternalActionExecutionAuthorizationBindingV1,
 ): Promise<Layout1SessionCreateOutcome> {
     try {
-        const outcome = await inTx(async (tx) => createOrRejoinLayout1SessionByTagInTx(tx, prepared, authentication, sessionCreationAuthorization));
+        const outcome = await inTx(async (tx) => createOrRejoinLayout1SessionByTagInTx(tx, prepared, authentication, sessionCreationAuthorization), { isolationLevel: "Serializable" /* Composed creation and rejoin retain lifecycle, Follow and ReportsTo admission predicates. */ });
         if (outcome.kind === "rejoined" && outcome.publication) {
             await publishSessionArchiveTransition(outcome.publication);
         }
@@ -226,7 +226,7 @@ export async function createOrRejoinLayout1SessionByTag(
         // A competing Layout-1 create can pass the initial lookup and lose the
         // unique `(accountId, tag)` insert. It must rejoin the winner's atomic
         // placement rather than retrying a placement write of its own.
-        const rejoined = await inTx(async (tx) => rejoinLayout1SessionByTagInTx(tx, prepared, sessionCreationAuthorization));
+        const rejoined = await inTx(async (tx) => rejoinLayout1SessionByTagInTx(tx, prepared, sessionCreationAuthorization), { isolationLevel: "Serializable" /* Composed creation and rejoin retain lifecycle, Follow and ReportsTo admission predicates. */ });
         if (rejoined === null) throw error;
         if (rejoined.kind === "rejoined" && rejoined.publication) {
             await publishSessionArchiveTransition(rejoined.publication);

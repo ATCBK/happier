@@ -108,7 +108,7 @@ export async function reorderSessionPins(params: Readonly<{
     | ReorderSessionOrganizationResponse
     | { readonly error: "invalid-session-organization-order" }
 > {
-    return await inTx(async (tx) => await reorderSessionPinsInTx(tx, params));
+    return await inTx(async (tx) => await reorderSessionPinsInTx(tx, params), { isolationLevel: "Serializable" /* Whole organization order replacement must serialize with membership and hierarchy writers. */ });
 }
 
 export async function reorderSessionOrganizationInTx(tx: SessionOrganizationTx, params: Readonly<{
@@ -221,5 +221,5 @@ export async function reorderSessionOrganization(params: Readonly<{
     request: ReorderSessionOrganizationRequest;
     authentication: SessionAccessAuthentication;
 }>) {
-    return await inTx(async (tx) => await reorderSessionOrganizationInTx(tx, params));
+    return await inTx(async (tx) => await reorderSessionOrganizationInTx(tx, params), { isolationLevel: "Serializable" /* Whole organization order replacement must serialize with membership and hierarchy writers. */ });
 }

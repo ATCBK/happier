@@ -18,7 +18,9 @@ export function buildPendingActivationRequestHint(
 }
 
 export async function loadPendingActivationPublication(sessionId: string) {
-    return inTx(tx => loadPendingActivationPublicationInTx(tx, sessionId));
+    return inTx(tx => loadPendingActivationPublicationInTx(tx, sessionId), {
+        isolationLevel: "Serializable" /* Waiting authorization and the admitted Machine target must describe one activation. */,
+    });
 }
 
 export async function loadPendingActivationPublicationInTx(tx: Tx, sessionId: string) {

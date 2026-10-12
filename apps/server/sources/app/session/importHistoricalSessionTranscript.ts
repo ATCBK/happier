@@ -1,7 +1,8 @@
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { inTx } from "@/storage/inTx";
 import { isPrismaErrorCode } from "@/storage/prisma";
-import type { SessionTranscriptSurfaceItemReferenceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { SessionMessageRowRevisionRaceError } from './sessionMessageRevisionWrite';
+import type { SessionTranscriptSurfaceItemReferenceInputV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 
 import { resolveSessionMessageRole } from "./messageRole/resolveSessionMessageRole";
 import type { SessionAccessAuthentication } from "./access/sessionAccessAuthentication";
@@ -15,7 +16,7 @@ export type HistoricalSessionTranscriptImportItem = Readonly<{
     localId: string;
     content: PrismaJson.SessionMessageContent;
     messageRole?: unknown;
-    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
+    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceInputV1;
 }>;
 
 export type HistoricalSessionTranscriptImportResult =
@@ -104,7 +105,7 @@ export async function importHistoricalSessionTranscript(
     try {
         return await attempt();
     } catch (error) {
-        if (!isPrismaErrorCode(error, "P2002")) {
+        if (!isPrismaErrorCode(error, "P2002") && !(error instanceof SessionMessageRowRevisionRaceError)) {
             return { ok: false, error: "internal" };
         }
         try {

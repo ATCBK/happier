@@ -466,6 +466,8 @@ function admissionsEqual(
             === right.publisherPrecondition.machineId
         && left.publisherPrecondition.committedFenceMs
             === right.publisherPrecondition.committedFenceMs
+        && left.publisherPrecondition.publisherGeneration
+            === right.publisherPrecondition.publisherGeneration
         && left.expectedSessionMetadataVersion === right.expectedSessionMetadataVersion
         && isDeepStrictEqual(left.metadataPatch, right.metadataPatch)
         && left.expectedSessionSeq === right.expectedSessionSeq
@@ -547,6 +549,7 @@ function readExternalLinkedTakeoverAdmissionRecord(
         publisherPrecondition: {
             machineId: record.machineId,
             committedFenceMs: command.publisherPrecondition.committedFenceMs,
+            publisherGeneration: command.publisherPrecondition.publisherGeneration,
         },
         expectedSessionMetadataVersion: record.expectedSessionMetadataVersion,
         expectedSessionSeq: record.expectedSessionSeq,
@@ -1063,6 +1066,7 @@ async function executeExternalSessionHistoricalImportCommandWithCreateRaceRetry(
                 machineId: params.transportMachineId,
                 sessionId: command.claim.sessionId,
                 committedFence: new Date(command.publisherPrecondition.committedFenceMs),
+                publisherGeneration: BigInt(command.publisherPrecondition.publisherGeneration),
             }, params.actorUserId, command.claim.sessionId)) {
                 return errorResponse("invalid_state", "Takeover publisher authority was superseded.");
             }
@@ -1729,7 +1733,7 @@ async function executeExternalSessionHistoricalImportCommandWithCreateRaceRetry(
         }
 
         return errorResponse("invalid_state", "Historical import command is invalid.");
-        });
+        }, { isolationLevel: "Serializable" /* Historical import job custody and Session transition decisions depend on prior job and lifecycle reads. */ });
     } catch (error) {
         if (error instanceof HistoricalImportStorageStateTransitionConflictError) {
             return errorResponse("storage_mode_conflict", error.message);

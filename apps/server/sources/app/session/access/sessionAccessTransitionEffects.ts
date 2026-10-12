@@ -1,6 +1,7 @@
-import { afterTx, type Tx } from "@/storage/inTx";
+import { afterTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { notifySessionHumanPresenceAccessChanged } from "@/app/session/humanPresence/sessionHumanPresenceService";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { tombstoneSessionDraftForLifecycleInTx } from "@/app/account/sessionDrafts/sessionDraftService";
 import { removeAccountSessionFollowsOnAccessLossInTx } from "@/app/session/follow/accountFollowService";
 import { removeUnsafeSessionFollowEdgesForAccessChangeInTx } from "@/app/session/follow/sessionFollowEdgeService";
@@ -28,6 +29,34 @@ function accessFingerprint(access: EffectiveSessionAccess | null): string {
     return `${access.level}|${capabilities}`;
 }
 
+async function resolveAccessTransitionProjectionSessionIdsInTx(tx: Tx, sessionIds: readonly string[]): Promise<string[]> {
+    const ids = [...new Set(sessionIds)];
+    if (ids.length === 0) return [];
+    const [followEdges, reportsToEdges] = await Promise.all([
+        tx.sessionFollowEdge.findMany({ where: { OR: [{ sourceSessionId: { in: ids } }, { destinationSessionId: { in: ids } }] },
+            select: { destinationSessionId: true } }),
+        tx.sessionReportsTo.findMany({ where: { OR: [{ sessionId: { in: ids } }, { leadSessionId: { in: ids } }] },
+            select: { sessionId: true, leadSessionId: true } }),
+    ]);
+    return [...new Set([...ids, ...followEdges.map(edge => edge.destinationSessionId),
+        ...reportsToEdges.flatMap(edge => [edge.sessionId, edge.leadSessionId])])];
+}
+
+/** Fence access cleanup's complete relation audience before native or grant writes. */
+export async function acquireSessionAccessTransitionCursorLocksInTx(
+    tx: Tx,
+    sessionIds: readonly string[],
+    additionalAccountIds: readonly string[] = [],
+): Promise<void> {
+    const projectionSessionIds = await resolveAccessTransitionProjectionSessionIdsInTx(tx, sessionIds);
+    await acquireSessionAccountCursorLocksInTx(tx, projectionSessionIds, additionalAccountIds);
+    const captured = new Set(projectionSessionIds);
+    const current = await resolveAccessTransitionProjectionSessionIdsInTx(tx, sessionIds);
+    if (current.some(sessionId => !captured.has(sessionId))) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
+}
+
 /** Shared effective-access lifecycle effects for grant and native membership mutations. */
 export async function applySessionAccessTransitionEffectsInTx(
     tx: Tx,
@@ -37,6 +66,8 @@ export async function applySessionAccessTransitionEffectsInTx(
         after: ReadonlyMap<string, EffectiveSessionAccess | null>;
         /** A changed direct projection needs refresh even when stronger access survives. */
         directGrantChangedAccountId?: string;
+        /** Accounts receiving a later roster projection in this same transition. */
+        additionalPublicationAccountIds?: readonly string[];
     }>,
 ): Promise<SessionAccessTransitionEffects> {
     const changedAccountIds: string[] = [];
@@ -69,16 +100,15 @@ export async function applySessionAccessTransitionEffectsInTx(
         }
         if (readTranscript(beforeAccess) && !readTranscript(afterAccess)) {
             revokedAccountIds.push(accountId);
-            // Only a final loss of read access retires the collaborator's own draft.
-            // An Edit-to-View downgrade keeps it: the Session is still readable and
-            // the draft is that person's data.
-            await tombstoneSessionDraftForLifecycleInTx(tx, { accountId, sessionId: params.sessionId });
         }
-        const cursor = await markAccountChanged(tx, {
-            accountId,
-            kind: "session",
-            entityId: params.sessionId,
-        });
+    }
+
+    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId],
+        [...changedAccountIds, ...(params.additionalPublicationAccountIds ?? [])]);
+    // Only final read-access loss retires the person's own draft; Edit-to-View
+    // keeps it. Draft and Session cursors share the complete transition fence.
+    for (const accountId of revokedAccountIds) await tombstoneSessionDraftForLifecycleInTx(tx, { accountId, sessionId: params.sessionId });
+    for (const { accountId, cursor } of await markAccountsChanged(tx, { accountIds: changedAccountIds, kind: "session", entityId: params.sessionId })) {
         accountCursors.set(accountId, cursor);
     }
 

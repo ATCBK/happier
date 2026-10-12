@@ -19,7 +19,7 @@ import {
     projectSessionMetadataForRecipient,
     requiresSessionMetadataOwnerAccountMode,
 } from "@/app/session/metadata/sessionMetadataRecipientProjection";
-import { mapPendingActivationAuthorization } from "@/app/session/pending/pendingActivationAuthorization";
+import { mapPendingActivationAuthorization, mapPendingActivationFailureDetails } from "@/app/session/pending/pendingActivationAuthorization";
 import {
     createSessionDataKeyEnvelopeViewerSelect,
     projectViewerSessionDataKey,
@@ -224,7 +224,8 @@ export async function listLegacyV1SessionsForAccount(params: Readonly<{
             pendingBlockedCount: hasLiveFacts ? v.pendingBlockedCount : 0,
             pendingVersion: hasLiveFacts ? v.pendingVersion : 0,
             ...(hasLiveFacts
-                ? { pendingActivationAuthorization: mapPendingActivationAuthorization(v) }
+                ? { pendingActivationAuthorization: mapPendingActivationAuthorization(v),
+                    pendingActivationFailureDetails: mapPendingActivationFailureDetails(v) }
                 : {}),
         };
         if (row.recipient === "owner") {

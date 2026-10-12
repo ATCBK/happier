@@ -173,7 +173,12 @@ describe("canonical transcript sequence writer on SQLite", () => {
                 const body = response.json();
                 const message = body.message ?? body.messages.find((row: { localId: string }) => row.localId === input.localId);
                 expect.soft(message.accountActor).toMatchObject({ v: 1, accountId: editor.id });
-                expect.soft(message).not.toHaveProperty("inputAdmissionReceipt");
+                // Authenticated transcript reads retain the canonical admission
+                // receipt, including its original role before grant promotion.
+                expect.soft(message.inputAdmissionReceipt).toEqual({
+                    v: 1, issuer: "authenticatedAccount", actorAccountId: editor.id,
+                    sessionRelationship: "sharedEditor",
+                });
             }
         });
         await db.sessionMessage.update({ where: { sessionId_localId: { sessionId: session.id, localId: input.localId } }, data: { authorAccountId: owner.id } });
@@ -2921,6 +2926,8 @@ describe("canonical transcript sequence writer on SQLite", () => {
                 active: true,
                 thinking: false,
                 lastActiveAt: fence,
+                publisherGeneration: 1n,
+                publisherGenerationLastActiveAt: fence,
             },
             select: { id: true },
         });
@@ -2947,6 +2954,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
             publisherPrecondition: {
                 machineId,
                 committedFenceMs: fence.getTime(),
+                publisherGeneration: '1',
             },
             expectedSessionMetadataVersion: 7,
             expectedSessionSeq: 0,
@@ -2986,7 +2994,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
         const reclaimedFence = new Date(fence.getTime() + 10);
         await db.session.update({
             where: { id: session.id },
-            data: { lastActiveAt: reclaimedFence },
+            data: { lastActiveAt: reclaimedFence, publisherGenerationLastActiveAt: reclaimedFence },
         });
         const reclaimed = {
             ...command,
@@ -2998,6 +3006,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
             publisherPrecondition: {
                 machineId,
                 committedFenceMs: reclaimedFence.getTime(),
+                publisherGeneration: '1',
             },
         } as const;
         await expect(execute(reclaimed)).resolves.toEqual({
@@ -3017,6 +3026,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
             publisherPrecondition: {
                 machineId,
                 committedFenceMs: reclaimedFence.getTime(),
+                publisherGeneration: '1',
             },
         })).resolves.toMatchObject({ kind: "error", errorCode: "invalid_state" });
 
@@ -3033,7 +3043,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
         const retryFence = new Date(reclaimedFence.getTime() + 10);
         await db.session.update({
             where: { id: session.id },
-            data: { lastActiveAt: retryFence },
+            data: { lastActiveAt: retryFence, publisherGenerationLastActiveAt: retryFence },
         });
         const freshRetry = {
             ...reclaimed,
@@ -3046,6 +3056,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
             publisherPrecondition: {
                 machineId,
                 committedFenceMs: retryFence.getTime(),
+                publisherGeneration: '1',
             },
         } as const;
         await expect(execute(freshRetry)).resolves.toEqual({
@@ -3060,7 +3071,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
         const lateOldFence = new Date(retryFence.getTime() + 10);
         await db.session.update({
             where: { id: session.id },
-            data: { lastActiveAt: lateOldFence },
+            data: { lastActiveAt: lateOldFence, publisherGenerationLastActiveAt: lateOldFence },
         });
         await expect(execute({
             ...reclaimed,
@@ -3072,6 +3083,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
             publisherPrecondition: {
                 machineId,
                 committedFenceMs: lateOldFence.getTime(),
+                publisherGeneration: '1',
             },
         })).resolves.toMatchObject({ kind: "error", errorCode: "invalid_state" });
 
@@ -3227,7 +3239,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
 
         await db.session.update({
             where: { id: session.id },
-            data: { active: true, lastActiveAt: publisherFence },
+            data: { active: true, lastActiveAt: publisherFence, publisherGeneration: 1n, publisherGenerationLastActiveAt: publisherFence },
         });
 
         const before = await db.session.findUniqueOrThrow({
@@ -3272,6 +3284,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
             publisherPrecondition: {
                 machineId,
                 committedFenceMs: publisherFence.getTime(),
+                publisherGeneration: '1',
             },
             expectedSessionMetadataVersion: 7,
             metadataPatch: {
@@ -3542,7 +3555,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
 
         await db.session.update({
             where: { id: session.id },
-            data: { active: true, lastActiveAt: publisherFence },
+            data: { active: true, lastActiveAt: publisherFence, publisherGeneration: 1n, publisherGenerationLastActiveAt: publisherFence },
         });
         const before = await db.session.findUniqueOrThrow({
             where: { id: session.id },
@@ -3564,6 +3577,7 @@ describe("canonical transcript sequence writer on SQLite", () => {
             publisherPrecondition: {
                 machineId,
                 committedFenceMs: publisherFence.getTime(),
+                publisherGeneration: '1',
             },
             expectedSessionMetadataVersion: 7,
             metadataPatch: {

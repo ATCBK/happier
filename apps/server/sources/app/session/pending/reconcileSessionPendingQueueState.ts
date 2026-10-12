@@ -1,4 +1,5 @@
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 
 export type ReconciledSessionPendingQueueState = Readonly<{
     pendingCount: number;
@@ -24,6 +25,7 @@ export async function reconcileSessionPendingQueueStateInTx(
     tx: Tx,
     sessionId: string,
 ): Promise<ReconciledSessionPendingQueueState> {
+    await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
     const pendingCount = await tx.sessionPendingMessage.count({
         where: { sessionId, targetExecutionRunId: null, status: "queued" },
     });

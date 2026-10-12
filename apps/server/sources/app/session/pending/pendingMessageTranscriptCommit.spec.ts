@@ -143,7 +143,8 @@ describe("Pending transcript commit", () => {
             v: {
                 role: "user",
                 content: { type: "text", text: "hello" },
-                meta: { happierInputRequestV1: { v: 1, producer: "cli", caller: { kind: "host" }, permission: {} } },
+                meta: { happierInputRequestV1: { v: 1, producer: "cli", retired: true,
+                    caller: { kind: "host", retired: true }, permission: {} } },
             },
         };
         const authorityContent = {
@@ -201,12 +202,14 @@ describe("Pending transcript commit", () => {
                 meta: {
                     happierInputAuthorityV1: {
                         v: 2,
+                        retired: true,
                         producer: "workflow",
                         caller: { kind: "host" },
                         workflow: {
                             purpose: "invocation",
                             runId: "workflow-run-a",
                             invocationRecordId: "invocation-a",
+                            retired: true,
                         },
                         permission: { admittedPermissionCeiling: "default" },
                     },

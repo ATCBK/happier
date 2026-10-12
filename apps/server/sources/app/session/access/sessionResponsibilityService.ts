@@ -22,6 +22,7 @@ import { buildAccountTextPrefixFilter } from "@/app/account/accountTextPrefixFil
 import { scheduleSessionActivityRemoteAlerts } from "@/app/activity/remoteAlerts/submitSessionActivityRemoteAlerts";
 import { applySessionAutoFollowForRelationshipChangeInTx } from "@/app/session/follow/accountFollowService";
 import { markCurrentSessionReadersChanged } from "@/app/session/changeTracking/markCurrentSessionReadersChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { scheduleSessionPersonalEvent } from "@/app/session/personal/publishPersonalEvent";
 import { AccountStatus, getDbProviderFromEnv } from "@/storage/prisma";
 import { afterTx, inTx, type Tx } from "@/storage/inTx";
@@ -135,6 +136,7 @@ export async function setSessionResponsibility(params: Readonly<{
 }>): Promise<SetSessionResponsibilityResult> {
     const desired = params.responsibleAccountId;
     return await inTx(async (tx) => {
+        await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId]);
         const actor = await admitSessionResponsibilityCapabilityInTx(tx, {
             accountId: params.actorAccountId,
             sessionId: params.sessionId,
@@ -231,7 +233,7 @@ export async function setSessionResponsibility(params: Readonly<{
             responsibleAccount,
             autoFollowed,
         };
-    });
+    }, { isolationLevel: "Serializable" /* Responsibility admission and access-change cleanup depend on the same assignment and eligibility reads. */ });
 }
 
 /**
@@ -254,6 +256,7 @@ export async function clearSessionResponsibilityIfNoReadAccessInTx(params: Reado
     const responsibleAccountId = session?.responsibleAccountId ?? null;
     if (responsibleAccountId === null) return { clearedAccountId: null };
 
+    await acquireSessionAccountCursorLocksInTx(tx, [sessionId]);
     const access = await resolveAccessInTx(tx, sessionId, [responsibleAccountId]);
     if (await isAssignableTargetInTx(tx, { sessionId, accountId: responsibleAccountId, access })) {
         return { clearedAccountId: null };
@@ -289,6 +292,7 @@ export async function clearSessionResponsibilitiesForAccountRemovalInTx(
     });
     if (sessions.length === 0) return;
 
+    await acquireSessionAccountCursorLocksInTx(tx, sessions.map(session => session.id));
     await tx.session.updateMany({
         where: { responsibleAccountId: params.accountId },
         data: { responsibleAccountId: null },
@@ -336,8 +340,7 @@ function buildCandidateSearchWhere(query: string): Prisma.AccountWhereInput {
     return {
         OR: [
             { username: buildAccountTextPrefixFilter(query, provider) },
-            { firstName: buildAccountTextPrefixFilter(query, provider) },
-            { lastName: buildAccountTextPrefixFilter(query, provider) },
+            { name: buildAccountTextPrefixFilter(query, provider) },
         ],
     };
 }
@@ -447,5 +450,5 @@ export async function listSessionResponsibilityCandidates(params: Readonly<{
                 })
                 : null,
         };
-    });
+    }, { isolationLevel: "Serializable" /* Responsibility admission and access-change cleanup depend on the same assignment and eligibility reads. */ });
 }

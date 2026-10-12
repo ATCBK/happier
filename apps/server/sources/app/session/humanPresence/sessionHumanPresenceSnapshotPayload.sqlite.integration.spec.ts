@@ -105,8 +105,8 @@ describe("human presence snapshot is not bounded by the inbound transport limit"
 
     it("emits the full snapshot beyond the former transport-derived threshold once, with no deterministic retry", async () => {
         const longName = "Presence".padEnd(180, "x");
-        const [owner, first, second] = await Promise.all(["Owner Viewer", longName, longName].map(firstName =>
-            db.account.create({ data: { publicKey: crypto.randomUUID(), firstName } })));
+        const [owner, first, second] = await Promise.all(["Owner Viewer", longName, longName].map(name =>
+            db.account.create({ data: { publicKey: crypto.randomUUID(), name } })));
         const session = await db.session.create({
             data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: "{}" },
         });
@@ -143,8 +143,8 @@ describe("human presence snapshot is not bounded by the inbound transport limit"
         harness.resetEnv({
             HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: "1",
         });
-        const [owner, member] = await Promise.all(["Credential Owner", "Credential Member"].map(firstName =>
-            db.account.create({ data: { publicKey: crypto.randomUUID(), firstName, encryptionMode: "e2ee" } })));
+        const [owner, member] = await Promise.all(["Credential Owner", "Credential Member"].map(name =>
+            db.account.create({ data: { publicKey: crypto.randomUUID(), name, encryptionMode: "e2ee" } })));
         const session = await db.session.create({
             data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: "{}" },
         });
@@ -247,8 +247,8 @@ describe("human presence snapshot is not bounded by the inbound transport limit"
             HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: "1",
         });
         // Key-challenge evidence qualifies only an Account that holds a key.
-        const [owner, member] = await Promise.all(["Source Owner", "Source Member"].map(firstName =>
-            db.account.create({ data: { publicKey: crypto.randomUUID(), firstName, encryptionMode: "e2ee" } })));
+        const [owner, member] = await Promise.all(["Source Owner", "Source Member"].map(name =>
+            db.account.create({ data: { publicKey: crypto.randomUUID(), name, encryptionMode: "e2ee" } })));
         const session = await db.session.create({
             data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: "{}" },
         });
@@ -302,8 +302,8 @@ describe("human presence snapshot is not bounded by the inbound transport limit"
     // transition owner must reach the API nodes through the worker's own Redis
     // Streams emitter (Redis is the true boundary here).
     it("publishes a transition committed in a worker-role process to the API nodes' presence owners", async () => {
-        const [owner, member] = await Promise.all(["Worker Owner", "Worker Member"].map(firstName =>
-            db.account.create({ data: { publicKey: crypto.randomUUID(), firstName, encryptionMode: "plain" } })));
+        const [owner, member] = await Promise.all(["Worker Owner", "Worker Member"].map(name =>
+            db.account.create({ data: { publicKey: crypto.randomUUID(), name, encryptionMode: "plain" } })));
         const session = await db.session.create({
             data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: "{}" },
         });
@@ -336,11 +336,11 @@ describe("human presence snapshot is not bounded by the inbound transport limit"
     it("rechecks admitted rooms after connection revision, provider security revision, and provider disable", async () => {
         harness.resetEnv();
         const owner = await db.account.create({ data: {
-            publicKey: crypto.randomUUID(), firstName: "Applicability owner", encryptionMode: "plain",
+            publicKey: crypto.randomUUID(), name: "Applicability owner", encryptionMode: "plain",
         } });
         const makeAffectedRoom = async (suffix: string) => {
             const member = await db.account.create({ data: {
-                publicKey: crypto.randomUUID(), firstName: `Applicability ${suffix}`, encryptionMode: "plain",
+                publicKey: crypto.randomUUID(), name: `Applicability ${suffix}`, encryptionMode: "plain",
             } });
             const team = await db.team.create({ data: { name: `Applicability ${suffix}` } });
             await db.teamMembership.createMany({ data: [

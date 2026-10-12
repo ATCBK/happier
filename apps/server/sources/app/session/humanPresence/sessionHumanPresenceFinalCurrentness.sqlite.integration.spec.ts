@@ -105,7 +105,7 @@ describe("human presence final socket-currentness gate", () => {
     afterAll(async () => { await harness?.close(); });
 
     it("withholds the held declaration until final currentness, then admits only the latest one", async () => {
-        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), firstName: "Gate Owner" } });
+        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), name: "Gate Owner" } });
         const [sessionA, sessionB] = await Promise.all([1, 2].map(() => db.session.create({
             data: { accountId: owner.id, tag: crypto.randomUUID(), metadata: "{}" },
         })));
@@ -153,7 +153,7 @@ describe("human presence final socket-currentness gate", () => {
     }, 30_000);
 
     it("discards a held declaration when final currentness fails and the socket disconnects", async () => {
-        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), firstName: "Revoked Owner" } });
+        const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), name: "Revoked Owner" } });
         const session = await db.session.create({
             data: { accountId: owner.id, tag: crypto.randomUUID(), metadata: "{}" },
         });

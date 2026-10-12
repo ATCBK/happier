@@ -501,7 +501,7 @@ export async function applyViewerReadCursorOperation(params: Readonly<{
         let latestMainMessageSeq: number | null = null;
         let initialVisibleSeq: number | null = null;
         if (operation.kind === "mark-unread") {
-            const initial = await inTx(async (tx) => await admitViewerReadCursorOperation(tx, { accountId, sessionId, authentication: params.authentication }));
+            const initial = await inTx(async (tx) => await admitViewerReadCursorOperation(tx, { accountId, sessionId, authentication: params.authentication }), { isolationLevel: "Serializable" /* Viewer baseline creation and tracking admission must serialize with Follow and discussion entry. */ });
             if (!initial.ok) return initial;
             initialVisibleSeq = resolveVisibleSessionSeq(initial.session);
             latestMainMessageSeq = await findLatestUnreadAffectingMainTranscriptMessageSeq(
@@ -525,7 +525,7 @@ export async function applyViewerReadCursorOperation(params: Readonly<{
             return await applyViewerReadCursorOperationInTx(tx, {
                 accountId, sessionId, operation, latestMainMessageSeq, initialVisibleSeq, authentication: params.authentication,
             });
-        });
+        }, { isolationLevel: "Serializable" /* Viewer baseline creation and tracking admission must serialize with Follow and discussion entry. */ });
     } catch {
         return { ok: false, error: "internal" };
     }

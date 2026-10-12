@@ -1,14 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PendingActivationFailureDetailsV1Schema, PendingActivationRuntimeFailureReasonV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import { SpawnSessionErrorCodeSchema } from '@happier-dev/protocol/spawnSession';
+import {
+    createAccountCursorRawQueryTransactionModel,
+    createEmptySessionReportsToTransactionModel,
+} from '@/app/api/testkit/txHarness';
+
+// This fixture replaces database initialization while using the real driver's
+// JSON sentinel. Activation, recipient resolution and lock logic stay real.
+vi.mock('@/storage/db', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/storage/db')>();
+    return { ...actual, getActivePrismaRuntime: () => actual.prismaRuntime };
+});
 
 import {
     armPendingActivationAuthorizationInTx,
     clearPendingActivationAuthorizationForPublisherActivityData,
     mapPendingActivationAuthorization,
+    mapPendingActivationFailureDetails,
     markPendingActivationAuthorizationFailedInTx,
     reconcilePendingActivationAuthorizationForRemovedRequestInTx,
 } from './pendingActivationAuthorization';
 
 function createTx(session: Record<string, unknown>, row?: Record<string, unknown>) {
+    const publication = () => ({
+        id: 's1', accountId: 'owner', seq: 0, currentStorageState: 'hosted',
+        account: { status: 'active' }, teamGrants: [], groupGrants: [],
+        acceptedThroughServerSeq: null, materializationPublicationId: null,
+        materializedThroughSourceAt: null, publishedThroughServerSeq: null,
+        ...session,
+    });
+    const account = { update: vi.fn(async () => ({ seq: 1 })) };
+    const accountChange = { upsert: vi.fn(async () => ({})) };
     const updateMany = vi.fn(async ({ where, data }: any) => {
         if (where.pendingActivationRequestId && where.pendingActivationRequestId !== session.pendingActivationRequestId) return { count: 0 };
         if (where.pendingActivationRequestedAt && where.pendingActivationRequestedAt.getTime() !== (session.pendingActivationRequestedAt as Date)?.getTime()) return { count: 0 };
@@ -19,10 +42,20 @@ function createTx(session: Record<string, unknown>, row?: Record<string, unknown
     });
     return {
         session: {
+            findMany: vi.fn(async () => [publication()]),
+            findUnique: vi.fn(async () => publication()),
             findUniqueOrThrow: vi.fn(async () => ({ ...session })),
             update: vi.fn(async ({ data }: any) => Object.assign(session, data)),
             updateMany,
         },
+        account,
+        accountChange,
+        $queryRawUnsafe: vi.fn(createAccountCursorRawQueryTransactionModel({ account, accountChange })),
+        sessionReportsTo: createEmptySessionReportsToTransactionModel(),
+        sessionShare: { findMany: vi.fn(async () => []) },
+        sessionTeamGrant: { findMany: vi.fn(async () => []) },
+        sessionGroupGrant: { findMany: vi.fn(async () => []) },
+        managedMachine: { findUnique: vi.fn(async () => null) },
         sessionPendingMessage: {
             findUnique: vi.fn(async () => row ?? {
                 localId: 'p1',
@@ -44,6 +77,31 @@ function createTx(session: Record<string, unknown>, row?: Record<string, unknown
 }
 
 describe('pending activation authorization owner', () => {
+    it('fits every admitted diagnostic in the existing MySQL VARCHAR(191) field', async () => {
+        const longest = (values: readonly string[]) => values.reduce((a, b) => a.length >= b.length ? a : b);
+        const session = { lastActiveAt: new Date(100), pendingActivationRequestId: 'p1',
+            pendingActivationRequestedAt: new Date(101), pendingActivationStatus: 'waiting', pendingActivationFailureCode: null as string | null };
+        const details = PendingActivationFailureDetailsV1Schema.parse({
+            reason: longest(PendingActivationFailureDetailsV1Schema.shape.reason.options),
+            spawnErrorCode: longest(SpawnSessionErrorCodeSchema.options),
+            runtimeReason: longest(PendingActivationRuntimeFailureReasonV1Schema.options),
+        });
+        await markPendingActivationAuthorizationFailedInTx({ tx: createTx(session), sessionId: 's1', requestId: 'p1',
+            requestedAt: new Date(101), failureCode: 'runtime_start_failed', failureDetails: details });
+        expect(session.pendingActivationFailureCode!.length).toBeLessThanOrEqual(191);
+        expect(mapPendingActivationFailureDetails(session)).toEqual(details);
+    });
+    it('retains failure diagnostics in the existing state while preserving the predecessor authorization projection', async () => {
+        const session = { lastActiveAt: new Date(100), pendingActivationRequestId: 'p1',
+            pendingActivationRequestedAt: new Date(101), pendingActivationStatus: 'waiting', pendingActivationFailureCode: null };
+        await markPendingActivationAuthorizationFailedInTx({ tx: createTx(session), sessionId: 's1', requestId: 'p1',
+            requestedAt: new Date(101), failureCode: 'runtime_start_failed',
+            failureDetails: { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' } });
+        expect(mapPendingActivationAuthorization(session)).toEqual({ requestId: 'p1', requestedAt: 101,
+            status: 'failed', failureCode: 'runtime_start_failed' });
+        expect(mapPendingActivationFailureDetails(session)).toEqual({ reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' });
+        expect(mapPendingActivationFailureDetails({ ...session, lastActiveAt: new Date(102) })).toBeUndefined();
+    });
     it('arms an eligible Account-authored send_now beyond the publisher fence', async () => {
         const session = {
             accountId: 'owner',

@@ -1,120 +1,53 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDbMocks, createDbTransactionMock, installDbModuleMock } from "../../api/testkit/dbMocks";
 
-import { createDbMocks, installDbModuleMock } from "../../api/testkit/dbMocks";
-
-const fenceExactCurrentPublisherAuthorityInTx = vi.fn(async () => true);
-vi.mock("@/app/session/pending/hasExactCurrentPublisherAuthorityInTx", () => ({
-    fenceExactCurrentPublisherAuthorityInTx,
-    hasExactCurrentPublisherAuthorityInTx: vi.fn(async () => true),
-}));
-
-const dbMocks = createDbMocks({
-    session: ["findUnique"],
+// Only the database boundary is replaced: transaction recovery, Account lock
+// policy, Machine binding and exact publisher authority remain real.
+const database = createDbMocks({
+    session: ["findUnique", "findFirst", "updateMany"],
+    machine: ["findUnique", "findFirst"],
+    accessKey: ["findUnique"],
     sessionPendingMessage: ["findFirst", "count"],
 } as const);
-installDbModuleMock({ db: dbMocks.db, isPrismaErrorCode: vi.fn(() => false) });
-
-const txSessionFindUniqueOrThrow = vi.fn();
-const txSessionFindUnique = vi.fn();
-const txExecuteRaw = vi.fn(async () => 0);
-const txSessionUpdate = vi.fn();
-const txSessionUpdateMany = vi.fn();
-const txSessionPendingMessageFindMany = vi.fn();
-const txSessionPendingMessageFindFirst = vi.fn();
-const txSessionPendingMessageCount = vi.fn();
-const txSessionPendingMessageUpdateMany = vi.fn();
-const tx = {
-    $executeRaw: txExecuteRaw,
-    session: {
-        findUnique: txSessionFindUnique,
-        findUniqueOrThrow: txSessionFindUniqueOrThrow,
-        update: txSessionUpdate,
-        updateMany: txSessionUpdateMany,
-    },
-    sessionPendingMessage: {
-        findFirst: txSessionPendingMessageFindFirst,
-        findMany: txSessionPendingMessageFindMany,
-        count: txSessionPendingMessageCount,
-        updateMany: txSessionPendingMessageUpdateMany,
-    },
-};
-const inTx = vi.fn(async <T>(run: (txArg: typeof tx) => Promise<T>) => run(tx));
-vi.mock("@/storage/inTx", () => ({
-    inTx,
-    isTransactionAcquisitionUnavailableError: () => false,
-    isTransactionDeadlineExceededError: () => false,
-}));
-
-let materializeNextPendingMessage: typeof import("./materializeNextPendingMessage").materializeNextPendingMessage;
-const publisherAuthority = {
-    accountId: "u1",
-    machineId: "m1",
-    sessionId: "s1",
-    committedFence: new Date(0),
-} as const;
-
-const materialize = () => materializeNextPendingMessage({
-    actorUserId: "u1",
-    sessionId: "s1",
-    deliveryState: "provider",
-    deliveryTiming: "after_foreground_ready",
-    foregroundState: "ready",
-    publisherAuthority,
-});
+const transactions = createDbTransactionMock(() => database.db);
+installDbModuleMock({ db: transactions.wrapDb(database.db) });
+const { materializeNextPendingMessage } = await import("./materializeNextPendingMessage");
 
 describe("materializeNextPendingMessage (pendingCount fast path)", () => {
-    beforeAll(async () => {
-        ({ materializeNextPendingMessage } = await import("./materializeNextPendingMessage"));
-    }, 60_000);
-
     beforeEach(() => {
-        vi.clearAllMocks();
-        dbMocks.reset();
-        txSessionFindUniqueOrThrow.mockReset();
-        txSessionFindUnique.mockReset();
-        txExecuteRaw.mockReset();
-        txExecuteRaw.mockResolvedValue(0);
-        txSessionUpdate.mockReset();
-        txSessionUpdateMany.mockReset();
-        txSessionPendingMessageFindMany.mockReset();
-        txSessionPendingMessageFindFirst.mockReset();
-        txSessionPendingMessageCount.mockReset();
-        txSessionPendingMessageUpdateMany.mockReset();
-        dbMocks.db.session.findUnique.mockResolvedValue({ encryptionMode: "e2ee", pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 8 });
-        dbMocks.db.sessionPendingMessage.findFirst.mockResolvedValue(null);
-        dbMocks.db.sessionPendingMessage.count.mockResolvedValue(0);
-        txSessionPendingMessageUpdateMany.mockResolvedValue({ count: 0 });
-        txSessionFindUnique.mockResolvedValue({
-            accountId: "u1",
-            encryptionMode: "e2ee",
-            pendingCount: 0,
-            pendingBlockedCount: 0,
-            pendingVersion: 8,
+        vi.stubEnv("HAPPIER_DB_PROVIDER", "sqlite");
+        database.reset();
+        transactions.transaction.mockClear();
+        database.db.session.findUnique.mockResolvedValue({
+            id: "s1", accountId: "u1", active: true, archivedAt: null,
+            lastActiveAt: new Date(0), updatedAt: new Date(0),
+            encryptionMode: "e2ee", pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 8,
         });
-        txSessionPendingMessageFindFirst.mockResolvedValue(null);
-        txSessionPendingMessageCount.mockImplementation(async (args: { where?: { deliveryState?: string } }) => (
-            args.where?.deliveryState === "blocked" ? 0 : 0
-        ));
+        database.db.session.findFirst.mockResolvedValue({ id: "s1" });
+        database.db.session.updateMany.mockResolvedValue({ count: 1 });
+        // This supported uninstalled owner tuple exercises real binding
+        // admission without needing an unrelated installation fixture.
+        const machine = { accountId: "u1", installationId: null, revokedAt: null, replacedByMachineId: null };
+        database.db.machine.findUnique.mockResolvedValue(machine);
+        database.db.machine.findFirst.mockResolvedValue(machine);
+        database.db.accessKey.findUnique.mockResolvedValue({ machine, session: { accountId: "u1" } });
+        database.db.sessionPendingMessage.findFirst.mockResolvedValue(null);
+        database.db.sessionPendingMessage.count.mockResolvedValue(0);
     });
 
-    it("returns didMaterialize=false through the same exact-authority transaction when pendingCount is 0", async () => {
-        const result = await materialize();
+    afterEach(() => { vi.unstubAllEnvs(); });
 
-        expect(fenceExactCurrentPublisherAuthorityInTx).toHaveBeenCalledTimes(1);
-        expect(txSessionFindUnique).toHaveBeenCalledTimes(1);
-        expect(txSessionPendingMessageFindFirst).toHaveBeenCalledTimes(1);
-        expect(txSessionPendingMessageCount).toHaveBeenCalledWith({
-            where: { sessionId: "s1", status: "queued", targetExecutionRunId: null },
+    it.each([0, 1])("requires the exact publisher fence even for an empty queue (fence %s)", async (fence) => {
+        const result = await materializeNextPendingMessage({
+            actorUserId: "u1", sessionId: "s1", deliveryState: "provider",
+            deliveryTiming: "after_foreground_ready", foregroundState: "ready",
+            publisherAuthority: { accountId: "u1", machineId: "m1", sessionId: "s1", committedFence: new Date(fence) },
         });
-        expect(inTx).toHaveBeenCalledTimes(1);
-        expect(result).toEqual({
-            ok: true,
-            didMaterialize: false,
-            pendingCount: 0,
-            pendingBlockedCount: 0,
-            pendingVersion: 8,
+
+        expect(result).toEqual(fence === 0 ? {
+            ok: true, didMaterialize: false, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 8,
             deliveryState: { mode: "provider", unresolved: false },
-        });
+        } : { ok: false, error: "forbidden" });
     });
 
 });

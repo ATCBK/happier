@@ -1,4 +1,4 @@
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import type { Tx } from "@/storage/inTx";
 
 export type SessionAccountChangeCursor = { accountId: string; cursor: number };
@@ -18,19 +18,16 @@ export async function markAccountChangesForSessionAccounts(params: {
     hint?: unknown;
     hintForAccount?: (accountId: string) => { kind: "suppress" } | { kind: "publish"; value: unknown };
 }): Promise<SessionAccountChangeCursor[]> {
-    const cursors: SessionAccountChangeCursor[] = [];
+    const hints = new Map<string, unknown>();
     for (const accountId of params.accountIds) {
         const projected = params.hintForAccount
             ? params.hintForAccount(accountId)
             : { kind: "publish" as const, value: params.hint };
         if (projected.kind === "suppress") continue;
-        const cursor = await markAccountChanged(params.tx, {
-            accountId,
-            kind: "session",
-            entityId: params.sessionId,
-            hint: projected.value,
-        });
-        cursors.push({ accountId, cursor });
+        hints.set(accountId, projected.value);
     }
-    return cursors;
+    return markAccountsChanged(params.tx, {
+        accountIds: [...hints.keys()], kind: "session", entityId: params.sessionId,
+        hintForAccount: accountId => hints.get(accountId),
+    });
 }

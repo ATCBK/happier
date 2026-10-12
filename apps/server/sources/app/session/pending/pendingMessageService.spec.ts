@@ -134,10 +134,18 @@ describe("pendingMessageService", () => {
         storagePolicyEnv.restore();
 
         currentTx = {
+            // Database adapter for the canonical Session row lock.
+            $queryRawUnsafe: vi.fn(async () => [{ id: 's1' }]),
             session: {
                 findUnique: vi.fn(async () => createPendingSessionFixture()),
+                findMany: vi.fn(async () => [{ id: 's1', ...createPendingSessionFixture(), account: { status: 'active' } }]),
                 update: vi.fn(async () => ({ pendingQueueSeq: 1 })),
             },
+            sessionReportsTo: { findMany: vi.fn(async () => []) },
+            sessionShare: { findMany: vi.fn(async () => []) },
+            sessionTeamGrant: { findMany: vi.fn(async () => []) },
+            sessionGroupGrant: { findMany: vi.fn(async () => []) },
+            managedMachine: { findUnique: vi.fn(async () => null) },
             sessionMessage: {
                 findUnique: vi.fn(async () => null),
             },
@@ -253,7 +261,7 @@ describe("pendingMessageService", () => {
         );
     });
 
-    it("projects Machine enqueue transaction acquisition exhaustion as outcome unknown", async () => {
+    it("projects Machine enqueue transaction acquisition exhaustion as definite rejection", async () => {
         const actualTransactions = await vi.importActual<typeof import("@/storage/inTx")>("@/storage/inTx");
         transactionHarness.inTx.mockRejectedValueOnce(
             new actualTransactions.TransactionAcquisitionUnavailableError(
@@ -270,9 +278,8 @@ describe("pendingMessageService", () => {
             content: { t: "encrypted", c: "cipher" },
             requestedAction: { v: 1, kind: "enqueue" },
         })).resolves.toEqual({
-            status: "outcomeUnknown",
-            localId: "machine-enqueue-acquisition-unavailable",
-            code: "session_input_admission_outcome_unknown",
+            status: "rejected",
+            code: "session_input_storage_unavailable",
         });
     });
 
@@ -492,7 +499,7 @@ describe("pendingMessageService", () => {
         expect(currentTx.sessionPendingMessage.create).not.toHaveBeenCalled();
     });
 
-    it("rejoins a materialized plain Pending request by its server-derived digest", async () => {
+    it("rejoins a materialized plain Pending request despite retired evidence fields without changing its digest", async () => {
         const createdAt = new Date("2020-01-01T00:00:00.000Z");
         storagePolicyEnv.set("HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY", "optional");
         const content = { t: "plain" as const, v: { type: "user", text: "hello" } };
@@ -510,7 +517,7 @@ describe("pendingMessageService", () => {
             localId: "pending-digest-retry",
             content,
             messageRole: "user",
-            requestedAction,
+            requestedAction: { ...requestedAction, retired: true },
             status: "queued",
             deliveryState: null,
             deliveryBlockedReason: null,
@@ -526,7 +533,7 @@ describe("pendingMessageService", () => {
                 actorAccountId: "u1",
                 sessionRelationship: "owner",
             },
-            requestEqualityEvidenceV1,
+            requestEqualityEvidenceV1: { ...requestEqualityEvidenceV1, retired: true },
         });
 
         await expect(enqueuePendingMessageCompat({
@@ -606,7 +613,7 @@ describe("pendingMessageService", () => {
         );
     });
 
-    it("rejoins authenticated-machine encrypted retries by opaque equality tag and self-heals missing role metadata", async () => {
+    it("rejoins authenticated-machine encrypted retries despite retired evidence fields and self-heals missing role metadata", async () => {
         const createdAt = new Date("2020-01-01T00:00:00.000Z");
         const inputAdmissionReceipt = buildSessionInputAdmissionReceipt({ issuer: 'authenticatedMachine',
             admittedTarget: { homeId: pendingHomeId, accountId: 'u1', sessionId: 's1',
@@ -636,7 +643,7 @@ describe("pendingMessageService", () => {
             discardedReason: null,
             authorAccountId: null,
             inputAdmissionReceipt,
-            requestEqualityEvidenceV1: equalityEvidence,
+            requestEqualityEvidenceV1: { ...equalityEvidence, retired: true },
         });
         currentTx.sessionPendingMessage.update.mockResolvedValue({
             localId: "l1",
@@ -656,7 +663,7 @@ describe("pendingMessageService", () => {
             requestEqualityEvidenceV1: equalityEvidence,
         });
 
-        const res = await enqueuePendingMessageByAuthenticatedMachine({
+        const retry = {
             accountId: "u1",
             sourceMachineId: "source-machine",
             targetMachineId: "target-machine",
@@ -665,12 +672,21 @@ describe("pendingMessageService", () => {
             content: { t: "encrypted", c: "retry-random-cipher" },
             requestedAction: { v: 1, kind: "enqueue" },
             requestEqualityEvidenceV1: equalityEvidence,
-        });
+        } as const;
+        const res = await enqueuePendingMessageByAuthenticatedMachine(retry);
 
         expect(res).toEqual({ status: "alreadyAccepted", localId: "l1" });
         expect(currentTx.sessionPendingMessage.update).toHaveBeenCalledWith(expect.objectContaining({
             data: { messageRole: "user" },
         }));
+        await expect(enqueuePendingMessageByAuthenticatedMachine({
+            ...retry,
+            requestEqualityEvidenceV1: { ...equalityEvidence, tag: "B".repeat(43) },
+        })).resolves.toEqual({ status: "rejected", code: "session_input_idempotency_conflict" });
+        const authoredExtraEvidence = { ...equalityEvidence, retired: true };
+        await expect(enqueuePendingMessageByAuthenticatedMachine({
+            ...retry, requestEqualityEvidenceV1: authoredExtraEvidence,
+        })).resolves.toEqual({ status: "rejected", code: "session_input_invalid" });
     });
 
     it("publishes the exact Run recovery hint after authenticated Machine target custody is durable", async () => {
@@ -982,6 +998,7 @@ describe("pendingMessageService", () => {
 
     it("does not copy request equality evidence when resend-as-new changes the requested action", async () => {
         currentTx.session.findUniqueOrThrow = vi.fn(async () => ({ pendingActivationRequestId: null }));
+        const content = { t: "encrypted", c: "randomized-ciphertext" } as const;
         currentTx.sessionPendingMessage.findUnique
             .mockResolvedValueOnce({
                 status: "queued",
@@ -989,7 +1006,7 @@ describe("pendingMessageService", () => {
                 deliveryBlockedReason: "delivery_outcome_uncertain",
                 discardedReason: null,
                 messageRole: "user",
-                content: { t: "encrypted", c: "randomized-ciphertext" },
+                content,
                 requestedAction: { v: 1, kind: "send_now" },
                 authorAccountId: "u1",
                 inputAdmissionReceipt: {
@@ -1004,18 +1021,26 @@ describe("pendingMessageService", () => {
         currentTx.sessionPendingMessage.findFirst.mockResolvedValue(null);
         currentTx.session.update.mockResolvedValue({ pendingQueueSeq: 1 });
 
-        await expect(sendPendingDeliveryAsNewCompat({
+        const result = await sendPendingDeliveryAsNewCompat({
             authentication,
             actorUserId: "u1",
             sessionId: "s1",
             localId: "original",
-        })).resolves.toMatchObject({ ok: true, didWrite: true });
+        });
+        expect(result).toMatchObject({ ok: true, didWrite: true });
 
         expect(currentTx.sessionPendingMessage.create).toHaveBeenCalledWith(expect.objectContaining({
             data: expect.not.objectContaining({
                 requestEqualityEvidenceV1: expect.anything(),
             }),
         }));
+        currentTx.sessionPendingMessage.findUnique
+            .mockResolvedValueOnce({ status: "discarded", deliveryState: null, deliveryBlockedReason: null,
+                discardedReason: "resent_as_new", messageRole: "user", content })
+            .mockResolvedValueOnce({ targetExecutionRunId: null, status: "queued", deliveryState: null,
+                messageRole: "user", content, requestedAction: { v: 1, kind: "enqueue", retired: true } });
+        await expect(sendPendingDeliveryAsNewCompat({ authentication, actorUserId: "u1", sessionId: "s1", localId: "original" }))
+            .resolves.toMatchObject({ ok: true, didWrite: false, newLocalId: result.newLocalId });
     });
 
     it("allocates queued positions from a session counter so racing enqueues keep their order", async () => {

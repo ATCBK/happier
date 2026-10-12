@@ -25,6 +25,7 @@ import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode
 import { assertSessionCapabilityInTx } from "@/app/session/access/sessionAccess";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { inTx, type Tx } from '@/storage/inTx';
+import { readSnapshotWithCurrentAdmission } from '@/storage/readSnapshotWithCurrentAdmission';
 import { isPrismaErrorCode } from '@/storage/prisma';
 
 const RECEIPT_PRUNE_BATCH_SIZE = 256;
@@ -322,7 +323,7 @@ export async function mutateSessionSubagentCustody(params: MutateSessionSubagent
     const request = parsed.data;
     const digest = requestDigest(request);
     try {
-        return await inTx((tx) => mutateInTx({ tx, actorUserId: params.actorUserId, sessionId: params.sessionId, request, digest, now: new Date(), authentication: params.authentication }));
+        return await inTx((tx) => mutateInTx({ tx, actorUserId: params.actorUserId, sessionId: params.sessionId, request, digest, now: new Date(), authentication: params.authentication }), { isolationLevel: "Serializable" /* Subagent source retirement and capacity admission must serialize with custody mutation. */ });
     } catch (error) {
         if (isPrismaErrorCode(error, 'P2002')) {
             try {
@@ -338,7 +339,7 @@ export async function mutateSessionSubagentCustody(params: MutateSessionSubagent
                             },
                         },
                     }) as Promise<ReceiptRow | null>;
-                });
+                }, { isolationLevel: "Serializable" /* Subagent source retirement and capacity admission must serialize with custody mutation. */ });
                 if (receipt === undefined) return { ok: false, error: 'session-not-found' };
                 if (!receipt || receipt.expiresAt <= new Date()) return { ok: false, error: 'cas-conflict' };
                 if (receipt.requestDigest !== digest) return { ok: false, error: 'idempotency-conflict' };
@@ -362,7 +363,7 @@ export async function listSessionSubagentCustody(params: Readonly<{
     if (!params.actorUserId || !params.sessionId || !parsed.success) return { ok: false, error: 'invalid-params' };
     if (!hasValidCustodyKey({ sessionId: params.sessionId, request: parsed.data })) return { ok: false, error: 'invalid-params' };
     try {
-        const rows = await inTx(async (tx) => {
+        const rows = await readSnapshotWithCurrentAdmission<CustodyRow[] | null | 'retired'>(async (tx) => {
             if (!(await assertSessionCapabilityInTx({ tx, accountId: params.actorUserId, sessionId: params.sessionId, capability: 'readTranscript', authentication: params.authentication })).ok) return null;
             const sourceIdentity = createSessionSubagentSourceCustodyStorageIdentityV1(parsed.data.sourceCustody);
             const retiredSource = await tx.sessionSubagentCustodyRetiredSource.findUnique({
@@ -390,7 +391,17 @@ export async function listSessionSubagentCustody(params: Readonly<{
                 orderBy: [{ subagentKey: 'asc' }],
                 take: MAX_SESSION_SUBAGENT_CUSTODY_RECORDS,
             }) as Promise<CustodyRow[]>;
-        }, { readOnly: true });
+        }, async (tx, captured) => {
+            if (captured === null || captured === 'retired') return captured;
+            if (!(await assertSessionCapabilityInTx({ tx, accountId: params.actorUserId, sessionId: params.sessionId,
+                capability: 'readTranscript', authentication: params.authentication })).ok) return null;
+            const sourceIdentity = createSessionSubagentSourceCustodyStorageIdentityV1(parsed.data.sourceCustody);
+            const retired = await tx.sessionSubagentCustodyRetiredSource.findUnique({ where: {
+                accountId_pluginId_sourceCustodyKind_sourceCustodyId: { accountId: params.actorUserId, pluginId: parsed.data.pluginId,
+                    sourceCustodyKind: sourceIdentity.kind, sourceCustodyId: sourceIdentity.id },
+            }, select: { id: true } });
+            return retired ? 'retired' : captured;
+        });
         if (!rows) return { ok: false, error: 'session-not-found' };
         if (rows === 'retired') return { ok: false, error: 'source-retired' };
         const records = rows.map(toPublicRecord);
@@ -454,7 +465,7 @@ export async function retireSessionSubagentCustodySource(params: Readonly<{
                 tx,
                 actorUserId: params.actorUserId,
                 request: parsed.data,
-            }));
+            }), { isolationLevel: "Serializable" /* Subagent source retirement and capacity admission must serialize with custody mutation. */ });
         } catch (error) {
             // A concurrent different source can claim the same next capacity
             // slot. Recount under a new transaction until this exact source

@@ -6,6 +6,7 @@ import {
 } from "@happier-dev/protocol";
 import type {
     SessionMetadataRecipientProjectionV1,
+    SessionOwnerMetadataEnvelopeV1,
 } from "@happier-dev/protocol";
 import type { Prisma } from "@prisma/client";
 
@@ -59,6 +60,23 @@ export type SessionMetadataRecipientProjection =
 
 export type SessionMetadataOwnerAccountMode =
     SessionOwnerMetadataAccountMode;
+
+/** Revalidate a captured owner envelope against the current Account authority. */
+export function assertSessionOwnerMetadataCurrentness(params: Readonly<{
+    metadataLayoutVersion: number; ownerMetadata: string | null;
+    accountMode: SessionMetadataOwnerAccountMode; isOwner: boolean;
+}>): SessionOwnerMetadataEnvelopeV1 {
+    if (params.metadataLayoutVersion !== SESSION_METADATA_LAYOUT_VERSION_V1) {
+        throw new SessionMetadataPrivacyUpgradeRequiredError();
+    }
+    const envelope = params.isOwner
+        ? parsePersistedSessionOwnerMetadataEnvelopeV1({ ...params, allowRetainedDevelopmentCiphertext: true })
+        : params.ownerMetadata === null ? null : parseSessionOwnerMetadataEnvelopeV1(params.ownerMetadata);
+    if (envelope === null || !validateSessionOwnerMetadataEnvelopeForAccountModeV1({
+        accountMode: params.accountMode, envelope,
+    }).ok) throw new SessionMetadataPrivacyUpgradeRequiredError();
+    return envelope;
+}
 
 /** Pending owner upgrades include archived/offscreen Sessions, but never private-only rows. */
 export async function listSessionMetadataPrivacyUpgradeIdsInTx(tx: Tx, accountId: string): Promise<string[]> {
@@ -118,7 +136,14 @@ type SessionMetadataOwnerAccountCurrentnessRow = Readonly<{
     contentPublicKeySig: Uint8Array | null;
 }>;
 
-function deriveSessionMetadataOwnerAccountMode(
+export const sessionMetadataOwnerAccountCurrentnessSelect = {
+    publicKey: true,
+    encryptionMode: true,
+    contentPublicKey: true,
+    contentPublicKeySig: true,
+} as const satisfies Prisma.AccountSelect;
+
+export function deriveSessionMetadataOwnerAccountMode(
     account: Omit<SessionMetadataOwnerAccountCurrentnessRow, "id"> | null,
 ): SessionMetadataOwnerAccountMode {
     const currentness = account
@@ -141,12 +166,7 @@ export async function readSessionMetadataOwnerAccountMode(
 ): Promise<SessionMetadataOwnerAccountMode> {
     const account = await client.account.findUnique({
         where: { id: accountId },
-        select: {
-            publicKey: true,
-            encryptionMode: true,
-            contentPublicKey: true,
-            contentPublicKeySig: true,
-        },
+        select: sessionMetadataOwnerAccountCurrentnessSelect,
     });
     return deriveSessionMetadataOwnerAccountMode(account);
 }
@@ -172,13 +192,7 @@ export async function readSessionMetadataOwnerAccountModes(
 
     const accounts = await client.account.findMany({
         where: { id: { in: distinctAccountIds } },
-        select: {
-            id: true,
-            publicKey: true,
-            encryptionMode: true,
-            contentPublicKey: true,
-            contentPublicKeySig: true,
-        },
+        select: { id: true, ...sessionMetadataOwnerAccountCurrentnessSelect },
     });
     if (accounts.length !== distinctAccountIds.length) {
         throw new SessionMetadataPrivacyUpgradeRequiredError();
@@ -225,20 +239,7 @@ export function projectSessionMetadataForRecipient(params: Readonly<{
         };
     }
 
-    const ownerMetadata = isOwner && recipient.type === "owner"
-        ? parsePersistedSessionOwnerMetadataEnvelopeV1({
-            metadataLayoutVersion,
-            accountMode: recipient.accountMode,
-            ownerMetadata: session.ownerMetadata ?? null,
-            allowRetainedDevelopmentCiphertext: true,
-        })
-        : typeof session.ownerMetadata === "string"
-            ? parseSessionOwnerMetadataEnvelopeV1(session.ownerMetadata)
-            : null;
-    if (
-        metadataLayoutVersion !== SESSION_METADATA_LAYOUT_VERSION_V1
-        || ownerMetadata === null
-    ) {
+    if (metadataLayoutVersion !== SESSION_METADATA_LAYOUT_VERSION_V1) {
         throw new SessionMetadataPrivacyUpgradeRequiredError();
     }
     if (session.encryptionMode === "plain") {
@@ -262,14 +263,10 @@ export function projectSessionMetadataForRecipient(params: Readonly<{
     if (ownerAccountMode === undefined) {
         throw new SessionMetadataPrivacyUpgradeRequiredError();
     }
-    const validatedOwnerMetadata =
-        validateSessionOwnerMetadataEnvelopeForAccountModeV1({
-            accountMode: ownerAccountMode,
-            envelope: ownerMetadata,
-        });
-    if (!validatedOwnerMetadata.ok) {
-        throw new SessionMetadataPrivacyUpgradeRequiredError();
-    }
+    const validatedOwnerMetadata = assertSessionOwnerMetadataCurrentness({
+        metadataLayoutVersion, ownerMetadata: session.ownerMetadata ?? null,
+        accountMode: ownerAccountMode, isOwner,
+    });
 
     if (isOwner) {
         if (recipient.type !== "owner") {
@@ -279,7 +276,7 @@ export function projectSessionMetadataForRecipient(params: Readonly<{
             metadata: session.metadata,
             metadataVersion: session.metadataVersion,
             metadataLayoutVersion: SESSION_METADATA_LAYOUT_VERSION_V1,
-            ownerMetadata: validatedOwnerMetadata.envelope,
+            ownerMetadata: validatedOwnerMetadata,
             agentState: session.agentState,
             agentStateVersion: session.agentStateVersion,
         };

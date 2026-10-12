@@ -1,9 +1,11 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { markSessionProjectionRecipientsChanged } from "./markSessionProjectionRecipientsChanged";
+import { eventRouter } from "@/app/events/eventRouter";
+import { PrismaClient } from "../../../../generated/sqlite-client";
 
 describe("markSessionProjectionRecipientsChanged publication privacy (SQLite integration)", () => {
     let harness: LightSqliteHarness;
@@ -20,12 +22,123 @@ describe("markSessionProjectionRecipientsChanged publication privacy (SQLite int
     });
 
     afterEach(async () => {
+        eventRouter.clearIo();
         await harness.resetDbTables([
+            () => db.sessionFollowEdge.deleteMany(),
+            () => db.sessionReportsTo.deleteMany(),
             () => db.sessionShare.deleteMany(),
             () => db.accountChange.deleteMany(),
             () => db.session.deleteMany(),
             () => db.account.deleteMany(),
         ]);
+    });
+
+    it("keeps relation fanout set-oriented while preserving hints, complete audiences and committed wakes", async () => {
+        // Trace real SQL from the disposable harness database. Rebind only the
+        // transaction transport; all production owners and database operations run.
+        const tracedClient = new PrismaClient({ log: [{ level: "query", emit: "event" }] });
+        const statements: string[] = [];
+        tracedClient.$on("query", event => statements.push(event.query));
+        const originalTransaction = db.$transaction;
+        // Provider-generated clients implement the same transaction boundary.
+        db.$transaction = tracedClient.$transaction.bind(tracedClient) as typeof db.$transaction;
+        const broadcast = vi.spyOn(eventRouter, "emitSessionBroadcast");
+        const wake = vi.spyOn(eventRouter, "emitUpdate");
+        const settleBroadcasts = async () => {
+            for (let settled = -1; settled !== broadcast.mock.results.length;) {
+                settled = broadcast.mock.results.length;
+                await Promise.all(broadcast.mock.results.map(result => result.type === "return" ? result.value : undefined));
+            }
+        };
+        try {
+            const traceFanout = async (audienceSize: number, destinationCount: number) => {
+                const accounts = await Promise.all(Array.from({ length: audienceSize }, () => db.account.create({
+                    data: { publicKey: `relation-recipient-${crypto.randomUUID()}`, encryptionMode: "plain" },
+                    select: { id: true },
+                })));
+                const owner = accounts[0];
+                const source = await db.session.create({ data: {
+                    accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: "{}",
+                    seq: 2, currentStorageState: "snapshot_complete", acceptedThroughServerSeq: 2,
+                    materializationPublicationId: "relation-publication", materializedThroughSourceAt: 20_000n,
+                    publishedThroughServerSeq: 2,
+                } });
+                const destinations = await Promise.all(Array.from({ length: destinationCount }, () => db.session.create({
+                    data: { accountId: owner.id, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: "{}" },
+                })));
+                const lead = destinations[0];
+                await db.sessionShare.createMany({ data: [source, ...destinations].flatMap(session => accounts.slice(1).map(account => ({
+                    sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "view",
+                }))) });
+                await db.sessionReportsTo.create({ data: { sessionId: source.id, leadSessionId: lead.id } });
+                await db.sessionFollowEdge.createMany({ data: destinations.map(destination => ({
+                    sourceSessionId: source.id, destinationSessionId: destination.id,
+                })) });
+                await db.accountChange.createMany({ data: accounts.map((account, index) => ({
+                    accountId: account.id, kind: "session", entityId: lead.id, sessionId: lead.id,
+                    cursor: 0, hint: { sharedMetadataVersion: index + 7 },
+                })) });
+
+                statements.length = 0;
+                wake.mockClear();
+                const cursors = await inTx(async tx => {
+                    const result = await markSessionProjectionRecipientsChanged({ tx, sessionId: source.id,
+                        recipientAccountIds: accounts.map(account => account.id),
+                        hint: { latestTurnId: "private-turn", latestTurnStatus: "failed" } });
+                    expect(broadcast.mock.calls.filter(([input]) => destinations.some(destination => destination.id === input.sessionId))).toEqual([]);
+                    expect(wake.mock.calls).toEqual([]);
+                    return result;
+                });
+                const trace = [...statements];
+                await settleBroadcasts();
+                expect(cursors.map(cursor => cursor.accountId)).toEqual([owner.id]);
+                const changes = await db.accountChange.findMany({ where: { sessionId: { in: [source.id, lead.id] } },
+                    select: { accountId: true, sessionId: true, hint: true } });
+                expect(changes.filter(change => change.sessionId === lead.id).map(change => change.accountId).sort())
+                    .toEqual(accounts.map(account => account.id).sort());
+                for (const [index, account] of accounts.entries()) {
+                    expect(changes.find(change => change.sessionId === lead.id && change.accountId === account.id)?.hint)
+                        .toEqual({ sharedMetadataVersion: index + 7 });
+                }
+                expect(changes.filter(change => change.sessionId === source.id)).toEqual([expect.objectContaining({
+                    accountId: owner.id, hint: { latestTurnId: "private-turn", latestTurnStatus: "failed" },
+                })]);
+                for (const destination of destinations) {
+                    expect([...new Set(broadcast.mock.calls.filter(([input]) => input.sessionId === destination.id)
+                        .map(([input]) => input.userId))].sort()).toEqual(accounts.map(account => account.id).sort());
+                }
+                const beforeRollback = await db.account.findMany({ where: { id: { in: accounts.map(account => account.id) } },
+                    orderBy: { id: "asc" }, select: { id: true, seq: true } });
+                for (const account of beforeRollback) {
+                    expect(wake.mock.calls.some(([input]) => input.userId === account.id
+                        && input.payload.seq === account.seq && input.payload.body.t === "account-change")).toBe(true);
+                }
+                broadcast.mockClear();
+                wake.mockClear();
+                await expect(inTx(async tx => {
+                    await markSessionProjectionRecipientsChanged({ tx, sessionId: source.id });
+                    throw new Error("relation-rollback");
+                })).rejects.toThrow("relation-rollback");
+                await settleBroadcasts();
+                expect(broadcast.mock.calls).toEqual([]);
+                expect(wake.mock.calls).toEqual([]);
+                expect(await db.account.findMany({ where: { id: { in: accounts.map(account => account.id) } },
+                    orderBy: { id: "asc" }, select: { id: true, seq: true } })).toEqual(beforeRollback);
+                return trace;
+            };
+            const small = await traceFanout(2, 1);
+            broadcast.mockClear();
+            const large = await traceFanout(8, 4);
+            // Source publication still uses its hint-sensitive writer. Relation
+            // audience/destination growth must not add database round trips.
+            console.info("relation fanout SQL trace", { small: small.length, large: large.length });
+            expect(large.length).toBeLessThanOrEqual(small.length);
+        } finally {
+            broadcast.mockRestore();
+            wake.mockRestore();
+            db.$transaction = originalTransaction;
+            await tracedClient.$disconnect();
+        }
     });
 
     it("does not create a collaborator AccountChange for post-publication private state", async () => {

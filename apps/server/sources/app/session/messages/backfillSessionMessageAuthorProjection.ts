@@ -72,7 +72,7 @@ export async function backfillSessionMessageAuthorProjection(options?: Readonly<
             const actorAccountId = deriveSessionMessageAuthorAccountIdV1({
                 messageRole: row.messageRole,
                 inputAdmissionReceipt: row.inputAdmissionReceipt,
-            });
+            }, 'stored');
             if (row.authorAccountId != null) {
                 if (row.authorAccountId !== actorAccountId) {
                     disagreements += 1;

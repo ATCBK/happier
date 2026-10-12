@@ -7,7 +7,9 @@ import type {
 import { SESSION_LIST_PAGE_DEFAULT_LIMIT, SessionListQueryResponseV1Schema } from "@happier-dev/protocol";
 import type { Prisma } from "@prisma/client";
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import type { Tx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
+import { readmitSessionRowsInTx } from "@/app/session/access/sessionReadAdmission";
 import { fetchSessionOrganizationPinnedSessionIds } from "@/app/session/organization/organizationQueries";
 import { buildSessionAccessWhere, createApplicableAudienceWhere, resolveEffectiveSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
@@ -47,7 +49,7 @@ import {
 import type { createV2SessionListServerTiming } from "./timing";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { readSessionLedSubtreeSessionIdsInTx } from "@/app/session/relations/sessionReportsToSubtree";
-import { projectSessionReportsForRowsInTx } from "@/app/session/awareness/sessionReportsProjection";
+import { projectSessionReportsForRowsInTx, readmitCapturedSessionReportReferencesInTx, type SessionReportContribution } from "@/app/session/awareness/sessionReportsProjection";
 
 export class SessionListInvalidCursorError extends Error {
     constructor() {
@@ -109,7 +111,8 @@ export async function listSessionsForAccount(params: Readonly<{
             timing: params.timing,
         });
     }
-    return await inTx(async (tx) => {
+    let contributions: readonly SessionReportContribution[] = [];
+    return await readSnapshotWithCurrentAdmission(async (tx) => {
         const now = Date.now();
         const accessResolution = {
             where: buildSessionAccessWhere({
@@ -168,9 +171,15 @@ export async function listSessionsForAccount(params: Readonly<{
                 sessions: page.sessions,
                 accessMode: "legacy_owner_or_direct",
                 nowMs: now,
+                captureContributions: rows => { contributions = rows; },
             }),
         };
-    }, { readOnly: true });
+    }, async (tx, captured) => {
+        if (!captured) return captured;
+        const admission = { accountId: params.userId, authentication: params.authentication, accessMode: "legacy_owner_or_direct" as const };
+        const sessions = await readmitSessionRowsInTx(tx, admission, captured.sessions);
+        return { ...captured, sessions: await readmitCapturedSessionReportReferencesInTx(tx, { ...admission, sessions, contributions }) };
+    });
 }
 
 async function listSessionRowsForAccount(params: Readonly<{
@@ -357,7 +366,8 @@ async function listFilteredSessionsForAccount(params: Readonly<{
         throw new SessionListUnavailableQueryError("audience");
     }
 
-    return await inTx(async (tx) => {
+    let contributions: readonly SessionReportContribution[] = [];
+    return await readSnapshotWithCurrentAdmission(async (tx) => {
         const accessResolution = await resolveEffectiveSessionAccessWhere({
             tx,
             accountId: params.userId,
@@ -463,6 +473,7 @@ async function listFilteredSessionsForAccount(params: Readonly<{
                 accessMode: "effective_access_v1",
                 collectiveAccessSnapshot: accessResolution.collectiveAccessSnapshot,
                 nowMs: now,
+                captureContributions: rows => { contributions = rows; },
             }),
             nextCursor: page.nextCursor ?? null,
             hasNext: page.hasNext ?? false,
@@ -472,5 +483,13 @@ async function listFilteredSessionsForAccount(params: Readonly<{
                 ? { metadataUpgradeRequiredCount: page.metadataUpgradeRequiredCount }
                 : {}),
         });
-    }, { readOnly: true });
+    }, async (tx, captured) => {
+        if (!captured) return captured;
+        const admission = { accountId: params.userId, authentication: params.authentication, accessMode: "effective_access_v1" as const };
+        const sessions = await readmitSessionRowsInTx(tx, admission, captured.sessions);
+        return SessionListQueryResponseV1Schema.parse({
+            ...captured,
+            sessions: await readmitCapturedSessionReportReferencesInTx(tx, { ...admission, sessions, contributions }),
+        });
+    });
 }

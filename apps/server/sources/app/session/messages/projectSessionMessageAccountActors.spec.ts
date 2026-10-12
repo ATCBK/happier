@@ -23,6 +23,7 @@ const MACHINE_RECEIPT = { v: 1, issuer: "authenticatedMachine" };
 
 function createAccountReader(accounts: readonly {
     id: string;
+    name: string | null;
     firstName: string | null;
     lastName: string | null;
     username: string | null;
@@ -35,6 +36,7 @@ function createAccountReader(accounts: readonly {
 
 const ALICE = {
     id: "acc_alice",
+    name: "Alice Chen",
     firstName: "Alice",
     lastName: "Chen",
     username: "alice",
@@ -49,8 +51,9 @@ describe("projectSessionMessageAccountActors", () => {
                 v: 1,
                 accountId: "acc_alice",
                 profile: {
-                    firstName: "Alice",
-                    lastName: "Chen",
+                    name: "Alice Chen",
+                    firstName: "Alice Chen",
+                    lastName: null,
                     username: "alice",
                     avatarUrl: "https://files.test/avatars/alice.png",
                 },
@@ -72,12 +75,28 @@ describe("projectSessionMessageAccountActors", () => {
             v: 1,
             accountId: "acc_alice",
             profile: {
-                firstName: "Alice",
-                lastName: "Chen",
+                name: "Alice Chen",
+                firstName: "Alice Chen",
+                lastName: null,
                 username: "alice",
                 avatarUrl: "https://files.test/avatars/alice.png",
             },
         }]);
+    });
+
+    it("retains known actor evidence from retired receipt fields without accepting Account-column disagreement", async () => {
+        const { reader } = createAccountReader([ALICE]);
+        const receipt = {
+            ...accountReceipt("acc_alice"), retired: true,
+            admittedTarget: { homeId: "home", accountId: "acc_alice", sessionId: "session", machineId: "machine", installationId: "installation", retired: true },
+        };
+        const actors = await projectSessionMessageAccountActors(reader, [
+            { messageRole: "user", inputAdmissionReceipt: receipt, authorAccountId: "acc_alice" },
+            { messageRole: "user", inputAdmissionReceipt: receipt, authorAccountId: "acc_mallory" },
+            { messageRole: "agent", inputAdmissionReceipt: receipt, authorAccountId: null },
+        ]);
+        expect(actors.map((actor) => actor?.accountId ?? null)).toEqual(["acc_alice", null, null]);
+        expect(actors[0]).not.toHaveProperty("inputAdmissionReceipt");
     });
 
     it("never discloses the admission relationship of a Team/Group-derived editor", async () => {
@@ -127,7 +146,7 @@ describe("projectSessionMessageAccountActors", () => {
     });
 
     it("resolves repeated and multiple actors with one bounded unique-id lookup", async () => {
-        const bob = { id: "acc_bob", firstName: null, lastName: null, username: "bob", avatar: null };
+        const bob = { id: "acc_bob", name: null, firstName: null, lastName: null, username: "bob", avatar: null };
         const { reader, findMany } = createAccountReader([ALICE, bob]);
         const actors = await projectSessionMessageAccountActors(reader, [
             { messageRole: "user", inputAdmissionReceipt: accountReceipt("acc_alice"), authorAccountId: "acc_alice" },
@@ -144,6 +163,7 @@ describe("projectSessionMessageAccountActors", () => {
             null,
         ]);
         expect(actors[1]!.profile).toEqual({
+            name: null,
             firstName: null,
             lastName: null,
             username: "bob",

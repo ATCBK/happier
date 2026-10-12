@@ -1,14 +1,16 @@
 import { buildSessionInputAdmissionReceipt, isSameSessionInputAdmissionIssuer } from "./messages/sessionInputAdmission";
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { assertSessionCapabilityInTx, assertSessionOwnerInTx, resolveSessionAccessForOperation, type EffectiveSessionAccess, type SessionCapability } from "@/app/session/access/sessionAccess";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { resolveCurrentSessionRecipientAccountIdsInTx } from "@/app/session/access/sessionRecipients";
 import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { observeCreateSessionMessageStage } from "@/app/monitoring/metrics/sessionWriteMetrics";
 import { db } from "@/storage/db";
 import { afterTx, inTx, type Tx } from "@/storage/inTx";
 import { isPrismaErrorCode, prismaRuntime } from "@/storage/prisma";
-import type { SessionTranscriptSurfaceItemReferenceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import type { SessionTranscriptSurfaceItemReferenceInputV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { log, warn } from "@/utils/logging/log";
 import type { Prisma } from "@prisma/client";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
@@ -40,6 +42,7 @@ import {
     SessionSharedMetadataV1Schema,
     SessionUserActionRequiredOccurrenceV1Schema,
     SessionAgentStateActivitySummaryV1Schema,
+    SessionMetadataPublisherPreconditionV1Schema,
     SESSION_METADATA_LAYOUT_VERSION_V1,
     type PrimaryTurnStatusV1,
     type AccountEncryptionMigrateSessionsDirective,
@@ -122,7 +125,7 @@ import {
 } from "@/app/automations/automationSessionLifecycleAdmission";
 import { rejoinAutomationOccurrenceInsertRace } from "@/app/automations/automationOccurrencePersistence";
 import { producesAutomationSessionLifecycleOccurrence } from "@/app/automations/automationSessionLifecycleTerminalTruth";
-import { notifySessionTranscriptMutationAfterCommit } from './sessionTranscriptMutationObserver';
+import { SESSION_MESSAGE_WRITE_SELECT, SessionMessageRowRevisionRaceError, updateSessionMessageAtCurrentRevisionInTx } from './sessionMessageRevisionWrite';
 import { loadSessionRollbackEligibleTurnStartsInTx } from "./turns/sessionRollbackEligibilityProjection";
 import {
     SessionTeamCredentialBindingMetadataPatchV1Schema,
@@ -575,69 +578,6 @@ type SessionMessageWriteRowInput = Omit<
     rowRevision?: bigint;
 }>;
 
-const SESSION_MESSAGE_WRITE_SELECT = {
-    id: true,
-    sessionId: true,
-    seq: true,
-    localId: true,
-    sidechainId: true,
-    messageRole: true,
-    content: true,
-    createdAt: true,
-    updatedAt: true,
-    sourceCreatedAt: true,
-    sourceUpdatedAt: true,
-    transcriptObservationProvenance: true,
-    inputAdmissionReceipt: true,
-    authorAccountId: true,
-    rowRevision: true,
-} as const;
-
-class SessionMessageRowRevisionRaceError extends Error {
-    constructor() {
-        super("Session Message mutation lost its row-revision precondition");
-        this.name = "SessionMessageRowRevisionRaceError";
-    }
-}
-
-async function updateSessionMessageAtCurrentRevisionInTx(params: Readonly<{
-    tx: Tx;
-    id: string;
-    rowRevision: bigint;
-    data: Prisma.SessionMessageUncheckedUpdateInput;
-}>) {
-    try {
-        const updated = await params.tx.sessionMessage.update({
-            where: { id: params.id, rowRevision: params.rowRevision },
-            data: {
-                ...params.data,
-                // A content correction cannot retain publication authority from the old ciphertext.
-                ...(params.data.content !== undefined && params.data.surfaceItemReference === undefined
-                    ? { surfaceItemReference: prismaRuntime.DbNull } : {}),
-            },
-            select: SESSION_MESSAGE_WRITE_SELECT,
-        });
-        notifySessionTranscriptMutationAfterCommit(params.tx, {
-            kind: 'upsert',
-            message: {
-                id: updated.id,
-                sessionId: updated.sessionId,
-                seq: updated.seq,
-                createdAtMs: updated.createdAt.getTime(),
-                updatedAtMs: updated.updatedAt.getTime(),
-                role: typeof updated.messageRole === 'string' ? updated.messageRole : null,
-                content: updated.content,
-            },
-        });
-        return updated;
-    } catch (error) {
-        if (isPrismaErrorCode(error, "P2025")) {
-            throw new SessionMessageRowRevisionRaceError();
-        }
-        throw error;
-    }
-}
-
 function toSessionMessageWriteRow(row: SessionMessageWriteRowInput): SessionMessageWriteRow {
     const {
         transcriptObservationProvenance: rawProvenance,
@@ -648,7 +588,7 @@ function toSessionMessageWriteRow(row: SessionMessageWriteRowInput): SessionMess
     return {
         ...rest,
         messageRole: parseSessionMessageRole(row.messageRole),
-        inputAdmissionReceipt: SessionInputAdmissionReceiptV1Schema.safeParse(row.inputAdmissionReceipt).data ?? null,
+        inputAdmissionReceipt: createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(row.inputAdmissionReceipt).data ?? null,
         ...(provenance.success ? { transcriptObservationProvenance: provenance.data } : {}),
     };
 }
@@ -864,6 +804,7 @@ async function loadSessionMutationContextInTx(
     tx: Tx,
     params: SessionMutationContextInput,
 ): Promise<SessionMutationContextResult | SessionMutationContextTypedResult> {
+    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId]);
     const session = await tx.session.findUnique({
         where: { id: params.sessionId },
         select: { tag: true, encryptionMode: true, ...selectSessionActivityBadgeInputs() },
@@ -1005,7 +946,7 @@ type CreateSessionMessageParamsBase = Readonly<{
     publisherAuthority?: CurrentSessionPublisherAuthority;
     trustedSourceTimestamps?: Readonly<{ createdAt: number; updatedAt: number }>;
     trustedTranscriptObservationProvenance?: SessionTranscriptObservationProvenanceV1;
-    trustedSurfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
+    trustedSurfaceItemReference?: SessionTranscriptSurfaceItemReferenceInputV1;
 }>;
 
 type CreateSessionMessageParams = CreateSessionMessageParamsBase & (
@@ -1066,7 +1007,7 @@ async function reconcileExistingTrustedLocalIdInTx(params: Readonly<{
     sourceCreatedAt: Date;
     sourceUpdatedAt: Date;
     provenance: SessionTranscriptObservationProvenanceV1;
-    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
+    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceInputV1;
     storagePolicy: SessionTranscriptStoragePolicy;
 }>): Promise<TrustedLocalIdReconciliation> {
     if (
@@ -1696,7 +1637,7 @@ async function createSessionMessageAttempt(
 
                     const resolvedRole = resolveRoleForStorageMode(access.sessionEncryptionMode);
                     const storedReceipt = existing.inputAdmissionReceipt == null ? null
-                        : SessionInputAdmissionReceiptV1Schema.safeParse(existing.inputAdmissionReceipt);
+                        : createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(existing.inputAdmissionReceipt);
                     const admittedReceipt = params.inputAdmission === "authenticatedAccount" && resolvedRole === "user"
                         ? buildSessionInputAdmissionReceipt({ issuer: "authenticatedAccount", access: access.access,
                             callerInputConstraints: params.authentication.callerInputConstraints ?? params.authentication.apiTokenGrant })
@@ -2217,6 +2158,7 @@ export async function writeSessionRuntimeActivityProjectionInTx(params: {
         return { status: "rejected", reason: "invalid-params" };
     }
 
+    await acquireSessionAccountCursorLocksInTx(params.tx, [sessionId]);
     const current = await params.tx.session.findUnique({
         where: { id: sessionId },
         select: {
@@ -2340,7 +2282,7 @@ export async function updateSessionRuntimeActivityProjection(params: {
         if (activity.status === "unchanged") return { ...activity, recipientCursors: [] };
         const recipientCursors = await markSessionProjectionRecipientsChanged({ tx, sessionId: params.sessionId });
         return { ...activity, recipientCursors };
-    });
+    }, { isolationLevel: "Serializable" /* Publisher admission is read before the Activity writer acquires the Account fence. */ });
 }
 
 /** Shared by legacy Agent-state and tuple CAS writers; terminal settlement wins. */
@@ -2413,6 +2355,9 @@ export async function updateSessionAgentState(params: {
 
     try {
         return await inTx(async (tx) => {
+            if (parsedUserActionRequiredOccurrences.data.length > 0) {
+                await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [], { includeLifecyclePublications: true });
+            }
             if (
                 params.restrictedRuntimePrecondition
                 && (
@@ -3293,6 +3238,9 @@ async function applySessionTurnMutationWithOwnerAccessInTx(params: {
     runtimeComposition?: SubmitSessionActivityRemoteAlertsParams["runtimeComposition"];
 }): Promise<ApplySessionTurnMutationResult> {
     const tx = params.tx;
+    if (producesAutomationSessionLifecycleOccurrence(params.turnMutation.action)) {
+        await acquireSessionAccountCursorLocksInTx(tx, [params.turnMutation.sessionId], [], { includeLifecyclePublications: true });
+    }
         const access = params.principal.kind === "credential"
             ? await loadSessionInputMutationContextInTx(tx, {
                 actorUserId: params.actorUserId,
@@ -4528,13 +4476,7 @@ function isValidSessionMetadataEnvelopeTupleInput(
             ? (
                 hasPublisherPrecondition
                 && (
-                    !publisherPrecondition
-                    || typeof publisherPrecondition.machineId !== "string"
-                    || publisherPrecondition.machineId.trim().length === 0
-                    || publisherPrecondition.machineId.length > 256
-                    || !isNonNegativeInteger(
-                        publisherPrecondition.committedFenceMs,
-                    )
+                    !SessionMetadataPublisherPreconditionV1Schema.safeParse(publisherPrecondition).success
                 )
             )
             : hasPublisherPrecondition
@@ -4677,7 +4619,7 @@ function validatePlainOwnerMigrationProjection(
     }
     const ownerProjection = createSessionOwnerMetadataV1({
         metadata: legacyMetadata,
-    });
+    }, 'stored');
     if (!ownerProjection.ok) return null;
     const canonicalOwnerEnvelope =
         createPlainSessionOwnerMetadataEnvelopeV1(
@@ -4736,6 +4678,10 @@ export async function updateSessionMetadataEnvelopeTupleInTx(
         return { ok: false, error: "invalid-params" };
     }
 
+    // The owner-mode fence below can otherwise hold a higher owner Account
+    // before recipient publication discovers a lower one. Fence the complete
+    // Session audience before that Account-first authority lock.
+    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.actorUserId]);
     if (params.mode !== "shared_editor") {
         const preflightAccount = await tx.account.findUnique({
             where: { id: params.actorUserId },
@@ -5038,9 +4984,7 @@ export async function updateSessionMetadataEnvelopeTupleInTx(
                 accountId: params.actorUserId,
                 machineId: params.publisherPrecondition.machineId,
                 sessionId: params.sessionId,
-                committedFence: new Date(
-                    params.publisherPrecondition.committedFenceMs,
-                ),
+                publisherGeneration: BigInt(params.publisherPrecondition.publisherGeneration),
             },
             params.actorUserId,
             params.sessionId,

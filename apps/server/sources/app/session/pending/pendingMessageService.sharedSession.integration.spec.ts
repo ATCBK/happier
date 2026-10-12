@@ -56,6 +56,7 @@ import { readManagedWakeTargets, assertManagedWakeOriginCurrentInTx } from '@/ap
 import { registerSessionListingRoutes } from "@/app/api/routes/session/registerSessionListingRoutes";
 import { registerManagedMachineRoutes } from '@/app/machines/managed/managedRoutes';
 import { getOrCreateServerIdentityId } from '@/app/serverIdentity/serverIdentity';
+import { mapPendingActivationAuthorization, mapPendingActivationFailureDetails } from './pendingActivationAuthorization';
 
 type EnqueuePendingMessageParams = Parameters<typeof enqueuePendingMessageWithAction>[0];
 const authentication = createPresentUserSessionAccessAuthentication();
@@ -95,6 +96,38 @@ const updatePendingRequestedAction = (params: WithoutAuthentication<Parameters<t
     updatePendingRequestedActionWithAuthentication(withPresentUserAuthentication(params));
 
 describe("pendingMessageService (shared sessions)", () => {
+    it('persists privacy-safe activation reasons through the actual failure route and exact CAS', async () => {
+        const { owner, session, controller, guest } = await createManagedPendingFixture();
+        const localId = `diagnostic-${randomUUID()}`;
+        await expect(enqueuePendingMessageByAuthenticatedMachine({ accountId: owner.id, sourceMachineId: controller.id,
+            targetMachineId: guest.id, sessionId: session.id, localId,
+            content: { t: 'encrypted', c: 'original-protected-input' }, requestedAction: { v: 1, kind: 'send_now' } }))
+            .resolves.toMatchObject({ status: 'accepted' });
+        const waiting = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+        const authorization = mapPendingActivationAuthorization(waiting)!;
+        const details = { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' };
+        const body = { requestId: localId, requestedAt: authorization.requestedAt, failureCode: 'runtime_start_failed' };
+        await withAuthenticatedTestApp(sessionPendingRoutes, async app => {
+            const url = `/v2/sessions/${session.id}/pending/activation/fail?failureDetails=${encodeURIComponent(JSON.stringify(details))}`;
+            const result = await app.inject({ method: 'POST', url, headers: { 'x-test-user-id': owner.id }, payload: body });
+            expect(result.json()).toEqual({ ok: true, didFail: true });
+            const failed = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            expect(mapPendingActivationAuthorization(failed)).toMatchObject({ ...body, status: 'failed' });
+            expect(mapPendingActivationFailureDetails(failed)).toEqual(details);
+            expect(failed.pendingCount).toBe(1);
+            expect(await listPendingMessages({ actorUserId: owner.id, sessionId: session.id }))
+                .toMatchObject({ ok: true, pending: [{ localId, content: { t: 'encrypted', c: 'original-protected-input' } }] });
+            expect((await app.inject({ method: 'POST', url, headers: { 'x-test-user-id': owner.id }, payload: body })).json())
+                .toEqual({ ok: true, didFail: false });
+        });
+        await withAuthenticatedTestApp(registerSessionListingRoutes, async app => {
+            const response = await app.inject({ method: 'GET', url: '/v2/sessions', headers: { 'x-test-user-id': owner.id } });
+            expect(response.statusCode).toBe(200);
+            expect(response.json().sessions.find((row: { id: string }) => row.id === session.id))
+                .toMatchObject({ pendingActivationAuthorization: { status: 'failed', failureCode: 'runtime_start_failed' },
+                    pendingActivationFailureDetails: details });
+        });
+    });
     let harness: LightSqliteHarness;
     const providerAuthorityBySessionId = new Map<
         string,
@@ -106,6 +139,7 @@ describe("pendingMessageService (shared sessions)", () => {
             tempDirPrefix: "happier-pending-shared-",
             initAuth: true,
         });
+        await getOrCreateServerIdentityId();
     }, 120_000);
 
     afterAll(async () => {
@@ -312,13 +346,13 @@ describe("pendingMessageService (shared sessions)", () => {
         const editor = await createAccount("actor-editor");
         const session = await createSession(owner.id);
         const share = await shareSession({ sessionId: session.id, ownerId: owner.id, participantId: editor.id, accessLevel: "edit" });
-        await db.account.update({ where: { id: editor.id }, data: { firstName: "Alice" } });
+        await db.account.update({ where: { id: editor.id }, data: { name: "Alice" } });
         expect(await enqueuePendingMessage({ actorUserId: editor.id, sessionId: session.id, localId: "actor-input", ciphertext: "cipher", messageRole: "user" })).toMatchObject({
-            ok: true, pending: { accountActor: { accountId: editor.id, profile: { firstName: "Alice" } } },
+            ok: true, pending: { accountActor: { accountId: editor.id, profile: { name: "Alice", firstName: "Alice" } } },
         });
         await db.sessionShare.delete({ where: { id: share.id } });
         expect(await listPendingMessages({ actorUserId: owner.id, sessionId: session.id })).toMatchObject({
-            ok: true, pending: [{ accountActor: { accountId: editor.id, profile: { firstName: "Alice" } } }],
+            ok: true, pending: [{ accountActor: { accountId: editor.id, profile: { name: "Alice", firstName: "Alice" } } }],
         });
         expect(await listPendingMessages({ actorUserId: editor.id, sessionId: session.id })).toMatchObject({ ok: false });
         await db.account.delete({ where: { id: editor.id } });
@@ -499,6 +533,7 @@ describe("pendingMessageService (shared sessions)", () => {
         const machineId = `target-machine-${randomUUID()}`;
         await db.machine.create({ data: {
             id: machineId, accountId: owner.id, metadata: "{}",
+            installationId: `install-${machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } },
             operationProtocolCapabilitiesRevision: 1,
         } });
@@ -569,6 +604,7 @@ describe("pendingMessageService (shared sessions)", () => {
         const session = await createSession(owner.id);
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         for (const [localId, targetExecutionRunId] of [["main", null], ["run-a-collision", "run-a"], ["run-b", "run-b"]] as const) {
@@ -661,6 +697,7 @@ describe("pendingMessageService (shared sessions)", () => {
         const session = await createSession(owner.id);
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const localId = "run-a-rejoin-collision";
@@ -742,6 +779,7 @@ describe("pendingMessageService (shared sessions)", () => {
         const session = await createSession(owner.id);
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const localId = "run-a-content-conflict";
@@ -963,7 +1001,7 @@ describe("pendingMessageService (shared sessions)", () => {
         });
     });
 
-    it("admits machine input only for the exact capable target and persists no Machine identity", async () => {
+    it("admits machine input only for the exact capable target and persists its placement without source identity", async () => {
         const owner = await createAccount("machine-admission-owner");
         const session = await createSession(owner.id);
         const sourceMachineId = `machine-source-${randomUUID()}`;
@@ -981,6 +1019,7 @@ describe("pendingMessageService (shared sessions)", () => {
                 id: targetMachineId,
                 accountId: owner.id,
                 metadata: "{}",
+                installationId: `install-${targetMachineId}`,
                 operationProtocolCapabilities: {
                     sessionInputAdmission: { protocolVersions: [1] },
                 },
@@ -1016,7 +1055,10 @@ describe("pendingMessageService (shared sessions)", () => {
             select: { authorAccountId: true, inputAdmissionReceipt: true },
         })).resolves.toEqual({
             authorAccountId: null,
-            inputAdmissionReceipt: { v: 1, issuer: "authenticatedMachine" },
+            inputAdmissionReceipt: { v: 1, issuer: "authenticatedMachine", admittedTarget: {
+                homeId: await getOrCreateServerIdentityId(), accountId: owner.id,
+                sessionId: session.id, machineId: targetMachineId, installationId: `install-${targetMachineId}`,
+            } },
         });
 
         await expect(enqueuePendingMessageByAuthenticatedMachine({
@@ -1035,6 +1077,7 @@ describe("pendingMessageService (shared sessions)", () => {
                 id,
                 accountId: owner.id,
                 metadata: "{}",
+                installationId: `install-${id}`,
             })),
         });
         await db.accessKey.create({
@@ -1073,6 +1116,7 @@ describe("pendingMessageService (shared sessions)", () => {
             id: targetMachineId,
             accountId: owner.id,
             metadata: "{}",
+            installationId: `install-${targetMachineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } },
             operationProtocolCapabilitiesRevision: 1,
         } });
@@ -1176,6 +1220,7 @@ describe("pendingMessageService (shared sessions)", () => {
         await db.session.update({ where: { id: session.id }, data: { encryptionMode: "plain" } });
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const localId = "target-authority";
@@ -1229,6 +1274,7 @@ describe("pendingMessageService (shared sessions)", () => {
         await db.session.update({ where: { id: session.id }, data: { encryptionMode: "plain" } });
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const localId = `workflow-v2-authority-${randomUUID()}`;
@@ -1307,6 +1353,7 @@ describe("pendingMessageService (shared sessions)", () => {
         await db.session.update({ where: { id: session.id }, data: { encryptionMode: "plain" } });
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const localId = `workflow-v2-unsettled-${randomUUID()}`;
@@ -1357,6 +1404,7 @@ describe("pendingMessageService (shared sessions)", () => {
         await shareSession({ sessionId: session.id, ownerId: owner.id, participantId: collaborator.id, accessLevel: "edit" });
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const localId = "target-plain-no-request";
@@ -1388,6 +1436,7 @@ describe("pendingMessageService (shared sessions)", () => {
         await db.machine.update({
             where: { id: publisherAuthority.machineId },
             data: {
+                installationId: `install-${publisherAuthority.machineId}`,
                 operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } },
                 operationProtocolCapabilitiesRevision: 1,
             },
@@ -1573,6 +1622,7 @@ describe("pendingMessageService (shared sessions)", () => {
         const session = await createSession(owner.id);
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const localId = "target-resent-machine";
@@ -1597,6 +1647,7 @@ describe("pendingMessageService (shared sessions)", () => {
         await db.session.update({ where: { id: session.id }, data: { encryptionMode: "plain" } });
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const contentForRun = (runId: string) => ({ t: "plain", v: {
@@ -1614,6 +1665,7 @@ describe("pendingMessageService (shared sessions)", () => {
         const session = await createSession(owner.id);
         const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            installationId: `install-${publisherAuthority.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const localId = "target-edit-equality";
@@ -1634,6 +1686,65 @@ describe("pendingMessageService (shared sessions)", () => {
         } })).toMatchObject({ ok: true, result: { status: "accepted" } });
     });
 
+    it.each(["plain", "encrypted"] as const)("retains %s main input custody after a lost admission ACK until provider settlement", async (mode) => {
+        harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional" });
+        const owner = await createAccount("main-admission-ack-owner");
+        const session = await createSession(owner.id);
+        await db.session.update({ where: { id: session.id }, data: { encryptionMode: mode === "plain" ? "plain" : "e2ee" } });
+        const publisherAuthority = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
+        await db.machine.update({ where: { id: publisherAuthority.machineId }, data: {
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1] } },
+            operationProtocolCapabilitiesRevision: 1,
+        } });
+        const admission = buildTrustedHostSessionInputAdmissionV1("ui");
+        const requestMeta = { sentFrom: "ui", happierInputRequestV1: admission.request,
+            [SESSION_MESSAGE_PROVENANCE_META_KEY]: admission.provenance };
+        const localId = `main-admission-ack-${randomUUID()}`;
+        const content = mode === "plain"
+            ? { t: "plain" as const, v: { role: "user", content: { type: "text", text: "retained input" }, meta: requestMeta } }
+            : { t: "encrypted" as const, c: "protected-request" };
+        await expect(enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId, content }))
+            .resolves.toMatchObject({ ok: true });
+        const claim = await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id, publisherAuthority });
+        expect(claim).toMatchObject({ ok: true, didMaterialize: true, message: { localId } });
+        if (!claim.ok || !claim.didMaterialize || !claim.message.inputAdmissionReceipt) throw new Error("Missing admitted claim");
+        const finalContent = mode === "plain"
+            ? { t: "plain" as const, v: { role: "user", content: { type: "text", text: "retained input" }, meta: {
+                ...withSessionInputAuthorityV1(requestMeta, settleSessionInputRequestV1({ request: admission.request,
+                    currentSessionPermissionCeiling: "default", inputAdmissionReceipt: claim.message.inputAdmissionReceipt })),
+                [SESSION_MESSAGE_PROVENANCE_META_KEY]: settleSessionMessageProvenanceV1({ request: admission.request,
+                    requestedProvenance: admission.provenance, inputAdmissionReceipt: claim.message.inputAdmissionReceipt }),
+            } } }
+            : { t: "encrypted" as const, c: "settled-authority" };
+        const settlement = { actorUserId: owner.id, sessionId: session.id, localId, publisherAuthority,
+            decision: { kind: "admit" as const, finalContent } };
+        // The socket boundary loses the reply only after the real database owner commits.
+        const socket = createFakeSocket({ timeout: () => ({ emitWithAck: async () => {
+            expect(await settlePendingInputAdmission(settlement)).toMatchObject({ ok: true, result: { status: "accepted" } });
+            throw Object.assign(new Error("Socket admission ACK was lost after commit"), { code: "socket_ack_timeout" });
+        } }) });
+        await expect(socket.timeout().emitWithAck("session-pending-admission-settlement-v1", settlement))
+            .rejects.toMatchObject({ code: "socket_ack_timeout" });
+        expect(await db.sessionPendingMessage.findUnique({ where: { sessionId_localId: { sessionId: session.id, localId } } }))
+            .toMatchObject({ status: "queued", deliveryState: "delivering" });
+        expect(await db.session.findUnique({ where: { id: session.id }, select: { pendingCount: true } })).toEqual({ pendingCount: 1 });
+        expect(await materializeNextPendingMessage({ actorUserId: owner.id, sessionId: session.id, publisherAuthority }))
+            .toMatchObject({ ok: true, didMaterialize: true, message: { localId, content: finalContent } });
+        expect(await settlePendingInputAdmission(settlement)).toMatchObject({ ok: true, result: { status: "alreadyAccepted", localId } });
+        if (mode === "plain") {
+            // The settled authority envelope must not replace original request identity.
+            expect(await enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId, content }))
+                .toMatchObject({ ok: true });
+        }
+        expect(await blockPendingDelivery({ actorUserId: owner.id, sessionId: session.id, localId, publisherAuthority,
+            reason: "provider_rejected_before_acceptance" })).toMatchObject({ ok: true });
+        expect(await db.sessionPendingMessage.findUnique({ where: { sessionId_localId: { sessionId: session.id, localId } } }))
+            .toMatchObject({ deliveryState: "blocked" });
+        expect(await resolveAcceptedPendingDelivery({ actorUserId: owner.id, sessionId: session.id, localId, publisherAuthority }))
+            .toMatchObject({ ok: true, didResolve: true, pendingCount: 0 });
+        expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId } })).toBe(1);
+    });
+
     it("settles protected machine input exactly once before transcript visibility", async () => {
         harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional" });
         const owner = await createAccount("machine-settlement-owner");
@@ -1649,6 +1760,7 @@ describe("pendingMessageService (shared sessions)", () => {
         await db.machine.update({
             where: { id: publisher.machineId },
             data: {
+                installationId: `install-${publisher.machineId}`,
                 operationProtocolCapabilities: {
                     sessionInputAdmission: { protocolVersions: [1] },
                 },
@@ -1742,12 +1854,19 @@ describe("pendingMessageService (shared sessions)", () => {
             where: { sessionId_localId: { sessionId: session.id, localId: acceptedLocalId } },
             select: { inputAdmissionReceipt: true, requestEqualityEvidenceV1: true },
         })).resolves.toEqual({
-            inputAdmissionReceipt: { v: 1, issuer: "authenticatedMachine" },
+            inputAdmissionReceipt: { v: 1, issuer: "authenticatedMachine", admittedTarget: {
+                homeId: await getOrCreateServerIdentityId(), accountId: owner.id,
+                sessionId: session.id, machineId: publisher.machineId, installationId: `install-${publisher.machineId}`,
+            } },
             requestEqualityEvidenceV1: {
                 kind: "plainDigest",
                 digest: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
             },
         });
+
+        // Provider acceptance retires the first claim before the later FIFO input.
+        expect(await resolveAcceptedPendingDelivery({ actorUserId: owner.id, sessionId: session.id,
+            localId: acceptedLocalId, publisherAuthority: authority })).toMatchObject({ ok: true, didResolve: true });
 
         const rejectedLocalId = `plugin-input-v1:${randomUUID()}`;
         await expect(enqueuePendingMessageByAuthenticatedMachine({
@@ -1968,7 +2087,17 @@ describe("pendingMessageService (shared sessions)", () => {
         })).resolves.toEqual(expect.objectContaining({ localId: uncertainLocalId }));
         await expect(db.sessionPendingMessage.findUnique({
             where: { sessionId_localId: { sessionId: session.id, localId: uncertainLocalId } },
+        })).resolves.toMatchObject({ status: "queued", deliveryState: "delivering", content: {
+            t: "plain", v: { role: "user", content: { type: "text", text: "uncertain" }, meta: uncertainFinalMeta },
+        } });
+        const providerSettlement = { actorUserId: owner.id, sessionId: session.id,
+            localId: uncertainLocalId, publisherAuthority: authority };
+        expect(await resolveAcceptedPendingDelivery(providerSettlement)).toMatchObject({ ok: true, didResolve: true });
+        await expect(db.sessionPendingMessage.findUnique({
+            where: { sessionId_localId: { sessionId: session.id, localId: uncertainLocalId } },
         })).resolves.toBeNull();
+        expect(await resolveAcceptedPendingDelivery(providerSettlement)).toMatchObject({ ok: true, didResolve: false });
+        expect(await db.sessionMessage.count({ where: { sessionId: session.id, localId: uncertainLocalId } })).toBe(1);
     });
 
     it.each([
@@ -2467,6 +2596,44 @@ describe("pendingMessageService (shared sessions)", () => {
             where: { sessionId_localId: { sessionId: session.id, localId } },
             select: { requestedAction: true },
         })).resolves.toEqual({ requestedAction: { v: 1, kind: "enqueue" } });
+    });
+
+    it("enqueues one pending message after a rolled-back transaction conflict", async () => {
+        const owner = await createAccount("pending-enqueue-conflict");
+        const session = await createSession(owner.id);
+        const localId = `pending-enqueue-conflict-${randomUUID()}`;
+        harness.resetEnv({ HAPPIER_DB_TX_MAX_RETRIES: "1", HAPPIER_DB_TX_RETRY_BASE_DELAY_MS: "0" });
+        const originalTransaction = db.$transaction;
+        let attempts = 0;
+        // Inject a conflict at the real Prisma transaction boundary after the
+        // enqueue writes: the database rolls them back before inTx retries.
+        db.$transaction = new Proxy(originalTransaction, {
+            apply(target, thisArg, args) {
+                const operation: unknown = args[0];
+                if (typeof operation !== "function") return Reflect.apply(target, thisArg, args);
+                return Reflect.apply(target, thisArg, [async (tx: object) => {
+                    const result: unknown = await Reflect.apply(operation, undefined, [tx]);
+                    if (++attempts === 1) {
+                        throw Object.assign(new Error("Transaction failed due to a write conflict or a deadlock."), { code: "P2034" });
+                    }
+                    return result;
+                }, ...args.slice(1)]);
+            },
+        });
+        try {
+            await expect(enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId,
+                ciphertext: "cipher-pending-enqueue-conflict" })).resolves.toMatchObject({ ok: true, didWrite: true });
+            expect(attempts).toBe(2);
+        } finally {
+            db.$transaction = originalTransaction;
+            harness.restoreEnv();
+        }
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id, localId } })).toBe(1);
+        expect(await db.session.findUniqueOrThrow({ where: { id: session.id }, select: {
+            pendingQueueSeq: true, pendingCount: true, pendingVersion: true,
+        } })).toEqual({ pendingQueueSeq: 1, pendingCount: 1, pendingVersion: 1 });
+        await expect(enqueuePendingMessage({ actorUserId: owner.id, sessionId: session.id, localId,
+            ciphertext: "cipher-pending-enqueue-conflict" })).resolves.toMatchObject({ ok: true, didWrite: false });
     });
 
     it("keeps the originally observed action revision stale when a transaction callback is retried", async () => {
@@ -5483,6 +5650,8 @@ describe("pendingMessageService (shared sessions)", () => {
 
         const list = await listPendingMessages({ actorUserId: viewer.id, sessionId: session.id, includeDiscarded: true });
         expect(list.ok).toBe(true);
+        const before = await db.session.findUniqueOrThrow({ where: { id: session.id },
+            select: { pendingCount: true, pendingBlockedCount: true, pendingVersion: true } });
 
         const enqueueViewer = await enqueuePendingMessage({
             actorUserId: viewer.id,
@@ -5492,7 +5661,7 @@ describe("pendingMessageService (shared sessions)", () => {
         });
         expect(enqueueViewer.ok).toBe(false);
         if (enqueueViewer.ok) throw new Error("expected forbidden");
-        expect(enqueueViewer.error).toBe("forbidden");
+        expect(enqueueViewer.error).toBe("session-not-found");
 
         const edit = await updatePendingMessage({
             actorUserId: viewer.id,
@@ -5502,27 +5671,32 @@ describe("pendingMessageService (shared sessions)", () => {
         });
         expect(edit.ok).toBe(false);
         if (edit.ok) throw new Error("expected forbidden");
-        expect(edit.error).toBe("forbidden");
+        expect(edit.error).toBe("session-not-found");
 
         const reorder = await reorderPendingMessages({ actorUserId: viewer.id, sessionId: session.id, orderedLocalIds: [localId] });
         expect(reorder.ok).toBe(false);
         if (reorder.ok) throw new Error("expected forbidden");
-        expect(reorder.error).toBe("forbidden");
+        expect(reorder.error).toBe("session-not-found");
 
         const discard = await discardPendingMessage({ actorUserId: viewer.id, sessionId: session.id, localId, reason: "test" });
         expect(discard.ok).toBe(false);
         if (discard.ok) throw new Error("expected forbidden");
-        expect(discard.error).toBe("forbidden");
+        expect(discard.error).toBe("session-not-found");
 
         const restore = await restorePendingMessage({ actorUserId: viewer.id, sessionId: session.id, localId });
         expect(restore.ok).toBe(false);
         if (restore.ok) throw new Error("expected forbidden");
-        expect(restore.error).toBe("forbidden");
+        expect(restore.error).toBe("session-not-found");
 
         const del = await deletePendingMessage({ actorUserId: viewer.id, sessionId: session.id, localId });
         expect(del.ok).toBe(false);
         if (del.ok) throw new Error("expected forbidden");
-        expect(del.error).toBe("forbidden");
+        expect(del.error).toBe("session-not-found");
+        expect(await db.session.findUniqueOrThrow({ where: { id: session.id },
+            select: { pendingCount: true, pendingBlockedCount: true, pendingVersion: true } })).toEqual(before);
+        expect(await listPendingMessages({ actorUserId: owner.id, sessionId: session.id, includeDiscarded: true }))
+            .toMatchObject({ ok: true, pending: [{ localId, status: "queued", content: { t: "encrypted", c: "cipher-a-1" } }] });
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: session.id } })).toBe(1);
     });
 
     it("retains only the protected accepted target for managed wake and clears it on confirmed withdrawal", async () => {
@@ -5707,6 +5881,7 @@ describe("pendingMessageService (shared sessions)", () => {
         const session = await createSession(owner.id);
         const publisher = await createCurrentPendingPublisher({ accountId: owner.id, sessionId: session.id });
         await db.machine.update({ where: { id: publisher.machineId }, data: {
+            installationId: `install-${publisher.machineId}`,
             operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } }, operationProtocolCapabilitiesRevision: 1,
         } });
         const socket = createFakeSocket({ data: { clientType: "machine-scoped", machineId: publisher.machineId } });

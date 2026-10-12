@@ -20,31 +20,38 @@ import { isDeepStrictEqual } from "node:util";
 
 import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode } from "@/app/session/encryptionRejectionCodes";
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { notifySessionTranscriptMutationAfterCommit } from './sessionTranscriptMutationObserver';
 import { isPrismaErrorCode } from "@/storage/prisma";
-import { SessionTranscriptSurfaceItemReferenceV1Schema, type SessionTranscriptSurfaceItemReferenceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { SessionTranscriptSurfaceItemReferenceInputV1Schema, getSessionTranscriptSurfaceItemReferenceSourceKeyV1, readSessionTranscriptSurfaceItemReferencesV1, type SessionTranscriptSurfaceItemReferenceInputV1, type SessionTranscriptSurfaceItemReferencesV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { readPublishedSessionSurfaceItemInTx } from './systemRecords/sessionSystemRecordService';
 import { isSessionSystemRecordRevisionAtLeastAcknowledged } from './systemRecords/sessionSystemRecordRevision';
+import { SessionMessageRowRevisionRaceError, updateSessionMessageAtCurrentRevisionInTx } from './sessionMessageRevisionWrite';
 
 /** A candidate is a publication hint, never authority over another Session or a record incarnation. */
 export async function admitSessionTranscriptSurfaceItemReferenceInTx(tx: Tx, params: Readonly<{
     accountId?: string;
     sessionId: string;
     sessionEncryptionMode: SessionEncryptionMode;
-    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
-}>): Promise<SessionTranscriptSurfaceItemReferenceV1 | undefined> {
-    const candidate = SessionTranscriptSurfaceItemReferenceV1Schema.safeParse(params.surfaceItemReference);
+    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceInputV1;
+}>): Promise<SessionTranscriptSurfaceItemReferencesV1 | undefined> {
+    const candidate = SessionTranscriptSurfaceItemReferenceInputV1Schema.safeParse(params.surfaceItemReference);
     if (!candidate.success) return undefined;
     const accountId = params.accountId ?? (await tx.session.findUnique({
         where: { id: params.sessionId }, select: { accountId: true },
     }))?.accountId;
     if (!accountId) return undefined;
-    const record = await readPublishedSessionSurfaceItemInTx(tx, {
-        accountId, sessionId: params.sessionId,
-        itemId: candidate.data.itemId, encryptionMode: params.sessionEncryptionMode,
-    });
-    return record && isSessionSystemRecordRevisionAtLeastAcknowledged(record.revision, candidate.data.itemRevision)
-        ? candidate.data : undefined;
+    const references: SessionTranscriptSurfaceItemReferencesV1['references'] = [];
+    for (const reference of candidate.data.references) {
+        const record = await readPublishedSessionSurfaceItemInTx(tx, {
+            accountId, sessionId: params.sessionId,
+            itemId: reference.itemId, encryptionMode: params.sessionEncryptionMode,
+        });
+        if (record && isSessionSystemRecordRevisionAtLeastAcknowledged(record.revision, reference.itemRevision)) {
+            references.push(reference);
+        }
+    }
+    return references.length ? { v: 1, references } : undefined;
 }
 
 export const SESSION_TRANSCRIPT_WRITE_SELECT = {
@@ -243,7 +250,7 @@ export type SessionTranscriptMessageWriteParams = Readonly<{
     /** Only the Pending admission/settlement owner may supply immutable input evidence. */
     inputAdmissionReceipt?: SessionInputAdmissionReceiptV1;
     requestEqualityEvidenceV1?: SessionInputRequestEqualityEvidenceV1;
-    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
+    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceInputV1;
 }>;
 
 export type HistoricalSessionMessageItem = Readonly<{
@@ -254,7 +261,7 @@ export type HistoricalSessionMessageItem = Readonly<{
     sourceCreatedAt?: Date;
     sourceUpdatedAt?: Date;
     transcriptObservationProvenance?: SessionTranscriptObservationProvenanceV1;
-    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceV1;
+    surfaceItemReference?: SessionTranscriptSurfaceItemReferenceInputV1;
 }>;
 
 export async function resolveSurvivingSessionMessageAuthorAccountIdInTx(
@@ -282,6 +289,7 @@ export async function writeSessionTranscriptMessageInTx(
     const storageAdmission = validateSessionTranscriptStoredContent(params);
     if (!storageAdmission.ok) return storageAdmission;
 
+    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId]);
     const createdAt = params.createdAt ?? new Date();
     let next: { seq: number; tag: string };
     try {
@@ -426,6 +434,7 @@ async function writeHistoricalSessionMessageBatchWithModeInTx(
         items: readonly HistoricalSessionMessageItem[];
     }>,
 ) {
+    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId]);
     const authority = await validateSessionTranscriptWriteAuthorityInTx(tx, {
         sessionId: params.sessionId,
         writeAuthority: params.writeAuthority,
@@ -467,7 +476,7 @@ async function writeHistoricalSessionMessageBatchWithModeInTx(
     const orderedItems = [...itemByLocalId.values()];
     const existing = await tx.sessionMessage.findMany({
         where: { sessionId: params.sessionId, localId: { in: orderedItems.map((item) => item.localId) } },
-        select: SESSION_TRANSCRIPT_WRITE_SELECT,
+        select: { ...SESSION_TRANSCRIPT_WRITE_SELECT, surfaceItemReference: true, rowRevision: true },
     });
     const existingByLocalId = new Map(
         existing.flatMap((message) => message.localId ? [[message.localId, message] as const] : []),
@@ -484,7 +493,34 @@ async function writeHistoricalSessionMessageBatchWithModeInTx(
     for (const item of orderedItems) {
         const stored = existingByLocalId.get(item.localId);
         if (stored) {
-            messages.push(stored);
+            // Only an explicit retry can enrich an exact existing native row. Omitted or
+            // unavailable associations never withdraw its previously admitted members.
+            const admitted = await admitSessionTranscriptSurfaceItemReferenceInTx(tx, {
+                sessionId: params.sessionId, sessionEncryptionMode: params.sessionEncryptionMode,
+                surfaceItemReference: item.surfaceItemReference,
+            });
+            if (!admitted) {
+                messages.push(stored);
+                continue;
+            }
+            const references = new Map<string, SessionTranscriptSurfaceItemReferencesV1['references'][number]>();
+            for (const reference of [...admitted.references, ...(readSessionTranscriptSurfaceItemReferencesV1(stored.surfaceItemReference) ?? [])]) {
+                const key = 'sourceItemId' in reference
+                    ? getSessionTranscriptSurfaceItemReferenceSourceKeyV1(reference)
+                    : `legacy:${JSON.stringify(reference)}`;
+                if (!references.has(key)) references.set(key, reference);
+            }
+            const enriched: SessionTranscriptSurfaceItemReferencesV1 = { v: 1, references: [...references.values()] };
+            if (isDeepStrictEqual(stored.surfaceItemReference, enriched)) {
+                messages.push(stored);
+                continue;
+            }
+            const updated = await updateSessionMessageAtCurrentRevisionInTx({
+                tx, id: stored.id, rowRevision: stored.rowRevision,
+                data: { surfaceItemReference: enriched, rowRevision: { increment: BigInt(1) } },
+            });
+            didWrite = true;
+            messages.push({ ...stored, updatedAt: updated.updatedAt, rowRevision: updated.rowRevision, surfaceItemReference: enriched });
             continue;
         }
         const persisted = await writeSessionTranscriptMessageInTx(tx, {
@@ -553,11 +589,13 @@ export async function writeHistoricalSessionMessageBatch(
 ) {
     const attempt = async () => await inTx(
         async (tx) => await writeHistoricalSessionMessageBatchInTx(tx, params),
+        // The batch captures Session.encryptionMode before its Account fence.
+        { isolationLevel: "Serializable" },
     );
     try {
         return await attempt();
     } catch (error) {
-        if (!isPrismaErrorCode(error, "P2002")) throw error;
+        if (!isPrismaErrorCode(error, "P2002") && !(error instanceof SessionMessageRowRevisionRaceError)) throw error;
         return await attempt();
     }
 }

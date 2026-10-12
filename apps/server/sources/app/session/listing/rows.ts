@@ -24,7 +24,7 @@ import {
     requiresSessionMetadataOwnerAccountMode,
     type SessionMetadataOwnerAccountMode,
 } from "@/app/session/metadata/sessionMetadataRecipientProjection";
-import { mapPendingActivationAuthorization } from "@/app/session/pending/pendingActivationAuthorization";
+import { mapPendingActivationAuthorization, mapPendingActivationFailureDetails } from "@/app/session/pending/pendingActivationAuthorization";
 import {
     createSessionDataKeyEnvelopeViewerSelect,
     projectViewerSessionDataKey,
@@ -265,7 +265,7 @@ function readSessionResponsibilityProjection(
     const value = row.responsibleAccountId;
     const responsibleAccountId = typeof value === "string" && value.length > 0 ? value : null;
     if (responsibleAccountId === null) return { responsibleAccountId: null, responsibleAccount: null };
-    const relation = "responsibleAccount" in row ? (row as { responsibleAccount?: { id: string; firstName: string | null; lastName: string | null; username: string | null; avatar: unknown } | null }).responsibleAccount : undefined;
+    const relation = "responsibleAccount" in row ? (row as { responsibleAccount?: { id: string; name: string | null; firstName: string | null; lastName: string | null; username: string | null; avatar: unknown } | null }).responsibleAccount : undefined;
     if (!relation || relation.id !== responsibleAccountId) {
         throw new Error("Current Session responsibility projection requires its matching Account summary");
     }
@@ -307,6 +307,16 @@ function readRuntimeActivityProjection(row: V2SessionRowCompat): Partial<V2Sessi
         runtimeActivityObservedAt: parsed.projection.observedAt,
         runtimeActivityRevision: parsed.projection.revision,
     };
+}
+
+/** Released owner/direct presentation; effectiveAccess remains capability authority. */
+export function projectSessionLegacyShare(params: Readonly<{
+    receivesOwnerMetadata: boolean;
+    share: V2SessionRecord["share"];
+}>): Pick<V2SessionRecord, "share"> {
+    return params.receivesOwnerMetadata ? { share: null } : params.share
+        ? { share: { accessLevel: params.share.accessLevel, canApprovePermissions: params.share.canApprovePermissions } }
+        : {};
 }
 
 export function mapV2SessionListRow(params: Readonly<{
@@ -467,7 +477,7 @@ export function mapV2SessionListRow(params: Readonly<{
                 pendingBlockedCount: row.pendingBlockedCount,
                 pendingVersion: row.pendingVersion,
                 ...(pendingActivationAuthorization
-                    ? { pendingActivationAuthorization }
+                    ? { pendingActivationAuthorization, pendingActivationFailureDetails: mapPendingActivationFailureDetails(row) }
                     : {}),
               }
             : {}),
@@ -489,14 +499,7 @@ export function mapV2SessionListRow(params: Readonly<{
         // The field stays absent only on the pre-migration projection fallback,
         // where omitted truthfully means "not projected" rather than "nobody".
         ...readSessionResponsibilityProjection(row),
-        ...(receivesOwnerMetadata
-            ? { share: null }
-            : viewerShare
-                ? { share: {
-                    accessLevel: viewerShare.accessLevel,
-                    canApprovePermissions: viewerShare.canApprovePermissions,
-                } }
-                : {}),
+        ...projectSessionLegacyShare({ receivesOwnerMetadata, share: viewerShare }),
     };
 }
 

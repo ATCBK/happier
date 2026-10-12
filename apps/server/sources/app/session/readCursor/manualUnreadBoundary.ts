@@ -75,6 +75,7 @@ export async function findLatestUnreadAffectingMainTranscriptMessageSeq(
         const contentRequiredRows = metadataRows.filter(
             (row) => !isRecoveredHistoryTranscriptObservationProvenance(
                 row.transcriptObservationProvenance,
+                'stored',
             ),
         );
         for (let offset = 0; offset < contentRequiredRows.length; offset += contentBatchSize) {

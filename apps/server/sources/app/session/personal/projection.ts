@@ -264,5 +264,5 @@ export async function loadSessionViewerProjection(params: Readonly<{ accountId: 
             discussion: discussion.get(params.sessionId) ?? QUIET_SESSION_PERSONAL_DISCUSSION_FACTS,
             qualifiedTeamIds: accessResolution.qualifiedTeamIds,
         });
-    });
+    }, { isolationLevel: "Serializable" /* Personal projection combines Session, Follow, read-frontier and discussion facts in one snapshot. */ });
 }

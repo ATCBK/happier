@@ -11,7 +11,7 @@ import { SessionIdSchema } from "@happier-dev/protocol/sessions";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
-import { ACCOUNT_DISPLAY_PROFILE_SELECT, projectAccountDisplayProfileV1 } from "@/app/account/profile/accountDisplayProfile";
+import { ACCOUNT_DISPLAY_PROFILE_SELECT, projectAccountDisplayProfileV1, resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import { resolveSessionAccessForOperation, type EffectiveSessionAccess } from "@/app/session/access/sessionAccess";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { readSessionAccessAuthenticationFromSocket } from "@/app/session/access/sessionAccessAuthentication";
@@ -242,7 +242,7 @@ export function createSessionHumanPresenceService(input: Readonly<{
         }
         if (closed || recipients.length === 0) return;
         const name = (account: SessionAccessAccountSummaryV1) =>
-            [account.firstName, account.lastName].filter(Boolean).join(" ").trim().toLowerCase() || account.username?.toLowerCase() || "";
+            resolveAccountDisplayLabelV1(account)?.toLowerCase() ?? "";
         const snapshot: SessionHumanPresenceSnapshotV1 = {
             v: 1, sessionId, ...(discussionId === undefined ? {} : { discussionId }), observedAt: now,
             viewers: [...viewers.values()].sort((a, b) => name(a.account).localeCompare(name(b.account))
@@ -368,7 +368,7 @@ export function createSessionHumanPresenceService(input: Readonly<{
                 .sort((left, right) => left.sessionId.localeCompare(right.sessionId)
                     || left.discussionId.localeCompare(right.discussionId));
             return { admittedSessionIds, admittedLocations };
-        });
+        }, { isolationLevel: "Serializable" /* Presence replacement must admit its Session and discussion locations from one access snapshot. */ });
         if (closed || !socket.connected) throw new Error("Human presence socket unavailable");
         const previous = sessionHumanPresenceLocationsFromRooms(socket.rooms);
         const next = [

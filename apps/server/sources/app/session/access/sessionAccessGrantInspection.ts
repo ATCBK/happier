@@ -5,7 +5,7 @@ import {
 } from "@happier-dev/protocol";
 import { ACCOUNT_DISPLAY_PROFILE_SELECT, projectAccountDisplayProfileV1 } from "@/app/account/profile/accountDisplayProfile";
 import { listSessionTeamCredentialBindingConsequencesInTx } from "@/app/teams/credentials/sessionBinding";
-import { inTx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { projectSessionEffectiveAccessV1, resolveSessionAccessForOperation } from "./sessionAccess";
 import type { SessionAccessAuthentication } from "./sessionAccessAuthentication";
 import { enforceTeamExternalSharingPolicyInTx, isSubjectExternalToTeamInTx } from "./sessionAccessExternalSharingPolicy";
@@ -27,7 +27,7 @@ export async function inspectSessionAccessGrants(params: Readonly<{
     sessionId: string;
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionAccessGrantInspectionResult> {
-    return await inTx(async (tx): Promise<SessionAccessGrantInspectionResult> => {
+    return await readSnapshotWithCurrentAdmission<SessionAccessGrantInspectionResult>(async (tx): Promise<SessionAccessGrantInspectionResult> => {
         const admission = await resolveSessionAccessForOperation(tx, {
             accountId: params.actorAccountId,
             sessionId: params.sessionId,
@@ -122,5 +122,17 @@ export async function inspectSessionAccessGrants(params: Readonly<{
             ])],
         });
         return { ok: true, value: { ...base, visibility: "complete", grants, credentialBindingConsequences: [...credentialBindingConsequences] } };
-    }, { readOnly: true });
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        const current = await resolveSessionAccessForOperation(tx, {
+            accountId: params.actorAccountId, sessionId: params.sessionId, authentication: params.authentication,
+            capability: captured.value.visibility === "complete" ? "manageAccess" : "readTranscript",
+        });
+        if (current.status === "authentication_required") return { ok: false, error: "session_access_authentication_required" };
+        if (current.status === "authentication_unavailable") return { ok: false, error: "session_access_authentication_unavailable" };
+        if (current.status !== "allowed"
+            || (captured.value.effectiveAccess.capabilities.managePermissionDelegation
+                && !current.access.capabilities.managePermissionDelegation)) return { ok: false, error: "session_access_forbidden" };
+        return { ...captured, value: { ...captured.value, effectiveAccess: projectSessionEffectiveAccessV1(current.access) } };
+    });
 }

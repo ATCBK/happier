@@ -1,4 +1,5 @@
 import { decodeBase64 } from "privacy-kit";
+import { isDeepStrictEqual } from "node:util";
 import {
     classifySessionDataKeyEnvelopeItemV1,
     decodeSessionDataKeyEnvelopeCursorV1,
@@ -25,6 +26,7 @@ import {
     resolveStructuralSessionAccessForAccountsInTx,
 } from "@/app/session/access/sessionAccess";
 import { inTx, type Tx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 
 /**
@@ -183,6 +185,12 @@ async function readAudienceChunk(
  * continuation pages start from their database keyset and return `summary:
  * null`, so they neither rescan nor discard the already delivered prefix.
  */
+function projectAudienceItem(account: RecipientReadinessRow, stored: Uint8Array | null): SessionDataKeyEnvelopeItemV1 {
+    const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(account);
+    return { recipientAccountId: account.id, envelopeState: projectEnvelopeState(stored),
+        contentKey: projectRecipientContentKey(account, readiness) };
+}
+
 export async function readSessionDataKeyEnvelopePage(input: Readonly<{
     actorAccountId: string;
     sessionId: string;
@@ -196,7 +204,7 @@ export async function readSessionDataKeyEnvelopePage(input: Readonly<{
         return { ok: false, error: "invalid_cursor" };
     }
 
-    return await inTx(async tx => {
+    return await readSnapshotWithCurrentAdmission<SessionDataKeyEnvelopePageResult>(async tx => {
         const authorization = await authorizeCollection(tx, input);
         if (!authorization.ok) return { ok: false, error: authorization.error };
         // A plain Session settles before any recipient key material is read.
@@ -216,12 +224,7 @@ export async function readSessionDataKeyEnvelopePage(input: Readonly<{
             if (chunk.length === 0) break;
 
             for (const { account, stored } of chunk) {
-                const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(account);
-                const item: SessionDataKeyEnvelopeItemV1 = {
-                    recipientAccountId: account.id,
-                    envelopeState: projectEnvelopeState(stored),
-                    contentKey: projectRecipientContentKey(account, readiness),
-                };
+                const item = projectAudienceItem(account, stored);
                 const bucket = classifySessionDataKeyEnvelopeItemV1(item);
                 if (summary !== null) summary[bucket] += 1;
 
@@ -248,7 +251,27 @@ export async function readSessionDataKeyEnvelopePage(input: Readonly<{
         }
 
         return { ok: true, page: { status: "required", summary, items, nextCursor } };
-    }, { readOnly: true });
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        const current = await authorizeCollection(tx, input);
+        if (!current.ok) return current;
+        if ((current.encryptionMode === "plain") !== (captured.page.status === "not_required")) {
+            return { ok: false, error: "session_data_key_unavailable" };
+        }
+        if (captured.page.status === "not_required") return captured;
+        const accountIds = captured.page.items.map(item => item.recipientAccountId);
+        const access = await resolveStructuralSessionAccessForAccountsInTx(tx, { sessionId: input.sessionId, accountIds });
+        const [accounts, envelopes] = await Promise.all([
+            tx.account.findMany({ where: { id: { in: accountIds } }, select: RECIPIENT_READINESS_SELECT }),
+            tx.sessionDataKeyEnvelope.findMany({ where: { sessionId: input.sessionId, recipientAccountId: { in: accountIds } },
+                select: { recipientAccountId: true, encryptedDataKey: true } }),
+        ]);
+        const stored = new Map(envelopes.map(row => [row.recipientAccountId, toBytes(row.encryptedDataKey)]));
+        const items = new Map(accounts.map(account => [account.id, projectAudienceItem(account, stored.get(account.id) ?? null)]));
+        if (captured.page.items.some(item => access.get(item.recipientAccountId)?.capabilities.readTranscript !== true
+            || !isDeepStrictEqual(items.get(item.recipientAccountId), item))) return { ok: false, error: "session_data_key_unavailable" };
+        return captured;
+    });
 }
 
 type ValidatedEntry = Readonly<{ recipientAccountId: string; envelope: Uint8Array }>;
@@ -351,5 +374,5 @@ export async function applySessionDataKeyEnvelopes(input: Readonly<{
         }
 
         return { ok: true, appliedCount: validated.length };
-    });
+    }, { isolationLevel: "Serializable" /* Envelope admission must keep Account keys, storage mode and access in one snapshot. */ });
 }

@@ -61,25 +61,33 @@ function installSessionMessageWinnerReadBarrier(params: Readonly<{
     transactionEntered: Promise<void>;
     firstRead: Promise<void>;
     secondRead: Promise<void>;
+    secondReadOrLockWait: () => Promise<"read" | "lock-wait">;
     releaseFirst: () => void;
     releaseSecond: () => void;
     restore: () => void;
 }> {
+    const provider = resolveContractProvider();
     const transactionEntered = deferred();
     const firstRead = deferred();
     const secondRead = deferred();
+    const peerTransactionEntered = deferred();
     const releaseFirst = deferred();
     const releaseSecond = deferred();
     const originalTransaction = db.$transaction;
     let matchingReadCount = 0;
+    let firstReadBackendPid = -1;
+    const activePeerBackendPids = new Set<number>();
+    let secondReadObserved = false;
     let restored = false;
 
-    const pauseAfterMatchingRead = async (): Promise<void> => {
+    const pauseAfterMatchingRead = async (backendPid: number): Promise<void> => {
         matchingReadCount += 1;
         if (matchingReadCount === 1) {
+            firstReadBackendPid = backendPid;
             firstRead.resolve();
             await releaseFirst.promise;
         } else if (matchingReadCount === 2) {
+            secondReadObserved = true;
             secondRead.resolve();
             await releaseSecond.promise;
         }
@@ -94,6 +102,21 @@ function installSessionMessageWinnerReadBarrier(params: Readonly<{
         }
         return await Reflect.apply(originalTransaction, undefined, [
             async (tx: object) => {
+                let backendPid = -1;
+                if (provider === "postgres") {
+                    const query: unknown = Reflect.get(tx, "$queryRawUnsafe");
+                    if (typeof query !== "function") throw new Error("Transaction query transport is unavailable");
+                    const [backend] = await Reflect.apply(query, tx, ["SELECT pg_backend_pid() AS pid"]) as { pid: number }[];
+                    backendPid = backend.pid;
+                }
+                // Duplicate insertion and winner rejoin are separate real
+                // transactions. Only callbacks entered after the first winner
+                // read belong to its concurrent peer, regardless of retries.
+                const isPeer = matchingReadCount > 0;
+                if (isPeer) {
+                    activePeerBackendPids.add(backendPid);
+                    peerTransactionEntered.resolve();
+                }
                 transactionEntered.resolve();
                 const transactionDelegate = Reflect.get(tx, "sessionMessage") as object;
                 const originalFindUnique = Reflect.get(transactionDelegate, "findUnique");
@@ -116,7 +139,7 @@ function installSessionMessageWinnerReadBarrier(params: Readonly<{
                                 && localIdWhere.sessionId === params.sessionId
                                 && localIdWhere.localId === params.localId
                             ) {
-                                await pauseAfterMatchingRead();
+                                await pauseAfterMatchingRead(backendPid);
                             }
                             return result;
                         };
@@ -128,7 +151,11 @@ function installSessionMessageWinnerReadBarrier(params: Readonly<{
                         return Reflect.get(target, property, receiver);
                     },
                 });
-                return await Reflect.apply(operation, undefined, [wrappedTx]);
+                try {
+                    return await Reflect.apply(operation, undefined, [wrappedTx]);
+                } finally {
+                    if (isPeer) activePeerBackendPids.delete(backendPid);
+                }
             },
             ...args.slice(1),
         ]);
@@ -138,6 +165,17 @@ function installSessionMessageWinnerReadBarrier(params: Readonly<{
         transactionEntered: transactionEntered.promise,
         firstRead: firstRead.promise,
         secondRead: secondRead.promise,
+        secondReadOrLockWait: async () => {
+            await Promise.race([peerTransactionEntered.promise, secondRead.promise]);
+            while (!secondReadObserved) {
+                const [state] = await db.$queryRawUnsafe<{ waiting: boolean }[]>(
+                    "SELECT EXISTS (SELECT 1 FROM unnest($1::int[]) AS peers(pid) WHERE $2::int = ANY(pg_blocking_pids(peers.pid))) AS waiting",
+                    [...activePeerBackendPids], firstReadBackendPid,
+                );
+                if (state.waiting) return "lock-wait";
+            }
+            return "read";
+        },
         releaseFirst: () => {
             releaseFirst.resolve();
         },
@@ -419,8 +457,9 @@ describe("historical transcript writer database contract", () => {
                 messageRole: "agent",
                 content: initialContent,
             });
-            await barrier.transactionEntered;
-            await barrier.firstRead;
+            await Promise.race([barrier.firstRead, backfill.then(() => {
+                throw new Error("Backfill ended before its winner read");
+            })]);
 
             const correction = createSessionMessage({
                 actorUserId: account.id,
@@ -431,14 +470,26 @@ describe("historical transcript writer database contract", () => {
                 messageRole: "user",
                 content: correctedContent,
             });
-            await barrier.secondRead;
-
-            // Commit the full correction first. A stale partial role backfill
-            // must then re-evaluate rather than attach its role to this content.
-            barrier.releaseSecond();
-            await expect(correction).resolves.toMatchObject({ ok: true, didUpdate: true });
-            barrier.releaseFirst();
-            await expect(backfill).resolves.toMatchObject({ ok: true, didUpdate: true });
+            // A valid early Account fence serializes the peer before its winner
+            // read. Observe that lock instead of requiring an unreachable second
+            // snapshot while holding the first transaction behind a barrier.
+            const concurrentRead = provider === "postgres" && await Promise.race([
+                barrier.secondReadOrLockWait(), correction.then(() => {
+                    throw new Error("Correction ended before its winner read or lock wait");
+                }),
+            ]) === "read";
+            if (concurrentRead) {
+                barrier.releaseSecond();
+                await expect(correction).resolves.toMatchObject({ ok: true, didUpdate: true });
+                barrier.releaseFirst();
+                await expect(backfill).resolves.toMatchObject({ ok: true, didUpdate: true });
+            } else {
+                barrier.releaseFirst();
+                await expect(backfill).resolves.toMatchObject({ ok: true, didUpdate: true });
+                await barrier.secondRead;
+                barrier.releaseSecond();
+                await expect(correction).resolves.toMatchObject({ ok: true, didUpdate: true });
+            }
         } finally {
             barrier.restore();
         }

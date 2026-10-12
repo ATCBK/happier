@@ -218,5 +218,5 @@ export async function setSessionDiscussionReadCursor(params: Readonly<{
         });
         scheduleSessionDiscussionReaderBadgeRefreshInTx({ tx, accountId: params.actorAccountId });
         return discussionSuccess({ discussionId: discussion.id, lastReadSeq: next, didChange: true });
-    });
+    }, { isolationLevel: "Serializable" /* Discussion read-frontier admission must remain coherent with tracking and lifecycle writers. */ });
 }

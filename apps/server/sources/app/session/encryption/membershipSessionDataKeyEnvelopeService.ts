@@ -515,7 +515,7 @@ export async function readMembershipSessionDataKeyEnvelopePage(input: Readonly<{
             exceptions,
             nextCursor,
         } };
-    });
+    }, { isolationLevel: "Serializable" /* Membership envelope admission must keep entitlement, keys and storage mode coherent. */ });
 }
 
 type ValidatedEntry = Readonly<{ sessionId: string; envelope: Uint8Array }>;
@@ -625,5 +625,5 @@ export async function applyMembershipSessionDataKeyEnvelopes(input: Readonly<{
         }
 
         return { ok: true, appliedCount: validated.entries.length };
-    });
+    }, { isolationLevel: "Serializable" /* Membership envelope admission must keep entitlement, keys and storage mode coherent. */ });
 }

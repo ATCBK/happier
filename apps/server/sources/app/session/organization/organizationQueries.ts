@@ -3,7 +3,9 @@ import {
     type SessionOrganizationSnapshotRequest,
 } from "@happier-dev/protocol";
 
-import { inTx, type Tx } from "@/storage/inTx";
+import type { Tx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
+import { readCurrentSessionIdsInTx } from "@/app/session/access/sessionReadAdmission";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import {
@@ -44,10 +46,13 @@ export async function fetchSessionOrganizationPinnedSessionIds(
         return pins.map((pin) => pin.sessionId);
     };
     if (admittedRead) return await readPins(admittedRead.reader, admittedRead.sessionWhere);
-    return await inTx(async (tx) => await readPins(
+    return await readSnapshotWithCurrentAdmission(async (tx) => await readPins(
         tx,
         await createVisibleUnarchivedOrganizationSessionWhere(tx, accountId, authentication),
-    ), { readOnly: true });
+    ), async (tx, captured) => {
+        const current = await readCurrentSessionIdsInTx(tx, { accountId, authentication, sessionIds: captured });
+        return captured.filter(id => current.has(id));
+    });
 }
 
 export async function fetchSessionFolderAssignmentsForSessions(params: Readonly<{
@@ -57,7 +62,7 @@ export async function fetchSessionFolderAssignmentsForSessions(params: Readonly<
 }>): Promise<SessionFolderAssignmentRecord[]> {
     if (params.sessionIds.length === 0) return [];
 
-    return await inTx(async (tx) => {
+    return await readSnapshotWithCurrentAdmission(async (tx) => {
         const sessionWhere = await buildSessionAccessWhere({ tx, accountId: params.accountId, capability: 'readTranscript', mode: 'effective_access_v1', authentication: params.authentication });
         return await tx.sessionFolderAssignment.findMany({
             where: {
@@ -71,7 +76,11 @@ export async function fetchSessionFolderAssignmentsForSessions(params: Readonly<
                 folderId: true,
             },
         });
-    }, { readOnly: true });
+    }, async (tx, captured) => {
+        const current = await readCurrentSessionIdsInTx(tx, { accountId: params.accountId,
+            authentication: params.authentication, sessionIds: captured.map(row => row.sessionId) });
+        return captured.filter(row => current.has(row.sessionId));
+    });
 }
 
 export function createSessionFolderAssignmentSessionWhere(params: Readonly<{
@@ -140,7 +149,7 @@ export async function fetchSessionOrganizationSnapshot(params: Readonly<{
     request: SessionOrganizationSnapshotRequest;
     authentication: SessionAccessAuthentication;
 }>) {
-    return await inTx(async (tx) => {
+    return await readSnapshotWithCurrentAdmission(async (tx) => {
         const sessionWhere = await buildSessionAccessWhere({ tx, accountId: params.accountId, capability: 'readTranscript', mode: 'effective_access_v1', authentication: params.authentication });
         const visibleSessionWhere = await createVisibleUnarchivedOrganizationSessionWhere(tx, params.accountId, params.authentication);
         const account = await tx.account.findUnique({
@@ -300,5 +309,20 @@ export async function fetchSessionOrganizationSnapshot(params: Readonly<{
                 return { sessionId: mapped.sessionId, standing: row.remindAt && row.remindAt.getTime() > Date.now() ? false : mapped.standing, updatedAt: mapped.updatedAt };
             }) } : {}),
         });
-    }, { readOnly: true });
+    }, async (tx, captured) => {
+        const sessionIds = [...captured.pins, ...captured.folderAssignments, ...captured.tagAssignments,
+            ...(captured.attentionStandings ?? [])].map(row => row.sessionId);
+        const current = await readCurrentSessionIdsInTx(tx, { accountId: params.accountId,
+            authentication: params.authentication, sessionIds });
+        return { ...captured,
+            pins: captured.pins.filter(row => current.has(row.sessionId)),
+            folderAssignments: captured.folderAssignments.filter(row => current.has(row.sessionId)),
+            tagAssignments: captured.tagAssignments.filter(row => current.has(row.sessionId)),
+            orderEntries: await filterValidSessionOrganizationOrderEntries({ accountId: params.accountId,
+                authentication: params.authentication, reader: tx, entries: captured.orderEntries }),
+            ...(captured.attentionStandings === undefined ? {} : {
+                attentionStandings: captured.attentionStandings.filter(row => current.has(row.sessionId)),
+            }),
+        };
+    });
 }

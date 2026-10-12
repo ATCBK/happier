@@ -32,12 +32,12 @@ async function setSessionResponsibility(
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 
-async function createAccount(profile?: Readonly<{ firstName?: string; username?: string }>) {
+async function createAccount(profile?: Readonly<{ name?: string; username?: string }>) {
     return await db.account.create({
         data: {
             publicKey: crypto.randomUUID(),
             encryptionMode: "plain",
-            ...(profile?.firstName ? { firstName: profile.firstName } : {}),
+            ...(profile?.name ? { name: profile.name } : {}),
             ...(profile?.username ? { username: profile.username } : {}),
         },
     });
@@ -46,9 +46,9 @@ async function createAccount(profile?: Readonly<{ firstName?: string; username?:
 async function createFixture(params: Readonly<{
     collaboratorLevel?: "view" | "edit" | "admin";
 }> = {}) {
-    const owner = await createAccount({ firstName: "Olive", username: `olive-${crypto.randomUUID().slice(0, 8)}` });
-    const collaborator = await createAccount({ firstName: "Alice", username: `alice-${crypto.randomUUID().slice(0, 8)}` });
-    const outsider = await createAccount({ firstName: "Mallory", username: `mallory-${crypto.randomUUID().slice(0, 8)}` });
+    const owner = await createAccount({ name: "Olive", username: `olive-${crypto.randomUUID().slice(0, 8)}` });
+    const collaborator = await createAccount({ name: "Alice", username: `alice-${crypto.randomUUID().slice(0, 8)}` });
+    const outsider = await createAccount({ name: "Mallory", username: `mallory-${crypto.randomUUID().slice(0, 8)}` });
     const session = await db.session.create({
         data: {
             accountId: owner.id,
@@ -787,7 +787,7 @@ describe("Session responsibility owner (SQLite integration)", () => {
             const fixture = await createFixture();
             await db.account.update({
                 where: { id: fixture.collaborator.id },
-                data: { firstName: "Zenobia" },
+                data: { name: "Zenobia" },
             });
             // Both connectors reject Prisma's PostgreSQL-only `mode` argument.
             // This exercises the MySQL filter shape, not a MySQL runtime.

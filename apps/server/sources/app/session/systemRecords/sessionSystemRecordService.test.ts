@@ -739,6 +739,40 @@ describe("sessionSystemRecordService account scoping", () => {
         }));
     });
 
+    it("projects additive stored visual rows on exact reads", async () => {
+        const currentTx = testState.currentTx as TxMock;
+        const item = { v: 1, destination: "transcript", title: "Visual", frame: "card",
+            height: { mode: "auto", fallback: "regular" }, source: { kind: "walkthrough", comparison: "session" } };
+        const row = activityRecord({ namespace: "surface", kind: "item.v1", localId: "visual",
+            ...deriveSessionSystemRecordAddressKeys({ ownerKind: "host", pluginId: null, namespace: "surface", localId: "visual" }),
+            content: { t: "session_surface_record_v1", futureDisplayField: 1,
+                creator: { kind: "unknown", futureDisplayField: 1 },
+                content: { t: "plain", futureDisplayField: 1, v: { ...item, futureDisplayField: 1,
+                    height: { ...item.height, futureDisplayField: 1 }, source: { ...item.source, futureDisplayField: 1 } } } } });
+        currentTx.session.findUnique.mockResolvedValue({ encryptionMode: "plain", accountId: "owner-account" });
+        currentTx.sessionSystemRecord.findFirst.mockResolvedValue(row);
+        const result = await readSessionSystemRecordV1({ authentication, actorUserId: "shared-editor", sessionId: "s1",
+            address: { owner: "host", namespace: "surface", kind: "item.v1", localId: "visual" } });
+        expect(result.ok && result.record?.content).toEqual({ t: "plain", v: item });
+        expect(result.ok && result.record?.creator).toEqual({ kind: "unknown" });
+    });
+
+    it("projects additive registered host rows on exact and list reads", async () => {
+        const currentTx = testState.currentTx as TxMock;
+        const canonical = workflowRunPayload();
+        const row = activityRecord({ content: { t: "plain", v: { ...canonical, futureDisplayField: 1,
+            phases: canonical.phases.map(phase => ({ ...phase, futureDisplayField: 1 })) } } });
+        currentTx.session.findUnique.mockResolvedValue({ encryptionMode: "plain", accountId: "owner-account" });
+        currentTx.sessionSystemRecord.findFirst.mockResolvedValue(row);
+        currentTx.sessionSystemRecord.findMany.mockResolvedValue([row]);
+        const address = { owner: "host", namespace: "activity", kind: "workflow_run.v1", localId: row.localId } as const;
+        const exact = await readSessionSystemRecordV1({ authentication, actorUserId: "shared-editor", sessionId: "s1", address });
+        expect(exact.ok && exact.record?.content).toEqual({ t: "plain", v: canonical });
+        const listed = await listSessionSystemRecordsV1({ authentication, actorUserId: "shared-editor", sessionId: "s1",
+            query: { owner: "host", namespace: "activity", limit: 20 } });
+        expect(listed.ok && listed.page.records[0]?.content).toEqual({ t: "plain", v: canonical });
+    });
+
     it("applies catalog-owned session-owner/edit policy across host v1 CRUD", async () => {
         const currentTx = testState.currentTx as TxMock;
         const row = activityRecord();

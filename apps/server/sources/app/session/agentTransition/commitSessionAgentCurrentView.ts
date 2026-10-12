@@ -427,7 +427,7 @@ export async function commitSessionAgentCurrentView(
     params: CommitSessionAgentCurrentViewParams,
 ): Promise<CommitSessionAgentCurrentViewResult> {
     try {
-        return await inTx(async (tx) => await commitSessionAgentCurrentViewInTx(tx, params));
+        return await inTx(async (tx) => await commitSessionAgentCurrentViewInTx(tx, params), { isolationLevel: "Serializable" /* Team credential bindings must retain coherent grant and resource admission across the current-view commit. */ });
     } catch (error) {
         // A refused Team binding is a definite no-effect answer about the input,
         // exactly as the shared tuple owner reports it (`toCommitError`).

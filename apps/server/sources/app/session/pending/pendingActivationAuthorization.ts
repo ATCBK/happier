@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import {
     PendingRequestedActionV1Schema,
     SessionInputAdmissionReceiptV1Schema,
@@ -7,15 +8,66 @@ import {
     type SessionInputAdmissionReceiptV1,
 } from '@happier-dev/protocol';
 import type { SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
-import type { Tx } from '@/storage/inTx';
+import { TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
+import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { getActivePrismaRuntime } from '@/storage/db';
 import { resolveManagedWakeTargetInTx } from '@/app/machines/managed/managedWake';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
 import { readStoredSessionInputAdmissionReceipt, isCurrentSessionInputMachineTargetInTx } from '@/app/session/messages/sessionInputAdmission';
+import { PendingActivationFailureCodeV1Schema, PendingActivationFailureDetailsV1Schema,
+    type PendingActivationFailureDetailsV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+
+const StoredActivationFailureSchema = PendingActivationFailureDetailsV1Schema.extend({ failureCode: PendingActivationFailureCodeV1Schema }).strict();
+
+function readStoredActivationFailure(value: unknown) {
+    if (value === 'runtime_start_failed') return { failureCode: value } as const;
+    if (typeof value !== 'string') return undefined;
+    try { return StoredActivationFailureSchema.safeParse(JSON.parse(value)).data; } catch { return undefined; }
+}
+
+/** Read-only sibling projection; the predecessor's closed authorization envelope stays unchanged. */
+export function mapPendingActivationFailureDetails(row: object): PendingActivationFailureDetailsV1 | undefined {
+    if (mapPendingActivationAuthorization(row)?.status !== 'failed') return undefined;
+    const failure = readStoredActivationFailure(Reflect.get(row, 'pendingActivationFailureCode'));
+    if (!failure || !('reason' in failure)) return undefined;
+    const { failureCode: _code, ...details } = failure;
+    return details;
+}
 
 export type PendingActivationTarget = Readonly<{ accountId: string; requestId: string;
     machinePublication?: Readonly<{ target: SessionInputMachineTargetV1; custodianAccountId: string; requestedAt: number }>;
     managedControllerPublication?: Readonly<{ accountId: string; cursor: number }> }>;
+
+/**
+ * Cursor lock audience only. Include the target Machine's owner even before
+ * enrollment: enrollment's mandatory publication locks this same custodian
+ * before committing. This grants no Machine, Session or wake authority.
+ * Normal activation admission revalidates the controller after Account locks.
+ */
+export async function readPendingActivationControllerAccountIdsInTx(
+    tx: Tx,
+    targetMachineId: string | undefined,
+): Promise<readonly string[]> {
+    if (!targetMachineId) return [];
+    const [machine, enrollment] = await Promise.all([
+        tx.machine.findUnique({ where: { id: targetMachineId }, select: { accountId: true } }),
+        tx.managedMachine.findUnique({
+            where: { enrolledMachineId: targetMachineId }, select: { custodianAccountId: true },
+        }),
+    ]);
+    return [...new Set([machine?.accountId, enrollment?.custodianAccountId]
+        .filter((id): id is string => typeof id === 'string'))].sort();
+}
+
+const ACTIVATION_ELIGIBILITY_SELECT = {
+    messageRole: true,
+    status: true,
+    deliveryState: true,
+    providerAction: true,
+    requestedAction: true,
+    authorAccountId: true,
+    inputAdmissionReceipt: true,
+} as const;
 
 /** One owner recovery admission predicate for activation and reset-bound Pending starts. */
 export function readPendingOwnerInputAdmission(input: Readonly<{
@@ -90,12 +142,13 @@ export function mapPendingActivationAuthorization(row: object): PendingActivatio
         ? target.data : undefined;
     if (status === 'waiting') return { requestId, requestedAt: requestedAt.getTime(), status,
         ...(managedWakeTargetV1 ? { managedWakeTargetV1 } : {}) };
-    if (status === 'failed' && value.pendingActivationFailureCode === 'runtime_start_failed') {
+    const failure = readStoredActivationFailure(value.pendingActivationFailureCode);
+    if (status === 'failed' && failure) {
         return {
             requestId,
             requestedAt: requestedAt.getTime(),
             status,
-            failureCode: value.pendingActivationFailureCode,
+            failureCode: failure.failureCode,
             ...(managedWakeTargetV1 ? { managedWakeTargetV1 } : {}),
         };
     }
@@ -111,15 +164,7 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
 }>): Promise<PendingActivationTarget | undefined> {
     const eligible = await params.tx.sessionPendingMessage.findUnique({
         where: { sessionId_localId: { sessionId: params.sessionId, localId: params.requestId }, targetExecutionRunId: null },
-        select: {
-            messageRole: true,
-            status: true,
-            deliveryState: true,
-            providerAction: true,
-            requestedAction: true,
-            authorAccountId: true,
-            inputAdmissionReceipt: true,
-        },
+        select: ACTIVATION_ELIGIBILITY_SELECT,
     });
     const requestedAction = PendingRequestedActionV1Schema.safeParse(eligible?.requestedAction);
     const inputAdmissionReceipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(
@@ -139,6 +184,24 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
             resumeWhenAvailable: params.resumeWhenAvailable,
         })
     ) return undefined;
+    const controllerAccountIds = await readPendingActivationControllerAccountIdsInTx(
+        params.tx, inputAdmissionReceipt.data.admittedTarget?.machineId,
+    );
+    await acquireSessionAccountCursorLocksInTx(params.tx, [params.sessionId], controllerAccountIds);
+    const currentEligible = await params.tx.sessionPendingMessage.findUnique({
+        where: { sessionId_localId: { sessionId: params.sessionId, localId: params.requestId }, targetExecutionRunId: null },
+        select: ACTIVATION_ELIGIBILITY_SELECT,
+    });
+    const currentControllerAccountIds = await readPendingActivationControllerAccountIdsInTx(
+        params.tx, inputAdmissionReceipt.data.admittedTarget?.machineId,
+    );
+    // Standalone arming can wait on Accounts after reading the receipt. Rejoin
+    // the complete admission with its current receipt instead of committing a
+    // refusal from that stale eligible row or adding another Account later.
+    if (!isDeepStrictEqual(eligible, currentEligible)
+        || !isDeepStrictEqual(controllerAccountIds, currentControllerAccountIds)) {
+        throw new TransactionReplayRequiredError('pending-activation-target-changed');
+    }
     const session = await params.tx.session.findUniqueOrThrow({
         where: { id: params.sessionId },
         select: AUTHORIZATION_SELECT,
@@ -213,6 +276,7 @@ export async function reconcilePendingActivationAuthorizationForRemovedRequestIn
     sessionId: string;
     requestId: string;
 }>): Promise<boolean> {
+    await acquireSessionAccountCursorLocksInTx(params.tx, [params.sessionId]);
     const session = await params.tx.session.findUniqueOrThrow({
         where: { id: params.sessionId },
         select: AUTHORIZATION_SELECT,
@@ -235,7 +299,9 @@ export async function markPendingActivationAuthorizationFailedInTx(params: Reado
     requestId: string;
     requestedAt: Date;
     failureCode: PendingActivationFailureCodeV1;
+    failureDetails?: PendingActivationFailureDetailsV1;
 }>): Promise<boolean> {
+    await acquireSessionAccountCursorLocksInTx(params.tx, [params.sessionId]);
     const updated = await params.tx.session.updateMany({
         where: {
             id: params.sessionId,
@@ -246,7 +312,8 @@ export async function markPendingActivationAuthorizationFailedInTx(params: Reado
         },
         data: {
             pendingActivationStatus: 'failed',
-            pendingActivationFailureCode: params.failureCode,
+            pendingActivationFailureCode: params.failureDetails ? JSON.stringify({ failureCode: params.failureCode,
+                ...PendingActivationFailureDetailsV1Schema.parse(params.failureDetails) }) : params.failureCode,
         },
     });
     return updated.count > 0;

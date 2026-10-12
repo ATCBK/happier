@@ -14,7 +14,9 @@ const sessionSystemRecordFindFirst = vi.fn();
 
 function createTx(): Tx {
     return {
-        session: { findUnique: sessionFindUnique, update: sessionUpdate },
+        $queryRawUnsafe: async () => [],
+        session: { findUnique: sessionFindUnique, findMany: async () => [], update: sessionUpdate },
+        sessionReportsTo: { findMany: async () => [] },
         sessionMessage: { findMany: sessionMessageFindMany, create: sessionMessageCreate },
         account: { findUnique: accountFindUnique },
         accountSessionReadState: { updateMany: accountSessionReadStateUpdateMany },
@@ -73,7 +75,7 @@ describe("canonical session transcript writer", () => {
             content: { t: 'encrypted', c: 'message-ciphertext' }, surfaceItemReference };
         const write = writeSessionTranscriptMessageInTx as (tx: Tx, params: unknown) => Promise<unknown>;
         expect(await runInTransaction((tx) => write(tx, params))).toMatchObject({ ok: true });
-        expect(sessionMessageCreate.mock.calls.at(-1)?.[0].data.surfaceItemReference).toEqual(surfaceItemReference);
+        expect(sessionMessageCreate.mock.calls.at(-1)?.[0].data.surfaceItemReference).toEqual({ v: 1, references: [surfaceItemReference] });
         sessionSystemRecordFindFirst.mockResolvedValue(null);
         sessionMessageCreate.mockClear();
         expect(await runInTransaction((tx) => write(tx, { ...params, localId: 'removed' }))).toMatchObject({ ok: true });

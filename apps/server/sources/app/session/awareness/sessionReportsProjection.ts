@@ -1,9 +1,12 @@
 import type { Prisma } from '@prisma/client';
+import { readCurrentSessionIdsInTx } from '@/app/session/access/sessionReadAdmission';
 import {
     isProjectedSessionStalledV1,
     parseSessionRuntimeActivityProjectionFields,
     projectSessionAwarenessOperationalV1,
     projectSessionAwarenessRuntimeV1,
+    readSessionAwarenessWorkStatusV1,
+    resolveSessionAwarenessLifecycleV1,
     type SessionReportsV1,
     type V2SessionRecord,
 } from '@happier-dev/protocol';
@@ -61,7 +64,7 @@ const REPORT_SESSION_SELECT = {
 
 type ReportSessionRow = Prisma.SessionGetPayload<{ select: typeof REPORT_SESSION_SELECT }>;
 
-function projectReportOperational(row: ReportSessionRow, nowMs: number) {
+function projectReportWorkStatus(row: ReportSessionRow, nowMs: number) {
     const liveFacts = hasSessionTranscriptPublicationLiveFacts(row);
     const lifecycle = {
         archivedAtMs: row.archivedAt?.getTime() ?? null,
@@ -99,10 +102,53 @@ function projectReportOperational(row: ReportSessionRow, nowMs: number) {
         } : {},
     });
     return {
-        operational: projectSessionAwarenessOperationalV1({ runtime, lifecycle }),
+        // Public runtime/lifecycle facts share Work's Protocol precedence. Content availability
+        // remains a client verdict; no encryption/readability assertion is made by this count.
+        status: readSessionAwarenessWorkStatusV1({ awareness: {
+            runtime: runtime.runtime,
+            freshness: runtime.freshness,
+            lifecycle: resolveSessionAwarenessLifecycleV1(lifecycle, false),
+            operational: projectSessionAwarenessOperationalV1({ runtime, lifecycle }),
+        } }),
         // The existing presence publisher/timeout owns Session.active; only its own turn can stall it.
-        stalled: liveFacts && isProjectedSessionStalledV1({ active: row.active, latestTurnStatus: lifecycle.latestTurnStatus }),
+        stalled: liveFacts && !runtime.archived && isProjectedSessionStalledV1({ active: row.active, latestTurnStatus: lifecycle.latestTurnStatus }),
     };
+}
+
+export type SessionReportContribution = Readonly<{
+    sessionId: string; leadSessionId: string; working: boolean; needsYou: boolean; stalled: boolean;
+}>;
+
+function projectCapturedReports(sessions: readonly V2SessionRecord[], contributions: readonly SessionReportContribution[]) {
+    const leads = new Map<string, string>();
+    const reports = new Map<string, SessionReportsV1>();
+    for (const contribution of contributions) {
+        leads.set(contribution.sessionId, contribution.leadSessionId);
+        const counts = reports.get(contribution.leadSessionId) ?? { total: 0, working: 0, needsYou: 0, stalled: 0 };
+        counts.total += 1;
+        if (contribution.working) counts.working += 1;
+        if (contribution.needsYou) counts.needsYou += 1;
+        if (contribution.stalled) counts.stalled += 1;
+        reports.set(contribution.leadSessionId, counts);
+    }
+    return sessions.map(session => {
+        const { reportsTo: _reportsTo, reports: _reports, ...base } = session;
+        const lead = leads.get(session.id);
+        return { ...base, ...(lead ? { reportsTo: { sessionId: lead } } : {}),
+            reports: reports.get(session.id) ?? { total: 0, working: 0, needsYou: 0, stalled: 0 } };
+    });
+}
+
+/** Redact revoked endpoints without refreshing captured operational facts. */
+export async function readmitCapturedSessionReportReferencesInTx(tx: Tx, input: Readonly<{
+    accountId: string; authentication: SessionAccessAuthentication;
+    accessMode: 'legacy_owner_or_direct' | 'effective_access_v1'; sessions: readonly V2SessionRecord[];
+    contributions: readonly SessionReportContribution[];
+}>): Promise<V2SessionRecord[]> {
+    const relatedIds = [...new Set(input.contributions.flatMap(row => [row.sessionId, row.leadSessionId]))];
+    const current = await readCurrentSessionIdsInTx(tx, { ...input, sessionIds: relatedIds });
+    return projectCapturedReports(input.sessions, input.contributions.filter(row =>
+        current.has(row.sessionId) && current.has(row.leadSessionId)));
 }
 
 /** One batch acquires authorized relation facts for every returned list/detail row. */
@@ -113,6 +159,7 @@ export async function projectSessionReportsForRowsInTx(tx: Tx, input: Readonly<{
     accessMode: 'legacy_owner_or_direct' | 'effective_access_v1';
     collectiveAccessSnapshot?: SessionCollectiveAccessSnapshot;
     nowMs: number;
+    captureContributions?: (contributions: readonly SessionReportContribution[]) => void;
 }>): Promise<V2SessionRecord[]> {
     if (input.sessions.length === 0) return [];
     const sessionIds = input.sessions.map((session) => session.id);
@@ -134,29 +181,16 @@ export async function projectSessionReportsForRowsInTx(tx: Tx, input: Readonly<{
     });
     const readable = new Map(related.filter((row) => row.accountId === input.accountId || isSessionTranscriptShareable(row))
         .map((row) => [row.id, row]));
-    const leads = new Map<string, string>();
-    const reports = new Map<string, SessionReportsV1>();
+    const contributions: SessionReportContribution[] = [];
     for (const edge of edges) {
         // Neither an unreadable parent nor an unreadable child leaks via counts or IDs.
         if (!readable.has(edge.sessionId) || !readable.has(edge.leadSessionId)) continue;
-        leads.set(edge.sessionId, edge.leadSessionId);
-        const counts = reports.get(edge.leadSessionId) ?? { total: 0, working: 0, needsYou: 0, stalled: 0 };
-        counts.total += 1;
         const child = readable.get(edge.sessionId)!;
-        const { operational, stalled } = projectReportOperational(child, input.nowMs);
-        if (operational.primary === 'working' && !stalled) counts.working += 1;
-        if (operational.primary === 'failed' || operational.primary === 'permission_required' || operational.primary === 'action_required') counts.needsYou += 1;
-        if (stalled) counts.stalled += 1;
-        reports.set(edge.leadSessionId, counts);
+        const { status, stalled } = projectReportWorkStatus(child, input.nowMs);
+        contributions.push({ ...edge, working: status.bucket === 'working' && !stalled,
+            needsYou: status.bucket === 'needs_you', stalled });
     }
-    return input.sessions.map((session) => {
-        const { reportsTo: _previousReportsTo, reports: _previousReports, ...base } = session;
-        const leadSessionId = leads.get(session.id);
-        return {
-            ...base,
-            pendingReviewRuns: pendingReviewRuns.get(session.id) ?? 0,
-            ...(leadSessionId ? { reportsTo: { sessionId: leadSessionId } } : {}),
-            reports: reports.get(session.id) ?? { total: 0, working: 0, needsYou: 0, stalled: 0 },
-        };
-    });
+    input.captureContributions?.(contributions);
+    return projectCapturedReports(input.sessions.map(session => ({ ...session,
+        pendingReviewRuns: pendingReviewRuns.get(session.id) ?? 0 })), contributions);
 }

@@ -1,5 +1,6 @@
 import { afterTx, type Tx } from '@/storage/inTx';
-import { markCurrentSessionReadersChanged } from '@/app/session/changeTracking/markCurrentSessionReadersChanged';
+import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from '@/app/session/access/sessionRecipients';
+import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from '@/app/changes/markAccountChanged';
 import { eventRouter } from '@/app/events/eventRouter';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 
@@ -13,9 +14,17 @@ export function scheduleSessionRelationBroadcastAfterTx(tx: Tx, sessionId: strin
     });
 }
 
-export async function invalidateSessionRelationProjectionsInTx(tx: Tx, sessionIds: Iterable<string>): Promise<void> {
-    for (const sessionId of [...new Set(sessionIds)].sort()) {
-        const recipients = await markCurrentSessionReadersChanged({ tx, sessionId });
-        scheduleSessionRelationBroadcastAfterTx(tx, sessionId, recipients.map(({ accountId }) => accountId));
+export async function invalidateSessionRelationProjectionsInTx(
+    tx: Tx,
+    sessionIds: Iterable<string>,
+    resolvedRecipients?: ReadonlyMap<string, readonly string[]>,
+): Promise<void> {
+    const uniqueSessionIds = [...new Set(sessionIds)].sort();
+    const recipientsBySession = resolvedRecipients
+        ?? await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, { sessionIds: uniqueSessionIds });
+    await acquireAccountChangePublicationLocksInTx(tx, [...recipientsBySession.values()].flat());
+    for (const [sessionId, accountIds] of recipientsBySession) {
+        await markAccountsChanged(tx, { accountIds, kind: 'session', entityId: sessionId });
+        scheduleSessionRelationBroadcastAfterTx(tx, sessionId, accountIds);
     }
 }

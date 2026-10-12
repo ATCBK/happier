@@ -184,7 +184,7 @@ export async function listSessionDiscussions(params: Readonly<{
             discussions: projected.value,
             nextCursor,
         });
-    });
+    }, { isolationLevel: "Serializable" /* Discussion content, latest-message facts and viewer admission require a coherent snapshot. */ });
 }
 
 export async function getSessionDiscussion(params: Readonly<{
@@ -217,7 +217,7 @@ export async function getSessionDiscussion(params: Readonly<{
         });
         if (!projected.ok) return projected;
         return discussionSuccess({ discussion: projected.value });
-    });
+    }, { isolationLevel: "Serializable" /* Discussion content, latest-message facts and viewer admission require a coherent snapshot. */ });
 }
 
 /**
@@ -292,5 +292,5 @@ export async function readSessionDiscussionMessages(params: Readonly<{
             hasMoreOlder,
             messageSeq: discussion.messageSeq,
         });
-    });
+    }, { isolationLevel: "Serializable" /* Discussion content, latest-message facts and viewer admission require a coherent snapshot. */ });
 }

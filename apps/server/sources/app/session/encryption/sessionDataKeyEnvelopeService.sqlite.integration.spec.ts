@@ -14,7 +14,6 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { withAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { sessionRoutes } from "@/app/api/routes/session/sessionRoutes";
-import { enableErrorHandlers } from "@/app/api/utils/enableErrorHandlers";
 import { registerSessionDataKeyEnvelopeRoutes } from "@/app/api/routes/session/registerSessionDataKeyEnvelopeRoutes";
 import {
     applySessionDataKeyEnvelopes,
@@ -153,10 +152,7 @@ describe("Session data-key envelope collection (SQLite)", () => {
             where: { sessionId: session.id, recipientAccountId: recipient.id },
         })).toBe(0);
 
-        await withAuthenticatedTestApp(app => {
-            sessionRoutes(app);
-            enableErrorHandlers(app);
-        }, async app => {
+        await withAuthenticatedTestApp(sessionRoutes, async app => {
             const response = await app.inject({
                 method: "GET",
                 url: `/v2/sessions/${session.id}/data-key/envelopes?state=all`,
@@ -698,10 +694,7 @@ describe("Session data-key envelope collection (SQLite)", () => {
             dataKey, recipientPublicKey: recipient.binding.contentPublicKey,
             randomBytes: length => tweetnacl.randomBytes(length),
         })));
-        await withAuthenticatedTestApp(app => {
-            sessionRoutes(app);
-            enableErrorHandlers(app);
-        }, async app => {
+        await withAuthenticatedTestApp(sessionRoutes, async app => {
             const url = `/v2/sessions/${session.id}/data-key/envelopes`;
             const headers = { "x-test-user-id": owner.id };
             const page = await app.inject({ method: "GET", url, headers });

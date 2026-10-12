@@ -1,22 +1,24 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+    createAccountCursorRawQueryTransactionModel,
     createEmptySessionFollowEdgeTransactionModel,
+    createEmptySessionReportsToTransactionModel,
     createInTxHarness,
 } from '@/app/api/testkit/txHarness';
 
-let deleteOwnedSession: typeof import('./deleteOwnedSession').deleteOwnedSession;
+import { deleteOwnedSession } from './deleteOwnedSession';
 
-const emitUpdate = vi.fn();
+const emitUpdate = vi.hoisted(() => vi.fn());
 // Socket emission is the transport boundary; deletion and change projection stay real.
 vi.mock('@/app/events/eventRouter', async () => {
     const actual = await vi.importActual<typeof import('@/app/events/eventRouter')>('@/app/events/eventRouter');
     return { ...actual, eventRouter: { ...actual.eventRouter, emitUpdate } };
 });
 
-const randomKeyNaked = vi.fn()
+const randomKeyNaked = vi.hoisted(() => vi.fn()
     .mockReturnValueOnce('upd-owner')
-    .mockReturnValueOnce('upd-u2');
+    .mockReturnValueOnce('upd-u2'));
 vi.mock('@/utils/keys/randomKeyNaked', () => ({ randomKeyNaked }));
 
 const upsertAccountChange = vi.fn(async () => ({}));
@@ -54,16 +56,26 @@ vi.mock('@/storage/inTx', () => {
             session: {
                 findFirst,
                 findUnique: findSession,
+                findMany: async () => [{ ...await findSession(), id: 's1' }],
                 updateMany: claimSession,
                 deleteMany: deleteSession,
             },
             account: { findMany: findAudienceAccounts, update: allocateAccountSeq },
             accountChange: { upsert: upsertAccountChange },
+            $queryRawUnsafe: createAccountCursorRawQueryTransactionModel({
+                account: { update: allocateAccountSeq },
+                accountChange: { upsert: upsertAccountChange },
+            }),
+            sessionShare: { findMany: async () => [] },
+            sessionTeamGrant: { findMany: async () => [] },
+            sessionGroupGrant: { findMany: async () => [] },
             sessionMessage: { deleteMany: deleteMessages },
             usageReport: { deleteMany: deleteReports },
             accessKey: { deleteMany: deleteAccessKeys },
             ephemeralRunnerActivation: { findFirst: findRunnerActivation },
             sessionFollowEdge: createEmptySessionFollowEdgeTransactionModel(),
+            sessionReportsTo: createEmptySessionReportsToTransactionModel(),
+            automation: { findMany: async () => [] },
             userKVStore: { findMany: findSessionDrafts, findUnique: findSessionDraft },
         }));
 
@@ -77,14 +89,10 @@ function seedDeleteTarget(metadataLayoutVersion: 0 | 1, recipientAccountIds: str
         metadataLayoutVersion,
         updatedAt: new Date('2025-01-01T00:00:00.000Z'),
     });
-    findAudienceAccounts.mockResolvedValueOnce(recipientAccountIds.map(id => ({ id })));
+    findAudienceAccounts.mockResolvedValue(recipientAccountIds.map(id => ({ id })));
 }
 
 describe('deleteOwnedSession', () => {
-    beforeAll(async () => {
-        ({ deleteOwnedSession } = await import('./deleteOwnedSession'));
-    });
-
     beforeEach(() => {
         vi.clearAllMocks();
     });

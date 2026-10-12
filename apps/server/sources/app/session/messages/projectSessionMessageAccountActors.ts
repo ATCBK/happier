@@ -28,6 +28,7 @@ type AccountDisplayProfileReader = Readonly<{
             select: typeof ACCOUNT_DISPLAY_PROFILE_SELECT;
         }) => Promise<readonly {
             id: string;
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;
@@ -94,7 +95,7 @@ export async function projectSessionMessageAccountActors(
         const actorAccountId = deriveSessionMessageAuthorAccountIdV1({
             messageRole: row.messageRole,
             inputAdmissionReceipt: row.inputAdmissionReceipt,
-        });
+        }, 'stored');
         if (actorAccountId === null) return null;
         if (row.authorAccountId != null && row.authorAccountId !== actorAccountId) {
             warn({

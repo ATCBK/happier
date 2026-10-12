@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { Buffer } from "node:buffer";
 import { isDeepStrictEqual } from "node:util";
+import { z } from "zod";
 
 import {
     isStoredContentKindAllowedForSessionByStoragePolicy,
@@ -12,6 +13,8 @@ import {
     SessionSystemRecordAddressSchema,
     SessionSystemRecordDeleteRequestSchema,
     SessionSystemRecordContentSchema,
+    SessionSystemRecordCreatorV1Schema,
+    type SessionSystemRecordCreatorV1,
     SessionSystemRecordListQuerySchema,
     SessionSystemRecordReadRequestSchema,
     SessionSystemRecordRevisionSchema,
@@ -49,6 +52,9 @@ import {
     SessionBoardItemRecordContentV1Schema,
     SessionBoardLayoutRecordContentV1Schema,
 } from "@happier-dev/protocol/sessions/board";
+import { createStoredReadSchema } from "@happier-dev/protocol/json/storedReadSchema";
+import { getSessionSystemRecordStoredPayloadSchema } from "@happier-dev/protocol/sessions/system/records/sessionSystemRecordCatalog";
+import { isSessionSurfaceItemIdentityCorrespondingV1, type SessionSurfaceItemV1 } from "@happier-dev/protocol/sessions/board/item";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { resolveEncryptionWriteRejectionCode, type EncryptionPolicyRejectionCode } from "@/app/session/encryptionRejectionCodes";
@@ -60,6 +66,7 @@ import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { isPrismaErrorCode } from "@/storage/prisma";
 import {
     deriveSessionSystemRecordAddressKeys,
@@ -662,6 +669,25 @@ function persistedV1Address(pluginId: string | undefined, address: SessionSystem
     };
 }
 
+// Only the typed visual writer persists this wrapper. Request content remains
+// the strict plain/encrypted envelope and can never supply creation metadata.
+const StoredSessionSurfaceRecordV1Schema = createStoredReadSchema(z.object({
+    t: z.literal("session_surface_record_v1"),
+    content: SessionSystemRecordContentSchema,
+    creator: SessionSystemRecordCreatorV1Schema,
+}).strict());
+const StoredSessionSystemRecordContentSchema = createStoredReadSchema(SessionSystemRecordContentSchema);
+
+function isSurfaceItemAddress(address: Readonly<{ ownerKind: string; namespace: string }>, kind: string): boolean {
+    return address.ownerKind === "host" && address.namespace === "surface" && kind === "item.v1";
+}
+
+function persistedV1Content(address: SessionSystemRecordAddress, content: SessionSystemRecordContent, creator: SessionSystemRecordCreatorV1) {
+    return address.owner === "host" && address.namespace === "surface" && address.kind === "item.v1"
+        ? { t: "session_surface_record_v1" as const, content, creator }
+        : content;
+}
+
 function storedV1Record(
     row: PersistedSessionSystemRecordRow,
     expected: PersistedSessionSystemRecordAddress,
@@ -677,7 +703,9 @@ function storedV1Record(
     if (!rawAddress || !sessionSystemRecordRawAddressEquals(rawAddress, expected)) {
         return { ok: false, code: "plugin_session_record_address_collision" };
     }
-    const parsedContent = SessionSystemRecordContentSchema.safeParse(row.content);
+    const isSurfaceItem = isSurfaceItemAddress(expected, row.kind);
+    const wrapper = isSurfaceItem ? StoredSessionSurfaceRecordV1Schema.safeParse(row.content) : null;
+    const parsedContent = StoredSessionSystemRecordContentSchema.safeParse(wrapper?.success ? wrapper.data.content : row.content);
     if (!parsedContent.success || !Number.isInteger(row.version) || row.version < 1 || row.version > SESSION_SYSTEM_RECORD_VERSION_MAX) {
         return { ok: false, code: "plugin_session_record_internal" };
     }
@@ -690,18 +718,25 @@ function storedV1Record(
     if (!parsedAddress.success) {
         return { ok: false, code: "plugin_session_record_internal" };
     }
-    if (!hasValidRegisteredHostPlainContent({
-        address: parsedAddress.data,
-        content: parsedContent.data,
-    })) {
-        return { ok: false, code: "plugin_session_record_internal" };
+    let content = parsedContent.data;
+    if (parsedAddress.data.owner === "host" && content.t === "plain") {
+        const payload = getSessionSystemRecordStoredPayloadSchema(parsedAddress.data.namespace, parsedAddress.data.kind)?.safeParse(content.v);
+        if (!payload?.success || (isSurfaceItem
+            && !isSessionSurfaceItemIdentityCorrespondingV1(row.localId, payload.data as SessionSurfaceItemV1))) {
+            return { ok: false, code: "plugin_session_record_internal" };
+        }
+        // The catalog owns payload projection; the envelope owns its JSON value contract.
+        const projected = SessionSystemRecordContentSchema.safeParse({ t: "plain", v: payload.data });
+        if (!projected.success) return { ok: false, code: "plugin_session_record_internal" };
+        content = projected.data;
     }
     return {
         ok: true,
         record: {
             id: row.id,
             address: parsedAddress.data,
-            content: parsedContent.data,
+            content,
+            ...(isSurfaceItem ? { creator: wrapper?.success ? wrapper.data.creator : { kind: "unknown" as const } } : {}),
             revision: encodeSessionSystemRecordRevision({ id: row.id, version: row.version }),
             createdAt: row.createdAt.toISOString(),
             updatedAt: row.updatedAt.toISOString(),
@@ -883,7 +918,7 @@ async function ensureV1RecordAccess(
             code: access.error === "session-not-found" ? "plugin_session_not_found" : "plugin_session_record_invalid_query",
         };
     }
-    const readAdmission = async (tx: Tx) => {
+    const readAdmission = async (tx: Tx): ReturnType<typeof ensureV1RecordAccess> => {
         const session = await tx.session.findUnique({
             where: { id: params.sessionId },
             select: { encryptionMode: true, accountId: true },
@@ -964,7 +999,7 @@ async function refetchV1RecordAfterMutation(
                 return { ok: false, code: "plugin_session_record_forbidden" as const };
             }
             return found;
-        });
+        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
     } catch {
         return { ok: false, code: "plugin_session_record_internal" };
     }
@@ -1020,6 +1055,33 @@ async function resolveV1ConditionalDeleteMiss(
     };
 }
 
+async function readV1Snapshot<T>(
+    params: SessionSystemRecordV1BaseParams,
+    target: Parameters<typeof ensureV1RecordAccess>[1],
+    read: (tx: Tx, access: Extract<Awaited<ReturnType<typeof ensureV1RecordAccess>>, { ok: true }>) => Promise<SessionSystemRecordV1Result<T>>,
+): Promise<SessionSystemRecordV1Result<T>> {
+    let capturedAdmission: Extract<Awaited<ReturnType<typeof ensureV1RecordAccess>>, { ok: true }> | undefined;
+    return await readSnapshotWithCurrentAdmission<SessionSystemRecordV1Result<T>>(async tx => {
+        const access = await ensureV1RecordAccess(params, target, tx);
+        if (!access.ok) return access;
+        capturedAdmission = access;
+        return await read(tx, access);
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        // This repeats the catalog, Account scope, runtime-principal and
+        // effective-access decisions, not merely transcript visibility.
+        const current = await ensureV1RecordAccess(params, target, tx);
+        if (!current.ok) return current;
+        if (!capturedAdmission || current.accountId !== capturedAdmission.accountId) {
+            return { ok: false, code: "plugin_session_record_forbidden" };
+        }
+        if (current.sessionEncryptionMode !== capturedAdmission.sessionEncryptionMode) {
+            return { ok: false, code: "plugin_session_record_storage_mode_mismatch" };
+        }
+        return captured;
+    });
+}
+
 export async function readSessionSystemRecordV1(
     params: SessionSystemRecordV1BaseParams & Readonly<{ address: SessionSystemRecordAddress }>,
 ): Promise<SessionSystemRecordV1Result<{ record: SessionSystemRecordStored | null }>> {
@@ -1027,9 +1089,7 @@ export async function readSessionSystemRecordV1(
         return { ok: false, code: "plugin_session_record_invalid_query" };
     }
     try {
-        return await inTx(async (tx) => {
-            const access = await ensureV1RecordAccess(params, { ...params.address, operation: "read" }, tx);
-            if (!access.ok) return access;
+        return await readV1Snapshot(params, { ...params.address, operation: "read" }, async (tx, access): ReturnType<typeof readSessionSystemRecordV1> => {
             const found = await findV1RecordByAddress(tx, {
                 ...params,
                 accountId: access.accountId,
@@ -1053,7 +1113,7 @@ export async function readSessionSystemRecordV1(
                 return { ok: false, code: "plugin_session_record_kind_conflict" as const };
             }
             return projected;
-        }, { readOnly: true });
+        });
     } catch {
         return { ok: false, code: "plugin_session_record_internal" };
     }
@@ -1083,14 +1143,12 @@ export async function listSessionSystemRecordsV1(
     };
     const keys = deriveSessionSystemRecordAddressKeys(expectedAddress);
     try {
-        return await inTx(async (tx) => {
-            const access = await ensureV1RecordAccess(params, {
+        return await readV1Snapshot(params, {
                 owner: parsed.data.owner,
                 namespace: parsed.data.namespace,
                 ...(parsed.data.kind ? { kind: parsed.data.kind } : {}),
                 operation: "read",
-            }, tx);
-            if (!access.ok) return access;
+            }, async (tx, access): ReturnType<typeof listSessionSystemRecordsV1> => {
             const rows = await tx.sessionSystemRecord.findMany({
                 where: {
                     accountId: access.accountId,
@@ -1147,7 +1205,7 @@ export async function listSessionSystemRecordsV1(
                     hasNext,
                 },
             };
-        }, { readOnly: true });
+        });
     } catch {
         return { ok: false, code: "plugin_session_record_internal" };
     }
@@ -1243,7 +1301,7 @@ async function settleV1UnconditionalCreateRace(
             return next
                 ? storedV1Record(next, raced.expected)
                 : { ok: false, code: "plugin_session_record_internal" as const };
-        });
+        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
     } catch {
         return { ok: false, code: "plugin_session_record_internal" };
     }
@@ -1272,7 +1330,7 @@ export async function upsertSessionSystemRecordV1(
 
 async function upsertSessionSystemRecordV1InTx(
     tx: Tx,
-    params: SessionSystemRecordV1BaseParams & Readonly<{ address: SessionSystemRecordAddress; content: SessionSystemRecordContent; expectedRevision?: SessionSystemRecordRevision | null; }>,
+    params: SessionSystemRecordV1BaseParams & Readonly<{ address: SessionSystemRecordAddress; content: SessionSystemRecordContent; expectedRevision?: SessionSystemRecordRevision | null; creator?: SessionSystemRecordCreatorV1 }>,
     access: Readonly<{ accountId: string; currentAccess: CurrentSessionRecordAccess }>,
 ): Promise<SessionSystemRecordV1Result<{ record: SessionSystemRecordStored }> | V1UpsertMutationRace> {
     const found = await findV1RecordByAddress(tx, {
@@ -1288,7 +1346,7 @@ async function upsertSessionSystemRecordV1InTx(
         if (current.kind !== params.address.kind) {
             return { ok: false, code: "plugin_session_record_kind_conflict" as const };
         }
-        const sameEnvelope = isDeepStrictEqual(current.content, params.content);
+        const sameEnvelope = isDeepStrictEqual(projected.record.content, params.content);
         const expected = params.expectedRevision === undefined || params.expectedRevision === null
             ? null
             : parseSessionSystemRecordRevision(params.expectedRevision);
@@ -1318,7 +1376,7 @@ async function upsertSessionSystemRecordV1InTx(
                     authentication: params.authentication,
                 }),
             },
-            data: { content: params.content, version: { increment: 1 } },
+            data: { content: persistedV1Content(params.address, params.content, projected.record.creator ?? { kind: "unknown" }), version: { increment: 1 } },
         });
         if (updated.count !== 1) {
             if (!await hasCurrentSessionRecordAccessInTx(tx, {
@@ -1372,7 +1430,7 @@ async function upsertSessionSystemRecordV1InTx(
             namespace: params.address.namespace,
             kind: params.address.kind,
             localId: params.address.localId,
-            content: params.content,
+            content: persistedV1Content(params.address, params.content, params.creator ?? { kind: "unknown" }),
             namespaceAddressKey: found.keys.namespaceAddressKey,
             recordAddressKey: found.keys.recordAddressKey,
             version: 1,
@@ -1415,7 +1473,7 @@ async function upsertSessionSystemRecordV1Attempt(
 
     let outcome: SessionSystemRecordV1Result<{ record: SessionSystemRecordStored }> | V1UpsertMutationRace;
     try {
-        outcome = await inTx((tx) => upsertSessionSystemRecordV1InTx(tx, params, access));
+        outcome = await inTx((tx) => upsertSessionSystemRecordV1InTx(tx, params, access), { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
     } catch (error) {
         if (!isPrismaErrorCode(error, "P2002")) {
             return { ok: false, code: "plugin_session_record_internal" };
@@ -1478,7 +1536,7 @@ async function settleV1UnconditionalDeleteMiss(
                 return { ok: false, code: "plugin_session_record_forbidden" as const };
             }
             return { ok: false, code: "plugin_session_record_internal" as const };
-        });
+        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
     } catch {
         return { ok: false, code: "plugin_session_record_internal" };
     }
@@ -1573,7 +1631,7 @@ export async function deleteSessionSystemRecordV1(
     if (!access.ok) return access;
     let outcome: SessionSystemRecordV1Result<Record<never, never>> | V1DeleteMutationRace;
     try {
-        outcome = await inTx((tx) => deleteSessionSystemRecordV1InTx(tx, params, access));
+        outcome = await inTx((tx) => deleteSessionSystemRecordV1InTx(tx, params, access), { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
     } catch {
         return { ok: false, code: "plugin_session_record_internal" };
     }
@@ -1604,7 +1662,7 @@ type SessionBoardRecordScopeResult =
  * Generic CRUD never receives this scope: its catalog policy remains unavailable.
  * Both callers use the same conditional row operations above.
  */
-export async function resolveSessionBoardRecordsInTx(tx: Tx, params: Readonly<{ actorUserId: string; sessionId: string; authentication: SessionAccessAuthentication; requiresLayout: boolean }>): Promise<SessionBoardRecordScopeResult> {
+export async function resolveSessionBoardRecordsInTx(tx: Tx, params: Readonly<{ actorUserId: string; sessionId: string; authentication: SessionAccessAuthentication; requiresLayout: boolean; creator?: SessionSystemRecordCreatorV1 }>): Promise<SessionBoardRecordScopeResult> {
     if (!isSessionSystemRecordsProtocolV1Active() || (params.requiresLayout && !await isServerFeatureEnabledForHome("sessions.board", { tx }))) {
         return { ok: false, code: "plugin_session_record_feature_disabled" };
     }
@@ -1643,7 +1701,8 @@ export async function resolveSessionBoardRecordsInTx(tx: Tx, params: Readonly<{ 
             return projected;
         },
         async upsert(localId: string | null, content: SessionSystemRecordContent, expectedRevision: SessionSystemRecordRevision | null) {
-            return await upsertSessionSystemRecordV1InTx(tx, { ...params, address: address(localId), content, expectedRevision }, access);
+            const creator = params.creator ?? (params.authentication.authority === "present_user" ? { kind: "user" as const } : { kind: "unknown" as const });
+            return await upsertSessionSystemRecordV1InTx(tx, { ...params, creator, address: address(localId), content, expectedRevision }, access);
         },
         async remove(localId: string, expectedRevision: SessionSystemRecordRevision) {
             return await deleteSessionSystemRecordV1InTx(tx, { ...params, address: address(localId), expectedRevision }, access);
@@ -1866,7 +1925,7 @@ async function ensurePermissionMediationRecordAccess(
     if (access.access.level !== "owner") {
         return { ok: false, code: "permission_mediation_record_forbidden" };
     }
-    const readAdmission = async (tx: Tx) => {
+    const readAdmission = async (tx: Tx): ReturnType<typeof ensurePermissionMediationRecordAccess> => {
         const session = await tx.session.findUnique({
             where: { id: params.sessionId },
             select: { accountId: true, encryptionMode: true },
@@ -1938,6 +1997,28 @@ function isPermissionMediationMutationMiss(
     return "kind" in value && value.kind === "refetch-permission-mediation-conflict";
 }
 
+async function readPermissionSnapshot<T>(
+    params: PermissionMediationRecordAccessParams,
+    read: (tx: Tx, access: Extract<Awaited<ReturnType<typeof ensurePermissionMediationRecordAccess>>, { ok: true }>) => Promise<PermissionMediationRecordResult<T>>,
+): Promise<PermissionMediationRecordResult<T>> {
+    let capturedAdmission: Extract<Awaited<ReturnType<typeof ensurePermissionMediationRecordAccess>>, { ok: true }> | undefined;
+    return await readSnapshotWithCurrentAdmission<PermissionMediationRecordResult<T>>(async tx => {
+        const access = await ensurePermissionMediationRecordAccess(params, tx);
+        if (!access.ok) return access;
+        capturedAdmission = access;
+        return await read(tx, access);
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        const current = await ensurePermissionMediationRecordAccess(params, tx);
+        if (!current.ok) return current;
+        if (!capturedAdmission || current.accountId !== capturedAdmission.accountId
+            || current.sessionEncryptionMode !== capturedAdmission.sessionEncryptionMode) {
+            return { ok: false, code: "permission_mediation_record_forbidden" };
+        }
+        return captured;
+    });
+}
+
 export async function readPermissionMediationRecord(
     params: ReadPermissionMediationRecordParams,
 ): Promise<PermissionMediationRecordResult<{ record: SessionPermissionMediationRecordStored | null }>> {
@@ -1948,9 +2029,7 @@ export async function readPermissionMediationRecord(
         return { ok: false, code: "permission_mediation_record_invalid" };
     }
     try {
-        return await inTx(async (tx) => {
-            const access = await ensurePermissionMediationRecordAccess(params, tx);
-            if (!access.ok) return access;
+        return await readPermissionSnapshot(params, async (tx, access): ReturnType<typeof readPermissionMediationRecord> => {
             const found = await findPermissionMediationRecord(tx, {
                 accountId: access.accountId,
                 identity: params.identity,
@@ -1958,7 +2037,7 @@ export async function readPermissionMediationRecord(
             if (!found.row) return { ok: true, record: null };
             const stored = storedPermissionMediationRecord(found.row, params.identity);
             return stored.ok ? { ok: true, record: stored.record } : stored;
-        }, { readOnly: true });
+        });
     } catch {
         return { ok: false, code: "permission_mediation_record_internal" };
     }
@@ -2160,9 +2239,7 @@ export async function listPermissionMediationRecords(
         permissionMediationNamespaceAddress(),
     );
     try {
-        return await inTx(async (tx) => {
-            const access = await ensurePermissionMediationRecordAccess(params, tx);
-            if (!access.ok) return access;
+        return await readPermissionSnapshot(params, async (tx, access): ReturnType<typeof listPermissionMediationRecords> => {
             const rows = await tx.sessionSystemRecord.findMany({
                 where: {
                     accountId: access.accountId,
@@ -2197,7 +2274,7 @@ export async function listPermissionMediationRecords(
                     hasNext,
                 },
             };
-        }, { readOnly: true });
+        });
     } catch {
         return { ok: false, code: "permission_mediation_record_internal" };
     }
@@ -2364,13 +2441,38 @@ async function upsertSessionSystemRecordWithCreateRaceRetry(
             const createdRecord = toSessionSystemRecordRow(created);
             if (!createdRecord) return { ok: false, error: "internal" };
             return { ok: true, didCreate: true, didUpdate: false, record: createdRecord };
-        });
+        }, { isolationLevel: "Serializable" /* Standalone record access, Session storage tuple and content decisions lack an early Account fence. */ });
     } catch (error) {
         if (retryCreateRace && isPrismaErrorCode(error, "P2002")) {
             return await upsertSessionSystemRecordWithCreateRaceRetry(params, false);
         }
         return { ok: false, error: "internal" };
     }
+}
+
+async function readLegacyHostSnapshot<T extends ListSessionSystemRecordsResult | GetSessionSystemRecordResult | GetLatestSessionSystemRecordResult>(
+    params: Readonly<{ actorUserId: string; sessionId: string; authentication: SessionAccessAuthentication;
+        namespace?: SessionSystemRecordNamespace; kind?: SessionSystemRecordKind }>,
+    read: (tx: Tx, session: Readonly<{ accountId: string; encryptionMode: string }> | null) => Promise<T>,
+): Promise<T | Readonly<{ ok: false; error: "session-not-found" | "invalid-params" | "forbidden" }>> {
+    let capturedSession: Readonly<{ accountId: string; encryptionMode: string }> | null = null;
+    return await readSnapshotWithCurrentAdmission<T | Readonly<{ ok: false; error: "session-not-found" | "invalid-params" | "forbidden" }>>(async tx => {
+        capturedSession = await tx.session.findUnique({ where: { id: params.sessionId }, select: { accountId: true, encryptionMode: true } });
+        return await read(tx, capturedSession);
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        const current = await ensureSessionRecordAccess(params, tx);
+        if (!current.ok) return current;
+        const session = await tx.session.findUnique({ where: { id: params.sessionId }, select: { accountId: true, encryptionMode: true } });
+        if (!session || !capturedSession || session.accountId !== capturedSession.accountId
+            || session.encryptionMode !== capturedSession.encryptionMode) return { ok: false, error: "forbidden" };
+        const records = "records" in captured ? captured.records : "record" in captured && captured.record ? [captured.record] : [];
+        if (!canReadHostSystemRecords({ access: current.access, namespace: params.namespace, kind: params.kind })
+            || records.some(record => !canReadHostSystemRecords({ access: current.access, namespace: record.namespace, kind: record.kind }))) {
+            return { ok: false, error: "forbidden" };
+        }
+        return captured;
+    });
 }
 
 export async function listSessionSystemRecords(
@@ -2382,7 +2484,7 @@ export async function listSessionSystemRecords(
     const cursor = decodeCursor(params.cursor);
 
     try {
-        return await inTx(async (tx) => {
+        return await readLegacyHostSnapshot(params, async (tx, session): Promise<ListSessionSystemRecordsResult> => {
             const access = await ensureSessionRecordAccess(params, tx);
             if (!access.ok) return access;
             if (!canReadHostSystemRecords({
@@ -2390,10 +2492,6 @@ export async function listSessionSystemRecords(
                 ...(params.namespace ? { namespace: params.namespace } : {}),
                 ...(params.kind ? { kind: params.kind } : {}),
             })) return { ok: false, error: "forbidden" };
-            const session = await tx.session.findUnique({
-                where: { id: params.sessionId },
-                select: { accountId: true, encryptionMode: true },
-            });
             if (!session) return { ok: false, error: "session-not-found" };
             const sessionAccountId = typeof session.accountId === "string"
                 ? session.accountId
@@ -2489,7 +2587,7 @@ export async function listSessionSystemRecords(
                 records: records as SessionSystemRecordRow[],
                 nextCursor: rows.length > limit && last ? encodeCursor(last) : null,
             };
-        }, { readOnly: true });
+        });
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -2501,16 +2599,12 @@ export async function getSessionSystemRecord(
     if (!validateLookupParams(params)) return { ok: false, error: "invalid-params" };
 
     try {
-        return await inTx(async (tx) => {
+        return await readLegacyHostSnapshot(params, async (tx, session): Promise<GetSessionSystemRecordResult> => {
             const access = await ensureSessionRecordAccess(params, tx);
             if (!access.ok) return access;
             if (!canReadHostSystemRecords({ access: access.access, namespace: params.namespace })) {
                 return { ok: false, error: "forbidden" };
             }
-            const session = await tx.session.findUnique({
-                where: { id: params.sessionId },
-                select: { accountId: true, encryptionMode: true },
-            });
             if (!session) return { ok: false, error: "session-not-found" };
             const recordScope = resolveSystemRecordAccountScope({
                 namespace: params.namespace,
@@ -2543,7 +2637,7 @@ export async function getSessionSystemRecord(
             const record = toSessionSystemRecordRow(row);
             if (!record) return { ok: false, error: "internal" };
             return { ok: true, record };
-        }, { readOnly: true });
+        });
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -2555,7 +2649,7 @@ export async function getLatestSessionSystemRecord(
     if (!validateLatestParams(params)) return { ok: false, error: "invalid-params" };
 
     try {
-        return await inTx(async (tx) => {
+        return await readLegacyHostSnapshot(params, async (tx, session): Promise<GetLatestSessionSystemRecordResult> => {
             const access = await ensureSessionRecordAccess(params, tx);
             if (!access.ok) return access;
             if (!canReadHostSystemRecords({
@@ -2563,10 +2657,6 @@ export async function getLatestSessionSystemRecord(
                 namespace: params.namespace,
                 kind: params.kind,
             })) return { ok: false, error: "forbidden" };
-            const session = await tx.session.findUnique({
-                where: { id: params.sessionId },
-                select: { accountId: true, encryptionMode: true },
-            });
             if (!session) return { ok: false, error: "session-not-found" };
             const recordScope = resolveSystemRecordAccountScope({
                 namespace: params.namespace,
@@ -2614,7 +2704,7 @@ export async function getLatestSessionSystemRecord(
             const record = toSessionSystemRecordRow(row);
             if (!record) return { ok: false, error: "internal" };
             return { ok: true, record };
-        }, { readOnly: true });
+        });
     } catch {
         return { ok: false, error: "internal" };
     }

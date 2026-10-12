@@ -3,7 +3,7 @@ import {
     resolveStructuralSessionAccessForSessionsInTx,
     type EffectiveSessionAccess,
 } from "./sessionAccess";
-import { applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
+import { acquireSessionAccessTransitionCursorLocksInTx, applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
 
 const captured = Symbol("Session access Account-status impact");
 
@@ -36,25 +36,39 @@ export interface SessionAccessAccountStatusEffects {
  * transition removes. The canonical structural evaluator decides whether each
  * candidate actually had access.
  */
-export async function captureSessionAccessAccountStatusImpactInTx(
-    tx: Tx,
-    input: Readonly<{ accountId: string }>,
-): Promise<SessionAccessAccountStatusImpact> {
+async function resolveAccountStatusAffectedSessionIdsInTx(tx: Tx, accountId: string): Promise<string[]> {
     const sessions = await tx.session.findMany({
         where: {
             OR: [
-                { accountId: input.accountId },
-                { shares: { some: { sharedWithUserId: input.accountId } } },
-                { teamGrants: { some: { team: { memberships: { some: { accountId: input.accountId } } } } } },
+                { accountId },
+                { shares: { some: { sharedWithUserId: accountId } } },
+                { teamGrants: { some: { team: { memberships: { some: { accountId } } } } } },
                 { groupGrants: { some: { teamGroup: { memberships: { some: {
-                    teamMembership: { accountId: input.accountId },
+                    teamMembership: { accountId },
                 } } } } } },
             ],
         },
         select: { id: true },
         orderBy: { id: "asc" },
     });
-    const sessionIds = sessions.map(session => session.id);
+    return sessions.map(session => session.id);
+}
+
+/** Lock the status transition's Session audience before actor/target Account fences. */
+export async function acquireSessionAccountStatusCursorLocksInTx(
+    tx: Tx,
+    input: Readonly<{ accountId: string; additionalAccountIds: readonly string[] }>,
+): Promise<void> {
+    await acquireSessionAccessTransitionCursorLocksInTx(tx,
+        await resolveAccountStatusAffectedSessionIdsInTx(tx, input.accountId),
+        [input.accountId, ...input.additionalAccountIds]);
+}
+
+export async function captureSessionAccessAccountStatusImpactInTx(
+    tx: Tx,
+    input: Readonly<{ accountId: string }>,
+): Promise<SessionAccessAccountStatusImpact> {
+    const sessionIds = await resolveAccountStatusAffectedSessionIdsInTx(tx, input.accountId);
     const access = await resolveStructuralSessionAccessForSessionsInTx(tx, {
         sessionIds,
         accountIds: [input.accountId],

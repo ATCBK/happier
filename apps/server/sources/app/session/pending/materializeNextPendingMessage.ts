@@ -1,4 +1,5 @@
 import type { SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import type { CurrentSessionPublisherAuthority } from "@/app/presence/sessionPublisherPresence";
 import {
     fenceExactCurrentPublisherAuthorityInTx,
@@ -9,6 +10,7 @@ import { markPendingStateChangedRecipients } from "@/app/session/pending/markPen
 import {
     inTx,
     isTransactionAcquisitionUnavailableError,
+    isTransactionConflictExhaustedError,
     isTransactionDeadlineExceededError,
     type Tx,
 } from "@/storage/inTx";
@@ -363,7 +365,7 @@ export async function materializeNextPendingMessage(
     try {
         return await inTx(
             async (tx) => await materializeNextPendingMessageInTx({ ...params, tx }),
-            params.deadlineAtMs === undefined ? undefined : { deadlineAtMs: params.deadlineAtMs },
+            { transactionClass: "pending-materialization", ...(params.deadlineAtMs === undefined ? {} : { deadlineAtMs: params.deadlineAtMs }) },
         );
     } catch (error) {
         return mapPendingMaterializationError(error);
@@ -372,7 +374,8 @@ export async function materializeNextPendingMessage(
 
 export function mapPendingMaterializationError(error: unknown): MaterializeNextPendingMessageResult {
     if (error instanceof PublisherAuthorityLostError) return { ok: false, error: "forbidden" };
-    if (isTransactionDeadlineExceededError(error) || isTransactionAcquisitionUnavailableError(error)) {
+    if (isTransactionDeadlineExceededError(error) || isTransactionAcquisitionUnavailableError(error)
+        || isTransactionConflictExhaustedError(error)) {
         return { ok: false, error: "transaction-unavailable", retryAfterMs: 1_000 };
     }
     return { ok: false, error: "internal" };
@@ -387,6 +390,7 @@ export async function materializeNextPendingMessageInTx(
         || (targetExecutionRunId !== null && (!targetExecutionRunId.trim() || !expectedSidechainId?.trim()))) {
         return { ok: false, error: "invalid-params" };
     }
+    await acquireSessionAccountCursorLocksInTx(params.tx, [params.sessionId]);
     const result = await materializePendingTargetInTx({ ...params, targetExecutionRunId, expectedSidechainId });
     if (!result.ok || targetExecutionRunId === null) return result;
     // Session invalidation keeps main counters; only the exact consumer receives Run counts.

@@ -1,0 +1,276 @@
+import { randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { db, initDbPostgres } from "@/storage/db";
+import { inTx } from "@/storage/inTx";
+import { putSessionAccessGrantInTx } from "./sessionAccessGrantService";
+import { setTeamMembershipStatusInTx } from "@/app/teams/memberships/membershipService";
+import { restoreTeamGroupForActorInTx } from "@/app/teams/groups/groupService";
+import { resolveCurrentSessionRecipientAccountIdsInTx } from "./sessionRecipients";
+import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
+import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
+import { setSessionReportsTo } from "@/app/session/relations/sessionReportsToService";
+import { setSessionFollowSource } from "@/app/session/follow/sessionFollowEdgeService";
+
+describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audience expansion writer fences (PostgreSQL)", () => {
+    beforeAll(async () => {
+        if (!process.env.DATABASE_URL) throw new Error("Missing disposable DATABASE_URL");
+        initDbPostgres();
+        await db.$connect();
+    });
+    afterAll(async () => { await db.$disconnect(); });
+
+    it("holds Follow attachment until the source Account fence is available", async () => {
+        const prefix = `audience-follow-${randomUUID()}`;
+        const destinationOwner = await db.account.create({ data: { id: `${prefix}-a-destination`, publicKey: `${prefix}-destination`, encryptionMode: "plain" } });
+        const sourceOwner = await db.account.create({ data: { id: `${prefix}-b-source`, publicKey: `${prefix}-source`, encryptionMode: "plain" } });
+        const destination = await db.session.create({ data: { accountId: destinationOwner.id, tag: prefix, metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted" } });
+        const source = await db.session.create({ data: { accountId: sourceOwner.id, tag: prefix, metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted" } });
+        let release!: () => void;
+        let holderReady!: () => void;
+        const mayCommit = new Promise<void>(resolve => { release = resolve; });
+        const sourceHeld = new Promise<void>(resolve => { holderReady = resolve; });
+        try {
+            await db.sessionShare.create({ data: { sessionId: source.id, sharedByUserId: sourceOwner.id,
+                sharedWithUserId: destinationOwner.id, accessLevel: "edit" } });
+            let holderPid = -1;
+            const holder = inTx(async tx => {
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, sourceOwner.id);
+                const [row] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
+                holderPid = row.pid;
+                holderReady();
+                await mayCommit;
+            }, { isolationLevel: "ReadCommitted" });
+            const holderOutcome = Promise.allSettled([holder]);
+            await sourceHeld;
+            let writerSettled = false;
+            const writer = setSessionFollowSource({ accountId: destinationOwner.id, sourceSessionId: source.id,
+                destinationSessionId: destination.id,
+                authentication: { env: process.env, authority: "present_user", authenticationEvidence: [] } });
+            const writerOutcome = Promise.allSettled([writer]).finally(() => { writerSettled = true; });
+            try {
+                while (!writerSettled) {
+                    const [row] = await db.$queryRawUnsafe<{ waiting: boolean }[]>(
+                        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))) AS waiting", holderPid,
+                    );
+                    if (row.waiting) break;
+                }
+                expect(writerSettled).toBe(false);
+            } finally {
+                release();
+                for (const outcome of await holderOutcome) if (outcome.status === "rejected") throw outcome.reason;
+                const [outcome] = await writerOutcome;
+                if (outcome.status === "rejected") throw outcome.reason;
+                expect(outcome.value).toMatchObject({ ok: true, value: { changed: true } });
+            }
+        } finally {
+            release();
+            await db.session.deleteMany({ where: { id: { in: [source.id, destination.id] } } });
+            await db.account.deleteMany({ where: { id: { in: [sourceOwner.id, destinationOwner.id] } } });
+        }
+    });
+
+    it("locks an incoming ReportsTo child's lower Account before the lead grant mutates", async () => {
+        const prefix = `audience-reports-${randomUUID()}`;
+        const childOwner = await db.account.create({ data: { id: `${prefix}-a-child`, publicKey: `${prefix}-child`, encryptionMode: "plain" } });
+        const leadOwner = await db.account.create({ data: { id: `${prefix}-b-lead`, publicKey: `${prefix}-lead`, encryptionMode: "plain" } });
+        const reader = await db.account.create({ data: { id: `${prefix}-c-reader`, publicKey: `${prefix}-reader`, encryptionMode: "plain" } });
+        const child = await db.session.create({ data: { accountId: childOwner.id, tag: prefix, metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted" } });
+        const lead = await db.session.create({ data: { accountId: leadOwner.id, tag: prefix, metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted" } });
+        let release!: () => void;
+        let holderReady!: () => void;
+        const mayCommit = new Promise<void>(resolve => { release = resolve; });
+        const childHeld = new Promise<void>(resolve => { holderReady = resolve; });
+        const authentication = { env: process.env, authority: "present_user", authenticationEvidence: [] } as const;
+        try {
+            await db.sessionShare.create({ data: { sessionId: child.id, sharedByUserId: childOwner.id, sharedWithUserId: leadOwner.id, accessLevel: "edit" } });
+            expect(await setSessionReportsTo({ accountId: leadOwner.id, sessionId: child.id, leadSessionId: lead.id,
+                expectedLeadSessionId: null, authentication })).toMatchObject({ ok: true });
+            await db.userRelationship.create({ data: { fromUserId: leadOwner.id, toUserId: reader.id, status: "friend" } });
+            let holderPid = -1;
+            const holder = inTx(async tx => {
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, childOwner.id);
+                const [row] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
+                holderPid = row.pid;
+                holderReady();
+                await mayCommit;
+            }, { isolationLevel: "ReadCommitted" });
+            const holderOutcome = Promise.allSettled([holder]);
+            await childHeld;
+            let writerSettled = false;
+            const writer = inTx(tx => putSessionAccessGrantInTx(tx, {
+                sessionId: lead.id, actorAccountId: leadOwner.id, subject: { kind: "account", accountId: reader.id },
+                grant: { accessLevel: "view", canApprovePermissions: false }, authentication,
+            }), { isolationLevel: "ReadCommitted" });
+            const writerOutcome = Promise.allSettled([writer]).finally(() => { writerSettled = true; });
+            try {
+                while (!writerSettled) {
+                    const [row] = await db.$queryRawUnsafe<{ waiting: boolean }[]>(
+                        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))) AS waiting", holderPid,
+                    );
+                    if (row.waiting) break;
+                }
+                expect(writerSettled).toBe(false);
+                await expect(inTx(tx => tx.$queryRawUnsafe(
+                    'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', leadOwner.id,
+                ), { isolationLevel: "ReadCommitted" })).resolves.toEqual([{ id: leadOwner.id }]);
+            } finally {
+                release();
+                for (const outcome of [...await holderOutcome, ...await writerOutcome]) {
+                    if (outcome.status === "rejected") throw outcome.reason;
+                }
+            }
+            expect(await db.sessionReportsTo.findUnique({ where: { sessionId: child.id } })).toBeNull();
+        } finally {
+            release();
+            await db.session.deleteMany({ where: { id: { in: [child.id, lead.id] } } });
+            await db.account.deleteMany({ where: { id: { in: [childOwner.id, leadOwner.id, reader.id] } } });
+        }
+    });
+
+    it("waits on the Session owner before locking a newly active reader's Account", async () => {
+        const prefix = `audience-lifecycle-${randomUUID()}`;
+        const owner = await db.account.create({ data: {
+            id: `${prefix}-a-owner`, publicKey: `${prefix}-owner`, encryptionMode: "plain",
+        } });
+        const reader = await db.account.create({ data: {
+            id: `${prefix}-b-reader`, publicKey: `${prefix}-reader`, encryptionMode: "plain", status: "suspended",
+        } });
+        const actor = await db.account.create({ data: {
+            id: `${prefix}-c-actor`, publicKey: `${prefix}-actor`, encryptionMode: "plain",
+        } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: prefix, metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted",
+        } });
+        let release!: () => void;
+        let holderReady!: () => void;
+        const mayCommit = new Promise<void>(resolve => { release = resolve; });
+        const ownerHeld = new Promise<void>(resolve => { holderReady = resolve; });
+        try {
+            await db.sessionShare.create({ data: {
+                sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: reader.id, accessLevel: "view",
+            } });
+            let holderPid = -1;
+            const holder = inTx(async tx => {
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, owner.id);
+                const [row] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
+                holderPid = row.pid;
+                holderReady();
+                await mayCommit;
+            }, { isolationLevel: "ReadCommitted" });
+            const holderOutcome = Promise.allSettled([holder]);
+            await ownerHeld;
+            let writerSettled = false;
+            const writer = inTx(tx => setAccountStatusInTx(tx, {
+                actorAccountId: actor.id, targetAccountId: reader.id, status: "active", authority: "provider_account_replacement",
+            }), { isolationLevel: "ReadCommitted" });
+            const writerOutcome = Promise.allSettled([writer]).finally(() => { writerSettled = true; });
+            try {
+                while (!writerSettled) {
+                    const [row] = await db.$queryRawUnsafe<{ waiting: boolean }[]>(
+                        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))) AS waiting", holderPid,
+                    );
+                    if (row.waiting) break;
+                }
+                expect(writerSettled).toBe(false);
+                await expect(inTx(tx => tx.$queryRawUnsafe(
+                    'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', reader.id,
+                ), { isolationLevel: "ReadCommitted" })).resolves.toEqual([{ id: reader.id }]);
+            } finally {
+                release();
+                for (const outcome of [...await holderOutcome, ...await writerOutcome]) {
+                    if (outcome.status === "rejected") throw outcome.reason;
+                }
+            }
+            expect(await db.account.findUniqueOrThrow({ where: { id: reader.id }, select: { status: true } }))
+                .toEqual({ status: "active" });
+        } finally {
+            release();
+            await db.session.delete({ where: { id: session.id } });
+            await db.account.deleteMany({ where: { id: { in: [owner.id, reader.id, actor.id] } } });
+        }
+    });
+
+    it.each(["direct_grant", "team_reactivation", "group_restore"] as const)(
+        "holds the inactive Session owner's Account through %s commit",
+        async transition => {
+            const prefix = `audience-writer-${randomUUID()}`;
+            const owner = await db.account.create({ data: {
+                id: `${prefix}-a-owner`, publicKey: `${prefix}-owner`, encryptionMode: "plain", status: "suspended",
+            } });
+            const actor = await db.account.create({ data: {
+                id: `${prefix}-b-actor`, publicKey: `${prefix}-actor`, encryptionMode: "plain",
+            } });
+            const recipient = await db.account.create({ data: {
+                id: `${prefix}-c-reader`, publicKey: `${prefix}-reader`, encryptionMode: "plain",
+            } });
+            const session = await db.session.create({ data: {
+                accountId: owner.id, tag: prefix, metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted",
+            } });
+            const team = await db.team.create({ data: { name: prefix } });
+            let release!: () => void;
+            let completed!: () => void;
+            const mayCommit = new Promise<void>(resolve => { release = resolve; });
+            const mutationComplete = new Promise<void>(resolve => { completed = resolve; });
+            try {
+                await db.sessionShare.create({ data: {
+                    sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: actor.id, accessLevel: "admin",
+                } });
+                await db.userRelationship.create({ data: { fromUserId: actor.id, toUserId: recipient.id, status: "friend" } });
+                await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: "owner" } });
+                const member = await db.teamMembership.create({ data: {
+                    teamId: team.id, accountId: recipient.id, role: "member",
+                    status: transition === "team_reactivation" ? "suspended" : "active",
+                } });
+                const group = await db.teamGroup.create({ data: {
+                    teamId: team.id, name: prefix, nameKey: prefix, archivedAt: new Date(),
+                } });
+                await db.teamGroupMembership.create({ data: { teamId: team.id, teamGroupId: group.id, teamMembershipId: member.id } });
+                if (transition === "team_reactivation") {
+                    await db.sessionTeamGrant.create({ data: { sessionId: session.id, teamId: team.id, accessLevel: "view", effectiveAt: new Date() } });
+                } else if (transition === "group_restore") {
+                    await db.sessionGroupGrant.create({ data: { sessionId: session.id, teamGroupId: group.id, accessLevel: "view", effectiveAt: new Date() } });
+                }
+                expect(await inTx(tx => resolveCurrentSessionRecipientAccountIdsInTx(tx, { sessionId: session.id })))
+                    .not.toContain(recipient.id);
+                const writer = inTx(async tx => {
+                    try {
+                        if (transition === "direct_grant") {
+                            expect(await putSessionAccessGrantInTx(tx, {
+                                sessionId: session.id, actorAccountId: actor.id, subject: { kind: "account", accountId: recipient.id },
+                                grant: { accessLevel: "view", canApprovePermissions: false },
+                                authentication: { env: process.env, authority: "present_user", authenticationEvidence: [] },
+                            })).toMatchObject({ ok: true, changed: true });
+                        } else if (transition === "team_reactivation") {
+                            await setTeamMembershipStatusInTx(tx, {
+                                teamId: team.id, membershipId: member.id, accountId: recipient.id, status: "active",
+                            });
+                        } else {
+                            expect(await restoreTeamGroupForActorInTx(tx, {
+                                teamId: team.id, actorAccountId: actor.id, groupId: group.id,
+                            })).toMatchObject({ ok: true });
+                        }
+                        expect(await resolveCurrentSessionRecipientAccountIdsInTx(tx, { sessionId: session.id })).toContain(recipient.id);
+                    } finally { completed(); }
+                    await mayCommit;
+                }, { isolationLevel: "ReadCommitted" });
+                const writerOutcome = Promise.allSettled([writer]);
+                await mutationComplete;
+                try {
+                    // Admission and native transitions remain real; NOWAIT observes
+                    // the Account fence without timing or internal spies.
+                    await expect(inTx(tx => tx.$queryRawUnsafe(
+                        'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', owner.id,
+                    ), { isolationLevel: "ReadCommitted" })).rejects.toThrow();
+                } finally {
+                    release();
+                    for (const outcome of await writerOutcome) if (outcome.status === "rejected") throw outcome.reason;
+                }
+            } finally {
+                release();
+                await db.session.delete({ where: { id: session.id } });
+                await db.team.delete({ where: { id: team.id } });
+                await db.account.deleteMany({ where: { id: { in: [owner.id, actor.id, recipient.id] } } });
+            }
+        },
+    );
+});
