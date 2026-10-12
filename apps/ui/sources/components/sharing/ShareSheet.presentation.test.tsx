@@ -146,6 +146,7 @@ const { lightTheme, darkTheme } = await import('@/theme');
 const { ShareSheet } = await import('./ShareSheet');
 const { createDocumentShareAdapter } = await import('./documents/documentShareAdapter');
 const { ModalCardFrame } = await import('@/modal/components/card/ModalCardFrame');
+const { resolveGlassPresentationVariables } = await import('@/components/ui/glass/glassDocumentPresentation');
 const { Switch } = await import('@/components/ui/forms/Switch');
 const { RoleDetailScreen } = await import('@/components/settings/roles/RoleDetailScreen');
 const { RoleCollectionRail } = await import('@/components/settings/roles/RoleCollectionRail');
@@ -283,12 +284,16 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
     const output = process.env.DV3_SHARE_CAPTURE_DIR!;
     mkdirSync(output, { recursive: true });
     const theme = capture.dark ? darkTheme : lightTheme;
+    // Static documents must carry the same root material variables as the loaded shell.
+    // Without them a dark floating ink coat defaults to 100% opacity instead of its real preset.
+    const glassVariables = Object.entries(resolveGlassPresentationVariables(storage.getState().settings, {}))
+        .map(([key, value]) => `${key}:${value}`).join(';');
     const web = await vi.importActual<{ StyleSheet: { getSheet(): { textContent: string } } }>('react-native-web');
     const fonts = ['Inter-Regular', 'Inter-Medium', 'Inter-SemiBold'].map(name =>
         `@font-face{font-family:${name};src:url(data:font/ttf;base64,${readFileSync(join(process.cwd(), `sources/assets/fonts/${name}.ttf`)).toString('base64')})}`).join('')
         + `@font-face{font-family:Ionicons;src:url(data:font/ttf;base64,${readFileSync(join(process.cwd(),
             'node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf')).toString('base64')})}`;
-    const documentHtml = (body: string) => `<!doctype html><html><meta charset="utf-8"><style>${fonts}${web.StyleSheet.getSheet().textContent}
+    const documentHtml = (body: string) => `<!doctype html><html style="${glassVariables}"><meta charset="utf-8"><style>${fonts}${web.StyleSheet.getSheet().textContent}
         body{margin:0;background:${theme.colors.surface.base};color:${theme.colors.text.primary};font:14px system-ui}section{padding:24px;min-width:0}h2{font-size:13px;margin:0 0 16px;color:${theme.colors.text.secondary}}.collection-scene{display:flex;flex-direction:column;height:1400px}@media(max-width:600px){section{padding:0 0 24px}h2{padding:16px}}</style><body>${body}</body></html>`;
     // Replay real Chromium geometry through the native onLayout boundary before serializing.
     // This is required for responsive section actions; static HTML alone cannot run RN layout callbacks.
@@ -404,6 +409,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
         writeFileSync(join(output, `${panel.id}-${capture.dark ? 'dark' : 'light'}-${capture.width}.geometry.json`), JSON.stringify(geometry, null, 2));
     };
     const onlyCollaboration = process.env.DV3_SHARE_CAPTURE_PANEL === 'collaboration';
+    const onlySharing = process.env.DV3_SHARE_CAPTURE_PANEL === 'sharing';
     if (!onlyCollaboration) {
     console.info(`DV4 SHARE profile Agent fixture: ${getEnabledAgentIds({ backendEnabledByTargetKey: storage.getState().settings.backendEnabledByTargetKey }).length} enabled Agents`);
     for (const document of [{ kind: 'workflow-definition.v1', name: 'Release review', subtitle: '3 steps', id: 'workflow' },
@@ -411,7 +417,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
         { kind: 'work-board.v1', name: 'Release workspace', subtitle: undefined, id: 'board' },
         { kind: 'launch-profile.v1', name: reviewProfile.name, subtitle: getProfileSubtitle({ profile: { ...reviewProfile, compatibility: {} },
             enabledAgentIds: getEnabledAgentIds({ backendEnabledByTargetKey: storage.getState().settings.backendEnabledByTargetKey }),
-            strings: getDefaultProfileListStrings(getEnabledAgentIds({ backendEnabledByTargetKey: storage.getState().settings.backendEnabledByTargetKey })) }), id: 'profile' }]) {
+            strings: getDefaultProfileListStrings(getEnabledAgentIds({ backendEnabledByTargetKey: storage.getState().settings.backendEnabledByTargetKey })) }), id: 'profile' }].filter(document => !onlySharing || document.id === 'role')) {
         showDocumentShareSheet({ artifactId: document.id, kind: document.kind, name: document.name, subtitle: document.subtitle });
         const chrome = capture.chrome;
         if (!chrome) throw new Error('Document share modal supplied no chrome');
@@ -429,6 +435,16 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
         }
         await settle(screen);
         await emit({ id: `share-${document.id}`, body: hostTree(screen.tree.toJSON()) });
+        if (onlySharing) {
+            const grant = screen.tree.root.findAll(node =>
+                node.props.testID === `${document.id}-share:document-share-grant-team:happier-team`
+                && typeof node.props.onPress === 'function')[0];
+            if (!grant) throw new Error('Sharing capture requires the real grant-row expansion action');
+            // Invoke the production component action, not RNW's host onClick (which requires a browser event).
+            await act(async () => { await grant.props.onPress(); });
+            await settle(screen);
+            await emit({ id: `share-${document.id}-levels`, body: hostTree(screen.tree.toJSON()) });
+        }
         await screen.unmount();
     }
     const sessionModel: SessionAccessEditorModel = { revision: 1, accessMode: 'editable',
@@ -454,6 +470,17 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
     await settle(session);
     await emit({ id: 'share-session', body: hostTree(session.tree.toJSON()) });
     await session.unmount();
+    if (onlySharing) {
+        const body = renderToStaticMarkup(<main>{panels.map(panel => <section key={panel.id} data-capture-panel={panel.id}>
+            <h2>{panel.id} · current shared presentation · {capture.width}px · {capture.dark ? 'dark' : 'light'}</h2>{panel.body}</section>)}</main>);
+        const name = `sharing-${capture.dark ? 'dark' : 'light'}-${capture.width}`;
+        writeFileSync(join(output, `${name}.html`), documentHtml(body));
+        await page.setContent(documentHtml(body));
+        await page.evaluate(() => document.fonts.ready);
+        await page.screenshot({ path: join(output, `${name}.png`), fullPage: true });
+        expect(prerequisites).toEqual([]);
+        return;
+    }
     if (!['baseline', 'secrets'].includes(process.env.DV3_SHARE_CAPTURE_PANEL ?? '')) {
         await getServerFeaturesSnapshot({ serverId: scope.serverId, force: true });
         const publicLink = await renderScreen(<InjectedAuthProvider credentials={credentials}><PublicLinkCapture /></InjectedAuthProvider>);
@@ -552,9 +579,9 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
     await settle(shell);
     await emit({ id: 'settings-shell', body: hostTree(shell.tree.toJSON()) });
     await shell.unmount();
-    const homeChooser = await renderScreen(<div style={{ display: 'flex', height: 700 }}>
+    const homeChooser = await renderScreen(<InjectedAuthProvider credentials={credentials}><div style={{ display: 'flex', height: 700 }}>
         <SessionInvalidLinkFallback sessionId="qa-unresolved" homeChoice="unknown" />
-    </div>);
+    </div></InjectedAuthProvider>);
     await settle(homeChooser);
     await emit({ id: 'home-chooser', body: hostTree(homeChooser.tree.toJSON()) });
     await homeChooser.unmount();

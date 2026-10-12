@@ -11,7 +11,7 @@ describe('Saved Secret principal presentation', () => {
         getStorage().setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: 'owner', firstName: 'Avery', lastName: 'Owner' }) });
         const hook = await renderHook(() => useSavedSecretShareController({ scope, disabled: false, onChange() {},
             draft: [{ kind: 'account', accountId: 'owner' }, { kind: 'account', accountId: 'unknown-person-id' }],
-            retainedAudience: { accounts: [{ kind: 'account', accountId: 'owner', firstName: 'Avery', lastName: 'Owner', username: null, avatarUrl: null }], teams: [], groups: [] },
+            retainedAudience: { accounts: [{ kind: 'account', accountId: 'owner', firstName: 'Avery', lastName: 'Owner', name: null, username: null, avatarUrl: null }], teams: [], groups: [] },
         }));
         expect(hook.getCurrent().model.grants[0].principal.displayName).toBe('Avery Owner');
         expect(hook.getCurrent().model.grants[0].principal.secondaryLabel).toBe(t('shareSheet.you'));

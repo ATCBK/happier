@@ -7,7 +7,7 @@ import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/dom
 export function useShareViewerProfile(scope: ServerAccountScope): AccountDisplayProfileV1 | null {
     return getStorage()(useShallow((state) => {
         const profile = areServerAccountScopesEqual(state.profileScope, scope) ? state.profile : null;
-        return profile ? { firstName: profile.firstName, lastName: profile.lastName,
+        return profile ? { name: profile.name, firstName: profile.firstName, lastName: profile.lastName,
             username: profile.username, avatarUrl: profile.avatar?.url ?? null } : null;
     }));
 }

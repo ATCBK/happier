@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS } from '@/components/ui/selectionList/_constants';
 import { ShareSheet } from './ShareSheet';
+import { t } from '@/text';
 import { createDocumentShareAdapter } from './documents/documentShareAdapter';
 import { buildShareSheetSelectionStep } from './buildShareSheetSelectionStep';
 import type { ShareSheetActions, ShareSheetModel } from './shareSheetTypes';
@@ -103,6 +104,25 @@ describe('ShareSheet full presentation', () => {
         expect(sendCopy).toHaveBeenCalledOnce();
         await screen.pressByTestIdAsync('document-share-done');
         expect(close).toHaveBeenCalledOnce();
+    });
+
+    it('keeps a suggestion heading out until its first load resolves, so opening the sheet moves nothing twice', async () => {
+        vi.useFakeTimers();
+        const heading = t('shareSheet.suggestions', { kind: 'People' });
+        const loading: ShareSheetModel = { ...model, directory: { query: '', sections: [{
+            kind: 'account', title: 'People', status: 'loading', cursor: null, hasMore: false, loadingMore: false, candidates: [],
+        }] } };
+        const screen = await renderScreen(<ShareSheet model={loading} actions={actions}
+            adapter={adapter} presentation="inline" testID="document-share-editor" />);
+        await flushHookEffects({ advanceTimersMs: 1 });
+        expect(screen.getTextContent()).not.toContain(heading);
+        await screen.update(<ShareSheet model={{ ...loading, revision: 1, directory: { query: '', sections: [{
+            ...loading.directory.sections[0]!, status: 'idle',
+            candidates: [{ principal: { ref: { kind: 'account', accountId: 'maya' }, key: 'account:maya',
+                displayName: 'Maya', accessibilityLabel: 'Maya' }, addition: { kind: 'allowed' }, operation: { kind: 'idle' } }],
+        }] } }} actions={actions} adapter={adapter} presentation="inline" testID="document-share-editor" />);
+        await flushHookEffects({ advanceTimersMs: SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS });
+        expect(screen.getTextContent()).toContain(heading);
     });
 
     it('hides empty Team and Team-group browse actions and keeps a directory with another page reachable', async () => {

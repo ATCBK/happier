@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HappierShareHelp } from '@happier-dev/plugin-ui/presentation';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import type { SelectionListOption, SelectionListSectionDescriptor, SelectionListStep } from '@/components/ui/selectionList';
@@ -8,6 +9,7 @@ import { Text } from '@/components/ui/text/Text';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { t } from '@/text';
 import { ShareGrantRow, ShareLevelControl, ShareRowAction } from './ShareGrantRow';
+import { useSharePresentationHost } from './sharePresentationHost';
 import {
     SHARE_ACCESS_LEVEL_ORDER,
     type ShareCandidateRowModel,
@@ -23,13 +25,7 @@ import {
 } from './shareSheetTypes';
 
 const styles = StyleSheet.create((theme) => ({
-    help: { paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx, paddingVertical: PAGE_LIST_METRICS.groupSeparatorGapPx, gap: PAGE_LIST_METRICS.groupHeadingGapPx },
     helpLine: { color: theme.colors.text.secondary },
-    helpLabel: { color: theme.colors.text.primary, fontWeight: '600' },
-    note: { flexDirection: 'row', alignItems: 'flex-start', gap: PAGE_LIST_METRICS.groupHeadingGapPx,
-        padding: PAGE_LIST_METRICS.groupSeparatorGapPx, borderRadius: PAGE_LIST_METRICS.sheetRadiusPx,
-        backgroundColor: theme.colors.surface.elevated },
-    noteText: { color: theme.colors.text.secondary, flex: 1, minWidth: 0 },
 }));
 
 export const SHARE_DIRECTORY_KINDS: readonly ShareDirectoryKind[] = ['account', 'group', 'team'];
@@ -44,7 +40,7 @@ function principalKindLabel(principal: SharePrincipalPresentation): string {
  * for a Team or Group. Decorative on purpose: the row's own `accessibilityLabel` is the single
  * accessible name, and the visible kind stays in the subtitle.
  */
-function SharePrincipalVisual(props: Readonly<{ principal: SharePrincipalPresentation; testID: string; size?: number }>): React.ReactElement {
+export function SharePrincipalVisual(props: Readonly<{ principal: SharePrincipalPresentation; testID: string; size?: number }>): React.ReactElement {
     const { principal } = props;
     const { theme } = useUnistyles();
     const size = props.size ?? ICON_SIZE.lg;
@@ -60,20 +56,14 @@ export function ShareHelp<TRow extends ShareGrantRowModel>(props: Readonly<{
     adapter: ShareSheetAdapter<TRow>; testID: string;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
+    const host = useSharePresentationHost();
     const lines = SHARE_ACCESS_LEVEL_ORDER.flatMap(level => {
         const presentation = props.adapter.levels[level];
         return presentation?.help ? [{ label: presentation.label, text: presentation.help }] : [];
     });
-    return <View testID={props.testID} style={styles.help}>
-        {lines.length ? <Text style={styles.helpLine}>{lines.map((line, index) => <React.Fragment key={line.label}>
-            {index ? ' · ' : null}<Text style={styles.helpLabel}>{line.label}</Text>{` ${line.text}`}
-        </React.Fragment>)}</Text> : null}
-        {props.adapter.notes?.length || props.adapter.linkPath ? <View testID={`${props.testID}:note:0`} style={styles.note}>
-            <Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
-            <Text style={styles.noteText}>{[...(props.adapter.notes ?? []),
-                ...(props.adapter.linkPath ? [t('shareSheet.membersOnlyLink')] : [])].join(' ')}</Text>
-        </View> : null}
-    </View>;
+    return <HappierShareHelp host={host} testID={props.testID} levels={lines}
+        noteIcon={<Icon name="info" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />}
+        note={[...(props.adapter.notes ?? []), ...(props.adapter.linkPath ? [t('shareSheet.membersOnlyLink')] : [])].join(' ')} />;
 }
 
 export type ShareSheetStepInput<TRow extends ShareGrantRowModel> = Readonly<{
@@ -162,7 +152,10 @@ export function buildShareSheetSelectionStep<TRow extends ShareGrantRowModel>(in
             ? source.title : t('shareSheet.suggestions', { kind: source.title }),
         resolverKey: JSON.stringify([source.resolverKey ?? source.kind, [...excluded], source.resolveCandidates ? undefined : model.revision]),
         resultFiltering: 'provider', resultTransition: 'none',
-        showSkeletonsOnFirstLoad: true, loadingSkeletonRows: 1,
+        // A directory step is the section, so its first load shows a skeleton row. On the root, suggestions
+        // whose existence is unknown stay out until they resolve: a heading that appears and then empties
+        // moved everything below it twice on every open (RUX-11.2).
+        showSkeletonsOnFirstLoad: input.directoryKind !== undefined, loadingSkeletonRows: 1,
         // The list owns debounce, cancellation and stale result rejection. No network or store access lives here.
         resolve: async (query, signal) => ({
             options: candidateOptions(source.resolveCandidates ? await source.resolveCandidates(query, signal) : source.candidates),

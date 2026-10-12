@@ -1,10 +1,7 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { HappierShareSheet } from '@happier-dev/plugin-ui/presentation';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { SelectionList } from '@/components/ui/selectionList';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { createDefaultDynamicSectionCache } from '@/components/ui/selectionList/selectionListDynamicSectionCache';
 import { resolvePublicShareApplicationBaseUrl } from '@/components/sessions/sharing/publicShareApplicationUrl';
 import { Modal } from '@/modal';
@@ -12,6 +9,7 @@ import { t } from '@/text';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { buildShareSheetSelectionStep, ShareHelp, ShareHandoffIcon, shareSheetStepId } from './buildShareSheetSelectionStep';
+import { useSharePresentationHost, ShareSheetButton } from './sharePresentationHost';
 import type {
     ShareDirectoryKind,
     ShareGrantRowModel,
@@ -21,18 +19,6 @@ import type {
     ShareSheetPresentation,
 } from './shareSheetTypes';
 
-const styles = StyleSheet.create(theme => ({
-    full: { flex: 1, minHeight: 0 }, compact: { minHeight: 0 },
-    footer: { paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx, paddingVertical: PAGE_LIST_METRICS.groupHeadingGapPx,
-        borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.subtle,
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: PAGE_LIST_METRICS.groupHeadingGapPx },
-    handoffs: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', flexShrink: 1, gap: PAGE_LIST_METRICS.groupHeadingGapPx },
-    action: { flexGrow: 0 },
-    phoneFooter: { flexDirection: 'column', alignItems: 'stretch' },
-    phoneHandoffs: { alignSelf: 'stretch', justifyContent: 'space-between', flexWrap: 'nowrap' },
-    phoneAction: { flex: 1, minWidth: 0 },
-    phoneDone: { alignSelf: 'stretch' },
-}));
 const noop = () => {};
 
 export type ShareSheetProps<TRow extends ShareGrantRowModel> = Readonly<{
@@ -54,6 +40,7 @@ export type ShareSheetProps<TRow extends ShareGrantRowModel> = Readonly<{
 export function ShareSheet<TRow extends ShareGrantRowModel>(props: ShareSheetProps<TRow>): React.ReactElement {
     const { model, actions, adapter, presentation, onRequestClose, testID } = props;
     const phone = useDeviceType() === 'phone';
+    const host = useSharePresentationHost();
     const [expanded, setExpanded] = React.useState<string | null>(props.openRowRequest?.key ?? null);
     React.useEffect(() => {
         if (props.openRowRequest) setExpanded(props.openRowRequest.key);
@@ -100,7 +87,14 @@ export function ShareSheet<TRow extends ShareGrantRowModel>(props: ShareSheetPro
     const rootStep = buildShareSheetSelectionStep(input);
     const source = directoryKind && model.directory.sections.find((section) => section.kind === directoryKind);
     const activeStep = directoryKind ? buildShareSheetSelectionStep({ ...input, directoryKind }) : null;
-    return <View testID={testID} style={presentation === 'full' ? styles.full : styles.compact}>
+    return <HappierShareSheet testID={testID} presentation={presentation} phone={phone} host={host} Button={ShareSheetButton}
+        handoffs={[
+            ...(copyLink ? [{ testID: `${idPrefix}${adapter.namespace}-copy-link`, label: t(copyLink.copied ? 'shareSheet.linkCopied' : 'shareSheet.copyLink'),
+                leading: <ShareHandoffIcon name="link" />, onPress: copyLink.onCopy }] : []),
+            ...(adapter.sendCopy ? [{ testID: `${idPrefix}${adapter.namespace}-send-copy`, label: t('shareSheet.sendCopy'),
+                leading: <ShareHandoffIcon name="copy" />, onPress: adapter.sendCopy }] : []),
+        ]}
+        done={onRequestClose ? { testID: `${idPrefix}${adapter.namespace}-done`, label: t('common.done'), onPress: onRequestClose } : undefined}>
         <SelectionList rootStep={rootStep} syncActiveStep={activeStep ?? undefined}
             onActiveStepChange={(step) => {
                 setDirectoryKind(model.directory.sections.find((section) => step.id === shareSheetStepId(adapter.namespace, section.kind))?.kind);
@@ -119,18 +113,5 @@ export function ShareSheet<TRow extends ShareGrantRowModel>(props: ShareSheetPro
                 error: source.error?.message, onEndReached: () => actions.loadMore(source.kind), onRetry: () => actions.retryDirectory(source.kind),
                 loadingLabel: t('common.loading'), moreLabel: t('shareSheet.browseAll'), retryLabel: t('common.retry'),
                 endReachedLabel: t('shareSheet.allLoaded') } : undefined} />
-        {presentation === 'full' && (copyLink || adapter.sendCopy || onRequestClose) ? <View style={[styles.footer, phone ? styles.phoneFooter : null]}>
-            <View style={[styles.handoffs, phone ? styles.phoneHandoffs : null]}>
-                {copyLink ? <RoundButton size="small" display="inverted" style={phone ? styles.phoneAction : styles.action} titleNumberOfLines="complete"
-                    testID={`${idPrefix}${adapter.namespace}-copy-link`}
-                    title={t(copyLink.copied ? 'shareSheet.linkCopied' : 'shareSheet.copyLink')}
-                    leading={<ShareHandoffIcon name="link" />} onPress={copyLink.onCopy} /> : null}
-                {adapter.sendCopy ? <RoundButton size="small" display="inverted" style={phone ? styles.phoneAction : styles.action} titleNumberOfLines="complete"
-                    testID={`${idPrefix}${adapter.namespace}-send-copy`} title={t('shareSheet.sendCopy')}
-                    leading={<ShareHandoffIcon name="copy" />} onPress={adapter.sendCopy} /> : null}
-            </View>
-            {onRequestClose ? <RoundButton size="small" style={phone ? styles.phoneDone : styles.action} testID={`${idPrefix}${adapter.namespace}-done`}
-                title={t('common.done')} onPress={onRequestClose} /> : null}
-        </View> : null}
-    </View>;
+    </HappierShareSheet>;
 }
