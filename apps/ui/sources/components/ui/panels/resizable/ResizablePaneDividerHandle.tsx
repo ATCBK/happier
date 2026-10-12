@@ -49,6 +49,7 @@ export const ResizablePaneDividerHandle = React.memo((props: Readonly<{
             accessibilityHint={t('ui.resizableDockedPane.resizeHint')}
             {...props.interactionProps}
             {...props.accessibilityHandleProps}
+            {...resolveDividerValueProps(props.accessibilityHandleProps?.accessibilityValue)}
             hitSlop={nativeHitSlop}
             style={[
                 {
@@ -83,3 +84,20 @@ export const ResizablePaneDividerHandle = React.memo((props: Readonly<{
         </Pressable>
     );
 });
+
+/**
+ * The divider's size as a slider's value, in the ARIA attributes a screen reader announces: React
+ * Native Web does not project `accessibilityValue` on a pressable, so the web reads the size from
+ * these (min, max, now and the spoken text).
+ */
+function resolveDividerValueProps(value: Readonly<{ min?: number; max?: number; now?: number }> | undefined) {
+    if (Platform.OS !== 'web' || !value || typeof value.now !== 'number') return null;
+    const now = Math.round(value.now);
+    return {
+        role: 'slider',
+        'aria-valuenow': now,
+        ...(typeof value.min === 'number' ? { 'aria-valuemin': Math.round(value.min) } : {}),
+        ...(typeof value.max === 'number' ? { 'aria-valuemax': Math.round(value.max) } : {}),
+        'aria-valuetext': t('ui.resizableDockedPane.resizeValue', { px: now }),
+    } as Record<string, unknown>;
+}
