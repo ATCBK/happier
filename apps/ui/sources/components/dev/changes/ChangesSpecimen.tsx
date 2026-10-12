@@ -230,7 +230,7 @@ export function ChangesSpecimen(props: Readonly<{ only: string | null; phone: bo
                         ? (props.phone ? (WALKTHROUGH_FRAME_IDS.has(frame.id) ? styles.walkthroughFramePhone : styles.filesFramePhone) : styles.filesFrame)
                         : (props.phone ? styles.cardFramePhone : styles.cardFrame)}
                 >
-                    {props.only ? null : <Text style={styles.caption}>{frame.title}</Text>}
+                    {props.only ? null : <Text style={styles.caption}>{`Specimen · fixture data · ${frame.title}`}</Text>}
                     {frame.render(props.phone)}
                 </View>
             ))}

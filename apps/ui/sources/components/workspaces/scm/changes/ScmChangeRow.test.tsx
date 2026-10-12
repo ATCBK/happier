@@ -59,6 +59,15 @@ function createScmChangeRowTheme() {
 }
 
 describe('ScmChangeRow', () => {
+  it('presents a captured header without an invented interactive target', async () => {
+    const { ScmChangeRow } = await import('./ScmChangeRow');
+    const screen = await renderScreen(<ScmChangeRow theme={createScmChangeRowTheme()} file={{ fileName: 'a.ts', filePath: 'src', fullPath: 'src/a.ts', status: 'modified', isIncluded: false, linesAdded: 3, linesRemoved: 1 }} />);
+    const path = screen.findAll(node => typeof node.type === 'string' && node.props.testID?.startsWith('scm-change-row-') && !node.props.testID?.startsWith('scm-change-row-container'))[0];
+    expect(path).toBeDefined();
+    expect(path!.props.accessibilityRole).not.toBe('button');
+    expect(path!.props.tabIndex).toBeUndefined();
+    expect(path!.props.onClick).toBeUndefined();
+  });
   it('keeps the conflict recovery visible without hover', async () => {
     const { ScmChangeRow } = await import('./ScmChangeRow');
     const screen = await renderScreen(<ScmChangeRow theme={createScmChangeRowTheme()} layout="stacked" onPress={() => {}} trailingElement={<RNPressable testID="conflict-open" />} file={{ fileName: 'a.ts', filePath: 'src', fullPath: 'src/a.ts', status: 'conflicted', isIncluded: false, linesAdded: 0, linesRemoved: 0 }} />);

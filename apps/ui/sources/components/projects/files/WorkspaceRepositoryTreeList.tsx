@@ -1,4 +1,5 @@
 import { useFilesystemTreeKeyboard } from '@/components/ui/filesystemBrowser/useFilesystemTreeKeyboard';
+import { DiffStat } from '@/components/workspaces/scm/DiffStat';
 import * as React from 'react';
 import { Platform, View, type ScrollViewProps } from 'react-native';
 import type { useUnistyles } from 'react-native-unistyles';
@@ -186,20 +187,6 @@ function buildWebDropTarget(node: WorkspaceRepositoryTreeNode): WorkspaceReposit
 const NO_CHANGED_FILES: readonly never[] = [];
 const NO_CLOSED_PATHS: ReadonlySet<string> = new Set();
 
-/** A change-list folder's line totals (its files' counts summed by the one badge index). */
-function ScmLineTotals(props: Readonly<{ testID: string; added: number; removed: number; complete: boolean; theme: AppTheme }>) {
-    if (!props.complete) return null;
-    return (
-        <View testID={props.testID} style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
-            {props.added > 0 ? (
-                <Text style={{ fontSize: 12, color: props.theme.colors.state.success.foreground, ...Typography.mono() }}>{`+${props.added.toLocaleString()}`}</Text>
-            ) : null}
-            {props.removed > 0 ? (
-                <Text style={{ fontSize: 12, color: props.theme.colors.state.danger.foreground ?? props.theme.colors.state.neutral.foreground, ...Typography.mono() }}>{`−${props.removed.toLocaleString()}`}</Text>
-            ) : null}
-        </View>
-    );
-}
 
 /** A change list labels lockfiles and generated output where they appear (the shared path classifier). */
 function ScmChangePathTag(props: Readonly<{ path: string; theme: AppTheme }>) {
@@ -470,7 +457,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
                 ) : null}
                 {badge && node.type === 'directory' && rowState.changeRows ? (
                     // A change list totals each folder's lines, like a file's, so a large turn reads at a glance.
-                    <ScmLineTotals testID={`${rowTestId}-totals`} added={badge.added} removed={badge.removed} complete={badge.isComplete !== false} theme={rowState.theme} />
+                    badge.isComplete !== false ? <DiffStat testID={`${rowTestId}-totals`} added={badge.added} removed={badge.removed} /> : null
                 ) : badge && node.type === 'directory' ? (
                     // A folder says how many changed files it holds, in the tone of its strongest change.
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
@@ -492,16 +479,7 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
                             </Text>
                         ) : null}
                         {rowState.changeRows || rowState.rowSelection ? <ScmChangePathTag path={node.path} theme={rowState.theme} /> : null}
-                        {rowState.changedOnly && badge.isComplete !== false && badge.added > 0 ? (
-                            <Text style={{ fontSize: 12, color: rowState.theme.colors.state.success.foreground, ...Typography.mono() }}>
-                                {`+${badge.added}`}
-                            </Text>
-                        ) : null}
-                        {rowState.changedOnly && badge.isComplete !== false && badge.removed > 0 ? (
-                            <Text style={{ fontSize: 12, color: rowState.theme.colors.state.danger.foreground ?? rowState.theme.colors.state.neutral.foreground, ...Typography.mono() }}>
-                                {`−${badge.removed}`}
-                            </Text>
-                        ) : null}
+                        {rowState.changedOnly && badge.isComplete !== false ? <DiffStat added={badge.added} removed={badge.removed} /> : null}
                         {rowState.rowSelection || rowState.changeRows ? null : (
                             <Text
                                 testID={`${rowTestId}-change`}

@@ -21,12 +21,12 @@ function sumEntryRemoved(entry: { stats: { includedRemoved: number; pendingRemov
 type DirKindPriority = Readonly<{ priority: number; letter: string }>;
 
 function kindToDirPriority(kind: ScmEntryKind): DirKindPriority {
-    if (kind === 'conflicted') return { priority: 5, letter: '!' };
-    if (kind === 'modified' || kind === 'renamed' || kind === 'copied') return { priority: 4, letter: 'M' };
-    if (kind === 'added') return { priority: 3, letter: 'A' };
-    if (kind === 'deleted') return { priority: 2, letter: 'D' };
-    if (kind === 'untracked') return { priority: 3, letter: 'A' };
-    return { priority: 0, letter: 'M' };
+    const descriptor = describeScmChangeKind(kind);
+    // A moved child modifies its containing directory; it does not rename the directory itself.
+    const directoryKind = descriptor.tone === 'moved' ? describeScmChangeKind('modified') : descriptor;
+    const priority = directoryKind.tone === 'conflicted' ? 5 : directoryKind.tone === 'modified' ? 4
+        : directoryKind.tone === 'added' ? 3 : 2;
+    return { priority, letter: directoryKind.code };
 }
 
 type DirAggregate = {

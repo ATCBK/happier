@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { ScmFileStatus } from '@/scm/scmStatusFiles';
 import { describeScmChangeKind, resolveScmChangeToneColor } from '@/scm/scmChangeKind';
@@ -130,7 +130,10 @@ export type ScmChangeRowProps = Readonly<{
     siblingPaths?: readonly string[];
     /** Stacked: the folder line for a file at the repository root (the repository's name). */
     rootLabel?: string | null;
-    onPress: () => void;
+    onPress?: () => void;
+    testID?: string;
+    style?: StyleProp<ViewStyle>;
+    pathAccessory?: React.ReactNode;
     onPressPinned?: () => void;
     onToggleSelection?: () => void;
     leadingElement?: React.ReactNode;
@@ -170,7 +173,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
     const descriptor = describeChange(file, theme);
     const accessibilityLabel = [
         descriptor.label,
-        t('files.changeRow.viewDiffA11y', { file: file.fullPath }),
+        props.onPress ? t('files.changeRow.viewDiffA11y', { file: file.fullPath }) : file.fullPath,
         props.tag?.trim() || null,
         props.accessibilityQualification?.trim() || null,
     ].filter((value): value is string => typeof value === 'string' && value.length > 0).join('. ');
@@ -227,7 +230,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
             if (event?.shiftKey && props.onPressPinned) {
                 props.onPressPinned();
             } else {
-                props.onPress();
+                props.onPress?.();
             }
             return;
         }
@@ -247,7 +250,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
             props.onPressPinned();
             return;
         }
-        props.onPress();
+        props.onPress?.();
     }, [isWeb, props.onPress, props.onPressPinned]);
 
     const rowContent = (
@@ -313,6 +316,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                     {props.proposalNote}
                 </Text>
             ) : null}
+            {props.pathAccessory}
 
             {props.tag ? (
                 <View testID="scm-change-row-tag" style={{ flexShrink: 0, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, backgroundColor: theme.colors.surface?.inset ?? theme.colors.surface?.base }}>
@@ -378,7 +382,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
     return (
         <ViewWithClick
             testID={`scm-change-row-container:${testIdSafePath}`}
-            style={[containerStyle, props.proposalEmphasis === 'out' ? { opacity: 0.42 } : null]}
+            style={[containerStyle, props.style, props.proposalEmphasis === 'out' ? { opacity: 0.42 } : null]}
             {...(revealHandlers ?? {})}
         >
             {props.proposalEmphasis === 'in' ? (
@@ -390,9 +394,10 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                 </View>
             ) : null}
 
-            {isWeb ? (
+            {!props.onPress ? <View testID={props.testID ?? `scm-change-row-${testIdSafePath}`} accessibilityLabel={accessibilityLabel}
+                style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 }}>{rowContent}</View> : isWeb ? (
                 <ViewWithClick
-                    testID={`scm-change-row-${testIdSafePath}`}
+                    testID={props.testID ?? `scm-change-row-${testIdSafePath}`}
                     accessibilityRole="button"
                     accessibilityLabel={accessibilityLabel}
                     onClick={onClick as any}
@@ -413,7 +418,7 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                 </ViewWithClick>
             ) : (
                 <Pressable
-                    testID={`scm-change-row-${testIdSafePath}`}
+                    testID={props.testID ?? `scm-change-row-${testIdSafePath}`}
                     accessibilityRole="button"
                     accessibilityLabel={accessibilityLabel}
                     onPress={props.onPress}
