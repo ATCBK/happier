@@ -2,16 +2,21 @@ import * as React from 'react';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import { applyReachRulesChangeV1, reachRulesToDraftsV1, ReachRulesChangeV1Schema, type ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
-import { McpRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
+import { McpRulesSetOutputV1Schema, SkillsRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
 import { projectMcpServerActionFailureV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { randomUUID } from '@/platform/randomUUID';
 
 export type ReachRulesWriteResult = Readonly<{ ok: true }> | Readonly<{ ok: false; message: string }>;
-export type ReachRulesSource = Readonly<{ key: string; itemId: string; rules: ReachRulesV1;
+export type ReachRulesSource = Readonly<{ key: string; kind: 'skill' | 'mcp_server'; itemId: string; rules: ReachRulesV1;
     revision: number | 'absent'; status: 'ready' | 'loading' | 'unavailable'; valueAvailable: boolean }>;
-export type ExecuteReachRules = (actionId: 'mcp.rules.set', input: Readonly<{
+type McpRulesInput = Readonly<{
     items: readonly Readonly<{ serverId: string }>[]; change: ReachRulesChangeV1;
-}>) => Promise<ActionExecuteResult>;
+}>;
+type SkillRulesInput = Readonly<{
+    items: readonly Readonly<{ skillId: string }>[]; change: ReachRulesChangeV1;
+}>;
+export type ExecuteReachRules = (...args: [actionId: 'mcp.rules.set', input: McpRulesInput]
+    | [actionId: 'skills.rules.set', input: SkillRulesInput]) => Promise<ActionExecuteResult>;
 
 type PendingChange = {
     change: ReachRulesChangeV1; nowMs: number; ids: string[]; execute: ExecuteReachRules;
@@ -70,14 +75,16 @@ export function useReachRulesState(source: ReachRulesSource, execute: ExecuteRea
             else if (latest.current.status === 'unavailable') result = { ok: false, message: 'catalog_unavailable' };
             else {
                 try {
-                    const receipt = await operation.execute('mcp.rules.set', { items: [{ serverId: source.itemId }], change: operation.change });
+                    const receipt = source.kind === 'skill'
+                        ? await operation.execute('skills.rules.set', { items: [{ skillId: source.itemId }], change: operation.change })
+                        : await operation.execute('mcp.rules.set', { items: [{ serverId: source.itemId }], change: operation.change });
                     if (!receipt.ok) result = { ok: false, message: receipt.errorCode ?? receipt.error };
                     else {
-                        const parsed = McpRulesSetOutputV1Schema.safeParse(receipt.result);
+                        const parsed = (source.kind === 'skill' ? SkillsRulesSetOutputV1Schema : McpRulesSetOutputV1Schema).safeParse(receipt.result);
                         if (!parsed.success) result = { ok: false, message: 'invalid_action_output' };
                         else if (!parsed.data.ok) result = { ok: false, message: parsed.data.code };
                         else {
-                            const item = parsed.data.items.find(item => item.serverId === source.itemId);
+                            const item = parsed.data.items.find(item => ('skillId' in item ? item.skillId : item.serverId) === source.itemId);
                             if (!item) result = { ok: false, message: 'invalid_action_output' };
                             else {
                                 if (current.revision === 'absent' || parsed.data.revision >= current.revision) {
@@ -99,7 +106,7 @@ export function useReachRulesState(source: ReachRulesSource, execute: ExecuteRea
             operation.resolve(result);
         }
         current.running = false;
-    }, [source.itemId, publish]);
+    }, [source.kind, source.itemId, publish]);
 
     const change = React.useCallback((input: ReachRulesChangeV1): Promise<ReachRulesWriteResult> => {
         if (owner.current !== state || !state.mounted) return Promise.resolve({ ok: false, message: 'scope-retired' });

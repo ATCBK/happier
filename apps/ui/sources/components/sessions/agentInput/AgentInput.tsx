@@ -592,6 +592,9 @@ interface AgentInputProps {
      * (D15). The send control names it; the session's send owner applies it.
      */
     armedRouteContinuation?: Readonly<{ sourceLabel: string }> | null;
+    /** Cancels the armed route change (D15); see `AgentInputSubmitButton`. */
+    onUnarmRoute?: (() => void) | null;
+    unarmRoutePending?: boolean;
     isSending?: boolean;
     disabled?: boolean;
     /** Ephemeral target-owned feedback; it never changes the input document. */
@@ -3739,6 +3742,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             dictationStatus={dictationStatus}
                                             armedContinuationTarget={props.armedContinuationTarget ?? null}
                                             armedRouteContinuation={props.armedRouteContinuation ?? null}
+                                            onUnarmRoute={props.onUnarmRoute ?? null}
+                                            unarmRoutePending={props.unarmRoutePending === true}
                                             armedContinuationIdentityMark={armedContinuationIdentityMark}
                                             onSend={handleSend}
                                             onStop={handleAbortPress}
@@ -3942,6 +3947,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                 dictationStatus={dictationStatus}
                                                 armedContinuationTarget={props.armedContinuationTarget ?? null}
                                                 armedRouteContinuation={props.armedRouteContinuation ?? null}
+                                            onUnarmRoute={props.onUnarmRoute ?? null}
+                                            unarmRoutePending={props.unarmRoutePending === true}
                                                 armedContinuationIdentityMark={armedContinuationIdentityMark}
                                                 onSend={handleSend}
                                                 onStop={handleAbortPress}

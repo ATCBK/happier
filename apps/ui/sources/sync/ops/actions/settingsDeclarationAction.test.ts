@@ -809,7 +809,6 @@ describe('navigation placement Settings Actions', () => {
                 defaults: { configMode: 'linked', stateMode: 'isolated' }, acknowledgedRisksByAgentId: {},
             },
         }));
-        humanConfirmation.confirm.mockResolvedValueOnce(false);
         expect(await owner.action({ actionId: 'settings.set', input: {
             anchor: 'connectedServicesAgentSignIn.sharingState', value: true,
         } })).toMatchObject({ value: true });
@@ -2035,9 +2034,6 @@ describe('declared settings owner', () => {
     });
 
     it.each([{ os: 'web', desktop: true }, { os: 'ios', desktop: false }] as const)('round-trips admitted scalar declarations on $os through the canonical schemas', async (host) => {
-            // Writable shared-state preferences still require the real owner's human privacy consent.
-            humanConfirmation.confirm.mockResolvedValue(true);
-            onTestFinished(() => { humanConfirmation.confirm.mockResolvedValue(false); });
             // Desktop setting commits reach the native window, which is the only substituted boundary.
             const invoke = vi.spyOn(desktopHostBoundary, 'invokeDesktopHost').mockResolvedValue(undefined);
             onTestFinished(() => invoke.mockRestore());
@@ -2055,6 +2051,9 @@ describe('declared settings owner', () => {
                     continue;
                 }
                 if (!('value' in current)) throw new Error(`${item.anchor}: ${'errorCode' in current ? current.errorCode : 'Missing value'}`);
+                // Compound owners expose a read projection, not necessarily their
+                // write intent. Their keyed/CAS contracts have dedicated owner tests.
+                if (current.value !== null && typeof current.value === 'object') continue;
                 expect(await owner.action({ actionId: 'settings.set', input: current })).toEqual(current);
             }
     });

@@ -23,6 +23,7 @@ import {
     type MutableComposerDocumentOwner,
 } from '@/components/sessions/composer/composerDocumentOwner';
 import {
+    ParticipantComposerSubmissionHeld,
     SessionParticipantComposer,
     type ParticipantComposerEngine,
     type ParticipantComposerPreparedSubmission,
@@ -76,6 +77,10 @@ import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteA
 import { requestRegisteredComposerFocus } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composerRef';
 import { useExecutionRunLaunchContext } from './useExecutionRunLaunchContext';
+import { useExactModelChoice } from '@/components/sessions/modelPicker/useExactModelChoice';
+import { useExecutionRunChildChoice } from './useExecutionRunChildChoice';
+import { applyExecutionRunChildSelection, type ExecutionRunChildSelection } from './executionRunChildChoice';
+import { ExecutionRunChildChoiceCard } from './ExecutionRunChildChoiceCard';
 
 type DraftIdentity = Readonly<{ correlationId: string; inputLocalId: string }>;
 
@@ -263,6 +268,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         onSelectionChange: () => setError(null),
     });
     const machine = useExecutionRunMachineName(session?.metadata ?? null);
+    const childChoice = useExecutionRunChildChoice();
     const runIdRef = React.useRef<string | null>(null);
     const notifiedRunIdRef = React.useRef<string | null>(null);
     const submitInFlightRef = React.useRef(false);
@@ -376,7 +382,9 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         }
     }, [accountLifetime, startAction, identity.correlationId, actionInput, options.actionId, options.actionSpec, options.backendChoices, options.fields, props.onRunStarted, props.sessionId, secretOverlayState.overlay, secretOverlayState.readiness.ok, teamCredential.available]);
 
-    const submitConversationStart = React.useCallback(async (submission: ParticipantComposerPreparedSubmission) => {
+    const submitConversationStartRef = React.useRef<(submission: ParticipantComposerPreparedSubmission, childSelection?: ExecutionRunChildSelection) => Promise<void>>();
+    const submitConversationStart = React.useCallback(async (submission: ParticipantComposerPreparedSubmission,
+        childSelection?: ExecutionRunChildSelection) => {
         if (submitInFlightRef.current) {
             throw new Error(t('common.loading'));
         }
@@ -395,6 +403,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             throw new Error(t('common.unavailable'));
         }
         submitInFlightRef.current = true;
+        childChoice.begin();
         setError(null);
         setPhase('starting');
         let handedOff = false;
@@ -411,7 +420,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 const launchOrigin = props.launchOrigin
                     ? { ...props.launchOrigin, draftCorrelationId: identity.correlationId }
                     : { kind: 'session' as const, sessionId: props.sessionId, draftCorrelationId: identity.correlationId };
-                const started = await startAction('execution.run.start', {
+                const startInput = {
                     intent: 'delegate',
                     ...startOptions.options,
                     ...(intentTitle ? { display: { title: intentTitle } } : {}),
@@ -421,7 +430,10 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                     // Each attempt carries its own correlation so a lost response can be
                     // reconciled; a Discussion launch keeps its selection provenance.
                     launchOrigin,
-                }, identity.correlationId, launchOrigin);
+                };
+                const started = await startAction('execution.run.start',
+                    childSelection ? applyExecutionRunChildSelection(startInput, childSelection) : startInput,
+                    identity.correlationId, launchOrigin);
                 startIssued = true;
                 const parsedStart = started.ok ? ExecutionRunStartResponseSchema.safeParse(started.result) : null;
                 if (parsedStart?.success) {
@@ -432,6 +444,12 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 if (!runId) {
                     const knownNoRun = !started.ok
                         && readExecutionRunStartRunCreation(started.details) === 'noRunCreated';
+                    // The Agent can't follow this Session's route (D9): the draft stays and the
+                    // chooser asks for its default or an exact model; that choice is a fresh start.
+                    if (knownNoRun && childChoice.offer(started, (selection) => submitConversationStartRef.current?.(submission, selection) ?? Promise.resolve())) {
+                        setPhase('idle');
+                        throw new ParticipantComposerSubmissionHeld();
+                    }
                     setPhase(knownNoRun ? 'idle' : 'unresolved');
                     // An unknown outcome is not a failure: the Run may already exist, so the copy
                     // says so and warns that another Start may create a second conversation.
@@ -517,6 +535,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 // actually issued keeps the unresolved recovery the try block chose.
                 setPhase('idle');
             }
+            if (cause instanceof ParticipantComposerSubmissionHeld) throw cause;
             const failureLabelKey = getSessionInputFailureLabelKey(cause);
             const message = failureLabelKey
                 ? t(failureLabelKey)
@@ -526,7 +545,9 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         } finally {
             submitInFlightRef.current = false;
         }
-    }, [accountLifetime, actionInput, startAction, findCorrelatedRun, identity, notifyRunStarted, options.selectedBackendChoice, props.launchOrigin, props.sessionId, secretOverlayState.overlay, secretOverlayState.readiness.ok, selectionContext, serverId, teamCredential.available]);
+    }, [accountLifetime, actionInput, childChoice.begin, childChoice.offer, startAction, findCorrelatedRun, identity, notifyRunStarted, options.selectedBackendChoice, props.launchOrigin, props.sessionId, secretOverlayState.overlay, secretOverlayState.readiness.ok, selectionContext, serverId, teamCredential.available]);
+
+    submitConversationStartRef.current = submitConversationStart;
 
     const submitPreparedMessage = React.useCallback(
         (submission: ParticipantComposerPreparedSubmission) => (intent
@@ -828,6 +849,38 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         : selectedChoice ? [selectedChoice.agentId] : [];
     const startCount = intent === 'review' ? Math.max(1, options.selectedBackendTargetKeys.length) : 1;
 
+    // D9's ask when the chosen Agent can't follow this Session: its default or an exact model.
+    const pendingChildChoice = childChoice.choice;
+    const childChoiceAgent = pendingChildChoice
+        ? options.backendChoices.find((choice) => choiceRunsAgent(choice, pendingChildChoice.agentTargetKey)) ?? null
+        : null;
+    const childModelChoice = useExactModelChoice({
+        agentTargetKey: pendingChildChoice?.agentTargetKey ?? null,
+        agentId: childChoiceAgent?.agentId ?? null,
+        machineId,
+        serverId,
+        selected: null,
+        title: t('runPage.childChoice.chooseModel'),
+        fallbackLabel: t('runPage.menu.selectionChoose'),
+        enabled: pendingChildChoice !== null,
+    });
+    const chooseChild = childChoice.choose;
+    const startWithChild = React.useCallback((selection: ExecutionRunChildSelection) => {
+        // A failure is already said under the composer by the start itself.
+        chooseChild(selection).catch(() => undefined);
+    }, [chooseChild]);
+    const openChildModelChoice = childModelChoice.open;
+    const chooseChildModel = React.useCallback(() => openChildModelChoice((ref) => {
+        if (ref) startWithChild(ref);
+    }), [openChildModelChoice, startWithChild]);
+    const childParentDetail = pendingChildChoice
+        ? resolveExecutionRunRouteChoice({
+            inherits: true,
+            inheritedSelection: pendingChildChoice.parentModelSelection ?? inheritedModelSelection ?? null,
+            inheritedRoutePresentation: inheritedRoutePresentation ?? null,
+        }).inheritDetail
+        : null;
+
     return (
         <View style={{ flex: 1, gap: 12, justifyContent: 'flex-end' }}>
             {/* What this start is, right above the composer where the answer will appear (lab S1/S3).
@@ -865,6 +918,17 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                     size="line"
                     kind={checkingCapabilities ? 'loading' : launchUnavailableReason === 'machineOffline' ? 'warning' : 'denied'}
                     title={blockedReason}
+                />
+            ) : null}
+            {pendingChildChoice ? (
+                <ExecutionRunChildChoiceCard
+                    choice={pendingChildChoice}
+                    agentTitle={childChoiceAgent?.title ?? t('runPage.childChoice.agentFallback')}
+                    parentDetail={childParentDetail}
+                    starting={phase === 'starting'}
+                    onUseDefault={() => startWithChild('agentDefault')}
+                    onChooseModel={chooseChildModel}
+                    onCancel={childChoice.cancel}
                 />
             ) : null}
             <SessionParticipantComposer

@@ -5,6 +5,7 @@ import Animated, { LinearTransition, ReduceMotion } from 'react-native-reanimate
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { IconButton } from '@/components/ui/buttons/IconButton';
 import { PrimaryCircleIconButton } from '@/components/ui/buttons/PrimaryCircleIconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
@@ -137,6 +138,12 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
      * (D15): pressing send restarts it on that source, then sends.
      */
     armedRouteContinuation?: Readonly<{ sourceLabel: string }> | null;
+    /**
+     * Cancels the armed route/model change (D15) and keeps the one the Session runs on. Shown beside
+     * the send control for as long as a route is armed, whichever shape the control has.
+     */
+    onUnarmRoute?: (() => void) | null;
+    unarmRoutePending?: boolean;
     /** Exact selected picker mark for an external/machine-qualified target. */
     armedContinuationIdentityMark?: React.ReactNode;
     onSend: () => void;
@@ -211,6 +218,23 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
         showStopWhenEmpty,
     ]);
 
+    // An armed Agent wins over a route change (its transition carries its own model), so the route's
+    // cancel shows only while the route is what the next message applies.
+    const unarmRoute = props.armedRouteContinuation && !props.armedContinuationTarget && props.onUnarmRoute ? (
+        <IconButton
+            testID="agent-input-route-unarm"
+            iconName="x"
+            variant="plain"
+            size={28}
+            iconSize={14}
+            accessibilityLabel={t('session.agentContinuation.routeUnarm', { source: props.armedRouteContinuation.sourceLabel })}
+            tooltip={t('session.agentContinuation.routeUnarm', { source: props.armedRouteContinuation.sourceLabel })}
+            tooltipPlacement="top"
+            disabled={props.unarmRoutePending === true || props.isSending === true}
+            onPress={props.onUnarmRoute}
+        />
+    ) : null;
+
     if (armedContinuation) {
         const canonicalMark = armed?.kind === 'agent' && canonicalIdentityMark
             ? React.cloneElement(canonicalIdentityMark, {
@@ -230,6 +254,7 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
         ) : undefined);
         return (
             <AgentInputSubmitShape>
+                {unarmRoute}
                 <RoundButton
                     testID={props.testID}
                     size="small"
@@ -261,6 +286,7 @@ export const AgentInputSubmitButton = React.memo(function AgentInputSubmitButton
 
     return (
         <AgentInputSubmitShape>
+        {unarmRoute}
         <PrimaryCircleIconButton
             appearance={props.appearance}
             testID={props.testID}

@@ -9,7 +9,7 @@ import { useReachRulesState, type ExecuteReachRules, type ReachRulesSource } fro
 
 afterEach(standardCleanup);
 const initial = { id: 'everywhere', target: { t: 'allMachines' as const }, enabled: true, createdAt: 1, updatedAt: 1 };
-const source: ReachRulesSource = { key: 'account/server', itemId: 'server', rules: [initial], revision: 1, status: 'ready', valueAvailable: true };
+const source: ReachRulesSource = { key: 'account/server', kind: 'mcp_server', itemId: 'server', rules: [initial], revision: 1, status: 'ready', valueAvailable: true };
 
 describe('reach rule optimistic state', () => {
     it('writes skill rules through the skill Action and Undo restores its previous value', async () => {
