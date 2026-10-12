@@ -57,16 +57,26 @@ function createEncryptionHarness(): SessionListEncryption {
     };
 }
 
-async function snapshotCoverage(page: { hasNext: boolean; nextCursor: string | null }): Promise<boolean | undefined> {
+function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+    });
+}
+
+async function snapshotCoverage(input: Readonly<{
+    page?: { hasNext: boolean; nextCursor: string | null };
+    request?: (path: string) => Promise<Response>;
+    sessionListCursor?: string | null;
+}>): Promise<boolean | undefined> {
     const coverage: Array<boolean | undefined> = [];
+    const page = input.page ?? { hasNext: false, nextCursor: null };
     await fetchAndApplySessions({
         credentials: { token: 't', secret: 's' } as AuthCredentials,
         encryption: createEncryptionHarness(),
         sessionDataKeys: new Map<string, Uint8Array>(),
-        request: async () => new Response(JSON.stringify({ sessions: [buildPlainRow('s1')], ...page }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-        }),
+        sessionListCursor: input.sessionListCursor ?? null,
+        request: input.request ?? (async () => jsonResponse({ sessions: [buildPlainRow('s1')], ...page })),
         applySessionListRenderables: (_renderables, options) => {
             coverage.push(options?.coversWholeList);
         },
@@ -84,14 +94,29 @@ afterEach(() => {
 
 describe('session-list snapshot replacement coverage', () => {
     it('declares the replacement authoritative for the whole list when the server has no further page', async () => {
-        await expect(snapshotCoverage({ hasNext: false, nextCursor: null })).resolves.toBe(true);
+        await expect(snapshotCoverage({ page: { hasNext: false, nextCursor: null } })).resolves.toBe(true);
     });
 
     it('declares the replacement partial when the server has a further page', async () => {
-        await expect(snapshotCoverage({ hasNext: true, nextCursor: 'cursor_2' })).resolves.toBe(false);
+        await expect(snapshotCoverage({ page: { hasNext: true, nextCursor: 'cursor_2' } })).resolves.toBe(false);
     });
 
     it('keeps the replacement partial when the server reports a further page it cannot page to', async () => {
-        await expect(snapshotCoverage({ hasNext: true, nextCursor: null })).resolves.toBe(false);
+        await expect(snapshotCoverage({ page: { hasNext: true, nextCursor: null } })).resolves.toBe(false);
+    });
+
+    it('keeps the replacement partial when it starts from a cursor below the list head', async () => {
+        await expect(snapshotCoverage({
+            sessionListCursor: 'cursor_1',
+            page: { hasNext: false, nextCursor: null },
+        })).resolves.toBe(false);
+    });
+
+    it('keeps the replacement partial for the capped /v1/sessions fallback', async () => {
+        await expect(snapshotCoverage({
+            request: async (path) => path.startsWith('/v2/sessions')
+                ? jsonResponse({ error: 'Not found' }, 404)
+                : jsonResponse({ sessions: [buildPlainRow('s1')] }),
+        })).resolves.toBe(false);
     });
 });

@@ -1331,13 +1331,15 @@ export async function fetchAndApplySessions(params: {
     };
 
     let cursor: string | null = params.sessionListCursor ?? null;
+    const startedFromListHead = cursor === null;
     const seenCursors = new Set<string>();
     let fetchedPages = 0;
     let nextCursorForMore: string | null = cursor;
     let hasNextForMore = false;
     // Whether the server said rows exist beyond the last fetched page, independent of whether
-    // this client can page to them: only a response that reports no further rows covers the
-    // whole list, so an unpageable `hasNext` still fails closed and retains omitted rows.
+    // this client can page to them. Whole-list coverage also requires starting at the list
+    // head and a v2 source: the `/v1/sessions` fallback is capped server-side yet reports no
+    // further page. Anything unproven fails closed and retains omitted rows.
     let serverReportedMoreRows = false;
     let source: 'v2' | 'v1' = 'v2';
     const buildFetchResult = (): SessionListFetchResult => ({
@@ -1527,7 +1529,10 @@ export async function fetchAndApplySessions(params: {
                 requiredRows: requiredSnapshotRows,
                 backgroundRows: countBackgroundRows(renderables.length, requiredSnapshotRows),
             },
-            () => params.applySessionListRenderables!(renderables, { replace: true, coversWholeList: !serverReportedMoreRows }),
+            () => params.applySessionListRenderables!(renderables, {
+                replace: true,
+                coversWholeList: startedFromListHead && source === 'v2' && !serverReportedMoreRows,
+            }),
         );
         recordFirstUsableListTelemetry({
             snapshotStartedAtMs,
