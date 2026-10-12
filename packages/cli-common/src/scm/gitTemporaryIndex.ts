@@ -1,6 +1,6 @@
-import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { copyFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
+import { createHappierTempDir, removeHappierTempDir } from '../tempDirs/createHappierTempDir.js';
 
 export type GitTemporaryIndexCommand = Readonly<{
     cwd: string;
@@ -54,10 +54,10 @@ export async function createGitTemporaryIndex(input: Readonly<{
     runGit: GitTemporaryIndexCommandAdapter;
     seed: GitTemporaryIndexSeed;
 }>): Promise<Readonly<{ success: true; tempIndex: GitTemporaryIndex }> | GitTemporaryIndexFailure> {
-    const tempDir = mkdtempSync(join(tmpdir(), 'happier-scm-index-'));
+    const tempDir = createHappierTempDir({ purpose: 'scm-index' });
     const indexPath = join(tempDir, 'index');
     const env = { GIT_INDEX_FILE: indexPath };
-    const cleanup = () => rmSync(tempDir, { recursive: true, force: true });
+    const cleanup = () => removeHappierTempDir(tempDir);
     let retained = false;
     try {
         let initializeEmpty = input.seed.kind === 'empty';

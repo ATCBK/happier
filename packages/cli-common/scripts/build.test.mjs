@@ -1,22 +1,58 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { rename as renameFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { describe, expect, it, vi } from 'vitest';
 
 import * as buildScript from './build.mjs';
+import { installNativeAdmissionFixture } from '../../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { writeFakeBin } from '../../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
+import { withPatchedProcessEnv } from '../../../apps/stack/scripts/testkit/core/env_scope.mjs';
 const { buildPackageDistAtomically } = buildScript;
 
 describe('cli-common atomic build contract', () => {
   it('emits source-runtime code but checks public package publication before replacing last-green output', async () => {
     const root = mkdtempSync(join(tmpdir(), 'happier-cli-common-runtime-mode-'));
     try {
-      const packageDir = join(root, 'packages', 'cli-common');
+      const repoDir = process.platform === 'linux' ? join(root, 'native-owner') : root;
+      const packageDir = join(repoDir, 'packages', 'cli-common');
+      const env = { ...process.env, HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev', npm_lifecycle_event: 'build' };
+      let build = buildPackageDistAtomically;
+      let fixtureAwkPath;
+      if (process.platform === 'linux') {
+        // Isolate only host capacity/OS observation. The finite build, lock owner,
+        // compiler resolver and real compiler still run their production logic.
+        await installNativeAdmissionFixture({ root });
+        const sourceRoot = resolve(import.meta.dirname, '../../..');
+        for (const path of [
+          'packages/cli-common/scripts/build.mjs',
+          'packages/cli-common/scripts/packageDistBuildPlan.mjs',
+          'packages/cli-common/scripts/packageDistBuildPhases.mjs',
+          'packages/cli-common/scripts/verifyExports.mjs',
+          'packages/cli-common/workspaceChildBuildEnv.mjs',
+          'scripts/workspaces/copyDirectoryContents.mjs',
+          'scripts/workspaces/resolveTypeScriptCliInvocation.mjs',
+        ]) {
+          mkdirSync(dirname(join(repoDir, path)), { recursive: true });
+          cpSync(join(sourceRoot, path), join(repoDir, path));
+        }
+        for (const path of ['workspaceBundleLock.mjs', 'workspacePackageBuildLock.mjs']) {
+          writeFileSync(join(repoDir, 'scripts/workspaces', path),
+            `export * from ${JSON.stringify(pathToFileURL(join(sourceRoot, 'scripts/workspaces', path)).href)};\n`);
+        }
+        const { binDir } = writeFakeBin({ root, name: 'awk', content: '#!/bin/sh\ncase "$*" in\n  */proc/meminfo*) printf "52428800 73400320\\n" ;;\n  *) exec /usr/bin/awk "$@" ;;\nesac\n' });
+        fixtureAwkPath = join(binDir, 'awk');
+        writeFakeBin({ root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
+        Object.assign(env, { PATH: `${binDir}:${env.PATH}`, HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
+          HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
+          HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '' });
+        ({ buildPackageDistAtomically: build } = await import(pathToFileURL(join(repoDir, 'packages/cli-common/scripts/build.mjs')).href));
+      }
       mkdirSync(join(packageDir, 'src'), { recursive: true });
-      symlinkSync(resolve(import.meta.dirname, '../../../node_modules'), join(root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+      symlinkSync(resolve(import.meta.dirname, '../../../node_modules'), join(repoDir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
       const packageJson = { name: '@fixture/cli-common', type: 'module', exports: { '.': './dist/index.js' } };
       writeFileSync(join(packageDir, 'package.json'), JSON.stringify(packageJson));
       writeFileSync(join(packageDir, 'tsconfig.json'), JSON.stringify({
@@ -24,15 +60,23 @@ describe('cli-common atomic build contract', () => {
         include: ['src/**/*.ts'],
       }));
       writeFileSync(join(packageDir, 'src/index.ts'), 'export const value: string = 42;\n');
-      // Keep the real compiler and its authenticated containing admission;
-      // this fixture does not replace the OS/process boundary.
-      const env = { ...process.env, HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev', npm_lifecycle_event: 'build' };
-      await buildPackageDistAtomically({ packageDir, packageJson, env });
+      await build({ packageDir, packageJson, env });
       const prior = readFileSync(join(packageDir, 'dist/index.js'), 'utf8');
       expect(prior).toContain('42');
-      await expect(buildPackageDistAtomically({ packageDir, packageJson, env: { ...env, npm_lifecycle_event: 'prepack' } }))
+      await expect(build({ packageDir, packageJson, env: { ...env, npm_lifecycle_event: 'prepack' } }))
         .rejects.toThrow(/failed with code/);
       expect(readFileSync(join(packageDir, 'dist/index.js'), 'utf8')).toBe(prior);
+      if (fixtureAwkPath) {
+        // Ordinary local CI already owns capacity. Its default package command
+        // must still hold the joint publication lease without joining the host queue.
+        writeFileSync(fixtureAwkPath, '#!/bin/sh\ncase "$*" in\n  */proc/meminfo*) printf "1 73400320\\n" ;;\n  *) exec /usr/bin/awk "$@" ;;\nesac\n');
+        await build({ packageDir, packageJson, env: {
+          ...env, CI: '1', HAPPIER_DEV_TARGET_EXECUTION: '',
+          HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '',
+          HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
+        } });
+        expect(readFileSync(join(packageDir, 'dist/index.js'), 'utf8')).toBe(prior);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -117,7 +161,10 @@ describe('cli-common atomic build contract', () => {
     expect(Object.isFrozen(buildPlan)).toBe(true);
   });
 
-  it('waits for the workspace dist build lock before staging a package build', async () => {
+  it('waits for the workspace dist build lock before staging a package build', async ({ onTestFinished }) => {
+    // This injected-compiler fixture owns an independent temporary lock;
+    // the routed payload's restriction applies to real publication leases.
+    onTestFinished(withPatchedProcessEnv(undefined, { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: undefined }));
     const root = mkdtempSync(join(tmpdir(), 'happier-cli-common-build-lock-'));
     try {
       const packageDir = join(root, 'packages', 'cli-common');

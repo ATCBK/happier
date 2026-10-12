@@ -98,6 +98,92 @@ function legacyOwnerSnapshot(params: Readonly<{
 }
 
 describe('updateSessionMetadataTupleWithRetry', () => {
+  it.each(['legacy_writer', 'owner_migration'] as const)('cannot add attestation through %s on an older Session', async (path) => {
+    const initialSnapshot = legacyOwnerSnapshot({ metadata: { path: '/repo', host: 'host' }, metadataVersion: 1,
+      metadataCiphertext: 'legacy-before', agentStateVersion: 0 });
+    const commit = vi.fn(async () => ({ result: 'success' as const, metadataVersion: 3, agentStateVersion: 5 }));
+    const mutateLegacy = vi.fn(async () => initialSnapshot);
+    await expect(updateSessionMetadataTupleWithRetry({ initialSnapshot,
+      mutation: { kind: 'metadata', update: metadata => ({ ...metadata, attestedContext: {
+        externalPrincipalId: 'forged@example.test', sourceMessageId: '<forged@example.test>',
+      } }) }, crypto: cryptoAdapter(), commit,
+      ...(path === 'owner_migration' ? { ownerMigrationCurrentness: {
+        expectedAccountEncryptionMode: 'plain' as const, expectedAccountContentPublicKeyFingerprint: null,
+      } } : { mutateLegacy }),
+    })).rejects.toMatchObject({ code: 'session_attested_context_read_only' });
+    expect(commit).not.toHaveBeenCalled();
+    expect(mutateLegacy).not.toHaveBeenCalled();
+  });
+
+  it.each(['replace', 'remove', 'add'] as const)('rejects an attested identity %s after Session birth', async (mode) => {
+    const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
+    const initialSnapshot = ownerSnapshot({ metadata: mode === 'add' ? {} : { attestedContext } });
+    const commit = vi.fn(async () => ({ result: 'success' as const, metadataVersion: 3, agentStateVersion: 5 }));
+    await expect(updateSessionMetadataTupleWithRetry({ initialSnapshot,
+      mutation: { kind: 'metadata', update: () => mode === 'remove' ? {} : {
+        attestedContext: { ...attestedContext, externalPrincipalId: 'forged@example.test' },
+      } }, crypto: cryptoAdapter(), commit,
+    })).rejects.toMatchObject({ code: 'session_attested_context_read_only' });
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('rejects an in-place attestation mutation without poisoning the current snapshot', async () => {
+    const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
+    const initialSnapshot = ownerSnapshot({ metadata: { attestedContext } });
+    const commit = vi.fn(async () => ({ result: 'success' as const, metadataVersion: 3, agentStateVersion: 5 }));
+    await expect(updateSessionMetadataTupleWithRetry({ initialSnapshot,
+      mutation: { kind: 'metadata', update: metadata => {
+        const context = metadata.attestedContext;
+        if (context && typeof context === 'object') Reflect.set(context, 'externalPrincipalId', 'forged@example.test');
+        return metadata;
+      } }, crypto: cryptoAdapter(), commit,
+    })).rejects.toMatchObject({ code: 'session_attested_context_read_only' });
+    expect(initialSnapshot.value.metadata.attestedContext).toEqual({
+      externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>',
+    });
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('keeps attestation admission on a legacy writer reapplication after a conflict', async () => {
+    const initialSnapshot = legacyOwnerSnapshot({ metadata: { path: '/repo', host: 'host' },
+      metadataVersion: 1, metadataCiphertext: 'legacy-before', agentStateVersion: 0 });
+    let written: Metadata | null = null;
+    await expect(updateSessionMetadataTupleWithRetry({ initialSnapshot,
+      mutation: { kind: 'metadata', update: metadata => ({ ...metadata,
+        summary: 'updated', ...(metadata.summary ? { attestedContext: {
+          externalPrincipalId: 'forged@example.test', sourceMessageId: '<forged@example.test>',
+        } } : {}),
+      }) }, crypto: cryptoAdapter(), commit: async () => { throw new Error('Legacy writes do not commit a tuple'); },
+      // Persistence boundary: the first CAS conflicts and re-applies its
+      // admitted callback against the newly read row, as SessionClient does.
+      mutateLegacy: async request => {
+        if (request.kind !== 'metadata') throw new Error('Expected metadata mutation');
+        const next = await request.mutation.update({ ...request.current.value.metadata, summary: 'concurrent update' });
+        written = next;
+        return initialSnapshot;
+      },
+    })).rejects.toMatchObject({ code: 'session_attested_context_read_only' });
+    expect(written).toBeNull();
+  });
+
+  it('preserves synchronous legacy writer reapplication for ordinary metadata', async () => {
+    const initialSnapshot = legacyOwnerSnapshot({ metadata: { path: '/repo', host: 'host' },
+      metadataVersion: 1, metadataCiphertext: 'legacy-before', agentStateVersion: 0 });
+    let written: Metadata | null = null;
+    await expect(updateSessionMetadataTupleWithRetry({ initialSnapshot,
+      mutation: { kind: 'metadata', update: metadata => ({ ...metadata, summary: 'updated' }) },
+      crypto: cryptoAdapter(), commit: async () => { throw new Error('Legacy writes do not commit a tuple'); },
+      mutateLegacy: async request => {
+        if (request.kind !== 'metadata') throw new Error('Expected metadata mutation');
+        const next = request.mutation.update({ ...request.current.value.metadata, summary: 'concurrent update' });
+        if (next && typeof next === 'object' && 'then' in next) throw new Error('Legacy socket updates must remain synchronous');
+        written = next as Metadata;
+        return initialSnapshot;
+      },
+    })).resolves.toEqual(initialSnapshot);
+    expect(written).toMatchObject({ path: '/repo', summary: 'updated' });
+  });
+
   it('refuses a stale reviewed metadata revision before effects and never rebases it after a conflict', async () => {
     const initial = ownerSnapshot({ metadataVersion: 2 });
     let writes = 0;

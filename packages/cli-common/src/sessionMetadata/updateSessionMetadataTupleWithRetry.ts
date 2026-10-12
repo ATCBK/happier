@@ -136,6 +136,7 @@ type TupleMutationError = Error & {
   code:
     | 'metadata_privacy_upgrade_required'
     | 'metadata_tuple_conflict'
+    | 'session_attested_context_read_only'
     | 'metadata_tuple_ambiguous';
   retryable: false;
   unsupportedFields?: readonly string[];
@@ -196,6 +197,29 @@ function tupleValuesEqual(left: unknown, right: unknown): boolean {
   return leftKeys.every((key) =>
     Object.prototype.hasOwnProperty.call(rightRecord, key)
     && tupleValuesEqual(leftRecord[key], rightRecord[key]));
+}
+
+function applyMetadataUpdate<M>(metadata: M, update: (metadata: M) => M | Promise<M>): M | Promise<M> {
+  const readContext = (value: unknown): unknown => value !== null && typeof value === 'object'
+    ? Reflect.get(value, 'attestedContext') : undefined;
+  const initial = readContext(metadata);
+  // Capture primitive birth facts before invoking even an in-place updater.
+  const before = initial !== null && typeof initial === 'object' ? { ...initial } : initial;
+  // A refused in-place update must not change the live snapshot either.
+  const updateInput = metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? { ...metadata, ...(initial === undefined ? {} : { attestedContext:
+      initial !== null && typeof initial === 'object' ? { ...initial } : initial }) } as M
+    : metadata;
+  const verify = (updated: M): M => {
+    if (!tupleValuesEqual(before, readContext(updated))) {
+      throw createTupleMutationError('Session attestation is immutable after birth', 'session_attested_context_read_only');
+    }
+    return updated;
+  };
+  const updated = update(updateInput);
+  // The legacy socket writer requires synchronous callbacks to stay synchronous.
+  return updated && typeof (updated as Promise<M>).then === 'function'
+    ? Promise.resolve(updated).then(verify) : verify(updated as M);
 }
 
 function tupleSourceIsExact<M, A>(
@@ -309,7 +333,7 @@ async function prepareLegacyOwnerMigration<M, A>(params: Readonly<{
   let updatedMetadata = current.value.metadata;
   let updatedAgentState = current.value.agentState;
   if (mutation.kind === 'metadata') {
-    updatedMetadata = await mutation.update(current.value.metadata);
+    updatedMetadata = await applyMetadataUpdate(current.value.metadata, mutation.update);
     if (tupleValuesEqual(updatedMetadata, current.value.metadata)) {
       return null;
     }
@@ -436,7 +460,7 @@ async function prepareTupleMutation<M, A>(params: Readonly<{
         'metadata_privacy_upgrade_required',
       );
     }
-    const updatedMetadata = await mutation.update(current.value.metadata);
+    const updatedMetadata = await applyMetadataUpdate(current.value.metadata, mutation.update);
     if (tupleValuesEqual(updatedMetadata, current.value.metadata)) {
       return null;
     }
@@ -465,7 +489,7 @@ async function prepareTupleMutation<M, A>(params: Readonly<{
   let updatedMetadata = current.value.metadata;
   let updatedAgentState = current.value.agentState;
   if (mutation.kind === 'metadata') {
-    updatedMetadata = await mutation.update(current.value.metadata);
+    updatedMetadata = await applyMetadataUpdate(current.value.metadata, mutation.update);
     if (tupleValuesEqual(updatedMetadata, current.value.metadata)) {
       return null;
     }
@@ -806,9 +830,8 @@ export async function updateSessionMetadataTupleWithRetry<M, A>(
     }
     params.assertCurrent?.();
     if (params.mutation.kind === 'metadata') {
-      const updatedMetadata = await params.mutation.update(
-        current.value.metadata,
-      );
+      const mutation = params.mutation;
+      const updatedMetadata = await applyMetadataUpdate(current.value.metadata, mutation.update);
       if (tupleValuesEqual(updatedMetadata, current.value.metadata)) {
         return current;
       }
@@ -817,7 +840,7 @@ export async function updateSessionMetadataTupleWithRetry<M, A>(
         kind: 'metadata',
         current,
         updatedMetadata,
-        mutation: params.mutation,
+        mutation: { ...mutation, update: metadata => applyMetadataUpdate(metadata, mutation.update) },
       });
     }
     const baseAgentState = current.value.agentState ?? ({} as A);

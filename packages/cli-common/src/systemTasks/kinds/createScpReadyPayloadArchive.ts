@@ -1,7 +1,6 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { runCommandStreaming } from '../../process/runCommandStreaming.js';
+import { createHappierTempDir, removeHappierTempDirAsync } from '../../tempDirs/createHappierTempDir.js';
 
 import { createScpReadyPayloadCopy } from './createScpReadyPayloadCopy.js';
 
@@ -12,7 +11,7 @@ export async function createScpReadyPayloadArchive(payloadRoot: string): Promise
   cleanup: () => Promise<void>;
 }>> {
   const scpReadyPayload = await createScpReadyPayloadCopy(payloadRoot);
-  const archiveStageRoot = await mkdtemp(join(tmpdir(), 'happier-first-party-scp-archive-'));
+  const archiveStageRoot = createHappierTempDir({ purpose: 'first-party-scp-archive' });
   const extractedPayloadDirName = basename(scpReadyPayload.payloadRoot);
   const archiveFileName = `${extractedPayloadDirName}.tar`;
 
@@ -31,14 +30,14 @@ export async function createScpReadyPayloadArchive(payloadRoot: string): Promise
       cleanup: async () => {
         await Promise.all([
           scpReadyPayload.cleanup(),
-          rm(archiveStageRoot, { recursive: true, force: true }),
+          removeHappierTempDirAsync(archiveStageRoot),
         ]);
       },
     };
   } catch (error) {
     await Promise.all([
       scpReadyPayload.cleanup(),
-      rm(archiveStageRoot, { recursive: true, force: true }),
+      removeHappierTempDirAsync(archiveStageRoot),
     ]);
     throw error;
   }

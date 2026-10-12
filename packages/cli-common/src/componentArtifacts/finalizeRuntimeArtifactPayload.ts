@@ -234,17 +234,6 @@ async function projectNativePackage(directory: string, target: BinaryTarget): Pr
       }
     }
   }
-  if (name === 'ps-list' && parent === 'node_modules' && target.os !== 'windows') {
-    // ps-list's POSIX implementation invokes ps; only Windows uses fastlist.
-    const vendorDir = join(directory, 'vendor');
-    const entries = await readdir(vendorDir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return [];
-      throw error;
-    });
-    for (const entry of entries) {
-      if (entry.isFile() && /^fastlist-.*\.exe$/i.test(entry.name)) await rm(join(vendorDir, entry.name));
-    }
-  }
   if (name === 'onnxruntime-node' && parent === 'node_modules') {
     // ONNX loads bin/napi-v*/<process.platform>/<process.arch>; retain the whole
     // selected directory, including shared libraries and provider sidecars.

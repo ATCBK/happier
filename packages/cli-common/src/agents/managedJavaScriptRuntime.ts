@@ -6,6 +6,7 @@ import { withWorkspaceBundleLock } from '../../workspaceBundleLock.mjs';
 import { expandHomeDirPath } from '../path/expandHomeDirPath.js';
 import { resolveWindowsCommandOnPath, resolveWindowsCommandPath } from '../process/index.js';
 import { createManagedToolScratchDir } from './createManagedToolScratchDir.js';
+import { removeHappierTempDirAsync } from '../tempDirs/createHappierTempDir.js';
 import { downloadGitHubReleaseAsset } from './downloadGitHubReleaseAsset.js';
 import { extractGitHubReleaseAsset } from './extractGitHubReleaseAsset.js';
 import { fetchNodeRuntimeReleaseAsset } from './nodeRelease.js';
@@ -327,7 +328,7 @@ export async function ensureManagedJavaScriptRuntimeCommand(
         try {
           await rm(nextDir, { recursive: true, force: true });
         } finally {
-          await rm(scratchDir, { recursive: true, force: true });
+          await removeHappierTempDirAsync(scratchDir);
         }
       }
     }, {

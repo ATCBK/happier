@@ -23,6 +23,7 @@ import {
   resolveJavaScriptRuntimeCommand,
 } from './managedJavaScriptRuntime.js';
 import { resolveHappyHomeDirFromEnvironment } from './resolveHappyHomeDir.js';
+import { resolveManagedPackageBin } from './managedPackageBin.js';
 
 export type AgentCliResolutionSource = 'override' | 'system' | 'managed';
 
@@ -210,20 +211,24 @@ function resolveAgentCliOverride(runtimeSpec: AgentCliRuntimeDescriptor, process
   return agentCliCandidatePathExists(runtimeSpec, override) ? override : null;
 }
 
-export function resolveAgentCliManagedCommandPathForRuntime(
-  runtimeSpec: AgentCliRuntimeDescriptor,
+export function resolveAgentCliManagedInstallRootForRuntime(
+  runtimeSpec: Pick<AgentCliRuntimeDescriptor, 'id'>,
   opts: Readonly<{ happyHomeDir?: string | null; processEnv?: NodeJS.ProcessEnv }> = {},
 ): string {
-  const managedInstall = runtimeSpec.managedInstall;
-  if (!managedInstall) {
-    throw new Error(`Agent ${runtimeSpec.id} does not define a managed CLI install path`);
-  }
   const processEnv = opts.processEnv ?? process.env;
   const happyHomeDir = typeof opts.happyHomeDir === 'string' && opts.happyHomeDir.trim().length > 0
     ? opts.happyHomeDir.trim()
     : resolveHappyHomeDirFromEnvironment(processEnv);
   // On-disk layout contract: tools/providers/<agentId> is where existing managed installs live (kept in R.16).
-  const installRoot = join(happyHomeDir, 'tools', 'providers', runtimeSpec.id);
+  return join(happyHomeDir, 'tools', 'providers', runtimeSpec.id);
+}
+
+export function resolveAgentCliManagedCommandPathForRuntime(
+  runtimeSpec: AgentCliRuntimeDescriptor,
+  opts: Readonly<{ happyHomeDir?: string | null; processEnv?: NodeJS.ProcessEnv }> = {},
+): string {
+  if (!runtimeSpec.managedInstall) throw new Error(`Agent ${runtimeSpec.id} does not define a managed CLI install path`);
+  const installRoot = resolveAgentCliManagedInstallRootForRuntime(runtimeSpec, opts);
   const commandRelativePath = resolveAgentCliManagedCommandRelativePathForRuntime(runtimeSpec);
   const activeCommandPath = join(installRoot, 'active', commandRelativePath);
   // Legacy runner snapshots keep resolving current; new POSIX promotions retain it and atomically switch active.
@@ -475,6 +480,8 @@ function resolveAgentCliManagedCommand(runtimeSpec: AgentCliRuntimeDescriptor, p
   const accessMode = process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK;
   try {
     accessSync(managedPath, accessMode);
+    const setup = runtimeSpec.managedInstall.kind === 'managed_package' ? runtimeSpec.managedInstall.packageBinarySetup : null;
+    if (setup?.kind === 'npm_package_bin' && !resolveManagedPackageBin({ workspaceDir: join(dirname(dirname(managedPath)), 'workspace'), ...setup })) return null;
     return managedPath;
   } catch {
     return null;

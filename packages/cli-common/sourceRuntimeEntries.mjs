@@ -51,21 +51,39 @@ export async function readWorkspacePackages(repoDir) {
   return packages;
 }
 
+/** Source producers use declared workspace dependencies, including compiler
+ * tooling, rather than unrelated package source trees. */
+export function workspaceSourcePackageClosure(packages, roots, { includeDevDependencies = true } = {}) {
+  const selected = new Set();
+  const visit = name => {
+    if (selected.has(name) || !packages.has(name)) return;
+    selected.add(name);
+    const { manifest } = packages.get(name);
+    for (const dependency of new Set([
+      ...Object.keys({ ...manifest.dependencies, ...(includeDevDependencies ? manifest.devDependencies : {}),
+        ...manifest.peerDependencies, ...manifest.optionalDependencies }),
+      ...(manifest.bundledDependencies ?? []),
+    ])) visit(dependency);
+  };
+  for (const name of roots) visit(name);
+  return selected;
+}
+
 export function packageNameOfSpecifier(specifier) {
   return specifier.split('/').slice(0, specifier.startsWith('@') ? 2 : 1).join('/');
 }
 
-function sourceConditionTarget(declaration) {
+function sourceConditionTarget(declaration, conditions = []) {
   if (typeof declaration === 'string') return declaration;
   if (!declaration || typeof declaration !== 'object') return undefined;
-  for (const condition of [SOURCE_CONDITION, 'node', 'import', 'default']) {
-    const target = sourceConditionTarget(declaration[condition]);
+  for (const condition of [...conditions, SOURCE_CONDITION, 'node', 'import', 'default']) {
+    const target = sourceConditionTarget(declaration[condition], conditions);
     if (target !== undefined) return target;
   }
   return undefined;
 }
 
-export function resolveWorkspaceSource(packages, specifier) {
+export function resolveWorkspaceSource(packages, specifier, { conditions = [] } = {}) {
   const segments = specifier.split('/');
   const name = packageNameOfSpecifier(specifier);
   const owner = packages.get(name);
@@ -87,7 +105,7 @@ export function resolveWorkspaceSource(packages, specifier) {
       }
     }
   }
-  const target = sourceConditionTarget(declaration);
+  const target = sourceConditionTarget(declaration, conditions);
   if (typeof target !== 'string' || !target.startsWith('./') || /(?:^|\/)(?:dist|package-dist)\//.test(target)) {
     throw new Error(`Source runtime requires an explicit source export: ${specifier}`);
   }
@@ -141,7 +159,10 @@ export async function readCliSourceEntries({ repoDir, manifest, transform,
       const prefix = pluginPrefix(packageName);
       const key = `${prefix}/dist/index`;
       entries[key] = resolve(pluginDir, sourceExport(pluginManifest.exports['.'], packageName));
-      entries[`${prefix}/${locator.manifest.entrypoints.daemon.replace(/^\.\//, '').replace(/\.js$/, '')}`] = entries[key];
+      // Locators are locator-only; the manifest lives in the generated asset beside them.
+      const pluginManifestDocument = locator.manifest
+        ?? JSON.parse(await readFile(join(projectDir, locator.manifestRelativePath), 'utf8'));
+      entries[`${prefix}/${pluginManifestDocument.entrypoints.daemon.replace(/^\.\//, '').replace(/\.js$/, '')}`] = entries[key];
       for (const [importKey, declaration] of Object.entries(pluginManifest.imports ?? {})) {
         const source = sourceExport(declaration, `${packageName}:${importKey}`);
         const runtimeTarget = sourceConditionTarget({ ...declaration, [SOURCE_CONDITION]: undefined });
@@ -150,14 +171,14 @@ export async function readCliSourceEntries({ repoDir, manifest, transform,
         }
         entries[`${prefix}/${runtimeTarget.slice(2).replace(/\.[^.]+$/, '')}`] = resolve(pluginDir, source);
       }
-      for (const factory of locator.manifest.runtime.agentFactories ?? []) {
+      for (const factory of pluginManifestDocument.runtime.agentFactories ?? []) {
         const stem = factory.locator.module.replace(/^\.\//, '').replace(/\.js$/, '');
         const source = ['.ts', '.tsx', '.mts', '.js'].map((extension) => join(pluginDir, 'src', stem + extension)).find(existsSync);
         if (!source) throw new Error(`Source runner leaf is missing: ${packageName}:${factory.locator.module}`);
         entries[`${prefix}/dist/${stem}`] = source;
         entries[`${prefix}/${factory.normalizedModulePath.replace(/\.js$/, '')}`] = source;
       }
-      pluginMetadata.push({ prefix, sourceDir: pluginDir, manifest: locator.manifest, package: pluginManifest });
+      pluginMetadata.push({ prefix, sourceDir: pluginDir, manifest: pluginManifestDocument, package: pluginManifest });
     }
   }
   return { entries, pluginMetadata };

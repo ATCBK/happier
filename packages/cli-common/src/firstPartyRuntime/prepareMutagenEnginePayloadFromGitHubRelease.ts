@@ -1,5 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { createHappierTempDir, removeHappierTempDirAsync } from '../tempDirs/createHappierTempDir.js';
 import { join } from 'node:path';
 
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
@@ -52,7 +51,7 @@ export async function prepareMutagenEnginePayloadFromGitHubRelease(params: Reado
     arch: params.arch,
   });
   const source = resolveReleaseSource(params);
-  const scratchRoot = await mkdtemp(join(tmpdir(), 'happier-mutagen-engine-'));
+  const scratchRoot = createHappierTempDir({ purpose: 'mutagen-engine' });
 
   try {
     const release = await fetchGitHubReleaseByTag({
@@ -102,11 +101,11 @@ export async function prepareMutagenEnginePayloadFromGitHubRelease(params: Reado
       payloadRoot,
       source: bundle.archive.url,
       cleanup: async () => {
-        await rm(scratchRoot, { recursive: true, force: true });
+        await removeHappierTempDirAsync(scratchRoot);
       },
     };
   } catch (error) {
-    await rm(scratchRoot, { recursive: true, force: true });
+    await removeHappierTempDirAsync(scratchRoot);
     throw error;
   }
 }

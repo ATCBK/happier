@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { spawnSync as spawnSyncProcess } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -226,6 +228,22 @@ describe('installAgentCli vendor_recipe execution gating', () => {
     if (!originalPlatformDescriptor || !originalArchDescriptor) {
       throw new Error('Expected process.platform to be configurable for this test');
     }
+    // Simulate only the genuine Windows OS-command boundary on a POSIX worker;
+    // protected-temp admission and ACL validation remain real.
+    const originalSystemRoot = process.env.SystemRoot;
+    const sid = 'S-1-5-21-100-200-300-400';
+    const windowsCommands = process.platform === 'win32' ? null : vi.spyOn(childProcess, 'spawnSync').mockImplementation((command) => {
+      const stdout = String(command).endsWith('whoami.exe') ? `"fixture","${sid}"`
+        : JSON.stringify({ ownerSid: sid, protected: true, reparsePoint: false,
+          rules: [{ sid, type: 'Allow', inherited: false, rights: 'FullControl' },
+            { sid: 'S-1-5-18', type: 'Allow', inherited: false, rights: 'FullControl' }] });
+      return { pid: 0, status: 0, signal: null, stdout: Buffer.from(stdout), stderr: Buffer.alloc(0),
+        output: [null, Buffer.from(stdout), Buffer.alloc(0)] };
+    });
+    if (windowsCommands) {
+      process.env.SystemRoot = 'C:\\WINDOWS';
+      syncBuiltinESMExports();
+    }
     Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
     Object.defineProperty(process, 'arch', { ...originalArchDescriptor, value: 'x64' });
 
@@ -302,7 +320,7 @@ describe('installAgentCli vendor_recipe execution gating', () => {
         },
       });
 
-      expect(res.ok).toBe(true);
+      expect(res.ok, JSON.stringify(res)).toBe(true);
       if (!res.ok) return;
       expect(res.plan.installMode).toBe('managed_package');
       expect(res.plan.managedInstall).toEqual({
@@ -328,6 +346,10 @@ describe('installAgentCli vendor_recipe execution gating', () => {
     } finally {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor);
       Object.defineProperty(process, 'arch', originalArchDescriptor);
+      windowsCommands?.mockRestore();
+      syncBuiltinESMExports();
+      if (originalSystemRoot === undefined) delete process.env.SystemRoot;
+      else process.env.SystemRoot = originalSystemRoot;
       await rm(homeDir, { recursive: true, force: true });
       await rm(logDir, { recursive: true, force: true });
     }
@@ -357,11 +379,14 @@ describe('installAgentCli vendor_recipe execution gating', () => {
           const workspaceDir = options.cwd;
           const opencodePackageDir = join(workspaceDir, 'node_modules', 'opencode-ai');
           const opencodeBinDir = join(opencodePackageDir, 'bin');
+          const nodeModulesBinDir = join(workspaceDir, 'node_modules', '.bin');
           mkdirSync(opencodeBinDir, { recursive: true });
+          mkdirSync(nodeModulesBinDir, { recursive: true });
           writeFileSync(
             join(opencodePackageDir, 'package.json'),
             JSON.stringify({
               name: 'opencode-ai',
+              bin: { opencode: 'bin/opencode.exe' },
               optionalDependencies: {
                 'opencode-linux-x64': '1.17.8',
                 'opencode-linux-x64-baseline': '1.17.8',
@@ -369,7 +394,11 @@ describe('installAgentCli vendor_recipe execution gating', () => {
             }, null, 2),
             'utf8',
           );
-          writeFileSync(join(opencodeBinDir, 'opencode'), 'Error: opencode-ai postinstall was not run.\n', 'utf8');
+          // opencode-ai 1.18.35 publishes this target on Unix too; its pnpm shim launches it.
+          writeFileSync(join(opencodeBinDir, 'opencode.exe'), '#!/bin/sh\necho "opencode-ai postinstall was not run" >&2\nexit 1\n', 'utf8');
+          chmodSync(join(opencodeBinDir, 'opencode.exe'), 0o755);
+          writeFileSync(join(nodeModulesBinDir, 'opencode'), '#!/bin/sh\nshim_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$shim_dir/../opencode-ai/bin/opencode.exe" "$@"\n', 'utf8');
+          chmodSync(join(nodeModulesBinDir, 'opencode'), 0o755);
           for (const packageName of ['opencode-linux-x64', 'opencode-linux-x64-baseline']) {
             const platformPackageDir = join(
               workspaceDir,
@@ -382,7 +411,8 @@ describe('installAgentCli vendor_recipe execution gating', () => {
             const platformBinDir = join(platformPackageDir, 'bin');
             mkdirSync(platformBinDir, { recursive: true });
             writeFileSync(join(platformPackageDir, 'package.json'), JSON.stringify({ name: packageName }, null, 2), 'utf8');
-            writeFileSync(join(platformBinDir, 'opencode'), `REAL OPENCODE BINARY ${packageName}\n`, 'utf8');
+            writeFileSync(join(platformBinDir, 'opencode'), '#!/bin/sh\necho "1.17.8 $*"\n', 'utf8');
+            chmodSync(join(platformBinDir, 'opencode'), 0o755);
           }
         }
         return {
@@ -415,11 +445,14 @@ describe('installAgentCli vendor_recipe execution gating', () => {
       expect(res.ok).toBe(true);
       if (!res.ok) return;
       expect(res.plan.installMode).toBe('managed_package');
-      const materializedBinary = await readFile(
-        join(homeDir, 'tools', 'providers', 'opencode', 'current', 'workspace', 'node_modules', 'opencode-ai', 'bin', 'opencode'),
-        'utf8',
-      );
-      expect(materializedBinary).toContain('REAL OPENCODE BINARY');
+      // Execute the promoted launcher and package-manager shim, not an internal helper.
+      const launched = spawnSyncProcess(join(homeDir, 'tools', 'providers', 'opencode', 'current', 'bin', 'opencode'), ['--version'], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '/usr/bin:/bin' },
+      });
+      expect({ status: launched.status, stdout: launched.stdout, stderr: launched.stderr }).toEqual({
+        status: 0, stdout: '1.17.8 --version\n', stderr: '',
+      });
     } finally {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor);
       Object.defineProperty(process, 'arch', originalArchDescriptor);
@@ -505,8 +538,6 @@ describe('installAgentCli vendor_recipe execution gating', () => {
       } else {
         expect(launcher).not.toContain('cd ');
         expect(launcher).not.toContain('pnpm-does-not-exist');
-        expect(launcher).toContain(`exec "${join(managedBinDir, 'gemini')}" "$@"`);
-
         await mkdir(managedBinDir, { recursive: true });
         const recordPath = join(homeDir, 'launcher-record.json');
         await writeFile(

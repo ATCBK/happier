@@ -2,6 +2,7 @@ export type { CommandInvocation } from './windows/resolveWindowsCommandInvocatio
 export { parseDaemonLockSnapshot, type DaemonLockRecord, type DaemonLockSnapshot } from './daemonLockRecord.js';
 export { closeStdioWhenCommandExits } from './closeStdioWhenCommandExits.js';
 export { readLocalHostIdentity, readPreferredHostName, readHomeHostFact } from './homeHostFact.js';
+export { parseDarwinBatteryFacts, readLinuxBatteryFacts, type BatteryFacts } from './batteryFacts.js';
 export { commandExistsOnPath } from './commandExists.js';
 export {
   execFileWithDeadline,

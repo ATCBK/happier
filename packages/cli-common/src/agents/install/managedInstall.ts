@@ -9,6 +9,7 @@ import { fetchGitHubLatestRelease } from '@happier-dev/release-runtime';
 import { execFileWithDeadline, resolveWindowsCommandInvocation } from '../../process/index.js';
 
 import { createManagedToolScratchDir } from '../createManagedToolScratchDir.js';
+import { removeHappierTempDirAsync } from '../../tempDirs/createHappierTempDir.js';
 import { AgentCliDownloadError, downloadGitHubReleaseAsset } from '../downloadGitHubReleaseAsset.js';
 import { extractGitHubReleaseAsset } from '../extractGitHubReleaseAsset.js';
 import {
@@ -18,10 +19,12 @@ import {
 } from '../managedJavaScriptRuntime.js';
 import { buildManagedPnpmEnvironment, ensureManagedPnpmCommand, readRawPnpmOverride } from '../managedPnpm.js';
 import { promoteManagedCurrentInstall } from '../promoteManagedCurrentInstall.js';
-import { resolveHappyHomeDirFromEnvironment } from '../resolveHappyHomeDir.js';
+import { resolveManagedPackageBin } from '../managedPackageBin.js';
+import { safeBashSingleQuote } from '../../ssh/shellQuote.js';
 import type { AgentInstallProgressCallback } from '../installProgress.js';
 import {
   resolveAgentCliManagedCommandRelativePathForRuntime,
+  resolveAgentCliManagedInstallRootForRuntime,
   type AgentCliRuntimeDescriptor,
 } from '../resolution.js';
 
@@ -55,11 +58,6 @@ type GitHubReleaseAsset = Readonly<{
 type GitHubReleasePayload = Readonly<{
   assets?: unknown;
 }>;
-
-function resolveManagedAgentInstallDir(agentId: string, env: NodeJS.ProcessEnv): string {
-  // On-disk layout contract: existing installs live under tools/providers/<agentId>. Kept during the agent-vocabulary rename (R.16) to avoid a data migration.
-  return join(resolveHappyHomeDirFromEnvironment(env), 'tools', 'providers', agentId);
-}
 
 function resolveManagedAgentCommandPathInInstallDir(
   runtimeSpec: AgentCliRuntimeDescriptor,
@@ -113,7 +111,7 @@ async function writeManagedPackageLauncher(params: Readonly<{
 
   await writeFile(
     params.outputPath,
-    `#!/bin/sh\nPATH="${pathPrefix}$PATH"\nexport PATH\nexec "${join(params.workspaceDir, 'node_modules', '.bin', params.binaryName)}" "$@"\n`,
+    `#!/bin/sh\nPATH=${safeBashSingleQuote(pathPrefix)}"$PATH"\nexport PATH\nexec ${safeBashSingleQuote(join(params.workspaceDir, 'node_modules', '.bin', params.binaryName))} "$@"\n`,
     'utf8',
   );
   await chmod(params.outputPath, 0o755);
@@ -294,7 +292,9 @@ async function materializeOpenCodeManagedPackageBinary(params: Readonly<{
   const rawPackageJson = await readFile(packageJsonPath, 'utf8');
   const optionalDependencyNames = readOptionalDependencyNames(JSON.parse(rawPackageJson));
   const sourceBinary = params.platform === 'win32' ? 'opencode.exe' : 'opencode';
-  const targetBinary = join(packageDir, 'bin', sourceBinary);
+  // The published opencode-ai launcher targets opencode.exe on every platform
+  // (vendor postinstall/publish contract, verified against 1.17.8 and 1.18.35).
+  const targetBinary = join(packageDir, 'bin', 'opencode.exe');
   const candidates = (await resolveOpenCodePlatformPackageCandidates({
     platform: params.platform,
     arch: process.arch,
@@ -361,7 +361,7 @@ export async function installManagedPackageAgentCli(params: Readonly<{
   }
 
   params.signal?.throwIfAborted();
-  const installRoot = resolveManagedAgentInstallDir(params.runtimeSpec.id, params.env);
+  const installRoot = resolveAgentCliManagedInstallRootForRuntime(params.runtimeSpec, { processEnv: params.env });
   const scratchDir = await createManagedToolScratchDir({
     installDir: installRoot,
     prefix: params.runtimeSpec.id,
@@ -377,10 +377,15 @@ export async function installManagedPackageAgentCli(params: Readonly<{
     });
 
     await mkdir(workspaceDir, { recursive: true });
+    const packageSetup = params.managedInstall.packageBinarySetup;
+    const definition = packageSetup?.kind === 'npm_package_bin' ? packageSetup.managedAcpDefinition : undefined;
     await writeFile(
       join(workspaceDir, 'package.json'),
       // happier-provider- is a persisted artifact name inside existing managed installs; kept in R.16.
-      JSON.stringify({ name: `happier-provider-${params.runtimeSpec.id}`, private: true, version: '0.0.0' }, null, 2),
+      JSON.stringify({ name: `happier-provider-${params.runtimeSpec.id}`, private: true, version: '0.0.0',
+        ...(definition && packageSetup?.kind === 'npm_package_bin' ? { happierManagedAcp: {
+          definitionId: definition.definitionId, title: definition.title, kind: 'npm', version: packageSetup.version,
+        } } : {}) }, null, 2),
       'utf8',
     );
 
@@ -424,10 +429,14 @@ export async function installManagedPackageAgentCli(params: Readonly<{
       params.appendLogLine(params.logPath, `# opencode platform package: ${materialized.packageName}`);
     }
 
+    const packageBinarySetup = params.managedInstall.packageBinarySetup;
+    const selectedPackageBin = packageBinarySetup?.kind === 'npm_package_bin'
+      ? resolveManagedPackageBin({ workspaceDir, ...packageBinarySetup }) : params.managedInstall.binaryName;
+    if (!selectedPackageBin) throw new Error('Installed npm package does not provide an unambiguous executable at the pinned version');
     await writeManagedPackageLauncher({
       outputPath: launcherPath,
       workspaceDir: launcherWorkspaceDir,
-      binaryName: params.managedInstall.binaryName,
+      binaryName: selectedPackageBin,
       runtimePathEntries,
     });
 
@@ -436,10 +445,11 @@ export async function installManagedPackageAgentCli(params: Readonly<{
       installRoot,
       signal: params.signal,
       candidatePath: candidateDir,
+      preserveExistingCurrent: definition !== undefined,
       reportWarning: (message) => params.appendLogLine(params.logPath, `# ${message}`),
     });
   } finally {
-    await rm(scratchDir, { recursive: true, force: true });
+    await removeHappierTempDirAsync(scratchDir);
   }
 }
 
@@ -588,7 +598,7 @@ export async function installManagedBinaryAgentCli(params: Readonly<{
   onProgress?: AgentInstallProgressCallback;
 }>): Promise<void> {
   params.signal?.throwIfAborted();
-  const installRoot = resolveManagedAgentInstallDir(params.runtimeSpec.id, params.env);
+  const installRoot = resolveAgentCliManagedInstallRootForRuntime(params.runtimeSpec, { processEnv: params.env });
   const asset = await resolveManagedBinaryAsset({
     managedInstall: params.managedInstall,
     platform: params.platform,
@@ -653,6 +663,6 @@ export async function installManagedBinaryAgentCli(params: Readonly<{
       activateVersionedRelease: params.platform !== 'win32',
     });
   } finally {
-    await rm(scratchDir, { recursive: true, force: true });
+    await removeHappierTempDirAsync(scratchDir);
   }
 }

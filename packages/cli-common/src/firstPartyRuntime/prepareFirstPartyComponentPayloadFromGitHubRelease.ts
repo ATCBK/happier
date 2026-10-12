@@ -1,5 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { createHappierTempDir, removeHappierTempDirAsync } from '../tempDirs/createHappierTempDir.js';
 import { join } from 'node:path';
 
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
@@ -164,7 +163,7 @@ export async function prepareFirstPartyComponentPayloadFromGitHubRelease(params:
     params.onProgress?.(progress);
   };
   report({ phase });
-  const scratchRoot = await mkdtemp(join(tmpdir(), `happier-first-party-${params.componentId}-`));
+  const scratchRoot = createHappierTempDir({ purpose: `first-party-${params.componentId}` });
 
   try {
     const { bundle, source: { githubRepo, githubToken, userAgent, releaseTag } } = await resolveFirstPartyComponentRelease({ ...params, componentId: params.componentId });
@@ -211,11 +210,11 @@ export async function prepareFirstPartyComponentPayloadFromGitHubRelease(params:
       payloadRoot,
       source: bundle.archive.url,
       cleanup: async () => {
-        await rm(scratchRoot, { recursive: true, force: true });
+        await removeHappierTempDirAsync(scratchRoot);
       },
     };
   } catch (error) {
-    await rm(scratchRoot, { recursive: true, force: true });
+    await removeHappierTempDirAsync(scratchRoot);
     params.signal?.throwIfAborted();
     throw new FirstPartyAcquisitionError(phase, readAcquisitionFailureCause(error), error);
   }

@@ -3,14 +3,12 @@ import {
   copyFile,
   lstat,
   mkdir,
-  mkdtemp,
   readlink,
   readdir,
   realpath,
-  rm,
 } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { createHappierTempDir, removeHappierTempDirAsync } from '../../tempDirs/createHappierTempDir.js';
 
 async function copyScpReadyEntry(
   sourcePath: string,
@@ -58,13 +56,13 @@ export async function createScpReadyPayloadCopy(payloadRoot: string): Promise<Re
   payloadRoot: string;
   cleanup: () => Promise<void>;
 }>> {
-  const stageRoot = await mkdtemp(join(tmpdir(), 'happier-first-party-scp-'));
+  const stageRoot = createHappierTempDir({ purpose: 'first-party-scp' });
   const stagedPayloadRoot = join(stageRoot, basename(payloadRoot));
   await copyScpReadyEntry(payloadRoot, stagedPayloadRoot, new Set<string>());
   return {
     payloadRoot: stagedPayloadRoot,
     cleanup: async () => {
-      await rm(stageRoot, { recursive: true, force: true });
+      await removeHappierTempDirAsync(stageRoot);
     },
   };
 }

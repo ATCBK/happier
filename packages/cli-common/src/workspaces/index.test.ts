@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -194,6 +195,97 @@ describe('sanitizeBundledPackageJson', () => {
 });
 
 describe('bundleWorkspacePackageWithRuntimeDependencies', () => {
+  it('materializes overlapping read-only declared and included author files', () => {
+    const root = createTempRoot('workspace-readonly-author-files-');
+    const sourceDir = join(root, 'source');
+    const destinationDir = join(root, 'destination');
+    writePackage(sourceDir, {
+      name: '@happier-dev/plugin-sdk', version: '0.0.0',
+      main: './dist/index.js', files: ['dist', 'README.md', 'API.md'],
+      exports: { '.': './dist/index.js', './api': './API.md' },
+      happier: { publicSdkRelease: { posture: 'developer_preview' } },
+    }, {
+      'dist/index.js': 'export const marker = true;\n',
+      'README.md': 'author documentation',
+      'API.md': 'public API inventory',
+    });
+    for (const name of ['README.md', 'API.md']) chmodSync(join(sourceDir, name), 0o444);
+
+    bundleWorkspacePackageWithRuntimeDependencies({
+      packageName: '@happier-dev/plugin-sdk', srcDir: sourceDir, destDir: destinationDir,
+      dereferenceRootDir: root, pruneStale: true,
+    });
+
+    expect(readFileSync(join(destinationDir, 'README.md'), 'utf8')).toBe('author documentation');
+    expect(readFileSync(join(destinationDir, 'API.md'), 'utf8')).toBe('public API inventory');
+  });
+
+  it('accepts absent third-party declarations while requiring their runtime exports', () => {
+    const root = createTempRoot('workspace-runtime-declarations-');
+    const sourceDir = join(root, 'packages', 'agents');
+    const hostDir = join(root, 'apps', 'cli');
+    const destinationDir = join(hostDir, 'node_modules', '@happier-dev', 'agents');
+    const manifest = { name: '@happier-dev/agents', version: '0.0.0',
+      main: './dist/index.js', types: './dist/index.d.ts', dependencies: { 'cbor-x': '1.6.0' } };
+    writePackage(hostDir, { bundledDependencies: ['@happier-dev/agents'] });
+    for (const dir of [sourceDir, destinationDir]) {
+      writePackage(dir, manifest, { 'dist/index.js': 'module.exports = {};\n',
+        'dist/index.d.ts': 'export {};\n' });
+    }
+    const dependencyDir = join(destinationDir, 'node_modules', 'cbor-x');
+    writePackage(dependencyDir, { name: 'cbor-x', version: '1.6.0', types: './index.d.ts',
+      exports: { '.': { import: { types: './index.d.ts', default: './index.js' },
+        require: { types: './index.d.cts', default: './index.cjs' } } } },
+    { 'index.js': 'export const decode = () => {};\n', 'index.cjs': 'exports.decode = () => {};\n' });
+
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
+    rmSync(join(dependencyDir, 'index.cjs'));
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
+    writeFileSync(join(dependencyDir, 'index.cjs'), 'exports.decode = () => {};\n');
+    rmSync(join(destinationDir, 'dist/index.d.ts'));
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
+  });
+
+  it('publishes source entrypoint dependencies and detects their content drift', () => {
+    const root = createTempRoot('workspace-package-source-closure-');
+    const sourceDir = join(root, 'packages', 'sdk');
+    const hostDir = join(root, 'apps', 'cli');
+    const destinationDir = join(hostDir, 'node_modules', '@happier-dev', 'sdk');
+    writePackage(hostDir, { bundledDependencies: ['@happier-dev/sdk'] });
+    writePackage(sourceDir, {
+      name: '@happier-dev/sdk', version: '0.0.0', type: 'module',
+      exports: { '.': { 'happier-source': './src/index.js', default: './dist/index.js' } },
+    }, {
+      'dist/index.js': 'export const selected = "dist";\n',
+      'src/index.js': 'export { selected } from "./private/value.js";\n',
+      'src/private/value.js': 'export const selected = "source";\n',
+    });
+    const publish = () => bundleWorkspacePackageWithRuntimeDependencies({
+      packageName: '@happier-dev/sdk', srcDir: sourceDir, destDir: destinationDir,
+      dereferenceRootDir: root,
+    });
+    const readSource = () => execFileSync(process.execPath, [
+      '--conditions=happier-source', '--input-type=module', '-e',
+      'const module = await import("@happier-dev/sdk"); console.log(module.selected);',
+    ], { cwd: hostDir, encoding: 'utf8' }).trim();
+
+    publish();
+    expect(readSource()).toBe('source');
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
+    writeFileSync(join(sourceDir, 'src/private/value.js'), 'export const selected = "updated";\n');
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
+    publish();
+    expect(readSource()).toBe('updated');
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
+    rmSync(join(destinationDir, 'src/private/value.js'));
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
+    publish();
+    rmSync(sourceDir, { recursive: true });
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(true);
+    rmSync(join(destinationDir, 'src/index.js'));
+    expect(hasBundledWorkspacePackagesHealthy({ repoRoot: root, hostPackageDir: hostDir })).toBe(false);
+  });
+
   it('preserves conditional package imports and their package-root runtime targets', () => {
     const root = createTempRoot('workspace-package-imports-');
     const sourceDir = join(root, 'packages', 'sdk');

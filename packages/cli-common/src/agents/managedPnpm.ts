@@ -10,6 +10,7 @@ import { extractArchivePayloadToDirectory } from '@happier-dev/release-runtime/a
 import { isPidPresent } from '../process/processLiveness.js';
 import { execFileWithDeadline, resolveWindowsCommandOnPath } from '../process/index.js';
 import { createManagedToolScratchDir } from './createManagedToolScratchDir.js';
+import { removeHappierTempDirAsync } from '../tempDirs/createHappierTempDir.js';
 import { resolveVendorInstallTimeoutMs } from './install/vendorRecipeInstall.js';
 import { downloadGitHubReleaseAsset } from './downloadGitHubReleaseAsset.js';
 import { promoteManagedCurrentInstall } from './promoteManagedCurrentInstall.js';
@@ -267,7 +268,7 @@ async function installManagedPnpm(
       try {
         await rm(nextDir, { recursive: true, force: true });
       } finally {
-        await rm(scratchDir, { recursive: true, force: true });
+        await removeHappierTempDirAsync(scratchDir);
       }
     }
   } finally {

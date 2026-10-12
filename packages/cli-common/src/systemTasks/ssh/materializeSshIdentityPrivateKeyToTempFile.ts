@@ -1,6 +1,6 @@
-import { mkdtemp, rm, writeFile, chmod } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHappierTempDir, removeHappierTempDirAsync } from '../../tempDirs/createHappierTempDir.js';
 
 function normalizePrivateKeyMaterial(input: string): string {
   const trimmed = String(input ?? '').replaceAll('\r\n', '\n').trim();
@@ -19,7 +19,7 @@ export async function materializeSshIdentityPrivateKeyToTempFile(params: Readonl
     throw new Error('SSH private key material is empty.');
   }
 
-  const dir = await mkdtemp(join(tmpdir(), params.prefix ?? 'happier-ssh-key-'));
+  const dir = createHappierTempDir({ purpose: params.prefix ?? 'ssh-key' });
   const identityFilePath = join(dir, 'identity.key');
 
   await writeFile(identityFilePath, normalized, {
@@ -33,7 +33,7 @@ export async function materializeSshIdentityPrivateKeyToTempFile(params: Readonl
   return {
     identityFilePath,
     cleanup: async () => {
-      await rm(dir, { recursive: true, force: true });
+      await removeHappierTempDirAsync(dir);
     },
   };
 }

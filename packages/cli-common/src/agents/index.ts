@@ -55,7 +55,10 @@ export {
   resolveAgentCliCommandForRuntime,
   resolveAgentCliManagedCommandPath,
   resolveAgentCliManagedCommandPathForRuntime,
+  resolveAgentCliManagedInstallRootForRuntime,
 } from './resolution.js';
+export { hasAgentCliManagedInstallForRuntime, readManagedAgentCliInstallMetadata, removeAgentCliManagedInstallForRuntime, type ManagedAgentCliAcpMetadata } from './removeManagedInstall.js';
+export { managedAcpAccountNamespace, managedAcpInstallId, readManagedAcpInstallNamespace } from './managedAcpInstallIdentity.js';
 export {
   ensureManagedJavaScriptRuntimeCommand,
   managedJavaScriptRuntimeBinPath,

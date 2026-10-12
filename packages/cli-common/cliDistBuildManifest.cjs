@@ -137,7 +137,7 @@ function computeStringCommentSpans(source) {
   return spans;
 }
 
-function extractRelativeModuleSpecifiers(source) {
+function extractModuleSpecifiers(source) {
   const text = String(source ?? '');
   const maskedSpans = computeStringCommentSpans(text);
   const isKeywordMasked = (index) => {
@@ -149,7 +149,7 @@ function extractRelativeModuleSpecifiers(source) {
   };
   const specifiers = new Set();
   const matches = text.matchAll(
-    /(?:import|export)\s+(?:[^'"`]*?\s+from\s+)?["'](\.{1,2}\/[^"'`]+)["']|import\(\s*["'](\.{1,2}\/[^"'`]+)["']\s*\)|require\(\s*["'](\.{1,2}\/[^"'`]+)["']\s*\)/g,
+    /(?:import|export)\s+(?:[^'"`]*?\s+from\s+)?["']([^"'`]+)["']|import\s*\(\s*["']([^"'`]+)["']\s*\)|require\s*\(\s*["']([^"'`]+)["']\s*\)/g,
   );
 
   for (const match of matches) {
@@ -159,6 +159,10 @@ function extractRelativeModuleSpecifiers(source) {
   }
 
   return [...specifiers];
+}
+
+function extractRelativeModuleSpecifiers(source) {
+  return extractModuleSpecifiers(source).filter(specifier => /^\.{1,2}\//.test(specifier));
 }
 
 function isPathInsideDirectory(candidatePath, directoryPath) {
@@ -828,6 +832,7 @@ module.exports = {
   CLI_DIST_BUILD_MANIFEST,
   CLI_DIST_BUILD_MANIFEST_TOOL_VERSION,
   buildCliDistManifest,
+  extractModuleSpecifiers,
   extractRelativeModuleSpecifiers,
   readCliDistBuildManifest,
   readCliDistClosure,

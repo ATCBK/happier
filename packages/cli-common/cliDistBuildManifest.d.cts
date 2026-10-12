@@ -63,6 +63,7 @@ declare const cliDistBuildManifest: {
   readonly CLI_DIST_BUILD_MANIFEST: string;
   readonly CLI_DIST_BUILD_MANIFEST_TOOL_VERSION: string;
   buildCliDistManifest(entrypoint: string, options?: CliDistBuildManifestOptions): CliDistBuildManifest;
+  extractModuleSpecifiers(source: string): readonly string[];
   extractRelativeModuleSpecifiers(source: string): readonly string[];
   readCliDistBuildManifest(entrypoint: string, options?: CliDistBuildManifestOptions): CliDistIntegrityResult;
   readCliDistClosure(entrypoint: string, options?: CliDistBuildManifestOptions): Readonly<{

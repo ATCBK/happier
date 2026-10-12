@@ -1,6 +1,6 @@
-import { chmodSync, mkdtempSync, openSync, writeFileSync, closeSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, openSync, writeFileSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHappierTempDir } from '../tempDirs/createHappierTempDir.js';
 
 export const SSH_PASSWORD_ENV = 'HAPPIER_SSH_PASSWORD';
 
@@ -13,7 +13,7 @@ export function ensureSshAskpassScriptPath(platformOverride?: NodeJS.Platform): 
     return cached;
   }
 
-  const directory = mkdtempSync(join(tmpdir(), 'happier-ssh-askpass-'));
+  const directory = createHappierTempDir({ purpose: 'ssh-askpass' });
   const scriptPath = join(directory, platform === 'win32' ? 'askpass.cmd' : 'askpass.sh');
   const fd = openSync(scriptPath, 'wx', 0o700);
   try {

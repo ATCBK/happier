@@ -184,7 +184,7 @@ describe('finalizeRuntimeArtifactPayload', () => {
         }
         const retained = ['scripts/relay.cjs', 'node_modules/unrelated/lib/windowsTerminal.js', 'node_modules/@happier-dev/plugin-sdk/dist/index.d.ts', 'node_modules/@happier-dev/plugin-sdk/dist/index.js.map', 'node_modules/plugin/package-dist/index.cjs', 'package-dist/worker.mjs', 'package-dist/worker.js.map', 'package-dist/worker.mjs.map', 'package-dist/worker.cjs.map', 'package-dist/runtime.json', 'node_modules/node-pty/build/Release/pty.node', 'node_modules/@homebridge/node-pty-prebuilt-multiarch/build/Release/pty.node'];
         const removedMetadata = ['package-dist/index.d.ts', 'package-dist/index.d.mts', 'package-dist/worker/entry.d.cts', 'package-dist/index.d.ts.map', 'package-dist/worker/entry.d.cts.map', 'package-dist/cache.tsbuildinfo', 'node_modules/@happier-dev/plugin-sdk/dist/index.d.ts.map', 'node_modules/@happier-dev/plugin-sdk/dist/cache.tsbuildinfo'];
-        for (const path of [...retained, ...removedMetadata, 'package-dist/index.cjs', 'node_modules/ps-list/vendor/fastlist-0.3.0-x64.exe', 'node_modules/ps-list/vendor/LICENSE']) await put(path);
+        for (const path of [...retained, ...removedMetadata, 'package-dist/index.cjs']) await put(path);
 
         await finalizeRuntimeArtifactPayload(root, target);
 
@@ -257,7 +257,6 @@ describe('finalizeRuntimeArtifactPayload', () => {
         for (const path of retained) expect(await readFile(join(root, path), 'utf8')).toBe(path);
         await expect(stat(join(root, 'package-dist', 'index.cjs'))).rejects.toMatchObject({ code: 'ENOENT' });
         for (const path of removedMetadata) await expect(stat(join(root, path))).rejects.toMatchObject({ code: 'ENOENT' });
-        expect(await readdir(join(root, 'node_modules/ps-list/vendor'))).toEqual(target.os === 'windows' ? ['LICENSE', 'fastlist-0.3.0-x64.exe'] : ['LICENSE']);
     });
 
     it('keeps a materialized plugin SDK type-resolvable after metadata projection', async () => {

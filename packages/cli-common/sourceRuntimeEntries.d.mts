@@ -4,11 +4,20 @@ export const SOURCE_CONDITION: 'happier-source';
 export function initialize(repoDir: string): Promise<void>;
 export const resolve: import('node:module').ResolveHook;
 export function sourceExport(value: unknown, label: string): string;
-export type WorkspaceSourcePackage = Readonly<{ root: string; manifest: { name?: string; exports?: unknown } }>;
+export type WorkspaceSourcePackage = Readonly<{ root: string; manifest: {
+  name?: string;
+  exports?: unknown;
+  dependencies?: Readonly<Record<string, string>>;
+  devDependencies?: Readonly<Record<string, string>>;
+  peerDependencies?: Readonly<Record<string, string>>;
+  optionalDependencies?: Readonly<Record<string, string>>;
+  bundledDependencies?: readonly string[];
+} }>;
 export function readWorkspacePackages(repoDir: string): Promise<Map<string, WorkspaceSourcePackage>>;
+export function workspaceSourcePackageClosure(packages: ReadonlyMap<string, WorkspaceSourcePackage>, roots: Iterable<string>): Set<string>;
 export function packageNameOfSpecifier(specifier: string): string;
 export function runtimePackageExports(value: unknown): unknown;
-export function resolveWorkspaceSource(packages: Map<string, WorkspaceSourcePackage>, specifier: string): string;
+export function resolveWorkspaceSource(packages: Map<string, WorkspaceSourcePackage>, specifier: string, options?: Readonly<{ conditions?: readonly string[] }>): string;
 export function workspaceSourceCompilerPaths(packages: Map<string, WorkspaceSourcePackage>): Record<string, string[]>;
 export type CliSourcePluginMetadata = Readonly<{
   prefix: string;

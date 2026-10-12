@@ -1,11 +1,11 @@
 import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { createManagedToolScratchDir } from '../createManagedToolScratchDir.js';
+import { removeHappierTempDirAsync } from '../../tempDirs/createHappierTempDir.js';
 import type { AgentCliInstallPlan } from '../install.js';
 import { resolveHappyHomeDirFromEnvironment } from '../resolveHappyHomeDir.js';
-import type { AgentCliRuntimeDescriptor } from '../resolution.js';
+import { resolveAgentCliManagedInstallRootForRuntime, type AgentCliRuntimeDescriptor } from '../resolution.js';
 import type { AgentInstallProgressCallback } from '../installProgress.js';
 
 type AppendCommandLogFn = (
@@ -92,11 +92,6 @@ function appendLogLine(logPath: string, line: string): void {
     appendFileSync(logPath, `${line}\n`, 'utf8');
 }
 
-function resolveAgentToolInstallDir(agentId: string, env: NodeJS.ProcessEnv): string {
-    // On-disk layout contract: existing installs live under tools/providers/<agentId> (kept in R.16).
-    return join(resolveHappyHomeDirFromEnvironment(env), 'tools', 'providers', agentId);
-}
-
 export async function createRuntimeInstallLifecycleContext(params: Readonly<{
     runtimeSpec: AgentCliRuntimeDescriptor;
     plan: AgentCliInstallPlan;
@@ -109,7 +104,7 @@ export async function createRuntimeInstallLifecycleContext(params: Readonly<{
     const vendorScratchDir =
         params.plan.installMode === 'vendor_recipe'
             ? await createManagedToolScratchDir({
-                  installDir: resolveAgentToolInstallDir(params.runtimeSpec.id, params.env),
+            installDir: resolveAgentCliManagedInstallRootForRuntime(params.runtimeSpec, { processEnv: params.env }),
                   prefix: 'vendor-install',
               })
             : null;
@@ -126,6 +121,6 @@ export async function createRuntimeInstallLifecycleContext(params: Readonly<{
 
 export async function disposeRuntimeInstallLifecycleContext(context: RuntimeInstallLifecycleContext): Promise<void> {
     if (context.vendorScratchDir) {
-        await rm(context.vendorScratchDir, { recursive: true, force: true });
+        await removeHappierTempDirAsync(context.vendorScratchDir);
     }
 }

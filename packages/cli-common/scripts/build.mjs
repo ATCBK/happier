@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 import { copyDirectoryContents } from '../../../scripts/workspaces/copyDirectoryContents.mjs';
 import { resolveWorkspacePackageBuildLockPath } from '../../../scripts/workspaces/workspacePackageBuildLock.mjs';
+import { requiresTypeScriptAdmission } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+import { resolveRemoteCommandPolicy } from '../../../apps/stack/scripts/utils/dev_targets/remote_commands.mjs';
 import { createPackageDistBuildPlan } from './packageDistBuildPlan.mjs';
 import {
   cleanupPackageDistBuildArtifacts,
@@ -52,6 +54,7 @@ export async function withWorkspaceDistBuildLock(fn, options) {
     ({ waited, heldLockValue, inherited }) => fn({ waited, heldLockValue, inherited }),
     {
       lockPath,
+      env,
       heldLockValue: env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD,
       timeoutMs,
       pollIntervalMs,
@@ -130,6 +133,48 @@ function resolveDefaultPackageDir() {
 }
 
 export async function buildPackageDistAtomically(options = {}) {
+  const scope = resolvePackageDistBuildScope(options);
+  const { commandEnv, workspaceOutputDir, packageDir, packageJson, buildPlan,
+    lockPath, lockTimeoutMs, lockPollMs } = scope;
+  // The outer workspace publisher owns the joint package/admission scope for a
+  // supplied stage. Injected compilers replace the genuine process boundary in
+  // deterministic tests; ordinary library callers use the same finite worker
+  // as the package command.
+  if (workspaceOutputDir
+    || typeof options.buildIntoDistDir === 'function'
+    || typeof options.runCommandImpl === 'function') {
+    return await buildPackageDistUnderLock(options, scope);
+  }
+  const scriptPath = fileURLToPath(import.meta.url);
+  const repoDir = resolve(dirname(scriptPath), '../../..');
+  const { runWorkspaceBuildAdmission } = await import(
+    '../../../apps/stack/scripts/utils/proc/workspace_build_admission.mjs'
+  );
+  const result = await runWorkspaceBuildAdmission({
+    repoDir,
+    command: process.execPath,
+    args: [scriptPath, `--workspace-build-worker=${JSON.stringify({
+      packageDir, packageJson, buildPlan, lockPath, lockTimeoutMs, lockPollMs,
+    })}`],
+    locks: [{ path: lockPath, kind: 'workspace', timeoutMs: lockTimeoutMs,
+      pollIntervalMs: lockPollMs, staleAfterMs: lockTimeoutMs }],
+    admissionClass: resolveRemoteCommandPolicy([process.execPath, scriptPath], {
+      cwd: relative(repoDir, packageDir).replaceAll('\\', '/'),
+    }).heavyClass,
+    admissionRequired: requiresTypeScriptAdmission({ env: commandEnv }),
+    cwd: packageDir,
+    env: commandEnv,
+    signal: options.signal,
+    stdio: options.stdio ?? 'inherit',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`[cli-common] package build failed with ${result.signal
+      ? `signal ${result.signal}` : `code ${result.status ?? 'unknown'}`}`);
+  }
+}
+
+function resolvePackageDistBuildScope(options = {}) {
   const packageDir = resolve(options.packageDir ?? resolveDefaultPackageDir());
   const packageJson = options.packageJson ?? readJson(join(packageDir, 'package.json'));
   const commandEnv = {
@@ -150,7 +195,18 @@ export async function buildPackageDistAtomically(options = {}) {
   const lockPollMs = options.lockPollMs
     ?? parsePositiveInteger(commandEnv.HAPPIER_PACKAGE_DIST_BUILD_LOCK_POLL_MS, 250);
 
-  const runStagedBuild = async ({ heldLockValue }) => {
+  return { packageDir, packageJson, commandEnv, buildPlan, workspaceOutputDir,
+    outputDir, lockPath, lockTimeoutMs, lockPollMs };
+}
+
+async function buildPackageDistUnderLock(options = {}, scope = resolvePackageDistBuildScope(options)) {
+  const { packageDir, packageJson, commandEnv, buildPlan, workspaceOutputDir,
+    outputDir, lockPath, lockTimeoutMs, lockPollMs } = scope;
+
+  const runStagedBuild = async ({ heldLockValue, inherited }) => {
+    if (options.requireInheritedLock && !inherited) {
+      throw new Error('[cli-common] package build worker requires its admitted workspace lock');
+    }
     let stageRoot = null;
     let distMovedToBackup = false;
 
@@ -239,6 +295,14 @@ export async function buildCliCommonDist(options = {}) {
 async function main() {
   if (resolveBuildScriptMode(process.argv.slice(2)) === 'clean') {
     cleanPackageDistSync();
+    return;
+  }
+  const workerArg = process.argv.slice(2).find(arg => arg.startsWith('--workspace-build-worker='));
+  if (workerArg) {
+    await buildPackageDistUnderLock({
+      ...JSON.parse(workerArg.slice('--workspace-build-worker='.length)),
+      requireInheritedLock: true,
+    });
     return;
   }
   await buildCliCommonDist();

@@ -615,13 +615,18 @@ function readWorkspacePackageDetails(params: Readonly<{
   return { srcPackageJsonPath, rawPackageJson, distDir };
 }
 
-function collectWorkspacePackageReferencedFiles(rawPackageJson: any): Set<string> {
+function collectWorkspacePackageReferencedFiles(rawPackageJson: any, includeTypes = true): Set<string> {
   const referencedFiles = new Set<string>();
   collectPackageJsonRelativeFileTargets(rawPackageJson.main, referencedFiles);
   collectPackageJsonRelativeFileTargets(rawPackageJson.module, referencedFiles);
-  collectPackageJsonRelativeFileTargets(rawPackageJson.types, referencedFiles);
-  collectPackageJsonRelativeFileTargets(rawPackageJson.exports, referencedFiles);
-  collectPackageJsonRelativeFileTargets(rawPackageJson.imports, referencedFiles);
+  if (includeTypes) collectPackageJsonRelativeFileTargets(rawPackageJson.types, referencedFiles);
+  collectPackageJsonRelativeFileTargets(rawPackageJson.exports, referencedFiles, includeTypes);
+  collectPackageJsonRelativeFileTargets(rawPackageJson.imports, referencedFiles, includeTypes);
+  // Source entrypoints reach private sibling modules that are not package
+  // exports. Publish their authored tree, not just the exported leaf files.
+  if ([...referencedFiles].some((relativePath) => relativePath.startsWith('src/'))) {
+    referencedFiles.add('src');
+  }
   return referencedFiles;
 }
 
@@ -682,8 +687,12 @@ function copyBundledWorkspacePackageContents(params: Readonly<{
     resolve(params.tempDir, '.happier-plugin'),
   );
 
+  const declaredFiles = new Set(collectWorkspacePackageDeclaredFileEntries(params.rawPackageJson));
   const files = params.includeFiles ?? ['README.md'];
   for (const f of files) {
+    // Required declarations own overlapping paths. Copying a read-only bundle
+    // file twice would attempt to overwrite the first copy's preserved mode.
+    if (declaredFiles.has(f) || params.referencedFiles.has(f)) continue;
     copyIfExists(resolve(params.srcDir, f), resolve(params.tempDir, f));
   }
 
@@ -697,6 +706,7 @@ function copyBundledWorkspacePackageContents(params: Readonly<{
     ) {
       throw new Error(`Bundled workspace package referenced file escapes the package root: '${relativePath}'`);
     }
+    if (relativePath.startsWith('src/') && params.referencedFiles.has('src')) continue;
     // package.json is generated from the sanitized manifest above. An explicit package.json export
     // must remain available, but copying its source target would restore scripts, dev dependencies,
     // and internal workspace edges that the artifact boundary intentionally removed.
@@ -704,10 +714,11 @@ function copyBundledWorkspacePackageContents(params: Readonly<{
     // dist was copied from the emission owner above. Never reopen workspace
     // dist for export targets and overwrite a caller-owned source emission.
     if (relativeTargetPath === 'dist' || relativeTargetPath.startsWith(`dist${sep}`)) continue;
+    if (declaredFiles.has(relativePath)) continue;
     copyIfExists(resolve(params.srcDir, relativePath), targetPath);
   }
 
-  for (const relativePath of collectWorkspacePackageDeclaredFileEntries(params.rawPackageJson)) {
+  for (const relativePath of declaredFiles) {
     if (!copyIfExists(resolve(params.srcDir, relativePath), resolve(params.tempDir, relativePath))) {
       throw new Error(`Bundled workspace package declared file is missing: '${relativePath}'`);
     }
@@ -1177,7 +1188,7 @@ function resolveBundledWorkspaceRepoRoot(params: Readonly<{
   return params.repoRoot;
 }
 
-function collectPackageJsonRelativeFileTargets(value: unknown, result: Set<string>): void {
+function collectPackageJsonRelativeFileTargets(value: unknown, result: Set<string>, includeTypes = true): void {
   if (typeof value === 'string') {
     if (value.startsWith('./') && !value.includes('*')) {
       result.add(value.slice(2));
@@ -1186,10 +1197,13 @@ function collectPackageJsonRelativeFileTargets(value: unknown, result: Set<strin
   }
   if (!value || typeof value !== 'object') return;
   if (Array.isArray(value)) {
-    for (const item of value) collectPackageJsonRelativeFileTargets(item, result);
+    for (const item of value) collectPackageJsonRelativeFileTargets(item, result, includeTypes);
     return;
   }
-  for (const nested of Object.values(value)) collectPackageJsonRelativeFileTargets(nested, result);
+  for (const [condition, nested] of Object.entries(value)) {
+    if (!includeTypes && condition === 'types') continue;
+    collectPackageJsonRelativeFileTargets(nested, result, includeTypes);
+  }
 }
 
 function stableJsonStringify(value: unknown): string {
@@ -1226,7 +1240,13 @@ function hasBundledWorkspacePackageReferencedFiles(packageJsonPath: string): boo
   }
 
   const packageDir = dirname(packageJsonPath);
-  const relativeFileTargets = collectWorkspacePackageReferencedFiles(pkg);
+  // Published third-party packages can advertise declarations they do not ship
+  // (e.g. cbor-x's require/types). Runtime health requires executable targets;
+  // first-party packages still own their checked declaration output contract.
+  const relativeFileTargets = collectWorkspacePackageReferencedFiles(
+    pkg,
+    typeof pkg.name === 'string' && pkg.name.startsWith(INTERNAL_PACKAGE_PREFIX),
+  );
 
   for (const relPath of relativeFileTargets) {
     if (!packageFileTargetExists(packageDir, relPath)) {
@@ -1319,12 +1339,13 @@ function hasBundledWorkspaceSourceContentParity(
     }
   }
 
-  const expectedOutputPaths = [...collectWorkspacePackageReferencedFiles(workspacePackageJson)]
-    .filter((relativePath) =>
-      relativePath.replace(/\\/g, '/') !== 'package.json'
-      && isRuntimePackageContentPath(relativePath),
-    );
-  for (const declaredEntry of collectWorkspacePackageDeclaredFileEntries(workspacePackageJson)) {
+  const expectedOutputPaths: string[] = [];
+  const contentEntries = new Set([
+    ...collectWorkspacePackageReferencedFiles(workspacePackageJson),
+    ...collectWorkspacePackageDeclaredFileEntries(workspacePackageJson),
+  ]);
+  for (const declaredEntry of contentEntries) {
+    if (declaredEntry === 'package.json') continue;
     const sourcePath = resolve(workspacePackageDir, declaredEntry);
     if (!existsSync(sourcePath)) return false;
     if (statSync(sourcePath).isDirectory()) {
@@ -1366,7 +1387,7 @@ function hasBundledWorkspacePackageManifestParity(
     && JSON.stringify(workspaceImports) === JSON.stringify(bundledImports);
 }
 
-function hasBundledWorkspaceRuntimeDependencyTreeHealthy(
+export function hasBundledWorkspaceRuntimeDependencyTreeHealthy(
   packageJsonPath: string,
   opts?: { visited?: Set<string> },
 ): boolean {

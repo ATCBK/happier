@@ -5,6 +5,7 @@ import type { HomeHostFact } from '@happier-dev/protocol';
 
 import { execFileWithDeadline } from './execFileWithDeadline.js';
 import { windowsSystemToolCommand } from './windows/windowsSystemToolPath.js';
+import { parseDarwinBatteryFacts, readLinuxBatteryFacts, readWindowsBatteryPresence } from './batteryFacts.js';
 
 export interface HomeHostSystem {
   readonly platform: NodeJS.Platform;
@@ -81,21 +82,7 @@ async function readLinuxMobility(system: HomeHostSystem): Promise<'portable' | '
   } catch {
     // A container or restricted host may not expose DMI.
   }
-  try {
-    for (const name of await system.listPowerSupplies()) {
-      try {
-        if ((await system.readText(`/sys/class/power_supply/${name}/type`)).trim() === 'Battery') {
-          try {
-            if ((await system.readText(`/sys/class/power_supply/${name}/scope`)).trim() === 'Device') continue;
-          } catch { /* Older supplies need not expose scope. */ }
-          return 'portable';
-        }
-      } catch { /* A missing entry does not hide another battery. */ }
-    }
-  } catch {
-    // A missing battery directory proves neither portability nor stationarity.
-  }
-  return null;
+  return (await readLinuxBatteryFacts(system)).present ? 'portable' : null;
 }
 
 async function readMacMobility(system: HomeHostSystem): Promise<'portable' | 'stationary' | null> {
@@ -105,7 +92,7 @@ async function readMacMobility(system: HomeHostSystem): Promise<'portable' | 'st
         // The Home fact uses the same successful battery observation for every
         // recognized model, including newer Mac<number> laptops and desktops.
         const batteries = await system.runTool('pmset', ['-g', 'batt']);
-        return /InternalBattery/u.test(batteries) ? 'portable' : 'stationary';
+        return parseDarwinBatteryFacts(batteries).present ? 'portable' : 'stationary';
     } catch {
         return null;
     }
@@ -126,16 +113,7 @@ async function readWindowsMobility(system: HomeHostSystem): Promise<'portable' |
   } catch {
     // The CIM enclosure is absent or unreadable.
   }
-  try {
-    const count = (await system.runTool(powershell, [
-      '-NoProfile', '-NonInteractive', '-Command',
-      "@(Get-CimInstance Win32_Battery | Where-Object { $_.Name -notmatch 'UPS|Uninterruptible' -and $_.DeviceID -notmatch 'UPS|Uninterruptible' }).Count",
-    ])).trim();
-    if (/^\d+$/u.test(count) && Number(count) > 0) return 'portable';
-  } catch {
-    // No battery evidence.
-  }
-  return null;
+  return await readWindowsBatteryPresence(system) ? 'portable' : null;
 }
 
 export async function detectHomeHostFactFromSystem(system: HomeHostSystem): Promise<HomeHostFact> {

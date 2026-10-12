@@ -3,8 +3,29 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { findRepoRoot } from '../dist/workspaces/index.js';
+import { bundleWorkspacePackage, findRepoRoot } from '../dist/workspaces/index.js';
+
+test('bundled cli-common supports the temporary-directory lifecycle', async () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'happier-cli-common-bundle-'));
+  try {
+    const destDir = join(tempRoot, 'cli-common');
+    bundleWorkspacePackage({
+      packageName: '@happier-dev/cli-common',
+      srcDir: fileURLToPath(new URL('..', import.meta.url)),
+      destDir,
+    });
+    const { createHappierTempDir, readHappierTempDirOwner, removeHappierTempDir } = await import(
+      pathToFileURL(join(destDir, 'dist', 'tempDirs', 'index.js')).href
+    );
+    const directory = createHappierTempDir({ purpose: 'happier-bundle-test', root: tempRoot });
+    assert.equal(readHappierTempDirOwner(directory)?.pid, process.pid);
+    removeHappierTempDir(directory);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test('findRepoRoot returns the nearest repo root marker directory', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'cli-common-workspaces-root-'));

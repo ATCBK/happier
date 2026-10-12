@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHappierTempDir } from '../tempDirs/createHappierTempDir.js';
 
 export async function createManagedToolScratchDir(params: Readonly<{
   installDir: string;
@@ -15,6 +15,5 @@ export async function createManagedToolScratchDir(params: Readonly<{
   }
 
   const scratchRoot = join(installDir, '.tmp');
-  await mkdir(scratchRoot, { recursive: true });
-  return mkdtemp(join(scratchRoot, `${prefix}-`));
+  return createHappierTempDir({ purpose: prefix, root: scratchRoot });
 }
