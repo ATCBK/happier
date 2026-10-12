@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ActionIdSchema } from '../actions/actionIds.js';
+import { getActionSpec } from '../actions/actionSpecs.js';
 import {
   ApprovalRequestSchema,
   ApprovalExecutionOriginV1Schema,
@@ -63,6 +64,17 @@ it('retains genuine signed Account approval origins without replacing Session au
     context: { ...context, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } }))
     .toMatchObject({ authority: 'present_user', surface: 'ui', caller: { kind: 'host' }, accountId: 'requester' });
   expect(ApprovalExecutionOriginV1Schema.parse(ui)).toEqual(ui);
+  const pluginCaller = { kind: 'plugin' as const, pluginId: 'happier.inspector', contributionLocalId: 'inspector-app',
+    sourceCustody: { kind: 'development' as const, registeredRootId: 'inspector-root' } };
+  const plugin = { ...ui, surface: 'plugin' as const, caller: pluginCaller };
+  expect(buildApprovalExecutionOriginV1({ actionId: 'machines.managed.acquire', input: {}, targetSessionId: null,
+    context: { ...context, surface: 'plugin', authority: 'present_user', actionCaller: {
+      ...pluginCaller, occurrenceId: 'current-occurrence',
+    } } })).toMatchObject({ authority: 'present_user', surface: 'plugin', caller: pluginCaller });
+  expect(ApprovalExecutionOriginV1Schema.parse(plugin)).toEqual(plugin);
+  expect(ApprovalExecutionOriginV1Schema.safeParse({ ...plugin, surface: 'ui' }).success).toBe(false);
+  expect(ApprovalExecutionOriginV1Schema.safeParse({ ...plugin, caller: { kind: 'host' } }).success).toBe(false);
+  expect(ApprovalExecutionOriginV1Schema.safeParse({ ...plugin, caller: { ...pluginCaller, sourceCustody: undefined } }).success).toBe(false);
   expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
     createdBy: { surface: 'system' }, requestedSurface: 'ui', actionId: ui.actionId, actionArgs: {}, summary: 'Acquire Machine',
     executionOriginV1: ui }))).toBe(true);
@@ -107,6 +119,19 @@ it('retains genuine signed Account approval origins without replacing Session au
   expect(buildApprovalExecutionOriginV1({ actionId: 'machines.managed.acquire', input: {}, targetSessionId: null,
     context: { ...context, surface: 'ui', authority: 'account_automation', actionCaller: { kind: 'host' } } }))
     .toMatchObject({ authority: 'account_automation', surface: 'ui', accountId: 'requester' });
+  const pairedTerminal = { ...automatedUi, externalActionExecutionAuthorization: {
+    ...automatedUi.externalActionExecutionAuthorization,
+    binding: { ...binding, authentication: { kind: 'terminal' as const, tokenEpoch: 7 } },
+  } };
+  expect(ApprovalExecutionOriginV1Schema.safeParse(pairedTerminal).success).toBe(true);
+  expect(buildApprovalExecutionOriginV1({ actionId: 'machines.managed.acquire', input: {}, targetSessionId: null,
+    context: { ...context, surface: 'ui', authority: 'account_automation', actionCaller: { kind: 'host' },
+      externalActionExecutionAuthorization: pairedTerminal.externalActionExecutionAuthorization } }))
+    .toMatchObject({ authority: 'account_automation', surface: 'ui', accountId: 'requester' });
+  expect(buildApprovalExecutionOriginV1({ actionId: 'machines.managed.acquire', input: {}, targetSessionId: null,
+    context: { ...context, surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' },
+      externalActionExecutionAuthorization: pairedTerminal.externalActionExecutionAuthorization } }))
+    .toMatchObject({ authority: 'account_automation', surface: 'cli', accountId: 'requester' });
   for (const changed of [{ surface: 'voice' }, { accountId: 'other-requester' }, { requestId: 'different-request' }]) {
     expect(ApprovalExecutionOriginV1Schema.safeParse({ ...automatedUi, ...changed }).success).toBe(false);
   }
@@ -1014,6 +1039,119 @@ describe('ApprovalRequestV1Schema', () => {
 });
 
 describe('requiresExactDaemonApprovalReplay', () => {
+  function hostCliRequest(actionId: Parameters<typeof getActionSpec>[0], actionArgs: unknown) {
+    return ApprovalRequestV2Schema.parse({
+      v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', actionId,
+      actionArgs: getActionSpec(actionId).inputSchema.parse(actionArgs), summary: 'Reviewed CLI Action',
+      executionOriginV1: {
+        v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+        serverId: 'creator-profile', serverIdentityId: 'stable-home', accountId: 'account-1',
+        actionId, requestId: 'request-1',
+      },
+    });
+  }
+
+  it('replays an unsigned host CLI Account effect at the deciding Home without inventing a Machine', () => {
+    const request = ApprovalRequestV2Schema.parse({
+      v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli',
+      actionId: 'launch_profiles.delete', actionArgs: { id: 'own-profile', expectedRevision: 0 },
+      summary: 'Delete launch profile',
+      executionOriginV1: {
+        v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+        serverId: 'creator-profile', serverIdentityId: 'stable-home', accountId: 'account-1',
+        actionId: 'launch_profiles.delete', requestId: 'request-1',
+      },
+    });
+    expect(requiresExactDaemonApprovalReplay(request)).toBe(false);
+    expect(requiresExactDaemonApprovalReplay({ ...request, executionOriginV1: {
+      ...request.executionOriginV1,
+      caller: { kind: 'session', sessionId: 'session-1', starterDepth: 0, turnDepth: 0 },
+    } })).toBe(true);
+  });
+
+  it('replays unsigned host CLI Account effects outside the Profile family', () => {
+    expect(requiresExactDaemonApprovalReplay(hostCliRequest('remote_hosts.delete', {
+      hostId: 'reviewed-host', expectedRevision: 3,
+    }))).toBe(false);
+    expect(requiresExactDaemonApprovalReplay(hostCliRequest('account.apiTokens.revokeAll', {}))).toBe(false);
+    expect(requiresExactDaemonApprovalReplay(hostCliRequest('session.reports_to.set', {
+      sessionId: 'worker', leadSessionId: 'lead', expectedLeadSessionId: null,
+    }))).toBe(false);
+  });
+
+  it('uses reviewed input placement rather than an Account default for host CLI custody', () => {
+    expect(requiresExactDaemonApprovalReplay(hostCliRequest('providers.connections.describe', {}))).toBe(false);
+    expect(requiresExactDaemonApprovalReplay(hostCliRequest('providers.connections.describe', {
+      machineId: 'machine-1',
+    }))).toBe(true);
+  });
+
+  it('keeps signed external CLI requests for Account effects on their admitting daemon', () => {
+    const request = hostCliRequest('launch_profiles.delete', { id: 'own-profile', expectedRevision: 0 });
+    const target = { kind: 'machine' as const, machineId: 'machine-1' };
+    // External CLI ingress has API authority; the reviewed descriptive surface stays CLI.
+    const signed = ApprovalRequestV2Schema.parse({ ...request, executionOriginV1: {
+      ...request.executionOriginV1, surface: 'api', machineId: target.machineId, target,
+      principalId: 'principal-1', credentialId: 'credential-1', externalActionInputSignature: 'a'.repeat(86),
+      externalActionExecutionAuthorization: { v: 1, token: 'home-signed-authorization', binding: {
+        serverIdentityId: 'stable-home', accountId: 'account-1', principalId: 'principal-1',
+        credentialId: 'credential-1', machineId: target.machineId, custodianAccountId: 'account-1',
+        installationId: 'installation-1', actionId: request.actionId, requestId: 'request-1',
+        requestEnvelopeDigest: 'a'.repeat(43), target, grant: API_TOKEN_FULL_GRANT_V1,
+      } },
+    } });
+    expect(requiresExactDaemonApprovalReplay(signed)).toBe(true);
+  });
+
+  it.each(['teams.invitations.create', 'teams.invitations.reissue'] as const)(
+    'replays signed Session %s in the approving app', actionId => {
+      const caller = { kind: 'session' as const, sessionId: 'source', starterDepth: 0, turnDepth: 0 };
+      const target = { kind: 'machine' as const, machineId: 'source-machine' };
+      const actionArgs = getActionSpec(actionId).inputSchema.parse(actionId.endsWith('create')
+        ? { v: 1, teamId: 'team', role: 'member', historyAccess: 'from_membership', recipientEmail: null, requestKey: 'create-request' }
+        : { v: 1, teamId: 'team', invitationId: 'invitation', recipientEmail: null, requestKey: 'reissue-request' });
+      const request = ApprovalRequestV2Schema.parse({
+        v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1, actionId, actionArgs, summary: 'Invitation proposal',
+        createdBy: { surface: 'agent', sessionId: 'source' }, requestedSurface: 'agent',
+        executionOriginV1: { v: 1, surface: 'agent', authority: 'account_automation', caller,
+          serverId: 'profile', serverIdentityId: 'stable-home', accountId: 'account', machineId: target.machineId,
+          sessionId: 'source', target, actionId, requestId: 'proposal-request', callerPermissionMode: null,
+          sessionInputSource: { sourceSessionId: 'source', sourceTurnId: 'turn', via: 'action' },
+          externalActionInputSignature: 'a'.repeat(86), externalActionExecutionAuthorization: {
+            v: 1, token: 'signed-proposal-fixture', binding: { serverIdentityId: 'stable-home', accountId: 'account',
+              authentication: { kind: 'account', tokenEpoch: 0 }, machineId: target.machineId,
+              custodianAccountId: 'account', installationId: 'installation', actionId, requestId: 'proposal-request',
+              requestEnvelopeDigest: 'a'.repeat(43), target,
+              sessionActionOrigin: { v: 1, caller, sourceTurnId: 'turn', callerPermissionMode: null, requestId: 'proposal-request' },
+              sessionActionSource: { machineId: target.machineId, installationId: 'installation' },
+            },
+          },
+        },
+      });
+      // Owner ruling 2026-10-12: the approving app runs the Account-only effect.
+      expect(requiresExactDaemonApprovalReplay(request)).toBe(false);
+      // The same signed origin cannot move a Machine effect into the app.
+      expect(requiresExactDaemonApprovalReplay({ ...request, actionId: 'paths.list_recent',
+        actionArgs: { machineId: target.machineId, limit: 10 },
+        executionOriginV1: { ...request.executionOriginV1, actionId: 'paths.list_recent' } })).toBe(true);
+    },
+  );
+
+  it('keeps Machine, Session and client placement and live-only Account inputs on the exact CLI daemon', () => {
+    for (const request of [
+      hostCliRequest('paths.list_recent', { machineId: 'machine-1', limit: 10 }),
+      hostCliRequest('session.stop', { sessionId: 'session-1' }),
+      hostCliRequest('remote_hosts.edit', { hostId: 'reviewed-host', expectedRevision: 3 }),
+      hostCliRequest('remote_hosts.save', {
+        host: { id: 'reviewed-host', name: 'Reviewed host', createdAt: 1, updatedAt: 1,
+          lastUsedAt: null, ssh: { target: 'user@example.test', authMode: 'agent' } },
+        expectedRevision: 3,
+      }),
+    ]) expect(requiresExactDaemonApprovalReplay(request), request.actionId).toBe(true);
+  });
+
   it('routes signed present-user UI approval custody to its admitting daemon', () => {
     const target = { kind: 'machine' as const, machineId: 'controller' };
     const actionId = 'machines.managed.acquire';
@@ -1123,7 +1261,7 @@ describe('requiresExactDaemonApprovalReplay', () => {
     expect(requiresExactDaemonApprovalReplay(automationRun)).toBe(true);
   });
 
-  it('keeps every non-present-human surface on the exact daemon', () => {
+  it('replays host CLI Account requests while retaining exact-daemon custody for other autonomous surfaces', () => {
     for (const surface of ['agent', 'mcp', 'cli', 'rpc'] as const) {
       const request = ApprovalRequestV2Schema.parse({
         ...approvalWithCaller({ kind: 'host' }) as Record<string, unknown>,
@@ -1134,7 +1272,7 @@ describe('requiresExactDaemonApprovalReplay', () => {
           surface,
         },
       });
-      expect(requiresExactDaemonApprovalReplay(request), surface).toBe(true);
+      expect(requiresExactDaemonApprovalReplay(request), surface).toBe(surface !== 'cli');
     }
 
     const apiRequest = ApprovalRequestV2Schema.parse({

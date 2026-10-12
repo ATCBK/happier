@@ -1,7 +1,6 @@
 import { ActionIdSchema } from '../actions/actionIds.js';
 import { getActionSpec } from '../actions/actionSpecs.js';
-import { sameStrictJsonValue } from '../json/strictJsonValue.js';
-import { ComputerTargetSelectRequestV1Schema } from '../computer/v1.js';
+import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '../json/strictJsonValue.js';
 import type { ApprovalRequest } from './approvalRequestV1.js';
 
 /**
@@ -16,9 +15,10 @@ import type { ApprovalRequest } from './approvalRequestV1.js';
  *   open -> rejected | canceled
  *   approved -> failed            (definitive pre-execution failure)
  *
- * The admitted operands (`actionArgs`) stay immutable, except a present user's
- * native target/access choice at open -> approved. That choice becomes the
- * immutable replay input. Settlement replaces it with the Action's observation
+ * The signed admitted operands (`actionArgs`) stay immutable during replay.
+ * A person's spec-admitted choice lives separately on the decision. Execution
+ * validates that choice against the original operands after origin verification.
+ * Settlement replaces both inputs with the Action's observation
  * projection (`settleApprovalRequestActionArgs`), never with caller-authored
  * arguments, so no durable history keeps write-only secrets after replay.
  */
@@ -51,6 +51,29 @@ export function settleApprovalRequestActionArgs(request: ApprovalRequest): unkno
   const spec = getActionSpec(actionId.data);
   if (spec.approvalInputCustody === 'live_only' || !spec.projectObservationInput) return request.actionArgs;
   return spec.projectObservationInput(request.actionArgs);
+}
+
+/** The decision choice shares the existing terminal secret-projection contract. */
+export function settleApprovalRequestDecision(request: ApprovalRequest): ApprovalRequest['decision'] {
+  if (request.v !== 2 || request.decision?.narrowedInput === undefined || isSettled(request.status)) return request.decision;
+  return { ...request.decision, narrowedInput: projectNativeJsonValueForTransport(
+    settleApprovalRequestActionArgs({ ...request, actionArgs: request.decision.narrowedInput }),
+  ) };
+}
+
+/** Input admission only, shared by the transition writer and the replay executor. */
+export function resolveApprovalRequestExecutionInput(request: ApprovalRequest):
+  | Readonly<{ ok: true; input: unknown }>
+  | Readonly<{ ok: false; errorCode: 'invalid_parameters'; error: 'invalid_parameters' }> {
+  if (request.v !== 2 || request.decision?.narrowedInput === undefined) return { ok: true, input: request.actionArgs };
+  const actionId = ActionIdSchema.safeParse(request.actionId);
+  const spec = actionId.success ? getActionSpec(actionId.data) : null;
+  if (request.decision.kind === 'approve' && request.decision.authority === 'present_user' && spec?.approvalNarrowing) {
+    const narrowed = spec.approvalNarrowing.narrow(request.actionArgs, request.decision.narrowedInput);
+    const admitted = narrowed === null ? null : spec.inputSchema.safeParse(narrowed);
+    if (admitted?.success) return { ok: true, input: admitted.data };
+  }
+  return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
 }
 
 /** Compare the JSON both adapters actually persist (absent and `undefined` fields agree). */
@@ -99,21 +122,14 @@ export function decideApprovalRequestTransition(
   next: ApprovalRequest,
 ): ApprovalRequestTransitionDecision {
   const settling = !isSettled(existing.status) && isSettled(next.status);
-  let expectedActionArgs = settling ? settleApprovalRequestActionArgs(existing) : existing.actionArgs;
-  if (existing.v === 2 && next.v === 2 && existing.status === 'open'
-    && next.status === 'approved' && existing.actionId === 'computer.target.select'
-    && next.decision?.kind === 'approve' && next.decision.authority === 'present_user') {
-    const original = ComputerTargetSelectRequestV1Schema.safeParse(existing.actionArgs);
-    const chosen = ComputerTargetSelectRequestV1Schema.safeParse(next.actionArgs);
-    if (original.success && chosen.success) {
-      expectedActionArgs = {
-        ...original.data,
-        ...(chosen.data.target !== undefined ? { target: chosen.data.target } : {}),
-        ...(chosen.data.access !== undefined ? { access: chosen.data.access } : {}),
-      };
-    }
-  }
+  const expectedActionArgs = settling ? settleApprovalRequestActionArgs(existing) : existing.actionArgs;
   if (!durablyEqual(immutableSubject(existing, expectedActionArgs), immutableSubject(next, next.actionArgs))) {
+    return SUBJECT_MISMATCH;
+  }
+  if (existing.status === 'open') {
+    if (next.v === 2 && next.decision?.narrowedInput !== undefined
+      && (next.status !== 'approved' || !resolveApprovalRequestExecutionInput(next).ok)) return SUBJECT_MISMATCH;
+  } else if (!durablyEqual(settling ? settleApprovalRequestDecision(existing) : existing.decision, next.decision)) {
     return SUBJECT_MISMATCH;
   }
   if (durablyEqual(existing, next)) {

@@ -20,6 +20,15 @@ function openRequest(): ApprovalRequestV2 {
 }
 
 describe('computer selection approval transition', () => {
+  it('does not widen see-only access while approving a target choice', () => {
+    const existing = openRequest();
+    existing.actionArgs = { machineId: 'machine', target, access: 'see', requestedTarget: 'Editor' };
+    expect(decideApprovalRequestTransition(existing, {
+      ...existing, status: 'approved', updatedAtMs: 2,
+      decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user',
+        narrowedInput: { ...existing.actionArgs as object, access: 'use' } },
+    })).toMatchObject({ ok: false, errorCode: 'subject_mismatch' });
+  });
   it.each([
     { target: { ...target, windowId: 456 }, access: 'use' },
     { target, access: 'see' },
@@ -27,23 +36,29 @@ describe('computer selection approval transition', () => {
     const existing = openRequest();
     const approved: ApprovalRequestV2 = {
       ...existing, status: 'approved', updatedAtMs: 2,
-      actionArgs: { ...existing.actionArgs as object, ...selection },
-      decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' },
+      decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user',
+        narrowedInput: { ...existing.actionArgs as object, ...selection } },
     };
     expect(decideApprovalRequestTransition(existing, approved)).toEqual({ ok: true, changed: true });
     expect(decideApprovalRequestTransition(existing, {
-      ...approved, decision: { kind: 'approve', decidedAtMs: 2 },
+      ...approved, decision: { ...approved.decision!, authority: undefined },
     })).toMatchObject({ ok: false, errorCode: 'subject_mismatch' });
     for (const edit of [
       { machineId: 'foreign' }, { requestedTarget: 'Forged suggestion' }, { access: 'all' },
     ]) {
       expect(decideApprovalRequestTransition(existing, {
-        ...approved, actionArgs: { ...approved.actionArgs as object, ...edit },
+        ...approved, decision: { ...approved.decision!,
+          narrowedInput: { ...approved.decision!.narrowedInput as object, ...edit } },
       })).toMatchObject({ ok: false, errorCode: 'subject_mismatch' });
     }
     expect(decideApprovalRequestTransition(approved, {
       ...approved, status: 'executing', updatedAtMs: 3,
-      actionArgs: { ...approved.actionArgs as object, target: { ...target, windowId: 789 } },
+      decision: { ...approved.decision!, narrowedInput: {
+        ...approved.decision!.narrowedInput as object, target: { ...target, windowId: 789 },
+      } },
+    })).toMatchObject({ ok: false, errorCode: 'subject_mismatch' });
+    expect(decideApprovalRequestTransition(existing, {
+      ...approved, actionArgs: { ...existing.actionArgs as object, ...selection },
     })).toMatchObject({ ok: false, errorCode: 'subject_mismatch' });
   });
 });

@@ -13,7 +13,7 @@ import {
 import { HandoffTargetReplacementApprovalV1Schema } from '../sessions/control/handoff/handoffTargetReplacementApprovalV1.js';
 import { ActionRequiredAuthoritySchema } from '../actions/metadata.js';
 import { isAutomationApprovalRequestSurface, canRequestPresentUserApprovalForActionInputV1 } from '../actions/decisionAuthority.js';
-import { getActionSpec } from '../actions/actionSpecs.js';
+import { getActionSpec, resolveActionExecutionPlacementForInput } from '../actions/actionSpecs.js';
 import {
   ExternalActionTargetV1Schema,
   ExternalActionExecutionAuthorizationV1Schema,
@@ -31,7 +31,7 @@ import { WorkflowAcceptedAuthorizationV1Schema, WorkflowRunStartedByV1Schema } f
 import { AgentStartSessionCallerV1Schema } from '../account/settings/admitAgentStartV1.js';
 import { ComputerSecretFillRequestV1Schema, SecretFillSettlementV1Schema } from '../computer/v1.js';
 import { BrowserAutomationSecretFillRequestV1Schema } from '../browser/automation/v1.js';
-import { sameStrictJsonValue } from '../json/strictJsonValue.js';
+import { sameStrictJsonValue, StrictJsonValueSchema } from '../json/strictJsonValue.js';
 
 export const ApprovalRequestStatusSchema = lazyZodSchema(() => z.enum(['open', 'approved', 'rejected', 'executed', 'failed', 'canceled']));
 export type ApprovalRequestStatus = z.infer<typeof ApprovalRequestStatusSchema>;
@@ -93,6 +93,7 @@ export type ApprovalDecisionV1 = z.infer<typeof ApprovalDecisionV1Schema>;
 // original passthrough schema and never authorizes current operand edits.
 const ApprovalDecisionV2Schema = lazyZodSchema(() => ApprovalDecisionV1Schema.extend({
   authority: z.literal('present_user').optional(),
+  narrowedInput: StrictJsonValueSchema.optional(),
 }).strict());
 
 export const ApprovalExecutionV1Schema = lazyZodSchema(() => z.object({
@@ -229,7 +230,12 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.object({
             && value.sessionInputSource?.sourceSessionId === binding.sessionActionOrigin.caller.sessionId
             && value.sessionInputSource.sourceTurnId === binding.sessionActionOrigin.sourceTurnId
             && value.sessionInputSource.via === 'action'
-          : value.surface === 'ui' && value.authority === 'present_user' && value.caller.kind === 'host')
+          : ((value.surface === 'ui' || value.surface === 'cli') && value.caller.kind === 'host'
+              || value.surface === 'plugin' && value.caller.kind === 'plugin')
+            && (value.authority === 'present_user'
+              // A Home-admitted paired terminal can propose an approval while
+              // retaining automation authority; only the decision grants consent.
+              || value.authority === 'account_automation'))
       : value.surface === 'api' && value.authority === 'account_automation'
         && value.principalId === binding.principalId && value.credentialId === binding.credentialId;
     if (!principalMatches || value.serverIdentityId !== binding.serverIdentityId
@@ -475,8 +481,8 @@ const CALLER_REQUIRES_EXACT_DAEMON_REPLAY_RECORD = {
 
 /**
  * Surfaces whose admission facts (external authorization, agent ceilings,
- * transport identity) the exact daemon owns. The present-human surfaces are the
- * only ones a client may settle itself.
+ * transport identity) the exact daemon owns, except for the host Account effects
+ * admitted by the shared custody predicate below.
  */
 const SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD = {
   ui: false,
@@ -493,22 +499,38 @@ const SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD = {
  * True when this durable approval carries authority facts a client cannot
  * verify itself, so its replay belongs to the exact daemon named by the origin.
  * Unsigned host-caused approvals on a present-user surface remain locally
- * replayable; signed external origins retain their admitting daemon's custody.
+ * replayable, as do host-CLI Account effects with durable input custody and,
+ * by the 2026-10-12 owner ruling, signed Agent-Session proposals whose reviewed
+ * effect is Account-only: the approving app runs that effect while the signed
+ * carrier stays immutable proposal provenance. Other signed external origins
+ * retain their admitting daemon's custody.
  */
 export function requiresExactDaemonApprovalReplay(approval: ApprovalRequest): boolean {
   if (approval.v !== 2) return false;
   const origin = approval.executionOriginV1;
-  if (origin.externalActionExecutionAuthorization) return true;
-  // These Account effects run through the deciding app's authenticated Home
-  // adapter, so a daemon's disallowed terminal policy cannot veto human consent.
-  // External and plugin provenance still belongs to its original executor.
   const actionId = ActionIdSchema.safeParse(approval.actionId);
   const spec = actionId.success ? getActionSpec(actionId.data) : null;
-  if (isAutomationApprovalRequestSurface(origin.surface) && origin.caller.kind === 'host'
-    && !origin.externalActionExecutionAuthorization
-    && spec?.executionPlacement === 'account'
-    && spec.approvalInputCustody !== 'live_only'
-    && canRequestPresentUserApprovalForActionInputV1(spec, approval.actionArgs)) return false;
+  const input = spec?.inputSchema.safeParse(approval.actionArgs);
+  const accountEffect = spec && input?.success
+    && resolveActionExecutionPlacementForInput(spec, input.data) === 'account'
+    && spec.workspaceWrite !== true && spec.approvalInputCustody !== 'live_only';
+  const authorization = origin.externalActionExecutionAuthorization;
+  if (authorization) {
+    return !(accountEffect && 'authentication' in authorization.binding
+      && authorization.binding.sessionActionOrigin !== undefined);
+  }
+  // These Account effects run through the deciding app's authenticated Home
+  // adapter, so a daemon's disallowed terminal policy cannot veto human consent.
+  // Plugin and other external provenance still belongs to its original executor.
+  if (spec && origin.caller.kind === 'host'
+    && spec.approvalInputCustody !== 'live_only') {
+    if (origin.surface === 'cli') {
+      if (accountEffect) return false;
+    }
+    if (isAutomationApprovalRequestSurface(origin.surface, spec, approval.actionArgs)
+      && (spec.executionPlacement === 'account' || spec.id === 'account.home_continuation.invoke')
+      && canRequestPresentUserApprovalForActionInputV1(spec, approval.actionArgs)) return false;
+  }
   return SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD[origin.surface]
     || CALLER_REQUIRES_EXACT_DAEMON_REPLAY_RECORD[origin.caller.kind];
 }
