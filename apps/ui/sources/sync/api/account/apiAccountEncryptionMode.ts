@@ -299,20 +299,39 @@ export async function fetchAccountEncryptionMode(
     const now = Date.now();
     pruneAccountEncryptionModeCache(now);
 
+    const revision = accountEncryptionModeCacheRevision;
+    // A shared mode read is readiness, not a finite user operation. Transient
+    // outages must recover without another mount/event; retirement stops retry
+    // before it can send captured credentials to a successor Home or Account.
+    const assertCurrent = (): void => {
+        if (revision !== accountEncryptionModeCacheRevision
+            || cacheKey !== getAccountEncryptionModeScopeKey(credentials)) {
+            throw new HappyError('Account encryption mode read retired', false, {
+                kind: 'config', code: 'account-encryption-mode-read-retired',
+            });
+        }
+    };
+
     const cached = accountEncryptionModeCache.get(cacheKey);
     if (cached?.promise) {
-        return await cached.promise;
+        const value = await cached.promise;
+        assertCurrent();
+        return value;
     }
     if (cached?.value && (cached.expiresAt ?? 0) > now) {
         return cached.value;
     }
 
     const promise = backoff(async () => {
+        assertCurrent();
         return await run();
     });
     accountEncryptionModeCache.set(cacheKey, { promise });
     try {
         const value = await promise;
+        // Invalidation can arrive while HTTP/body decoding is pending. Cache
+        // custody alone is not enough: stale mode must not reach the caller.
+        assertCurrent();
         if (accountEncryptionModeCache.get(cacheKey)?.promise === promise) {
             accountEncryptionModeCache.set(cacheKey, {
                 value,

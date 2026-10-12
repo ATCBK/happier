@@ -2,15 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 
-vi.mock('@/utils/timing/time', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/utils/timing/time')>();
-  const immediate = async <T,>(callback: () => Promise<T>): Promise<T> => await callback();
-  return {
-    ...actual,
-    backoff: immediate,
-  };
-});
-
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules();
@@ -291,8 +282,10 @@ describe('apiAccountEncryptionMode', () => {
     subscription();
   });
 
-  it('does not let a stale in-flight account mode GET repopulate cache after an update invalidates it', async () => {
-    mockServerConfig();
+  it('rejects a stale in-flight account mode GET after an update instead of disclosing or caching it', async () => {
+    vi.doUnmock('@/sync/domains/server/serverRuntime');
+    const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+    await upsertAndActivateServer({ serverUrl: 'https://mode-update.test', scope: 'tab' });
     let resolveFirstGet!: (response: Response) => void;
     const firstGetResponse = new Promise<Response>((resolve) => {
       resolveFirstGet = resolve;
@@ -312,13 +305,23 @@ describe('apiAccountEncryptionMode', () => {
 
     const { fetchAccountEncryptionMode, updateAccountEncryptionMode } = await import('./apiAccountEncryptionMode');
 
-    const staleFetch = fetchAccountEncryptionMode(credentials);
+    const staleFetches = Promise.allSettled([
+      fetchAccountEncryptionMode(credentials),
+      fetchAccountEncryptionMode(credentials),
+    ]);
     await Promise.resolve();
 
     await expect(updateAccountEncryptionMode(credentials, 'plain')).resolves.toMatchObject({ mode: 'plain' });
 
     resolveFirstGet(new Response(JSON.stringify({ mode: 'e2ee', updatedAt: 1 }), { status: 200 }));
-    await expect(staleFetch).resolves.toMatchObject({ mode: 'e2ee' });
+    const retired = {
+      status: 'rejected',
+      reason: expect.objectContaining({
+        code: 'account-encryption-mode-read-retired',
+        canTryAgain: false,
+      }),
+    };
+    expect(await staleFetches).toEqual([retired, retired]);
     await expect(fetchAccountEncryptionMode(credentials)).resolves.toMatchObject({ mode: 'plain', updatedAt: 3 });
 
     const getCalls = serverFetch.mock.calls.filter(([path, init]) =>
