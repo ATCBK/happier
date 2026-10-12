@@ -6,7 +6,11 @@ import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@ha
 import { UiContributedActionExecuteRequestV1Schema, UiContributedActionExecuteResponseV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
 import { PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE } from '@happier-dev/protocol/plugins/actions/invocation';
 import type { ActionDefinitionSummaryV1 } from '@happier-dev/protocol/actions/actionDefinitionV1';
-import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
+import type { AccountHomeContinuationInputV1 } from '@happier-dev/protocol/actions';
+import { voiceDictationOperation, type VoiceDictationActionId } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+import { PluginJsonValueV2Schema, type PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import type { PluginProjectedActionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type {
     PluginUiHostApiErrorCodeV1,
@@ -47,6 +51,7 @@ import { apiSocket } from '@/sync/api/session/apiSocket';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 export { bindCurrentUiContextVoiceToolPortToAdmission } from './currentUiContextVoiceToolBinding';
 
 import {
@@ -92,6 +97,9 @@ export type CurrentUiContextVoiceActionSchemas = Readonly<{
 }>;
 
 export type CurrentUiContextVoiceToolPort = CurrentUiContextReader & Readonly<{
+    invokeVoiceDictation?: (request: Readonly<{ actionId: VoiceDictationActionId; input: Readonly<{ commandId: string }>; context: ActionExecutorContext }>) => Promise<ActionExecuteResult>;
+    /** Only the ordinary typed Action may reach this admitted mounted effect. */
+    invokeAccountHomeContinuation?: (request: Readonly<{ input: AccountHomeContinuationInputV1; context: ActionExecutorContext }>) => Promise<ActionExecuteResult>;
     listCurrentContributedActionDefinitions?: () => readonly ActionDefinitionSummaryV1[];
     readCurrentContributedActionSchemas?: (
         id: string,
@@ -475,6 +483,46 @@ export function createCurrentUiContextVoiceToolPort(
         );
         if (!isCurrent()) return stale();
 
+        // This parameterized command is consumed only by its typed origin Actions.
+        if (resolved.command.kind === 'pluginExecutionOrigin') return unavailable();
+
+        if (resolved.command.kind === 'voiceDictation') {
+            const command = resolved.command;
+            const mergedSignal = mergeAbortSignals([resolved.retirementSignal, request.signal]);
+            try {
+                const execute = input.hostAction?.execute ?? (async (...args: Parameters<PluginSurfaceHostActionExecute>) => {
+                    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+                    return createDefaultActionExecutor().execute(...args);
+                });
+                if (!isCurrent() || !command.account.isCurrent()) return stale();
+                const result = await execute(`ui.voice_global.dictation.${command.operation}`, { commandId: resolved.id }, {
+                    ...input.hostAction?.context, surface: input.invocationSurface ?? 'voice', signal: mergedSignal.signal,
+                });
+                if (!result.ok) return { ok: false, code: 'denied', errorCode: result.errorCode };
+                const payload = PluginJsonValueV2Schema.safeParse(result.result ?? null);
+                return payload.success ? { ok: true, result: payload.data } : internalError();
+            } finally { mergedSignal.dispose(); }
+        }
+
+        if (resolved.command.kind === 'accountHomeContinuation') {
+            const command = resolved.command;
+            const mergedSignal = mergeAbortSignals([resolved.retirementSignal, request.signal]);
+            try {
+                const execute = input.hostAction?.execute ?? (async (...args: Parameters<PluginSurfaceHostActionExecute>) => {
+                    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+                    return await createDefaultActionExecutor().execute(...args);
+                });
+                if (!isCurrent() || !command.account.isCurrent()) return stale();
+                const result = await execute('account.home_continuation.invoke', {
+                    commandId: resolved.id, operation: command.operation,
+                    ...(command.operation === 'choose' ? { homeServerIdentityId: command.homeServerIdentityId } : {}),
+                }, { ...input.hostAction?.context, surface: input.invocationSurface ?? 'voice', signal: mergedSignal.signal });
+                if (!result.ok) return { ok: false, code: 'denied', errorCode: result.errorCode };
+                const payload = PluginJsonValueV2Schema.safeParse(result.result ?? null);
+                return payload.success ? { ok: true, result: payload.data } : internalError();
+            } finally { mergedSignal.dispose(); }
+        }
+
         if (resolved.command.kind === 'hostLocal') {
             const mergedSignal = mergeAbortSignals([resolved.retirementSignal, request.signal]);
             try {
@@ -527,6 +575,46 @@ export function createCurrentUiContextVoiceToolPort(
 
     return Object.freeze({
         ...input.reader,
+        invokeVoiceDictation: async (request: Readonly<{ actionId: VoiceDictationActionId; input: Readonly<{ commandId: string }>; context: ActionExecutorContext }>): Promise<ActionExecuteResult> => {
+            const resolved = input.reader.resolveCurrentUiCommand(request.input.commandId);
+            const command = resolved?.command;
+            const unavailable = (): ActionExecuteResult => ({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });
+            if (!resolved || command?.kind !== 'voiceDictation' || !isResolvedCommandCurrent(input.reader, resolved)
+                || command.operation !== voiceDictationOperation(request.actionId) || !command.account.isCurrent()
+                || request.context.signal?.aborted || !request.context.serverId
+                || !areServerProfileIdentifiersEquivalent(request.context.serverId, command.account.scope.serverId)
+                || (request.context.expectedAccountId ?? request.context.runtimeAccountId) !== command.account.scope.accountId) return unavailable();
+            const accountRetirement = new AbortController();
+            const retirement = command.account.onRetire(() => accountRetirement.abort());
+            const cancellation = mergeAbortSignals([resolved.retirementSignal, request.context.signal, accountRetirement.signal]);
+            try {
+                if (cancellation.signal.aborted || !isResolvedCommandCurrent(input.reader, resolved)) return unavailable();
+                return { ok: true, result: await command.invoke({ signal: cancellation.signal }) };
+            } finally { retirement.dispose(); cancellation.dispose(); }
+        },
+        invokeAccountHomeContinuation: async (request: Readonly<{ input: AccountHomeContinuationInputV1; context: ActionExecutorContext }>): Promise<ActionExecuteResult> => {
+            const resolved = input.reader.resolveCurrentUiCommand(request.input.commandId);
+            const command = resolved?.command;
+            const unavailable = (): ActionExecuteResult => ({ ok: false, errorCode: 'action_account_scope_changed', error: 'current_account_continuation_unavailable' });
+            if (!resolved || command?.kind !== 'accountHomeContinuation' || !isResolvedCommandCurrent(input.reader, resolved)
+                || !command.account.isCurrent() || request.context.signal?.aborted
+                || request.context.authority !== 'present_user'
+                || !request.context.serverId || !areServerProfileIdentifiersEquivalent(request.context.serverId, command.account.scope.serverId)
+                || (request.context.expectedAccountId ?? request.context.runtimeAccountId) !== command.account.scope.accountId
+                || request.input.operation !== command.operation
+                || (request.input.operation === 'choose' && (command.operation !== 'choose'
+                    || request.input.homeServerIdentityId !== command.homeServerIdentityId))) return unavailable();
+            const accountRetirement = new AbortController();
+            const retirement = command.account.onRetire(() => accountRetirement.abort());
+            const cancellation = mergeAbortSignals([resolved.retirementSignal, request.context.signal, accountRetirement.signal]);
+            try {
+                if (cancellation.signal.aborted || !command.account.isCurrent()
+                    || !isResolvedCommandCurrent(input.reader, resolved)) return unavailable();
+                // The same mounted operation settles its own durable result. Its
+                // successful publication may retire this descriptor afterwards.
+                return { ok: true, result: await command.invoke({ signal: cancellation.signal, context: request.context }) };
+            } finally { retirement.dispose(); cancellation.dispose(); }
+        },
         listCurrentContributedActionDefinitions: () => (
             listCurrentContributedActionDefinitions(input.readProjection)
         ),

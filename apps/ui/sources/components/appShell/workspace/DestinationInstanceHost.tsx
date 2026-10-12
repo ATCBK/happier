@@ -11,7 +11,8 @@ import { PluginSurfaceFocusEligibilityProvider, useLayoutPresentationActive } fr
 import type { NativeStackNavigationOptions } from '@react-navigation/native-stack';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { DefaultBackButton, Header, NavigationHeaderTitle } from '@/components/navigation/Header';
+import { DefaultBackButton, Header, NavigationHeaderTitle, PageHeaderActionsHost } from '@/components/navigation/Header';
+import { HeaderActionsScope } from '@/components/navigation/stackHeaderActions';
 import { NavigationTitleChromeProvider } from '@/components/ui/layout/navigationTitleChrome';
 
 const DestinationHeaderOptionsContext = React.createContext<((options: NativeStackNavigationOptions) => void) | null>(null);
@@ -76,7 +77,7 @@ export function DestinationInstanceHost(props: Readonly<{
     }), [props.focused, props.navigation, props.pathname, props.ref, props.tabId, props.visible]);
     return <DestinationInstanceContext.Provider value={value}>
         <PluginSurfaceFocusEligibilityProvider active={value.focused} presentationActive={value.visible} currentUiContextActive={value.focused}>
-            <DestinationNavigationChrome phone={props.phone === true} navigation={props.navigation}>
+            <DestinationNavigationChrome scopeKey={`destination:${props.tabId}`} phone={props.phone === true} navigation={props.navigation}>
                 {props.children}
             </DestinationNavigationChrome>
         </PluginSurfaceFocusEligibilityProvider>
@@ -84,6 +85,7 @@ export function DestinationInstanceHost(props: Readonly<{
 }
 
 function DestinationNavigationChrome(props: Readonly<{
+    scopeKey: string;
     phone: boolean;
     navigation?: DestinationNavigation;
     children: React.ReactNode;
@@ -100,6 +102,11 @@ function DestinationNavigationChrome(props: Readonly<{
     const canGoBack = props.navigation?.canGoBack?.() ?? false;
     const tintColor = options.headerTintColor ?? theme.colors.chrome.header.foreground;
     const chromeShown = props.phone && options.headerShown !== false;
+    const renderActions = React.useMemo(() => !props.phone && options.headerShown !== false && (options.headerLeft || options.headerRight)
+        ? () => <>
+            {options.headerLeft?.({ tintColor, canGoBack }) ?? null}
+            {options.headerRight?.({ tintColor, canGoBack }) ?? null}
+        </> : null, [canGoBack, options.headerLeft, options.headerRight, options.headerShown, props.phone, tintColor]);
     const declaredTitle = typeof options.headerTitle === 'string' ? options.headerTitle : options.title;
     const titleNode = title !== undefined
         ? (title === null ? null : <NavigationHeaderTitle title={title} tintColor={tintColor} />)
@@ -116,7 +123,10 @@ function DestinationNavigationChrome(props: Readonly<{
                         ? <DefaultBackButton tintColor={tintColor} onPress={() => props.navigation?.back()} /> : null)}
                     headerRight={options.headerRight ? () => options.headerRight!({ tintColor, canGoBack }) : undefined} />
             </View> : null}
-            {props.children}
+            <HeaderActionsScope scopeKey={props.phone ? null : props.scopeKey}>
+                <PageHeaderActionsHost scopeKey={props.scopeKey} render={renderActions} />
+                {props.children}
+            </HeaderActionsScope>
         </NavigationTitleChromeProvider>
     </DestinationHeaderOptionsContext.Provider>;
 }

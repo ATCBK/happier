@@ -18,6 +18,84 @@ afterEach(() => {
 });
 
 describe('current UI context Action adapter', () => {
+    it('admits declared plugin Dictation effects without granting generic current-UI reads', async () => {
+        const account = { serverId: 'dictation-home', accountId: 'dictation-account' };
+        const command: CurrentUiContextResolvedCommand = {
+            id: 'current-ui:cancel-dictation', retirementSignal: new AbortController().signal,
+            command: { kind: 'voiceDictation', operation: 'cancel',
+                account: { scope: account, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+                invoke: async () => ({ status: 'completed', dictationStatus: 'idle', inserted: false }) },
+        };
+        unregister = registerCurrentUiContextActionPort((surface, hostAction) => createCurrentUiContextVoiceToolPort({
+            invocationSurface: surface, hostAction,
+            reader: { readCurrentUiContext: () => ({ navigation: { area: 'session', screen: 'session' },
+                commands: [{ id: command.id, title: 'Cancel Dictation' }] }),
+                resolveCurrentUiCommand: id => id === command.id ? command : null, subscribe: () => () => {} },
+            readProjection: () => EMPTY_PLUGIN_UI_PROJECTION, readNavigationBinding: () => null,
+        }));
+        const executor = createActionExecutor({
+            uiCurrentContextAction: request => executeCurrentUiContextAction(request),
+            voiceConversationAction: async request => {
+                const result = await executeCurrentUiContextAction(request);
+                return result.ok ? result.result : result;
+            },
+        });
+        const context = { surface: 'plugin', authority: 'account_automation', serverId: account.serverId,
+            expectedAccountId: account.accountId,
+            actionCaller: { kind: 'plugin', pluginId: 'fixture.dictation', contributionLocalId: 'field',
+                occurrenceId: 'field-occurrence', sourceCustody: { kind: 'development', registeredRootId: 'dictation-root' } } } as const;
+        expect(await executor.execute('ui.voice_global.dictation.cancel', { commandId: command.id }, context))
+            .toEqual({ ok: true, result: { status: 'completed', dictationStatus: 'idle', inserted: false } });
+        expect(await executor.execute('ui.current_context.read', {}, context)).toMatchObject({ ok: false });
+    });
+
+    it('requires microphone approval for an exact mounted Dictation command and rejects retired fields', async () => {
+        let captures = 0;
+        const retirement = new AbortController();
+        const scope = { serverId: 'dictation-home', accountId: 'dictation-account' };
+        const command: CurrentUiContextResolvedCommand = {
+            id: 'current-ui:dictation-field', retirementSignal: retirement.signal,
+            command: { kind: 'voiceDictation', operation: 'start',
+                account: { scope, isCurrent: () => !retirement.signal.aborted, onRetire: () => ({ dispose() {} }) },
+                invoke: async () => { captures += 1; return { status: 'completed', dictationStatus: 'listening', inserted: false }; } },
+        };
+        unregister = registerCurrentUiContextActionPort((surface, hostAction) => createCurrentUiContextVoiceToolPort({
+            invocationSurface: surface, hostAction,
+            reader: { readCurrentUiContext: () => ({ navigation: { area: 'session', screen: 'session' },
+                commands: [{ id: command.id, title: 'Dictate' }] }),
+                resolveCurrentUiCommand: id => id === command.id && !retirement.signal.aborted ? command : null,
+                subscribe: () => () => {} },
+            readProjection: () => EMPTY_PLUGIN_UI_PROJECTION, readNavigationBinding: () => null,
+        }));
+        const executor = createActionExecutor({
+            uiCurrentContextAction: request => executeCurrentUiContextAction(request, { execute: executor.execute, context: request.context }),
+            voiceConversationAction: async request => {
+                const result = await executeCurrentUiContextAction(request);
+                return result.ok ? result.result : result;
+            },
+        });
+        expect(await executor.execute('ui.current_context.command.invoke', { commandId: command.id },
+            { surface: 'agent', authority: 'account_automation', ...scope, expectedAccountId: scope.accountId }))
+            .toMatchObject({ ok: false });
+        expect(captures).toBe(0);
+        expect(await executor.execute('ui.current_context.command.invoke', { commandId: command.id },
+            { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId }))
+            .toEqual({ ok: true, result: { status: 'completed', dictationStatus: 'listening', inserted: false } });
+        expect(captures).toBe(1);
+        expect(await executor.execute('ui.voice_global.dictation.finish', { commandId: command.id },
+            { surface: 'agent', authority: 'account_automation', serverId: scope.serverId, expectedAccountId: scope.accountId }))
+            .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });
+        expect(await executor.execute('ui.voice_global.dictation.start', { commandId: command.id },
+            { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: 'other-account' }))
+            .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });
+        expect(captures).toBe(1);
+        retirement.abort();
+        expect(await executor.execute('ui.voice_global.dictation.start', { commandId: command.id },
+            { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId }))
+            .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });
+        expect(captures).toBe(1);
+    });
+
     it('admits an exact authenticated Home continuation through human authority, not a local callback bypass', async () => {
         let completed = 0;
         const retirement = new AbortController();

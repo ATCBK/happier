@@ -1,8 +1,24 @@
-import { describe, expect, it } from 'vitest';
-import { matchWorkspaceRoutePatterns } from './workspaceRouteMatch';
+import { describe, expect, it, vi } from 'vitest';
+import { createWorkspaceRouteMatcher, matchWorkspaceRoutePatterns } from './workspaceRouteMatch';
 import { matchWorkspaceDestinationRoute } from './workspaceRoutes';
 
 describe('Expo destination route matching', () => {
+    it('reuses the prepared destination registry across repeated tab identity reads', () => {
+        // Observe real sorting without replacing route matching or its comparator.
+        const sorting = vi.spyOn(Array.prototype, 'sort');
+        try {
+            for (let i = 0; i < 100; i++) {
+                expect(matchWorkspaceDestinationRoute(`/session/session-${i}/runs/new`)).toEqual({
+                    routeKey: 'session/[id]/runs/new', params: { id: `session-${i}` },
+                });
+                expect(matchWorkspaceDestinationRoute('/settings/connected-services/connect')?.routeKey)
+                    .toBe('settings/connected-services/connect');
+            }
+            expect(sorting.mock.calls).toHaveLength(0);
+        } finally {
+            sorting.mockRestore();
+        }
+    });
     it('loads the connect journey instead of interpreting connect as a legacy service id', () => {
         expect(matchWorkspaceDestinationRoute('/settings/connected-services/connect')?.routeKey).toBe('settings/connected-services/connect');
     });
@@ -29,5 +45,17 @@ describe('Expo destination route matching', () => {
             routeKey: 'settings/agents/custom/[backendId]', params: { backendId: 'agent one' },
         });
         expect(matchWorkspaceRoutePatterns(routes, '/settings/agents/custom/a/extra')).toBeNull();
+    });
+    it('preserves required and optional plugin subpaths and malformed-path refusal in a prepared registry', () => {
+        const match = createWorkspaceRouteMatcher([
+            'plugins/[pluginId]/[[...path]]', 'plugins/[pluginId]/[...path]', 'plugins/[pluginId]/settings',
+        ]);
+        expect(match('/plugins/acme/settings')).toEqual({ routeKey: 'plugins/[pluginId]/settings', params: { pluginId: 'acme' } });
+        expect(match('/plugins/acme/a%2Fb/c#view')).toEqual({
+            routeKey: 'plugins/[pluginId]/[...path]', params: { pluginId: 'acme', path: 'a/b/c' },
+        });
+        expect(match('/plugins/acme')).toEqual({ routeKey: 'plugins/[pluginId]/[[...path]]', params: { pluginId: 'acme' } });
+        expect(match('/plugins/%ZZ')).toBeNull();
+        expect(match('/unregistered')).toBeNull();
     });
 });

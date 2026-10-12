@@ -29,12 +29,13 @@ function readOrCreateWindowId(): string | null {
 export function useWorkspaceState(input: Readonly<{
     initialTab: WorkspaceTab;
     windowId?: string;
-    admitState?: (state: WorkspaceState) => WorkspaceState;
+    admitState?: (state: WorkspaceState, retainedState?: WorkspaceState) => WorkspaceState;
 }>): Readonly<{
     state: WorkspaceState;
     dispatch: (action: WorkspaceAction) => void;
     getState: () => WorkspaceState;
     restoreAction: (action: WorkspaceAction) => void;
+    isRestored: boolean;
     isReady: boolean;
     windowId: string | null;
     applySharedRecord: (record: SharedWorkspaceTabs) => void;
@@ -63,7 +64,12 @@ export function useWorkspaceState(input: Readonly<{
     const layoutsRef = React.useRef(layouts);
     layoutsRef.current = layouts;
     const restoredScopeRef = React.useRef<string | null>(canRestore ? scopeKey : null);
-    const isReady = canRestore && restoredScopeRef.current === scopeKey;
+    // Core readiness admits the first restoration. Once that scope is restored,
+    // a pending sync publication must not replace its retained destinations with
+    // the initial preview and unmount editors whose handoff handles were consumed.
+    // A different or unavailable Account/window still withdraws the old layout.
+    const isRestored = scopeKey !== null && restoredScopeRef.current === scopeKey;
+    const isReady = canRestore && isRestored;
 
     React.useEffect(() => {
         if (!canRestore || !scopeKey || restoredScopeRef.current === scopeKey) return;
@@ -74,9 +80,9 @@ export function useWorkspaceState(input: Readonly<{
         setState(admitted);
     }, [canRestore, input.admitState, input.initialTab, scopeKey]);
 
-    const update = React.useCallback((next: WorkspaceState) => {
+    const update = React.useCallback((next: WorkspaceState, retainedState?: WorkspaceState) => {
         if (!isReady || !scopeKey || currentScopeRef.current !== scopeKey) return null;
-        next = input.admitState?.(next) ?? next;
+        next = input.admitState?.(next, retainedState) ?? next;
         if (next === stateRef.current) return null;
         stateRef.current = next;
         setState(next);
@@ -96,9 +102,10 @@ export function useWorkspaceState(input: Readonly<{
     }, [update]);
     const applySharedRecord = React.useCallback((record: SharedWorkspaceTabs) => {
         if (!isReady || currentScopeRef.current !== scopeKey) return;
-        update(reconcileWorkspaceSyncedTabs(stateRef.current, record, randomUUID));
+        const retainedState = stateRef.current;
+        update(reconcileWorkspaceSyncedTabs(retainedState, record, randomUUID), retainedState);
     }, [isReady, update, scopeKey]);
 
-    const getState = React.useCallback(() => isReady ? stateRef.current : fallbackState, [fallbackState, isReady]);
-    return { state: isReady ? state : fallbackState, dispatch, restoreAction, getState, isReady, windowId, applySharedRecord };
+    const getState = React.useCallback(() => isRestored ? stateRef.current : fallbackState, [fallbackState, isRestored]);
+    return { state: isRestored ? state : fallbackState, dispatch, restoreAction, getState, isRestored, isReady, windowId, applySharedRecord };
 }

@@ -14,7 +14,7 @@ import {
     type PluginUiLaunchInputV1,
 } from '@happier-dev/protocol/plugins/ui';
 
-import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, renderScreen, standardCleanup, withPopoverWebGlobals } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -503,7 +503,7 @@ function readRenderContext(): RenderContext {
     return props!.renderContext!;
 }
 
-async function renderPage(input: Readonly<{
+async function createPageRenderer(input: Readonly<{
     pluginId?: string;
     localId?: string;
     subPath?: string | null;
@@ -519,10 +519,9 @@ async function renderPage(input: Readonly<{
 }> = {}) {
     const { PluginAppPageScreen } = await import('./PluginAppPageScreen');
     const { AppShellPluginUiProjectionValueProvider } = await import('./AppShellPluginUiProjection');
-    const model = composeAppProjection(input.projection ?? daemonProjection());
     const wrap = input.wrap ?? ((children: React.ReactNode) => <>{children}</>);
     // The page stands in the app's pane host (its details pane), which the app root provides.
-    const screen = await renderScreen(
+    return (model: PluginUiProjectionModel) => (
         <AppPaneProvider>
         <AppShellPluginUiProjectionValueProvider
             value={{
@@ -548,12 +547,15 @@ async function renderPage(input: Readonly<{
                 )}
             </AppTargetNavigationScope>
         </AppShellPluginUiProjectionValueProvider>
-        </AppPaneProvider>,
-        // The exact target snapshot and Account-mode disclosure are both required
-        // mount facts. Use the canonical drain so this route test observes the
-        // admitted renderer rather than its fail-closed interim.
+        </AppPaneProvider>
     );
-    return screen;
+}
+
+async function renderPage(input: Parameters<typeof createPageRenderer>[0] = {}) {
+    const render = await createPageRenderer(input);
+    // Drain exact target admission and Account-mode disclosure before reading
+    // the admitted renderer rather than its fail-closed interim.
+    return await renderScreen(render(composeAppProjection(input.projection ?? daemonProjection())));
 }
 
 type PageHostProps = Readonly<{
@@ -774,6 +776,69 @@ afterEach(async () => {
 });
 
 describe('plugin app page host route (EU-5b)', () => {
+    it('keeps the exact mounted page and context through a selected-origin presence drop', async () => {
+        const render = await createPageRenderer();
+        const model = pageModel();
+        const screen = await renderScreen(render(model));
+        await vi.waitFor(() => expect(reactNativeSurfaceInstanceRefs).not.toHaveLength(0));
+        expect((reactNativeSurfaceProps.at(-1) as { interactionEnabled: boolean }).interactionEnabled).toBe(true);
+        const instance = reactNativeSurfaceInstanceRefs.at(-1);
+        const context = readRenderContext();
+        const machine = storage.getState().machines['machine-1']!;
+        const offline = { ...machine, active: false, activeAt: 0 };
+        const offlineModel = unionPluginUiProjections([{
+            machineId: 'machine-1', serverId: 'server-1', serverIdentityId: 'srv_account_one',
+            projection: normalizePluginUiProjection(PluginProjectionV2Schema.parse(daemonProjection())),
+            phase: 'retainedOffline', interactionEnabled: false,
+        }]).pluginUiProjection!;
+        const { act } = await import('react-test-renderer');
+        await act(async () => { storage.setState({ machines: { 'machine-1': offline },
+            machineListByServerId: { 'server-1': [offline] } }); });
+        await screen.update(render(offlineModel));
+        expect(screen.findByTestId('plugin-app-page-loading')).toBeNull();
+        expect(screen.findByTestId('plugin-surface-unavailable')).toBeNull();
+        expect(screen.findByTestId('plugin-react-native-surface-proxy')).toBeTruthy();
+        expect(reactNativeSurfaceInstanceRefs.at(-1)).toBe(instance);
+        expect(context.signal.aborted).toBe(false);
+        expect(readRenderContext().signal).toBe(context.signal);
+        expect((reactNativeSurfaceProps.at(-1) as { interactionEnabled: boolean }).interactionEnabled).toBe(false);
+        await act(async () => { storage.setState({ endpointStatus: 'online', machines: { 'machine-1': machine },
+            machineListByServerId: { 'server-1': [machine] } }); });
+        await screen.update(render(model));
+        expect(reactNativeSurfaceInstanceRefs.at(-1)).toBe(instance);
+        expect(readRenderContext().signal).toBe(context.signal);
+        expect((reactNativeSurfaceProps.at(-1) as { interactionEnabled: boolean }).interactionEnabled).toBe(true);
+    });
+
+    it('keeps a described page loading while its execution origin is unresolved', async () => {
+        const { PluginAppPageScreen } = await import('./PluginAppPageScreen');
+        const { AppShellPluginUiProjectionValueProvider } = await import('./AppShellPluginUiProjection');
+        const current = normalizePluginUiProjection(PluginProjectionV2Schema.parse(daemonProjection()));
+        const older = { ...current, installedPackagesById: { ...current.installedPackagesById,
+            [NOTES_PLUGIN_ID]: { ...current.installedPackagesById[NOTES_PLUGIN_ID]!, version: '0.1.0' } } };
+        const selectableOrigin = (machineId: string) => ({ serverIdentityId: 'srv_account_one',
+            sourceRef: { machineId, pluginId: NOTES_PLUGIN_ID,
+                sourceCustody: current.installedPackagesById[NOTES_PLUGIN_ID]!.sourceCustody! } });
+        const union = unionPluginUiProjections([
+            { machineId: 'machine-1', serverId: 'server-1', serverIdentityId: 'srv_account_one',
+                projection: current, phase: 'current', interactionEnabled: true, selectableExecutionOrigins: [selectableOrigin('machine-1')] },
+            { machineId: 'machine-2', serverId: 'server-1', serverIdentityId: 'srv_account_one',
+                projection: older, phase: 'current', interactionEnabled: true, selectableExecutionOrigins: [selectableOrigin('machine-2')] },
+        ]);
+        const screen = await renderScreen(
+            <AppShellPluginUiProjectionValueProvider value={{
+                ...union, pluginBrowserProjection: null, platform: 'web',
+                accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' },
+                reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {},
+            }}>
+                <PluginAppPageScreen pluginId={NOTES_PLUGIN_ID} localId="notes" subPath="" />
+            </AppShellPluginUiProjectionValueProvider>,
+        );
+        expect(screen.findByTestId('plugin-app-page-loading')).toBeTruthy();
+        expect(screen.findByTestId('plugin-app-page-unavailable')).toBeNull();
+        expect(reactNativeSurfaceProps).toHaveLength(0);
+    });
+
     it('keeps singleton page mount identity shared when hosted in distinct workspace tabs', async () => {
         for (const tabId of ['tab-notes-a', 'tab-notes-b']) {
             await renderPage({
@@ -879,10 +944,9 @@ describe('plugin app page host route (EU-5b)', () => {
 
         const headerRight = stackOptions.at(-1)?.headerRight;
         expect(typeof headerRight).toBe('function');
-        const header = (headerRight as () => React.ReactElement<{
-            signal?: AbortSignal;
-            isCurrent?: () => boolean;
-        }>)();
+        const { PluginAppPageHeaderActions } = await import('./pluginAppPageHeaderActions');
+        const headerScreen = await renderScreen((headerRight as () => React.ReactElement)());
+        const header = headerScreen.root.findByType(PluginAppPageHeaderActions);
         expect(header.props.signal?.aborted).toBe(false);
         expect(header.props.isCurrent?.()).toBe(true);
 
@@ -935,10 +999,26 @@ describe('plugin app page host route (EU-5b)', () => {
         expect(targetedContributionsReadMock).not.toHaveBeenCalled();
     });
 
-    it('mounts the declared page at its root with an empty plugin-local location', async () => {
-        await renderPage();
+    it('mounts the declared page at its root with one header execution chip and no duplicate body chip', () => withPopoverWebGlobals(async () => {
+        const screen = await renderPage();
+        expect(screen.findByTestId('plugin-surface-execution.chip')).toBeNull();
+        const headerRight = stackOptions.at(-1)?.headerRight;
+        const header = await renderScreen((headerRight as () => React.ReactElement)());
+        expect(header.findByTestId('plugin-page-execution.chip')).not.toBeNull();
 
         const context = readRenderContext();
+        const mountedSurface = reactNativeSurfaceInstanceRefs.at(-1);
+        const selectedOrigins = storage.getState().settings.machineAdministrationSelectionsV1;
+        await header.pressByTestIdAsync('plugin-page-execution.chip');
+        expect(header.findHostByTestId('plugin-page-execution.picker-list')).not.toBeNull();
+        expect(screen.findByTestId('plugin-app-page-loading')).toBeNull();
+        expect(readRenderContext().hostApi).toBe(context.hostApi);
+        expect(readRenderContext().signal.aborted).toBe(false);
+        await header.pressByTestIdAsync('plugin-page-execution.chip');
+        const chip = header.findHostByTestId('plugin-page-execution.chip');
+        expect(chip?.props.accessibilityState?.expanded ?? chip?.props['aria-expanded']).toBe(false);
+        expect(reactNativeSurfaceInstanceRefs.at(-1)).toBe(mountedSurface);
+        expect(storage.getState().settings.machineAdministrationSelectionsV1).toBe(selectedOrigins);
         expect(context.plugin.id).toBe(NOTES_PLUGIN_ID);
         expect(context.surface.mount).toEqual({
             kind: 'destination',
@@ -972,6 +1052,17 @@ describe('plugin app page host route (EU-5b)', () => {
             points: [],
         });
         expect(context.subPath).toBe('');
+    }));
+
+    it('retains execution context in the header when the admitted page is unavailable', async () => {
+        const screen = await renderPage({ projection: daemonProjection({ availability: {
+            state: 'disabled', reason: 'plugin_disabled', diagnostics: [],
+        } }) });
+        expect(screen.findByTestId('plugin-app-page-unavailable')).not.toBeNull();
+        expect(screen.findByTestId('plugin-surface-execution.chip')).toBeNull();
+        const headerRight = stackOptions.at(-1)?.headerRight;
+        const header = await renderScreen((headerRight as () => React.ReactElement)());
+        expect(header.findByTestId('plugin-page-execution.chip')).not.toBeNull();
     });
 
     it('does not construct a route-local destination binding outside the app target scope', async () => {
@@ -1548,7 +1639,7 @@ describe('plugin app page host route (EU-5b)', () => {
         expect(readRenderContext().launchInput).toBeUndefined();
     });
 
-    it('clears an old mounted launch input when the compact sidebar reopens the same page without remounting it', async () => {
+    it('clears an old mounted launch input when the launcher reopens the same page without remounting it', async () => {
         const PageHost = await loadPageHost();
         const model = pageModel();
         routerLocation.pathname = NOTES_PAGE_PATH;
@@ -1558,12 +1649,10 @@ describe('plugin app page host route (EU-5b)', () => {
         expect(readRenderContext().launchInput).toEqual({ recordId: 'old' });
         expect(routerPushes).toEqual([]);
         const mountedSurface = reactNativeSurfaceInstanceRefs.at(-1);
-        const sidebar = screen.findByTestId('compact-app-destination:plugin:acme.notes:notes');
-
-        const { act } = await import('react-test-renderer');
-        await act(async () => {
-            sidebar?.props.onPress();
-        });
+        // Plugin destinations live in the launcher's existing More disclosure.
+        // A missing row must fail the test rather than silently skip reopening.
+        await screen.pressByTestIdAsync('phone-launcher-more');
+        await screen.pressByTestIdAsync('compact-app-destination:plugin:acme.notes:notes');
 
         expect(readRenderContext().launchInput).toBeUndefined();
         expect(routerPushes).toEqual([]);

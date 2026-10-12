@@ -150,24 +150,49 @@ describe('WorkspaceShell', () => {
         expect(state.focusedGroupId).toBe('group:2');
     });
 
-    it('retains visited tabs without mounting unopened tabs and releases closed bodies', async () => {
-        const screen = await renderWorkspace(initialState());
-        expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => node.props.tabId)).toEqual(['b']);
-        await act(async () => { screen.findByTestId('workspace-tab-a')?.props.onPress(); });
-        expect(stateOf(screen).groups['group:1'].activeTabId).toBe('a');
+    it('restores 50 tabs without mounting unopened bodies, retains visited state and releases closed bodies', async () => {
+        const restoredTab = (index: number) => ({ id: `restored-${index}`, target: { kind: 'newTab', params: {} }, pinned: false, preview: false });
+        let initial = createWorkspaceState(restoredTab(0));
+        for (let index = 1; index < 50; index++) {
+            initial = reduceWorkspaceState(initial, { type: 'openTab', groupId: 'group:1', tab: restoredTab(index) });
+        }
+        const screen = await renderWorkspace(initial);
+        const body = (tabId: string) => screen.root.findAllByType('StatefulRouteBodyProbe').find(node => node.props.tabId === tabId)!;
+        const mountedBodies = () => screen.root.findAllByType('StatefulRouteBodyProbe').map(node => node.props.tabId);
+        expect(stateOf(screen).groups['group:1'].tabIds).toHaveLength(50);
+        expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => node.props.tabId)).toEqual(['restored-49']);
+        expect(mountedBodies()).toEqual(['restored-49']);
+        const lastMount = body('restored-49').props.mount;
+        await act(async () => {
+            body('restored-49').props.setDraft('Keep the restored draft');
+            body('restored-49').props.setViewport(387);
+            screen.findByTestId('workspace-tab-restored-0')?.props.onPress();
+        });
+        expect(stateOf(screen).groups['group:1'].activeTabId).toBe('restored-0');
         expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => [node.props.tabId, node.props.visible, node.props.focused]))
-            .toEqual([['a', true, true], ['b', false, false]]);
-        await act(async () => { screen.findByTestId('workspace-tab-b')?.props.onPress(); });
+            .toEqual([['restored-0', true, true], ['restored-49', false, false]]);
+        expect(mountedBodies()).toEqual(['restored-0', 'restored-49']);
+        expect(body('restored-49').props).toMatchObject({ mount: lastMount, draft: 'Keep the restored draft', viewport: 387 });
+        const firstMount = body('restored-0').props.mount;
+        await act(async () => {
+            body('restored-0').props.setDraft('Keep the newly visited draft');
+            body('restored-0').props.setViewport(92);
+            screen.findByTestId('workspace-tab-restored-49')?.props.onPress();
+        });
         expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => [node.props.tabId, node.props.visible, node.props.focused]))
-            .toEqual([['a', false, false], ['b', true, true]]);
-        await chooseFromTabMenu(screen, 'a', 'workspace-tab-menu-pin');
-        expect(stateOf(screen).tabs.a).toMatchObject({ pinned: true, preview: false });
-        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-pin');
-        expect(stateOf(screen).tabs.b).toMatchObject({ pinned: true, preview: false });
-        await chooseFromTabMenu(screen, 'b', 'workspace-tab-menu-close');
-        expect(stateOf(screen).tabs.b).toBeUndefined();
-        expect(stateOf(screen).groups['group:1'].activeTabId).toBe('a');
-        expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => node.props.tabId)).toEqual(['a']);
+            .toEqual([['restored-0', false, false], ['restored-49', true, true]]);
+        expect(body('restored-49').props).toMatchObject({ mount: lastMount, draft: 'Keep the restored draft', viewport: 387 });
+        expect(body('restored-0').props).toMatchObject({ mount: firstMount, draft: 'Keep the newly visited draft', viewport: 92 });
+        await chooseFromTabMenu(screen, 'restored-0', 'workspace-tab-menu-pin');
+        expect(stateOf(screen).tabs['restored-0']).toMatchObject({ pinned: true, preview: false });
+        await chooseFromTabMenu(screen, 'restored-49', 'workspace-tab-menu-pin');
+        expect(stateOf(screen).tabs['restored-49']).toMatchObject({ pinned: true, preview: false });
+        await chooseFromTabMenu(screen, 'restored-0', 'workspace-tab-menu-close');
+        expect(stateOf(screen).tabs['restored-0']).toBeUndefined();
+        expect(stateOf(screen).groups['group:1'].activeTabId).toBe('restored-49');
+        expect(screen.root.findAllByType(DestinationInstanceHost).map((node) => node.props.tabId)).toEqual(['restored-49']);
+        expect(mountedBodies()).toEqual(['restored-49']);
+        expect(body('restored-49').props).toMatchObject({ mount: lastMount, draft: 'Keep the restored draft', viewport: 387 });
     });
 
     it('preserves the mounted body, draft and viewport when a tab moves across groups', async () => {

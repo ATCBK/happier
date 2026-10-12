@@ -273,6 +273,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
             onUnpin={(tabId) => workspace.dispatch({ type: 'setPinned', tabId, pinned: false })}
             onClose={(tabId) => workspace.closeTab(group.id, tabId)}
             onTabMenu={(tabId, event) => setMenu({ tabId, anchor: resolvePointerMenuAnchor(event) })}
+            onDismissTabMenu={(tabId) => setMenu(current => current?.tabId === tabId ? null : current)}
             entityDragDrop={entityDragDrop}
             dropSlot={dropCue.slot}
             dropRingTabKey={dropCue.pulseTabKey}

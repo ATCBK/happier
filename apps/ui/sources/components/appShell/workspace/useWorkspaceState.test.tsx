@@ -29,8 +29,8 @@ const pluginCatalog = [{ id: pluginKind, kind: 'plugin', container: 'appPage', d
 }] satisfies readonly CompactAppDestination[];
 const duplicateState = () => reduceWorkspaceState(createWorkspaceState({ id: 'first', target: { kind: pluginKind, params: { subPath: 'first' } }, pinned: false, preview: false }),
     { type: 'openTab', groupId: 'group:1', tab: { id: 'second', target: { kind: pluginKind, params: { subPath: 'last' } }, pinned: false, preview: false } });
-const admission = (catalog: readonly CompactAppDestination[]) => (state: WorkspaceState) => {
-    return admitWorkspaceSingletonState(state, catalog, () => 'blank');
+const admission = (catalog: readonly CompactAppDestination[]) => (state: WorkspaceState, retainedState?: WorkspaceState) => {
+    return admitWorkspaceSingletonState(state, catalog, () => 'blank', retainedState);
 };
 
 vi.mock('@/sync/domains/state/storage', () => createStorageModuleStub({
@@ -43,6 +43,23 @@ vi.mock('@/sync/domains/state/storage', () => createStorageModuleStub({
 }));
 
 describe('useWorkspaceState', () => {
+    it('keeps a local singleton instance when a remote client opens the same destination under another ID', async () => {
+        storageState.ready = true;
+        const active = { id: 'device-editor', target: { kind: pluginKind, params: { subPath: 'SECOND' } }, pinned: true, preview: false };
+        const scopeKey = workspaceLayoutScopeKey({ ...storageState.scope, windowId: 'window-a' });
+        storageState.layouts = { [scopeKey]: createWorkspaceState(active) };
+        const { useWorkspaceState } = await import('./useWorkspaceState');
+        const hook = await renderHook(() => useWorkspaceState({ initialTab, windowId: 'window-a', admitState: admission(pluginCatalog) }));
+        const original = hook.getCurrent().state;
+        act(() => hook.getCurrent().applySharedRecord({ v: 1, order: ['peer-editor'], pairs: [], tabsById: {
+            'peer-editor': { id: 'peer-editor', target: { kind: pluginKind, params: { subPath: 'remote navigation' } }, pinned: false },
+        } }));
+        expect(hook.getCurrent().state.groups['group:1'].activeTabId).toBe('device-editor');
+        expect(hook.getCurrent().state.tabs['device-editor'].target).toBe(original.tabs['device-editor'].target);
+        expect(Object.keys(hook.getCurrent().state.tabs)).toEqual(['device-editor']);
+        expect(saveLayouts).not.toHaveBeenCalled();
+        await hook.unmount();
+    });
     it.each(['restore', 'sync'] as const)('admits duplicate workflow details from %s without writing or changing unrelated tabs', async source => {
         storageState.ready = true;
         const first = { id: 'workflow-first', target: { kind: 'workflow', params: { id: 'workflow-1' } }, pinned: true, preview: false };
@@ -55,7 +72,7 @@ describe('useWorkspaceState', () => {
         const hook = await renderHook(() => useWorkspaceState({ initialTab, windowId: 'window-a', admitState: admission([]) }));
         if (source === 'sync') act(() => hook.getCurrent().applySharedRecord({ v: 1,
             order: ['workflow-first', 'session-a', 'workflow-duplicate'], pairs: [], tabsById: {
-                'workflow-first': first, 'session-a': storedTab, 'workflow-duplicate': { ...duplicate, preview: false },
+                'workflow-first': first, 'session-a': storedTab, 'workflow-duplicate': { id: duplicate.id, target: duplicate.target, pinned: duplicate.pinned },
             } }));
         expect(Object.values(hook.getCurrent().state.tabs).filter(tab => tab.target.kind === 'workflow')).toHaveLength(1);
         expect(hook.getCurrent().state.tabs['workflow-first']).toMatchObject({ pinned: source === 'restore', preview: false });

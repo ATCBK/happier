@@ -2,7 +2,13 @@ import * as React from 'react';
 import { stripGroupSegmentsFromPath } from 'expo-router/build/matchers';
 import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { resolveProjectCockpitRouteFromPathname } from '@/components/workspaceCockpit/project/projectCockpitState';
+import { normalizeProjectPage, resolveProjectCockpitRouteFromPathname } from '@/components/workspaceCockpit/project/projectCockpitState';
+import { readProjectRouteWorktreeSelection, resolveProjectRouteHeaderTitle } from '@/components/projects/detail/projectRouteState';
+import { projectPageLabel } from '@/components/projects/shell/ProjectShellHeader';
+import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
+import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
+import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
+import { EMPTY_WORKSPACE_REFS, readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
 import type {
     PluginUiDestinationPlacementV1,
     PluginUiDestinationReferenceV1,
@@ -35,7 +41,7 @@ import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
 import type { KeyboardCommandId } from '@/keyboard/types';
 import { selectPluginRightSidebarTabPlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
-import { useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
+import { getStorage, useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
 import { t, type TranslationKeyNoParams } from '@/text';
 import { UNIVERSAL_SEARCH_ROUTE } from '@/components/appShell/search/universalSearchRoutePresentation';
 import {
@@ -76,7 +82,7 @@ export const SESSIONS_DESTINATION_ID = 'sessions';
  * typed against this list, so a column id without a renderer is a type error. A placement naming any
  * other column falls back to the rail.
  */
-export const BUILTIN_APP_SHELL_COLUMN_IDS = ['sessions', 'projects', 'workflows', 'boards', 'plugins', 'settings'] as const;
+export const BUILTIN_APP_SHELL_COLUMN_IDS = ['sessions', 'projects', 'workflows', 'boards', 'plugins', 'settings', 'machines'] as const;
 export type BuiltinAppShellColumnId = typeof BUILTIN_APP_SHELL_COLUMN_IDS[number];
 
 export function isBuiltinAppShellColumnId(value: string): value is BuiltinAppShellColumnId {
@@ -87,12 +93,15 @@ export function isBuiltinAppShellColumnId(value: string): value is BuiltinAppShe
  * The columns another destination may be placed in. Settings is not one: settings contributions are
  * settings pages, with the Settings catalog as their one owner. Workflows is not one either: its
  * column lists workflow sections from their own owners (FIN 04 §3.3), not other destinations. Nor is
- * Boards: its column lists the user's boards (INT §5.1).
+ * Boards: its column lists the user's boards (INT §5.1). Nor is Machines: its column is the machine
+ * list (plan machine-resources 10 §4.2).
  */
-export type PlaceableAppShellColumnId = Exclude<BuiltinAppShellColumnId, 'settings' | 'workflows' | 'boards'>;
+export type PlaceableAppShellColumnId = Exclude<BuiltinAppShellColumnId, 'settings' | 'workflows' | 'boards' | 'machines'>;
+
+const UNPLACEABLE_APP_SHELL_COLUMN_IDS: ReadonlySet<string> = new Set(['settings', 'workflows', 'boards', 'machines']);
 
 function isPlaceableAppShellColumnId(value: string): value is PlaceableAppShellColumnId {
-    return isBuiltinAppShellColumnId(value) && value !== 'settings' && value !== 'workflows' && value !== 'boards';
+    return isBuiltinAppShellColumnId(value) && !UNPLACEABLE_APP_SHELL_COLUMN_IDS.has(value);
 }
 
 export type AppDestinationRailRegion = 'app' | 'plugins' | 'account';
@@ -135,6 +144,12 @@ export type CompactAppBuiltinDestination = CompactAppDestinationCommon & Readonl
     signal?: 'inboxCount';
     /** Offered by the command palette before anything is typed. */
     suggested?: true;
+    /**
+     * The rail already draws this destination as one of its own footer controls (Machines is the
+     * `app-rail-machines` icon and its popover), so the rail, its customizer and the phone launcher do
+     * not list it again; it stays a visible destination for the command palette and location.
+     */
+    railControl?: 'footer';
     availability: 'available' | 'unavailable';
 }>;
 
@@ -196,6 +211,7 @@ type BuiltinDestinationRow = Readonly<{
     shortcut?: KeyboardCommandId;
     signal?: 'inboxCount';
     suggested?: true;
+    railControl?: 'footer';
     available?: (availability: AppBuiltinDestinationAvailability) => boolean;
     activationAvailable?: (availability: AppBuiltinDestinationAvailability) => boolean;
     visibility?: CompactAppDestinationVisibility;
@@ -273,6 +289,14 @@ function readBuiltinDestinationRows(): readonly BuiltinDestinationRow[] {
         routePath: PLUGINS_APP_ROUTE, currentRoutePatterns: PLUGINS_APP_PAGE_PATTERNS,
     },
     {
+        // One Machines page with two doors (R1): this rail door opens it beside the machine list, without
+        // the Settings column; Settings → Machines is the other door. The rail's footer Machines icon is
+        // this destination's control (its popover), so no second rail icon is drawn.
+        id: 'machines', titleKey: 'settings.machines', icon: 'desktop', placement: { kind: 'rail', region: 'account' },
+        column: 'machines', activation: 'navigate', routePath: '/machines',
+        currentRoutePatterns: ['/machines/[...rest]'], railControl: 'footer',
+    },
+    {
         id: 'settings', titleKey: 'settings.title', icon: 'gear', placement: { kind: 'rail', region: 'account' },
         column: 'settings', activation: 'navigate', routePath: '/settings',
         currentRoutePatterns: ['/settings/[...rest]'], shortcut: 'settings.open', suggested: true,
@@ -284,6 +308,11 @@ function readBuiltinDestinationRows(): readonly BuiltinDestinationRow[] {
         } satisfies BuiltinDestinationRow] : []
     )),
     ];
+}
+
+/** A destination the rail draws as its own control, so rail lists (rail, customizer, phone launcher) skip it. */
+export function isRailControlDestination(destination: CompactAppDestination): boolean {
+    return destination.kind === 'builtin' && destination.railControl !== undefined;
 }
 
 /** Ordinary discovery honors contribution visibility; surface preferences remain surface-local. */
@@ -356,6 +385,7 @@ export function resolveCompactAppDestinations(input: Readonly<{
             ...(row.shortcut === undefined ? {} : { shortcut: row.shortcut }),
             ...(row.signal === undefined ? {} : { signal: row.signal }),
             ...(row.suggested === undefined ? {} : { suggested: row.suggested }),
+            ...(row.railControl === undefined ? {} : { railControl: row.railControl }),
             ...(row.visibility === undefined ? {} : { visibility: row.visibility }),
             availability: row.activationAvailable && !row.activationAvailable(input.builtins) ? 'unavailable' : 'available',
         }));
@@ -808,11 +838,11 @@ export type DestinationInstanceTitleEntry = Readonly<{ key: string; ref: Destina
 /**
  * The title of what is open, without asking any store: a Details target's own title (its file name,
  * "Board", a terminal), a settings page's title, or the catalog's title for a plugin page or an
- * app area. `null` when only live data can name it (a session) or nothing can.
+ * app area. `null` when only live data can name it (a session or Project) or nothing can.
  */
 function resolveStaticInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef): string | null {
     if (ref.kind === 'newTab') return t('workspaceBar.newTab');
-    if (ref.kind === 'session') return null;
+    if (ref.kind === 'session' || ref.kind === 'project') return null;
     if (ref.kind === 'sessionDetails') {
         const details = parseSessionPaneUrlState(ref.params)?.details;
         return details ? createSessionPaneDetailsTab(details)?.title ?? null : null;
@@ -827,11 +857,31 @@ function resolveStaticInstanceTitle(catalog: readonly CompactAppDestination[], r
     return resolveCurrentAppDestination(catalog, pathname)?.title ?? null;
 }
 
+function resolveProjectInstanceTitle(ref: DestinationRef, workspaceRefs: readonly WorkspaceRefV1[]): string | null {
+    if (!ref.params.workspaceRefId) return null;
+    const resolution = resolveWorkspaceRefById(workspaceRefs, ref.params.workspaceRefId, ref.params.serverId);
+    if (resolution.kind !== 'resolved') return null;
+    const selection = readProjectRouteWorktreeSelection({
+        rawWorktreeId: ref.params.worktreeId,
+        rawLegacyActiveRootPath: ref.params.activeRootPath,
+        defaultRootPath: resolution.ref.rootPath,
+    });
+    const project = resolveProjectRouteHeaderTitle(resolution.ref, selection.requestedRootPath);
+    const page = normalizeProjectPage(ref.params.pageId);
+    if (page) return `${project} · ${projectPageLabel(page)}`;
+    if (ref.params.pageId === 'terminal') return `${project} · ${t('settings.terminal')}`;
+    return project;
+}
+
 /**
  * The same title, read once without subscribing (a drag preview names what it carries and where it
  * lands only when the verdict changes). `null` when nothing can name it yet.
  */
 export function readDestinationInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef): string | null {
+    if (ref.kind === 'project') {
+        const state = readRegisteredStorageState();
+        return resolveProjectInstanceTitle(ref, state ? readProjectWorkspaceRefs(state) : EMPTY_WORKSPACE_REFS);
+    }
     const title = resolveStaticInstanceTitle(catalog, ref);
     if (title || ref.kind !== 'session' || !ref.params.id) return title;
     return readSessionDisplayTitle({ sessionId: ref.params.id, serverId: ref.params.serverId ?? null });
@@ -842,11 +892,14 @@ export function readDestinationInstanceTitle(catalog: readonly CompactAppDestina
  * destination"): a session's current name, a Details target's own name, a settings page or plugin
  * page title. One resolver for every tab bar, keyed by the caller's tab key; a key is absent when the
  * instance cannot be named yet, so the caller shows its saved title (loading, unavailable).
+ * Project names and page/checkout qualification come from the Project display owners.
  */
 export function useDestinationInstanceTitles(
     catalog: readonly CompactAppDestination[],
     entries: readonly DestinationInstanceTitleEntry[],
 ): ReadonlyMap<string, string> {
+    const hasProjects = entries.some(entry => entry.ref.kind === 'project');
+    const workspaceRefs = getStorage()(state => hasProjects ? readProjectWorkspaceRefs(state) : EMPTY_WORKSPACE_REFS);
     const sessionEntries = React.useMemo(() => entries.filter((entry) => entry.ref.kind === 'session'
         && typeof entry.ref.params.id === 'string' && entry.ref.params.id.length > 0), [entries]);
     const addresses = React.useMemo(() => sessionEntries.map((entry) => ({
@@ -863,7 +916,9 @@ export function useDestinationInstanceTitles(
     return React.useMemo(() => {
         const titles = new Map<string, string>();
         for (const entry of entries) {
-            const title = resolveStaticInstanceTitle(catalog, entry.ref);
+            const title = entry.ref.kind === 'project'
+                ? resolveProjectInstanceTitle(entry.ref, workspaceRefs)
+                : resolveStaticInstanceTitle(catalog, entry.ref);
             if (title) titles.set(entry.key, title);
         }
         sessionEntries.forEach((entry, index) => {
@@ -877,5 +932,5 @@ export function useDestinationInstanceTitles(
             if (name) titles.set(entry.key, name);
         });
         return titles;
-    }, [catalog, entries, sessionEntries, sessionTitles, discussionEntries, discussionTitles]);
+    }, [catalog, entries, workspaceRefs, sessionEntries, sessionTitles, discussionEntries, discussionTitles]);
 }

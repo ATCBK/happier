@@ -5,12 +5,15 @@ import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot'
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage, useAllMachines } from '@/sync/domains/state/storage';
 import { createUiClientActionReverseHandler } from '@/sync/ops/actions/clientActionReverseDispatch';
+import { getMountedWorkflowDraftAddresses, subscribeMountedWorkflowDraftOwners } from '@/sync/ops/actions/workflowAuthoringAction';
+import { workflowDraftClientRpcMethod } from '@happier-dev/protocol/actions/workflowAuthoringAction';
 
-function MachineClientActionBinding({ serverId, generation, accountId, machineId }: Readonly<{
+function MachineClientActionBinding({ serverId, generation, accountId, machineId, method }: Readonly<{
     serverId: string;
     generation: number;
     accountId: string;
     machineId: string;
+    method: string;
 }>): null {
     React.useEffect(() => {
         let mounted = true;
@@ -20,13 +23,13 @@ function MachineClientActionBinding({ serverId, generation, accountId, machineId
                 && storage.getState().profile?.id === accountId;
         } });
         const dispose = apiSocket.registerMachineScopedRpcHandler(
-            machineId, RPC_METHODS.UI_ACTION_EXECUTE, handler,
+            machineId, method, handler,
         );
         return () => {
             mounted = false;
             dispose();
         };
-    }, [serverId, generation, accountId, machineId]);
+    }, [serverId, generation, accountId, machineId, method]);
     return null;
 }
 
@@ -35,8 +38,13 @@ export function ClientActionReverseRuntime(): React.ReactElement | null {
     const { serverId, generation } = useActiveServerSnapshot();
     const accountId = storage(state => state.profile?.id ?? null);
     const machines = useAllMachines();
+    const addresses = React.useSyncExternalStore(subscribeMountedWorkflowDraftOwners,
+        getMountedWorkflowDraftAddresses, getMountedWorkflowDraftAddresses);
     if (!serverId || !accountId) return null;
     // Inventory changes retire only the removed Machine, not unrelated in-flight Actions.
-    return <>{machines.map(machine => <MachineClientActionBinding key={machine.id}
-        serverId={serverId} generation={generation} accountId={accountId} machineId={machine.id} />)}</>;
+    const methods = [...new Set([RPC_METHODS.UI_ACTION_EXECUTE, ...addresses.flatMap(address =>
+        address.scope.serverId === serverId && address.scope.accountId === accountId
+            ? [workflowDraftClientRpcMethod(address), workflowDraftClientRpcMethod({ scope: address.scope })] : [])])];
+    return <>{machines.flatMap(machine => methods.map(method => <MachineClientActionBinding key={`${machine.id}:${method}`}
+        serverId={serverId} generation={generation} accountId={accountId} machineId={machine.id} method={method} />))}</>;
 }

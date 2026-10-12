@@ -7,7 +7,8 @@ import { useWorkspacePresentation } from './useWorkspaceShellEnabled';
 export function WorkspaceAppShellProvider(props: Readonly<{ children: React.ReactNode }>) {
     const catalog = useCompactAppDestinations();
     const presentation = useWorkspacePresentation();
-    return <WorkspaceProvider enabled={presentation === 'shell'} phone={presentation === 'phone'} catalog={catalog}>
+    return <WorkspaceProvider enabled={presentation === 'shell'} phone={presentation === 'phone'}
+        deferred={presentation === 'deferred'} catalog={catalog}>
         {props.children}
     </WorkspaceProvider>;
 }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createWorkspaceTabsSync, parseWorkspaceTabs, type WorkspaceTabsSyncSnapshot } from './workspaceTabsSync';
-import { emptyWorkspaceTabs, type SharedWorkspaceTabs } from './workspaceSyncedTabs';
-import { normalizeWorkspaceSingletonTabs } from './workspaceDestinationPolicy';
+import { collectWorkspaceTabIntents, emptyWorkspaceTabs, projectWorkspaceSharedTabs, reconcileWorkspaceSyncedTabs, type SharedWorkspaceTabs } from './workspaceSyncedTabs';
+import { admitWorkspaceSingletonState, normalizeWorkspaceSingletonTabs } from './workspaceDestinationPolicy';
+import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
 import type { CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
 
 const tab = (id: string) => ({ id, target: { kind: 'settings', params: { pageId: id } }, pinned: false });
@@ -13,6 +14,70 @@ const singletonCatalog = [{ id: singletonKind, kind: 'plugin', container: 'appPa
 }] satisfies readonly CompactAppDestination[];
 
 describe('workspace KV synchronization', () => {
+    it('maps retained singleton membership, order and split pairs without changing its local destination', async () => {
+        const editor = { ...tab('device-editor'), target: { kind: singletonKind, params: { subPath: 'SECOND' } }, preview: false };
+        const peer = { ...tab('peer-editor'), target: { kind: singletonKind, params: { subPath: 'FIRST' } } };
+        let local = reduceWorkspaceState(createWorkspaceState(editor), { type: 'openTab', groupId: 'group:1', tab: { ...tab('other'), preview: false } });
+        let stored: SharedWorkspaceTabs = { v: 1, tabsById: { [peer.id]: peer, other: tab('other') }, order: [peer.id, 'other'], pairs: [[peer.id, 'other']] };
+        const controller = createWorkspaceTabsSync({ transport: {
+            read: async () => ({ value: stored, version: 1 }),
+            compareAndSet: async value => { stored = value; return { success: true as const, version: 2 }; },
+        }, getLocalRecord: () => projectWorkspaceSharedTabs(local), normalizeRecord: value => normalizeWorkspaceSingletonTabs(value, singletonCatalog),
+        onRecord: (value, localValue) => {
+            const retained = local;
+            local = admitWorkspaceSingletonState(reconcileWorkspaceSyncedTabs(local, localValue ?? value, () => 'blank'), singletonCatalog, () => 'blank', retained);
+        } });
+        await controller.refresh();
+        expect(local.tabs[editor.id]?.target).toBe(editor.target);
+        expect(local.tabs[peer.id]).toBeUndefined();
+        expect(local.tabPairs).toEqual([[editor.id, 'other']]);
+        const before = local;
+        local = reduceWorkspaceState(local, { type: 'reorderTab', groupId: 'group:1', tabId: editor.id, index: 1 });
+        controller.enqueue(collectWorkspaceTabIntents(before, local));
+        await controller.flush();
+        expect(stored.order).toEqual(['other', peer.id]);
+        const beforeSplit = local;
+        local = reduceWorkspaceState(local, { type: 'splitTab', tabId: editor.id, sourceGroupId: 'group:1', targetGroupId: 'group:1', newGroupId: 'second',
+            axis: 'row', placement: 'after', availableSizePx: 1200, minimumFirstSizePx: 300, minimumSecondSizePx: 300 });
+        controller.enqueue(collectWorkspaceTabIntents(beforeSplit, local));
+        await controller.flush();
+        expect(stored.pairs).toEqual([['other', peer.id]]);
+        expect(local.tabs[editor.id].target).toBe(editor.target);
+        expect(local.groups.second.activeTabId).toBe(editor.id);
+        controller.stop();
+    });
+    it.each(['close', 'retype'] as const)('does not send retained-instance edits to a peer identity after peer %s', async change => {
+        const editor = { ...tab('device-editor'), target: { kind: singletonKind, params: { subPath: 'SECOND' } }, preview: false };
+        const peer = { ...tab('peer-editor'), target: { kind: singletonKind, params: { subPath: 'FIRST' } } };
+        let local = createWorkspaceState(editor);
+        let stored: SharedWorkspaceTabs = { v: 1, tabsById: { [peer.id]: peer }, order: [peer.id], pairs: [] };
+        const writes: SharedWorkspaceTabs[] = [];
+        const controller = createWorkspaceTabsSync({ transport: {
+            read: async () => ({ value: stored, version: 1 }),
+            compareAndSet: async value => { writes.push(value); stored = value; return { success: true as const, version: 2 }; },
+        }, getLocalRecord: () => projectWorkspaceSharedTabs(local), normalizeRecord: value => normalizeWorkspaceSingletonTabs(value, singletonCatalog),
+        onRecord: (value, localValue) => {
+            const retained = local;
+            local = admitWorkspaceSingletonState(reconcileWorkspaceSyncedTabs(local, localValue ?? value, () => 'blank'), singletonCatalog, () => 'blank', retained);
+        } });
+        await controller.refresh();
+        stored = change === 'close' ? emptyWorkspaceTabs() : record(peer.id);
+        await controller.refresh();
+        const peerRecord = stored;
+        expect(local.tabs[editor.id].target).toBe(editor.target);
+        const beforePin = local;
+        local = reduceWorkspaceState(local, { type: 'setPinned', tabId: editor.id, pinned: true });
+        controller.enqueue(collectWorkspaceTabIntents(beforePin, local));
+        await controller.flush();
+        const beforeClose = local;
+        local = reduceWorkspaceState(local, { type: 'closeTab', groupId: 'group:1', tabId: editor.id,
+            newTab: { ...tab('blank'), target: { kind: 'newTab', params: {} }, preview: true }, remember: false });
+        controller.enqueue(collectWorkspaceTabIntents(beforeClose, local));
+        await controller.flush();
+        expect(stored).toBe(peerRecord);
+        expect(writes).toEqual([]);
+        controller.stop();
+    });
     it('rebases a retired workflow detail onto its matching definition rather than the first workflow tab', async () => {
         const other = { ...tab('other'), target: { kind: 'workflow', params: { id: 'workflow-2' } } };
         const remote = { ...tab('remote'), target: { kind: 'workflow', params: { id: 'workflow-1' } } };

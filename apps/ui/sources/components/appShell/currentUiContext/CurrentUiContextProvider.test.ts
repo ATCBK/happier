@@ -299,6 +299,53 @@ describe('CurrentUiContextProvider', () => {
         await hook.unmount();
     });
 
+    it('refuses an old opaque command after provider unmount and remount without invoking the replacement', async () => {
+        const readPorts = () => ({
+            publisher: useCurrentUiContextMountPublisher(),
+            reader: useOptionalCurrentUiContextReader(),
+        });
+        const original = await renderHook(readPorts, { wrapper: CurrentUiContextTestProvider });
+        const originalReader = requireCurrentUiContextReader(original.getCurrent().reader);
+        const originalPublication = original.getCurrent().publisher!.createMount();
+        let selectedPeriod = '7days';
+        await act(async () => {
+            originalPublication.publish({ commands: [{ title: 'Today', command: {
+                kind: 'hostLocal', invoke: () => {
+                    selectedPeriod = 'today';
+                    return { ok: true, result: { period: selectedPeriod } };
+                },
+            } }] });
+        });
+        const oldCommandId = originalReader.readCurrentUiContext()!.commands[0]!.id;
+        const oldRetirement = originalReader.resolveCurrentUiCommand(oldCommandId)!.retirementSignal;
+        await original.unmount();
+        expect(oldRetirement.aborted).toBe(true);
+
+        const replacement = await renderHook(readPorts, { wrapper: CurrentUiContextTestProvider });
+        try {
+            const reader = requireCurrentUiContextReader(replacement.getCurrent().reader);
+            const publication = replacement.getCurrent().publisher!.createMount();
+            await act(async () => {
+                publication.publish({ commands: [{ title: 'This month', command: {
+                    kind: 'hostLocal', invoke: () => {
+                        selectedPeriod = 'month';
+                        return { ok: true, result: { period: selectedPeriod } };
+                    },
+                } }] });
+            });
+            const port = createCurrentUiContextVoiceToolPort({ reader, readProjection: () => null, readNavigationBinding: () => null });
+            await expect(port.invokeCurrentUiCommand!({ commandId: oldCommandId })).resolves.toEqual({ ok: false, code: 'unavailable' });
+            expect(selectedPeriod).toBe('7days');
+            expect(reader.resolveCurrentUiCommand(oldCommandId)).toBeNull();
+
+            const currentCommandId = reader.readCurrentUiContext()!.commands[0]!.id;
+            await expect(port.invokeCurrentUiCommand!({ commandId: currentCommandId })).resolves.toEqual({ ok: true, result: { period: 'month' } });
+            expect(selectedPeriod).toBe('month');
+        } finally {
+            await replacement.unmount();
+        }
+    });
+
     it('aborts an in-flight private host command when its exact mount retires', async () => {
         const hook = await renderHook(() => ({ publisher: useCurrentUiContextMountPublisher(), reader: useOptionalCurrentUiContextReader() }),
             { wrapper: CurrentUiContextTestProvider });
@@ -494,6 +541,8 @@ describe('CurrentUiContextProvider', () => {
     });
 
     it('provides VoiceSessionRuntime its non-null reader through the AppShell provider wiring', async () => {
+        const { CanonicalVoiceSettingsSchema } = await import('@/sync/domains/settings/voiceSettings');
+        providerState.voiceSettings = CanonicalVoiceSettingsSchema.parse({});
         const createAssembly = vi.fn(() => ({ adapters: [], dispose: vi.fn(async () => {}) }));
         vi.doMock('@/voice/adapters/registerBuiltinVoiceAdapters', () => ({
             createBuiltinVoiceAdapterAssembly: createAssembly,
@@ -869,6 +918,15 @@ describe('CurrentUiContextProvider', () => {
         providerState.routeSegments = ['(app)', 'settings', 'voice'];
         providerState.settingsTitle = 'x'.repeat(10_000);
         await hook.rerender();
+        expect(reader.readCurrentUiContext()?.navigation.title).toBe(providerState.settingsTitle);
+        expect(reader.resolveCurrentUiCommand(commandId)).not.toBeNull();
+
+        await act(async () => {
+            publication.publish({ detail: { callback: () => undefined }, commands: [{
+                title: 'Invalid surface command', command: { kind: 'openSurface',
+                    destination: { pluginId: 'triage', localId: 'issues' } },
+            }] } as never);
+        });
         expect(reader.readCurrentUiContext()).toMatchObject({
             detail: { incomplete: true },
             commands: [],

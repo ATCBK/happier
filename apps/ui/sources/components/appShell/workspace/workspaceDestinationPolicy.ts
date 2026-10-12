@@ -11,7 +11,7 @@ export function isWorkspaceSingletonDestination(catalog: readonly CompactAppDest
     return workspaceSingletonDestinationIds(catalog).includes(target.kind);
 }
 
-/** Identity of an admitted merge, also used to validate pending sync aliases. */
+/** Identity of an admitted merge, also used to validate retained and pending sync aliases. */
 export function workspaceDestinationAdmissionIdentity(target: DestinationRef): string {
     if (target.kind !== 'workflow' && target.kind !== 'workflowRun') return target.kind;
     return JSON.stringify([target.kind, Object.keys(target.params).sort().map(key => [key, target.params[key]])]);
@@ -55,7 +55,23 @@ export function normalizeWorkspaceSingletonTabs(record: SharedWorkspaceTabs, cat
 }
 
 /** Local admission preserves disposition; remote sharing separately excludes previews. */
-export function admitWorkspaceSingletonState(state: WorkspaceState, catalog: readonly CompactAppDestination[], createId: () => string): WorkspaceState {
+export function admitWorkspaceSingletonState(state: WorkspaceState, catalog: readonly CompactAppDestination[], createId: () => string, retainedState?: WorkspaceState): WorkspaceState {
+    // A peer may use a different shared ID for an already-open singleton. Its
+    // membership must not retire this window's retained instance or navigate it.
+    // Ordinary local navigation/restoration still uses the usual admission below.
+    if (retainedState) {
+        const singletonKinds = new Set(workspaceSingletonDestinationIds(catalog));
+        const retainedKeys = new Set(Object.values(retainedState.tabs).filter(tab => state.tabs[tab.id])
+            .map(tab => destinationAdmissionKey(tab.target, singletonKinds)).filter(key => key !== null));
+        for (const tab of Object.values(state.tabs)) {
+            if (retainedState.tabs[tab.id]) continue;
+            const key = destinationAdmissionKey(tab.target, singletonKinds);
+            if (key === null || !retainedKeys.has(key)) continue;
+            const group = Object.values(state.groups).find(group => group.tabIds.includes(tab.id));
+            if (group) state = reduceWorkspaceState(state, { type: 'closeTab', groupId: group.id, tabId: tab.id,
+                newTab: createWorkspaceEmptyTab(createId()), remember: false });
+        }
+    }
     const order = collectSplitCanvasLeaves(state.root).flatMap(leaf => state.groups[leaf.payload.groupId].tabIds);
     const singletonKinds = new Set(workspaceSingletonDestinationIds(catalog));
     const intentionalPinByDestination = new Map<string, boolean>();

@@ -19,7 +19,6 @@ import {
 import type { PluginSurfaceDestinationNavigationBinding } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 import type { machinePluginStructuredMessageActionExecute } from '@/sync/ops/machineContributionRegistryProjection';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
-import { PLUGIN_PRESENT_USER_INTERACTION_DEADLINE_MS } from '@/components/plugins/hostApi/interactionLifetime';
 
 export type AppShellPluginUiActionExecute = (
     machineId: string,
@@ -139,7 +138,7 @@ export function createAppShellPluginUiInvocationHost(input: Readonly<{
                 contributedAction: {
                     machineId: input.machineId,
                     serverId: input.serverId ?? null,
-                    timeoutMs: input.timeoutMs ?? PLUGIN_PRESENT_USER_INTERACTION_DEADLINE_MS,
+                    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
                     ...(input.execute
                         ? { execute: input.execute as PluginSurfaceContributedActionTransport }
                         : {}),

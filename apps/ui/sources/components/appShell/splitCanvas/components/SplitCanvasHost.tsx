@@ -30,6 +30,7 @@ function roundRatio(value: number): number {
 }
 
 type MinimumSize = Readonly<{ width: number; height: number }>;
+type DividerSizes = Readonly<Record<SplitCanvasAxis, number>>;
 export type SplitCanvasRetainedLeafContentContext = Readonly<{
     leafId: string;
     isFocused: boolean;
@@ -58,24 +59,26 @@ export type SplitCanvasHostControls = Readonly<{
 function subtreeMinimumSize<TLeafPayload>(
     node: SplitCanvasNode<TLeafPayload>,
     getLeafMinimumSizePx: (leaf: SplitCanvasLeafNode<TLeafPayload>) => MinimumSize,
+    dividerSizePx: DividerSizes,
 ): MinimumSize {
     if (node.kind === 'leaf') return getLeafMinimumSizePx(node);
-    const first = subtreeMinimumSize(node.first, getLeafMinimumSizePx);
-    const second = subtreeMinimumSize(node.second, getLeafMinimumSizePx);
+    const first = subtreeMinimumSize(node.first, getLeafMinimumSizePx, dividerSizePx);
+    const second = subtreeMinimumSize(node.second, getLeafMinimumSizePx, dividerSizePx);
     return node.axis === 'row'
-        ? { width: first.width + second.width + SPLIT_CANVAS_DIVIDER_SIZE_PX.row, height: Math.max(first.height, second.height) }
-        : { width: Math.max(first.width, second.width), height: first.height + second.height + SPLIT_CANVAS_DIVIDER_SIZE_PX.column };
+        ? { width: first.width + second.width + dividerSizePx.row, height: Math.max(first.height, second.height) }
+        : { width: Math.max(first.width, second.width), height: first.height + second.height + dividerSizePx.column };
 }
 
 function splitNodeSizing<TLeafPayload>(
     node: Extract<SplitCanvasNode<TLeafPayload>, { kind: 'split' }>,
     size: MinimumSize,
     getLeafMinimumSizePx?: (leaf: SplitCanvasLeafNode<TLeafPayload>) => MinimumSize,
+    dividerSizePx: DividerSizes = SPLIT_CANVAS_DIVIDER_SIZE_PX,
 ) {
     const containerAxisSizePx = node.axis === 'row' ? size.width : size.height;
-    const availableSizePx = Math.max(0, containerAxisSizePx - SPLIT_CANVAS_DIVIDER_SIZE_PX[node.axis]);
-    const firstMinimum = getLeafMinimumSizePx ? subtreeMinimumSize(node.first, getLeafMinimumSizePx) : null;
-    const secondMinimum = getLeafMinimumSizePx ? subtreeMinimumSize(node.second, getLeafMinimumSizePx) : null;
+    const availableSizePx = Math.max(0, containerAxisSizePx - dividerSizePx[node.axis]);
+    const firstMinimum = getLeafMinimumSizePx ? subtreeMinimumSize(node.first, getLeafMinimumSizePx, dividerSizePx) : null;
+    const secondMinimum = getLeafMinimumSizePx ? subtreeMinimumSize(node.second, getLeafMinimumSizePx, dividerSizePx) : null;
     const minimumFirstSizePx = firstMinimum ? (node.axis === 'row' ? firstMinimum.width : firstMinimum.height) : 0;
     const minimumSecondSizePx = secondMinimum ? (node.axis === 'row' ? secondMinimum.width : secondMinimum.height) : 0;
     const hasMeasuredMinimums = firstMinimum !== null && secondMinimum !== null && availableSizePx > 0;
@@ -126,7 +129,11 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
      * rings the pane.
      */
     chrome?: 'framed' | 'flat';
+    /** Inset consumers use the same gutter for rendered dividers, pane rectangles and admission. */
+    gutterSizePx?: number;
 }> & SplitCanvasContentProps<TLeafPayload>) {
+    const dividerSizePx = React.useMemo<DividerSizes>(() => props.gutterSizePx === undefined
+        ? SPLIT_CANVAS_DIVIDER_SIZE_PX : { row: props.gutterSizePx, column: props.gutterSizePx }, [props.gutterSizePx]);
     const keyboardEnabled = props.keyboardEnabled ?? true;
     const inputModality = useSplitCanvasInputModality(keyboardEnabled);
     const leafCount = countSplitCanvasLeaves(props.state.root);
@@ -174,8 +181,8 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
         if (hostSize) {
             // Admission uses the current normal tree, including immediately after maximize or a split.
             size = collectSplitCanvasLeafRects(props.state.root, { x: 0, y: 0, ...hostSize }, {
-                dividerSizePx: SPLIT_CANVAS_DIVIDER_SIZE_PX,
-                resolveRatio: (node, nodeSize) => resolveSplitRatio(node.ratio, splitNodeSizing(node, nodeSize, props.getLeafMinimumSizePx)),
+                dividerSizePx,
+                resolveRatio: (node, nodeSize) => resolveSplitRatio(node.ratio, splitNodeSizing(node, nodeSize, props.getLeafMinimumSizePx, dividerSizePx)),
             }).find((rect) => rect.leafId === leafId);
         } else if (props.state.maximizedLeafId) {
             return null;
@@ -186,11 +193,11 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
         const extent = axis === 'row' ? size.width : size.height;
         const minimum = props.getLeafMinimumSizePx(leaf);
         const minimumExistingSizePx = axis === 'row' ? minimum.width : minimum.height;
-        const availableSizePx = extent - SPLIT_CANVAS_DIVIDER_SIZE_PX[axis];
+        const availableSizePx = extent - dividerSizePx[axis];
         if (!Number.isFinite(availableSizePx) || availableSizePx <= 0
             || !Number.isFinite(minimumExistingSizePx) || minimumExistingSizePx < 0) return null;
         return { availableSizePx, minimumExistingSizePx };
-    }, [props.getLeafMinimumSizePx, props.state.maximizedLeafId, props.state.root]);
+    }, [dividerSizePx, props.getLeafMinimumSizePx, props.state.maximizedLeafId, props.state.root]);
     React.useLayoutEffect(() => {
         if (!props.controlsRef) return;
         const controls: SplitCanvasHostControls = {
@@ -300,6 +307,7 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
                 getLeafMinimumSizePx={props.getLeafMinimumSizePx}
                 registerResize={registerResize}
                 publishLiveRatio={publishLiveRatio}
+                dividerSizePx={dividerSizePx}
             />
         );
     }, [
@@ -318,12 +326,13 @@ function SplitCanvasHostInner<TLeafPayload>(props: Readonly<{
         handleSplitRequest,
         registerResize,
         publishLiveRatio,
+        dividerSizePx,
     ]);
 
     if (!props.state.root) return null;
     const leafRects = collectSplitCanvasLeafRects(props.state.root, { x: 0, y: 0, width: hostSize?.width ?? 0, height: hostSize?.height ?? 0 }, {
-        dividerSizePx: SPLIT_CANVAS_DIVIDER_SIZE_PX,
-        resolveRatio: (node, size) => resolveSplitRatio(liveRatios[node.id] ?? node.ratio, splitNodeSizing(node, size, props.getLeafMinimumSizePx)),
+        dividerSizePx,
+        resolveRatio: (node, size) => resolveSplitRatio(liveRatios[node.id] ?? node.ratio, splitNodeSizing(node, size, props.getLeafMinimumSizePx, dividerSizePx)),
     });
 
     return (
@@ -560,6 +569,7 @@ function SplitNodeRenderer<TLeafPayload>(props: Readonly<{
     getLeafMinimumSizePx?: (leaf: SplitCanvasLeafNode<TLeafPayload>) => MinimumSize;
     registerResize: (splitId: string, resize: (ratio: number) => boolean) => () => void;
     publishLiveRatio: (splitId: string, ratio: number | null) => void;
+    dividerSizePx: DividerSizes;
 }>) {
     const [containerSize, setContainerSize] = React.useState({ width: 0, height: 0 });
     const [dragRatio, setDragRatio] = React.useState<number | null>(null);
@@ -569,7 +579,7 @@ function SplitNodeRenderer<TLeafPayload>(props: Readonly<{
     const secondVisible = !props.maximizedLeafId || splitCanvasSubtreeContainsLeaf(props.node.second, props.maximizedLeafId);
     const {
         containerAxisSizePx, availableSizePx, minimumFirstSizePx, minimumSecondSizePx, hasMeasuredMinimums, minRatio, maxRatio,
-    } = splitNodeSizing(props.node, containerSize, props.getLeafMinimumSizePx);
+    } = splitNodeSizing(props.node, containerSize, props.getLeafMinimumSizePx, props.dividerSizePx);
     const effectiveRatio = resolveSplitRatio(dragRatio ?? props.node.ratio, { minRatio, maxRatio });
     const inverseRatio = roundRatio(1 - effectiveRatio);
     React.useLayoutEffect(() => {
@@ -669,6 +679,7 @@ function SplitNodeRenderer<TLeafPayload>(props: Readonly<{
 
             {firstVisible && secondVisible ? (
                 <SplitCanvasDivider
+                    gutterSizePx={props.dividerSizePx[props.node.axis]}
                     splitId={props.node.id}
                     axis={props.node.axis}
                     containerSizePx={containerAxisSizePx}

@@ -16,6 +16,8 @@ export type WorkspaceOpenOptions = Readonly<{
     availableSizePx?: number;
     minimumFirstSizePx?: number;
     minimumSecondSizePx?: number;
+    /** Release a source pane only after navigation guards and destination admission succeed. */
+    onOpened?: () => void;
 }>;
 
 export type WorkspaceOpenDestination = Readonly<{ tabId: string; groupId: string }>;
@@ -120,7 +122,9 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             return target ? findOpenDestination(target) : null;
         },
         initialize(href: string) {
-            this.openHref(href, { replace: true });
+            // The navigator is already mounting this URL; adopt it rather than
+            // dispatching a replacement before its route is registered.
+            this.openHref(href, { replace: true }, false);
         },
         openHref(href: string, options: WorkspaceOpenOptions = {}, projectUrl = true): boolean {
             const target = resolveOpenTarget(href);
@@ -134,6 +138,17 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
             const admittedSingleton = singletonActions(state, target);
             const reusable = options.reuseExisting && !options.tabId ? findOpenDestination(target) : null;
             if (reusable && !admittedSingleton) {
+                const retained = state.tabs[reusable.tabId].target;
+                // Reuse retains pane state, but an explicitly selected Session
+                // address must qualify a legacy tab before it is projected again.
+                if (target.kind === 'session') {
+                    const params = { ...retained.params,
+                        ...(target.params.serverId ? { serverId: target.params.serverId } : {}),
+                        ...(target.params.accountId ? { accountId: target.params.accountId } : {}),
+                    };
+                    const qualified = { ...retained, params };
+                    if (!sameDestinationRef(retained, qualified)) input.dispatch({ type: 'setTarget', tabId: reusable.tabId, target: qualified });
+                }
                 if (mode !== 'preview') input.dispatch({ type: 'promoteTab', tabId: reusable.tabId });
                 input.dispatch({ type: 'activateTab', groupId: reusable.groupId, tabId: reusable.tabId });
             } else if (admittedSingleton) {
@@ -173,6 +188,7 @@ export function createWorkspaceNavigationAdapter(input: Readonly<{
                 }
             }
             visit(options.replace, projectUrl, true);
+            options.onOpened?.();
             return true;
         },
         activateTab(groupId: string, tabId: string) {

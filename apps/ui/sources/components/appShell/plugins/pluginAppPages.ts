@@ -62,7 +62,10 @@ function resolvePluginAppPageColumnPlacement(
         id: `${placement.id}:column`,
         binding: column.binding,
         renderer: column.renderer,
-        availability: column.availability,
+        // The column shares this page's unresolved producer selection. Its own
+        // renderer availability cannot turn that pending selection into a mount.
+        availability: placement.availability.state === 'resolving'
+            ? placement.availability : column.availability,
     });
 }
 

@@ -162,6 +162,7 @@ function WorkspaceCanvas(props: Readonly<{
         onRequestSplitLeaf={(input) => splitTab(workspace, { ...input, groupId: input.leafId })}
         keyboardEnabled={workspace.active}
         chrome="flat"
+        gutterSizePx={8}
     />;
 }
 

@@ -4,6 +4,7 @@ import { createWorkspaceState, reduceWorkspaceState } from './workspaceState';
 import { createWorkspaceNavigationAdapter } from './workspaceNavigationAdapter';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
 import { normalizeWorkspaceSingletonTabs } from './workspaceDestinationPolicy';
+import { applyCloseDetailsTab, applyOpenDetailsTab, createEmptyPaneDetailsState } from '../panes/details/workspace/detailsWorkspaceReducer';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -31,6 +32,32 @@ function harness(pages: Parameters<typeof resolveCompactAppDestinations>[0]['pag
 }
 
 describe('workspace navigation adapter', () => {
+    it('hands a pane destination off only after its main tab is admitted', () => {
+        const h = harness();
+        let sidebar = applyOpenDetailsTab(createEmptyPaneDetailsState(), {
+            tab: { key: 'board', kind: 'board', title: 'Board', resource: { kind: 'board' } }, openAs: 'pinned',
+        });
+        const onOpened = () => { sidebar = applyCloseDetailsTab(sidebar, 'board'); };
+        expect(h.adapter.openHref('/settings/usage', { mode: 'splitRight',
+            availableSizePx: 100, minimumFirstSizePx: 320, minimumSecondSizePx: 320, onOpened })).toBe(false);
+        expect(sidebar.tabsByKey.board).toBeDefined();
+        expect(h.adapter.openHref('/session/A1/details?serverId=home-a&details=board', { mode: 'newTab', onOpened })).toBe(true);
+        expect(sidebar.tabsByKey.board).toBeUndefined();
+        expect(sidebar.isOpen).toBe(false);
+        expect(h.active().target.kind).toBe('sessionDetails');
+    });
+
+    it('adopts a cold Usage deep link without replacing the navigator route being mounted', () => {
+        const h = harness();
+        h.adapter.initialize('/settings/usage');
+        expect(h.active().target).toMatchObject({ kind: 'settings', params: { pageId: 'usage' } });
+        expect(h.commits).toEqual([]);
+        expect(h.adapter.canGoBack).toBe(false);
+        h.adapter.openHref('/settings/account');
+        expect(h.commits.map(commit => commit.href)).toEqual(['/settings/account']);
+        expect(h.adapter.canGoBack).toBe(true);
+    });
+
     it('contracts restored duplicate Workflows hubs without dropping distinct workflow details', () => {
         const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });
         const normalized = normalizeWorkspaceSingletonTabs({ v: 1, order: ['hub-1', 'detail', 'hub-2'], pairs: [], tabsById: {
@@ -63,6 +90,8 @@ describe('workspace navigation adapter', () => {
         expect(h.adapter.findOpenHref('/session/A1?serverId=home-b&accountId=account-a')).toBeNull();
         h.adapter.openHref('/session/A1?serverId=home-a&accountId=account-a', { mode: 'newTab', reuseExisting: true });
         expect(Object.keys(h.state().tabs)).toEqual(['A']);
+        expect(h.active().target.params).toEqual({ id: 'A1', serverId: 'home-a', accountId: 'account-a' });
+        expect(h.commits.at(-1)?.href).toBe('/session/A1?serverId=home-a&accountId=account-a');
     });
     it('publishes a destination edge as one admitted layout without exposing an intermediate centre tab', () => {
         const h = harness();
@@ -227,7 +256,7 @@ describe('workspace navigation adapter', () => {
         h.adapter.initialize('/session/A1?serverId=home-a');
         h.adapter.step(-1);
         expect(h.adapter.history.index).toBe(0);
-        expect(h.commits).toHaveLength(1);
+        expect(h.commits).toHaveLength(0);
     });
     it('projects one history including tab switches and restores A2/A1/A2/B1', () => {
         const h = harness();

@@ -5,6 +5,9 @@ import { renderScreen } from '@/dev/testkit';
 import { usePluginSurfaceFocusEligibility, usePluginSurfaceCurrentUiContextEligibility, useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { WorkspaceNavigationContext, type WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
 import { createWorkspaceState } from './workspaceState';
+import { Stack } from './destinationRoute';
+import { useClaimedStackHeaderActions } from '@/components/navigation/stackHeaderActions';
+import { NavigationHeaderActions, PageNavigationContextActionsProvider } from '@/components/ui/layout/NavigationHeaderActions';
 import { resolveCompactAppDestinations } from '../destinations/compactAppDestinationCatalog';
 import {
     DestinationInstanceHost,
@@ -59,7 +62,54 @@ function FocusProbe() {
     });
 }
 
+const pageHeaderOptions = { headerRight: () => React.createElement('MachineContextChip', { testID: 'machine-context' }) };
+function PageHeaderActionsProbe() {
+    const actions = useClaimedStackHeaderActions();
+    return React.createElement('PageHeaderActionsProbe', {}, actions);
+}
+
 describe('DestinationInstanceHost', () => {
+    it('hands hosted desktop route actions to the page header once and retains them when content is loading', async () => {
+        const page = (ready: boolean) => <DestinationInstanceHost tabId="header-tab"
+            ref={{ kind: 'settings', params: {} }} pathname="/settings" focused visible
+            navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+            <Stack.Screen options={pageHeaderOptions} />
+            {ready ? <PageHeaderActionsProbe /> : React.createElement('LoadingBody')}
+        </DestinationInstanceHost>;
+        const screen = await renderScreen(page(true));
+        expect(screen.root.findByType('PageHeaderActionsProbe').findAllByProps({ testID: 'machine-context' })).toHaveLength(1);
+        expect(screen.root.findAllByProps({ testID: 'machine-context' })).toHaveLength(1);
+        await screen.update(page(false));
+        expect(screen.root.findAllByProps({ testID: 'machine-context' })).toHaveLength(1);
+    });
+    it('keeps phone route context beside page actions and after the renderer returns to loading', async () => {
+        const page = (ready: boolean) => <DestinationInstanceHost tabId="phone-header-tab" phone
+            ref={{ kind: 'settings', params: {} }} pathname="/settings" focused visible
+            navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+            <Stack.Screen options={pageHeaderOptions} />
+            <PageNavigationContextActionsProvider actions={pageHeaderOptions.headerRight()}>
+                {ready ? <NavigationHeaderActions primary={{ title: 'Save', onPress: () => {} }} /> : React.createElement('LoadingBody')}
+            </PageNavigationContextActionsProvider>
+        </DestinationInstanceHost>;
+        const screen = await renderScreen(page(true));
+        expect(screen.root.findAllByProps({ testID: 'machine-context' })).toHaveLength(1);
+        await screen.update(page(false));
+        expect(screen.root.findAllByProps({ testID: 'machine-context' })).toHaveLength(1);
+    });
+    it('withdraws old phone context when its provider and destination leave', async () => {
+        const page = (first: boolean) => <DestinationInstanceHost tabId={first ? 'first-phone' : 'second-phone'} phone
+            ref={{ kind: 'settings', params: {} }} pathname="/settings" focused visible
+            navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+            <Stack.Screen options={first ? pageHeaderOptions : { title: 'Other page' }} />
+            {first ? <PageNavigationContextActionsProvider actions={pageHeaderOptions.headerRight()}>
+                <NavigationHeaderActions primary={{ title: 'Save', onPress: () => {} }} />
+            </PageNavigationContextActionsProvider> : React.createElement('OtherPage')}
+        </DestinationInstanceHost>;
+        const screen = await renderScreen(page(true));
+        expect(screen.root.findAllByProps({ testID: 'machine-context' })).toHaveLength(1);
+        await screen.update(page(false));
+        expect(screen.root.findAllByProps({ testID: 'machine-context' })).toHaveLength(0);
+    });
     it('gives unhosted shell consumers the focused workspace route before Expo mirrors it', async () => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: true, friends: false } });
         const value = (id: string | null): WorkspaceNavigationContextValue => ({

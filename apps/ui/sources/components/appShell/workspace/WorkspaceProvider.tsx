@@ -25,6 +25,25 @@ import { useWorkspaceKeyboardShortcuts } from './useWorkspaceKeyboardShortcuts';
 import { WorkspaceRouteHostingContext } from './WorkspaceRouteHostingContext';
 import { useOptionalAppPaneFindSeedContext } from '../panes/AppPaneProvider';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { BROWSER_HISTORY_NAVIGATION_CHANGED } from '@/utils/navigation/browserHistoryNavigation';
+
+function readBrowserHref(): string | null {
+    return Platform.OS === 'web' && typeof window !== 'undefined'
+        ? `${window.location.pathname}${window.location.search}${window.location.hash}` : null;
+}
+
+function subscribeBrowserHref(changed: () => void): () => void {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {};
+    const target = window;
+    target.addEventListener(BROWSER_HISTORY_NAVIGATION_CHANGED, changed);
+    target.addEventListener('popstate', changed);
+    return () => {
+        target.removeEventListener(BROWSER_HISTORY_NAVIGATION_CHANGED, changed);
+        target.removeEventListener('popstate', changed);
+    };
+}
+
+const readServerHref = () => null;
 
 function runNavigation(navigate: () => void, intent?: 'history'): void {
     const result = runGuardedNavigation(navigate, intent);
@@ -39,6 +58,8 @@ export function WorkspaceProvider(props: Readonly<{
      * Web destinations retain their workspace host when only the viewport changes.
      */
     phone?: boolean;
+    /** A web shell awaiting onboarding teardown must not lend its editable routes to Expo. */
+    deferred?: boolean;
     catalog: readonly CompactAppDestination[];
     children: React.ReactNode | ((navigation: WorkspaceNavigationContextValue) => React.ReactNode);
 }>): React.ReactNode {
@@ -48,15 +69,14 @@ export function WorkspaceProvider(props: Readonly<{
     const router = useRouter();
     const pathname = usePathname();
     const params = useGlobalSearchParams();
+    const browserHref = React.useSyncExternalStore(subscribeBrowserHref, readBrowserHref, readServerHref);
     const scope = useActiveServerAccountScope();
     const findSeedContext = useOptionalAppPaneFindSeedContext();
     const findHandoff = findSeedContext?.fileFindSeedHandoff;
     const scopeKey = scope ? JSON.stringify([scope.serverId, scope.accountId]) : null;
     // Browser history is authoritative even when readiness changes before Expo updates its mirror.
     const routeHref = (() => {
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-            return `${window.location.pathname}${window.location.search}${window.location.hash}`;
-        }
+        if (browserHref !== null) return browserHref;
         const query = new URLSearchParams();
         for (const [key, value] of Object.entries(params)) {
             if (typeof value === 'string') query.set(key, value);
@@ -66,7 +86,11 @@ export function WorkspaceProvider(props: Readonly<{
     const phone = props.phone === true && !props.enabled;
     // Width changes presentation, never the owner or lifetime of an admitted web destination.
     const routeDestination = resolveDestinationRefFromHref(props.catalog, routeHref);
-    const canHostRoutes = props.enabled || (phone && Platform.OS === 'web');
+    // Deferred web admission precedes shell presentation during onboarding
+    // teardown. Lending an editable body to Expo while the shell is absent
+    // would consume its handoff before the retained host can take custody.
+    // Native phones still lend their routes to the native stack.
+    const canHostRoutes = props.enabled || ((phone || props.deferred === true) && Platform.OS === 'web');
     const ownsHref = React.useCallback((href: string) => canHostRoutes
         && resolveDestinationRefFromHref(props.catalog, href) !== null, [canHostRoutes, props.catalog]);
     const ownsRoute = ownsHref(routeHref);
@@ -85,7 +109,7 @@ export function WorkspaceProvider(props: Readonly<{
     const admissionCatalog = React.useRef(props.catalog);
     admissionCatalog.current = props.catalog;
     const singletonPolicyKey = React.useMemo(() => JSON.stringify([...workspaceSingletonDestinationIds(props.catalog)].sort()), [props.catalog]);
-    const admitState = React.useCallback((state: WorkspaceState) => admitWorkspaceSingletonState(state, admissionCatalog.current, randomUUID), [singletonPolicyKey]);
+    const admitState = React.useCallback((state: WorkspaceState, retainedState?: WorkspaceState) => admitWorkspaceSingletonState(state, admissionCatalog.current, randomUUID, retainedState), [singletonPolicyKey]);
     const localOwner = useWorkspaceState({ initialTab, admitState });
     const owner = useWorkspaceTabSync({ local: localOwner, catalog: props.catalog, enabled: props.enabled || phone });
     const [historyVersion, changed] = React.useReducer((value: number) => value + 1, 0);
@@ -227,10 +251,10 @@ export function WorkspaceProvider(props: Readonly<{
         return {
             catalog: props.catalog,
             onTab: phoneOnTab,
-            openHref: (href, mode) => {
+            openHref: (href, mode, onOpened) => {
                 const tabHref = resolvePhoneWorkspaceTabHref(latest.current.catalog, href);
                 if (!tabHref) return false;
-                navigate(() => { runtime.adapter.openHref(tabHref, { mode }); });
+                navigate(() => { runtime.adapter.openHref(tabHref, { mode, onOpened }); });
                 return true;
             },
             activateTab: (tabId) => {
@@ -291,7 +315,10 @@ export function WorkspaceProvider(props: Readonly<{
         return navigation;
     }, [guardTraversal, isCurrentUiOwner, openHref, runUiNavigation, runtime, tabNavigations]);
     const navigation = React.useMemo<WorkspaceNavigationContextValue>(() => ({
-        active: hostsRoute && owner.isReady && eligible && runtime.initialized,
+        // Scoped restoration grants the retained host custody synchronously.
+        // Transport initialization adopts the URL in a layout effect; it is
+        // not another hydration barrier on a ready remount.
+        active: hostsRoute && owner.isRestored && eligible,
         ownsRoute,
         phone: phoneControls,
         state: owner.state,
@@ -331,7 +358,7 @@ export function WorkspaceProvider(props: Readonly<{
             if (runtime.browser) runtime.adapter.step(1);
             else guardTraversal(1, () => runtime.adapter.step(1), 'history');
         },
-    }), [activateTab, eligible, guardTraversal, historyVersion, hostsRoute, isCurrentUiOwner, navigationForTab, openHref, ownsRoute, phoneControls, owner.isReady, owner.state, owner.sharedTabs, owner.tabSyncStatus, owner.handoffSource, runUiNavigation, runtime]);
+    }), [activateTab, eligible, guardTraversal, historyVersion, hostsRoute, isCurrentUiOwner, navigationForTab, openHref, ownsRoute, phoneControls, owner.isRestored, owner.state, owner.sharedTabs, owner.tabSyncStatus, owner.handoffSource, runUiNavigation, runtime]);
     useWorkspaceKeyboardShortcuts(navigation.active, () => latest.current.owner.getState());
     return <WorkspaceRouteHostingContext.Provider value={ownsHref}>
         <WorkspaceNavigationContext.Provider value={navigation}>{typeof props.children === 'function' ? props.children(navigation) : props.children}</WorkspaceNavigationContext.Provider>

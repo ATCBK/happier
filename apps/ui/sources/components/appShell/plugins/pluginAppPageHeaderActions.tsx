@@ -15,6 +15,7 @@ import { resolvePluginUiText } from '@/sync/domains/plugins/ui/i18n';
 import { getPreferredLanguage } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import {
     resolvePluginUiIconName,
@@ -162,7 +163,7 @@ export function PluginAppPageHeaderActions(props: Readonly<{
 }>): React.ReactElement | null {
     const { theme } = useUnistyles();
     const currentUiContextReader = useOptionalCurrentUiContextReader();
-    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    const minimumInteractiveTargetSize = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS));
     usePluginUiClientExecutableRegistrationRevision();
     const resolveContributedAction = React.useMemo(
         () => createPluginUiProjectedActionResolver(props.projection?.actionsById),

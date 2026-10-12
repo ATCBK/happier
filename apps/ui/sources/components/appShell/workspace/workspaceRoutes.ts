@@ -1,7 +1,7 @@
 import { listSettingsRouteNames } from '@/components/settings/navigation/settingsRouteDefinitions';
 import type { IconName } from '@/components/ui/icons/Icon';
 import type { TranslationKeyNoParams } from '@/text';
-import { matchWorkspaceRoutePatterns } from './workspaceRouteMatch';
+import { createWorkspaceRouteMatcher } from './workspaceRouteMatch';
 
 // A navigator's root declaration and its index name describe the same location.
 // The Settings registry owns the actual leaf module name (including /index).
@@ -44,6 +44,11 @@ export const workspaceRouteFiles: Readonly<Record<string, string>> = {
     "boards/[boardId]": "./(app)/boards/[boardId].tsx",
     "boards": "./(app)/boards/index.tsx",
     "friends": "./(app)/friends/index.tsx",
+    // The Machines page's rail door (plan machine-resources 10 §4.1); the Settings door is a Settings route.
+    "machines": "./(app)/machines/index.tsx",
+    "machines/[id]": "./(app)/machines/[id]/index.tsx",
+    "machines/[id]/[page]": "./(app)/machines/[id]/[page].tsx",
+    "machines/managed/[id]": "./(app)/machines/managed/[id].tsx",
     "friends/manage": "./(app)/friends/manage.tsx",
     "friends/search": "./(app)/friends/search.tsx",
     "inbox/approvals/[id]": "./(app)/inbox/approvals/[id].tsx",
@@ -98,7 +103,7 @@ export const workspaceRouteFiles: Readonly<Record<string, string>> = {
     "workflows/settings": "./(app)/workflows/settings.tsx",
 };
 
-const routeKeys = Object.keys(workspaceRouteFiles);
+const matchDestinationRoute = createWorkspaceRouteMatcher(Object.keys(workspaceRouteFiles));
 export function matchWorkspaceDestinationRoute(pathname: string) {
-    return matchWorkspaceRoutePatterns(routeKeys, pathname);
+    return matchDestinationRoute(pathname);
 }

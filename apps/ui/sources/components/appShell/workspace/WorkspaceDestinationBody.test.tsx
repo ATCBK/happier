@@ -52,7 +52,7 @@ beforeAll(async () => {
         './(app)/settings/server/_layout.tsx': { default: CollectionLayout },
         './(app)/settings/server/index.tsx': { WorkspaceRouteBody: Editor },
         './(app)/settings/machines/_layout.tsx': { default: CollectionLayout },
-        './(app)/settings/machines/[id].tsx': { WorkspaceRouteBody: Editor },
+        './(app)/settings/machines/[id]/index.tsx': { WorkspaceRouteBody: Editor },
         './(app)/settings/connected-services/_layout.tsx': { default: CollectionLayout },
         './(app)/settings/connected-services/account.tsx': { WorkspaceRouteBody: Editor },
         './(app)/settings/embeds/_layout.tsx': { default: CollectionLayout },

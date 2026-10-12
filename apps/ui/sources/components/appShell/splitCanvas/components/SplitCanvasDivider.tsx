@@ -21,6 +21,7 @@ export const SplitCanvasDivider = React.memo((props: Readonly<{
     ratio: number;
     minRatio: number;
     maxRatio: number;
+    gutterSizePx?: number;
     onCommitRatio: (ratio: number, meta?: DockedPaneResizeCommitMeta) => void;
     onDragRatio?: (ratio: number | null, meta?: DockedPaneResizeCommitMeta | null) => void;
 }>) => {
@@ -49,7 +50,7 @@ export const SplitCanvasDivider = React.memo((props: Readonly<{
 
     const vertical = props.axis === 'row';
     const nativeTouchTargetSize = resolveResizablePaneNativeTouchTargetSize();
-    const visualHandleSize = SPLIT_CANVAS_DIVIDER_SIZE_PX[props.axis];
+    const visualHandleSize = props.gutterSizePx ?? SPLIT_CANVAS_DIVIDER_SIZE_PX[props.axis];
     const targetSize = nativeTouchTargetSize ?? visualHandleSize;
     const layoutCompensation = (targetSize - visualHandleSize) / 2;
 
@@ -81,13 +82,13 @@ export const SplitCanvasDivider = React.memo((props: Readonly<{
                         ? {
                             top: 0,
                             bottom: 0,
-                            width: SPLIT_CANVAS_DIVIDER_SIZE_PX.row,
+                            width: visualHandleSize,
                             left: 0,
                         }
                         : {
                             left: 0,
                             right: 0,
-                            height: SPLIT_CANVAS_DIVIDER_SIZE_PX.column,
+                            height: visualHandleSize,
                         }),
                     zIndex: 100,
                 }}

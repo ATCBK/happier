@@ -20,9 +20,11 @@ import { registerWorkspaceRouteContext } from './workspaceRouteContext';
 import { Stack } from './destinationRoute';
 import { WorkspaceRouteEntry } from './createWorkspaceRouteEntry';
 import { WorkspaceRootStack } from './WorkspaceRootStack';
+import { openInWorkspace } from './useWorkspaceOpenActions';
+import { applyCloseDetailsTab, applyOpenDetailsTab, createEmptyPaneDetailsState } from '../panes/details/workspace/detailsWorkspaceReducer';
 
 const boundary = vi.hoisted(() => ({ layouts: {} as Record<string, unknown>, mirrors: [] as string[], scope: { serverId: 'home-a', accountId: 'alice' }, dataReady: true,
-    platform: 'ios', pathname: '/session/A1', params: { id: 'A1', serverId: 'home-a' } as Record<string, string>,
+    platform: 'ios', pathname: '/session/A1', params: { id: 'A1', serverId: 'home-a' } as Record<string, string | string[]>,
     renderScene: null as (() => React.ReactNode) | null }));
 // Socket transport is a genuine boundary; this layout-owner suite has no authenticated RPCs.
 vi.mock('@/sync/api/session/apiSocket', () => ({ apiSocket: {} }));
@@ -128,6 +130,31 @@ function installBrowserBoundary(input: Record<string, unknown> & { history: obje
 }
 
 describe('consumed workspace navigation owner', () => {
+    it.each([false, true])('retains a Board source on cancelled navigation and hands it off on admission (phone=%s)', async phone => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false,
+        } });
+        let sidebar = applyOpenDetailsTab(createEmptyPaneDetailsState(), {
+            tab: { key: 'board', kind: 'board', title: 'Board', resource: { kind: 'board' } }, openAs: 'pinned',
+        });
+        const screen = await renderScreen(<WorkspaceProvider enabled={!phone} phone={phone} catalog={catalog}>
+            {navigation => React.createElement('WorkspaceOwner', { navigation })}
+        </WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        const href = '/session/A1/details?serverId=home-a&details=board';
+        const onOpened = () => { sidebar = applyCloseDetailsTab(sidebar, 'board'); };
+        const before = navigation().state;
+        setActiveUnsavedChangesGuard({ isDirtyRef: { current: true }, requestDecision: async () => 'keepEditing', tag: 'board-handoff' });
+        await act(async () => { openInWorkspace(navigation(), href, 'newTab', undefined, onOpened); });
+        expect(navigation().state).toBe(before);
+        expect(sidebar.tabsByKey.board).toBeDefined();
+        clearActiveUnsavedChangesGuard();
+        await act(async () => { openInWorkspace(navigation(), href, 'newTab', undefined, onOpened); });
+        const state = navigation().state;
+        expect(state.tabs[state.groups[state.focusedGroupId].activeTabId].target.kind).toBe('sessionDetails');
+        expect(sidebar.tabsByKey.board).toBeUndefined();
+        expect(sidebar.isOpen).toBe(false);
+    });
     it('opens approval review beside a dirty preview and preserves it through subsequent preview navigation', async () => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: false, friends: false } });
         const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>
@@ -179,6 +206,33 @@ describe('consumed workspace navigation owner', () => {
         boundary.platform = 'ios'; boundary.pathname = '/session/A1'; boundary.params = { id: 'A1', serverId: 'home-a' };
         boundary.renderScene = null;
         clearActiveUnsavedChangesGuard(); vi.unstubAllGlobals(); });
+    it('does not commit a hydration fallback when a ready settings route is re-admitted after remount', async () => {
+        boundary.platform = 'web'; boundary.pathname = '/settings'; boundary.params = {};
+        const history = { state: null as unknown,
+            replaceState: (state: unknown) => { history.state = state; },
+            pushState: (state: unknown) => { history.state = state; }, go: () => {},
+        };
+        installBrowserBoundary({ location: { pathname: '/settings', search: '', hash: '' }, history,
+            sessionStorage: { getItem: () => 'main' } });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
+        let loadingCommits = 0;
+        function LoadingProbe() {
+            React.useEffect(() => { loadingCommits += 1; }, []);
+            return React.createElement('HydrationFallback');
+        }
+        const Body = () => React.createElement('SettingsBody');
+        const element = (key: string, phone: boolean) => <WorkspaceProvider key={key} enabled={!phone} phone={phone} catalog={catalog}>
+            {navigation => <>{React.createElement('WorkspaceOwner', { navigation })}
+                <WorkspaceRouteEntry Body={Body} loadingFallback={<LoadingProbe />} /></>}
+        </WorkspaceProvider>;
+        const screen = await renderScreen(element('wide', false));
+        expect(screen.root.findByType('WorkspaceOwner').props.navigation.active).toBe(true);
+        loadingCommits = 0;
+        await screen.update(element('phone', true));
+        expect(screen.root.findByType('WorkspaceOwner').props.navigation.active).toBe(true);
+        expect(screen.root.findAllByType('SettingsBody')).toHaveLength(0);
+        expect(loadingCommits).toBe(0);
+    });
     it.each([true, false])('never mounts an empty route modal for hosted History before/after hydration or resize (desktop=%s)', async desktop => {
         boundary.platform = 'web'; boundary.pathname = '/external/browse'; boundary.params = {}; boundary.dataReady = false;
         const location = { pathname: boundary.pathname, search: '', hash: '' };
@@ -245,6 +299,13 @@ describe('consumed workspace navigation owner', () => {
         ['/settings/plugins/acme.review/policy', '?subPath=bindings%2F1&subPath=bindings%2F2', true],
     ] as const)('retains Expo ownership for the unadmitted web location %s%s (desktop=%s)', async (pathname, search, desktop) => {
         boundary.platform = 'web'; boundary.pathname = pathname; boundary.params = {}; boundary.dataReady = false;
+        // Match Expo's query boundary, including repeated values; the route
+        // entry may render before the parent observes the browser mirror.
+        const query = new URLSearchParams(search);
+        for (const key of query.keys()) {
+            const values = query.getAll(key);
+            boundary.params[key] = values.length === 1 ? values[0] : values;
+        }
         const history = { state: null as unknown, pushState: () => { throw new Error('Unadmitted route must not be projected'); },
             replaceState: (state: unknown, _unused: string, href?: string | URL | null) => {
                 if (href) throw new Error('Unadmitted route must not be projected');
@@ -272,6 +333,46 @@ describe('consumed workspace navigation owner', () => {
             <WorkspaceRouteEntry Body={Body} />
         </WorkspaceProvider>);
         expect(screen.root.findAllByType('NativeOwnedDraft')).toHaveLength(1);
+    });
+    it('keeps a deliberately excluded web presentation with Expo rather than withholding its body', async () => {
+        boundary.platform = 'web'; boundary.pathname = '/session/A1'; boundary.params = { id: 'A1' };
+        const history = { state: null as unknown,
+            replaceState: (state: unknown) => { history.state = state; },
+            pushState: (state: unknown) => { history.state = state; }, go: () => {},
+        };
+        installBrowserBoundary({ location: { pathname: boundary.pathname, search: '', hash: '' }, history,
+            sessionStorage: { getItem: () => 'main' } });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: true, friends: false } });
+        const Body = () => React.createElement('ExcludedWebBody');
+        const screen = await renderScreen(<WorkspaceProvider enabled={false} catalog={catalog}>
+            <WorkspaceRouteEntry Body={Body} />
+        </WorkspaceProvider>);
+        expect(screen.root.findAllByType('ExcludedWebBody')).toHaveLength(1);
+    });
+    it('admits an external browser-history commit without waiting for an Expo or Account publication', async () => {
+        boundary.platform = 'web'; boundary.pathname = '/new'; boundary.params = {};
+        const location = { pathname: '/new', search: '', hash: '' };
+        const history = { state: null as unknown,
+            replaceState: (state: unknown, _unused: string, href?: string | URL | null) => {
+                history.state = state;
+                if (!href) return;
+                const next = new URL(href, 'https://happier.invalid');
+                location.pathname = next.pathname; location.search = next.search; location.hash = next.hash;
+            },
+            pushState: (state: unknown, unused: string, href: string) => history.replaceState(state, unused, href), go: () => {},
+        };
+        installBrowserBoundary({ location, history, sessionStorage: { getItem: () => 'main' } });
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: true, friends: false } });
+        const screen = await renderScreen(<WorkspaceProvider enabled catalog={catalog}>
+            {navigation => React.createElement('WorkspaceOwner', { navigation })}
+        </WorkspaceProvider>);
+        const navigation = () => screen.root.findByType('WorkspaceOwner').props.navigation as WorkspaceNavigationContextValue;
+        expect(navigation().ownsRoute).toBe(false);
+        await act(async () => history.pushState({}, '', '/workflows/new?newSessionDraftSeedId=local-handoff'));
+        expect(navigation().ownsRoute).toBe(true);
+        expect(navigation().active).toBe(true);
+        const group = navigation().state.groups[navigation().state.focusedGroupId];
+        expect(navigation().state.tabs[group.activeTabId].target.params.newSessionDraftSeedId).toBe('local-handoff');
     });
     it.each([[true, '/workflows/new'], [false, '/workflows/new'],
         [false, '/settings/prompts/skills'], [false, '/settings/prompts/templates'],
@@ -314,7 +415,7 @@ describe('consumed workspace navigation owner', () => {
         expect(location.pathname).toBe(pathname);
         expect(boundary.mirrors.every(href => href.split('?')[0] === pathname)).toBe(true);
     });
-    it.each(['agents/custom', 'connected-services/connect', 'embeds/new', 'account/api-tokens/token-a', 'voice/service', 'personalize',
+    it.each(['usage', 'agents/custom', 'connected-services/connect', 'embeds/new', 'account/api-tokens/token-a', 'voice/service', 'personalize',
         'artifacts/new', 'artifacts/edit/document-a', 'workflows/new', 'workflows/edit', 'automations/new', 'boards/board-a', 'inbox',
         'external/browse', 'prompts/skills', 'prompts/templates', 'session/runtime',
         'session/new-session-wizard'])('retains the %s editor across mobile-web/desktop hosting changes', async pageId => {

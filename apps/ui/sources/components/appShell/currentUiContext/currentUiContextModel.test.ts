@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
     CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
-    CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1,
     CurrentUiContextSnapshotV1Schema,
-    PluginUiContextEnrichmentV1Schema,
 } from '@happier-dev/protocol/plugins/ui';
 import { projectParameterFreeRoute } from '@/track/parameterFreeRouteProjection';
 
@@ -146,24 +144,31 @@ describe('composeCurrentUiContextSnapshot', () => {
         expect(cleared).not.toHaveProperty('detail');
     });
 
-    it('returns a valid explicit incomplete snapshot when host composition exceeds the canonical byte bound', () => {
-        const envelopeBytes = new TextEncoder().encode(JSON.stringify({ detail: { padding: '' } })).byteLength;
+    it('retains valid context and every descriptor as the mounted inventory grows', () => {
         const enrichment = {
-            detail: { padding: 'x'.repeat(CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1 - envelopeBytes) },
+            entity: { kind: 'usage', label: 'Usage' },
+            detail: { inventory: '€'.repeat(8_192) },
+            commands: Array.from({ length: 96 }, (_, index) => ({ id: `command-${index}`, title: `Filter ${index}` })),
         } as const;
-
-        expect(PluginUiContextEnrichmentV1Schema.safeParse(enrichment).success).toBe(true);
-
         const snapshot = composeCurrentUiContextSnapshot({
             route: route('settings', 'voice'),
             settings: { title: 'Voice settings' },
-            mountEnrichment: { ...enrichment, commands: [] },
+            mountEnrichment: enrichment,
         } as never);
 
         expect(CurrentUiContextSnapshotV1Schema.safeParse(snapshot).success).toBe(true);
+        expect(snapshot.entity).toEqual(enrichment.entity);
+        expect(snapshot.detail).toEqual(enrichment.detail);
+        expect(snapshot.commands).toEqual(enrichment.commands);
+    });
+
+    it('withholds malformed context without publishing executable descriptors', () => {
+        const snapshot = composeCurrentUiContextSnapshot({
+            route: route('settings', 'voice'),
+            mountEnrichment: { detail: { callback: () => undefined }, commands: [{ id: 'command-a', title: 'Command' }] },
+        } as never);
         expect(snapshot.detail).toEqual(CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1);
         expect(snapshot.commands).toEqual([]);
-        expect(JSON.stringify(snapshot)).not.toContain('padding');
     });
 
     it('uses a visible modal kind before every lower-precedence fact without copying modal content', () => {

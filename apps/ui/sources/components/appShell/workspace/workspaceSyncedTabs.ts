@@ -108,6 +108,11 @@ export function reconcileWorkspaceSyncedTabs(state: WorkspaceState, record: Shar
     for (const tab of Object.values(state.tabs)) {
         if (!intentional(tab) || record.tabsById[tab.id]) continue;
         const group = Object.values(next.groups).find(group => group.tabIds.includes(tab.id));
+        // Shared membership is not presentation authority. A remote close may
+        // retire a background tab, but cannot replace a device's visible pane.
+        // Keep its existing instance until local navigation leaves it; importing
+        // this record produces no open intent or write back to the shared set.
+        if (group?.activeTabId === tab.id) continue;
         if (group) next = reduceWorkspaceState(next, { type: 'closeTab', groupId: group.id, tabId: tab.id, newTab: createWorkspaceEmptyTab(createId()), remember: false });
     }
     for (const id of record.order) {
@@ -115,7 +120,9 @@ export function reconcileWorkspaceSyncedTabs(state: WorkspaceState, record: Shar
         const existing = next.tabs[id];
         if (!existing) next = reduceWorkspaceState(next, { type: 'openTab', groupId: next.focusedGroupId, tab: { ...shared, preview: false } });
         else {
-            if (!same(existing.target, shared.target)) next = reduceWorkspaceState(next, { type: 'setTarget', tabId: id, target: shared.target });
+            // An already-open destination belongs to this window. In particular,
+            // singleton Workflows route params may name a consumed local handoff;
+            // another client's navigation must not replace that mounted document.
             if (existing.pinned !== shared.pinned) next = reduceWorkspaceState(next, { type: 'setPinned', tabId: id, pinned: shared.pinned });
             if (existing.preview) next = reduceWorkspaceState(next, { type: 'promoteTab', tabId: id });
         }

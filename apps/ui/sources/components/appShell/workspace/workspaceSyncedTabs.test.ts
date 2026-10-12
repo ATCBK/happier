@@ -7,6 +7,45 @@ const tab = (id: string) => ({ id, target: { kind: 'session', params: { id, serv
 const record = (...ids: string[]) => ({ v: 1 as const, tabsById: Object.fromEntries(ids.map(id => [id, tab(id)])), order: ids, pairs: [] });
 
 describe('workspace synced tab intent owner', () => {
+    it('keeps the device active destination when another client retargets its shared tab', () => {
+        const local = createWorkspaceState({ ...tab('workflows'), pinned: true, target: {
+            kind: 'workflows', params: { workspacePathname: '/workflows/new', definitionDraftSeedId: 'SECOND' },
+        } });
+        const remote = { ...record('workflows', 'remote'), tabsById: {
+            ...record('workflows', 'remote').tabsById,
+            workflows: { id: 'workflows', pinned: true, target: { kind: 'workflows', params: { workspacePathname: '/workflows/QA-FIN30' } } },
+        } };
+        const reconciled = reconcileWorkspaceSyncedTabs(local, remote, () => 'blank');
+        expect(reconciled.tabs.workflows.target).toBe(local.tabs.workflows.target);
+        expect(reconciled.groups['group:1'].activeTabId).toBe('workflows');
+        expect(reconciled.tabs.remote).toBeDefined();
+        expect(collectWorkspaceTabIntents(reconciled, reduceWorkspaceState(reconciled, {
+            type: 'activateTab', groupId: 'group:1', tabId: 'remote',
+        }))).toEqual([]);
+    });
+
+    it.each([false, true])('keeps each visible pane when another client closes its shared tab (split: %s)', split => {
+        let local = createWorkspaceState(tab('a'));
+        local = reduceWorkspaceState(local, { type: 'openTab', groupId: 'group:1', tab: tab('b') });
+        if (split) local = reduceWorkspaceState(local, { type: 'splitTab', tabId: 'b', sourceGroupId: 'group:1', targetGroupId: 'group:1',
+            newGroupId: 'group:2', axis: 'row', placement: 'after', availableSizePx: 1200, minimumFirstSizePx: 320, minimumSecondSizePx: 320 });
+        const groupId = split ? 'group:2' : 'group:1';
+        const reconciled = reconcileWorkspaceSyncedTabs(local, record('a', 'remote'), () => 'blank');
+        expect(reconciled.groups[groupId].activeTabId).toBe('b');
+        expect(reconciled.root).toBe(local.root);
+        expect(reconciled.focusedGroupId).toBe(local.focusedGroupId);
+        expect(reconciled.tabs.b.target).toBe(local.tabs.b.target);
+        expect(reconciled.tabs.b).toBe(local.tabs.b);
+        expect(reconcileWorkspaceSyncedTabs(reconciled, record('a', 'remote'), () => 'blank')).toBe(reconciled);
+        if (split) {
+            const closedBoth = reconcileWorkspaceSyncedTabs(reconciled, record('remote'), () => 'blank');
+            expect(closedBoth.groups['group:1'].activeTabId).toBe('a');
+            expect(closedBoth.tabs.a).toBe(local.tabs.a);
+            expect(closedBoth.root).toBe(local.root);
+        }
+        const left = reduceWorkspaceState(reconciled, { type: 'openTab', groupId, tab: tab('replacement') });
+        expect(reconcileWorkspaceSyncedTabs(left, record('a', 'remote'), () => 'blank').tabs.b).toBeUndefined();
+    });
     it('rebases a close and a reorder without dropping a concurrent open or resurrecting a closed tab', () => {
         const winner = record('a', 'c', 'remote');
         const next = applyWorkspaceTabIntents(winner, [

@@ -25,7 +25,8 @@ export type WorkspaceTabsSyncSnapshot = Readonly<{ status: 'synced' | 'pending' 
 
 export function createWorkspaceTabsSync(input: Readonly<{
     transport: WorkspaceTabsTransport;
-    onRecord: (record: SharedWorkspaceTabs) => void;
+    onRecord: (record: SharedWorkspaceTabs, localRecord: SharedWorkspaceTabs) => void;
+    getLocalRecord?: () => SharedWorkspaceTabs;
     shouldContinue?: () => boolean;
     onStatus?: (snapshot: WorkspaceTabsSyncSnapshot) => void;
     enroll?: () => readonly WorkspaceTabIntent[];
@@ -35,7 +36,7 @@ export function createWorkspaceTabsSync(input: Readonly<{
     let record: SharedWorkspaceTabs | null = null;
     let version = -1;
     let pending: WorkspaceTabIntent[] = [];
-    const pendingAliases = new Map<string, Readonly<{ id: string; destinationKey: string }>>();
+    const tabAliases = new Map<string, Readonly<{ id: string; destinationKey: string }>>();
     let enrollmentCount = 0;
     let status: WorkspaceTabsSyncSnapshot['status'] = 'pending';
     let queue: Promise<void> = Promise.resolve();
@@ -43,12 +44,12 @@ export function createWorkspaceTabsSync(input: Readonly<{
     const normalize = (value: SharedWorkspaceTabs) => input.normalizeRecord?.(value) ?? value;
     const rememberNormalizedAliases = (before: SharedWorkspaceTabs, after: SharedWorkspaceTabs) => {
         // A currently retained identity is an alias root, including one restored by a peer.
-        for (const id of after.order) pendingAliases.delete(id);
+        for (const id of after.order) tabAliases.delete(id);
         for (const id of before.order) {
             if (after.tabsById[id]) continue;
             const destinationKey = workspaceDestinationAdmissionIdentity(before.tabsById[id].target);
             const incumbent = after.order.find(kept => workspaceDestinationAdmissionIdentity(after.tabsById[kept].target) === destinationKey);
-            if (incumbent) pendingAliases.set(id, { id: incumbent, destinationKey });
+            if (incumbent) tabAliases.set(id, { id: incumbent, destinationKey });
         }
     };
     const normalizeWithAliases = (value: SharedWorkspaceTabs) => {
@@ -58,9 +59,9 @@ export function createWorkspaceTabsSync(input: Readonly<{
     };
     const resolvePendingId = (id: string): string => {
         const original = id;
-        const destinationKey = pendingAliases.get(id)?.destinationKey;
-        while (pendingAliases.has(id)) {
-            const alias = pendingAliases.get(id)!;
+        const destinationKey = tabAliases.get(id)?.destinationKey;
+        while (tabAliases.has(id)) {
+            const alias = tabAliases.get(id)!;
             if (alias.destinationKey !== destinationKey) return original;
             id = alias.id;
         }
@@ -76,6 +77,36 @@ export function createWorkspaceTabsSync(input: Readonly<{
         if (intent.type === 'pairs') return { ...intent, pairs: intent.pairs.map(pair => pair.map(resolvePendingId)) };
         if (intent.type === 'move') return { ...intent, tabId: resolvePendingId(intent.tabId), beforeId: intent.beforeId === null ? null : resolvePendingId(intent.beforeId) };
         return { ...intent, tabId: resolvePendingId(intent.tabId) };
+    };
+    const rememberLocalAliases = () => {
+        const local = input.getLocalRecord?.();
+        const shared = record;
+        if (!local || !shared) return;
+        // Catalog admission decides which retained local instances correspond to
+        // shared singletons. Reuse that same normalization and alias owner without
+        // enrolling local-only tabs or changing the canonical shared record.
+        const combined: SharedWorkspaceTabs = { ...shared,
+            tabsById: { ...local.tabsById, ...shared.tabsById },
+            order: [...shared.order, ...local.order.filter(id => !shared.tabsById[id])],
+        };
+        rememberNormalizedAliases(combined, normalize(combined));
+    };
+    const localProjection = (value: SharedWorkspaceTabs): SharedWorkspaceTabs => {
+        const local = input.getLocalRecord?.();
+        if (!local) return value;
+        const localIds = new Map<string, string>();
+        for (const id of local.order) {
+            const sharedId = resolvePendingId(id);
+            if (sharedId !== id && value.tabsById[sharedId]
+                && workspaceDestinationAdmissionIdentity(local.tabsById[id].target) === workspaceDestinationAdmissionIdentity(value.tabsById[sharedId].target)) {
+                localIds.set(sharedId, id);
+            }
+        }
+        if (!localIds.size) return value;
+        const localId = (id: string) => localIds.get(id) ?? id;
+        return { ...value, order: value.order.map(localId), pairs: value.pairs.map(pair => pair.map(localId)),
+            tabsById: Object.fromEntries(value.order.map(id => [localId(id), { ...value.tabsById[id], id: localId(id) }])),
+        };
     };
     const projected = () => record ? normalize(applyWorkspaceTabIntents(record,
         version === -1 && !pending.length ? input.enroll?.() ?? [] : pending.map(rebasePendingIntent))) : null;
@@ -100,10 +131,11 @@ export function createWorkspaceTabsSync(input: Readonly<{
     const project = () => {
         if (!current()) return;
         if (record) record = normalizeWithAliases(record);
+        rememberLocalAliases();
         const value = snapshot().record;
         if (value && value !== publishedRecord) {
             publishedRecord = value;
-            input.onRecord(value);
+            input.onRecord(value, localProjection(value));
         }
         notify();
     };
@@ -132,6 +164,12 @@ export function createWorkspaceTabsSync(input: Readonly<{
     };
     return {
         reproject: project,
+        reconcileLocal: () => {
+            if (!current()) return;
+            rememberLocalAliases();
+            const value = snapshot().record;
+            if (value) input.onRecord(value, localProjection(value));
+        },
         refresh: () => {
             // Catalog policy changes apply to the cached projection even if the reread fails.
             project();
@@ -144,7 +182,8 @@ export function createWorkspaceTabsSync(input: Readonly<{
                 const replayed = applyWorkspaceTabIntents(record, pending.slice(0, count).map(rebasePendingIntent));
                 const proposed = normalizeWithAliases(replayed);
                 // A CAS singleton merge can retire an ID while the user is still editing it.
-                // Keep only pending-operation aliases; nothing is persisted or retained after drain.
+                // Retained local instances also use these validated aliases after
+                // drain; nothing is persisted beyond this Account/window runtime.
                 if (proposed === record) { pending = pending.slice(count); enrollmentCount = 0; continue; }
                 const result = await input.transport.compareAndSet(proposed, version);
                 if (!current()) return;
@@ -157,7 +196,10 @@ export function createWorkspaceTabsSync(input: Readonly<{
                 project();
             }
             status = pending.length ? 'pending' : 'synced';
-            if (!pending.length) pendingAliases.clear();
+            if (!pending.length) {
+                tabAliases.clear();
+                rememberLocalAliases();
+            }
             notify();
         }),
         enqueue: (intents: readonly WorkspaceTabIntent[]) => {
@@ -169,7 +211,7 @@ export function createWorkspaceTabsSync(input: Readonly<{
             }
             pending.push(...intents); status = 'pending'; notify();
         },
-        stop: () => { stopped = true; pending = []; pendingAliases.clear(); },
+        stop: () => { stopped = true; pending = []; tabAliases.clear(); },
         getSnapshot: snapshot,
     };
 }

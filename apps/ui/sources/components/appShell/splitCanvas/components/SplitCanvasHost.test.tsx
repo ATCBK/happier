@@ -11,6 +11,9 @@ import type { SplitCanvasHostControls } from './SplitCanvasHost';
 
 installPanelCommonModuleMocks();
 
+// Load the real host after platform mocks, during collection rather than a test's timeout budget.
+const { SplitCanvasHost } = await import('./SplitCanvasHost');
+
 afterEach(() => {
     vi.unstubAllGlobals();
 });
@@ -93,6 +96,16 @@ function findAncestorWithFlattenedStyle(
 }
 
 describe('SplitCanvasHost', () => {
+    it('uses an eight pixel inset gutter for both layout and split admission', async () => {
+        const controlsRef: React.MutableRefObject<SplitCanvasHostControls | null> = { current: null };
+        const screen = await renderScreen(<SplitCanvasHost state={createNestedState()} dispatch={() => {}}
+            gutterSizePx={8} chrome="flat" controlsRef={controlsRef}
+            getLeafMinimumSizePx={() => ({ width: 100, height: 100 })} renderLeaf={() => null} />);
+        await act(async () => { invokeTestInstanceHandler(screen.findByTestId('split-canvas-host'), 'onLayout',
+            { nativeEvent: { layout: { width: 1000, height: 600 } } }); });
+        expect(controlsRef.current?.readSplitMeasurement('leaf-a', 'right')).toEqual({ availableSizePx: 488, minimumExistingSizePx: 100 });
+        expect(controlsRef.current?.readSplitMeasurement('leaf-b', 'down')).toEqual({ availableSizePx: 288, minimumExistingSizePx: 100 });
+    });
     it('preserves member state when the same member moves between leaves', async () => {
         const { SplitCanvasHost } = await import('./SplitCanvasHost');
         let mounts = 0;

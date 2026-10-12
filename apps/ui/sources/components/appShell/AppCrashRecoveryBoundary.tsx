@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Appearance, Image, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Image, Platform, Pressable, ScrollView, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -9,6 +9,8 @@ import { loadThemeRuntimeLocalState } from '@/sync/domains/state/persistence';
 import {
   resolveThemeRuntimeThemes,
   resolveThemeRuntimeVisualTheme,
+  readSystemTheme,
+  subscribeSystemTheme,
 } from '@/theme/profiles/themeProfileRuntime';
 import { Typography } from '@/constants/Typography';
 import { getBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail';
@@ -36,7 +38,7 @@ export type AppBlockingScreenAction = Readonly<{
 
 function readSystemThemeForCrashRecovery(): 'light' | 'dark' | null {
   try {
-    return Appearance.getColorScheme() === 'dark' ? 'dark' : 'light';
+    return readSystemTheme();
   } catch {
     return null;
   }
@@ -113,6 +115,7 @@ export function AppBlockingScreen(props: Readonly<{
   details: string;
   actions: ReadonlyArray<AppBlockingScreenAction>;
 }>): React.ReactElement {
+  React.useSyncExternalStore(subscribeSystemTheme, readSystemThemeForCrashRecovery, () => null);
   const theme = resolveCrashRecoveryFallbackTheme();
 
   const primary = props.actions.filter((a) => a.variant === 'primary');
@@ -411,8 +414,7 @@ const styles = StyleSheet.create(() => ({
     gap: 10,
   },
   sectionTitle: {
-    ...Typography.default('semiBold'),
-    fontSize: 12,
+    ...Typography.variant('meta', 'semiBold'),
     letterSpacing: 0.4,
   },
   details: {
@@ -431,8 +433,7 @@ const styles = StyleSheet.create(() => ({
     justifyContent: 'center',
   },
   primaryButtonText: {
-    ...Typography.default('semiBold'),
-    fontSize: 14,
+    ...Typography.variant('label', 'semiBold'),
   },
   secondaryButton: {
     borderWidth: 1,
@@ -442,7 +443,6 @@ const styles = StyleSheet.create(() => ({
     justifyContent: 'center',
   },
   secondaryButtonText: {
-    ...Typography.default('semiBold'),
-    fontSize: 14,
+    ...Typography.variant('label', 'semiBold'),
   },
 }));

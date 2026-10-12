@@ -8,6 +8,8 @@ import type { PluginSurfaceActionInvocationSurface, PluginSurfaceHostActionBindi
 import { CurrentUiContextSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui';
 import type { CurrentUiContextReader } from './CurrentUiContextProvider';
 import type { CurrentUiContextMountedCommand } from './currentUiContextModel';
+import { isVoiceDictationActionId } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 
 type PortFactory = (surface: PluginSurfaceActionInvocationSurface, hostAction?: PluginSurfaceHostActionBinding) => CurrentUiContextVoiceToolPort | null;
 let mountedPortFactory: PortFactory | null = null;
@@ -37,15 +39,35 @@ export function registerCurrentUiContextActionPort(createPort: PortFactory): () 
     return () => { if (mountedPortFactory === createPort) mountedPortFactory = null; };
 }
 
+/** Typed host Actions resolve through the incumbent current record, never a second mount registry. */
+export function readCurrentUiContextActionReader(context: Pick<ActionExecutorContext, 'surface' | 'signal'>): CurrentUiContextReader | null {
+    const surface = PluginActionSurfaceV2Schema.safeParse(context.surface);
+    return surface.success && surface.data !== 'plugin' && !context.signal?.aborted
+        ? mountedPortFactory?.(surface.data) ?? null : null;
+}
+
 export async function executeCurrentUiContextAction(
     request: Parameters<NonNullable<ActionExecutorDeps['uiCurrentContextAction']>>[0]
-        | Parameters<NonNullable<ActionExecutorDeps['accountHomeContinuationAction']>>[0],
+        | Parameters<NonNullable<ActionExecutorDeps['accountHomeContinuationAction']>>[0]
+        | Parameters<NonNullable<ActionExecutorDeps['voiceConversationAction']>>[0],
     hostAction?: PluginSurfaceHostActionBinding,
 ): Promise<ActionExecuteResult> {
     const surface = PluginActionSurfaceV2Schema.safeParse(request.context.surface);
-    const port = surface.success && surface.data !== 'plugin' ? mountedPortFactory?.(surface.data, hostAction) : null;
+    // Declared field effects borrow the mounted UI reader, not generic plugin
+    // current-context admission. The effect retains its original context below.
+    const invocationSurface = surface.success
+        ? surface.data === 'plugin' ? isVoiceDictationActionId(request.actionId) ? 'ui' : null : surface.data
+        : null;
+    const port = invocationSurface ? mountedPortFactory?.(invocationSurface, hostAction) : null;
     if (!port || request.context.signal?.aborted) {
+        if (request.actionId.startsWith('ui.voice_global.dictation.')) return { ok: true,
+            result: { status: 'unavailable', code: 'dictation_field_unmounted' } };
         return { ok: false, errorCode: 'unsupported_action', error: 'current_ui_context_not_mounted' };
+    }
+    if (request.actionId.startsWith('ui.voice_global.')) {
+        if (!isVoiceDictationActionId(request.actionId)) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+        return port.invokeVoiceDictation?.({ actionId: request.actionId, input: request.input as Readonly<{ commandId: string }>, context: request.context })
+            ?? { ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } };
     }
     if (request.actionId === 'ui.current_context.read') {
         const snapshot = port.readCurrentUiContext();

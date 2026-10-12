@@ -12,6 +12,8 @@ import type { EntityDragItemV1 } from '@happier-dev/protocol/plugins/ui';
 
 type WorkspaceDestinationRowProps = Readonly<{
     href: string | null;
+    /** Handoff, not a copy: release this source only once the destination has opened. */
+    onOpened?: () => void;
     /** Host-built qualified identity for destinations that also supply context. */
     entityItem?: EntityDragItemV1 | null;
     children: React.ReactNode | ((actions: ReturnType<typeof useWorkspaceOpenActions>) => React.ReactNode);
@@ -33,7 +35,7 @@ export function WorkspaceDestinationRow(props: WorkspaceDestinationRowProps) {
 }
 
 function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps) {
-    const actions = useWorkspaceOpenActions(props.href);
+    const actions = useWorkspaceOpenActions(props.href, props.onOpened);
     const workspace = useOptionalWorkspaceNavigation();
     const scope = useActiveServerAccountScope();
     const runtime = useEntityDragDropRuntime();

@@ -25,6 +25,7 @@ type LocalOwner = ReturnType<typeof useWorkspaceState>;
 type Runtime = Readonly<{
     accept: (intents: readonly WorkspaceTabIntent[], projection: SharedWorkspaceTabs) => void;
     policyChanged: () => void;
+    reconcileLocal: () => void;
 }>;
 type PublishedProjection = Readonly<{
     binding: string;
@@ -106,9 +107,10 @@ export function useWorkspaceTabSync(input: Readonly<{
         const controller = syncEnabled ? createWorkspaceTabsSync({
             transport: createAccountKvJsonTransport({ credentials, request, key: 'workspace:tabs:v1', shouldContinue }),
             shouldContinue, normalizeRecord,
-            onRecord: record => {
+            getLocalRecord: () => projectWorkspaceSharedTabs(latest.current.local.getState()),
+            onRecord: (_record, localRecord) => {
                 if (!shouldContinue()) return;
-                latest.current.local.applySharedRecord(record);
+                latest.current.local.applySharedRecord(localRecord);
             },
             onStatus: value => {
                 if (shouldContinue()) setPublished(current => ({ binding, credentials, snapshot: value, isCurrent: shouldContinue,
@@ -152,7 +154,9 @@ export function useWorkspaceTabSync(input: Readonly<{
         let timer: ReturnType<typeof setTimeout> | null = null;
         let dirty = false;
         const refresh = () => { if (controller && shouldContinue()) { refreshRequested = true; sharedSync.invalidate(); } };
-        const mounted: Runtime = { policyChanged: () => {
+        const mounted: Runtime = { reconcileLocal: () => {
+            if (shouldContinue()) controller?.reconcileLocal();
+        }, policyChanged: () => {
             if (!shouldContinue()) return;
             controller?.reproject();
             refresh();
@@ -188,13 +192,19 @@ export function useWorkspaceTabSync(input: Readonly<{
         local.dispatch(action);
         const after = local.getState();
         const intents = collectWorkspaceTabIntents(before, after, action);
-        if (!intents.length) return;
-        const projection = projectWorkspaceSharedTabs(after);
-        runtime.current?.accept(intents, projection);
+        if (intents.length) runtime.current?.accept(intents, projectWorkspaceSharedTabs(after));
+        // Presentation-only navigation has no shared intent. Reconsider deferred
+        // closes against the already observed record after collecting user edits,
+        // so retiring a background instance never becomes a new shared Close.
+        runtime.current?.reconcileLocal();
+    }, []);
+    const restoreAction = React.useCallback((action: WorkspaceAction) => {
+        latest.current.local.restoreAction(action);
+        runtime.current?.reconcileLocal();
     }, []);
     const offProjection = React.useMemo(() => projectWorkspaceSharedTabs(input.local.state), [input.local.state]);
     const visible = published.binding === binding && published.credentials === credentials && (published.isCurrent?.() ?? true)
         ? published : null;
-    return { ...input.local, dispatch, sharedTabs: syncEnabled ? visible?.snapshot.record ?? null : offProjection,
+    return { ...input.local, dispatch, restoreAction, sharedTabs: syncEnabled ? visible?.snapshot.record ?? null : offProjection,
         tabSyncStatus: syncEnabled ? visible?.snapshot.status ?? 'pending' : 'off', handoffSource: visible?.source ?? null };
 }

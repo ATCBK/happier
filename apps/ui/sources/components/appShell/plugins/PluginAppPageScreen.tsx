@@ -6,6 +6,8 @@ import { useDestinationFocus, useDestinationRouter, useDestinationVisibility } f
 import { DetailsPaneSlotHost } from '@/components/appShell/panes/details/DetailsPaneSlot';
 import { PluginSurfacePlacementHost } from '@/components/plugins/surfaces';
 import { PluginSurfaceFallback } from '@/components/sessions/panes/PluginSurfaceFallback';
+import { PluginMachineExecutionOriginSelectorView } from '@/components/settings/machines/PluginMachineExecutionOriginSelector';
+import { PageNavigationContextActionsProvider } from '@/components/ui/layout/NavigationHeaderActions';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useNativeBackLayerBackHandler } from '@/components/ui/overlays/NativeBackLayerBoundary';
 import { RouteRemovalStepConsumer } from '@/utils/navigation/RouteRemovalStepConsumer';
@@ -93,17 +95,18 @@ export function PluginAppPageScreen(props: Readonly<{
     }), [pages, props.localId, props.pluginId]);
 
     const accountLifetime = captureActiveServerAccountScopeLifetime();
+    const needsMachineExecution = !!page && isPluginSurfaceMachineBound({
+        pluginId: props.pluginId,
+        renderer: page.placement.renderer,
+        projection: projection.pluginUiProjection,
+        headerActions: page.placement.headerActions,
+        resourceCapability: readSelectedPluginUiResourceCapability(page.placement),
+    });
     const pageExecution = usePluginSurfaceExecutionOrigin({
         pluginId: props.pluginId,
         projection: projection.pluginUiProjection,
         entry: page?.placement,
-        enabled: !!page && isPluginSurfaceMachineBound({
-            pluginId: props.pluginId,
-            renderer: page.placement.renderer,
-            projection: projection.pluginUiProjection,
-            headerActions: page.placement.headerActions,
-            resourceCapability: readSelectedPluginUiResourceCapability(page.placement),
-        }),
+        enabled: needsMachineExecution,
     });
     // An app-scope projection is a catalog union, so its top-level machine and
     // generation are intentionally absent when more than one contributor is
@@ -169,7 +172,8 @@ export function PluginAppPageScreen(props: Readonly<{
         isCurrent: () => pageIsMountedRef.current && accountLifetime?.isCurrent() !== false,
     }), [accountLifetime, props.localId, props.pluginId, router]);
     React.useEffect(() => () => locationOwner.dispose(), [locationOwner]);
-    const pageIsLive = props.subPath !== null && !!page && page.disabledReason === null;
+    const pageIsLive = props.subPath !== null && !!page && page.disabledReason === null
+        && page.placement.availability.state !== 'resolving';
     // A location this owner did not settle on — a push, a deep link, or the
     // user's own history walk — retires the declared step. Losing the live
     // page does the same even if its route sub-path has not moved; otherwise a
@@ -238,27 +242,21 @@ export function PluginAppPageScreen(props: Readonly<{
         [page],
     );
     const activePageForHeader = pageIsLive ? page : null;
-    const headerOptions = React.useMemo(() => ({
-        headerTitle,
-        ...(activePageForHeader && openSurface && pageHeaderActions.length > 0
-            ? {
-                headerRight: () => (
-                    <PluginAppPageHeaderActions
-                        actions={pageHeaderActions}
-                        page={activePageForHeader}
-                        projection={projection.pluginUiProjection}
-                        actionAuthority={pageHeaderActionAuthority}
-                        openSurface={openSurface}
-                        signal={pageHeaderActionScope.signal}
-                        isCurrent={isPageHeaderActionCurrent}
-                        isDaemonExecutionCurrent={pageExecution.isExecutionOriginCurrent}
-                    />
-                ),
-            }
-            : {}),
-    }), [
+    const routeActions = React.useMemo(() => <>
+        {needsMachineExecution ? <PluginMachineExecutionOriginSelectorView selection={pageExecution.selection} presentation="chip"
+            groupTitle={t('settingsPlugins.executionOriginTitle')} testIDPrefix="plugin-page-execution" /> : null}
+        {activePageForHeader && openSurface && pageHeaderActions.length > 0 ? <PluginAppPageHeaderActions
+            actions={pageHeaderActions}
+            page={activePageForHeader}
+            projection={projection.pluginUiProjection}
+            actionAuthority={pageHeaderActionAuthority}
+            openSurface={openSurface}
+            signal={pageHeaderActionScope.signal}
+            isCurrent={isPageHeaderActionCurrent}
+            isDaemonExecutionCurrent={pageExecution.isExecutionOriginCurrent}
+        /> : null}
+    </>, [
         activePageForHeader,
-        headerTitle,
         openSurface,
         pageHeaderActions,
         pageHeaderActionScope.signal,
@@ -266,10 +264,17 @@ export function PluginAppPageScreen(props: Readonly<{
         pageHeaderActionAuthority,
         isPageHeaderActionCurrent,
         pageExecution.isExecutionOriginCurrent,
+        pageExecution.selection,
+        needsMachineExecution,
     ]);
+    const headerOptions = React.useMemo(() => ({ headerTitle, headerRight: () => routeActions }), [headerTitle, routeActions]);
+    const renderPage = (body: React.ReactNode) => <PageNavigationContextActionsProvider actions={routeActions}>{body}</PageNavigationContextActionsProvider>;
 
-    if (props.subPath !== null && !page && (projection.phase === 'establishing' || projection.hasEstablishingMembers)) {
-        return (
+    if (props.subPath !== null && (
+        (!page && (projection.phase === 'establishing' || projection.hasEstablishingMembers))
+        || (page?.disabledReason === null && page.placement.availability.state === 'resolving')
+    )) {
+        return renderPage(
             <>
                 <Stack.Screen options={headerOptions} />
                 <View testID="plugin-app-page-establishing" style={pageContentFrameStyle}>
@@ -284,7 +289,7 @@ export function PluginAppPageScreen(props: Readonly<{
             ? 'plugin_surface_open_sub_path_invalid'
             : page?.disabledReason ?? 'plugin_app_page_unavailable';
 
-        return (
+        return renderPage(
             <>
                 <Stack.Screen options={headerOptions} />
                 <PluginSurfaceFallback
@@ -296,7 +301,7 @@ export function PluginAppPageScreen(props: Readonly<{
         );
     }
 
-    return (
+    return renderPage(
         <>
             <Stack.Screen options={headerOptions} />
             {/*

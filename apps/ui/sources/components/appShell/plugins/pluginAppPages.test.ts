@@ -100,6 +100,13 @@ describe('plugin app page catalog (EU-5b)', () => {
         // A second mount of the same page: it must not share the page mount's surface identity.
         expect(withColumn?.columnPlacement?.id).not.toBe(withColumn?.placement.id);
 
+        const [resolving] = resolvePluginAppPages({ placements: [createPagePlacement({
+            availability: { state: 'resolving', reason: 'available', diagnostics: [] },
+            column: { binding: columnBinding, renderer: columnRenderer, availability: available },
+        })] });
+        expect(resolving?.disabledReason).toBeNull();
+        expect(resolving?.columnPlacement?.availability.state).toBe('resolving');
+
         const [unavailable] = resolvePluginAppPages({
             placements: [createPagePlacement({
                 column: { binding: columnBinding, renderer: columnRenderer, availability: { state: 'disabled' as const, reason: 'artifact_missing', diagnostics: [] } },

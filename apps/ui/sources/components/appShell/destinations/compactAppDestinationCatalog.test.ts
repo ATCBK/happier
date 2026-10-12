@@ -67,6 +67,17 @@ describe('workspace route identity round trips', () => {
         expect(target && hrefForDestinationRef(catalog, target)).toBe(href);
     });
 
+    it('admits and round trips the Machines rail door, its machine pages and sub-pages', () => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: false, workflows: false, friends: false,
+        } });
+        expect(resolveDestinationRefFromHref(catalog, '/machines')).toEqual({ kind: 'machines', params: {} });
+        for (const href of ['/machines/m%201?serverId=srv%2Fa', '/machines/m1/doctor?serverId=a', '/machines/managed/p1?serverId=a']) {
+            const target = resolveDestinationRefFromHref(catalog, href);
+            expect(target?.kind, href).toBe('machines');
+            expect(target && hrefForDestinationRef(catalog, target), href).toBe(href);
+        }
+    });
     it('includes hidden contribution defaults for rail customization only', () => {
         const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: false, friends: false } });
         const accountPlacement = { kind: 'rail', region: 'account' } as const;
@@ -150,7 +161,7 @@ describe('workspace route identity round trips', () => {
         } });
         for (const href of ['/session/archived', '/session/recent', '/automations/edit?id=automation-a', '/automations/automation-a/runs/run-a',
             '/workflows/edit?id=workflow-a', '/workflows/settings?serverId=home-a', '/automations/settings?serverId=home-a', '/settings/plugins/acme.notes/general',
-            '/settings/agents/custom/custom-agent', '/inbox/approvals/request-a']) {
+            '/settings/agents/custom/custom-agent', '/inbox/approvals/request-a', '/inbox/approvals/request-a?serverId=home-b']) {
             const target = resolveDestinationRefFromHref(catalog, href);
             expect(target, href).not.toBeNull();
             expect(hrefForDestinationRef(catalog, target!), href).toBe(href);
@@ -297,9 +308,13 @@ describe('resolveCompactAppDestinations', () => {
             ['bots', { kind: 'rail', region: 'app' }],
             ['browseExistingSessions', { kind: 'column', column: 'sessions' }],
             ['plugins', { kind: 'rail', region: 'plugins' }],
+            // The Machines page's rail door, drawn on the rail by its own footer control (plan 10 §4.2).
+            ['machines', { kind: 'rail', region: 'account' }],
             ['settings', { kind: 'rail', region: 'account' }],
             ['personalize', { kind: 'rail', region: 'account' }],
         ]);
+        expect(destinations.find((destination) => destination.id === 'machines'))
+            .toMatchObject({ column: 'machines', routePath: '/machines', activation: 'navigate', railControl: 'footer' });
         expect(destinations.find((destination) => destination.id === 'search')).toMatchObject({ activation: 'overlay' });
         expect(destinations.find((destination) => destination.id === 'sessions')).toMatchObject({ column: 'sessions', activation: 'navigate' });
         expect(destinations.find((destination) => destination.id === 'workflows')).toMatchObject({ column: 'workflows', routePath: '/workflows' });
@@ -308,7 +323,7 @@ describe('resolveCompactAppDestinations', () => {
         expect(destinations.find((destination) => destination.id === 'artifacts')).not.toHaveProperty('column');
         // Gated built-ins are omitted; the local Bots overlay remains honestly unavailable until its leaf mounts.
         expect(ids(resolveCompactAppDestinations({ builtins: CORE_BUILTINS, pages: [] })))
-            .toEqual(['sessions', 'search', 'projects', 'boards', 'artifacts', 'bots', 'plugins', 'settings', 'personalize']);
+            .toEqual(['sessions', 'search', 'projects', 'boards', 'artifacts', 'bots', 'plugins', 'machines', 'settings', 'personalize']);
     });
 
     it('places a plugin page on the rail or in a named column, and falls back to the rail for a column this host lacks', () => {

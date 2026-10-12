@@ -5,8 +5,12 @@ import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSession
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 import type { ParameterFreeRouteProjection } from '@/track/parameterFreeRouteProjection';
 import type { CurrentUiContextVoiceInvocationOutcome } from './currentUiContextVoiceToolPort';
-import type { AccountHomeContinuationInputV1 } from '@happier-dev/protocol/actions/accountHomeContinuationV1';
+import type { AccountHomeContinuationInputV1 } from '@happier-dev/protocol/actions';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import type { PluginExecutionOriginContextualSelection } from '@happier-dev/protocol/actions/pluginExecutionOriginActionFamily';
+import type { VoiceDictationActionResult, VoiceDictationOperation } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
 import { readMachineName } from '@/utils/sessions/machineDisplayNames';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { redactVoicePathLikeString } from '@/voice/shared/redactVoicePathLikeData';
@@ -29,13 +33,34 @@ export type CurrentUiContextHostCommand = Readonly<{
 }>;
 
 /** A mounted outward effect is executed only by its typed human-decided Action. */
+type MountedAccountHomeContinuationStep<T = AccountHomeContinuationInputV1> =
+    T extends AccountHomeContinuationInputV1 ? Omit<T, 'commandId'> : never;
 export type CurrentUiContextAccountHomeContinuationCommand = Readonly<{
     kind: 'accountHomeContinuation';
     account: ServerAccountScopeLifetime;
-    invoke(input: Readonly<{ signal: AbortSignal }>): Promise<Readonly<{ status: 'completed' }>>;
-}> & Omit<AccountHomeContinuationInputV1, 'commandId'>;
+    invoke(input: Readonly<{ signal: AbortSignal; context: ActionExecutorContext }>): Promise<Readonly<{ status: 'completed' }>>;
+}> & MountedAccountHomeContinuationStep;
 
-export type CurrentUiContextMountedCommand = PluginUiResolvedSemanticCommandV1 | CurrentUiContextHostCommand | CurrentUiContextAccountHomeContinuationCommand;
+/** A focused field lends its existing Dictation controller; approval remains with the Voice Action. */
+export type CurrentUiContextVoiceDictationCommand = Readonly<{
+    kind: 'voiceDictation';
+    operation: VoiceDictationOperation;
+    account: ServerAccountScopeLifetime;
+    invoke(input: Readonly<{ signal: AbortSignal }>): Promise<VoiceDictationActionResult>;
+}>;
+
+/** Parameterized contextual choices retain the mounted Administration owner. */
+export type CurrentUiContextPluginExecutionOriginCommand = Readonly<{
+    kind: 'pluginExecutionOrigin';
+    pluginId: string;
+    account: ServerAccountScopeLifetime;
+    target: Readonly<{ serverIdentityId: string; machineId: string }>;
+    read(): PluginExecutionOriginContextualSelection | Readonly<{ status: 'unavailable' }>;
+    apply(origin: PluginMachineExecutionOriginV1 | null): Readonly<{ status: 'applied' | 'unavailable' }>;
+}>;
+
+export type CurrentUiContextMountedCommand = PluginUiResolvedSemanticCommandV1 | CurrentUiContextHostCommand
+    | CurrentUiContextAccountHomeContinuationCommand | CurrentUiContextVoiceDictationCommand | CurrentUiContextPluginExecutionOriginCommand;
 
 type CurrentUiContextSessionTitleSource = Parameters<typeof getSessionName>[0];
 type CurrentUiContextMachineLabelSource = Parameters<typeof readMachineName>[0];
@@ -151,11 +176,9 @@ export function readCurrentUiContextSettingsPage(input: Readonly<{
 }
 
 /**
- * The mounted surface validates its own enrichment, but the navigation and
- * descriptor projection added here can still make the final provider-facing
- * snapshot exceed the one transport bound. Qualify at this sole composition
- * boundary and withhold the optional surface data rather than silently
- * truncating a command descriptor.
+ * Validate the final descriptor-only projection at the composition owner.
+ * Malformed optional surface data is withheld; valid inventories remain
+ * complete independently of their command count or serialized size.
  */
 function qualifyCurrentUiContextSnapshot(
     snapshot: CurrentUiContextSnapshotV1,

@@ -164,25 +164,69 @@ describe('ColumnDestinationRows', () => {
         expect(rowIds(plugins)).toEqual([]);
     });
 
-    it('gives the phone launcher every destination its tab bar does not show', async () => {
+    it("pins the app's own destinations on the phone launcher and keeps plugin destinations behind More", async () => {
         setCatalog({
             pages: [page('log', { requestedPlacement: { kind: 'column', column: 'sessions' } }), page('board')],
             tabs: [reviewTab],
         });
         const { ColumnDestinationRows } = await import('./ColumnDestinationRows');
         const launcher = await render(<ColumnDestinationRows />);
-        expect(rowIds(launcher)).toEqual([
+        // Four pinned rows keep "My work" in the first third of a phone screen (lab xrail P1).
+        const pinned = [
             'sessions-search-all-button',
             'compact-app-destination:workflows',
-            'compact-app-destination:boards',
             'compact-app-destination:artifacts',
             'compact-app-destination:bots',
+        ];
+        expect(rowIds(launcher)).toEqual([...pinned, 'phone-launcher-more']);
+
+        // More opens in place: the rest of the destinations, then the way to change what is pinned.
+        await pressTestInstanceAsync(rowFor(launcher, 'phone-launcher-more'));
+        expect(rowIds(launcher)).toEqual([
+            ...pinned,
+            'phone-launcher-more',
+            'compact-app-destination:boards',
             'external-sessions-browse-button',
             'compact-app-destination:plugin:acme.log:log',
             'compact-app-destination:plugins',
             'compact-app-destination:plugin:acme.board:board',
             'compact-app-destination:rightSidebarTab:plugin:acme.review:review-panel',
+            'phone-launcher-customize',
         ]);
+    });
+
+    it("honours the launcher's own placements, never the desktop rail's", async () => {
+        setCatalog({
+            pages: [page('board')],
+            navigationPlacements: {
+                phoneLauncher: { orderedIds: [], placements: { 'plugin:acme.board:board': 'pinned', boards: 'hidden', artifacts: 'overflow' } },
+                appRail: { orderedIds: [], placements: { workflows: 'hidden' } },
+            },
+        });
+        const { ColumnDestinationRows } = await import('./ColumnDestinationRows');
+        const launcher = await render(<ColumnDestinationRows />);
+        const ids = rowIds(launcher);
+        expect(ids).toContain('compact-app-destination:plugin:acme.board:board');
+        expect(ids).toContain('compact-app-destination:workflows');
+        expect(ids).not.toContain('compact-app-destination:boards');
+        expect(ids).not.toContain('compact-app-destination:artifacts');
+        await pressTestInstanceAsync(rowFor(launcher, 'phone-launcher-more'));
+        expect(rowIds(launcher)).toContain('compact-app-destination:artifacts');
+        expect(rowIds(launcher)).not.toContain('compact-app-destination:boards');
+    });
+
+    it('names why a pinned destination is unavailable, and dims an unavailable one in More without repeating it', async () => {
+        setCatalog({
+            pages: [page('pinned', { disabledReason: 'feature_disabled' }), page('later', { disabledReason: 'feature_disabled' })],
+            navigationPlacements: { phoneLauncher: { orderedIds: [], placements: { 'plugin:acme.pinned:pinned': 'pinned' } } },
+        });
+        const { ColumnDestinationRows } = await import('./ColumnDestinationRows');
+        const launcher = await render(<ColumnDestinationRows />);
+        expect(rowFor(launcher, 'compact-app-destination:plugin:acme.pinned:pinned')?.props.subtitle).toEqual(expect.any(String));
+        await pressTestInstanceAsync(rowFor(launcher, 'phone-launcher-more'));
+        const later = rowFor(launcher, 'compact-app-destination:plugin:acme.later:later');
+        expect(later?.props.disabled).toBe(true);
+        expect(later?.props.subtitle).toBeUndefined();
     });
 
     it('opens Search over the page with the column scope, and navigates every other row through the one activation', async () => {
@@ -194,6 +238,7 @@ describe('ColumnDestinationRows', () => {
         expect(openUniversalSearch).toHaveBeenCalledWith(undefined, scope);
         expect(routeState.push).not.toHaveBeenCalled();
 
+        await pressTestInstanceAsync(rowFor(screen, 'phone-launcher-more'));
         await pressTestInstanceAsync(rowFor(screen, 'compact-app-destination:plugins'));
         await pressTestInstanceAsync(rowFor(screen, 'compact-app-destination:plugin:acme.notes:notes'));
         expect(routeState.push.mock.calls.map(([href]) => href)).toEqual(['/plugins', '/plugins/acme.notes/notes']);
@@ -261,6 +306,8 @@ describe('ColumnDestinationRows', () => {
 
         const row = rowFor(launcher, 'compact-app-destination:bots');
         expect(row?.props.rightElement).toBeTruthy();
+        // Still a navigation row: the faces sit before the same chevron every launcher row has.
+        expect(row?.props.keepChevronWithRightElement).toBe(true);
         expect(launcher.findAllByTestId('bots-entry-summary')).toHaveLength(1);
         // A column (desktop) keeps its quiet row: the rail button carries the Bots dot there.
         const column = await render(<ColumnDestinationRows column="sessions" />);
@@ -278,6 +325,7 @@ describe('ColumnDestinationRows', () => {
         expect(screen.findByTestId('compact-app-destination:plugin:acme.notes:notes')).not.toBeNull();
         expect(rowIds(screen)[0]).toBe('external-sessions-browse-button');
         const launcher = await render(<ColumnDestinationRows />);
+        await pressTestInstanceAsync(rowFor(launcher, 'phone-launcher-more'));
         expect(launcher.findByTestId('compact-app-destination:plugin:acme.notes:notes')).not.toBeNull();
     });
 });
