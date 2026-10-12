@@ -101,9 +101,13 @@ export async function resolveCurrentMachineRecipientAccountIdsInTx(tx: Tx, machi
     if (!row) return [];
     return [...new Set([row.accountId, ...contributions(row).flatMap(source => source.accountIds)])].sort();
 }
-export async function listMachineCandidatesInTx(tx: Tx, actorAccountId: string): Promise<string[]> {
+export async function listMachineCandidatesInTx(
+    tx: Tx,
+    actorAccountId: string,
+    options: Readonly<{ includeRevokedOwned?: boolean }> = {},
+): Promise<string[]> {
     const [owned, direct, memberships, groupMemberships] = await Promise.all([
-        tx.machine.findMany({ where: { accountId: actorAccountId }, select: { id: true } }),
+        tx.machine.findMany({ where: { accountId: actorAccountId, ...(options.includeRevokedOwned ? {} : { revokedAt: null }) }, select: { id: true } }),
         tx.machineAccountGrant.findMany({ where: { accountId: actorAccountId }, select: { machineId: true } }),
         tx.teamMembership.findMany({ where: { accountId: actorAccountId }, select: { teamId: true } }),
         tx.teamGroupMembership.findMany({ where: { teamMembership: { accountId: actorAccountId } }, select: { teamGroupId: true } }),

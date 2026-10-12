@@ -30,6 +30,15 @@ describe('Machine current access (real SQLite)', () => {
     }
     const grant = (actorAccountId: string, machineId: string, accountId: string, level: 'view' | 'admin' = 'view') => inTx(tx => access.setMachineAccessGrantInTx(tx, { actorAccountId, machineId, principal: { kind: 'account', accountId }, level }));
 
+    it('excludes revoked owned Machines from discovery while retaining explicit historical candidates', async () => {
+        const f = await fixture();
+        const offline = await db.machine.create({ data: { ...f.machine, id: crypto.randomUUID() } });
+        await db.machine.update({ where: { id: f.machine.id }, data: { revokedAt: new Date(), active: false } });
+        expect(await inTx(tx => access.listMachineCandidatesInTx(tx, f.owner.id))).toEqual([offline.id]);
+        expect(await inTx(tx => access.listMachineCandidatesInTx(tx, f.owner.id, { includeRevokedOwned: true })))
+            .toEqual([f.machine.id, offline.id].sort());
+    });
+
     it('admits requester-scoped operation reads and cancellation for current Machine Use and Manage', async () => {
         const f = await fixture();
         const requester = await account();
@@ -65,10 +74,10 @@ describe('Machine current access (real SQLite)', () => {
         const manager = await account();
         const member = await account();
         const outsider = await account();
-        await db.account.update({ where: { id: requester.id }, data: { firstName: 'Bob', lastName: 'Requester', username: 'bob', settings: 'private-settings' } });
+        await db.account.update({ where: { id: requester.id }, data: { name: 'Bob Requester', firstName: 'Bob', lastName: 'Requester', username: 'bob', settings: 'private-settings' } });
         await db.account.update({ where: { id: manager.id }, data: { username: 'current-manager' } });
-        await db.account.update({ where: { id: member.id }, data: { firstName: 'Team', lastName: 'Requester' } });
-        await db.account.update({ where: { id: outsider.id }, data: { firstName: 'Never', lastName: 'Admitted' } });
+        await db.account.update({ where: { id: member.id }, data: { name: 'Team Requester', firstName: 'Team', lastName: 'Requester' } });
+        await db.account.update({ where: { id: outsider.id }, data: { name: 'Never Admitted', firstName: 'Never', lastName: 'Admitted' } });
         await db.session.create({ data: { accountId: requester.id, tag: crypto.randomUUID(), metadata: 'private-requester-session' } });
         await grant(f.owner.id, f.machine.id, requester.id);
         await grant(f.owner.id, f.machine.id, manager.id, 'admin');
@@ -205,9 +214,9 @@ describe('Machine current access (real SQLite)', () => {
         const f = await fixture('e2ee');
         const eligible = await account('e2ee');
         const incompatible = await account('plain');
-        const unbound = await db.account.create({ data: { encryptionMode: 'e2ee', firstName: 'Unbound' } });
-        await db.account.update({ where: { id: eligible.id }, data: { firstName: 'Eligible' } });
-        await db.account.update({ where: { id: incompatible.id }, data: { firstName: 'Plain member' } });
+        const unbound = await db.account.create({ data: { encryptionMode: 'e2ee', name: 'Unbound' } });
+        await db.account.update({ where: { id: eligible.id }, data: { name: 'Eligible' } });
+        await db.account.update({ where: { id: incompatible.id }, data: { name: 'Plain member' } });
         const team = await db.team.create({ data: { name: 'Mixed Team' } });
         const principal = { kind: 'team' as const, teamId: team.id };
         for (const accountId of [eligible.id, incompatible.id, unbound.id]) {

@@ -102,7 +102,9 @@ export async function listManagedMachines(params: Readonly<{ actorAccountId: str
     const input = ManagedListInputV1Schema.parse(params.input);
     return await inTx(async tx => {
         await requireHome(tx, input.homeId);
-        const candidates = await listMachineCandidatesInTx(tx, params.actorAccountId);
+        // Retiring a controller must not conceal the custodian's retained managed
+        // resources, including archived history and outstanding native cleanup.
+        const candidates = await listMachineCandidatesInTx(tx, params.actorAccountId, { includeRevokedOwned: true });
         const rows = await tx.managedMachine.findMany({ where: { homeId: input.homeId, controllerMachineId: { in: candidates }, archivedAt: input.archived ? { not: null } : null }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
         const machines = [];
         for (const row of rows) {

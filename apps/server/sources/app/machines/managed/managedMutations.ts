@@ -156,6 +156,9 @@ async function readOrAdmitManagedPolicy(params: Readonly<{ custodianAccountId: s
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current), requestId: readManagedCurrentRequestId(current), replayed: false };
+    }, {
+        // Policy admission combines current controller, guest activity and retained allocation facts.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -230,6 +233,9 @@ export async function admitManagedControl(params: Readonly<{
         await invalidateManagedMachineInTx(tx, row);
         if (row.controllerMachineId !== current.controllerMachineId) await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current), replayed: false };
+    }, {
+        // Controller and credential admission must compose with retirement and replacement writers.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -255,6 +261,9 @@ export async function submitManagedIntent(input: ManagedControllerCurrentnessV1)
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         if (changed.count) await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current), submitted: changed.count === 1 };
+    }, {
+        // Serialize submitted-effect admission with allocation and observation settlement.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -269,6 +278,21 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
                 || pending.expectedIntentRevision !== canonical.expectedIntentRevision || pending.requestId !== canonical.requestId
                 || !sameManagedInput(pending.controller, canonical.controller)) throw new ManagedMachineError("request_conflict");
         const data: Prisma.ManagedMachineUpdateManyMutationInput = {};
+        if (canonical.result.kind === 'accepted') {
+            if (pending.intent !== 'delete') throw new ManagedMachineError('resource_mismatch');
+            const launch = readManagedLaunchSnapshot(row.launch);
+            const declaration = await resolveManagedDeclarationInTx(tx, { homeId: row.homeId, custodianAccountId: row.custodianAccountId,
+                controller: canonical.controller, provider: launch.provider });
+            if (!declaration?.reconciliation || declaration.schemaVersion !== launch.schemaVersion) {
+                throw new ManagedMachineError('provider_unavailable');
+            }
+            const previous = projectManagedMachine(row, declaration);
+            const parsed = createManagedMachineDeclaredSchema(declaration.launchSchema, declaration.resourceSchema,
+                declaration.reconciliation.nativeOperationSchema).safeParse({ ...previous,
+                nativeOperationRef: canonical.result.nativeOperationRef });
+            if (!parsed.success) throw new ManagedMachineError('resource_mismatch');
+            data.nativeOperationRef = ManagedMachineV1Schema.parse(parsed.data).nativeOperationRef;
+        }
         if (canonical.result.kind === 'bound') {
             if (pending.intent !== 'rebuild') throw new ManagedMachineError('resource_mismatch');
             const launch = readManagedLaunchSnapshot(row.launch);
@@ -321,7 +345,10 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
             ? canonical.observation : undefined;
         if (currentObservation) {
             data.observation = currentObservation;
-            if (currentObservation.availability === "absent" && pending.intent !== 'rebuild') data.allocation = "confirmed-absent";
+            if (currentObservation.availability === "absent" && pending.intent !== 'rebuild') {
+                data.allocation = "confirmed-absent";
+                data.nativeOperationRef = getActivePrismaRuntime().DbNull;
+            }
         }
         const observedSettlement = pending.intent !== 'rebuild' && currentObservation && (pending.intent === 'delete'
             ? currentObservation.availability === 'absent'
@@ -344,6 +371,9 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, row);
         return { machine: await projectManagedMachineInTx(tx, current) };
+    }, {
+        // Observation ordering and allocation settlement are not fully covered by the intent CAS.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -366,6 +396,9 @@ export async function submitManagedAcquire(input: ManagedControllerSubmitInputV1
         const current = changed.count ? await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } }) : row;
         if (changed.count) await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current), submitted: changed.count === 1 };
+    }, {
+        // Serialize allocation submission with cancellation and resource reports.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -414,6 +447,9 @@ export async function reportManagedAcquire(input: ManagedControllerReportV1, opt
         const updated = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, updated);
         return { machine: projectManagedMachine(updated, declaration) };
+    }, {
+        // Bound resource and observation reads are not all covered by the allocation CAS.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -443,6 +479,9 @@ export async function createManagedBootstrapCredential(input: ManagedBootstrapCr
         const updated = await tx.managedMachine.update({ where: { id: row.id }, data: { bootstrapCredentialRef: { kind: "shared_resource", resourceId: created.value.resourceId } } });
         await invalidateManagedMachineInTx(tx, updated);
         return { machine: await projectManagedMachineInTx(tx, updated) };
+    }, {
+        // SavedSecret mode/key admission precedes the retained bootstrap reference write.
+        isolationLevel: "Serializable",
     });
 }
 

@@ -7,6 +7,7 @@ import type { Tx } from "@/storage/inTx";
 import type { MachineReplacementSource } from "./validateMachineReplacement";
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { catchUpAutomationRunLifecycleSourcesForRestoredMachineTx } from "@/app/automations/automationRunLifecycleAdmission";
+import { acquireWorkflowPublicationLocksInTx } from "@/app/workflows/acquireWorkflowPublicationLocksInTx";
 import { readMachineDevcontainerChildInTx } from './managed/managedRows';
 import { resolveMachineAccessInTx } from './machineAccess';
 
@@ -121,6 +122,13 @@ export async function clearMachineReplacement(params: Readonly<{
     accountId: string;
     oldMachineId: string;
 }>): Promise<void> {
+    await acquireWorkflowPublicationLocksInTx(params.tx, {
+        accountId: params.accountId,
+        automationWhere: { accountId: params.accountId, enabled: true, deletedAt: null,
+            assignments: { some: { machineId: params.oldMachineId, enabled: true } } },
+        runSourceTriggerWhere: { enabled: true, remainingOccurrences: 1, automation: { accountId: params.accountId,
+            enabled: true, deletedAt: null, assignments: { some: { machineId: params.oldMachineId, enabled: true } } } },
+    });
     await params.tx.machine.update({
         where: { accountId_id: { accountId: params.accountId, id: params.oldMachineId } },
         data: {

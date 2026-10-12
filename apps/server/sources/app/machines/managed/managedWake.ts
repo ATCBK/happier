@@ -154,9 +154,9 @@ export async function prepareManagedFiniteActionWake(input: Readonly<{
 }
 
 /** Accepted-origin correlation only. This never admits a power Action or changes desired intent. */
-export async function resolveManagedWakeTargetInTx(tx: Tx, input: Readonly<{
-    actorAccountId: string; machineId: string; origin: ManagedWakeTargetV1['origin'];
-}>): Promise<ManagedWakeTargetV1 | undefined> {
+async function readManagedWakeTargetBindingInTx(tx: Tx, input: Readonly<{
+    actorAccountId: string; machineId: string;
+}>) {
     const homeId = await readCurrentServerIdentityId(process.env, tx);
     if (!homeId) return undefined;
     const row = await tx.managedMachine.findFirst({ where: {
@@ -174,8 +174,15 @@ export async function resolveManagedWakeTargetInTx(tx: Tx, input: Readonly<{
     let projected;
     try { projected = projectManagedMachine(row); } catch { return undefined; }
     if (projected.observation?.availability === 'absent' || projected.observation?.storage === 'lost') return undefined;
-    return ManagedWakeTargetV1Schema.parse({ homeId, managedId: row.id, enrolledMachineId: input.machineId,
-        expectedIntentRevision: row.intentRevision, controller, origin: input.origin, reason: 'admitted-work' });
+    return { homeId, managedId: row.id, enrolledMachineId: input.machineId,
+        expectedIntentRevision: row.intentRevision, controller, reason: 'admitted-work' as const };
+}
+
+export async function resolveManagedWakeTargetInTx(tx: Tx, input: Readonly<{
+    actorAccountId: string; machineId: string; origin: ManagedWakeTargetV1['origin'];
+}>): Promise<ManagedWakeTargetV1 | undefined> {
+    const binding = await readManagedWakeTargetBindingInTx(tx, input);
+    return binding ? ManagedWakeTargetV1Schema.parse({ ...binding, origin: input.origin }) : undefined;
 }
 
 /** Real queued assignment is the durable origin; guest claims remain at the incumbent claim owner. */
@@ -196,9 +203,9 @@ export async function publishManagedRunWakeInTx(tx: Tx, input: Readonly<{ accoun
 }
 
 /** A cold delivery follows actual Session placement, even when no human input is pending. */
-async function resolveSessionContextWakeTargetInTx(tx: Tx, input: Readonly<{
-    accountId: string; sessionId: string; runId: string; revision: number;
-}>): Promise<ManagedWakeTargetV1 | undefined> {
+async function readSessionContextWakePlacementInTx(tx: Tx, input: Readonly<{
+    accountId: string; sessionId: string;
+}>) {
     const session = await tx.session.findUnique({ where: { id: input.sessionId },
         select: { accountId: true, archivedAt: true, runtimeMachineTarget: true } });
     if (!session || session.accountId !== input.accountId || session.archivedAt !== null) return undefined;
@@ -210,10 +217,52 @@ async function resolveSessionContextWakeTargetInTx(tx: Tx, input: Readonly<{
     const machineId = committed?.machineId ?? accepted?.enrolledMachineId;
     const homeId = committed?.homeId ?? accepted?.homeId;
     if (!machineId || !homeId) return undefined;
+    return { machineId, homeId, accepted };
+}
+
+async function resolveSessionContextWakeTargetInTx(tx: Tx, input: Readonly<{
+    accountId: string; sessionId: string; runId: string; revision: number;
+}>): Promise<ManagedWakeTargetV1 | undefined> {
+    const placement = await readSessionContextWakePlacementInTx(tx, input);
+    if (!placement) return undefined;
+    const { machineId, homeId, accepted } = placement;
     const target = await resolveManagedWakeTargetInTx(tx, { actorAccountId: input.accountId, machineId,
         origin: { kind: 'context-delivery', session: { homeId, sessionId: input.sessionId },
             delivery: { runId: input.runId, revision: input.revision } } });
     return target && (!accepted || target.managedId === accepted.managedId) ? target : undefined;
+}
+
+/** Acquisition projects the same eligible wake binding without admitting or publishing work. */
+export async function readManagedWakePublicationAccountIdsInTx(tx: Tx, input: Readonly<{
+    machineTargets: readonly Readonly<{ accountId: string; machineId: string }>[];
+    sessionIds: readonly string[];
+}>): Promise<string[]> {
+    const targets = new Map(input.machineTargets.map(target => [JSON.stringify(target), target]));
+    const sessions = input.sessionIds.length > 0 ? await tx.session.findMany({
+        where: { id: { in: [...input.sessionIds] } }, select: { id: true, accountId: true },
+    }) : [];
+    for (const session of sessions) {
+        const placement = await readSessionContextWakePlacementInTx(tx, { accountId: session.accountId, sessionId: session.id });
+        if (placement) {
+            const target = { accountId: session.accountId, machineId: placement.machineId };
+            targets.set(JSON.stringify(target), target);
+        }
+    }
+    // Enrollment admits only a guest owned by its custodian. Taking that existing
+    // authority also prevents an enrollment committed during acquisition from
+    // introducing a previously absent custodian into the later publication.
+    const machines = targets.size > 0 ? await tx.machine.findMany({
+        where: { id: { in: [...new Set([...targets.values()].map(target => target.machineId))] } },
+        select: { accountId: true },
+    }) : [];
+    const accountIds = new Set(machines.map(machine => machine.accountId));
+    for (const target of targets.values()) {
+        const binding = await readManagedWakeTargetBindingInTx(tx, { actorAccountId: target.accountId, machineId: target.machineId });
+        if (!binding) continue;
+        const controller = await tx.machine.findUnique({ where: { id: binding.controller.machineId }, select: { accountId: true } });
+        if (controller) accountIds.add(controller.accountId);
+    }
+    return [...accountIds].sort();
 }
 
 /** Committed delivery uses Session placement, never an initial Run assignment guess. */
