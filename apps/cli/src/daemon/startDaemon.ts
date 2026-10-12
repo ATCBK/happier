@@ -1072,6 +1072,16 @@ export async function startDaemon(
         serverId: configuration.activeServerId,
         machineId,
         signal: homeTransportCancellation.signal,
+        requesterSessionCustody: {
+          resolve: async sessionId => {
+            const context = await resolveRequesterSessionRuntimeContext(sessionId);
+            if (!context) return null;
+            return { ...context.bootstrap, isCurrent: context.isCurrent, release: async () => {
+              if ([...pidToTrackedSession.values()].some(tracked => tracked.requesterSessionRuntimeContext === context)) return;
+              await context.dispose();
+            } };
+          },
+        },
       }),
       onTrackedSessionReady: async (tracked) => {
         const sessionId = typeof tracked.happySessionId === 'string' ? tracked.happySessionId.trim() : '';

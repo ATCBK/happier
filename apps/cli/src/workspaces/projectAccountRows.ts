@@ -21,11 +21,13 @@ import { readAccountEncryptionModeOnce } from '@/api/client/accountEncryptionMod
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { configuration } from '@/configuration';
-import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 import type { StoredCredentials } from '@/persistence';
 import { AccountSettingsEncryptionMaterialUnavailableError, hasUsableAccountSettingsEncryptionMaterial, requireAccountSettingsEncryptionCredentials } from '@/settings/accountSettings/accountSettingsEncryptionMaterial';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveWorkspaceRefById } from '@/workspaces/workspaceRefsV1';
+import { resolveWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { getPathRemainderWithinBase } from '@/session/handoff/paths/sessionHandoffPathNormalization';
 import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 export type OpenedProjectAccountRow = Readonly<{ key: ProjectAccountRowKeyV1; revision: number; payload: ProjectAccountRowPayloadV1 | null }>;
@@ -73,8 +75,10 @@ function publish(snapshot: ActiveProjectAccountRowsSnapshot | null): ActiveProje
 }
 export function withdrawActiveProjectAccountRowsSnapshot(): void { publish(null); }
 function rowError(code: string): Error & { code: string } { return Object.assign(new Error(code), { code }); }
-export type ProjectAccountRowsInput = Readonly<({ credentials: StoredCredentials; authorization?: never; effectActionId?: never }
-  | { credentials?: never; authorization: ExternalActionExecutionAuthorizationV1; effectActionId: string })
+/** Private admitted Session custody, separate from a finite Action's signed HTTP port. */
+export type ProjectAccountSessionCustody = Readonly<{ serverId: string; accountId: string; serverHttpBaseUrl: string; isCurrent(): Promise<boolean> }>;
+export type ProjectAccountRowsInput = Readonly<({ credentials: StoredCredentials; sessionCustody?: ProjectAccountSessionCustody; authorization?: never; effectActionId?: never }
+  | { credentials?: never; sessionCustody?: never; authorization: ExternalActionExecutionAuthorizationV1; effectActionId: string })
   & { serverId?: string; signal?: AbortSignal }>;
 export type ProjectRuntimeAccountAccess = Readonly<{ credentials: StoredCredentials; accountAuthorization?: never }>
   | Readonly<{ credentials?: never; accountAuthorization: ExternalActionExecutionAuthorizationV1 }>;
@@ -86,6 +90,11 @@ export function projectRuntimeAccountRowsInput(runtime: ProjectRuntimeAccountAcc
 }
 type ReadInput = ProjectAccountRowsInput;
 async function assertRequesterCurrent(input: ReadInput): Promise<void> {
+  if (input.sessionCustody && (!await input.sessionCustody.isCurrent()
+    || input.serverId && !await isServerProfileHomeIdentity(input.sessionCustody.serverId, input.serverId))) {
+    throw rowError('project_requester_authority_unavailable');
+  }
+  input.signal?.throwIfAborted();
   if (!input.authorization) return;
   const account = input.authorization.requesterAccountProjection;
   const http = input.authorization.requesterHttpProjection;
@@ -97,22 +106,23 @@ async function assertRequesterCurrent(input: ReadInput): Promise<void> {
   input.signal?.throwIfAborted();
 }
 async function requestHeaders(input: ReadInput, path: string, body: unknown) {
-  if (!input.authorization) return headers(input.credentials);
   await assertRequesterCurrent(input);
+  if (!input.authorization) return headers(input.credentials);
   const result = await input.authorization.requesterHttpProjection!.createRequestHeaders({
     effectActionId: input.effectActionId, method: 'POST', path, body, ...(input.signal ? { signal: input.signal } : {}),
   });
   if (!result) throw rowError('project_requester_authority_unavailable');
   return { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), ...result, 'Content-Type': 'application/json' };
 }
-function baseUrl(input: ReadInput) { return input.authorization?.requesterHttpProjection?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(); }
+function baseUrl(input: ReadInput) { return input.authorization?.requesterHttpProjection?.serverHttpBaseUrl
+  ?? input.sessionCustody?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl(); }
 function scopeKey(input: ReadInput) {
-  return `${input.serverId ?? configuration.activeServerId}:${input.authorization?.requesterAccountProjection?.accountId
+  return `${input.serverId ?? configuration.activeServerId}:${input.authorization?.requesterAccountProjection?.accountId ?? input.sessionCustody?.accountId
     ?? resolveAccountSettingsScopeKey(input.credentials!)}`;
 }
 function acceptSnapshot(input: ReadInput, snapshot: ActiveProjectAccountRowsSnapshot) {
   // A private invocation must not replace the daemon Account's live Sync projection.
-  return input.authorization ? snapshot : publish(snapshot);
+  return input.authorization || input.sessionCustody ? snapshot : publish(snapshot);
 }
 function headers(credentials: StoredCredentials) {
   return { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' };
@@ -124,11 +134,11 @@ function cryptoMaterial(credentials: StoredCredentials) {
     : { type: 'dataKey' as const, machineKey: encryption.machineKey };
 }
 async function readMode(input: ReadInput): Promise<'plain' | 'e2ee'> {
+  await assertRequesterCurrent(input);
   if (input.authorization) {
-    await assertRequesterCurrent(input);
     return input.authorization.requesterAccountProjection!.accountEncryptionMode;
   }
-  const result = await readAccountEncryptionModeOnce({ request: () => axios.get(`${resolveServerHttpBaseUrl()}/v1/account/encryption`, {
+  const result = await readAccountEncryptionModeOnce({ request: () => axios.get(`${baseUrl(input)}/v1/account/encryption`, {
     headers: headers(input.credentials), validateStatus: () => true, ...(input.signal ? { signal: input.signal } : {}),
   }) });
   if (result.kind !== 'resolved') throw rowError('project_account_mode_unavailable');
@@ -251,7 +261,7 @@ export async function readProjectAccountRows(input: ReadInput): Promise<ActivePr
       input.signal?.throwIfAborted();
       return acceptSnapshot(input, snapshot);
     } catch (error) {
-      if (!input.authorization && (!active || active.scopeKey === scopeKey(bound))) withdrawActiveProjectAccountRowsSnapshot();
+      if (!input.authorization && !input.sessionCustody && (!active || active.scopeKey === scopeKey(bound))) withdrawActiveProjectAccountRowsSnapshot();
       throw error;
     }
   });
@@ -324,6 +334,20 @@ export function createProjectAccountSnapshotMutation(authority: StoredCredential
       if (isDeepStrictEqual(prior, value)) continue;
       if (!prior || !value || prior.machineId !== value.machineId || prior.rootPath !== value.rootPath) topologyChange = true;
       mutations.push({ key, expectedRevision: byKey.get(identity)?.revision ?? 'absent', payload: value ? { key, value } : null });
+    }
+    // Narrow mitigation while retained Home/Artifact repair is owed: a known
+    // local-profile checkout must not receive another portable ref/anchor.
+    // Unrelated insertions, existing-ref edits and graph retirement stay usable.
+    const homeId = input.serverId ? await resolveServerProfileHomeIdentityId(input.serverId) : null;
+    if (homeId && homeId !== input.serverId) {
+      const retained = before.workspaceRefs.filter(ref => ref.serverId === input.serverId).map(ref => ({ ...ref, serverId: homeId }));
+      for (const ref of next.workspaceRefs) {
+        if (ref.serverId !== homeId || resolveWorkspaceRefById(before.workspaceRefs, ref.id, homeId)) continue;
+        const resolution = resolveWorkspaceRefV1(retained, { serverId: homeId, machineId: ref.machineId, rootPath: ref.rootPath }, {
+          rootsEqual: (left, right) => getPathRemainderWithinBase(left, right) === '',
+        });
+        if (resolution.kind !== 'missing') throw rowError('project_home_reconciliation_required');
+      }
     }
     if (topologyChange) {
       const key = { kind: 'relationship-graph' as const };
