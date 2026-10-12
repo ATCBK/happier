@@ -20,6 +20,24 @@ const wrapper: React.ComponentType<React.PropsWithChildren> = ({ children }) => 
 
 describe('Project terminal private presentation at the existing pane Account boundary', () => {
     beforeEach(async () => { standardCleanup(); await harness.reset(); storage.getState().applyLocalSettings({ appPaneScopesV1: {} }); });
+    it('clears focus for omitted and explicitly undefined scopes without changing qualified pane state', async () => {
+        const serverId = await harness.addHome({ name: 'Focus Home', serverUrl: 'https://pane-focus.test', accountId: 'alice' });
+        const scopeId = buildProjectPaneScopeId('accepted', serverId);
+        const host = await renderHook(useAppPaneContext, { wrapper });
+        await act(async () => {
+            host.getCurrent().dispatch({ type: 'activateScope', scopeId });
+            host.getCurrent().dispatch({ type: 'openRight', scopeId });
+        });
+        const scopes = host.getCurrent().state.scopes;
+        for (const action of [{ type: 'exitFocusMode' }, { type: 'exitFocusMode', scopeId: undefined }] as const) {
+            await act(async () => host.getCurrent().dispatch({ type: 'enterFocusMode', scopeId }));
+            expect(host.getCurrent().state.focusMode.scopeId).toBe(scopeId);
+            await act(async () => host.getCurrent().dispatch(action));
+            expect(host.getCurrent().state.focusMode.scopeId).toBeNull();
+            expect(host.getCurrent().state.scopes).toBe(scopes);
+        }
+        await host.unmount();
+    });
     it('does not disclose Bob persisted members when the pane owner first mounts under Cara', async () => {
         const serverId = await harness.addHome({ name: 'Persisted Home', serverUrl: 'https://pane-persisted.test', accountId: 'bob' });
         storage.getState().activateProfileScope({ serverId, accountId: 'bob' });

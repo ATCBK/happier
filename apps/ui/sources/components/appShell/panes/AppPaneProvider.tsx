@@ -252,7 +252,7 @@ export const AppPaneProvider = React.memo((props: Readonly<{ children: React.Rea
         }
 
         let previousState = stateRef.current;
-        if ('scopeId' in action) {
+        if ('scopeId' in action && action.scopeId !== undefined) {
             const pane = previousState.scopes[action.scopeId];
             if (pane) {
                 const qualified = qualifyProjectTerminalPane(action.scopeId, pane, readPaneAccountScope(action.scopeId));
