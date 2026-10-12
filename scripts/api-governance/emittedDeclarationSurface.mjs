@@ -56,8 +56,11 @@ export function projectPreparedDeclarationSurface({
   packageJson,
   title,
   bundledDependencies = [],
+  excludedEntrypointRoots = [],
 }) {
-  const entrypoints = readPreparedDeclarationEntrypoints(packageJson);
+  const entrypoints = Object.freeze(readPreparedDeclarationEntrypoints(packageJson).filter(({ specifier }) => (
+    !excludedEntrypointRoots.some((root) => specifier === root || specifier.startsWith(`${root}/`))
+  )));
   const reportEntrypoints = declarationEntrypointRows(entrypoints);
   const program = createPublicSurfaceProgram(
     reportEntrypoints.map((entrypoint) => resolve(packageRoot, entrypoint.sourceModule)),

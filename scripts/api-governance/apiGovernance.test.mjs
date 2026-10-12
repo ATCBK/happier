@@ -547,6 +547,34 @@ test('the plugin-ui profile gates only its committed census and generates declar
   }
 });
 
+test('the plugin-ui author census excludes host presentation exports while retaining their package entrypoints', async () => {
+  const root = await createEntrypointFixture();
+  try {
+    const packagePath = join(root, 'package.json');
+    const packageJson = JSON.parse(await readFile(packagePath, 'utf8'));
+    packageJson.exports['./presentation'] = {
+      types: './dist/presentation/index.d.ts', default: './dist/presentation/index.js',
+    };
+    packageJson.exports['./presentation/typeScale'] = {
+      types: './dist/presentation/typeScale.d.ts', default: './dist/presentation/typeScale.js',
+    };
+    await writeFixtureFile(root, 'package.json', `${JSON.stringify(packageJson)}\n`);
+    await writeFixtureFile(root, 'dist/presentation/index.d.ts', 'export declare const HostRenderer: unique symbol;\n');
+    await writeFixtureFile(root, 'dist/presentation/typeScale.d.ts', 'export declare const HostScale: unique symbol;\n');
+    await writeFixtureFile(root, 'src/presentation/index.public.ts', 'export declare const HostRenderer: unique symbol;\n');
+    await writeFixtureFile(root, 'src/presentation/typeScale/index.public.ts', 'export declare const HostScale: unique symbol;\n');
+    const result = await runApiGovernance({ profileId: 'plugin-ui', packageRoot: root, write: true });
+    assert.equal(result.status, 'current');
+    const census = JSON.parse(await readFile(join(root, 'api-surface.json'), 'utf8'));
+    assert.deepEqual(census.entrypoints.map((entry) => entry.specifier), ['.']);
+    assert.deepEqual(census.symbols.map((entry) => entry.exportName), ['run']);
+    assert.doesNotMatch(await readFile(join(root, 'API.md'), 'utf8'), /HostRenderer|HostScale|\.\/presentation/u);
+    assert.deepEqual(JSON.parse(await readFile(packagePath, 'utf8')).exports, packageJson.exports);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('the plugin-ui profile requires an author-owned source spec for every public entrypoint', async () => {
   const root = await createEntrypointFixture();
   try {

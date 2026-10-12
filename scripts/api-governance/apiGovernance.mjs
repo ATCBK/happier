@@ -68,6 +68,7 @@ export const API_GOVERNANCE_PROFILES = Object.freeze({
     title: 'Plugin UI public API',
     declarationTitle: 'Plugin UI public declaration report',
     sourceEntrypointSpecs: true,
+    excludedEntrypointRoots: Object.freeze(['./presentation']),
   }),
   sdk: Object.freeze({
     id: 'sdk',
@@ -571,6 +572,7 @@ async function runEntrypointDeclarationProfile(profile, options) {
     packageJson,
     title: profile.declarationTitle,
     bundledDependencies: packageJson.bundledDependencies ?? [],
+    excludedEntrypointRoots: profile.excludedEntrypointRoots,
   });
   const { entrypoints, rows } = emitted;
   // A published tarball ships `dist` and the tracked records, never `src`, so
