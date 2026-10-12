@@ -4,7 +4,7 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { t } from '@/text';
 import { useOptionalSessionScreenTestId } from '../shell/sessionScreenTestIds';
-import { SESSION_HEADER_ICON_SIZE_PX } from '@/components/sessions/actions/sessionHeaderIconMetrics';
+import { SESSION_HEADER_ICON_SIZE_PX, resolveSessionHeaderActionTargetPx } from '@/components/sessions/actions/sessionHeaderIconMetrics';
 import { Icon } from '@/components/ui/icons/Icon';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 
@@ -28,8 +28,8 @@ export const SessionHeaderInfoButton = React.memo((props: Readonly<{
             onPress={props.onPress}
             hitSlop={15}
             style={({ pressed }) => ({
-                width: 44,
-                height: 44,
+                width: resolveSessionHeaderActionTargetPx(),
+                height: resolveSessionHeaderActionTargetPx(),
                 alignItems: 'center',
                 justifyContent: 'center',
                 opacity: pressed ? motionTokens.press.opacity : 1,

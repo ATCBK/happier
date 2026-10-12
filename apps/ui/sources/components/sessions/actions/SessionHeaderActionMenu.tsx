@@ -86,11 +86,11 @@ import { resolveSessionAttentionStanding } from '@/sync/domains/session/organiza
 import { useSessionAttentionStandingInputs } from '@/hooks/session/useSessionAttentionStandingInputs';
 import { sessionTagKey } from '@/components/sessions/shell/sessionTagUtils';
 import {
-  SESSION_HEADER_ACTION_TAP_TARGET_PX,
+  SESSION_HEADER_ACTION_SIZE_PX,
   SESSION_HEADER_ICON_SIZE_PX,
+  resolveSessionHeaderActionTargetPx,
 } from '@/components/sessions/actions/sessionHeaderIconMetrics';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { emitSessionResumeRequest } from '@/components/sessions/model/sessionResumeRequests';
 import { useResumeCapabilityOptions } from '@/agents/hooks/useResumeCapabilityOptions';
 import { supportsExternalSessionBackgroundFollow } from '@/components/sessions/external/browse/resolveExternalSessionBrowseSourceOptions';
@@ -740,8 +740,8 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
   const directPluginHeaderActions = props.pluginHeaderActionPlacement === 'direct'
     ? props.pluginHeaderActions ?? []
     : [];
-  const headerInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-  const headerInteractiveHitSlop = headerInteractiveTargetSize > SESSION_HEADER_ACTION_TAP_TARGET_PX
+  const headerInteractiveTargetSize = resolveSessionHeaderActionTargetPx();
+  const headerInteractiveHitSlop = headerInteractiveTargetSize > SESSION_HEADER_ACTION_SIZE_PX
     ? undefined
     : 15;
 

@@ -6,7 +6,7 @@ import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneSco
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { useOptionalSessionScreenTestId } from '../shell/sessionScreenTestIds';
-import { SESSION_HEADER_ICON_SIZE_PX } from '@/components/sessions/actions/sessionHeaderIconMetrics';
+import { SESSION_HEADER_ICON_SIZE_PX, resolveSessionHeaderActionTargetPx } from '@/components/sessions/actions/sessionHeaderIconMetrics';
 import { SessionHeaderIconWithCount } from '@/components/sessions/actions/SessionHeaderIconWithCount';
 import { ICON_SIZE, Icon } from '@/components/ui/icons/Icon';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
@@ -37,8 +37,8 @@ export const SessionHeaderSubagentsButton = React.memo((props: Readonly<{
             onPress={onPress}
             hitSlop={15}
             style={({ pressed }) => ({
-                width: 44,
-                height: 44,
+                width: resolveSessionHeaderActionTargetPx(),
+                height: resolveSessionHeaderActionTargetPx(),
                 alignItems: 'center',
                 justifyContent: 'center',
                 opacity: pressed ? motionTokens.press.opacity : 1,

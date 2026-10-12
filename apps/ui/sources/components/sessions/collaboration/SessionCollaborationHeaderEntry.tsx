@@ -6,7 +6,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { SESSION_HEADER_ICON_SIZE_PX, SESSION_HEADER_ACTION_TAP_TARGET_PX } from '@/components/sessions/actions/sessionHeaderIconMetrics';
+import { SESSION_HEADER_ICON_SIZE_PX, SESSION_HEADER_ACTION_SIZE_PX } from '@/components/sessions/actions/sessionHeaderIconMetrics';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { useSessionHumanPresence } from '@/sync/domains/session/humanPresence/useSessionHumanPresence';
 import { t } from '@/text';
@@ -129,7 +129,7 @@ export function SessionCollaborationHeaderEntry({ target, compact = false, atten
     return (
         <View style={styles.attentionFrame}>
             <IconButton testID="session-collaboration-header" iconName="users" variant="plain"
-                size={SESSION_HEADER_ACTION_TAP_TARGET_PX} iconSize={SESSION_HEADER_ICON_SIZE_PX}
+                size={SESSION_HEADER_ACTION_SIZE_PX} iconSize={SESSION_HEADER_ICON_SIZE_PX}
                 minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
                 accessibilityLabel={label} tooltip={t('session.collaboration.open')} onPress={onPress} />
             {marker}

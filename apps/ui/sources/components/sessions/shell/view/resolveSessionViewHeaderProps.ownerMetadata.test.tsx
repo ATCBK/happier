@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 import type { PluginProjectionV2 } from '@happier-dev/protocol';
 
@@ -11,8 +10,7 @@ import { SessionHeaderActionMenu } from '@/components/sessions/actions/SessionHe
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { SESSION_BOARD_DESTINATION } from '@/components/sessions/board/sessionBoardDestination';
 import { t } from '@/text';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { SESSION_HEADER_ACTION_TAP_TARGET_PX } from '@/components/sessions/actions/sessionHeaderIconMetrics';
+import { SESSION_HEADER_ACTION_SIZE_PX, resolveSessionHeaderActionTargetPx } from '@/components/sessions/actions/sessionHeaderIconMetrics';
 
 import { resolveSessionViewHeaderProps } from './resolveSessionViewHeaderProps';
 
@@ -372,13 +370,13 @@ describe('resolveSessionViewHeaderProps owner metadata', () => {
         }));
         const boardButton = findBoardHeaderButton(populatedWide);
         const boardButtonStyle = boardButton?.props.style({ pressed: false });
-        const expectedTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+        const expectedTargetSize = resolveSessionHeaderActionTargetPx();
         expect(boardButtonStyle).toEqual(expect.objectContaining({
             width: expectedTargetSize,
             height: expectedTargetSize,
         }));
         expect(boardButton?.props.hitSlop).toBe(
-            expectedTargetSize > SESSION_HEADER_ACTION_TAP_TARGET_PX ? undefined : 15,
+            expectedTargetSize > SESSION_HEADER_ACTION_SIZE_PX ? undefined : 15,
         );
         expect(findHeaderActionMenu(populatedWide).props.extraItems ?? []).not.toEqual(expect.arrayContaining([
             expect.objectContaining({ id: 'header.openBoard' }),

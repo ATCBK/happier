@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { CompanionWidgetAddPopover, type CompanionWidgetAddSource } from '@/components/widgets/add/CompanionWidgetAddPopover';
 import { Icon } from '@/components/ui/icons/Icon';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -34,8 +35,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     icon: {
         alignItems: 'center',
         justifyContent: 'center',
-        width: resolveMinimumInteractiveTargetSize(Platform.OS),
-        height: resolveMinimumInteractiveTargetSize(Platform.OS),
+        width: Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS)),
+        height: Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS)),
     },
 }));
 

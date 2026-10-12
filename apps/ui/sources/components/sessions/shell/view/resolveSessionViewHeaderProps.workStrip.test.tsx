@@ -80,4 +80,15 @@ describe('resolveSessionViewHeaderProps work strip', () => {
         expect(findByType(second, SessionHeaderWorkStrip)?.props.summary.needsYou).toBe(2);
         expect(findByType(settled, SessionHeaderWorkStrip)).toBeUndefined();
     });
+
+    it('refreshes the cached strip when working work stalls and recovers without changing outstanding totals', () => {
+        const working = resolveSessionViewHeaderProps(input('strip-stalled', summary({ outstanding: 1 })));
+        const stalled = resolveSessionViewHeaderProps(input('strip-stalled', summary({ outstanding: 1, stalled: 1 })));
+        const recovered = resolveSessionViewHeaderProps(input('strip-stalled', summary({ outstanding: 1 })));
+
+        expect(stalled).not.toBe(working);
+        expect(findByType(stalled, SessionHeaderWorkStrip)?.props.summary.stalled).toBe(1);
+        expect(findByType(recovered, SessionHeaderWorkStrip)?.props.summary.stalled).toBe(0);
+        expect(recovered).toBe(working);
+    });
 });

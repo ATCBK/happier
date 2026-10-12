@@ -1,14 +1,14 @@
 import * as React from 'react';
-import { Platform, Pressable } from 'react-native';
+import { Pressable } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { SessionHeaderIconWithCount } from '@/components/sessions/actions/SessionHeaderIconWithCount';
 import {
-    SESSION_HEADER_ACTION_TAP_TARGET_PX,
+    SESSION_HEADER_ACTION_SIZE_PX,
     SESSION_HEADER_ICON_SIZE_PX,
+    resolveSessionHeaderActionTargetPx,
 } from '@/components/sessions/actions/sessionHeaderIconMetrics';
 import { Icon } from '@/components/ui/icons/Icon';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 
 import {
     resolveSessionCompanionHeaderAccessibilityLabel,
@@ -27,8 +27,8 @@ export const SessionCompanionHeaderButton = React.memo((props: Readonly<{
 }>) => {
     const { theme } = useUnistyles();
     const { intent } = props;
-    const targetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    const hitSlop = targetSize > SESSION_HEADER_ACTION_TAP_TARGET_PX ? undefined : 15;
+    const targetSize = resolveSessionHeaderActionTargetPx();
+    const hitSlop = targetSize > SESSION_HEADER_ACTION_SIZE_PX ? undefined : 15;
 
     return (
         <Pressable

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 
 import { useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
@@ -23,7 +23,7 @@ import { t } from '@/text';
 
 import { resolveLocalServicesGlanceRows, type LocalServicesGlanceRow } from './glanceModels';
 
-const OPEN_TARGET_PX = resolveMinimumInteractiveTargetSize(Platform.OS);
+const OPEN_TARGET_PX = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS));
 
 const stylesheet = StyleSheet.create((theme) => ({
     row: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40, minWidth: 0 },

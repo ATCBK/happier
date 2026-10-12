@@ -8,6 +8,7 @@ import {
 } from '@/components/browser/surfaces';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { SESSION_HEADER_ACTION_SIZE_PX } from './sessionHeaderIconMetrics';
 import { useOptionalSessionScreenTestId } from '../shell/sessionScreenTestIds';
 
 function decisionEnabled(decision: ReturnType<typeof useFeatureDecision>): boolean {
@@ -60,7 +61,7 @@ export const SessionHeaderBrowserButton = React.memo((props: Readonly<{
         <BrowserSurfaceOpenButton
             onPress={onPress}
             testID={testId ?? 'session-header-browser-button'}
-            size={44}
+            size={SESSION_HEADER_ACTION_SIZE_PX}
             iconColor={theme.colors.chrome.header.foreground}
         />
     );

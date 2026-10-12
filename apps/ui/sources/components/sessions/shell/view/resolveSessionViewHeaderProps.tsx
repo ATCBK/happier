@@ -7,12 +7,14 @@ import { SessionHeaderBrowserButton } from '@/components/sessions/actions/Sessio
 import { SessionHeaderIconWithCount } from '@/components/sessions/actions/SessionHeaderIconWithCount';
 import { SessionHeaderInfoButton } from '@/components/sessions/actions/SessionHeaderInfoButton';
 import {
-    SESSION_HEADER_ACTION_TAP_TARGET_PX,
+    SESSION_HEADER_ACTION_SIZE_PX,
     SESSION_HEADER_ICON_SIZE_PX,
+    resolveSessionHeaderActionTargetPx,
 } from '@/components/sessions/actions/sessionHeaderIconMetrics';
 import { SessionHeaderSubagentsButton } from '@/components/sessions/actions/SessionHeaderSubagentsButton';
 import { SessionHeaderTerminalButton } from '@/components/sessions/actions/SessionHeaderTerminalButton';
 import { SessionHeaderWorkStrip } from '@/components/sessions/work/SessionHeaderWorkStrip';
+import { SessionHeaderRoleChip } from '@/components/roles/session/SessionHeaderRoleChip';
 import { PendingNavigationPill } from '@/components/sessions/pendingNavigation/PendingNavigationPill';
 import { EMPTY_WORK_SUMMARY, type WorkSummary } from '@/components/sessions/work/workProjection';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -30,6 +32,7 @@ import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAcco
 import { getSessionAvatarId, getSessionName, getSessionStatus, getSessionSubtitle, resolveLockedSessionTitle } from '@/utils/sessions/sessionUtils';
 import { formatSessionPath } from '@/utils/sessions/formatPathRelativeToHome';
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
+import { readSessionRoleIdV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { LruMap } from '@/utils/cache/lruMap';
 
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
@@ -49,7 +52,6 @@ import { SessionRowAttentionIndicator } from '../row/SessionRowAttentionIndicato
 import { resolveAgentIdFromFlavor, resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ActionOperationActivityButton } from '@/components/inbox/actionOperations/ActionOperationActivityButton';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { resolveSessionCompanionHeaderPlacement } from '@/components/sessions/companion/sessionCompanionHeaderPlacement';
 import { resolveSessionCompanionHeaderIntent } from '@/components/sessions/companion/sessionCompanionHeaderIntent';
 import type { SessionCompanionPlacement } from '@/components/sessions/companion/layout/resolveSessionCompanionPlacement';
@@ -60,17 +62,9 @@ import {
 } from '@/components/sessions/board/sessionBoardDestination';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 
-const WORKSPACE_SYNC_CONFLICT_TARGET_SIZE = Math.max(
-    SESSION_HEADER_ACTION_TAP_TARGET_PX,
-    resolveMinimumInteractiveTargetSize(Platform.OS),
-);
-const WORKSPACE_SYNC_CONFLICT_HIT_SLOP = Math.max(
-    0,
-    (WORKSPACE_SYNC_CONFLICT_TARGET_SIZE - SESSION_HEADER_ACTION_TAP_TARGET_PX) / 2,
-);
-
 export type SessionViewHeaderProps = Readonly<{
     title: string;
+    titleAccessory?: React.ReactNode;
     subtitle?: string;
     subtitleEllipsizeMode?: 'head' | 'tail';
     badges?: ReadonlyArray<string>;
@@ -224,6 +218,8 @@ function buildSessionViewHeaderPropsCacheKey(input: Readonly<{
     subagentActiveCount: number;
     workOutstandingCount: number;
     workNeedsYouCount: number;
+    workStalledCount: number;
+    roleId: string | null;
     sessionExecutionRunsSupported: boolean;
     showAutomations: boolean;
     actionIconColor: string;
@@ -274,6 +270,8 @@ function buildSessionViewHeaderPropsCacheKey(input: Readonly<{
         input.subagentActiveCount,
         input.workOutstandingCount,
         input.workNeedsYouCount,
+        input.workStalledCount,
+        input.roleId,
         input.sessionExecutionRunsSupported,
         input.showAutomations,
         input.actionIconColor,
@@ -381,6 +379,8 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
             flavor,
         };
     }
+    // The leaf subscribes to its selected role; catalog/snapshot edits do not invalidate the shell.
+    const roleId = shouldFoldHeaderIconActions ? null : readSessionRoleIdV1(ownerMetadata);
     const cacheKey = buildSessionViewHeaderPropsCacheKey({
         sessionId: session.id,
         sessionServerId: session.serverId,
@@ -404,6 +404,8 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
         subagentActiveCount: input.subagentActiveCount,
         workOutstandingCount: input.workSummary?.outstanding ?? 0,
         workNeedsYouCount: input.workSummary?.needsYou ?? 0,
+        workStalledCount: input.workSummary?.stalled ?? 0,
+        roleId,
         sessionExecutionRunsSupported: input.sessionExecutionRunsSupported,
         showAutomations: input.showAutomations,
         actionIconColor: input.actionIconColor,
@@ -505,8 +507,8 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
         });
     }
     const pluginHeaderActionPlacement = optionalDirectActionOwner === 'plugin' ? 'direct' : 'overflow';
-    const headerInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    const headerInteractiveHitSlop = headerInteractiveTargetSize > SESSION_HEADER_ACTION_TAP_TARGET_PX
+    const headerInteractiveTargetSize = resolveSessionHeaderActionTargetPx();
+    const headerInteractiveHitSlop = headerInteractiveTargetSize > SESSION_HEADER_ACTION_SIZE_PX
         ? undefined
         : 15;
 
@@ -525,6 +527,11 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
 
     const next: SessionViewHeaderProps = {
         title,
+        titleAccessory: roleId ? <SessionHeaderRoleChip
+            sessionId={input.sessionId}
+            serverId={session.serverId ?? null}
+            roleId={roleId}
+        /> : undefined,
         subtitle,
         subtitleEllipsizeMode,
         avatarId,
@@ -535,7 +542,7 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
                 <ActionOperationActivityButton
                     preferredSessionAddress={normalizeSessionAddress(session.serverId, input.sessionId)}
                     testID="session-header-action-operations"
-                    buttonSize={SESSION_HEADER_ACTION_TAP_TARGET_PX}
+                    buttonSize={SESSION_HEADER_ACTION_SIZE_PX}
                     iconSize={SESSION_HEADER_ICON_SIZE_PX}
                 />
                 {boardHeaderActionPlacement === 'direct' && input.boardHeaderAction ? (
@@ -638,10 +645,10 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
                 {workspaceSyncAttentionLabel && input.onOpenWorkspaceSyncConflicts ? (
                     <Pressable
                         onPress={input.onOpenWorkspaceSyncConflicts}
-                        hitSlop={WORKSPACE_SYNC_CONFLICT_HIT_SLOP}
+                        hitSlop={headerInteractiveHitSlop}
                         style={({ pressed }) => ({
-                            width: SESSION_HEADER_ACTION_TAP_TARGET_PX,
-                            height: SESSION_HEADER_ACTION_TAP_TARGET_PX,
+                            width: headerInteractiveTargetSize,
+                            height: headerInteractiveTargetSize,
                             alignItems: 'center',
                             justifyContent: 'center',
                             opacity: pressed ? motionTokens.press.opacity : 1,
