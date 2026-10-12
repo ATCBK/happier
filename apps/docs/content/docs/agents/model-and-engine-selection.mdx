@@ -65,6 +65,12 @@ is unknown. Runtime confirmation and model-loading controls require the selected
 machine's evidence. An unavailable source or missing selected model remains a
 setup/recovery state rather than silently switching to native CLI settings.
 
+The development Models view marks exact Account favorites and the saved default
+model. Setting a default writes that Agent's exact model reference through the
+Account preference Action; it does not change a running session. Reasoning or
+effort options remain on the Agent's existing configuration controls rather
+than becoming a second model-selection format.
+
 See [Account Provider setup](/agents/provider-integrations#account-setup-in-03-development)
 for connection configuration without a machine. The live refresh behavior below
 still runs from the selected machine.
@@ -79,8 +85,11 @@ does not change a running session or revoke credentials. In development builds t
 model picker lists hidden sources under the models; choosing one browses its models
 in place, and only picking a model changes the session. A model whose name appears
 in more than one source shows which source it comes from. The composer's account chip
-reads **Runs through** followed by where the session's models come from, and
-**Now via … · Change pending** while a requested change waits for a restart. The
+reads **Runs through** followed by where the session's models come from. Picking a
+model from another source while the session runs works like choosing another Agent:
+the chip reads **Next via …**, the send button reads **Continue via …**, and nothing
+happens until you send. Sending restarts the Agent on that source and continues the
+same conversation; picking the current model again cancels the change. The
 Account-wide visibility control is still being integrated, so this is not yet a
 released Settings workflow.
 
@@ -100,6 +109,11 @@ choice cannot be admitted, Happier asks for a choice instead of changing the
 model or billing source. Independent detached or scheduled work uses its own
 choices or Account defaults. Resuming a child keeps that child's retained choice,
 even after its parent changes.
+
+Development Run rows show the admitted child's model and source, including its
+Home, rather than a pending parent choice. Older daemon entries without that
+summary use a matching transcript when available; otherwise the source remains
+unknown. This presentation is not proof that the source is currently ready.
 
 Voice's **Session model** choice follows the same admission rule; custom chat
 and commit model choices remain explicit. Native children created by an Agent

@@ -101,6 +101,11 @@ if it still belongs to that pool. Multiple gateways require an explicit choice.
 These operations use the existing approval policy and revision-checked
 connection update, rather than a separate pool-routing setting.
 
+In development builds, choosing or clearing this pool slot does not require a
+selected or online machine. It saves Account configuration, not a gateway start
+or a runtime-readiness check. An unavailable unrelated source does not hide a
+gateway whose own declaration is available.
+
 The gateway configuration and collection integration are still being validated.
 See [managed gateways](/agents/provider-integrations#managed-gateways-in-development)
 for placement, Claude helper-model choices and experimental routing limits.
@@ -125,6 +130,11 @@ uses ACP turn usage. These are different measurements. Sign-in, refresh, quota
 attribution and A→B→A resume still require authenticated validation, including
 native Windows and macOS isolation checks. The integration uses Antigravity's own
 OAuth client and Google's internal quota API, which Google can change or block.
+
+[Google's FAQ](https://www.antigravity.google/docs/faq/) says third-party access
+can lead to account suspension or termination, and consumer-plan account rotation
+is unsupported. This development integration does not establish Google approval
+or an exception for Happier's use of the official ACP server.
 
 See [Antigravity](/agents/antigravity) for the managed ACP/native CLI boundary.
 
@@ -464,6 +474,131 @@ Each profile detail view lets you:
 - refresh the snapshot
 - inspect the provider plan label when available
 - pin specific meters so the same meters appear as summary badges elsewhere in the UI
+
+### Usage reset credits in 0.3 development
+
+Eligible Claude subscription OAuth accounts can show saved usage resets alongside
+ordinary quota and spending. A saved reset that cannot be used yet shows its count
+and availability reason with **Apply reset** disabled. Claude setup tokens and
+Anthropic API keys do not provide this OAuth operation.
+
+The account controls and session recovery use the same reset owner. Refresh reads
+current inventory; applying a reset checks the provider again and sends one
+redemption request. For subscription pools, automatic reset use must be explicitly
+enabled and the grant must cover a currently exhausted allowance selected by the
+pool. A reset for another window cannot authorize automatic spending.
+
+If the provider's answer is uncertain, Happier holds further manual and automatic
+reset attempts for that account instead of retrying the debit with another key.
+Availability, expiry and grant quantities come from Claude. Applying a reset is
+irreversible and leaves the ordinary weekly reset schedule unchanged; see
+[Claude's limit-reset guidance](https://support.claude.com/en/articles/17007452-what-is-a-limit-reset).
+
+This integration uses an undocumented provider endpoint. Read-only discovery was
+verified during development; redemption has boundary tests but has not been
+verified by spending a live grant. It requires a supported Claude CLI identity
+on the executing machine. Older components can retain the base usage snapshot
+while omitting supplemental saved counts and reasons.
+
+## Usage in 0.3 development
+
+Open **Settings → Usage** to inspect recorded accounting, add usage sources from
+your machines, or choose **Plans** to compare allowances and their history. These
+workflows are unreleased and still being validated in 0.3 development builds.
+The Usage entry requires **Usage reporting**, which is enabled by default;
+allowance surfaces also require the quota support described above. Source
+discovery and capture need a connected, available machine with a supported
+accounting reader.
+
+### Capture usage from outside Happier
+
+Choose **Sources** in Usage. Happier discovers source metadata on your machines;
+finding a source does not grant permission to read its accounting records.
+Choose **Add** on the source you want to count, then read and confirm the
+disclosure for that Agent, machine and source folder. **Not now** dismisses the
+card without enabling capture. Continuing an outside session in Happier is a
+separate operation and does not grant capture consent.
+
+Consented sources read existing accounting incrementally and capture subsequent
+changes in the background. Charts fill in as records arrive. Check the source's
+reading status and coverage: unreadable or unsupported history stays unknown,
+and a source still being read is not zero usage. Once accounting is durably
+captured, later cleanup of the Agent's original logs does not erase that history.
+
+Usage capture sends numbers, token categories, models, Agents and times to the
+Happier server, where they are queryable **even on an E2EE account**. Accounting
+records contain no prompts, replies, file paths or file contents. Machine
+identity and opaque source-root, native-session and project keys associate the
+records; readable project labels follow your account's encryption mode. This numeric disclosure is
+different from quota history, which retains its account-mode protection. See
+[Security](/security) for the wider encryption boundary.
+
+- **Stop** ends collection and keeps captured history. **Resume** asks for consent
+  before reading again.
+- **Delete history** is separately confirmed. It removes the selected source's
+  captured accounting and stops collection until you consent again; usage from
+  Happier sessions is unaffected.
+- **Change folder** or **Use default folder** changes the source root and ends its
+  previous consent. Confirm capture again for the resulting source.
+
+### Retained allowance history and pacing
+
+In **Plans**, current capacity and recorded quota history are separate readings.
+Happier retains accepted allowance observations, so the history describes what
+was actually recorded. Missing earlier readings remain missing. Quota and
+subscription history follows your account's encryption mode; authorized clients
+open encrypted history for E2EE accounts.
+
+Compare each allowance with its own reset window. The even-pace marker shows how
+much of that window had elapsed at the reading; the projection estimates what
+would be used or left at reset if the observed pace continued. These are estimates,
+with the recorded readings and coverage as their basis. Stale observations, unknown
+window duration, moved resets, changed limits or changed plans can make a
+projection unavailable. Percentages from different allowances are not a single
+interchangeable pool balance.
+
+An optional **Personal pace target** expresses how much of a window you aim to
+use. It is advice: it does not limit spending or switch accounts. Plan-fit
+history shows how recorded, comparable ended windows finished; partial history
+does not establish your complete past usage or how a different plan would have
+behaved.
+
+### Routing hints in the model picker
+
+The model picker can show **Uses first** for the selected Agent's pools, including
+the account in use, the order that follows and why an active account is kept.
+This reads the existing account selector's decision. Opening or hiding the hint
+does not switch accounts, and it does not rank unrelated Agents' allowances.
+Choose **Hide** in the hint, or change **Routing hints in the model picker** in
+the same Usage settings group as [composer gauges](#composer-gauges-in-development-builds).
+
+### Prices and plan fit
+
+In **Plans**, open a plan's **Details → Your monthly price** to enter a monthly
+amount and currency. Save it or use **Remove entered price** to clear it. The
+price belongs to that connected account and follows your account's encryption
+mode. Its meaning stays explicit:
+
+- **You entered** is your own price, not a verified payment.
+- **list price …, as of …** is a dated published price for a matching plan.
+- **You paid** requires a provider-reported payment fact; a plan label or list
+  price cannot establish it.
+
+The Costs view's **Model prices** editor lets you set token rates, price a model
+as another model, or reset an override. API-equivalent values use the effective
+catalog and overrides at query time, so changing a rate can re-price historical
+usage. Vendor-reported costs stay unchanged. An unknown or unpriced model remains
+unpriced rather than becoming zero cost.
+
+Plan value uses priced API-equivalent accounting attributed to that exact
+connected account. Unknown attribution and unpriced usage are excluded with
+partial coverage. A price multiple is available only when the queried range fits
+the witnessed current subscription period and both values are USD with a
+positive subscription price. It compares recorded API-equivalent value with the
+entered, reported-paid or list price; it is not a bill, paid savings or a forecast
+of the whole billing period. Read the price basis, dates and coverage before
+using it to judge plan fit. The billing control opens the provider's billing
+page; subscription changes remain with the provider.
 
 ## Security model
 
