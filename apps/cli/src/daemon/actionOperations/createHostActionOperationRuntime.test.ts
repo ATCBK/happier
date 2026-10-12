@@ -326,7 +326,7 @@ describe('finite host operation custody', () => {
     const terminals = createTerminalPtySessionManager({ ptyProvider: { spawn: () => process }, env: {}, platform: 'linux',
       probeProcessGroup: () => 'absent',
       stopProcessTree: async () => { attempts++; if (attempts === 1) throw new Error('OS tree Stop unconfirmed'); },
-      config: { maxSessions: 10, idleTimeoutMs: 60000, bufferMaxBytes: 100000, bufferMaxEvents: 1000,
+      config: { bufferMaxBytes: 100000, bufferMaxEvents: 1000,
         bufferRetentionMs: 600000, urlParseBufferLimit: 32768, maxWriteChunkBytes: 16384, defaultCols: 80, defaultRows: 24 } });
     try {
       const runtime = createHostActionOperationRuntime({ machineId: 'worker', resolveAccountId: async () => 'account',
@@ -349,6 +349,10 @@ describe('finite host operation custody', () => {
       await expect.poll(() => attempts).toBe(2);
       expect(runtime.store.get({ accountId: 'account', machineId: 'worker' }, 'repeat-stop')).not.toHaveProperty('settledAt');
       for (const exit of exits) exit({ exitCode: 0, signal: 0 });
+      // An outstanding stop_unconfirmed observation makes public wait return
+      // early; wait for the real process owner to consume its exit first.
+      await expect.poll(() => runtime.store.get({ accountId: 'account', machineId: 'worker' }, 'repeat-stop')?.state)
+        .toBe('cancelled');
       expect(await runtime.handlers.get({ operationId: 'repeat-stop', waitForTerminal: true }))
         .toMatchObject({ kind: 'found', operation: { state: 'cancelled' } });
       expect(runtime.store.get({ accountId: 'account', machineId: 'worker' }, 'repeat-stop')).not.toHaveProperty('observation');

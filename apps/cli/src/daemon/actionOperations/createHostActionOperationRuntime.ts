@@ -106,7 +106,7 @@ export function createHostActionOperationRuntime(deps: Readonly<{
   const observeExecution = async (request: Readonly<{
     actionId: string;
     input: unknown;
-    actionRequestId?: string;
+    actionRequestId?: import('@happier-dev/protocol').ActionExecutorContext['actionRequestId'];
     sessionId?: string;
     /** Already admitted receiving-host context, never a public Action input. */
     rpcContext?: ActionOperationRpcContext;
