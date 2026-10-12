@@ -77,7 +77,8 @@ import {
   TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1,
   TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1,
   TEAM_CREDENTIAL_ACTION_PATHS_V1,
-  type TeamCredentialActionIdV1,
+  TEAM_CREDENTIAL_ACTION_METHODS_V1,
+  type TeamCredentialHomeActionIdV1,
 } from '../../teams/credentials/actionsV1.js';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import {
@@ -86,6 +87,8 @@ import {
   type HomeDomainActionRow,
 } from './homeDomainRow.js';
 import { redactObservationInputPaths } from './observationRedaction.js';
+import { TeamMembershipHistoryInputV1Schema, TeamMembershipHistoryReadinessV1Schema,
+  TeamMembershipHistoryPreparationResultV1Schema } from '../../teams/membershipHistoryPreparationV1.js';
 
 const TEAM_ID_FIELD = approvalField('teamId', 'Team ID', { required: true });
 const MEMBERSHIP_ID_FIELD = approvalField('membershipId', 'Membership ID', { required: true });
@@ -114,6 +117,7 @@ function projectTeamCredentialExternalApiKeyCreateObservation(output: unknown): 
 
 type TeamProvisioningActionRowInput = Readonly<{
   id: TeamIdentityActionIdV1 | TeamDirectoryActionIdV1;
+  approval: PreNormalizedActionSpec['approval'];
   title: string;
   description: string;
   safety: 'safe' | 'danger';
@@ -178,13 +182,15 @@ function teamExternalGroupBindingActionRow<
   inputSchema: TInputSchema;
   outputSchema: TOutputSchema;
   method: 'GET' | 'PUT' | 'DELETE';
+  approval: PreNormalizedActionSpec['approval'];
   path: string;
 }>): HomeDomainActionRow<TActionId, TInputSchema, TOutputSchema> {
   return homeDomainActionRow(input);
 }
 
-function teamCredentialActionRow<TActionId extends TeamCredentialActionIdV1>(input: Readonly<{
+function teamCredentialActionRow<TActionId extends TeamCredentialHomeActionIdV1>(input: Readonly<{
   id: TActionId;
+  approval: PreNormalizedActionSpec['approval'];
   title: string;
   description: string;
   safety: 'safe' | 'danger';
@@ -196,6 +202,7 @@ function teamCredentialActionRow<TActionId extends TeamCredentialActionIdV1>(inp
     ...input,
     inputSchema: TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1[input.id],
     outputSchema: TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1[input.id],
+    method: TEAM_CREDENTIAL_ACTION_METHODS_V1[input.id],
   });
   if (input.id === 'teams.credentials.externalKeys.create') {
     return {
@@ -204,8 +211,9 @@ function teamCredentialActionRow<TActionId extends TeamCredentialActionIdV1>(inp
       approvalResultCustody: 'live_only' as const,
     };
   }
-  return input.id === 'teams.credentials.test'
-    ? { ...row, surfaces: { ...row.surfaces, agent: false, mcp: false } as const }
+  if (input.id === 'teams.credentials.test') return { ...row, requiredAuthority: 'present_user' as const };
+  return input.id === 'teams.credentials.preparation.get'
+    ? { ...row, surfaces: { ...row.surfaces, mcp: true } as const }
     : row;
 }
 
@@ -223,8 +231,43 @@ function teamCredentialActionRow<TActionId extends TeamCredentialActionIdV1>(inp
  * prefix because preview is the pre-authentication transport of the same owner.
  */
 export const TEAM_ACTION_SPECS = Object.freeze([
+  {
+    id: 'teams.credentials.usage.export', approval: {result: 'required'}, title: 'Export Team credential usage',
+    description: 'Return CSV file bytes from the authorized Team credential usage query, preserving the selected ranked-row scope and measurement coverage. Saving and sharing remain explicit client operations.',
+    safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'account',
+    placements: [], surfaces: { ui: true, voice: false, agent: true, mcp: false, cli: true, rpc: false },
+    cli: { commands: [{ path: ['teams', 'credentials', 'usage', 'export'], visibility: 'canonical' }], acceptsServerId: true, requiresServerId: true },
+    bindings: { mcpToolName: 'teams_credentials_usage_export' },
+    inputSchema: TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1['teams.credentials.usage.export'],
+    outputSchema: TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1['teams.credentials.usage.export'],
+    inputHints: { fields: [approvalField('query', 'Usage query', { widget: 'json', required: true }),
+      approvalField('resourceName', 'Resource display name', { required: true }),
+      approvalField('breakdownRowCount', 'Selected ranked rows', { widget: 'number' })] },
+  } as const satisfies PreNormalizedActionSpec,
+  {
+    id: 'teams.members.history.preparation.get', title: 'Check member history encryption',
+    description: 'Read readiness and counts through an answering app without exposing Session envelopes.',
+    executionPlacement: 'client', requiredAuthority: 'account_automation', safety: 'safe', sideEffectClass: 'read',
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false }, placements: [],
+    inputSchema: TeamMembershipHistoryInputV1Schema, outputSchema: TeamMembershipHistoryReadinessV1Schema,
+    approval: { flow: 'blocking', result: 'required' },
+    inputHints: { fields: [TEAM_ID_FIELD, approvalField('target', 'Membership', { widget: 'json', required: true }),
+      approvalField('recipientAccountId', 'Recipient Account', { required: true })] },
+    bindings: { mcpToolName: 'teams_members_history_preparation_get' },
+  },
+  {
+    id: 'teams.members.history.prepare', title: 'Prepare member history encryption',
+    description: 'Ask a person to prepare existing encrypted history through the answering app’s captured encryption owner.',
+    executionPlacement: 'client', requiredAuthority: 'present_user', safety: 'danger', sideEffectClass: 'write',
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false }, placements: [],
+    inputSchema: TeamMembershipHistoryInputV1Schema, outputSchema: TeamMembershipHistoryPreparationResultV1Schema,
+    approval: { flow: 'blocking', result: 'required' },
+    inputHints: { fields: [TEAM_ID_FIELD, approvalField('target', 'Membership', { widget: 'json', required: true }),
+      approvalField('recipientAccountId', 'Recipient Account', { required: true })] },
+    bindings: { mcpToolName: 'teams_members_history_prepare' },
+  },
   ...TEAM_CREDENTIAL_HOME_ACTION_IDS_V1.map((id) => teamCredentialActionRow({
-    id,
+    id, approval: ['teams.credentials.create', 'teams.credentials.update', 'teams.credentials.audience.set', 'teams.credentials.delete', 'teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.externalKeys.revoke', 'teams.credentials.externalKeys.revokeAll'].includes(id) ? { result: 'required', flow: 'deferred' } : { result: 'required' },
     title: {
       'teams.credentials.list': 'List Team credentials',
       'teams.credentials.sources.list': 'List offerable credential sources',
@@ -237,6 +280,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
       'teams.credentials.audience.set': 'Update Team credential audience',
       'teams.credentials.delete': 'Delete Team credential',
       'teams.credentials.test': 'Test Team credential',
+      'teams.credentials.preparation.get': 'Check Team credential preparation',
       'teams.credentials.activity.list': 'List Team credential activity',
       'teams.credentials.limits.list': 'List Team credential limits',
       'teams.credentials.limits.upsert': 'Set Team credential limit',
@@ -260,6 +304,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
       'teams.credentials.audience.set': 'Set the Team credential audience and delivery modes.',
       'teams.credentials.delete': 'Remove a Team credential resource.',
       'teams.credentials.test': 'Test a saved Team credential through its production broker and Provider path.',
+      'teams.credentials.preparation.get': 'Read aggregate direct-access readiness without credential material or recipient encryption bindings.',
       'teams.credentials.activity.list': 'Read administrative activity for a visible Team credential resource.',
       'teams.credentials.limits.list': 'List usage limits for a visible Team credential resource.',
       'teams.credentials.limits.upsert': 'Set a usage limit for a Team credential resource.',
@@ -272,6 +317,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
       'teams.credentials.externalKeys.revokeAll': 'Revoke every external API key for a Team credential resource.',
     }[id],
     safety: id === 'teams.credentials.list'
+      || id === 'teams.credentials.preparation.get'
       || id === 'teams.credentials.sources.list'
       || id === 'teams.credentials.requestPolicySupport.get'
       || id === 'teams.credentials.sourceResources.list'
@@ -282,6 +328,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
       || id === 'teams.credentials.usage.query'
       || id === 'teams.credentials.externalKeys.list' ? 'safe' : 'danger',
     sideEffectClass: id === 'teams.credentials.test' ? 'external' : id === 'teams.credentials.list'
+      || id === 'teams.credentials.preparation.get'
       || id === 'teams.credentials.sources.list'
       || id === 'teams.credentials.requestPolicySupport.get'
       || id === 'teams.credentials.sourceResources.list'
@@ -297,7 +344,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     path: TEAM_CREDENTIAL_ACTION_PATHS_V1[id],
   })),
   homeDomainActionRow({
-    id: 'teams.list',
+    id: 'teams.list', approval: {result: 'required'},
     title: 'List Teams',
     description: 'Page through the Teams visible in this Home for the authenticated Account.',
     safety: 'safe',
@@ -312,7 +359,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.get',
+    id: 'teams.get', approval: {result: 'required'},
     title: 'Get Team',
     description: 'Read one Team as the authenticated Account sees it.',
     safety: 'safe',
@@ -324,7 +371,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.create',
+    id: 'teams.create', approval: {result: 'required'},
     title: 'Create Team',
     description: 'Create a Team in this Home. A repeated request key returns the same Team rather than a second one.',
     safety: 'safe',
@@ -340,7 +387,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.update',
+    id: 'teams.update', approval: {result: 'required',flow: 'deferred'},
     title: 'Update Team',
     description: 'Change a Team\'s name or description.',
     safety: 'safe',
@@ -356,7 +403,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.logo.set',
+    id: 'teams.logo.set', approval: {result: 'required'},
     title: 'Set Team logo',
     description: 'Replace a Team\'s logo through the shared managed-image owner.',
     safety: 'safe',
@@ -371,7 +418,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.logo.remove',
+    id: 'teams.logo.remove', approval: {result: 'required'},
     title: 'Remove Team logo',
     description: 'Drop a Team\'s logo and fall back to its monogram.',
     safety: 'safe',
@@ -383,7 +430,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.policy.set',
+    id: 'teams.policy.set', approval: {result: 'required',flow: 'deferred'},
     title: 'Set Team policy',
     description: 'Change a Team\'s Session, sharing, history and admission policy. These decide who may reach Team work.',
     safety: 'danger',
@@ -402,7 +449,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.archive',
+    id: 'teams.archive', approval: {result: 'required',flow: 'deferred'},
     title: 'Archive Team',
     description: 'Archive a Team, ending ordinary member access to its work until it is restored.',
     safety: 'danger',
@@ -414,7 +461,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.restore',
+    id: 'teams.restore', approval: {result: 'required',flow: 'deferred'},
     title: 'Restore Team',
     description: 'Restore an archived Team and its members\' access.',
     safety: 'danger',
@@ -426,7 +473,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.list',
+    id: 'teams.members.list', approval: {result: 'required'},
     title: 'List Team members',
     description: 'Page through a Team roster with the viewer\'s per-member capabilities.',
     safety: 'safe',
@@ -441,7 +488,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.get',
+    id: 'teams.members.get', approval: {result: 'required'},
     title: 'Get Team member',
     description: 'Read one membership lifetime and what the viewer may do to it.',
     safety: 'safe',
@@ -453,7 +500,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, MEMBERSHIP_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.add',
+    id: 'teams.members.add', approval: {result: 'required',flow: 'deferred'},
     title: 'Add Team member',
     description: 'Admit an existing Home Account to a Team with an explicit role and history horizon.',
     safety: 'danger',
@@ -470,7 +517,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.role.set',
+    id: 'teams.members.role.set', approval: {result: 'required',flow: 'deferred'},
     title: 'Set Team member role',
     description: 'Change one member\'s Team role. The Team refuses to strand its final active owner.',
     safety: 'danger',
@@ -486,7 +533,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.suspend',
+    id: 'teams.members.suspend', approval: {result: 'required',flow: 'deferred'},
     title: 'Suspend Team member',
     description: 'Suspend one membership, ending its access while preserving the lifetime.',
     safety: 'danger',
@@ -498,7 +545,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, MEMBERSHIP_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.reactivate',
+    id: 'teams.members.reactivate', approval: {result: 'required',flow: 'deferred'},
     title: 'Reactivate Team member',
     description: 'Lift a suspension and restore that membership\'s access.',
     safety: 'danger',
@@ -510,7 +557,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, MEMBERSHIP_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.remove',
+    id: 'teams.members.remove', approval: {result: 'required',flow: 'deferred'},
     title: 'Remove Team member',
     description: 'End one membership lifetime. Repeating the request answers unchanged rather than failing.',
     safety: 'danger',
@@ -522,7 +569,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, MEMBERSHIP_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.leave',
+    id: 'teams.members.leave', approval: {result: 'required',flow: 'deferred'},
     title: 'Leave Team',
     description: 'End your own membership lifetime. Directory-managed members and the final active owner of a live Team cannot leave.',
     safety: 'danger',
@@ -534,7 +581,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.management.set',
+    id: 'teams.members.management.set', approval: {result: 'required',flow: 'deferred'},
     title: 'Set Team member management',
     description: 'Convert who owns one membership\'s lifecycle while preserving its lifetime, role, status and horizon.',
     safety: 'danger',
@@ -551,7 +598,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.members.groups.list',
+    id: 'teams.members.groups.list', approval: {result: 'required'},
     title: 'List a Team member\'s Groups',
     description: 'Page through the Groups one membership lifetime is effectively in.',
     safety: 'safe',
@@ -563,7 +610,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, MEMBERSHIP_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.groups.list',
+    id: 'teams.groups.list', approval: {result: 'required'},
     title: 'List Team Groups',
     description: 'Page through a Team\'s Groups.',
     safety: 'safe',
@@ -578,7 +625,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.groups.get',
+    id: 'teams.groups.get', approval: {result: 'required'},
     title: 'Get Team Group',
     description: 'Read one Group on direct reload or deep link.',
     safety: 'safe',
@@ -590,7 +637,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, GROUP_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.groups.create',
+    id: 'teams.groups.create', approval: {result: 'required'},
     title: 'Create Team Group',
     description: 'Create a Group in a Team. A repeated request key returns the same Group.',
     safety: 'safe',
@@ -606,7 +653,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.groups.update',
+    id: 'teams.groups.update', approval: {result: 'required'},
     title: 'Update Team Group',
     description: 'Change a Group\'s name or description.',
     safety: 'safe',
@@ -623,7 +670,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.groups.archive',
+    id: 'teams.groups.archive', approval: {result: 'required',flow: 'deferred'},
     title: 'Archive Team Group',
     description: 'Archive a Group, ending the access its membership conferred.',
     safety: 'danger',
@@ -635,7 +682,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, GROUP_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.groups.restore',
+    id: 'teams.groups.restore', approval: {result: 'required',flow: 'deferred'},
     title: 'Restore Team Group',
     description: 'Restore an archived Group and the access its membership confers.',
     safety: 'danger',
@@ -647,7 +694,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, GROUP_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.groups.members.list',
+    id: 'teams.groups.members.list', approval: {result: 'required'},
     title: 'List Team Group members',
     description: 'Page through a Group\'s members and where each contribution comes from.',
     safety: 'safe',
@@ -659,7 +706,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, GROUP_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.groups.members.add',
+    id: 'teams.groups.members.add', approval: {result: 'required',flow: 'deferred'},
     title: 'Add Team Group member',
     description: 'Add a native Group contribution for one Team member.',
     safety: 'danger',
@@ -676,7 +723,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'teams.groups.members.remove',
+    id: 'teams.groups.members.remove', approval: {result: 'required',flow: 'deferred'},
     title: 'Remove Team Group member',
     description: 'Clear the native Group contribution. A surviving directory contribution is reported truthfully.',
     safety: 'danger',
@@ -688,7 +735,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [TEAM_ID_FIELD, GROUP_ID_FIELD, ACCOUNT_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'teams.invitations.list',
+    id: 'teams.invitations.list', approval: {result: 'required'},
     title: 'List Team invitations',
     description: 'Page through a Team\'s invitations. The bearer is never republished here.',
     safety: 'safe',
@@ -702,8 +749,8 @@ export const TEAM_ACTION_SPECS = Object.freeze([
       approvalField('state', 'Invitation state'),
     ] },
   }),
-  homeDomainActionRow({
-    id: 'teams.invitations.create',
+  { ...homeDomainActionRow({
+    id: 'teams.invitations.create', approval: {result: 'required'},
     title: 'Invite to Team',
     description: 'Create a Team invitation. Accepting it admits a person to Team work.',
     safety: 'danger',
@@ -718,15 +765,13 @@ export const TEAM_ACTION_SPECS = Object.freeze([
       approvalField('role', 'Team role', { required: true }),
       approvalField('historyAccess', 'History access', { required: true }),
     ] },
-    // The direct human/API/plugin caller receives the one-time bearer. Shared
-    // execution observers retain useful metadata but never receive it, and an
-    // autonomous Agent cannot invoke this result-bearing Action directly.
-    agent: false,
+    // Requesters receive safe observations. Only the approving user's live
+    // invocation receives the bearer; the shared approval owner enforces custody.
     projectObservationOutput: projectTeamInvitationCreateObservation,
     approvalResultCustody: 'live_only',
-  }),
+  }), requiredAuthority: 'present_user' as const },
   homeDomainActionRow({
-    id: 'teams.invitations.revoke',
+    id: 'teams.invitations.revoke', approval: {result: 'required',flow: 'deferred'},
     title: 'Revoke Team invitation',
     description: 'Stop an outstanding invitation from admitting anyone. A repeated revocation reports the current row.',
     safety: 'danger',
@@ -737,8 +782,8 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     outputSchema: TeamInvitationRevokeResultV1Schema,
     inputHints: { fields: [TEAM_ID_FIELD, INVITATION_ID_FIELD] },
   }),
-  homeDomainActionRow({
-    id: 'teams.invitations.reissue',
+  { ...homeDomainActionRow({
+    id: 'teams.invitations.reissue', approval: {result: 'required'},
     title: 'Reissue Team invitation',
     description: 'Retire the current bearer and issue a fresh invitation carrying the same role and history intent.',
     safety: 'danger',
@@ -752,12 +797,11 @@ export const TEAM_ACTION_SPECS = Object.freeze([
       INVITATION_ID_FIELD,
       approvalField('recipientEmail', 'Recipient email'),
     ] },
-    agent: false,
     projectObservationOutput: projectTeamInvitationReissueObservation,
     approvalResultCustody: 'live_only',
-  }),
+  }), requiredAuthority: 'present_user' as const },
   homeDomainActionRow({
-    id: 'teams.invitations.preview',
+    id: 'teams.invitations.preview', approval: {result: 'required'},
     title: 'Preview Team invitation',
     description: 'Read the bounded public preview for an invitation bearer.',
     safety: 'safe',
@@ -769,7 +813,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     projectObservationInput: redactObservationInputPaths('token'),
   }),
   {
-    id: 'teams.invitations.accept.prepareApproval',
+    id: 'teams.invitations.accept.prepareApproval', approval: {result: 'required'},
     title: 'Prepare Team invitation approval',
     description: 'Exchange an invitation bearer for Account-bound deferred-approval custody.',
     safety: 'safe',
@@ -785,7 +829,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     serverTransport: { method: 'POST', path: '/v1/team-invitations/accept/prepare-approval' },
   },
   homeDomainActionRow({
-    id: 'teams.invitations.accept',
+    id: 'teams.invitations.accept', approval: {result: 'required',flow: 'deferred'},
     title: 'Accept Team invitation',
     description: 'Redeem an invitation bearer and join the Team as the authenticated Account.',
     safety: 'danger',
@@ -807,7 +851,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     projectObservationInput: redactObservationInputPaths('token', 'continuation.reference'),
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.connections.list',
+    id: 'teams.identity.connections.list', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.list'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.list'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.connections.list'],
@@ -818,7 +862,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'identity', 'connections', 'list'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.connections.create',
+    id: 'teams.identity.connections.create', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.create'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.create'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.connections.create'],
@@ -829,7 +873,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'identity', 'connections', 'create'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.connections.settings.update',
+    id: 'teams.identity.connections.settings.update', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.settings.update'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.settings.update'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.connections.settings.update'],
@@ -840,7 +884,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'identity', 'connections', 'settings', 'update'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.connections.enable',
+    id: 'teams.identity.connections.enable', approval: {result: 'required',flow: 'deferred'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.enable'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.enable'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.connections.enable'],
@@ -851,7 +895,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'identity', 'connections', 'enable'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.connections.disable',
+    id: 'teams.identity.connections.disable', approval: {result: 'required',flow: 'deferred'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.disable'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.disable'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.connections.disable'],
@@ -862,7 +906,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'identity', 'connections', 'disable'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.connections.remove.preview',
+    id: 'teams.identity.connections.remove.preview', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.remove.preview'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.remove.preview'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.connections.remove.preview'],
@@ -873,7 +917,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'identity', 'connections', 'remove', 'preview'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.connections.remove',
+    id: 'teams.identity.connections.remove', approval: {result: 'required',flow: 'deferred'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.remove'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.remove'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.connections.remove'],
@@ -885,7 +929,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     sdkMethod: 'teams.identity.connections.remove.execute',
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.connections.test.start',
+    id: 'teams.identity.connections.test.start', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.test.start'],
     presentUser: false,
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.test.start'],
@@ -898,7 +942,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     projectObservationOutput: () => ({ redacted: true }),
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.connections.test.consume',
+    id: 'teams.identity.connections.test.consume', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.test.consume'],
     presentUser: false,
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.test.consume'],
@@ -911,7 +955,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     projectObservationInput: redactObservationInputPaths('resultHandle'),
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.workos.connection.create',
+    id: 'teams.identity.workos.connection.create', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.workos.connection.create'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.workos.connection.create'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.workos.connection.create'],
@@ -922,7 +966,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'identity', 'workos', 'connection', 'create'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.workos.adminPortalLink.create',
+    id: 'teams.identity.workos.adminPortalLink.create', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.workos.adminPortalLink.create'],
     presentUser: false,
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.workos.adminPortalLink.create'],
@@ -939,7 +983,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     approvalResultCustody: 'live_only',
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.workos.reconcile',
+    id: 'teams.identity.workos.reconcile', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.workos.reconcile'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.workos.reconcile'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.workos.reconcile'],
@@ -950,7 +994,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'identity', 'workos', 'reconcile'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.identity.workos.connection.set',
+    id: 'teams.identity.workos.connection.set', approval: {result: 'required'},
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.workos.connection.set'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.workos.connection.set'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.workos.connection.set'],
@@ -961,7 +1005,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'identity', 'workos', 'connection', 'set'],
   }),
   teamExternalGroupBindingActionRow({
-    id: 'teams.externalGroupBindings.list',
+    id: 'teams.externalGroupBindings.list', approval: {result: 'required'},
     method: TEAM_EXTERNAL_GROUP_BINDING_ACTION_METHODS_V1['teams.externalGroupBindings.list'],
     path: TEAM_EXTERNAL_GROUP_BINDING_ACTION_PATHS_V1['teams.externalGroupBindings.list'],
     inputSchema: TEAM_EXTERNAL_GROUP_BINDING_ACTION_INPUT_SCHEMAS_V1['teams.externalGroupBindings.list'],
@@ -973,7 +1017,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'external-group-bindings', 'list'],
   }),
   teamExternalGroupBindingActionRow({
-    id: 'teams.externalGroupBindings.set',
+    id: 'teams.externalGroupBindings.set', approval: {result: 'required',flow: 'deferred'},
     method: TEAM_EXTERNAL_GROUP_BINDING_ACTION_METHODS_V1['teams.externalGroupBindings.set'],
     path: TEAM_EXTERNAL_GROUP_BINDING_ACTION_PATHS_V1['teams.externalGroupBindings.set'],
     inputSchema: TEAM_EXTERNAL_GROUP_BINDING_ACTION_INPUT_SCHEMAS_V1['teams.externalGroupBindings.set'],
@@ -985,7 +1029,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'external-group-bindings', 'set'],
   }),
   teamExternalGroupBindingActionRow({
-    id: 'teams.externalGroupBindings.remove',
+    id: 'teams.externalGroupBindings.remove', approval: {result: 'required',flow: 'deferred'},
     method: TEAM_EXTERNAL_GROUP_BINDING_ACTION_METHODS_V1['teams.externalGroupBindings.remove'],
     path: TEAM_EXTERNAL_GROUP_BINDING_ACTION_PATHS_V1['teams.externalGroupBindings.remove'],
     inputSchema: TEAM_EXTERNAL_GROUP_BINDING_ACTION_INPUT_SCHEMAS_V1['teams.externalGroupBindings.remove'],
@@ -997,7 +1041,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'external-group-bindings', 'remove'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.sourceSetup.list',
+    id: 'teams.directory.sourceSetup.list', approval: {result: 'required'},
     method: 'GET',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sourceSetup.list'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sourceSetup.list'],
@@ -1009,7 +1053,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'source-setup', 'list'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.sources.list',
+    id: 'teams.directory.sources.list', approval: {result: 'required'},
     method: 'GET',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.list'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.list'],
@@ -1021,7 +1065,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'sources', 'list'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.sources.get',
+    id: 'teams.directory.sources.get', approval: {result: 'required'},
     method: 'GET',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.get'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.get'],
@@ -1033,7 +1077,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'sources', 'get'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.people.list',
+    id: 'teams.directory.people.list', approval: {result: 'required'},
     method: 'GET',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.people.list'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.people.list'],
@@ -1045,7 +1089,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'people', 'list'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.groups.list',
+    id: 'teams.directory.groups.list', approval: {result: 'required'},
     method: 'GET',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.groups.list'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.groups.list'],
@@ -1057,7 +1101,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'groups', 'list'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.sources.create',
+    id: 'teams.directory.sources.create', approval: {result: 'required',flow: 'deferred'},
     method: 'POST',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.create'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.create'],
@@ -1069,7 +1113,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'sources', 'create'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.sources.sync',
+    id: 'teams.directory.sources.sync', approval: {result: 'required',flow: 'deferred'},
     method: 'POST',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.sync'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.sync'],
@@ -1081,7 +1125,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'sources', 'sync'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.sources.pause',
+    id: 'teams.directory.sources.pause', approval: {result: 'required',flow: 'deferred'},
     method: 'POST',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.pause'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.pause'],
@@ -1093,7 +1137,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'sources', 'pause'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.sources.resume',
+    id: 'teams.directory.sources.resume', approval: {result: 'required',flow: 'deferred'},
     method: 'POST',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.resume'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.resume'],
@@ -1105,7 +1149,8 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'sources', 'resume'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.sources.remove.preview',
+    id: 'teams.directory.sources.remove.preview', approval: {result: 'required'},
+    presentUser: true,
     method: 'GET',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.remove.preview'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.remove.preview'],
@@ -1117,7 +1162,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     cliPath: ['teams', 'directory', 'sources', 'remove', 'preview'],
   }),
   teamProvisioningActionRow({
-    id: 'teams.directory.sources.remove',
+    id: 'teams.directory.sources.remove', approval: {result: 'required',flow: 'deferred'},
     method: 'DELETE',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.remove'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.remove'],
@@ -1127,13 +1172,8 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     safety: 'danger',
     sideEffectClass: 'danger',
     cliPath: ['teams', 'directory', 'sources', 'remove'],
-    // This exact mutation is an approved public SDK operation. The Team route
-    // remains the authorization/currentness owner and the shared dangerous
-    // Action policy still routes API/plugin calls through configurable approval.
-    // Keep autonomous Agent/MCP discovery closed; this does not widen the rest
-    // of the directory mutation family.
-    presentUser: false,
-    agent: false,
+    // Removal and its preview share present-user requestability and approval.
+    presentUser: true,
     // `remove.preview` occupies the `remove` SDK namespace, so the mutation takes the
     // sibling `remove.execute` path exactly like the identity-connection removal above.
     sdkMethod: 'teams.directory.sources.remove.execute',

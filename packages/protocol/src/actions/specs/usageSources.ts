@@ -8,7 +8,7 @@ type SourceSpec<K extends UsageSourceActionId> = PreNormalizedActionSpec & Reado
 function spec<K extends UsageSourceActionId>(id: K, title: string, summary: string, read = false): SourceSpec<K> {
   const dismiss = id === 'usage.sources.dismiss';
   return {
-    id, title, description: summary,
+    id, approval: { result: 'required' }, title, description: summary,
     safety: read || dismiss ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: dismiss ? 'client' : 'machine', placements: [],
     ...(id === 'usage.sources.root.set' ? { approvalInputCustody: 'live_only' as const } : {}),

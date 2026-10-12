@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { createActionExecutor } from './actionExecutor.js';
+import { createActionExecutor, type ActionExecutorContext } from './actionExecutor.js';
 import type { ActionId } from './actionIds.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.testkit.js';
 import type { WidgetSurfaceRefV1 } from '../widgets/widgetInstanceV1.js';
 import { createWidgetActionInputResolverV1 } from '../widgets/widgetActionInputResolverV1.js';
@@ -11,7 +12,7 @@ import { createWidgetAreaActionPortV1, createWidgetAreaLayoutArtifactPortV1, cre
 
 const account = { serverId: 'home', accountId: 'account' };
 
-async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean) {
+async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean, policyHook = true) {
   const boundary = createWorkBoardArtifactBoundary();
   const transport = boundary.forAccount(account.accountId);
   // Artifact transport is the system boundary; domain ports and approval logic remain real.
@@ -38,6 +39,8 @@ async function fixture(owner: WidgetSurfaceRefV1['owner'], shared: boolean) {
   await artifact.apply({ kind: 'group_create', groupId: 'group', instanceIds: ['two'] });
   const port = createWidgetAreaActionPortV1(artifactFor);
   const executor = createActionExecutor({ widgetAccountScope: () => account,
+    ...(policyHook ? { isActionApprovalRequired: (actionId: ActionId, context: ActionExecutorContext, input: unknown) => isApprovalRequiredByActionsSettings(actionId,
+      context.actionsSettings ?? normalizeActionsSettingsV1({ v: 1 }), context, undefined, undefined, input) } : {}),
     widgetSurfaceActions: { [owner.kind]: port },
     widgetInputs: createWidgetActionInputResolverV1({
       readDescriptor: async ({ instance }) => readBuiltinWidgetDescriptorV1(instance.definition),
@@ -106,17 +109,39 @@ const consequentialEdits: readonly { action: ActionId; input: (state: Fixture) =
 ];
 
 describe('contextual widget approval at the Action executor', () => {
-  it.each(owners.flatMap(owner => edits.map(edit => ({ ...owner, ...edit }))))('$name ($owner.kind, shared=$shared)', async row => {
+  it.each(owners.flatMap(owner => edits.flatMap(edit => ['ui', 'mcp'].map(surface => ({ ...owner, ...edit, surface })))))('$name ($owner.kind, shared=$shared, $surface)', async row => {
     const state = await fixture(row.owner, row.shared);
     const input = await row.input(state);
     const before = [...(await state.artifact.read()).items];
-    const result = await state.executor.execute(row.action, input, { surface: 'mcp', authority: 'account_automation' });
-    // Projects are linear: safe approval classification must still reach the real size refusal.
-    const expected = row.dangerous ? { ok: false, errorCode: 'approvals_not_supported' }
-      : row.name === 'widget size' && row.owner.kind === 'project' ? { ok: false, errorCode: 'widget_size_unsupported' }
-      : { ok: true };
-    expect(result, JSON.stringify(result)).toMatchObject(expected);
-    if (row.dangerous) expect((await state.artifact.read()).items).toEqual(before);
+    const result = await state.executor.execute(row.action, input, { surface: row.surface, authority: row.surface === 'ui' ? 'present_user' : 'account_automation' });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect((await state.artifact.read()).items).toEqual(before);
+  });
+
+  it.each(['ui', 'mcp'] as const)('applies a private widget edit only after its persisted %s approval waiver', async surface => {
+    // The executor must route persisted policy even without an optional host policy hook.
+    const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, false, false);
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'widgets.item.rename': [surface] } });
+    expect(await state.executor.execute('widgets.item.rename', { ref: { surface: state.surface, instanceId: 'one' }, displayName: 'Renamed' }, {
+      surface, authority: surface === 'ui' ? 'present_user' : 'account_automation', actionsSettings,
+    })).toMatchObject({ ok: true });
+    expect((await state.artifact.read()).items[0]).toMatchObject({ instance: { id: 'one', displayName: 'Renamed' } });
+  });
+
+  it('fails closed without a policy hook and preserves Ask-first over a supplied waiver', async () => {
+    const state = await fixture({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'main' }, false, false);
+    const input = { ref: { surface: state.surface, instanceId: 'one' }, displayName: 'Renamed' };
+    const context = { surface: 'mcp' as const, authority: 'account_automation' as const };
+    expect(await state.executor.execute('widgets.item.rename', input, context))
+      .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1,
+      approvalWaivedSurfaces: { 'widgets.item.rename': ['mcp'] },
+      actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['mcp'] } },
+    });
+    expect(await state.executor.execute('widgets.item.rename', input, { ...context, actionsSettings }))
+      .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect((await state.artifact.read()).items[0]).toMatchObject({ instance: { id: 'one' } });
+    expect((await state.artifact.read()).items[0]).not.toHaveProperty('instance.displayName');
   });
 
   it.each(owners.filter(owner => !owner.dangerous).flatMap(owner => edits.map(edit => ({ ...owner, ...edit }))))('retains explicit Ask-first for $name ($owner.kind)', async row => {

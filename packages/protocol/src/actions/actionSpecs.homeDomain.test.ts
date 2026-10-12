@@ -19,7 +19,7 @@ describe('Home runtime Action parity', () => {
     const reads = ['relay.access.status', 'relay.runtime.status', 'relay.runtime.personal_home.inspect',
       'relay.runtime.personal_home.verify_backup', 'home.runtime.get'];
     const writes = ['relay.access.configure', 'relay.access.disable', 'relay.runtime.install_or_update',
-      'relay.runtime.start', 'relay.runtime.stop', 'relay.runtime.restart', 'relay.runtime.uninstall',
+      'relay.runtime.start', 'relay.runtime.stop', 'relay.runtime.restart', 'relay.runtime.uninstall', 'relay.runtime.task.cancel',
       'relay.runtime.personal_home.backup', 'relay.runtime.personal_home.restore',
       'relay.runtime.personal_home.recover_restore', 'relay.runtime.personal_home.erase',
       'relay.runtime.personal_home.claim', 'relay.runtime.personal_home.relocate'];
@@ -30,7 +30,7 @@ describe('Home runtime Action parity', () => {
       expect(spec?.executionPlacement, id).toBe('client');
       expect(spec?.surfaces.agent, id).toBe(true);
       expect(spec?.surfaces.mcp, id).toBe(true);
-      expect(spec?.surfaces.cli, id).toBe(true);
+      expect(spec?.surfaces.cli, id).toBe(false);
       expect(spec?.safety, id).toBe(writes.includes(id) ? 'danger' : 'safe');
     }
   });
@@ -59,6 +59,20 @@ describe('Home runtime Action parity', () => {
     expect(restart?.outputSchema.safeParse({ status: 'completed', taskId: 'restart-task', result: {
       protocolVersion: 1, taskId: 'restart-task', ok: false, error: { code: 'restart_failed', message: 'Failed' },
     } }).success).toBe(true);
+  });
+
+  it('requires confirmation for OS file opening without making pickers or reveal destructive', () => {
+    const open = getActionSpec('relay.runtime.open_path');
+    expect(open.safety).toBe('danger');
+    expect(resolveActionApprovalRouting({ actionId: open.id, spec: open,
+      input: { path: '/home/test/.happier/runtime/program' },
+      context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+    for (const id of ['relay.runtime.personal_home.choose_archive',
+      'relay.runtime.personal_home.choose_backup_destination', 'relay.runtime.reveal_output'] as const) {
+      const spec = getActionSpec(id);
+      expect(spec.safety, id).toBe('safe');
+      expect(spec.sideEffectClass, id).toBe('write');
+    }
   });
 });
 
@@ -443,7 +457,7 @@ describe('Home and Teams Action family', () => {
     }
   });
 
-  it('admits Lane 01 governance and Team intents as Account automation', () => {
+  it('declares Account-scoped intent authority with human-only invitation minting', () => {
     for (const actionId of LANE_01_ACTION_IDS) {
       expect(getActionSpec(actionId).requiredAuthority).toBe(
         actionId === 'teams.invitations.create' || actionId === 'teams.invitations.reissue'
@@ -452,7 +466,7 @@ describe('Home and Teams Action family', () => {
     }
   });
 
-  it('keeps Lane 01 Account-automation rows off the MCP tool surface', () => {
+  it('keeps automation rows off MCP while making human-approved invitations requestable', () => {
     for (const actionId of LANE_01_ACTION_IDS) {
       expect(getActionSpec(actionId).surfaces.mcp).toBe(
         actionId === 'teams.invitations.create' || actionId === 'teams.invitations.reissue',

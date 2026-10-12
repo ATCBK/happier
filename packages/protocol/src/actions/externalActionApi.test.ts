@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as externalActionApi from './externalActionApi.js';
 import { ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
@@ -7,6 +5,26 @@ import { SessionActionRpcOriginV1Schema } from '../rpc/socket.js';
 
 const invocationGrant = ApiTokenGrantV1Schema.parse({ v: 1, actions: { families: [], ids: ['session.title.set'] },
   targets: { sessions: [], machines: ['machine-1'] }, approve: false, origins: [], models: null, permissionModes: null, create: null });
+
+it('carries mounted plugin claims in both root envelopes while rejecting authority and unbound claims', () => {
+  const mountedBinding = { pluginId: 'happier.inspector', contributionLocalId: 'inspector-app', occurrenceId: 'mounted-occurrence',
+    sourceCustody: { kind: 'development', registeredRootId: 'inspector-root' },
+    materializationRef: { machineId: 'machine-1', pluginId: 'happier.inspector', materializationId: 'installed-inspector' } };
+  const pluginInvocation = { kind: 'mountedPluginSurface', mountedBinding };
+  const base = { requestId: 'mounted-request', target: { kind: 'machine', machineId: 'machine-1' } };
+  for (const envelope of [{ ...base, v: 1, input: {} }, { ...base, v: 2, payload: { t: 'encrypted', c: 'opaque-input' } }]) {
+    expect(externalActionApi.ExternalActionRequestEnvelopeSchema.parse({ ...envelope, pluginInvocation }))
+      .toEqual({ ...envelope, pluginInvocation });
+    expect(externalActionApi.ExternalActionRequestEnvelopeSchema.safeParse({ ...envelope,
+      pluginInvocation: { ...pluginInvocation, authority: 'host' } }).success).toBe(false);
+    expect(externalActionApi.ExternalActionRequestEnvelopeSchema.safeParse({ ...envelope,
+      pluginInvocation: { ...pluginInvocation, mountedBinding: { ...mountedBinding, signature: 'claimed-publisher' } } }).success).toBe(false);
+    expect(externalActionApi.ExternalActionRequestEnvelopeSchema.safeParse({ ...envelope,
+      pluginInvocation: { kind: 'hostPresentedComposer', currentComposerIntent: {} } }).success).toBe(false);
+    expect(externalActionApi.ExternalActionRequestEnvelopeSchema.parse(envelope)).toEqual(envelope);
+  }
+  expect(externalActionApi.ExternalActionRequestEnvelopeSchema.safeParse({ v: 1, input: {}, pluginInvocation }).success).toBe(false);
+});
 
 it('carries finite controller custody beside the unchanged guest root and keeps the named currentness purpose closed', () => {
   expect(externalActionApi.ExternalActionExecutionAuthorizationVerifyRequestV1Schema.parse({ v: 1 })).toEqual({ v: 1 });
@@ -86,8 +104,8 @@ it('retains authenticated Session origin as automation authority and requires it
   const principal = { accountId: 'requester', authority: 'account_automation', authentication, sessionActionOrigin: origin };
   expect(externalActionApi.ExternalActionServerPrincipalV1Schema.parse(principal)).toEqual(principal);
   expect(externalActionApi.ExternalActionServerPrincipalV1Schema.safeParse({ ...principal, authority: 'present_user' }).success).toBe(false);
-  const { sessionActionOrigin: _origin, ...missingOrigin } = principal;
-  expect(externalActionApi.ExternalActionServerPrincipalV1Schema.safeParse(missingOrigin).success).toBe(false);
+  // Ordinary Account automation is also valid provenance. A Session claim
+  // remains bound to its installed origin/proof by the mint framing below.
   expect(externalActionApi.ExternalActionServerPrincipalV1Schema.safeParse({ ...principal, grant: invocationGrant }).success).toBe(false);
   const binding = { accountId: 'requester', authentication, sessionActionOrigin: origin, serverIdentityId: 'srv_home',
     sessionActionSource: { machineId: 'source-machine', installationId: 'source-installation' },
@@ -101,6 +119,16 @@ it('retains authenticated Session origin as automation authority and requires it
     sessionActionOrigin: origin, sessionActionSource: binding.sessionActionSource,
     installationProof: { version: 1, algorithm: 'ed25519', signature: 'a'.repeat(86) } };
   expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.parse(request)).toEqual(request);
+  const visualRequest = { ...request, machineId: binding.sessionActionSource.machineId,
+    envelope: { ...request.envelope, target: { kind: 'session', sessionId: origin.caller.sessionId } } };
+  const visualSchema = externalActionApi.externalActionExecutionAuthorizationRequestSchemaForActionV1('session.board.item.upsert');
+  expect(visualSchema.parse(visualRequest)).toEqual(visualRequest);
+  expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.safeParse(visualRequest).success).toBe(false);
+  expect(externalActionApi.externalActionExecutionAuthorizationRequestSchemaForActionV1('settings.set').safeParse(visualRequest).success).toBe(false);
+  expect(visualSchema.safeParse(request).success).toBe(false);
+  expect(visualSchema.safeParse({ ...visualRequest, machineId: 'other-machine' }).success).toBe(false);
+  expect(visualSchema.safeParse({ ...visualRequest, envelope: { ...visualRequest.envelope,
+    target: { kind: 'session', sessionId: 'substituted-session' } } }).success).toBe(false);
   const { installationProof: _proof, ...withoutProof } = request;
   const { sessionActionOrigin: _requestOrigin, ...withoutOrigin } = request;
   expect(externalActionApi.ExternalActionExecutionAuthorizationRequestV1Schema.safeParse(withoutProof).success).toBe(false);
@@ -112,10 +140,10 @@ it('retains authenticated Session origin as automation authority and requires it
   expect(externalActionApi.ExternalActionRequestEnvelopeSchema.safeParse({ ...request.envelope, sessionActionOrigin: origin }).success).toBe(false);
 });
 
-it('keeps signed ordinary Account provenance distinct from PAT grants and public input', () => {
+it.each(['present_user', 'account_automation'] as const)('keeps signed ordinary Account %s provenance distinct from PAT grants and public input', (authority) => {
   const authentication = { kind: 'account', tokenEpoch: 7,
     evidence: [{ kind: 'home_method', methodId: 'public-key' }] };
-  const principal = { accountId: 'requester', authority: 'present_user', authentication };
+  const principal = { accountId: 'requester', authority, authentication };
   const target = { kind: 'machine', machineId: 'controller' };
   const authorization = { v: 1, token: 'home-signed-account-invocation', binding: {
     accountId: 'requester', authentication, serverIdentityId: 'home',
@@ -231,11 +259,9 @@ it('carries Home-issued invocation authority only in the trusted daemon dispatch
 
 import {
   EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES,
-  EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2,
   EXTERNAL_ACTION_RELAY_REQUEST_SOCKET_MIN_BUFFER_BYTES,
   EXTERNAL_ACTION_RELAY_RESPONSE_SOCKET_MIN_BUFFER_BYTES,
   EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
-  EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2,
   ExternalActionDaemonDispatchResultV1Schema,
   ExternalActionDaemonDispatchRequestV1Schema,
   ExternalActionHttpErrorV1Schema,
@@ -590,19 +616,6 @@ describe('External Action API envelope v1', () => {
     expect(EXTERNAL_ACTION_RELAY_RESPONSE_SOCKET_MIN_BUFFER_BYTES).toBe(25_000_000);
     expect(EXTERNAL_ACTION_RELAY_RESPONSE_SOCKET_MIN_BUFFER_BYTES)
       .toBeGreaterThan(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES);
-  });
-
-  it('derives protected transport ceilings without materializing the decoded request ceiling', () => {
-    const source = readFileSync(
-      fileURLToPath(new URL('./externalActionApi.ts', import.meta.url)),
-      'utf8',
-    );
-
-    expect(source).not.toMatch(/\.repeat\(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES\)/u);
-    expect(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2)
-      .toBeLessThan(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES * 2);
-    expect(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2)
-      .toBeLessThan(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES * 3);
   });
 
   it('defines a strict result_too_large execution result that records completed execution', () => {

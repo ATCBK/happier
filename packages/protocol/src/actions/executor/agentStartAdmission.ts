@@ -31,7 +31,7 @@ const RunStartConfigOptionsSchema = z.record(z.string(), SpawnConfigOptionValueS
 const spawnPolicyFields = SessionSpawnNewInputV2BaseSchema.pick({
     executionTarget: true, directory: true, agentTarget: true, roleId: true,
     modelSelection: true, permissionMode: true, agentModeId: true, configuration: true,
-    profileId: true, environmentVariables: true, connectedServices: true, mcpSelection: true, transcriptStorage: true,
+    profileId: true, environmentVariables: true, connectedServices: true, capabilitySelection: true, transcriptStorage: true,
 }).strip();
 type SpawnStartFactsInput = {
     [Key in keyof z.infer<typeof spawnPolicyFields>]?: z.infer<typeof spawnPolicyFields>[Key] | Unresolved;
@@ -77,7 +77,7 @@ export function projectActionWorkflowSelectionInputV1(
         if (projected[targetField] === undefined) projected[targetField] = targetField === 'agentTarget' || targetField === 'backendTarget'
             ? selected.agentTarget : [buildBackendTargetKeyV2(selected.agentTarget)];
     }
-    for (const key of ['permissionMode', 'connectedServices', 'mcpSelection', 'transcriptStorage'] as const) {
+    for (const key of ['permissionMode', 'allowedTools', 'unlistedTools', 'connectedServices', 'capabilitySelection', 'transcriptStorage'] as const) {
         if (projected[key] === undefined && selected[key] !== undefined) projected[key] = selected[key];
     }
     if (actionId === 'session.spawn_new' && projected.profileId === undefined && selected.profileId !== undefined)
@@ -128,6 +128,8 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
     ok: false;
     errorCode: 'target_unavailable' | 'invalid_parameters';
     knownFacts?: AgentStartFactsV1;
+    /** Concrete fan-out members still need Workflow admission while another member is deferred. */
+    knownRequests?: readonly AgentStartRequestV1[];
 }> {
     const { actionId, input: request, context, baseline } = params;
     if (actionId === 'machines.managed.acquire' && request.agentStart !== undefined) {
@@ -175,7 +177,7 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
             profileId: actionId !== 'session.spawn_new' && selected.profileId !== undefined ? selected.profileId
                 : facts.profileId === undefined ? selected.profileId : facts.profileId,
             connectedServices: facts.connectedServices === undefined ? selected.connectedServices : facts.connectedServices,
-            mcpSelection: facts.mcpSelection === undefined ? selected.mcpSelection : facts.mcpSelection,
+            capabilitySelection: facts.capabilitySelection === undefined ? selected.capabilitySelection : facts.capabilitySelection,
             transcriptStorage: facts.transcriptStorage ?? selection(SessionSpawnNewInputV2Schema.shape.transcriptStorage.unwrap(), selected.transcriptStorage),
         };
     };
@@ -249,16 +251,40 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
     const teamModel = TeamCredentialProviderModelSelectionV1Schema.safeParse(request.teamCredentialModel);
     const startInput = { ...request, ...(runOptions.ok ? runOptions.options : {}),
         ...(teamModel.success ? { modelId: teamModel.data.modelId } : {}) };
-    if (targets.length === 0 || targets.some((target) => !target))
+    if (targets.length === 0)
         return { ok: false, errorCode: 'target_unavailable',
             knownFacts: selectedFacts(executionRunStartFactsV1(startInput, unresolved, context, baseline)),
         };
-    inheritWorkflowModel = targets.every((target) => selected?.modelSelection === undefined || selectedModelForTarget(target ?? undefined) !== undefined);
+    inheritWorkflowModel = targets.every((target) => !target || selected?.modelSelection === undefined || selectedModelForTarget(target) !== undefined);
     if (!inheritWorkflowModel && request.modelSelection === undefined && request.modelId === undefined && request.teamCredentialModel === undefined)
         delete selectedInput.modelSelection;
-    if (!runOptions.ok)
-        return { ok: false, errorCode: 'invalid_parameters' };
     const perTargetConnectedServices = request.connectedServicesByBackendTargetKey;
+    const intent = actionId === 'execution.run.start' ? ExecutionRunIntentSchema.safeParse(request.intent) : null;
+    const requests: AgentStartRequestV1[] = [];
+    for (const [index, target] of targets.entries()) {
+        if (!target)
+            continue;
+        const key = Array.isArray(targetValues) ? targetValues[index] : undefined;
+        const connected = typeof key === 'string' && perTargetConnectedServices && typeof perTargetConnectedServices === 'object'
+            && !Array.isArray(perTargetConnectedServices) ? Reflect.get(perTargetConnectedServices, key) : undefined;
+        const effective = { ...startInput,
+            ...(connected !== undefined ? { connectedServices: connected } : {}),
+        };
+        requests.push({ kind: 'execution_run',
+            source: actionId === 'review.start' ? 'review' : actionId === 'subagents.plan.start' ? 'subagents_plan'
+                : actionId === 'subagents.delegate.start' ? 'subagents_delegate' : actionId === 'voice_agent.start' ? 'voice_agent' : 'execution_run',
+            intent: intent?.success ? intent.data : actionId === 'review.start' ? 'review'
+                : actionId === 'subagents.plan.start' ? 'plan' : actionId === 'subagents.delegate.start' ? 'delegate' : 'voice_agent',
+            ...(typeof request.roleId === 'string' ? { roleId: request.roleId } : {}),
+            facts: selectedFacts(executionRunStartFactsV1(effective, target, context, baseline)), backendTargets: [target],
+        });
+    }
+    if (targets.some((target) => !target))
+        return { ok: false, errorCode: 'target_unavailable', knownRequests: requests,
+            knownFacts: selectedFacts(executionRunStartFactsV1(startInput, unresolved, context, baseline)),
+        };
+    if (!runOptions.ok || (intent && !intent.success))
+        return { ok: false, errorCode: 'invalid_parameters' };
     let projectedConnectedServices: Readonly<Record<string, unknown>> | undefined;
     if (overrideEngine && Array.isArray(targetValues) && perTargetConnectedServices
         && typeof perTargetConnectedServices === 'object' && !Array.isArray(perTargetConnectedServices)) {
@@ -284,28 +310,6 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
             selections.set(key, { value, normalized });
         }
         projectedConnectedServices = Object.fromEntries([...selections].flatMap(([key, selection]) => selection.value === undefined ? [] : [[key, selection.value]]));
-    }
-    const intent = actionId === 'execution.run.start' ? ExecutionRunIntentSchema.safeParse(request.intent) : null;
-    if (intent && !intent.success)
-        return { ok: false, errorCode: 'invalid_parameters' };
-    const requests: AgentStartRequestV1[] = [];
-    for (const [index, target] of targets.entries()) {
-        if (!target)
-            continue;
-        const key = Array.isArray(targetValues) ? targetValues[index] : undefined;
-        const connected = typeof key === 'string' && perTargetConnectedServices && typeof perTargetConnectedServices === 'object'
-            && !Array.isArray(perTargetConnectedServices) ? Reflect.get(perTargetConnectedServices, key) : undefined;
-        const effective = { ...startInput,
-            ...(connected !== undefined ? { connectedServices: connected } : {}),
-        };
-        requests.push({ kind: 'execution_run',
-            source: actionId === 'review.start' ? 'review' : actionId === 'subagents.plan.start' ? 'subagents_plan'
-                : actionId === 'subagents.delegate.start' ? 'subagents_delegate' : actionId === 'voice_agent.start' ? 'voice_agent' : 'execution_run',
-            intent: intent?.success ? intent.data : actionId === 'review.start' ? 'review'
-                : actionId === 'subagents.plan.start' ? 'plan' : actionId === 'subagents.delegate.start' ? 'delegate' : 'voice_agent',
-            ...(typeof request.roleId === 'string' ? { roleId: request.roleId } : {}),
-            facts: selectedFacts(executionRunStartFactsV1(effective, target, context, baseline)), backendTargets: [target],
-        });
     }
     const effectiveInput: Record<string, unknown> = { ...projectSelectedEngine(selectedInput, 'execution_run') };
     if (actionId === 'execution.run.start' && request.backendTarget === undefined)
@@ -352,7 +356,7 @@ export function executionRunStartFactsV1(input: Readonly<Record<string, unknown>
         ...(configOptions !== undefined ? { configOptions } : {}),
         ...(input.launchProfileId !== undefined ? { profileId: selection(SessionSpawnNewInputV2Schema.shape.profileId.unwrap(), input.launchProfileId) } : {}),
         ...(connected !== undefined ? { connectedServices: connected.ok && connected.defaultServiceIds.length === 0 ? connected.bindings : unresolved } : {}),
-        ...(input.mcpSelection !== undefined ? { mcpSelection: selection(SessionSpawnNewInputV2Schema.shape.mcpSelection.unwrap(), input.mcpSelection) } : {}),
+        ...(input.capabilitySelection !== undefined ? { capabilitySelection: selection(SessionSpawnNewInputV2Schema.shape.capabilitySelection.unwrap(), input.capabilitySelection) } : {}),
         ...(input.transcriptStorage !== undefined ? { transcriptStorage: selection(SessionSpawnNewInputV2Schema.shape.transcriptStorage.unwrap(), input.transcriptStorage) } : {}),
     };
 }
@@ -374,7 +378,7 @@ export function spawnStartFactsV1(input: Readonly<SpawnStartFactsInput>): AgentS
         configOptions: configurationUnresolved ? unresolved : configuration?.options,
         profileId: input.profileId, connectedServices: input.connectedServices,
         hasEnvironmentVariables: input.environmentVariables !== undefined && input.environmentVariables !== null,
-        mcpSelection: input.mcpSelection, transcriptStorage: input.transcriptStorage,
+        capabilitySelection: input.capabilitySelection, transcriptStorage: input.transcriptStorage,
     };
 }
 export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutorDeps, 'resolveAgentStartContext'> & Partial<Pick<ActionExecutorDeps, 'sessionList'>>, context: ActionExecutorContext, targetSessionId?: string) {

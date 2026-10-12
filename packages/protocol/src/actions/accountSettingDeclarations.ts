@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { AccountSettings } from '../account/settings/accountSettings.js';
 import { SessionAgentSpawnPolicyV1Schema, SessionAgentSpawnPolicyV1StrictSchema, type SessionAgentSpawnPolicyV1 } from '../account/settings/sessionAgentSpawnPolicyV1.js';
-import { SessionAgentStartAllowListsV1Schema } from '../account/settings/sessionAgentStartAllowListsV1.js';
+import { SessionAgentStartAllowListsV1Schema, SessionAgentStartAllowListsV1StrictSchema } from '../account/settings/sessionAgentStartAllowListsV1.js';
 import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
 import { BUILT_IN_SETTINGS_METADATA_V1 } from './settings/builtInSettingsMetadata.js';
 export * from './settings/settingsDeclarations.js';
@@ -34,10 +34,10 @@ function startAllowListSetting<Field extends 'allowedRoleIds' | 'allowedAgentTar
   return { ...declaration,
     storage: { ...declaration.storage, field },
     // Persisted malformed lists recover fail closed; Action writes reject malformed values.
-    parseValue: (value: unknown) => SessionAgentStartAllowListsV1Schema.removeCatch().shape[field].removeCatch().safeParse(value),
+    parseValue: (value: unknown) => SessionAgentStartAllowListsV1StrictSchema.shape[field].safeParse(value),
     readValue: (settings: Pick<AccountSettings, 'sessionAgentStartAllowListsV1'>) => SessionAgentStartAllowListsV1Schema.parse(settings.sessionAgentStartAllowListsV1)[field],
     updateValue: (settings: Pick<AccountSettings, 'sessionAgentStartAllowListsV1'>, value: unknown) =>
-      SessionAgentStartAllowListsV1Schema.parse({ ...SessionAgentStartAllowListsV1Schema.parse(settings.sessionAgentStartAllowListsV1), [field]: value }),
+      SessionAgentStartAllowListsV1StrictSchema.parse({ ...SessionAgentStartAllowListsV1Schema.parse(settings.sessionAgentStartAllowListsV1), [field]: value }),
   } as const;
 }
 
@@ -75,6 +75,7 @@ export const ACCOUNT_SETTING_DECLARATIONS_V1 = {
   memoryUseInNewBots: canonicalDeclaration('prompts.context.memoryUseInNewBots'),
   memoryUpkeepInNewBots: canonicalDeclaration('prompts.context.memoryUpkeepInNewBots'),
   transcriptShowToolCalls: canonicalDeclaration('transcript.showToolCalls'),
+  agentHtmlNetworkPolicy: canonicalDeclaration('transcript.agentHtmlNetworkPolicy'),
 } as const;
 
 export function readAccountSettingDeclarationV1(anchor: unknown) {
@@ -86,7 +87,7 @@ export function isPresentUserSettingWriteV1(actionId: string, input: unknown): b
     && 'anchor' in input && readBuiltInSettingDeclarationV1(input.anchor)?.presentUserOnly === true;
 }
 
-/** Human transcript choices never become autonomous preference mutations, even after an approval. */
+/** Declaration-owned surface restrictions remain separate from configurable Action approval. */
 export function isAccountSettingActionSurfaceAllowedV1(actionId: string, input: unknown, surface: unknown): boolean {
   if (!['settings.set', 'settings.reset', 'settings.invoke'].includes(actionId)) return true;
   if (surface !== 'agent' && surface !== 'mcp') return true;

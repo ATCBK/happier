@@ -16,13 +16,14 @@ const titles = {
   'relay.runtime.personal_home.relocate': 'Move Personal Home', 'relay.runtime.personal_home.choose_archive': 'Choose Personal Home backup archive',
   'relay.runtime.personal_home.choose_backup_destination': 'Choose Personal Home backup destination',
   'relay.runtime.open_path': 'Open runtime data or logs', 'relay.runtime.reveal_output': 'Reveal runtime output',
-  'home.runtime.get': 'Get Home release information',
+  'relay.runtime.task.cancel': 'Cancel local runtime task',
+  'home.runtime.get': 'Get Home runtime information',
   'home.runtime.restart': 'Restart Home on connected Machine',
 } as const;
 const reads: ReadonlySet<string> = new Set(['relay.access.status', 'relay.runtime.status',
   'relay.runtime.personal_home.inspect', 'relay.runtime.personal_home.verify_backup', 'home.runtime.get']);
 const presentation: ReadonlySet<string> = new Set(['relay.runtime.personal_home.choose_archive',
-  'relay.runtime.personal_home.choose_backup_destination', 'relay.runtime.open_path', 'relay.runtime.reveal_output']);
+  'relay.runtime.personal_home.choose_backup_destination', 'relay.runtime.reveal_output']);
 
 /** Credential-bearing relay config remains exclusively in the admitted live invocation. */
 function projectRelayAccessInput(value: unknown): unknown {
@@ -43,12 +44,14 @@ export const HOME_RUNTIME_ACTION_SPECS_V1 = HOME_RUNTIME_ACTION_IDS_V1.map((id):
   const read = reads.has(id);
   const danger = !read && !presentation.has(id);
   return {
-    id, title: titles[id], description: 'Use the addressed Home or answering client’s existing runtime and SystemTask owner.',
+    id, approval: { result: 'required' }, title: titles[id], description: 'Use the addressed Home or answering client’s existing runtime and SystemTask owner.',
     safety: danger ? 'danger' : 'safe', sideEffectClass: read ? 'read' : danger ? 'danger' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: id === 'home.runtime.restart' ? 'machine' : 'client',
-    placements: [], surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    placements: [], surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: id === 'home.runtime.restart', rpc: false },
     bindings: { mcpToolName: id.replaceAll('.', '_') },
-    cli: { commands: [{ path: id.split('.').map(segment => segment.replaceAll('_', '-')), visibility: 'canonical' }], acceptsServerId: true },
+    ...(id === 'home.runtime.restart' ? {
+      cli: { commands: [{ path: id.split('.').map(segment => segment.replaceAll('_', '-')), visibility: 'canonical' as const }], acceptsServerId: true },
+    } : {}),
     inputSchema: inputs[id], outputSchema: outputs[id],
     inputHints: { fields: [
       ...(id === 'home.runtime.restart' ? [{ path: 'machineId', title: 'Machine', widget: 'text' as const, required: true }] : []),
@@ -68,6 +71,7 @@ export const HOME_RUNTIME_ACTION_SPECS_V1 = HOME_RUNTIME_ACTION_IDS_V1.map((id):
         { path: 'config.hostname', title: 'Relay hostname', widget: 'text' as const },
       ] : []),
       ...(id === 'relay.runtime.open_path' || id === 'relay.runtime.reveal_output' ? [{ path: 'path', title: 'Path', widget: 'text' as const, required: true }] : []),
+      ...(id === 'relay.runtime.task.cancel' ? [{ path: 'taskId', title: 'Local task', widget: 'text' as const, required: true }] : []),
     ] },
     ...(id === 'relay.access.configure' ? { approvalInputCustody: 'live_only', projectObservationInput: projectRelayAccessInput } : {}),
   };

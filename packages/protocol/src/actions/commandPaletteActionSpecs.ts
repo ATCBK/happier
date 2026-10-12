@@ -19,7 +19,7 @@ const surfaces = { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc
 /** The mounted palette remains the only command catalog and dispatch owner. */
 export const COMMAND_PALETTE_ACTION_SPECS = [
   {
-    id: 'ui.command_palette.list', title: 'List command palette entries',
+    id: 'ui.command_palette.list', approval: {result: 'required'}, title: 'List command palette entries',
     description: 'List the current client’s available commands. Requires a mounted app shell.',
     safety: 'safe', sideEffectClass: 'read', executionPlacement: 'client',
     placements: [], surfaces,
@@ -31,7 +31,7 @@ export const COMMAND_PALETTE_ACTION_SPECS = [
     cli: { commands: [{ path: ['ui', 'command-palette', 'list'], visibility: 'canonical' }] },
   },
   {
-    id: 'ui.command_palette.invoke', title: 'Invoke a command palette entry',
+    id: 'ui.command_palette.invoke', approval: {result: 'required'}, title: 'Invoke a command palette entry',
     description: 'Invoke an available command by its catalog id on the current client. Commands keep their existing navigation and Action policy.',
     safety: 'safe', sideEffectClass: 'external', executionPlacement: 'client',
     placements: [], surfaces,

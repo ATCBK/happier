@@ -24,13 +24,14 @@ const WIDGET_INSTANCE_ACTION_COPY = {
   'widgets.item.rename': ['Rename widget', 'Change the name shown on a widget.'],
   'widgets.item.size.set': ['Resize widget', 'Change how wide or tall a widget is.'],
   'widgets.item.frame.set': ['Change widget frame', 'Choose how a widget is framed, such as with or without its card and title.'],
+  'widgets.item.network.set': ['Change widget network', 'Choose which sites this widget can contact from its guest frame.'],
   'widgets.item.inputs.get': ['Read widget settings', 'See what a widget is set to show, such as its project or time range.'],
   'widgets.item.inputs.validate': ['Check widget settings', 'Check that new settings for a widget would work, without saving them.'],
   'widgets.item.inputs.set': ['Change widget settings', 'Change what a widget shows, such as its project or time range.'],
   'widgets.item.inputs.reset': ['Reset widget settings', 'Put a widget back to its default settings.'],
   'widgets.item.refresh': ['Refresh widget', 'Load a widget\'s data again now.'],
   'widgets.group.create': ['Group widgets', 'Put widgets that are already there into one group.'],
-  'widgets.group.add': ['Add saved group', 'Add a copy of a saved group of widgets to a dashboard or a board.'],
+  'widgets.group.add': ['Add saved group', 'Add a copy of a saved group of widgets to Home or a widget area.'],
   'widgets.group.ungroup': ['Ungroup widgets', 'Remove a group and keep the widgets that were in it.'],
   'widgets.group.set': ['Change widget group', 'Change a group\'s width and whether lines separate its widgets.'],
   'widgets.group.inputs.set': ['Change widget group settings', 'Set what the widgets in a group show together, such as one project for all of them.'],
@@ -186,6 +187,8 @@ const WIDGET_INSTANCE_ACTION_FIELDS = {
     { ...widthField, requiredWhen: { op: 'truthy', path: 'width' }, description: 'For a group, choose width instead of widget size.' }],
   'widgets.item.frame.set': [refField, { path: 'frameStyle', title: 'Frame', widget: 'select', required: true,
     options: [{ value: 'card', label: 'Card' }, { value: 'plain', label: 'Plain' }, { value: null, label: 'Surface default' }] }],
+  'widgets.item.network.set': [refField, { path: 'network', title: 'Guest network', widget: 'json', required: true,
+    description: 'Use network none or open, or exact HTTPS networkOrigins. This changes guest egress only and cannot widen installed renderer authority.' }],
   'widgets.item.inputs.get': [refField],
   'widgets.item.inputs.validate': [refField, bindingsField],
   'widgets.item.inputs.set': [refField, bindingsField, pathsField],
@@ -250,7 +253,13 @@ export const WIDGET_INSTANCE_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec 
   const select = id === 'widgets.area.layout.select';
   const refresh = id.endsWith('.refresh');
   return {
-    id, title: WIDGET_INSTANCE_ACTION_COPY[id][0], description: id === 'widgets.area.layout.reset'
+    id, approvalPolicy: {
+      ...(id.startsWith('widgets.item.') && !read && !refresh ? { uiConfirmationForInput: (input: unknown) => {
+        const surface = readWidgetActionSurfaceV1(input);
+        const destination = id === 'widgets.item.move' ? readWidgetActionDestinationV1(input) : null;
+        return !surface || surface.owner.kind === 'sessionBoard' || destination?.owner.kind === 'sessionBoard';
+      } } : { uiConfirmation: 'policy' }),
+    }, approval: { result: 'required' }, title: WIDGET_INSTANCE_ACTION_COPY[id][0], description: id === 'widgets.area.layout.reset'
       ? 'Restore the host-declared area preset immediately and return a guarded Undo for the acknowledged change.'
       : id === 'widgets.area.layout.undo'
       ? 'Restore the layout preceding a preset Reset only while that Reset remains the current acknowledged revision.'
@@ -305,7 +314,7 @@ export const WIDGET_DEFINITION_ACTION_SPECS_V1: readonly (PreNormalizedActionSpe
 }>)[] = WIDGET_DEFINITION_ACTION_IDS_V1.map(id => {
   const read = id === 'widgets.definition.list' || id === 'widgets.definition.get';
   return {
-    id, title: WIDGET_DEFINITION_ACTION_COPY[id][0],
+    id, approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'required' }, title: WIDGET_DEFINITION_ACTION_COPY[id][0],
     description: id === 'widgets.definition.list'
       ? 'List reusable Account widget summaries. Each definition may include author (kind: person, agent, or plugin) and createdAt (creation timestamp); definitions saved before these provenance facts existed omit them.'
       : id === 'widgets.definition.update'
@@ -315,7 +324,7 @@ export const WIDGET_DEFINITION_ACTION_SPECS_V1: readonly (PreNormalizedActionSpe
         : id === 'widgets.definition.delete'
           ? 'Delete the Account widget definition while retaining its placements for repair or removal.'
           : 'Read or author a reusable Account widget through the existing mode-aware Artifact owner.',
-    safety: id === 'widgets.definition.update' || id === 'widgets.definition.delete' ? 'danger' : 'safe',
+    safety: id === 'widgets.definition.update' || id === 'widgets.definition.delete' || id === 'widgets.definition.saveFromSession' ? 'danger' : 'safe',
     sideEffectClass: read ? 'read' : 'write', executionPlacement: 'account', requiredAuthority: 'account_automation',
     placements: [], bindings: { mcpToolName: id.replaceAll('.', '_'), rpcMethod: id },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
@@ -332,7 +341,7 @@ export const WIDGET_SNAPSHOT_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec 
   id: 'widgets.snapshot.post'; requiredAuthority: 'account_automation';
   inputSchema: typeof WidgetSnapshotPostInputV1Schema; outputSchema: typeof WidgetSnapshotPostOutputV1Schema;
 }>)[] = [{
-  id: 'widgets.snapshot.post', title: 'Post a widget snapshot',
+  id: 'widgets.snapshot.post', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Post a widget snapshot',
   description: 'Publish the exact previewed frozen output and as-of provenance as an inert shared Session Board item. The approved payload is never queried again.',
   safety: 'danger', sideEffectClass: 'write', executionPlacement: 'account', requiredAuthority: 'account_automation',
   placements: [], bindings: { mcpToolName: 'widgets_snapshot_post', rpcMethod: 'widgets.snapshot.post' },
@@ -357,7 +366,7 @@ export const WIDGET_LAYOUT_FRAGMENT_ACTION_SPECS_V1: readonly (PreNormalizedActi
 }>)[] = WIDGET_LAYOUT_FRAGMENT_ACTION_IDS_V1.map(id => {
   const read = id.endsWith('.list') || id.endsWith('.get');
   return {
-    id, title: WIDGET_LAYOUT_FRAGMENT_ACTION_COPY[id][0], description: 'Read or author an Account saved group through its mode-aware Artifact owner. Adding it makes independent copies.',
+    id, approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'required' }, title: WIDGET_LAYOUT_FRAGMENT_ACTION_COPY[id][0], description: 'Read or author an Account saved group through its mode-aware Artifact owner. Adding it makes independent copies.',
     safety: id.endsWith('.update') || id.endsWith('.delete') ? 'danger' : 'safe',
     sideEffectClass: read ? 'read' : 'write', executionPlacement: 'account', requiredAuthority: 'account_automation',
     placements: [], bindings: { mcpToolName: id.replaceAll('.', '_'), rpcMethod: id },

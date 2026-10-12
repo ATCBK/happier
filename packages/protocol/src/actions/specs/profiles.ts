@@ -29,7 +29,9 @@ function profileSpec<TId extends ProfileActionIdV1>(id: TId, title: string, summ
 }>): ProfileActionSpec<TId> {
   const client = options.placement === 'client';
   return {
-    id, title, safety: options.danger ? 'danger' as const : 'safe' as const,
+    id, approval: { result: 'required' }, title, safety: options.danger ? 'danger' as const : 'safe' as const,
+    ...(id === 'launch_profiles.delete' || id === 'launch_profiles.legacy.convert' || id === 'launch_profiles.legacy.resolve_conflict'
+      ? { approvalPolicy: { uiConfirmation: 'policy' as const } } : {}),
     sideEffectClass: options.read ? 'read' as const : 'write' as const,
     requiredAuthority: 'account_automation' as const,
     executionPlacement: options.placement ?? 'account', placements: [],
@@ -37,6 +39,9 @@ function profileSpec<TId extends ProfileActionIdV1>(id: TId, title: string, summ
     ...(!client ? { bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') } } : {}),
     inputSchema: inputs[id], outputSchema: outputs[id],
     projectObservationInput: projectProfileObservation, projectObservationOutput: projectProfileObservation,
+    // Profile content is private: the authenticated approval reviews the exact saved definition,
+    // while shared observers continue receiving only the identity/outcome projection above.
+    approvalPresentation: { summary: () => null, projectInput: input => input },
     inputHints: { description: summary, fields: [] },
     ...(!client ? { cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' as const }] } } : {}),
   } satisfies ProfileActionSpec<TId>;

@@ -135,3 +135,8 @@ type CheckedFamilyIdsMustCoverIndex = AssertTrue<Equal<
 >>;
 type InputFamiliesMustCorrespond = AssertNever<FamilyCorrespondenceFailures<SchemaInputs, DtoInputs, true>>;
 type ResultFamiliesMustCorrespond = AssertNever<FamilyCorrespondenceFailures<SchemaResults, DtoResults, false>>;
+
+// Edit consumers share the canonical op grammar, including its input type.
+// A validator's default `unknown` input must not erase the entire union in DTOs.
+type WorkflowDraftEditOpsMustRemainConcrete = AssertTrue<Concrete<SchemaInputs['workflow.authoring.draft.edit']['ops'][number]>>;
+type WorkflowSavedEditOpsMustRemainConcrete = AssertTrue<Concrete<SchemaInputs['workflow.definition.edit']['ops'][number]>>;

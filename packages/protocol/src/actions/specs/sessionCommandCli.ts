@@ -51,12 +51,17 @@ export const SESSION_STOP_CLI_PROJECTION: ActionCliProjection = {
  * command sent. Rejecting an unknown alias at the caller schema keeps the
  * diagnostic naming the value the user typed.
  */
+export const SessionPermissionModeSetApplyTimingSchema = lazyZodSchema(() => z.literal('immediate', {
+  error: 'Permission-mode changes apply immediately. Use session.message.send with permissionModeOverride to apply a mode with the next prompt.',
+}));
+
 export const SessionPermissionModeSetCliInputSchema = lazyZodSchema(() => z.object({
   sessionId: z.string().trim().min(1),
   permissionMode: z.string().trim().min(1).refine(
     (value) => parseAgentPermissionIntentV1Alias(value) !== null,
     { message: 'Invalid permission mode' },
   ),
+  applyTiming: SessionPermissionModeSetApplyTimingSchema.optional(),
 }).strict());
 export type SessionPermissionModeSetCliInput = z.infer<typeof SessionPermissionModeSetCliInputSchema>;
 
@@ -70,6 +75,7 @@ export function bindSessionPermissionModeSetCliInput(
     ...(value.permissionMode === undefined
       ? {}
       : { permissionMode: parseAgentPermissionIntentV1Alias(value.permissionMode)! }),
+    ...(value.applyTiming === undefined ? {} : { applyTiming: value.applyTiming }),
   };
 }
 
@@ -85,6 +91,8 @@ export const SESSION_PERMISSION_MODE_SET_CLI_PROJECTION: ActionCliProjection = {
     fields: [
       { path: 'sessionId', title: 'Session id or prefix', widget: 'text', required: true },
       { path: 'permissionMode', title: 'Permission mode or alias', widget: 'text', required: true },
+      { path: 'applyTiming', title: 'Apply timing', description: 'Immediate only. Use session.message.send with permissionModeOverride for the next prompt.',
+        widget: 'select', options: [{ value: 'immediate', label: 'Immediately' }] },
     ],
   },
   bindInput: (value) => bindSessionPermissionModeSetCliInput(value as Partial<SessionPermissionModeSetCliInput>),

@@ -39,6 +39,20 @@ function baseSpec(overrides: Record<string, unknown>): Record<string, unknown> {
 }
 
 describe('ActionSpec.cli declaration', () => {
+  it('projects mounted Usage controls and source browsing through their existing Action owners', () => {
+    const commands = listActionCliCommandDeclarations();
+    for (const [id, path] of [
+      ['ui.current_context.read', ['ui', 'current-context', 'read']],
+      ['ui.current_context.command.invoke', ['ui', 'current-context', 'command', 'invoke']],
+      ['sessions.external.candidates.list', ['sessions', 'external', 'candidates', 'list']],
+    ] as const) {
+      const spec = getActionSpec(id);
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
+      expect(spec.safety).toBe('safe');
+      expect(commands.some(entry => entry.spec.id === id && entry.binding.path.join(' ') === path.join(' ')), id).toBe(true);
+    }
+  });
+
   it('routes Project context through its strict canonical Action input', () => {
     const command = listActionCliCommandDeclarations().find((entry) => entry.spec.id === 'projects.context.update');
     expect(command?.binding.path).toEqual(['projects', 'context', 'update']);

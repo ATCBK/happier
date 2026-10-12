@@ -7,9 +7,11 @@ import { DEFAULT_AGENT_ID } from '../../agents/defaultAgent.js';
 import { readDirectConnectionsEnabled, withDirectConnectionsEnabled } from '../../account/settings/peerMediationPreferencesV1.js';
 import { MachineRetentionDefaultsV1Schema, updateMachineRetentionCategoryPreferenceV1, type MachineRetentionCategoryV1 } from '../../account/settings/machineRetentionDefaultsV1.js';
 import { UI_FEATURE_REGISTRY, listUiFeatureToggleDefinitions, resolveUiFeatureToggleEnabled, buildUiFeatureToggleChange, buildUiFeatureExperimentsChange } from './featurePreferenceMutations.js';
-import { GLASS_PRESETS, GLASS_BLUR_STEPS, readGlassMaterials, readGlassPreset, resolveGlassPresetSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassSurfaceSettingsDelta, type GlassSurfaceGroup } from './glassPreferenceMutations.js';
+import { GLASS_PRESETS, GLASS_BLUR_STEPS, GLASS_SURFACE_GROUPS, GLASS_TINT_STEPS, resolveGlassTintSettingsDelta, readGlassMaterials, readGlassPreset, readGlassSurfaceMode, resolveGlassSurfaceModeSettingsDelta, resolveGlassPresetSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassSurfaceSettingsDelta, type GlassSurfaceGroup } from './glassPreferenceMutations.js';
 import { buildKeyboardShortcutResetDelta, buildKeyboardShortcutSetDelta, buildKeyboardShortcutToggleDelta } from './keyboardPreferenceMutations.js';
-import { prepareDefaultProviderStateSharingChangeV1, type ProviderStateSharingMutationServicesV1 } from './providerStateSharingMutations.js';
+import { prepareDefaultProviderStateSharingChangeV1, prepareAgentProviderStateSharingChangeV1, AgentProviderStateSharingChangeV1Schema, type ProviderStateSharingMutationServicesV1 } from './providerStateSharingMutations.js';
+import { BackendTargetKeyV2InputSchema } from '../../backends/targets/backendTargetRefV2.js';
+import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 export * from './featurePreferenceMutations.js';
 export * from './glassPreferenceMutations.js';
 export * from './keyboardPreferenceMutations.js';
@@ -26,10 +28,12 @@ type CoupledSettings = Pick<AccountSettings, 'codingPromptBehaviorV1' | 'usageLi
     | 'sessionListSectionModeV1' | 'sessionListActiveGroupingV1' | 'sessionListInactiveGroupingV1'
     | 'sessionListOrderingModeV1' | 'sessionFolderViewModeV1' | 'sessionListFolderSortModeV1' | 'sessionListWorkingPlacementModeV1'
     | 'peerMediationPreferencesV1' | 'favoriteProfiles' | 'experiments' | 'featureToggles'
-    | 'glassBlurEnabled' | 'glassBlurIntensity' | 'glassSurfaceMaterials' | 'scmCommitMessageGeneratorBackendId'
+    | 'glassBlurEnabled' | 'glassBlurIntensity' | 'glassTintIntensity' | 'glassSurfaceMaterials' | 'scmCommitMessageGeneratorBackendId'
     | 'machineRetentionDefaultsV1' | 'connectedServicesProviderStateSharingSettingsV1'
     | 'keyboardShortcutDisabledCommandIdsV1' | 'keyboardShortcutOverridesV1' | 'commandPaletteEnabled'
-    | 'sessionTerminalHost' | 'sessionUseTmux' | 'sessionTmuxByMachineId' | 'sessionTerminalHostByMachineId' | 'actionsSettingsV1'>;
+    | 'sessionTerminalHost' | 'sessionUseTmux' | 'sessionTmuxByMachineId' | 'sessionTerminalHostByMachineId'
+    | 'sessionTmuxSessionName' | 'sessionTmuxIsolated' | 'sessionTmuxTmpDir' | 'actionsSettingsV1'
+    | 'sessionDefaultPermissionModeByTargetKey' | 'backendEnabledByTargetKey' | 'backendCliSourcePreferenceByTargetKey'>;
 
 export type PortableAccountSettingBindingV1 = Readonly<{
     scope: 'account'; kind: 'owner'; access: 'read_write' | 'read_only' | 'sensitive';
@@ -49,6 +53,47 @@ export type PreparedPortableAccountSettingBindingV1 = PortableAccountSettingBind
 
 const boolean = (value: unknown) => typeof value === 'boolean' ? { success: true as const, value } : { success: false as const };
 const owner = { scope: 'account', kind: 'owner', access: 'read_write' } as const;
+type AgentPreferenceKey = 'sessionDefaultPermissionModeByTargetKey' | 'backendEnabledByTargetKey' | 'backendCliSourcePreferenceByTargetKey';
+const AgentPreferenceIntentSchema = z.object({ agentTargetKey: BackendTargetKeyV2InputSchema, value: StrictJsonValueSchema }).strict();
+/** One target-sized intent, revalidated and rebased by the existing Settings CAS owner. */
+function agentPreferenceStorage(key: AgentPreferenceKey): PortableAccountSettingBindingV1 {
+    function parse(value: unknown) {
+        const intent = AgentPreferenceIntentSchema.safeParse(value);
+        if (!intent.success) return null;
+        const record = ACCOUNT_SETTING_DEFINITIONS[key].parseMutationValue({ [intent.data.agentTargetKey]: intent.data.value });
+        return record.success && record.data !== null && typeof record.data === 'object' && !Array.isArray(record.data)
+            && Object.entries(record.data).some(([target, value]) => target === intent.data.agentTargetKey && value === intent.data.value)
+            ? { intent: intent.data, record: { [intent.data.agentTargetKey]: intent.data.value } } : null;
+    }
+    return { ...owner, read: settings => settings[key],
+        parse: value => { const admitted = parse(value); return admitted ? { success: true, value: admitted.intent } : { success: false }; },
+        mutate: (settings, value) => { const admitted = parse(value); return admitted ? {
+            [key]: { ...settings[key], ...admitted.record },
+        } : null; },
+    };
+}
+export const agentDefaultPermissionStorage = agentPreferenceStorage('sessionDefaultPermissionModeByTargetKey');
+export const agentEnabledStorage = agentPreferenceStorage('backendEnabledByTargetKey');
+export const agentExecutableSourceStorage = agentPreferenceStorage('backendCliSourcePreferenceByTargetKey');
+export const sharingPerAgentStorage: PreparedPortableAccountSettingBindingV1 = { ...owner,
+    read: settings => settings.connectedServicesProviderStateSharingSettingsV1.byAgentId,
+    parse: value => { const parsed = AgentProviderStateSharingChangeV1Schema.safeParse(value);
+        return parsed.success ? { success: true, value: parsed.data } : { success: false }; },
+    mutate: () => null,
+    prepare: async (settings, value, services, context) => {
+        const parsed = AgentProviderStateSharingChangeV1Schema.safeParse(value);
+        if (!parsed.success) return { status: 'invalid_value' };
+        if (context?.signal?.aborted || context?.isCurrent() === false) return { status: 'cancelled' };
+        const prepared = await prepareAgentProviderStateSharingChangeV1(settings.connectedServicesProviderStateSharingSettingsV1, parsed.data, services);
+        if (prepared.status !== 'prepared') return prepared;
+        if (context?.signal?.aborted || context?.isCurrent() === false) return { status: 'cancelled' };
+        return { status: 'prepared', mutate: current => {
+            if (context?.signal?.aborted || context?.isCurrent() === false) return null;
+            const next = prepared.mutate(current.connectedServicesProviderStateSharingSettingsV1);
+            return next ? { connectedServicesProviderStateSharingSettingsV1: next } : null;
+        } };
+    },
+};
 const instructionsAgentEditsModes = ['off', 'default', 'ask_first', 'allowed'] as const;
 function isInstructionsAgentEditsMode(value: unknown): value is typeof instructionsAgentEditsModes[number] {
     return value === 'off' || value === 'default' || value === 'ask_first' || value === 'allowed';
@@ -105,7 +150,18 @@ export const glassIntensityStorageBinding: PortableAccountSettingBindingV1 = { .
     parse: value => value === 'light' || value === 'regular' || value === 'strong' ? { success: true, value } : { success: false },
     mutate: (settings, value) => value === 'light' || value === 'regular' || value === 'strong' ? resolveGlassIntensitySettingsDelta(settings, value) : null,
 };
-export function glassSurfaceStorageBinding(group: GlassSurfaceGroup, field: 'blur' | 'opacity'): PortableAccountSettingBindingV1 { return { ...owner,
+export const glassTintStorageBinding: PortableAccountSettingBindingV1 = { ...owner, allowedValues: GLASS_TINT_STEPS,
+    read: settings => settings.glassTintIntensity ?? 'subtle',
+    parse: value => GLASS_TINT_STEPS.some(step => step === value) && typeof value === 'string' ? { success: true, value } : { success: false },
+    mutate: (settings, value) => { const tint = GLASS_TINT_STEPS.find(step => step === value); return tint ? resolveGlassTintSettingsDelta(settings, tint) : null; },
+};
+export function glassSurfaceStorageBinding(group: GlassSurfaceGroup, field: 'blur' | 'opacity' | 'mode'): PortableAccountSettingBindingV1 {
+    if (field === 'mode') return { ...owner, allowedValues: ['glass', 'solid'],
+        read: settings => readGlassSurfaceMode(settings, group),
+        parse: value => value === 'glass' || value === 'solid' ? { success: true, value } : { success: false },
+        mutate: (settings, value) => value === 'glass' || value === 'solid' ? resolveGlassSurfaceModeSettingsDelta(settings, group, value) : null,
+    };
+    return { ...owner,
     ...(field === 'blur' ? { allowedValues: GLASS_BLUR_STEPS } : {}),
     read: settings => readGlassMaterials(settings)[group][field],
     parse: value => field === 'opacity'
@@ -167,12 +223,56 @@ export function categoryBinding(category: MachineRetentionCategoryV1): PortableA
 }; }
 export function resolveTerminalHost(params: { settings: Pick<CoupledSettings, 'sessionTerminalHost' | 'sessionUseTmux' | 'sessionTmuxByMachineId' | 'sessionTerminalHostByMachineId'>; machineId: string | null }): 'none' | 'tmux' | 'zellij' | 'herdr' {
     const { settings, machineId } = params;
-    const override = machineId ? settings.sessionTmuxByMachineId?.[machineId] : undefined;
+    const override = machineId && settings.sessionTmuxByMachineId && Object.hasOwn(settings.sessionTmuxByMachineId, machineId)
+        ? settings.sessionTmuxByMachineId[machineId] : undefined;
     if (override?.useTmux) return 'tmux';
-    const host = machineId ? settings.sessionTerminalHostByMachineId?.[machineId] : undefined;
+    const host = machineId && settings.sessionTerminalHostByMachineId && Object.hasOwn(settings.sessionTerminalHostByMachineId, machineId)
+        ? settings.sessionTerminalHostByMachineId[machineId] : undefined;
     if (host) return host;
     if (override) return 'none';
     return settings.sessionTerminalHost === 'legacy' ? settings.sessionUseTmux ? 'tmux' : 'none' : settings.sessionTerminalHost ?? 'none';
+}
+export type MachineTerminalHost = 'none' | 'tmux' | 'zellij' | 'herdr';
+export type MachineTerminalHostSettingChange = Readonly<{
+    host?: MachineTerminalHost | null;
+    tmux?: Readonly<Partial<NonNullable<CoupledSettings['sessionTmuxByMachineId'][string]>>>;
+}>;
+/** A sparse per-machine intent, rebased by the existing Account Settings CAS writer. */
+export function buildMachineTerminalSettingsPatch(params: Readonly<{
+    settings: Pick<CoupledSettings, 'sessionTmuxByMachineId' | 'sessionTerminalHostByMachineId' | 'sessionTmuxSessionName' | 'sessionTmuxIsolated' | 'sessionTmuxTmpDir'>;
+    machineId: string;
+    change: MachineTerminalHostSettingChange;
+}>): Pick<CoupledSettings, 'sessionTmuxByMachineId' | 'sessionTerminalHostByMachineId'> {
+    const { settings, machineId, change } = params;
+    let tmuxByMachineId = { ...settings.sessionTmuxByMachineId };
+    let hostByMachineId = { ...settings.sessionTerminalHostByMachineId };
+    if (change.host !== undefined) {
+        delete hostByMachineId[machineId];
+        if (change.host === null) {
+            delete tmuxByMachineId[machineId];
+        } else {
+            const prior = (Object.hasOwn(tmuxByMachineId, machineId) ? tmuxByMachineId[machineId] : undefined) ?? {
+                sessionName: settings.sessionTmuxSessionName,
+                isolated: settings.sessionTmuxIsolated,
+                tmpDir: settings.sessionTmuxTmpDir,
+            };
+            tmuxByMachineId = { ...tmuxByMachineId, [machineId]: {
+                ...prior,
+                useTmux: change.host === 'tmux',
+            } };
+            if (change.host === 'herdr' || change.host === 'zellij') hostByMachineId = { ...hostByMachineId, [machineId]: change.host };
+        }
+    }
+    if (change.tmux) {
+        const prior = (Object.hasOwn(tmuxByMachineId, machineId) ? tmuxByMachineId[machineId] : undefined) ?? {
+            useTmux: false,
+            sessionName: settings.sessionTmuxSessionName,
+            isolated: settings.sessionTmuxIsolated,
+            tmpDir: settings.sessionTmuxTmpDir,
+        };
+        tmuxByMachineId = { ...tmuxByMachineId, [machineId]: { ...prior, ...change.tmux } };
+    }
+    return { sessionTmuxByMachineId: tmuxByMachineId, sessionTerminalHostByMachineId: hostByMachineId };
 }
 export const terminalHostStorage: PortableAccountSettingBindingV1 = { ...owner, allowedValues: ['none', 'tmux', 'zellij', 'herdr'],
     read: settings => resolveTerminalHost({ settings, machineId: null }),
@@ -276,11 +376,16 @@ export function readPortableAccountSettingBindingV1(declaration: Readonly<{
         }
         case 'glassPresetStorageBinding': return glassPresetStorageBinding;
         case 'glassIntensityStorageBinding': return glassIntensityStorageBinding;
+        case 'glassTintStorageBinding': return glassTintStorageBinding;
         case 'glassSurfaceStorageBinding': {
-            const group = (['chrome', 'sidebar', 'content', 'floating'] as const).find(group => group === args[0]);
-            return group && (args[1] === 'blur' || args[1] === 'opacity') ? glassSurfaceStorageBinding(group, args[1]) : null;
+            const group = GLASS_SURFACE_GROUPS.find(group => group === args[0]);
+            return group && (args[1] === 'blur' || args[1] === 'opacity' || args[1] === 'mode') ? glassSurfaceStorageBinding(group, args[1]) : null;
         }
         case 'sourceControl.commitMessageAgent': return commitMessageAgentStorage;
+        case 'agents.defaultPermission': return agentDefaultPermissionStorage;
+        case 'agents.enabled': return agentEnabledStorage;
+        case 'agents.executableSource': return agentExecutableSourceStorage;
+        case 'connectedServicesAgentSignIn.sharingPerAgent': return sharingPerAgentStorage;
         case 'connectedServicesAgentSignIn.sharingConfig': return sharingConfigStorage;
         case 'connectedServicesAgentSignIn.sharingState': return sharingStateStorage;
         case 'terminalHostStorage': return terminalHostStorage;

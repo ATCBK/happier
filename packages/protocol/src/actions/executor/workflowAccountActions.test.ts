@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '../actionExecutor.js';
-import { createWorkflowActionExecutor } from './workflowAccountActions.js';
+import { createWorkflowActionExecutor, normalizeWorkflowActionThrownError } from './workflowAccountActions.js';
 import { createWorkflowDefinitionActions } from './workflowDefinitions.js';
 import { createWorkflowAccountRunActionOwner } from './workflowRunActions.js';
 import { parseWorkflowDocumentJsonIngressV1 } from '../../workflows/workflowDocumentV1.js';
@@ -33,6 +33,16 @@ function executor(invalidStoredHeader = false, readFailure?: unknown) {
 }
 
 describe('workflow Action refusal classification', () => {
+  it('keeps typed target diagnostics through the family and outer Action failure boundary', async () => {
+    const details = { code: 'target_unavailable' as const, reason: 'agent_probe_failed' as const,
+      agentId: 'claude', errorCode: 'cli-detection-failed', blockId: 'writer' };
+    const actions = createActionExecutor({ workflowAction: executor(false,
+      Object.assign(new Error('target_unavailable'), { code: 'target_unavailable', details })) } as unknown as ActionExecutorDeps);
+    await expect(actions.execute('workflow.definition.get', { definitionId }, { surface: 'ui' }))
+      .resolves.toEqual({ ok: false, errorCode: 'target_unavailable', error: 'target_unavailable', details });
+    expect(normalizeWorkflowActionThrownError(Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' })))
+      .toMatchObject({ errorCode: 'target_unavailable', details: { code: 'target_unavailable', reason: 'selection_unavailable' } });
+  });
   it('imports a document through the Action seam as unsaved content without persistence or execution', async () => {
     const actions = createActionExecutor({ workflowAction: executor() } as unknown as ActionExecutorDeps);
     const json = JSON.stringify({ kind: 'happier.workflow', version: 1, definition });

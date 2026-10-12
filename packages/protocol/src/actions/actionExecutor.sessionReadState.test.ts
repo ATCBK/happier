@@ -195,6 +195,16 @@ describe('Session read-state Action vertical', () => {
     expect(projectSessionReadStateActionTransportFailure(404, {
       error: 'missing route',
     })).toEqual({ errorCode: 'unsupported_action' });
+    expect(projectSessionReadStateActionTransportFailure(403, {
+      error: 'present_user_required',
+    })).toEqual({ errorCode: 'present_user_required' });
+    expect(projectSessionReadStateActionTransportFailure(403, {
+      error: 'present_user_required',
+      authority: 'present_user',
+    })).toEqual({ errorCode: 'unavailable' });
+    expect(projectSessionReadStateActionTransportFailure(403, {
+      error: 'Forbidden',
+    })).toEqual({ errorCode: 'forbidden' });
     expect(projectSessionReadStateActionTransportFailure(500, {
       error: 'caller-controlled-code',
     })).toEqual({ errorCode: 'unavailable' });

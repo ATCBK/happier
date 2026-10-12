@@ -41,6 +41,15 @@ describe('actionCatalog action-definition adapter', () => {
     expect(prepared.response.execution).toMatchObject({ ok: true });
   });
 
+  it('omits unrepresentable optional output metadata without weakening the input contract', () => {
+    const spec = { ...getActionSpec('action.spec.get'), outputSchema: z.object({ data: z.custom<unknown>() }).strict() };
+    const definition = actionSpecToActionDefinitionV1(spec);
+    expect(definition.id).toBe(spec.id);
+    expect(definition.inputSchema).toMatchObject({ type: 'object' });
+    expect(definition).not.toHaveProperty('outputSchema');
+    expect(() => actionSpecToActionDefinitionV1({ ...spec, inputSchema: spec.outputSchema })).toThrow();
+  });
+
   it('builds a serialized action definition with a JSON-schema input contract', () => {
     const definition = actionSpecToActionDefinitionV1(getActionSpec('action.spec.get'));
 
@@ -184,36 +193,33 @@ describe('actionCatalog action-definition adapter', () => {
   });
 
   it('filters action definitions by surface and enabled predicate', () => {
+    const candidates = new Set(['review.start', 'session.mode.set', 'ui.voice_global.reset']);
     const definitions = listActionDefinitionsForCatalogSurface({
       surface: 'cli',
-      isActionEnabled: (id) => id !== 'review.start',
+      isActionEnabled: (id) => candidates.has(id) && id !== 'review.start',
     });
 
     expect(definitions.some((definition) => definition.id === 'review.start')).toBe(false);
     expect(definitions.some((definition) => definition.id === 'session.mode.set')).toBe(true);
     expect(definitions.every((definition) => definition.surfaces.cli === true)).toBe(true);
+    expect(definitions.map((definition) => definition.id)).toEqual(['session.mode.set']);
   });
 
-  it.each(['ui', 'voice', 'agent', 'mcp', 'cli', 'rpc', 'api', 'plugin'] as const)('projects every %s-visible Action definition through the canonical schema boundary', (surface) => {
-    const definitions: ActionDefinitionV1[] = [];
-    const rejected = listActionSpecsForCatalogSurface({ surface }).flatMap(spec => {
-      try {
-        definitions.push(actionSpecToActionDefinitionV1(spec, { surface }));
-        return [];
-      } catch (error) {
-        return [`${spec.id}: ${error instanceof Error ? error.message : String(error)}`];
-      }
-    });
-    expect(rejected, rejected.join('\n')).toEqual([]);
+  describe.each(['ui', 'voice', 'agent', 'mcp', 'cli', 'rpc', 'api', 'plugin'] as const)('%s-visible Action census', (surface) => {
+    const specs = listActionSpecsForCatalogSurface({ surface });
 
-    expect(definitions.length).toBeGreaterThan(0);
-    expect(definitions.map((definition) => definition.id)).toEqual(
-      listActionSpecsForCatalogSurface({ surface }).map((spec) => spec.id),
-    );
-    for (const definition of definitions) {
+    it('contains visible Action definitions', () => {
+      expect(specs.length).toBeGreaterThan(0);
+    });
+
+    // Each contract gets the ordinary test budget and a named failure. A whole
+    // surface contains over a thousand independently projected contracts.
+    it.each(specs)(`projects every ${surface}-visible Action definition through the canonical schema boundary: $id`, (spec) => {
+      const definition = actionSpecToActionDefinitionV1(spec, { surface });
+      expect(definition.id).toBe(spec.id);
       const parsed = SerializedActionDefinitionV1Schema.safeParse(JSON.parse(JSON.stringify(definition)));
       expect(parsed.success, `${definition.id}: ${parsed.success ? '' : parsed.error.message}`).toBe(true);
-    }
+    });
   });
 
   it.each(['agent', 'mcp', 'cli'] as const)('searches the real %s catalog without unrelated schema failures', (surface) => {
@@ -229,6 +235,19 @@ describe('actionCatalog action-definition adapter', () => {
     }).map((definition) => definition.id)).toEqual(
       getActionSpec('execution.run.stream.read').surfaces[surface] ? ['execution.run.stream.read'] : [],
     );
+  });
+
+  it('finds the read owners for saved workflows, starter templates, eligible events and Home Boards', () => {
+    for (const [query, actionId] of [
+      ['saved workflows', 'workflow.definition.list'],
+      ['starter workflow templates', 'workflow.starters.list'],
+      ['eligible trigger events', 'workflow.events.list'],
+      ['Home Boards', 'boards.list'],
+    ] as const) {
+      expect(searchSerializedActionSpecsForSurface({
+        surface: 'agent', query, limit: 1,
+      }).map((definition) => definition.id), query).toEqual([actionId]);
+    }
   });
 
   it('reuses immutable host projections while evaluating request-current search inputs', () => {
@@ -440,8 +459,8 @@ describe('actionCatalog action-definition adapter', () => {
     const apiOutputSchema = spec.surfaceBindings?.api?.outputSchema;
     if (!spec.outputSchema || !apiOutputSchema) throw new Error('Expected internal and API output schemas');
 
-    const apiOutputJsonSchema = zodSchemaToJsonSchemaObject(apiOutputSchema);
-    const internalOutputJsonSchema = zodSchemaToJsonSchemaObject(spec.outputSchema);
+    const apiOutputJsonSchema = zodSchemaToJsonSchemaObject(apiOutputSchema, { target: 'draft-7' });
+    const internalOutputJsonSchema = zodSchemaToJsonSchemaObject(spec.outputSchema, { target: 'draft-7' });
     const apiDefinition = getActionDefinitionForCatalogSurface({
       id: 'session.message.send',
       surface: 'api',

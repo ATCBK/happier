@@ -17,15 +17,17 @@ export const WorkflowEventsListOutputV1Schema = lazyZodSchema(() => z.object({
 export type WorkflowEventsListOutputV1 = z.output<typeof WorkflowEventsListOutputV1Schema>;
 
 export const WORKFLOW_EVENT_CATALOG_ACTION_SPECS_V1 = [{
-  id: 'workflow.events.list',
+  id: 'workflow.events.list', approval: {result: 'none'},
   title: 'List eligible workflow events',
-  description: 'Read the selected Machine\'s current eligible Event declarations, supported observation transports and source setup Actions. This catalog does not configure, list or admit source instances.',
+  description: 'List eligible trigger events from the selected Machine\'s current Event declarations. Returns event ids, titles, supported observation transports and source setup Actions. Use these declarations to discover Event trigger types; runWhen values are workflow block outcome conditions. This catalog does not configure, list or admit source instances.',
   safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation',
   executionPlacement: 'machine', placements: [],
   surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
   bindings: { mcpToolName: 'workflow_events_list' },
   toolExposure: { mcp: 'discoverable_only' },
-  inputHints: { fields: [{ path: 'machineId', title: 'Machine id', widget: 'text' }] },
+  contextualDefaults: { machineId: 'current_session_machine' },
+  inputHints: { fields: [{ path: 'machineId', title: 'Machine id', widget: 'text', required: true,
+    description: 'In a Session, omit machineId to use that Session’s Machine. For another Machine, use its exact id returned by machines.list; a host name, dev-target name (such as nl1), or server profile id is not a Machine id.' }] },
   cli: { acceptsServerId: true, commands: [{ path: ['workflow', 'events', 'list'], visibility: 'canonical' }] },
   inputSchema: WorkflowEventsListInputV1Schema,
   outputSchema: WorkflowEventsListOutputV1Schema,

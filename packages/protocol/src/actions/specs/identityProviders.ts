@@ -72,7 +72,7 @@ export const MANAGED_IDENTITY_PROVIDER_ACTION_SPECS: readonly PreNormalizedActio
   MANAGED_IDENTITY_PROVIDER_ACTION_IDS_V1.map((id): PreNormalizedActionSpec => {
     const metadata = METADATA[id];
     return {
-      id,
+      id, approval: { result: 'required' },
       title: metadata.title,
       description: metadata.description,
       safety: metadata.safety,

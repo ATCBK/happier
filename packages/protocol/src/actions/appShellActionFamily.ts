@@ -6,7 +6,7 @@ import { ComposerRefV1Schema } from '../plugins/ui/composerRef.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { SessionDirectoryIntentV1Schema } from '../sessions/creation/sessionDirectoryIntentV1.js';
 
-export const APP_SHELL_ACTION_IDS = ['session.work.get', 'inbox.get', 'inbox.mark_all_read', 'session.draft.delete', 'session.draft.directory.set', 'session.draft.append'] as const;
+export const APP_SHELL_ACTION_IDS = ['session.work.get', 'inbox.get', 'inbox.mark_all_read', 'session.draft.open', 'session.draft.delete', 'session.draft.directory.set', 'session.draft.append'] as const;
 export type AppShellActionId = typeof APP_SHELL_ACTION_IDS[number];
 export function isAppShellActionId(value: string): value is AppShellActionId {
   return (APP_SHELL_ACTION_IDS as readonly string[]).includes(value);
@@ -32,19 +32,24 @@ const InboxReadItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('session'), key: z.string(), serverId: z.string(), sessionId: z.string(), title: z.string(),
     attentionState: z.string(), pendingPermissionCount: z.number(), pendingQuestionCount: z.number(), foldedUnderRunId: z.string().nullable() }).strict(),
   z.object({ kind: z.literal('workflow_run'), key: z.string(), runId: z.string() }).strict(),
+  z.object({ kind: z.literal('automation_run'), key: z.string(), runId: z.string() }).strict(),
+  z.object({ kind: z.literal('approval'), key: z.string(), artifactId: z.string() }).strict(),
   z.object({ kind: z.literal('stalled'), key: z.string(), serverId: z.string(), sessionId: z.string() }).strict(),
-  z.object({ kind: z.literal('landing'), key: z.string(), serverId: z.string(), sessionId: z.string(), pullRequestNumber: z.number() }).strict(),
+  z.object({ kind: z.literal('landing'), key: z.string(), serverId: z.string(), sessionId: z.string(), pullRequestNumber: z.number(), pullRequestUrl: z.string().url(),
+    pullRequestState: z.enum(['open', 'merged', 'closed', 'unknown']).optional(), pullRequestObservedAt: z.number().int().nonnegative().optional() }).strict(),
   z.object({ kind: z.literal('snoozed'), key: z.string(), serverId: z.string(), sessionId: z.string(), remindAt: z.number() }).strict(),
 ]);
 const InboxReadGroupSchema = z.object({ key: z.string(), root: z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('lead'), sessionId: z.string() }).strict(),
   z.object({ kind: z.literal('run'), runId: z.string() }).strict(),
+  z.object({ kind: z.literal('automation'), automationId: z.string(), serverId: z.string(), runId: z.string() }).strict(),
   z.object({ kind: z.literal('other') }).strict(),
 ]), items: z.array(InboxReadItemSchema) }).strict();
 export const AppShellActionInputSchemas = {
   'session.work.get': z.object({ sessionId: z.string().min(1) }).strict(),
   'inbox.get': z.object({}).strict(),
   'inbox.mark_all_read': z.object({ targets: z.array(InboxTargetSchema) }).strict(),
+  'session.draft.open': z.object({ draftId: SessionDraftAddressV1Schema.options[0].shape.draftId }).strict(),
   'session.draft.delete': z.object({ draftId: SessionDraftAddressV1Schema.options[0].shape.draftId }).strict(),
   'session.draft.directory.set': z.object({ ref: asProtocolZod(ComposerRefV1Schema).refine(ref => ref.kind === 'newSession'),
     directory: SessionDirectoryIntentV1Schema }).strict(),
@@ -70,6 +75,10 @@ export const AppShellActionOutputSchemas = {
     status: z.enum(['succeeded', 'failed', 'skipped', 'cancelled']),
   })) }).strict(),
   'session.draft.delete': z.object({ status: z.enum(['deleted', 'missing', 'launch_custody', 'unavailable']) }).strict(),
+  'session.draft.open': z.discriminatedUnion('status', [
+    z.object({ status: z.literal('opened'), draftId: SessionDraftAddressV1Schema.options[0].shape.draftId }).strict(),
+    z.object({ status: z.enum(['missing', 'unavailable']) }).strict(),
+  ]),
   'session.draft.directory.set': z.object({ status: z.enum(['applied', 'unavailable']) }).strict(),
   'session.draft.append': z.discriminatedUnion('status', [ReadUnavailableSchema, z.object({
     status: z.literal('appended'), sessionId: z.string().min(1), createdAtMs: z.number().int().nonnegative(),
@@ -78,11 +87,23 @@ export const AppShellActionOutputSchemas = {
 
 export const APP_SHELL_ACTION_SPECS = [
   {
-    id: 'session.draft.append', title: 'Append to a Session draft',
+    id: 'session.draft.open', approval: {result: 'required'}, title: 'Open a saved New Session draft',
+    description: 'Open the exact saved New Session draft on its captured Home and Account. Preserves its content and never starts a Session.',
+    safety: 'safe', sideEffectClass: 'external', requiredAuthority: 'account_automation', executionPlacement: 'client',
+    placements: [], bindings: { mcpToolName: 'session_draft_open' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    cli: { acceptsServerId: true, commands: [{ path: ['session', 'draft', 'open'], visibility: 'canonical' }] },
+    toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
+    inputSchema: AppShellActionInputSchemas['session.draft.open'], outputSchema: AppShellActionOutputSchemas['session.draft.open'],
+    inputHints: { fields: [{ path: 'draftId', title: 'Draft id', widget: 'text', required: true }] },
+  },
+  {
+    id: 'session.draft.append', approval: {result: 'required'}, title: 'Append to a Session draft',
     description: 'Persist an append handoff for the exact Session composer on the invoking Home. Preserves existing draft text and never submits a message.',
     safety: 'safe', sideEffectClass: 'write', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'session_draft_append' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    cli: { acceptsServerId: true, commands: [{ path: ['session', 'draft', 'append'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: AppShellActionInputSchemas['session.draft.append'], outputSchema: AppShellActionOutputSchemas['session.draft.append'],
     inputHints: { fields: [{ path: 'sessionId', title: 'Destination Session', widget: 'text', required: true },
@@ -90,51 +111,56 @@ export const APP_SHELL_ACTION_SPECS = [
       { path: 'sourceSessionId', title: 'Source Session', widget: 'text' }] },
   },
   {
-    id: 'session.work.get', title: 'Read Session Work',
+    id: 'session.work.get', approval: {result: 'required'}, title: 'Read Session Work',
     description: 'Read the answering client’s mounted canonical Work projection for one exact Session. Unavailable without its mounted owner; never loads a second projection.',
     safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'session_work_get' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    cli: { acceptsServerId: true, commands: [{ path: ['session', 'work', 'get'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: AppShellActionInputSchemas['session.work.get'], outputSchema: AppShellActionOutputSchemas['session.work.get'],
-    inputHints: { fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }] },
+    inputHints: { fields: [{ path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true }] },
   },
   {
-    id: 'inbox.get', title: 'Read Inbox',
+    id: 'inbox.get', approval: {result: 'required'}, title: 'Read Inbox',
     description: 'Read the answering client’s open canonical Inbox for the exact invoking Home and Account. Unavailable without its mounted owner; never opens or loads Inbox.',
     safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'inbox_get' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    cli: { acceptsServerId: true, commands: [{ path: ['inbox', 'get'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: AppShellActionInputSchemas['inbox.get'], outputSchema: AppShellActionOutputSchemas['inbox.get'],
     inputHints: { fields: [] },
   },
   {
-    id: 'inbox.mark_all_read', title: 'Mark Inbox as read',
+    id: 'inbox.mark_all_read', approval: {result: 'required'}, title: 'Mark Inbox as read',
     description: 'Mark an exact Home-scoped Inbox snapshot read. Does not resolve approvals, mentions or human attention.',
     safety: 'safe', sideEffectClass: 'write', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'inbox_mark_all_read' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    cli: { acceptsServerId: true, commands: [{ path: ['inbox', 'mark-all-read'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: AppShellActionInputSchemas['inbox.mark_all_read'], outputSchema: AppShellActionOutputSchemas['inbox.mark_all_read'],
     inputHints: { fields: [{ path: 'targets', title: 'Inbox snapshot', widget: 'json', required: true }] },
   },
   {
-    id: 'session.draft.delete', title: 'Delete a New Session draft',
+    id: 'session.draft.delete', approval: {result: 'required'}, approvalPolicy: { uiConfirmation: 'policy' }, title: 'Delete a New Session draft',
     description: 'Delete an exact New Session draft on the answering client through draft tombstone and attachment cleanup. Refuses launches already in custody.',
     safety: 'danger', sideEffectClass: 'danger', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'session_draft_delete' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    cli: { acceptsServerId: true, commands: [{ path: ['session', 'draft', 'delete'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: AppShellActionInputSchemas['session.draft.delete'], outputSchema: AppShellActionOutputSchemas['session.draft.delete'],
     inputHints: { fields: [{ path: 'draftId', title: 'Draft id', widget: 'text', required: true }] },
   },
   {
-    id: 'session.draft.directory.set', title: 'Set New Session draft directory',
+    id: 'session.draft.directory.set', approval: {result: 'required'}, title: 'Set New Session draft directory',
     description: 'Set folder or no-folder intent on one exact mounted editable New Session composer. Does not launch a Session or create a directory.',
     safety: 'safe', sideEffectClass: 'write', requiredAuthority: 'account_automation', executionPlacement: 'client',
     placements: [], bindings: { mcpToolName: 'session_draft_directory_set' },
-    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },
+    cli: { acceptsServerId: true, commands: [{ path: ['session', 'draft', 'directory', 'set'], visibility: 'canonical' }] },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: AppShellActionInputSchemas['session.draft.directory.set'], outputSchema: AppShellActionOutputSchemas['session.draft.directory.set'],
     inputHints: { fields: [{ path: 'ref', title: 'Exact New Session composer', widget: 'json', required: true },

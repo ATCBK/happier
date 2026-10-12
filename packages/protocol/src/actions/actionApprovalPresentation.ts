@@ -3,10 +3,17 @@ import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { getActionSpec } from './actionSpecs.js';
 import { resolveEffectiveActionInputFields } from './actionInputHintsRuntime.js';
 import { actionInputFieldAcceptsNull } from './actionInputSchemaPath.js';
-import type { ActionId } from './actionIds.js';
+import { ActionIdSchema, type ActionId } from './actionIds.js';
 import { VoiceConversationTargetSchema } from './voiceConversationActionFamily.js';
 import type { ActionInputFieldHint } from './actionInputHintsRuntime.js';
 import { readCanonicalPaddedBase64DecodedLength } from '../crypto/base64.js';
+import { normalizeUiSurfaceCapabilityRequestV1 } from '../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
+import { SessionVisualReviewedAdmissionV1Schema } from '../sessions/board/actions.js';
+import { resolveSessionVisualEffectiveCapabilitiesV1 } from '../sessions/board/visualPolicy.js';
+import { z } from 'zod';
+import { unwrapActionInputSchema } from './actionInputSchemaPath.js';
+import { isSettingsDeclarationActionIdV1 } from './settingsDeclarationActionFamily.js';
+import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -43,6 +50,8 @@ export type ApprovalStructuredValueEntry = Readonly<{
 export type ApprovalActionFieldRow =
   | Readonly<{
     kind: 'value'; path: string; title: string; value: string; reference?: ApprovalActionReference;
+    /** A boolean choice reads through the client's localized yes/no labels. */
+    valueFormat?: 'boolean';
     /** A readable reading of a structured (JSON) value; `value` stays the exact literal. */
     entries?: readonly ApprovalStructuredValueEntry[];
     /** A schema version argument: present, but read only when asked for. */
@@ -54,7 +63,10 @@ export type ApprovalActionFieldRow =
 export type ApprovalActionReference =
   | Readonly<{ kind: 'session'; id: string; serverId?: string }>
   | Readonly<{ kind: 'home'; id: string }>
-  | Readonly<{ kind: 'account'; id: string }>;
+  | Readonly<{ kind: 'account'; id: string }>
+  | Readonly<{ kind: 'setting'; id: string }>
+  | Readonly<{ kind: 'providerConnection'; id: string; displayName?: string }>
+  | Readonly<{ kind: 'providerContribution'; id: string }>;
 
 // These are declared Action field keys, not a guess from an opaque value or suffix.
 const SESSION_REFERENCE_KEYS = new Set([
@@ -79,7 +91,7 @@ function isTechnicalApprovalKey(key: string | undefined): boolean {
   return key === 'v';
 }
 
-function describeApprovalReference(actionId: string, field: ActionInputFieldHint, values: readonly unknown[]): ApprovalActionReference | undefined {
+function describeApprovalReference(actionId: string, field: ActionInputFieldHint, values: readonly unknown[], input: unknown): ApprovalActionReference | undefined {
   if (values.length !== 1) return undefined;
   const value = values[0];
   if (field.path === 'target' && (actionId === 'ui.voice_global.start' || actionId === 'ui.voice_global.get')) {
@@ -92,6 +104,16 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
     return undefined;
   }
   if (typeof value !== 'string' || !value.trim()) return undefined;
+  if (field.path === 'anchor' && isSettingsDeclarationActionIdV1(actionId) && readBuiltInSettingDeclarationV1(value)) {
+    return { kind: 'setting', id: value };
+  }
+  if (actionId.startsWith('providers.')) {
+    if (field.path === 'connectionId') {
+      const name = isRecord(input) && typeof input.displayName === 'string' ? input.displayName.trim() : '';
+      return { kind: 'providerConnection', id: value.trim(), ...(name ? { displayName: name } : {}) };
+    }
+    if (field.path === 'contributionKey') return { kind: 'providerContribution', id: value.trim() };
+  }
   const key = field.path.split('.').at(-1);
   if (field.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'session') {
     return { kind: 'session', id: value.trim() };
@@ -295,6 +317,15 @@ export function projectApprovalStructuredAnswers(values: readonly unknown[]): Ap
   };
 }
 
+function readApprovalPresentationPreview(input: Readonly<{ actionId: string; preview?: unknown }>) {
+  if (isRecord(input.preview)
+    && input.preview.actionId === input.actionId
+    && Object.hasOwn(input.preview, 'actionArgs')) {
+    return input.preview;
+  }
+  return null;
+}
+
 /**
  * Selects the host-owned observation-safe arguments persisted in the approval
  * preview. Released artifacts without that envelope fall back to the Action's
@@ -306,11 +337,8 @@ export function resolveApprovalPresentationInput(input: Readonly<{
   actionArgs: unknown;
   preview?: unknown;
 }>): unknown {
-  if (isRecord(input.preview)
-    && input.preview.actionId === input.actionId
-    && Object.hasOwn(input.preview, 'actionArgs')) {
-    return input.preview.actionArgs;
-  }
+  const preview = readApprovalPresentationPreview(input);
+  if (preview) return preview.actionArgs;
   try {
     const spec = getActionSpec(input.actionId as ActionId);
     return spec.projectObservationInput
@@ -331,14 +359,54 @@ export function describeApprovalActionFields(input: Readonly<{
   try {
     spec = getActionSpec(input.actionId as ActionId);
   } catch {
-    return { rows: [], unrepresentable: null };
+    return { rows: [], unrepresentable: { path: '', reason: 'missing_required_context' } };
   }
-  const presentationInput = resolveApprovalPresentationInput(input);
-  const resolved = resolveEffectiveActionInputFields(spec, presentationInput);
+  if (spec.approvalPresentation?.projectInput && !spec.inputSchema.safeParse(input.actionArgs).success) {
+    const reason = 'missing_required_context' as const;
+    return { rows: [{ kind: 'unrepresentable', path: '', title: spec.title, reason }],
+      unrepresentable: { path: '', reason } };
+  }
+  // Observation previews can intentionally omit private domain content. Only the domain's
+  // explicit review projection may disclose that content; never fall back to raw secret input.
+  const presentationInput = spec.approvalPresentation?.projectInput
+    ? spec.approvalPresentation.projectInput(input.actionArgs)
+    : resolveApprovalPresentationInput(input);
+  const resolved = [...resolveEffectiveActionInputFields(spec, presentationInput)];
+  const coveredRoots = new Set(resolved.map(field => field.path.split('.')[0]));
+  const schema = unwrapActionInputSchema(spec.inputSchema).schema;
+  const shape = schema instanceof z.ZodObject ? schema.shape as Record<string, z.core.$ZodType> : {};
+  // Form hints refine a field's reading; without hints, the canonical review
+  // projection determines which operands can be shown.
+  // Existing hints also declare intentional safe omissions (for example a saved credential
+  // reference in a Provider review). Do not invent a required secret disclosure beside them.
+  // The observation owner can deliberately omit invocation operands. Derive
+  // unhinted review fields from that canonical projection, while an explicit
+  // approval projection still defines its full reviewed-input contract.
+  const observationInput = !spec.approvalPresentation?.projectInput && spec.projectObservationInput
+    ? spec.approvalInputCustody !== 'live_only' && readApprovalPresentationPreview(input)
+      && spec.inputSchema.safeParse(input.actionArgs).success
+      ? spec.projectObservationInput(input.actionArgs)
+      : presentationInput
+    : null;
+  const schemaKeys = !spec.approvalPresentation?.projectInput && spec.projectObservationInput
+    ? isRecord(observationInput) ? Object.keys(observationInput) : []
+    : Object.keys(shape);
+  const keys = new Set((spec.inputHints?.fields.length ?? 0) === 0
+    ? [...schemaKeys, ...(isRecord(presentationInput) ? Object.keys(presentationInput) : [])]
+    : []);
+  for (const path of keys) {
+    if (coveredRoots.has(path)) continue;
+    const fieldSchema = shape[path];
+    resolved.push({ path, title: humanizeApprovalKey(path), widget: 'json', visible: true, disabled: false,
+      required: fieldSchema !== undefined && !z.safeParse(fieldSchema, undefined).success });
+  }
   const paths = resolved.map((field) => field.path);
   const structuredAnswerPath = STRUCTURED_ANSWER_FIELD_PATH_BY_ACTION_ID[input.actionId];
   const rows: ApprovalActionFieldRow[] = [];
-  let unrepresentable: ApprovalActionFieldsPresentation['unrepresentable'] = null;
+  let unrepresentable: ApprovalActionFieldsPresentation['unrepresentable'] = resolved.length === 0
+    && (!isRecord(presentationInput) || Object.keys(presentationInput).length > 0
+      || (isRecord(input.actionArgs) && Object.keys(input.actionArgs).length > 0))
+    ? { path: '', reason: 'missing_required_context' } : null;
 
   for (const field of resolved) {
     if (shouldHideApprovalField(field.path, paths)) continue;
@@ -376,18 +444,84 @@ export function describeApprovalActionFields(input: Readonly<{
       }
       continue;
     }
-    const reference = describeApprovalReference(input.actionId, field, values);
+    const reference = describeApprovalReference(input.actionId, field, values, presentationInput);
     // A typed reference already reads by its name; entries are for values nothing else can read.
     const entries = field.widget === 'json' && !reference ? describeApprovalStructuredValue(values) : undefined;
-    const technical = !reference && !entries && isTechnicalApprovalKey(field.path.split('.').at(-1));
+    const technical = !reference && (isTechnicalApprovalKey(field.path.split('.').at(-1))
+      || values.length > 0 && values.every(isEmptyApprovalValue)
+      // The visual summary already names this item. Preserve its exact identity
+      // in Details, rather than adding an opaque id to that first reading.
+      || field.path === 'itemId' && Boolean(readApprovalVisualItem(input.actionId, presentationInput)?.title?.trim())
+      || input.actionId.startsWith('providers.') && field.path === 'action');
     rows.push({
       kind: 'value', path: field.path, title: field.title, value,
       ...(reference ? { reference } : {}),
+      ...(values.length === 1 && typeof values[0] === 'boolean' ? { valueFormat: 'boolean' as const } : {}),
       ...(entries ? { entries } : {}),
       ...(technical ? { technical: true as const } : {}),
     });
   }
+  // A previewed visual is read by looking at it; its arguments stay one disclosure away.
+  if (resolveApprovalVisualPreview(input)) {
+    const at = rows.findIndex((row) => row.path === 'item' && row.kind === 'value');
+    const row = rows[at];
+    if (row && row.kind === 'value') rows[at] = { ...row, technical: true };
+  }
+  const network = describeApprovalVisualNetwork(input.actionId, presentationInput);
+  if (network) {
+    // The one consequence a visual approval exists for, next to the visual it belongs to.
+    const at = rows.findIndex((row) => row.path === 'item');
+    rows.splice(at < 0 ? rows.length : at + 1, 0, network);
+  }
   return { rows, unrepresentable };
+}
+
+/** The visual a Session visual approval asks to show, read once for its rows and its preview. */
+function readApprovalVisualItem(actionId: string, input: unknown): Readonly<{ title: string | null; source: Record<string, unknown> }> | null {
+  if (actionId !== 'session.board.item.upsert' || !isRecord(input) || !isRecord(input.item)) return null;
+  const source = input.item.source;
+  if (!isRecord(source)) return null;
+  return { title: typeof input.item.title === 'string' ? input.item.title : null, source };
+}
+
+export type ApprovalVisualPreview =
+  | Readonly<{ kind: 'declarative'; title: string | null; document: unknown }>
+  | Readonly<{ kind: 'html'; title: string | null; source: unknown; requestedCapabilities: Readonly<{ network: 'none' }> }>;
+
+/**
+ * The visual itself, for the person deciding. Nothing is approved yet, so an HTML visual previews
+ * with no network and no requested Actions or Resources; its admitted network is the Network row.
+ */
+export function resolveApprovalVisualPreview(input: Readonly<{
+  actionId: string; actionArgs: unknown; preview?: unknown;
+}>): ApprovalVisualPreview | null {
+  const visual = readApprovalVisualItem(input.actionId, resolveApprovalPresentationInput(input));
+  if (!visual) return null;
+  if (visual.source.kind === 'declarative' && visual.source.document !== undefined) {
+    return { kind: 'declarative', title: visual.title, document: visual.source.document };
+  }
+  if (visual.source.kind === 'hostedHtml' && visual.source.source !== undefined) {
+    return { kind: 'html', title: visual.title, source: visual.source.source, requestedCapabilities: { network: 'none' } };
+  }
+  return null;
+}
+
+/** What network an HTML visual gets once approved, using the host-captured admission facts. */
+function describeApprovalVisualNetwork(actionId: string, input: unknown): ApprovalActionFieldRow | null {
+  const source = readApprovalVisualItem(actionId, input)?.source;
+  if (!source || source.kind !== 'hostedHtml') return null;
+  // An invalid request is refused by admission; it has no network to state.
+  const capabilities = normalizeUiSurfaceCapabilityRequestV1(source.requestedCapabilities);
+  if (!capabilities) return null;
+  const reviewed = SessionVisualReviewedAdmissionV1Schema.safeParse(isRecord(input) ? input.reviewedVisual : undefined);
+  const policy = resolveSessionVisualEffectiveCapabilitiesV1(capabilities, {
+    isCreate: isRecord(input) && input.expectedItemRevision === null,
+    networkSetting: reviewed.success ? reviewed.data.networkSetting : null,
+  });
+  const value = policy.network === 'open' ? 'Any site'
+    : policy.network === 'origins' ? `Only ${policy.networkOrigins.join(', ')}`
+      : 'No network access';
+  return { kind: 'value', path: 'item.source.requestedCapabilities', title: 'Network', value };
 }
 
 export function describeApprovalRequestFields(
@@ -412,6 +546,23 @@ export function describeApprovalRequestFields(
 export function resolveApprovalRequestApproveAdmission(
   request: ApprovalRequest,
 ): ApprovalRequestApproveAdmission {
+  // Current durable requests retain the complete replay input. Validate before
+  // typed projectors run; live-only records validate their private operands at
+  // the invocation owner and keep only safe observation fields here.
+  if (request.v === 2) {
+    const actionId = ActionIdSchema.safeParse(request.actionId);
+    if (actionId.success) {
+      const spec = getActionSpec(actionId.data);
+      if (spec.projectObservationInput && spec.approvalInputCustody !== 'live_only') {
+        const admitted = spec.inputSchema.safeParse(request.actionArgs);
+        if (!admitted.success) {
+          const details = { path: admitted.error.issues[0]?.path.join('.') ?? '', reason: 'missing_required_context' as const };
+          return { status: 'unavailable', reason: 'context_unavailable', details,
+            presentation: { rows: [{ kind: 'unrepresentable', ...details, title: spec.title }], unrepresentable: details } };
+        }
+      }
+    }
+  }
   const presentation = describeApprovalRequestFields(request);
   if (request.v === 1) {
     return { status: 'unavailable', reason: 'legacy_request', presentation };

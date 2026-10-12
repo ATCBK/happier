@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import * as m from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AutomationDefinitionCreateRequestSchema } from '../automations/automationApiV3.js';
+import { listActionSpecs } from './actionSpecs.js';
 
 import {
   ActionJsonSchemaProjectionError,
@@ -10,6 +11,46 @@ import {
 } from './actionInputJsonSchema.js';
 
 describe('actionInputJsonSchema', () => {
+  it('publishes Project Action schemas when the Project owner is imported before the Action catalog', async () => {
+    vi.resetModules();
+    await import('../projects/projectContextV1.js');
+    const { getActionSpec } = await import('./actionSpecs.js');
+    for (const id of ['projects.context.update', 'projects.visibility.set'] as const) {
+      const spec = getActionSpec(id);
+      expect(spec.inputSchema, id).toBeDefined();
+      expect(spec.outputSchema, id).toBeDefined();
+      expect(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' }), id)
+        .toMatchObject({ type: 'object', required: expect.arrayContaining(['target', 'expectedRevision']) });
+    }
+  });
+  it('compacts repeated Action schemas without weakening their advertised inputs', () => {
+    const target = z.object({ kind: z.literal('workspace'), path: z.string().min(1) }).strict();
+    const schema = z.object({ source: target, destination: target,
+      archives: z.array(target).optional(), alternatives: z.array(target).optional(),
+    }).strict();
+    const inline = zodSchemaToJsonSchemaObject(schema);
+    const compact = zodSchemaToJsonSchemaObject(schema, { reused: 'ref' });
+    expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(inline).length);
+    const advertised = z.fromJSONSchema(compact);
+    expect(advertised.safeParse({ source: { kind: 'workspace', path: '/a' }, destination: { kind: 'workspace', path: '/b' } }).success).toBe(true);
+    expect(advertised.safeParse({ source: { kind: 'workspace', path: '' }, destination: { kind: 'workspace', path: '/b' } }).success).toBe(false);
+    expect(advertised.safeParse({ source: { kind: 'workspace', path: '/a' }, destination: { kind: 'project', path: '/b' } }).success).toBe(false);
+    expect(advertised.safeParse({ source: { kind: 'workspace', path: '/a', secret: true }, destination: { kind: 'workspace', path: '/b' } }).success).toBe(false);
+  });
+  it.each(listActionSpecs().filter(spec => spec.surfaces.mcp))(
+    'projects the MCP input and output for $id from the real registry',
+    spec => {
+      // MCP eagerly registers every advertised input; a missing export must
+      // fail this census rather than being skipped and aborting initialize.
+      expect(spec.inputSchema, spec.id).toBeDefined();
+      for (const schema of [spec.inputSchema, spec.agentInputSchema, spec.outputSchema]) {
+        if (!schema) continue;
+        const projected = zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' });
+        expect(JSON.parse(JSON.stringify(projected))).toEqual(projected);
+      }
+    },
+  );
+
   it('projects genuine Mini lazy children without losing their input constraints', () => {
     const schema = z.object({
       name: m.lazy(() => m.string().check(m.minLength(2))),

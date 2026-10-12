@@ -11,7 +11,8 @@ import { UsageCoachPreferencesV1Schema } from '../../account/settings/usageCoach
 import { UsageQueryBatchResultSchema } from '../../usage/resolveUsagePageAggregation.js';
 import { getUsageQueryKey } from '../../inputs/usageQuery.js';
 import { SessionModelMutationReversalV1Schema } from '../../sessions/control/modelTransitionV1.js';
-import { McpServerBindingEnabledReversalV1Schema } from '../../mcp/servers/catalogSchemasV1.js';
+import { McpRulesSetOutputV1Schema } from '../specs/capabilityRules.js';
+import { reachRulesToDraftsV1 } from '../../reach/reachRulesChangeV1.js';
 import { SessionSpawnNewResultV1Schema } from '../../sessions/creation/sessionSpawnNewResultV1.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 
@@ -57,9 +58,8 @@ export async function executeUsageCoachAction(actionId: UsageCoachActionId, valu
                         selection: reversal.owner.applied, updatedAt: reversal.owner.updatedAt, scope: reversal.owner.scope } });
                 break;
             case 'mcp_binding':
-                restored = await child(reversal.owner.before ? 'mcp.bindings.enable' : 'mcp.bindings.disable',
-                    { bindingId: reversal.owner.bindingId, expectedRevision: reversal.owner.revision,
-                        expectedEnabled: reversal.owner.applied, expectedScope: reversal.owner.scope });
+                restored = await child('mcp.rules.set', { items: [{ serverId: reversal.owner.serverId }],
+                    change: { kind: 'replace', rules: reachRulesToDraftsV1(reversal.owner.previous) } });
                 break;
         }
         if (paused(restored)) return restored;
@@ -106,8 +106,9 @@ export async function executeUsageCoachAction(actionId: UsageCoachActionId, valu
         case 'model': applied = await child('session.model.set', { sessionId: remedy.sessionId, modelId: remedy.modelId,
             ...(remedy.providerConnectionId !== undefined ? { providerConnectionId: remedy.providerConnectionId } : {}),
             ...(remedy.expected ? { expected: remedy.expected } : {}), captureBefore: true }); break;
-        case 'mcp_binding': applied = await child(remedy.enabled ? 'mcp.bindings.enable' : 'mcp.bindings.disable',
-            { bindingId: remedy.bindingId, expectedRevision: remedy.expectedRevision, captureBefore: true }); break;
+        case 'mcp_binding': applied = await child('mcp.rules.set', { items: [{ serverId: remedy.serverId }],
+            change: { kind: 'write', write: { place: remedy.target, state: remedy.enabled ? 'on' : 'off',
+                ...(remedy.agentId ? { agentId: remedy.agentId } : {}) } } }); break;
         case 'prepared_session': applied = await child('session.spawn_new', remedy.input); break;
         case 'recovery': applied = await child(remedy.actionId, { sessionId: remedy.sessionId }); break;
     }
@@ -133,9 +134,9 @@ export async function executeUsageCoachAction(actionId: UsageCoachActionId, valu
         if (!owner.success) return failure('coach_owner_result_invalid');
         reversal = { kind: 'model', sessionId: remedy.sessionId, owner: owner.data };
     } else if (remedy.kind === 'mcp_binding') {
-        const owner = McpServerBindingEnabledReversalV1Schema.safeParse(result?.reversal);
-        if (!owner.success) return failure('coach_owner_result_invalid');
-        reversal = { kind: 'mcp_binding', owner: owner.data };
+        const receipt = McpRulesSetOutputV1Schema.safeParse(result);
+        if (!receipt.success || !receipt.data.ok || receipt.data.items.length !== 1) return failure('coach_owner_result_invalid');
+        reversal = { kind: 'mcp_binding', owner: receipt.data.items[0]! };
     }
     if (reversal && !matchesRemedy(remedy, reversal)) return failure('coach_owner_result_invalid');
     return { ok: true, result: { kind: 'applied', evidenceKey: request.evidenceKey, remedy,
@@ -153,15 +154,16 @@ function matchesRemedy(remedy: UsageCoachRemedy, reversal: UsageCoachReversal): 
             && sameStrictJsonValue(remedy.expected.scope, reversal.owner.scope)
             && sameStrictJsonValue(remedy.expected.selection, reversal.owner.before)
             && (remedy.expected.owner !== 'active' || reversal.owner.owner === 'active' && remedy.expected.runId === reversal.owner.runId));
-    return remedy.kind === 'mcp_binding' && reversal.kind === 'mcp_binding' && remedy.bindingId === reversal.owner.bindingId
-        && remedy.enabled === reversal.owner.applied;
+    return remedy.kind === 'mcp_binding' && reversal.kind === 'mcp_binding' && remedy.serverId === reversal.owner.serverId
+        && reversal.owner.rules.some(rule => rule.id === remedy.bindingId && rule.enabled === remedy.enabled
+            && rule.agentId === remedy.agentId && sameStrictJsonValue(rule.target, remedy.target));
 }
 
 function semanticFailure(result: ActionExecuteResult, kind: UsageCoachRemedy['kind']): ActionExecuteFailure | null {
     if (!result.ok) return result;
     const value = record(result.result);
     if (value?.ok === false) return failure(typeof value.errorCode === 'string' ? value.errorCode : 'coach_owner_refused', result.result);
-    if (kind === 'mcp_binding' && value?.status !== 'updated') return failure('coach_owner_refused', result.result);
+    if (kind === 'mcp_binding' && value?.ok !== true) return failure('coach_owner_refused', result.result);
     if (kind === 'model' && !['applied', 'already_active', 'intent_updated'].includes(String(value?.status))) return failure('coach_owner_refused', result.result);
     if (kind === 'prepared_session') {
         const spawned = SessionSpawnNewResultV1Schema.safeParse(result.result);

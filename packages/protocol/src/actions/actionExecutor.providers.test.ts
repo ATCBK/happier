@@ -5,10 +5,126 @@ import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { createProviderActionExecuteV1 } from '../providers/executeProviderActionV1.js';
 import { createProviderErrorV1 } from '../providers/errors.js';
 import { applyProviderDefaultModelSelectionV1, SessionModelSelectionV1Schema } from '../providers/selection/v1.js';
+import { createAccountProviderActionExecuteV1 } from '../providers/connections/accountProviderActionV1.js';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, type ProviderConnectionsCatalogV1 } from '../providers/connections/connectionRowsV1.js';
+import { createActionExecutor } from './actionExecutor.js';
+import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
+import { decideApprovalRequestTransition } from '../approvals/approvalRequestTransition.js';
+import { ProviderConnectionV1Schema } from '../providers/connections/v1.js';
+import { ProviderContributionV1Schema } from '../providers/contributions/v1.js';
+import { CLIPROXYAPI_PROVIDER_CONTRIBUTION } from '../../../plugins/cliproxyapi/src/provider/contribution.js';
 
 const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
 
 describe('Provider Settings Actions', () => {
+  it.each(['updated', 'refused', 'conflict', 'terminal_lost'] as const)(
+    'settles a deferred Account gateway slot approval with %s disposition without daemon replay', async disposition => {
+      const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_approval_gateway', role: 'named',
+        source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' },
+        displayName: 'Gateway', displayNameMode: 'custom', deployment: { kind: 'managedLocal' },
+        revision: 1, createdAt: 1, updatedAt: 1 });
+      let catalog: ProviderConnectionsCatalogV1 = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [connection] };
+      let stored: ApprovalRequestV2 | null = null;
+      let catalogRevision = 1;
+      const statuses: string[] = [];
+      const target = { kind: 'account' as const, account: {
+        service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'unavailable-account' } };
+      const input = { action: 'update', connectionId: connection.id, expectedRevision: 1,
+        deployment: { kind: 'managedLocal', purposeBindingDefaults: {
+          [disposition === 'refused' ? 'undeclared-slot' : 'anthropic-upstream']: target,
+        } } };
+      // Account-row and Artifact persistence are the boundaries. Approval policy,
+      // lifecycle transitions, Provider dispatch and Account semantics stay real.
+      const account = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 10,
+        readCatalog: async () => ({ status: 'ready', revision: catalogRevision, catalog }),
+        readDefinitions: async () => [{ contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
+          definition: ProviderContributionV1Schema.parse(CLIPROXYAPI_PROVIDER_CONTRIBUTION), provenance: 'first_party' }],
+        writeCatalog: async write => {
+          expect(write.expectedRevision).toBe(catalogRevision);
+          if (disposition === 'conflict') return { status: 'conflict' };
+          catalog = write.catalog;
+          catalogRevision++;
+          return { status: 'updated' };
+        },
+      });
+      const executor = createActionExecutor({
+        isApprovalExecutionOriginCurrent: async () => true,
+        approvalsCreate: async ({ request }) => {
+          stored = ApprovalRequestV2Schema.parse(request);
+          statuses.push(stored.status);
+          return { artifactId: 'approval-gateway-slot' };
+        },
+        approvalsGet: async () => stored && structuredClone(stored),
+        approvalsUpdate: async ({ request }) => {
+          if (!stored) throw new Error('Missing approval');
+          const next = ApprovalRequestV2Schema.parse(request);
+          const transition = decideApprovalRequestTransition(stored, next);
+          if (!transition.ok) return transition;
+          if (disposition === 'terminal_lost' && next.status === 'executed') {
+            throw Object.assign(new Error('Lost terminal receipt'), { code: 'ECONNRESET' });
+          }
+          stored = structuredClone(next);
+          statuses.push(next.status);
+          return { ok: true };
+        },
+        providerActionExecute: createProviderActionExecuteV1({ assertCurrent() {}, account,
+          rpc: async () => { throw new Error('Account slot edits must not invoke a daemon'); },
+          setDefault: async () => ({ status: 'applied' }),
+        }),
+      });
+      const invocation = { ...context, serverId: 'test-home', actionRequestId: 'slot-request' };
+      expect(await executor.execute('providers.connections.update', input, invocation))
+        .toEqual(expect.objectContaining({ ok: true, result: expect.objectContaining({ kind: 'approval_request_created' }) }));
+      const decided = await executor.execute('approval.request.decide', {
+        artifactId: 'approval-gateway-slot', decision: 'approve',
+      }, invocation);
+      const readStored = (): ApprovalRequestV2 => {
+        if (!stored) throw new Error('Missing persisted approval');
+        return stored;
+      };
+      if (disposition === 'terminal_lost') {
+        expect(decided).toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+        expect(readStored()).toMatchObject({ status: 'executing' });
+        expect(readStored().execution).toBeUndefined();
+        expect(statuses).toEqual(['open', 'approved', 'executing']);
+      } else {
+        const failed = disposition === 'refused' || disposition === 'conflict';
+        expect(decided).toMatchObject({ ok: true, result: { status: failed ? 'failed' : 'executed' } });
+        expect(readStored().execution).toMatchObject(failed
+          ? { ok: false, errorCode: disposition === 'refused' ? 'provider_connection_invalid' : 'provider_catalog_conflict' }
+          : { ok: true });
+        expect(statuses).toEqual(['open', 'approved', 'executing', failed ? 'failed' : 'executed']);
+      }
+      expect(catalog.connections[0]?.purposeBindingDefaults).toEqual(
+        disposition === 'updated' || disposition === 'terminal_lost' ? { 'anthropic-upstream': target } : undefined,
+      );
+      if (disposition === 'terminal_lost') {
+        expect(await executor.execute('approval.request.decide', {
+          artifactId: 'approval-gateway-slot', decision: 'approve',
+        }, invocation)).toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+        expect(catalogRevision).toBe(2);
+      }
+    },
+  );
+  it('executes the same Account operation through either targeted daemon without machine-specific Provider state', async () => {
+    const { createActionExecutor } = await import('./actionExecutor.js');
+    // Captured Account-row transport is the boundary; both dispatch and the
+    // Account semantic producer remain real and share the same Account catalog.
+    const account = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 1,
+      readCatalog: async () => ({ status: 'ready', revision: 1, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 }),
+      writeCatalog: async () => { throw new Error('description must not write'); }, readDefinitions: async () => [],
+    });
+    const executor = createActionExecutor({ providerActionExecute: createProviderActionExecuteV1({
+      assertCurrent() {}, account,
+      rpc: async () => { throw new Error('Account description must not read machine Provider state'); },
+      setDefault: async () => ({ status: 'applied' }),
+    }) });
+    for (const machineId of ['daemon-a', 'daemon-b']) {
+      await expect(executor.execute('providers.connections.describe', {}, {
+        surface: 'agent', authority: 'account_automation', externalActionTarget: { kind: 'machine', machineId },
+      })).resolves.toMatchObject({ ok: true, result: { connections: [] } });
+    }
+  });
   it('places Account catalog actions independently of optional machine execution', async () => {
     const { getActionSpec, resolveActionExecutionPlacementForInput } = await import('./actionSpecs.js');
     const cases = [
@@ -111,9 +227,9 @@ describe('Provider Settings Actions', () => {
   it('keeps a dispatched mutation ACK after retirement, but refuses a retired read and malformed mutation ACK', async () => {
     const { createActionExecutor } = await import('./actionExecutor.js');
     let current = true;
-    let reply: unknown = { status: 'success', action: 'setEnabled', connectionId: 'connection' };
+    let reply: unknown = { status: 'success', action: 'startLocal', contributionKey: 'example.gateway/gateway', phase: 'running' };
     const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {},
-      approvalWaivedSurfaces: { 'providers.connections.enabled.set': ['ui'] } });
+      approvalWaivedSurfaces: { 'providers.connections.start_local': ['ui'] } });
     const executor = createActionExecutor({
       isActionApprovalRequired: (id, ctx, input) => isApprovalRequiredByActionsSettings(id, settings, ctx, undefined, undefined, input),
       providerActionExecute: createProviderActionExecuteV1({
@@ -122,12 +238,12 @@ describe('Provider Settings Actions', () => {
       }),
     });
     const waivedContext = { ...context, actionsSettings: settings };
-    const input = { action: 'setEnabled', machineId: 'machine', connectionId: 'connection', enabled: true, scope: 'machine' };
-    expect(await executor.execute('providers.connections.enabled.set', input, waivedContext))
+    const input = { action: 'startLocal', machineId: 'machine', contributionKey: 'example.gateway/gateway' };
+    expect(await executor.execute('providers.connections.start_local', input, waivedContext))
       .toEqual({ ok: true, result: reply });
     current = true;
     reply = { unrecognized: true };
-    expect(await executor.execute('providers.connections.enabled.set', input, waivedContext))
+    expect(await executor.execute('providers.connections.start_local', input, waivedContext))
       .toMatchObject({ ok: false, errorCode: 'provider_rpc_mutation_outcome_unknown' });
     current = true;
     reply = { status: 'error', error: createProviderErrorV1('agent_unavailable') };

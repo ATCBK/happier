@@ -432,6 +432,21 @@ export const BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
 } as const satisfies Readonly<Record<BrowserRuntimeActionId, z.ZodTypeAny>>);
 
 export const BROWSER_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
+  approvalPolicies: {
+    'browser.automation.cancelActive': { agentDefault: 'authority', requiredSurfaces: ['agent', 'mcp', 'plugin', 'api'] },
+    'browser.control.takeControl': { agentDefault: 'authority' },
+    'browser.control.handBack': { agentDefault: 'authority' },
+    'browser.context.capturePage': { agentDefault: 'egress' },
+    'browser.context.captureScreenshot': { agentDefault: 'egress' },
+    'browser.context.captureSelectedElement': { agentDefault: 'egress' },
+    'browser.context.captureNetworkSummary': { agentDefault: 'egress' },
+    'browser.context.captureConsoleSummary': { agentDefault: 'egress' },
+    'browser.context.annotation.captureRegion': { agentDefault: 'egress' },
+    'browser.context.annotation.captureElement': { agentDefault: 'egress' },
+    'browser.context.attachToComposer': { agentDefault: 'egress' },
+    'browser.context.attachToAgentTurn': { agentDefault: 'egress' },
+    'browser.recording.attachToComposer': { agentDefault: 'egress' },
+  },
   titles: BROWSER_RUNTIME_ACTION_TITLES,
   descriptions: BROWSER_RUNTIME_ACTION_DESCRIPTIONS,
   inputSchemas: BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS,

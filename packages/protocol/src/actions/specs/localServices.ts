@@ -240,7 +240,7 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_DESCRIPTIONS: Readonly<Partial<Record
   'localServices.preview.openOrCreate': 'Open an existing or create a new private local service preview.',
   'localServices.preview.status': 'Read the status of a local service preview.',
   'localServices.preview.revoke': 'Revoke a local service preview.',
-  'localServices.publicPreview.create': 'Create a public exposure for a local service preview (requires confirmation).',
+  'localServices.publicPreview.create': 'Create a public exposure for a local service preview (asks first by default; the user can change approval policy).',
   'localServices.publicPreview.status': 'Read the status of a local service public exposure.',
   'localServices.publicPreview.revoke': 'Revoke a local service public exposure.',
   'localServices.publicPreview.copyUrl': 'Copy the public URL of a local service exposure.',
@@ -307,6 +307,10 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
 } as const satisfies Readonly<Record<LocalServicesRuntimeActionId, z.ZodTypeAny>>);
 
 export const LOCAL_SERVICES_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
+  approvalPolicies: {
+    'localServices.publicPreview.status': { agentDefault: 'egress' },
+    'localServices.publicPreview.copyUrl': { agentDefault: 'egress' },
+  },
   titles: LOCAL_SERVICES_RUNTIME_ACTION_TITLES,
   descriptions: LOCAL_SERVICES_RUNTIME_ACTION_DESCRIPTIONS,
   inputSchemas: LOCAL_SERVICES_RUNTIME_ACTION_INPUT_SCHEMAS,

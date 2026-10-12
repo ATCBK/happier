@@ -35,6 +35,10 @@ import { PluginSettingsAdministrationActionIdV1Schema } from '../plugins/setting
 import { SPAWN_SESSION_ERROR_CODES } from '../sessions/spawnSession.js';
 import { SessionDirectoryIntentV1Schema } from '../sessions/creation/sessionDirectoryIntentV1.js';
 import { ExecutionRunLaunchOriginSchema } from '../execution/runs/startRequest.js';
+import { getUsageQueryKey, normalizeUsageQuery } from '../inputs/usageQuery.js';
+import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
+import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1 } from '../widgets/widgetSurfaceArtifactV1.js';
+import { UsageQueryBatchResultSchema } from '../usage/resolveUsagePageAggregation.js';
 import { AgentStartSessionCallerV1Schema, type AgentStartContextV1 } from '../account/settings/admitAgentStartV1.js';
 import {
   ExecutionRunTransportErrorCodeSchema,
@@ -215,7 +219,7 @@ describe('machine Agent inventory execution', () => {
       consumer: { kind: 'widget', surface, definition }, fieldPath: 'choice',
     })).resolves.toMatchObject({ ok: true, result: { fieldPath: 'choice', options: [{ value: 'current', label: 'Current' }] } });
   });
-  it('preserves exact machine, Home and refresh targeting through every inventory surface', async () => {
+  it('preserves exact machine, Home and refresh targeting through admitted inventory surfaces', async () => {
     const machinesAgentsList = vi.fn(async (_args: MachinesAgentsListInput) => ({ items: [] }));
     const executor = createActionExecutor({ ...createDeps(), machinesAgentsList });
     const input = { machineId: 'machine-1', serverId: 'home-1', agentId: 'acme/helper', refresh: true };
@@ -255,7 +259,94 @@ const inventoryAgentStartContext = {
 } satisfies AgentStartContextV1;
 
 describe('createActionExecutor (inventory/discovery)', () => {
-  // Blocked: contributed field-owned sources remain rejected by author admission until all executable consumers are migrated.
+  it('discovers Usage own-value choices on Home from accounting and retains chosen values without page slots', async () => {
+    const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
+    const usageActions: NonNullable<ActionExecutorDeps['usageActions']> = { query: async ({ queries }) => ({ v: 1, results: queries.map(query => ({ key: getUsageQueryKey(query), requestedQuery: query, shownQuery: query,
+        accounting: { v: 1 as const, totals: { eventCount: 1, tokens: { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1 },
+          cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } },
+          engineTimeline: [{ bucketStartMs: 1, bucketEndMs: 2, leaders: [{ key: 'claude:remote', eventCount: 1,
+            tokens: { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1 }, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }] }],
+          breakdowns: { machine: [{ key: 'machine-a', eventCount: 1,
+            tokens: { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1 }, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }],
+            project: [{ key: 'project-a', label: 'Project A', eventCount: 1,
+            tokens: { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1 }, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }] } },
+        sources: [{ source: 'accounting', status: 'available' as const }], pending: false })) }) };
+    const sample = UsageQueryBatchResultSchema.safeParse(await usageActions.query({ queries: [normalizeUsageQuery({})] }, { surface: 'ui' }));
+    expect(sample.success ? null : sample.error.issues).toBeNull();
+    const executor = createActionExecutor({ ...createDeps(), usageActions, widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }),
+      machinesList: async () => ({ items: [{ id: 'machine-a', label: 'Personal laptop' }, { id: 'unused', label: 'Other computer' }] }) });
+    for (const [fieldPath, expected] of [['agents', { value: 'claude', label: 'claude' }],
+      ['machines', { value: 'machine-a', label: 'Personal laptop' }], ['projects', { value: 'project-a', label: 'Project A' }]] as const) {
+      const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
+        definition: { kind: 'builtin', id: 'usage_daily' } }, fieldPath, draftInput: { [fieldPath]: ['retained'] } }, { serverId: 'home' });
+      expect(result.ok ? null : result).toBeNull();
+      expect(result).toMatchObject({ ok: true, result: { options: [expected, { value: 'retained', label: 'retained' }] } });
+    }
+  });
+  it('offers one Group by choice while preserving previously saved multi-dimension query arrays', async () => {
+    const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
+    const executor = createActionExecutor({ ...createDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) });
+    const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
+      definition: { kind: 'builtin', id: 'usage_flow' } }, fieldPath: 'breakdown', draftInput: { breakdown: ['source', 'machine'] } }, { serverId: 'home' });
+    expect(result).toMatchObject({ ok: true, result: { options: expect.arrayContaining([
+      { value: ['agent'], label: 'Agent' }, { value: ['source', 'machine'], label: 'Source · Machine' },
+    ]) } });
+    expect(normalizeUsageQuery({ breakdown: ['session', 'workspace'] }).breakdown).toEqual(['session', 'workspace']);
+    expect(await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
+      definition: { kind: 'builtin', id: 'usage_period_summary' } }, fieldPath: 'breakdown' }, { serverId: 'home' })).toMatchObject({ ok: false });
+    expect(readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_breakdowns' })?.inputs?.fields.find(field => field.path === 'breakdown')?.widget).toBe('multiselect');
+  });
+  it('discovers builtin choices before a core-page preset is persisted without admitting missing-layout operations or another Account', async () => {
+    const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'corePage' as const, pageId: 'usage', area: 'main', layoutId: 'overview' } };
+    const area = createWidgetAreaActionPortV1(ref => createWidgetSurfaceArtifactPortV1({
+      read: async () => null,
+      create: async () => { throw new Error('Choices must not materialize a layout'); },
+      update: async () => { throw new Error('Choices must not mutate a layout'); },
+    }, { surface: ref, isCurrent: () => true }));
+    const executor = createActionExecutor({ ...createDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }),
+      widgetSurfaceActions: { corePage: area } });
+    const request = { consumer: { kind: 'widget' as const, surface, definition: { kind: 'builtin' as const, id: 'usage_flow' } },
+      fieldPath: 'breakdown', draftInput: { breakdown: ['source', 'machine'] } };
+    expect(await executor.execute('action.options.resolve', request, { serverId: 'home' })).toMatchObject({ ok: true, result: {
+      options: expect.arrayContaining([{ value: ['agent'], label: 'Agent' }, { value: ['source', 'machine'], label: 'Source · Machine' }]),
+    } });
+    expect(await executor.execute('widgets.item.list', { surface }, { serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'widget_area_not_found' });
+    expect(await executor.execute('action.options.resolve', { ...request, consumer: { ...request.consumer,
+      surface: { ...surface, accountId: 'other' } } }, { serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
+    expect(await executor.execute('action.options.resolve', request, { serverId: 'other-home' })).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+  });
+  it('discovers every Home machine including offline choices through the typed widget input', async () => {
+    const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
+    const machines = Array.from({ length: 251 }, (_, index) => ({ serverId: 'home', machineId: `m-${index}`, label: `Machine ${index}`, active: index !== 250 }));
+    const executor = createActionExecutor({ ...createDeps(), machinesList: async () => ({ items: machines }),
+      widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }) });
+    const result = await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface,
+      definition: { kind: 'builtin', id: 'machine_vitals' } }, fieldPath: 'machine' }, { serverId: 'home' });
+    expect(result).toMatchObject({ ok: true, result: { optionsSourceId: 'host-input:machine' } });
+    if (!result.ok) return;
+    const options = PUBLIC_ACTION_OUTPUT_SCHEMAS['action.options.resolve'].parse(result.result).options;
+    expect(options).toHaveLength(251);
+    expect(options[0]).toEqual({ value: { serverId: 'home', machineId: 'm-0' }, label: 'Machine 0', description: 'Online' });
+    expect(options.at(-1)).toEqual({ value: { serverId: 'home', machineId: 'm-250' }, label: 'Machine 250', description: 'Offline' });
+  });
+  it('requires a qualified machine before discovering its volume choices from the vitals owner', async () => {
+    const surface = { serverId: 'home', accountId: 'viewer', owner: { kind: 'home' as const } };
+    const executor = createActionExecutor({ ...createDeps(), widgetAccountScope: () => ({ serverId: 'home', accountId: 'viewer' }),
+      machineVitalsAction: async ({ input }) => {
+        expect(input).toEqual({ serverId: 'home', machineId: 'selected', view: 'overview' });
+        return { state: 'reporting', series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] }, sample: {
+          v: 1, sampledAt: 1, intervalMs: 2_000, cpu: { reported: false, reason: 'platform' }, memory: { reported: false, reason: 'platform' },
+          network: { reported: false, reason: 'platform' }, disk: { reported: true, volumes: [
+            { id: 'root', label: 'System', mount: '/', totalBytes: 100, availableBytes: 30 },
+            { id: 'external', label: 'Work', mount: '/Volumes/Work', totalBytes: 200, availableBytes: 80 },
+          ] },
+        } };
+      } });
+    const request = { consumer: { kind: 'widget' as const, surface, definition: { kind: 'builtin' as const, id: 'machine_storage' } }, fieldPath: 'volume' };
+    expect(await executor.execute('action.options.resolve', request, { serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'missing_option_dependency' });
+    expect(await executor.execute('action.options.resolve', { ...request, draftInput: { machine: { serverId: 'home', machineId: 'selected' } } }, { serverId: 'home' }))
+      .toMatchObject({ ok: true, result: { options: [{ value: 'root', label: 'System', description: '/' }, { value: 'external', label: 'Work', description: '/Volumes/Work' }] } });
+  });
   it('[blocked: authored contributed source] resolves a granted typed widget field source before its type Resource and refuses ungranted discovery', async () => {
     const surface = { serverId: 'home', accountId: 'account', owner: { kind: 'home' as const } };
     const definition = { kind: 'installed' as const, surface: { pluginId: 'com.acme.inputs', localId: 'choice-widget' } };
@@ -268,7 +359,9 @@ describe('createActionExecutor (inventory/discovery)', () => {
           inputType: { pluginId: 'com.acme.inputs', localId: 'choice' }, optionsSourceId: 'notifications.channels.available' }],
         availability: 'available', instanceCount: 0 }] },
       notificationChannelsList: async () => ({ items: [{ id: 'allowed', label: 'Allowed' }] }),
-      resolveInputType: async () => { throw new Error('The consuming source does not read a type Resource'); },
+      resolveInputType: async identity => ({ identity, occurrenceId: 'serving-1', definition: {
+        id: identity.localId, title: 'Choice', semantic: 'choice', valueSchema: { type: 'string' },
+      } }),
       readAdmittedInputTypeOptions: async () => { throw new Error('The consuming source must not relay to the type Resource'); },
     });
     const granted = { surface: 'api' as const, authority: 'account_automation' as const,
@@ -282,6 +375,31 @@ describe('createActionExecutor (inventory/discovery)', () => {
       ...granted, externalActionCredential: { ...granted.externalActionCredential,
         grant: { ...granted.externalActionCredential.grant, actions: { families: [], ids: ['paths.list_recent'] } } },
     })).toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
+  });
+  it('intersects consuming static and source choices with a type Resource at admitted discovery', async () => {
+    const inputType = { pluginId: 'com.acme.inputs', localId: 'repository' };
+    const surface = { serverId: 'home', accountId: 'account', owner: { kind: 'home' as const } };
+    const definition = { kind: 'installed' as const, surface: { pluginId: inputType.pluginId, localId: 'choice-widget' } };
+    let constraint = { options: [{ value: 'one', label: 'One' }, { value: 'outside-resource', label: 'Outside' }] } as
+      Pick<import('../inputs/inputFields.js').InputFieldHint, 'options' | 'optionsSourceId'>;
+    const executor = createActionExecutor({ ...createDeps(),
+      widgetAccountScope: () => ({ serverId: 'home', accountId: 'account' }),
+      widgetCatalog: { list: async () => [{ definition, title: 'Choice',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+        fields: [{ path: 'choice', title: 'Choice', widget: 'select', inputType, ...constraint }],
+        availability: 'available', instanceCount: 0 }] },
+      notificationChannelsList: async () => ({ items: [{ id: 'one', label: 'One' }, { id: 'outside-resource', label: 'Outside' }] }),
+      resolveInputType: async identity => ({ identity, occurrenceId: 'serving-1', definition: {
+        id: identity.localId, title: 'Repository', semantic: 'repository', valueSchema: { type: 'string' },
+        options: { resource: 'repositories' },
+      } }),
+      readInputTypeResource: async () => [{ value: 'one', label: 'One' }],
+    });
+    for (const next of [constraint, { optionsSourceId: 'notifications.channels.available' }]) {
+      constraint = next;
+      expect(await executor.execute('action.options.resolve', { consumer: { kind: 'widget', surface, definition }, fieldPath: 'choice' },
+        { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true, result: { options: [{ value: 'one', label: 'One' }] } });
+    }
   });
   it('resolves declared plugin input options only through the granted consuming field', async () => {
     const inputType = { pluginId: 'com.acme.inputs', localId: 'repository' };
@@ -1002,6 +1120,18 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(deps.machinesList).toHaveBeenCalledWith({ limit: 20 });
   });
 
+  it('refreshes the UI machine inventory without admitting a public privacy-projection operand', async () => {
+    const deps = createDeps();
+    const executor = createActionExecutor(deps);
+    const ui = await executor.execute('machines.list', { refresh: true }, { surface: 'ui' });
+    expect(ui).toMatchObject({ ok: true });
+    expect(deps.machinesList).toHaveBeenLastCalledWith({ refresh: true, purpose: 'input' });
+    const agent = await executor.execute('machines.list', { refresh: true }, { surface: 'agent' });
+    expect(agent).toMatchObject({ ok: true });
+    expect(deps.machinesList).toHaveBeenLastCalledWith({ refresh: true });
+    expect(getActionSpec('machines.list').inputSchema.safeParse({ refresh: true, purpose: 'input' }).success).toBe(false);
+  });
+
   it('routes servers.list to deps.serversList', async () => {
     const deps = createDeps();
     const executor = createActionExecutor(deps);
@@ -1082,7 +1212,8 @@ describe('createActionExecutor (inventory/discovery)', () => {
     deps.reviewEnginesList = vi.fn(async () => ({ items: [{ value: 'codex', label: 'Codex' }] }));
     const executor = createActionExecutor(deps);
     expect(await executor.execute('action.options.resolve', {
-      actionId: 'review.start', fieldPath: 'engineIds', sessionId: null, machineId: 'machine-review',
+      actionId: 'review.start', fieldPath: 'engineIds',
+      draftInput: { sessionId: null, machineId: 'machine-review' },
     }, { defaultSessionId: 'session-active' })).toMatchObject({ ok: true, result: { options: [{ value: 'codex' }] } });
     expect(deps.reviewEnginesList).toHaveBeenCalledWith({ sessionId: null, machineId: 'machine-review' });
   });
@@ -1134,9 +1265,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
         runClass: 'long_lived',
         ioMode: 'streaming',
         launchOrigin: presentUserActionLaunchOrigin,
-        intentInput: expect.objectContaining({
-          backendTargetKey: 'agent:codex',
-        }),
+        instructions: 'Start the voice agent run.',
       }),
       { authority: 'present_user' },
     );
@@ -1268,9 +1397,14 @@ describe('createActionExecutor (inventory/discovery)', () => {
       );
 
       expect(result.ok).toBe(true);
-      expect(deps[dependencyName]).toHaveBeenCalledWith(expect.objectContaining({
-        serverId: 'host-stamped',
-      }));
+      const expectedInput = expect.objectContaining({ serverId: 'host-stamped' });
+      if (dependencyName === 'spawnConnectedServicesList') {
+        expect(deps[dependencyName]).toHaveBeenCalledWith(expectedInput, {
+          authority: 'present_user', surface: 'ui', serverId: 'host-stamped',
+        });
+      } else {
+        expect(deps[dependencyName]).toHaveBeenCalledWith(expectedInput);
+      }
     },
   );
 
@@ -1343,7 +1477,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       agentId: 'codex',
       backendTargetKey: 'backend:codex',
       includeUnavailable: true,
-    });
+    }, { authority: 'present_user', surface: 'ui' });
 
     await expect(executor.execute('sessions.spawn.mcp_servers.preview' as any, {
       agentId: 'codex',
@@ -1357,7 +1491,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     });
   });
 
-  it('drops additive undeclared fields for agents.models.list', async () => {
+  it('rejects undeclared fields for the closed agents.models.list input before reading inventory', async () => {
     const deps = createDeps();
     const executor = createActionExecutor(deps);
 
@@ -1368,13 +1502,8 @@ describe('createActionExecutor (inventory/discovery)', () => {
       providerTraceId: 'preview-field',
     });
 
-    expect(res.ok).toBe(true);
-    expect(deps.agentsModelsList).toHaveBeenCalledWith({
-      agentId: 'codex',
-      backendTargetKey: 'backend:codex',
-      machineId: 'm1',
-      limit: 2,
-    });
+    expect(res).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(deps.agentsModelsList).not.toHaveBeenCalled();
   });
 
   it('routes configured ACP backendTargetKey through agents.models.list', async () => {
@@ -1909,8 +2038,8 @@ describe('createActionExecutor (inventory/discovery)', () => {
       { surface: 'api' },
     )).resolves.toEqual({
       ok: false,
-      errorCode: 'unavailable',
-      error: 'unavailable',
+      errorCode: 'options_source_not_supported',
+      error: 'options_source_not_supported',
     });
     await expect(executor.execute(
       'action.options.resolve',
@@ -2006,7 +2135,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       optionsSourceId: 'execution.backends.enabled',
       options: [
         { value: 'agent:happier.agent.codex/codex', label: 'Codex' },
-        { value: 'backend:review-bot:configured:review-bot', label: 'Review Bot' },
+        { value: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot', label: 'Review Bot' },
       ],
     });
   });
@@ -2071,11 +2200,12 @@ describe('createActionExecutor (inventory/discovery)', () => {
         updatedAt: 1,
         ref: { agentTargetKey: 'backend:claude', modelId: 'claude-opus-4-8' },
       },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
+        v: 1,
         managedServersEnabled: true,
         forceIncludeServerIds: [],
         forceExcludeServerIds: [],
-      },
+      } },
     } as const;
 
     const cases = [
@@ -2091,7 +2221,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       ['sessions.spawn.servers.available', 'executionTarget.serverId', [{ value: 'local', label: 'Local' }]],
       ['sessions.spawn.profiles.available', 'profileId', [{ value: 'profile-default', label: 'Default profile' }]],
       ['sessions.spawn.connected_services.available', 'connectedServices', [{ value: 'openai:work', label: 'OpenAI work' }]],
-      ['sessions.spawn.mcp_servers.preview', 'mcpSelection', [{ value: 'managed:repo', label: 'Repo MCP' }]],
+      ['sessions.spawn.mcp_servers.preview', 'capabilitySelection', [{ value: 'managed:repo', label: 'Repo MCP' }]],
     ] as const;
 
     for (const [optionsSourceId, fieldPath, options] of cases) {
@@ -2146,7 +2276,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
       backendTargetKey: 'backend:claude',
       machineId: 'm1',
       directory: '/repo',
-      selection: sessionSpawnOptionContext.mcpSelection,
+      selection: sessionSpawnOptionContext.capabilitySelection.mcp,
       limit: 10,
     });
   });
@@ -2196,7 +2326,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     });
     await expect(executor.execute('action.options.resolve', {
       actionId: 'session.spawn_new',
-      fieldPath: 'mcpSelection',
+      fieldPath: 'capabilitySelection',
       draftInput: {
         executionTarget: { serverId: 'local', machineId: 'm1' },
         directory,
@@ -2252,7 +2382,7 @@ describe('createActionExecutor (inventory/discovery)', () => {
     expect(deps.spawnConnectedServicesList).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'pi',
       backendTargetKey: 'agent:pi',
-    }));
+    }), { authority: 'present_user', surface: 'ui' });
   });
 
   it('returns a typed missing dependency for ergonomic-run options without a selected target', async () => {

@@ -36,7 +36,8 @@ export const PROJECT_SERVICE_PLACEMENT_ACTION_SPECS = PROJECT_SERVICE_PLACEMENT_
   const read = id.endsWith('.get');
   const title = read ? 'Read service placement' : 'Set service placement';
   return {
-    id, title, description: read ? 'Read desired next-start placement and separately observed actual native service custody.'
+    id, approval: read ? { result: 'required' } : { result: 'optional', flow: 'deferred' },
+    approvalPolicy: { uiConfirmation: 'policy' }, title, description: read ? 'Read desired next-start placement and separately observed actual native service custody.'
       : 'Save the destination and fallback for the next service start without starting or moving the service.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'write', executionPlacement: 'account', placements: [],
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },

@@ -29,7 +29,7 @@ export const HomeHubLayoutResultSchema = lazyZodSchema(() => z.object({
 
 export const HOME_HUB_LAYOUT_ACTION_SPECS = [
   {
-    id: 'home.reachNudge.dismiss', title: 'Dismiss Home reachability suggestion',
+    id: 'home.reachNudge.dismiss', approval: {result: 'required'}, title: 'Dismiss Home reachability suggestion',
     description: 'Permanently dismiss the selected Home’s reachability suggestion on this client device. Other devices are unchanged.',
     safety: 'safe', sideEffectClass: 'write', executionPlacement: 'client', placements: [],
     bindings: { mcpToolName: 'home_reach_nudge_dismiss', voiceClientToolName: 'dismissHomeReachNudge' },
@@ -39,7 +39,7 @@ export const HOME_HUB_LAYOUT_ACTION_SPECS = [
     examples: { voice: { argsExample: '{"homeServerId":"home-1"}' } },
   },
   {
-    id: 'home.hub.layout.get', title: 'Read Home customization',
+    id: 'home.hub.layout.get', approval: {result: 'required'}, title: 'Read Home customization',
     description: 'Read this Home and Account’s section order, visibility, configured widget and group items and available widgets.',
     safety: 'safe', sideEffectClass: 'read', executionPlacement: 'account', placements: [],
     bindings: { mcpToolName: 'home_hub_layout_get', voiceClientToolName: 'readHomeLayout', rpcMethod: 'home.hub.layout.get' },
@@ -49,7 +49,7 @@ export const HOME_HUB_LAYOUT_ACTION_SPECS = [
     examples: { voice: { argsExample: '{}' } },
   },
   {
-    id: 'home.hub.layout.update', title: 'Customize Home',
+    id: 'home.hub.layout.update', approval: {result: 'required'}, title: 'Customize Home',
     description: 'Reorder, move, show or hide Home sections and layout items, create and edit groups, set or clear a frame style override, mark or dismiss individual setup steps, restore them or reset the layout. Start and attention stay visible.',
     safety: 'safe', sideEffectClass: 'write', executionPlacement: 'account', placements: [],
     bindings: { mcpToolName: 'home_hub_layout_update', voiceClientToolName: 'customizeHomeLayout', rpcMethod: 'home.hub.layout.update' },

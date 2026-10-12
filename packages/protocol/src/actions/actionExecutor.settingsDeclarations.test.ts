@@ -3,10 +3,36 @@ import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.
 import { getActionSpec } from './actionSpecs.js';
 import type { ActionId } from './actionIds.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 
 const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'settings.set': { enabled: true } } });
 
 describe('declared settings Actions', () => {
+  it.each([
+    { anchor: 'transcript.agentHtmlNetworkPolicy', value: 'allowed' },
+    { anchor: 'transcript.showToolCalls', value: false },
+  ])('admits $anchor through ordinary dangerous approval and its explicit waiver', async input => {
+    const writes: unknown[] = [];
+    // The answering Settings host is the process boundary; Action admission and policy stay real.
+    const executor = createActionExecutor({ settingsDeclarationAction: async ({ input }: Parameters<NonNullable<ActionExecutorDeps['settingsDeclarationAction']>>[0]) => {
+      writes.push(input);
+      return { anchor: input.anchor, value: input.value };
+    }, isActionApprovalRequired: (id, context, admittedInput) =>
+      isApprovalRequiredByActionsSettings(id, context.actionsSettings ?? actionsSettings, context, undefined, undefined, admittedInput),
+    } as unknown as ActionExecutorDeps);
+    for (const surface of ['agent', 'mcp'] as const) {
+      expect(await executor.execute('settings.set', input, { surface, actionsSettings }))
+        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      expect(writes).toEqual([]);
+    }
+    const waived = ActionsSettingsV1Schema.parse({ v: 1,
+      approvalWaivedSurfaces: { 'settings.set': ['agent', 'mcp'] } });
+    for (const surface of ['agent', 'mcp'] as const) {
+      expect(await executor.execute('settings.set', input, { surface, actionsSettings: waived }))
+        .toEqual({ ok: true, result: { anchor: input.anchor, value: input.value } });
+    }
+    expect(writes).toEqual([input, input]);
+  });
   it('round-trips compound JSON settings through the same strict Action envelope', async () => {
     const value = { appRail: { orderedIds: ['plugin:removed', 'sessions'], placements: { sessions: 'overflow', 'plugin:removed': 'hidden' } } };
     // The answering UI is the process boundary; Protocol admission and snapshots stay real.
@@ -61,7 +87,7 @@ describe('declared settings Actions', () => {
     for (const id of ['settings.list', 'settings.get', 'settings.set']) {
       expect(getActionSpec(id as ActionId).surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
     }
-    expect(getActionSpec('settings.invoke').surfaces.cli).toBe(false);
+    expect(getActionSpec('settings.invoke').surfaces.cli).toBe(true);
   });
 
   it('rejects unknown selectors and malformed results without interpreting them as settings values', async () => {

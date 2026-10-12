@@ -4,6 +4,7 @@ import { ActionIdSchema, type ActionId } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
 import { createActionExecutor, type ActionExecutorDeps, type ActionExecutorContext } from './actionExecutor.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { prepareArtifactHeaderForRevisionV1 } from '../artifacts/artifactHeaderRestorationV1.js';
 import { buildWorkBoardArtifactHeaderV1, readWorkBoardArtifactSummaryV1 } from '../boards/workBoardArtifactV1.js';
 import { createWorkBoardV1 } from '../boards/workBoardV1.js';
@@ -250,11 +251,30 @@ describe('ordinary Artifact Actions', () => {
       isActionApprovalRequired: () => false, interceptActionExecution: async ({ input }) => ({ status: 'continue', input }),
       observeActionExecution });
     const result = await executor.execute(actionId, actionId === 'artifact.public_link.create' ? { artifactId: 'artifact' } : { sessionId: 'session' },
-      { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' } });
+      { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
     expect(result).toEqual({ ok: true, result: actionId === 'artifact.public_link.create'
       ? { ...output, publicShare: { ...output.publicShare, networkOff: false } } : output });
     expect(observeActionExecution).toHaveBeenCalled();
     expect(JSON.stringify(observeActionExecution.mock.calls)).not.toContain('SECRET_FOR_CALLER');
+  });
+  it.each(['artifact.public_link.create', 'session.public_link.create'] as const)('requires a human decision for %s despite an agent policy waiver', async actionId => {
+    let published = false;
+    const publish = async () => { published = true; return actionId === 'artifact.public_link.create'
+      ? { publicShare: { id: 'share', subject: { kind: 'artifact', id: 'artifact' }, expiresAt: null, maxUses: null,
+          useCount: 0, isConsentRequired: false, createdAt: 1, updatedAt: 1, keyDerivation: 'fragment_v1' }, url: 'https://public.example/s/link' }
+      : { id: 'share', expiresAt: null, maxUses: null, useCount: 0, isConsentRequired: false, updatedAt: 1, url: 'https://public.example/s/link' }; };
+    const executor = createActionExecutor({ artifactAction: publish, sessionAccessAction: publish,
+      isActionApprovalRequired: () => false,
+      approvalsCreate: async () => ({ artifactId: 'approval' }) });
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['agent'] } });
+    const result = await executor.execute(actionId, actionId === 'artifact.public_link.create'
+      ? { artifactId: 'artifact' } : { sessionId: 'session' },
+      { surface: 'agent', authority: 'account_automation', serverId: 'home', runtimeAccountId: 'account',
+        defaultSessionId: 'session', actionRequestId: 'share',
+        actionCaller: { kind: 'session', sessionId: 'session', starterDepth: 0, turnDepth: 0 }, actionsSettings });
+    expect(result, JSON.stringify(result))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(published).toBe(false);
   });
   it('offers reads and approval-based writes to Agents, MCP and CLI through the canonical catalog', () => {
     for (const id of ids) {

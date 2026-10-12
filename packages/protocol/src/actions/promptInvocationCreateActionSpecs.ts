@@ -14,7 +14,7 @@ export const PromptInvocationCreateOutputSchema = lazyZodSchema(() => z.discrimi
   z.object({ status: z.literal('unavailable'), reason: z.string().min(1) }).strict(),
 ]));
 export const PROMPT_INVOCATION_CREATE_ACTION_SPECS = [{
-  id: 'prompts.invocation.create', title: 'Create a prompt shortcut',
+  id: 'prompts.invocation.create', approval: {result: 'required'}, title: 'Create a prompt shortcut',
   description: 'Add a slash shortcut to an existing prompt document in the admitted Account. Uses the current invocations catalog, canonical token validation and revision CAS; conflicts are not retried.',
   safety: 'danger', sideEffectClass: 'write', executionPlacement: 'client', placements: [],
   surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },

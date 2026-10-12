@@ -1,10 +1,16 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
-import { MACHINE_ADD_SSH_ACTION_IDS } from './specs/machineConnection.js';
+import { MACHINE_ADD_SSH_ACTION_IDS, MACHINE_PAGE_ACTION_IDS } from './specs/machineConnection.js';
 import { USAGE_ACTION_IDS, USAGE_COACH_ACTION_IDS } from '../usage/usageActionIdsV1.js';
 import { MACHINE_ACCESS_ACTION_IDS, MACHINE_WORK_SUMMARY_ACTION_IDS } from './specs/machineAccess.js';
+import { MACHINE_VITALS_ACTION_IDS } from './specs/machineVitals.js';
+import { MACHINE_PROCESSES_ACTION_IDS } from './specs/machineProcesses.js';
+import { MACHINE_STORAGE_ACTION_IDS } from './specs/storage.js';
+import { MACHINE_RESOURCES_ACTION_IDS } from './specs/machineResources.js';
+import { MACHINE_GUARD_ACTION_IDS } from '../machines/guard/actionIdsV1.js';
 import { MACHINE_TERMINAL_ACTION_IDS } from './specs/machineTerminal.js';
 import { SCOPE_ACTION_IDS } from './scopeActionFamily.js';
+import { DIAGNOSTICS_ACTION_IDS } from './diagnosticsActionFamily.js';
 import { ROLE_ACTION_IDS_V1 } from '../prompts/roles/roleActionIdsV1.js';
 import { WORK_BOARD_ACTION_IDS_V1 } from '../boards/actionIdsV1.js';
 import { VOICE_CONVERSATION_ACTION_IDS } from './voiceConversationActionFamily.js';
@@ -13,6 +19,8 @@ import { PROJECT_SOURCE_ACTION_IDS_V1 } from './specs/projectSources.js';
 import { HOME_GOVERNANCE_ACTION_IDS_V1 } from '../home/governance/actionsV1.js';
 import { HOME_IDENTITY_ACTION_IDS_V1 } from '../teams/identity/actionIds.js';
 import { PLUGIN_SETTINGS_ADMINISTRATION_ACTION_IDS_V1 } from '../plugins/settingsAdministration.js';
+import { PLUGIN_WEBHOOK_ACTION_IDS_V1 } from '../plugins/webhooks/endpointV1.js';
+import { PLUGIN_EXECUTION_ORIGIN_ACTION_IDS } from './pluginExecutionOriginActionFamily.js';
 import { SESSION_BOARD_ACTION_IDS_V1 } from '../sessions/board/actionIds.js';
 import { SESSION_DISCUSSION_ACTION_IDS_V1 } from '../sessions/discussions/actionIds.js';
 import { SESSION_READ_STATE_ACTION_IDS_V1 } from '../sessions/readState/actionIds.js';
@@ -39,6 +47,9 @@ import { APP_SHELL_ACTION_IDS } from './appShellActionFamily.js';
 import { SESSION_TERMINAL_ACTION_IDS } from './sessionTerminalActionFamily.js';
 import { NOTIFICATION_CONFIGURATION_ACTION_IDS } from './notificationConfigurationActionIds.js';
 import { APP_UPDATE_ACTION_IDS } from './appUpdateActionFamily.js';
+import { BUG_REPORT_SUBMISSION_ACTION_IDS } from './specs/bugReport.js';
+import { UPDATES_ACTION_IDS } from './updatesActionFamily.js';
+import { CLIPBOARD_ACTION_IDS } from './clipboardActionFamily.js';
 import { WIDGET_INSTANCE_ACTION_IDS_V1 } from '../widgets/actionIdsV1.js';
 import { WIDGET_DEFINITION_ACTION_IDS_V1 } from '../widgets/definitionActionIdsV1.js';
 import { WIDGET_LAYOUT_FRAGMENT_ACTION_IDS_V1 } from '../widgets/fragmentActionIdsV1.js';
@@ -46,12 +57,14 @@ import { WORKFLOW_EFFECT_ACTION_IDS_V1 } from '../workflows/stepActionsV1.js';
 import { FILESYSTEM_ACTION_IDS } from './filesystemActionFamily.js';
 import { PROFILE_ACTION_IDS_V1 } from '../profiles/profileActionIdsV1.js';
 import { MCP_SERVER_ACTION_IDS_V1 } from '../mcp/servers/serverActionIdsV1.js';
+import { CAPABILITY_RULES_ACTION_IDS_V1 } from './capabilityRulesActionIdsV1.js';
 import { PROVIDER_ACTION_IDS_V1 } from '../providers/providerActionIdsV1.js';
 import { REMOTE_HOST_ACTION_IDS_V1 } from '../remoteHosts/remoteHostActionIdsV1.js';
 import { HOME_RUNTIME_ACTION_IDS_V1 } from '../home/runtime/actionIdsV1.js';
+import { ACCOUNT_LIFECYCLE_ACTION_IDS } from './accountLifecycleActionFamily.js';
 import { ARTIFACT_FOLDER_ACTION_IDS_V1 } from '../prompts/library/artifactFolderActionIdsV1.js';
 import { USAGE_SOURCE_ACTION_IDS } from '../usage/usageSources.js';
-import { WORKFLOW_AUTHORING_ACTION_IDS } from './workflowAuthoringAction.js';
+import { WORKFLOW_AUTHORING_ACTION_IDS } from './workflowAuthoringActionIds.js';
 
 export const WORKFLOW_ACTION_IDS_V1 = [
   'workflow.validate', 'workflow.run.start', 'workflow.run.list', 'workflow.run.summaries', 'workflow.run.get', 'workflow.run.wait',
@@ -78,6 +91,7 @@ export const PLUGIN_DEV_LOOP_ACTION_IDS_V1 = [
   'plugins.install',
   'plugins.uninstall',
   'plugins.dev.submit',
+  'plugins.dev.unregister',
   'plugins.dev.install',
   'plugins.dev.typecheck',
   'plugins.dev.build',
@@ -98,11 +112,13 @@ export function isPluginDevLoopActionIdV1(value: string): value is PluginDevLoop
 // Action ids remain protocol-owned and closed in this wave.
 // Plugin/runtime unification must not imply plugin-defined action-id authoring parity yet.
 export const ACTION_ID_FAMILIES_V1 = Object.freeze({
+  plugin_execution_origin: PLUGIN_EXECUTION_ORIGIN_ACTION_IDS,
   usage: [...USAGE_ACTION_IDS, ...USAGE_COACH_ACTION_IDS],
   project_sources: PROJECT_SOURCE_ACTION_IDS_V1,
   project_execution: PROJECT_ACTION_IDS_V1,
   project_definitions: PROJECT_DEFINITION_ACTION_IDS,
   observation: ['wait'],
+  account_profile: ['account.profile.get', 'account.name.set', 'account.username.set'],
   project_workers: PROJECT_WORKER_ACTION_IDS_V1,
   operation_output: ACTION_OPERATION_ACTION_IDS_V1,
   capture_viewing: ['capture.view'],
@@ -116,6 +132,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   workflow_event_catalog: ['workflow.events.list'],
   filesystem: FILESYSTEM_ACTION_IDS,
   scope: SCOPE_ACTION_IDS,
+  diagnostics: DIAGNOSTICS_ACTION_IDS,
   connected_services_configuration: CONNECTED_SERVICE_CONFIGURATION_ACTION_IDS_V1,
   usage_sources: USAGE_SOURCE_ACTION_IDS,
   boards: WORK_BOARD_ACTION_IDS_V1,
@@ -123,9 +140,12 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   roles: ROLE_ACTION_IDS_V1,
   launch_profiles: ['launch_profiles.publish', ...PROFILE_ACTION_IDS_V1],
   mcp_servers: MCP_SERVER_ACTION_IDS_V1,
+  capability_rules: CAPABILITY_RULES_ACTION_IDS_V1,
   providers: PROVIDER_ACTION_IDS_V1,
+  model_preferences: ['models.favorite.set'],
   remote_hosts: REMOTE_HOST_ACTION_IDS_V1,
   home_runtime: HOME_RUNTIME_ACTION_IDS_V1,
+  account_lifecycle: ACCOUNT_LIFECYCLE_ACTION_IDS,
   artifact_folders: ARTIFACT_FOLDER_ACTION_IDS_V1,
   discovery: [
     'action.spec.search',
@@ -145,16 +165,24 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   notifications: ['notifications.notify_me'],
   notification_configuration: NOTIFICATION_CONFIGURATION_ACTION_IDS,
   app_updates: APP_UPDATE_ACTION_IDS,
+  updates: UPDATES_ACTION_IDS,
+  clipboard: CLIPBOARD_ACTION_IDS,
   home_hub_layout: ['home.hub.layout.get', 'home.hub.layout.update', 'home.reachNudge.dismiss'],
   machine_agent_install: [
     'machines.agents.install',
+    'machines.agents.uninstall',
     'machines.agents.install.status',
     'machines.agents.install.cancel',
   ],
   machine_agent_sign_in: ['machines.agents.signIn.start', 'machines.agents.signIn.status', 'machines.agents.signIn.cancel', 'machines.agents.signIn.restart'],
-  machine_connection: ['homes.connect', 'machines.add.command', 'machines.pairing.create', ...MACHINE_TERMINAL_ACTION_IDS, ...MACHINE_ADD_SSH_ACTION_IDS],
+  machine_connection: ['homes.connect', 'machines.add.command', 'machines.pairing.create', ...MACHINE_PAGE_ACTION_IDS, ...MACHINE_TERMINAL_ACTION_IDS, ...MACHINE_ADD_SSH_ACTION_IDS],
   machine_access: MACHINE_ACCESS_ACTION_IDS,
   machine_work_summary: MACHINE_WORK_SUMMARY_ACTION_IDS,
+  machine_vitals: MACHINE_VITALS_ACTION_IDS,
+  machine_processes: MACHINE_PROCESSES_ACTION_IDS,
+  machine_storage: MACHINE_STORAGE_ACTION_IDS,
+  machine_resources: MACHINE_RESOURCES_ACTION_IDS,
+  machine_guard: MACHINE_GUARD_ACTION_IDS,
   session_access: [
     'session.access.grants.list',
     'session.access.grant.set',
@@ -233,6 +261,10 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'session.view.toolCalls.set',
     'session.reports_to.set',
     'session.model.set',
+    'session.model.unarm',
+    'session.config_option.set',
+    'session.mcp_selection.set',
+    'session.connected_services_auth.set',
     'session.permission_mode.set',
     'session.archive',
     'session.unarchive',
@@ -425,10 +457,12 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'prompt_doc.favorite.set',
     'prompts.library.list',
     'prompt_doc.update',
+    'prompt_bundle.create',
     'prompt_bundle.update',
     'prompt_asset.export',
     'prompt_registry.install',
   ],
+  bug_report_submission: BUG_REPORT_SUBMISSION_ACTION_IDS,
   daemon_admin: [
     'daemon.promptAssets.discover',
     'daemon.promptAssets.delete',
@@ -441,10 +475,12 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'bugreport.uploadArtifact',
   ],
   browser_control: [
+    'browser.workspace.open',
     'browser.sandbox.install',
     'browser.control.takeControl',
     'browser.control.handBack',
     'browser.view.open',
+    'browser.view.openExternal',
     'browser.view.close',
     'browser.view.focus',
     'browser.target.set',
@@ -609,18 +645,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'plugins.permissions.grants.revoke',
     'plugins.permissions.grants.dismissRequest',
   ],
-  plugin_webhooks: [
-    'plugin.webhook.endpoint.ensure',
-    'plugin.webhook.endpoint.read',
-    'plugin.webhook.endpoint.revoke',
-    'plugin.webhook.endpoint.retarget',
-    'plugin.webhook.endpoint.checkCorrespondence',
-    'plugin.webhook.endpoint.convergeTarget',
-    'plugin.webhook.delivery.movePending',
-    'plugin.webhook.endpoint.credential.configure',
-    'plugin.webhook.endpoint.credential.rotate',
-    'plugin.webhook.endpoint.credential.finishRotation',
-  ],
+  plugin_webhooks: PLUGIN_WEBHOOK_ACTION_IDS_V1,
   account_plugin_data: [
     'account.plugins.data.erase',
   ],
@@ -751,123 +776,9 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   saved_secret_sharing: SHARED_SAVED_SECRET_ACTION_IDS_V1,
 } as const);
 
-export const ACTION_IDS = [
-  ...ACTION_ID_FAMILIES_V1.usage,
-  ...ACTION_ID_FAMILIES_V1.project_sources,
-  ...ACTION_ID_FAMILIES_V1.project_execution,
-  ...ACTION_ID_FAMILIES_V1.project_definitions,
-  ...ACTION_ID_FAMILIES_V1.project_workers,
-  ...ACTION_ID_FAMILIES_V1.operation_output,
-  ...ACTION_ID_FAMILIES_V1.workflow_authoring,
-  ...ACTION_ID_FAMILIES_V1.workflow_diagnostics,
-  ...ACTION_ID_FAMILIES_V1.session_authoring,
-  ...ACTION_ID_FAMILIES_V1.observation,
-  ...ACTION_ID_FAMILIES_V1.capture_viewing,
-  ...ACTION_ID_FAMILIES_V1.session_terminals,
-  ...ACTION_ID_FAMILIES_V1.connected_services_configuration,
-  ...ACTION_ID_FAMILIES_V1.usage_sources,
-  ...ACTION_ID_FAMILIES_V1.workspace_layout,
-  ...ACTION_ID_FAMILIES_V1.session_organization_move,
-  ...ACTION_ID_FAMILIES_V1.composer_ingress,
-  ...ACTION_ID_FAMILIES_V1.list_reorder,
-  ...ACTION_ID_FAMILIES_V1.todo_session_link,
-  ...ACTION_ID_FAMILIES_V1.workspace_file_search,
-  ...ACTION_ID_FAMILIES_V1.workflow_event_catalog,
-  ...ACTION_ID_FAMILIES_V1.home_hub_layout,
-  ...ACTION_ID_FAMILIES_V1.scope,
-  ...ACTION_ID_FAMILIES_V1.boards,
-  ...ACTION_ID_FAMILIES_V1.widgets,
-  ...ACTION_ID_FAMILIES_V1.computer,
-  ...ACTION_ID_FAMILIES_V1.machine_connection,
-  ...ACTION_ID_FAMILIES_V1.machine_access,
-  ...ACTION_ID_FAMILIES_V1.machine_work_summary,
-  ...ACTION_ID_FAMILIES_V1.machine_agent_install,
-  ...ACTION_ID_FAMILIES_V1.machine_agent_sign_in,
-  ...ACTION_ID_FAMILIES_V1.roles,
-  ...ACTION_ID_FAMILIES_V1.launch_profiles,
-  ...ACTION_ID_FAMILIES_V1.mcp_servers,
-  ...ACTION_ID_FAMILIES_V1.providers,
-  ...ACTION_ID_FAMILIES_V1.remote_hosts,
-  ...ACTION_ID_FAMILIES_V1.home_runtime,
-  ...ACTION_ID_FAMILIES_V1.artifact_folders,
-  ...ACTION_ID_FAMILIES_V1.artifact_access,
-  ...ACTION_ID_FAMILIES_V1.artifacts,
-  ...ACTION_ID_FAMILIES_V1.settings_declarations,
-  ...ACTION_ID_FAMILIES_V1.app_shell,
-  ...ACTION_ID_FAMILIES_V1.notification_configuration,
-  ...ACTION_ID_FAMILIES_V1.app_updates,
-  ...ACTION_ID_FAMILIES_V1.discovery,
-  ...ACTION_ID_FAMILIES_V1.session_access,
-  ...ACTION_ID_FAMILIES_V1.session_lifecycle,
-  ...ACTION_ID_FAMILIES_V1.inventory,
-  ...ACTION_ID_FAMILIES_V1.messaging,
-  ...ACTION_ID_FAMILIES_V1.session_control,
-  ...ACTION_ID_FAMILIES_V1.intent_start,
-  ...ACTION_ID_FAMILIES_V1.session_organization_resources,
-  ...ACTION_ID_FAMILIES_V1.review_comments,
-  ...ACTION_ID_FAMILIES_V1.subagent_registry,
-  ...ACTION_ID_FAMILIES_V1.execution_run_control,
-  ...ACTION_ID_FAMILIES_V1.session_targeting,
-  ...ACTION_ID_FAMILIES_V1.session_follow,
-  ...ACTION_ID_FAMILIES_V1.session_read_state,
-  ...ACTION_ID_FAMILIES_V1.session_attention,
-  ...ACTION_ID_FAMILIES_V1.session_transcripts,
-  ...ACTION_ID_FAMILIES_V1.session_board,
-  ...ACTION_ID_FAMILIES_V1.session_discussion,
-  ...ACTION_ID_FAMILIES_V1.session_permissions,
-  ...ACTION_ID_FAMILIES_V1.external_sessions,
-  ...ACTION_ID_FAMILIES_V1.voice_controls,
-  ...ACTION_ID_FAMILIES_V1.current_ui_context,
-  ...ACTION_ID_FAMILIES_V1.command_palette,
-  ...ACTION_ID_FAMILIES_V1.find,
-  ...ACTION_ID_FAMILIES_V1.prompt_picker,
-  ...ACTION_ID_FAMILIES_V1.companion_controls,
-  ...ACTION_ID_FAMILIES_V1.memory,
-  ...ACTION_ID_FAMILIES_V1.prompt_library,
-  ...ACTION_ID_FAMILIES_V1.daemon_admin,
-  ...ACTION_ID_FAMILIES_V1.filesystem,
-  ...ACTION_ID_FAMILIES_V1.browser_control,
-  ...ACTION_ID_FAMILIES_V1.browser_diagnostics,
-  ...ACTION_ID_FAMILIES_V1.browser_context,
-  ...ACTION_ID_FAMILIES_V1.browser_automation,
-  ...ACTION_ID_FAMILIES_V1.browser_recording,
-  ...ACTION_ID_FAMILIES_V1.local_services_inventory,
-  ...ACTION_ID_FAMILIES_V1.local_services_launcher,
-  ...ACTION_ID_FAMILIES_V1.local_services_preview,
-  ...ACTION_ID_FAMILIES_V1.local_services_public_preview,
-  ...ACTION_ID_FAMILIES_V1.local_services_actions,
-  ...ACTION_ID_FAMILIES_V1.peer_mediation_observability,
-  ...ACTION_ID_FAMILIES_V1.devices_simulator,
-  ...ACTION_ID_FAMILIES_V1.approvals,
-  ...ACTION_ID_FAMILIES_V1.plugin_dev_loop,
-  ...ACTION_ID_FAMILIES_V1.plugin_settings_administration,
-  ...ACTION_ID_FAMILIES_V1.plugin_permission_grants,
-  ...ACTION_ID_FAMILIES_V1.plugin_webhooks,
-  ...ACTION_ID_FAMILIES_V1.account_plugin_data,
-  ...ACTION_ID_FAMILIES_V1.account_sessions,
-  ...ACTION_ID_FAMILIES_V1.account_security,
-  ...ACTION_ID_FAMILIES_V1.account_api_tokens,
-  ...ACTION_ID_FAMILIES_V1.agent_acp_catalog,
-  ...ACTION_ID_FAMILIES_V1.identity_github_apps,
-  ...ACTION_ID_FAMILIES_V1.identity_providers,
-  ...ACTION_ID_FAMILIES_V1.machine_pools,
-  ...ACTION_ID_FAMILIES_V1.managed_machines,
-  ...ACTION_ID_FAMILIES_V1.machine_presets,
-  ...ACTION_ID_FAMILIES_V1.ephemeral_runner,
-  ...ACTION_ID_FAMILIES_V1.automation_events,
-  ...ACTION_ID_FAMILIES_V1.automation_conversation,
-  ...ACTION_ID_FAMILIES_V1.scm_pull_request,
-  ...ACTION_ID_FAMILIES_V1.scm_git,
-  ...ACTION_ID_FAMILIES_V1.scm_repository,
-  ...ACTION_ID_FAMILIES_V1.scm_diff_summary,
-  ...ACTION_ID_FAMILIES_V1.home_governance,
-  ...ACTION_ID_FAMILIES_V1.home_identity,
-  ...ACTION_ID_FAMILIES_V1.teams,
-  ...ACTION_ID_FAMILIES_V1.saved_secret_sharing,
-  ...ACTION_ID_FAMILIES_V1.workflows,
-  ...ACTION_ID_FAMILIES_V1.workflow_effects,
-  ...ACTION_ID_FAMILIES_V1.notifications,
-] as const;
+type ActionFamilyId = (typeof ACTION_ID_FAMILIES_V1)[keyof typeof ACTION_ID_FAMILIES_V1][number];
+
+export const ACTION_IDS: readonly ActionFamilyId[] = Object.freeze(Object.values(ACTION_ID_FAMILIES_V1).flat());
 
 export const RUNTIME_ACTION_IDS_V1 = [
   ...ACTION_ID_FAMILIES_V1.computer,
@@ -885,8 +796,8 @@ export const RUNTIME_ACTION_IDS_V1 = [
   ...ACTION_ID_FAMILIES_V1.devices_simulator,
 ] as const;
 
-export const ActionIdSchema = lazyZodSchema(() => z.enum(ACTION_IDS));
-export type ActionId = z.infer<typeof ActionIdSchema>;
+export type ActionId = typeof ACTION_IDS[number];
+export const ActionIdSchema: z.ZodEnum<{ [Id in ActionId]: Id }> = lazyZodSchema(() => z.enum(ACTION_IDS));
 export type ActionIdFamilyV1 = keyof typeof ACTION_ID_FAMILIES_V1;
 export const ActionIdFamilyV1Schema = lazyZodSchema(() => z.enum(
   Object.keys(ACTION_ID_FAMILIES_V1) as [ActionIdFamilyV1, ...ActionIdFamilyV1[]],

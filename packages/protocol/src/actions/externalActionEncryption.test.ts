@@ -7,6 +7,7 @@ import {
   EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2,
   isExternalActionRequestWithinLimit,
   measureExternalActionResponseEnvelopeUtf8BytesV1,
+  projectExternalActionPendingResetStartAdmissionV1,
 } from './externalActionApi.js';
 import {
   openExternalActionRequestV2,
@@ -25,6 +26,49 @@ const binding = {
 const randomBytes = (length: number) => new Uint8Array(length).fill(2);
 
 describe('whole external Action encryption', () => {
+  it('retains narrowing mounted provenance beside E2EE content through the root codec', () => {
+    const pluginInvocation = { kind: 'mountedPluginSurface' as const, mountedBinding: {
+      pluginId: 'happier.inspector', contributionLocalId: 'inspector-app', occurrenceId: 'occurrence',
+      sourceCustody: { kind: 'development' as const, registeredRootId: 'inspector-root' },
+      materializationRef: { machineId: binding.target.machineId, pluginId: 'happier.inspector', materializationId: 'installed' },
+    } };
+    const input = { privateInput: 'account content' };
+    const request = sealExternalActionRequestV2({ binding, material, randomBytes, input, pluginInvocation });
+    expect(request.pluginInvocation).toEqual(pluginInvocation);
+    expect(JSON.stringify(request)).not.toContain(input.privateInput);
+    expect(openExternalActionRequestV2({ envelope: request, binding, material })).toEqual({ input });
+  });
+  it('binds fresh reset preparatory facts to the encrypted input without exposing initial content', () => {
+    const reset = { source: { bindingKind: 'account' as const, ref: { service: { pluginId: 'example.usage', localId: 'quota' }, accountId: 'connected' } },
+      recordId: 'paug_v1_abcdefgh', meterId: 'weekly', witness: { id: 'accepted', observedAtMs: 100 } };
+    const resetBinding = { ...binding, actionId: 'session.pending.resetStart.set', target: { kind: 'session' as const, sessionId: 'session' } };
+    const input = { sessionId: 'session', localId: 'prepared', reset,
+      initialInput: { content: { t: 'encrypted' as const, c: 'private-session-ciphertext' } } };
+    const request = sealExternalActionRequestV2({ binding: resetBinding, input, material, randomBytes });
+    expect(request).toMatchObject({ pendingResetStartAdmission: projectExternalActionPendingResetStartAdmissionV1(input) });
+    expect(JSON.stringify(request)).not.toContain('weekly');
+    expect(JSON.stringify(request)).not.toContain('private-session-ciphertext');
+    expect(openExternalActionRequestV2({ envelope: request, binding: resetBinding, material })).toEqual({ input });
+    // Strict JSON preserves lone UTF-16 surrogates; digest encoding must not
+    // collapse distinct accepted identities into TextEncoder's replacement character.
+    const surrogateInput = { ...input, reset: { ...reset, meterId: '\ud800' } };
+    const surrogateRequest = sealExternalActionRequestV2({ binding: resetBinding, input: surrogateInput, material, randomBytes });
+    expect(openExternalActionRequestV2({ envelope: { ...surrogateRequest,
+      pendingResetStartAdmission: projectExternalActionPendingResetStartAdmissionV1({ ...surrogateInput,
+        reset: { ...reset, meterId: '\ufffd' } }) }, binding: resetBinding, material })).toBeNull();
+    for (const substituted of [
+      { sessionId: 'another', localId: input.localId, reset },
+      { sessionId: input.sessionId, localId: 'another', reset },
+      { sessionId: input.sessionId, localId: input.localId, reset: { ...reset, meterId: 'another' } },
+      { sessionId: input.sessionId, localId: input.localId, reset: { ...reset, witness: { ...reset.witness, id: 'another' } } },
+      { ...input, reset: { ...reset, source: { ...reset.source, ref: { ...reset.source.ref, accountId: 'another' } } } },
+      { ...input, reset: { ...reset, recordId: 'paug_v1_anotherrecord' } },
+      { ...input, reset: { ...reset, witness: { ...reset.witness, observedAtMs: 101 } } },
+    ]) expect(openExternalActionRequestV2({ envelope: { ...request,
+      pendingResetStartAdmission: projectExternalActionPendingResetStartAdmissionV1(substituted) }, binding: resetBinding, material })).toBeNull();
+    const { pendingResetStartAdmission: _admission, ...missing } = request;
+    expect(openExternalActionRequestV2({ envelope: missing, binding: resetBinding, material })).toBeNull();
+  });
   it('retains terminal authentication kind across encrypted finite requests and responses without an Account upgrade', () => {
     const { credentialId: _credentialId, ...routing } = binding;
     const terminal = { ...routing, actionId: 'projects.script.run', authentication: { kind: 'terminal' as const, tokenEpoch: 7 } };
@@ -87,6 +131,19 @@ describe('whole external Action encryption', () => {
 
       expect(opened).not.toBeNull();
       expect((opened?.input as { blob: string }).blob).toHaveLength(padding.length);
+  }, 120_000);
+
+  it('preserves the decoded reset input budget with compact exact facts for Home admission', () => {
+    const target = { kind: 'session' as const, sessionId: 'session' };
+    const reset = { source: { bindingKind: 'account' as const, ref: { service: { pluginId: 'example.usage', localId: 'quota' }, accountId: 'connected' } },
+      recordId: 'paug_v1_abcdefgh', meterId: '', witness: { id: 'accepted', observedAtMs: 100 } };
+    const input = { sessionId: 'session', localId: 'prepared', reset };
+    const bytes = new TextEncoder().encode(JSON.stringify({ v: 1, requestId: binding.requestId, target, input })).byteLength;
+    input.reset.meterId = 'x'.repeat(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES - bytes);
+    const resetBinding = { ...binding, actionId: 'session.pending.resetStart.set', target };
+    const sealed = sealExternalActionRequestV2({ binding: resetBinding, input, material, randomBytes });
+    expect(isExternalActionRequestWithinLimit(sealed)).toBe(true);
+    expect(openExternalActionRequestV2({ envelope: sealed, binding: resetBinding, material })).toEqual({ input });
   }, 120_000);
 
   it('rejects before transmission when duplicated visible routing metadata exceeds the V2 body ceiling', () => {

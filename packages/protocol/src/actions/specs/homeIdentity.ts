@@ -80,6 +80,8 @@ function homeIdentityActionRow(id: HomeIdentityActionIdV1): HomeIdentityActionRo
   return {
     ...metadata,
     id,
+    // Home identity returns its own live result; Team deferred replay custody is not shared.
+    approval: { result: 'required' },
     requiredAuthority: source.requiredAuthority,
     executionPlacement: source.executionPlacement,
     title: source.title.replaceAll('Team', 'Home'),

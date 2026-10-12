@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ActionIdSchema } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
-import { projectSessionPublicLinkActionResultV1 } from '../sessions/access/sessionAccessActionsV1.js';
+import { projectSessionPublicLinkActionResultV1, projectSessionPublicLinkCreateActionResultV1 } from '../sessions/access/sessionAccessActionsV1.js';
 import { bindSessionAccessActionHttpRequestV1 } from './sessionAccessActionFamily.js';
 
 describe('Session access Action contracts', () => {
@@ -11,6 +11,26 @@ describe('Session access Action contracts', () => {
     })).toEqual({ method: 'POST', path: '/v1/public-shares', body: {
       subject: { kind: 'session', id: 's/id' }, maxUses: 3, isConsentRequired: true,
     } });
+  });
+  it('preserves the default publication wire shape and requires confirmation of a requested network-off policy', () => {
+    const input = { sessionId: 's/id', isConsentRequired: false };
+    expect(bindSessionAccessActionHttpRequestV1('session.public_link.create', { ...input, networkOff: false }))
+      .toEqual(bindSessionAccessActionHttpRequestV1('session.public_link.create', input));
+    expect(bindSessionAccessActionHttpRequestV1('session.public_link.create', { ...input, networkOff: true }).body)
+      .toMatchObject({ networkOff: true });
+    const response = { viewerOrigin: 'https://home.example', publicShare: {
+      id: 'publication', updatedAt: 1, expiresAt: null, maxUses: null, useCount: 0,
+      isConsentRequired: false, keyDerivation: 'fragment_v1',
+    } };
+    const material = { lookupId: 'A'.repeat(43), secret: 'B'.repeat(43) };
+    expect(() => projectSessionPublicLinkCreateActionResultV1(response, material, true)).toThrow();
+    expect(() => projectSessionPublicLinkCreateActionResultV1({ ...response,
+      publicShare: { ...response.publicShare, networkOff: false } }, material, true)).toThrow();
+    expect(projectSessionPublicLinkCreateActionResultV1(response, material, false)).toMatchObject({
+      id: 'publication', viewerOrigin: 'https://home.example', url: `https://home.example/s/${material.lookupId}#k=${material.secret}`,
+    });
+    expect(projectSessionPublicLinkCreateActionResultV1({ ...response,
+      publicShare: { ...response.publicShare, networkOff: true } }, material, true)).toMatchObject({ networkOff: true });
   });
   it('admits logical desired-state grants and excludes host encryption material', () => {
     const id = ActionIdSchema.parse('session.access.grant.set');

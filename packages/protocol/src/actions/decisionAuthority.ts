@@ -6,6 +6,8 @@ import { isPresentUserSettingWriteV1 } from './accountSettingDeclarations.js';
 import { HandoffWorkspaceActionV1Schema } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 import { readRecord } from '../inputs/inputRecords.js';
 import { isRoleActionIdV1 } from '../prompts/roles/roleActionIdsV1.js';
+import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
+import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
 
 /** Safe Session relocation can contain an explicitly chosen workspace-writing effect. */
 export function isActionWorkspaceWriteV1(
@@ -41,8 +43,22 @@ export function resolveWorkspaceWriteActionAdmissionV1(input: Readonly<{
 export const DECISION_ACTION_IDS = ['approval.request.decide', 'session.permission.respond'] as const;
 export const TOKEN_CONVERSATIONAL_INPUT_ACTION_IDS = ['session.user_action.answer'] as const;
 
-export function isAutomationApprovalRequestSurface(surface: string | null | undefined): boolean {
-  return surface === 'agent' || surface === 'mcp' || surface === 'plugin';
+function isLegacyWorkflowConversionInputV1(spec: Pick<ActionSpec, 'id'> | undefined, input: unknown): boolean {
+  return spec?.id === 'workflow.trigger.update' && readRecord(input).confirmLegacyConversion === true;
+}
+
+export function isAutomationApprovalRequestSurface(
+  surface: string | null | undefined,
+  spec?: Pick<ActionSpec, 'id'>,
+  input?: unknown,
+): boolean {
+  return surface === 'agent' || surface === 'mcp' || surface === 'plugin'
+    || (surface === 'cli' && isLegacyWorkflowConversionInputV1(spec, input));
+}
+
+/** Exact admitted operands, including their domain revision, bound by the approval owner. */
+export function computeActionInputApprovalDigestV1(actionId: ActionId, input: unknown): string {
+  return computeCanonicalDomainSeparatedDigest('action.present-user-approval.v1', [actionId, createCanonicalJsonSigningInput(input)]);
 }
 
 /** Requestability follows the Action owner, not a second mutation allowlist. */
@@ -58,13 +74,20 @@ export function canCredentialDecideV1(input: Readonly<{ authority: ActionRequire
   return input.authority === 'present_user' || input.grant?.approve === true;
 }
 
+/** Public creation shares one authority and disclosure classification. */
+export function isPublicLinkCreationActionV1(actionId: string): boolean {
+  return actionId === 'artifact.public_link.create' || actionId === 'session.public_link.create';
+}
+
 /** Execution authority is separate from who may decide a requested approval. */
 export function requiresPresentUserExecutionAuthorityForActionInputV1(
   spec: Pick<ActionSpec, 'id' | 'requiredAuthority'>,
   input?: unknown,
 ): boolean {
   return spec.requiredAuthority === 'present_user'
+    || isPublicLinkCreationActionV1(spec.id)
     || isPresentUserSettingWriteV1(spec.id, input)
+    || isLegacyWorkflowConversionInputV1(spec, input)
     || (spec.id === 'session.open' && typeof input === 'object' && input !== null
       && 'approvedNewDirectoryCreation' in input && input.approvedNewDirectoryCreation === true);
 }
@@ -95,10 +118,10 @@ export function resolveCredentialActionAdmissionV1(input: Readonly<{
   hasExternalCredential?: boolean;
   actionInput?: unknown;
 }>): { ok: true } | { ok: false; errorCode: 'present_user_required' } {
-  // Host Agent/MCP permission answers reach the shared, user-waivable approval
+  // Host Agent/MCP decisions reach the shared, user-waivable approval
   // policy. External credentials retain the opt-in approve authority; changing
   // this Action's minimum authority must not widen token or terminal access.
-  if (input.spec.id === 'session.permission.respond') {
+  if (input.spec.id === 'session.permission.respond' || input.spec.id === 'approval.request.decide') {
     return canCredentialDecideV1(input)
       || ((input.surface === 'agent' || input.surface === 'mcp') && !input.hasExternalCredential && !input.grant)
       ? { ok: true }
@@ -107,7 +130,7 @@ export function resolveCredentialActionAdmissionV1(input: Readonly<{
   if (!requiresPresentUserExecutionAuthorityForActionInputV1(input.spec, input.actionInput) || input.authority === 'present_user') return { ok: true };
   // Admission here permits requesting consent, never automatic execution.
   // The approval owner enforces a mandatory floor, including persisted waivers.
-  if (isAutomationApprovalRequestSurface(input.surface) && !input.hasExternalCredential && !input.grant
+  if (isAutomationApprovalRequestSurface(input.surface, input.spec, input.actionInput) && !input.hasExternalCredential && !input.grant
     && canRequestPresentUserApprovalForActionInputV1(input.spec, input.actionInput)) return { ok: true };
   if ((DECISION_ACTION_IDS as readonly string[]).includes(input.spec.id) && canCredentialDecideV1(input)) return { ok: true };
   if (input.grant && (TOKEN_CONVERSATIONAL_INPUT_ACTION_IDS as readonly string[]).includes(input.spec.id)

@@ -116,7 +116,7 @@ describe('createActionExecutor (Machine Pools family)', () => {
     });
     swapped = true;
     await expect(executor.execute('machines.pools.resolve', input, { surface: 'cli' })).resolves.toEqual({
-      ok: true, result: { kind: 'unavailable', poolId, reason: 'no_available_machine' },
+      ok: true, result: { kind: 'unavailable', poolId, reason: 'worker_status_unavailable' },
     });
     await expect(executor.execute('machines.pools.resolve', input, { surface: 'ui', serverId: 'other-home' }))
       .resolves.toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });

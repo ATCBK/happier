@@ -2,12 +2,14 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 
 import type { RuntimeActionIdV1 } from '../actionIds.js';
+import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 
 export type RuntimeActionSpecTextMap = Readonly<Partial<Record<RuntimeActionIdV1, string>>>;
 
 export type RuntimeActionSchemaMap = Readonly<Partial<Record<RuntimeActionIdV1, z.ZodTypeAny>>>;
 
 export type RuntimeActionSpecFamily = Readonly<{
+  approvalPolicies?: Readonly<Partial<Record<RuntimeActionIdV1, PreNormalizedActionSpec['approvalPolicy']>>>;
   titles: RuntimeActionSpecTextMap;
   descriptions?: RuntimeActionSpecTextMap;
   /** Canonical per-id schema rows for public/runtime projections. */

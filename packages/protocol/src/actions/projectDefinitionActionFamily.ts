@@ -51,23 +51,23 @@ export const PROJECT_DEFINITION_ACTION_OUTPUT_SCHEMAS = {
 
 export const PROJECT_DEFINITION_ACTION_SPECS = [
   {
-    id: 'projects.inspect', title: 'Inspect project definitions', description: 'Read current project declarations and detect native references without evaluating project code. For Project work in an ongoing Session, inspect this exact qualified checkout, then read projects.worker.preferences.get with its serverId and workspaceId as refId. A script is worker-portable only when its declaration permits it; absent execution permission and detected native commands remain primary-only. An unavailable or invalid definition is not an empty script list. Use these current reads rather than an earlier authoring prompt.',
+    id: 'projects.inspect', approval: {result: 'required'}, title: 'Inspect project definitions', description: 'Read current project declarations and detect native references without evaluating project code. For Project work in an ongoing Session, inspect this exact qualified checkout, then read projects.worker.preferences.get with its serverId and workspaceId as refId. A script is worker-portable only when its declaration permits it; absent execution permission and detected native commands remain primary-only. An unavailable or invalid definition is not an empty script list. Use these current reads rather than an earlier authoring prompt.',
     safety: 'safe', sideEffectClass: 'read', executionPlacement: 'machine', placements: [],
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     bindings: { mcpToolName: 'projects_inspect', rpcMethod: 'daemon.projects.inspect.v1' },
     cli: { acceptsServerId: true, commands: [{ path: ['project', 'inspect'], visibility: 'canonical' }] },
     inputSchema: ProjectDefinitionInspectInputSchema, outputSchema: ProjectDefinitionInspectOutputSchema,
-    inputHints: { fields: [{ path: 'workspace', title: 'Qualified checkout', widget: 'json', required: true }] },
+    inputHints: { fields: [{ path: 'workspace', title: 'Qualified checkout', prompt: 'Which workspace?', widget: 'json', required: true }] },
   },
   {
-    id: 'projects.manifest.update', title: 'Update project file', description: 'Save reviewed project file bytes against the expected absence or content hash. Form, raw and imports share this writer.',
+    id: 'projects.manifest.update', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Update project file', description: 'Save reviewed project file bytes against the expected absence or content hash. Form, raw and imports share this writer.',
     safety: 'danger', sideEffectClass: 'write', executionPlacement: 'machine', placements: [],
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     bindings: { mcpToolName: 'projects_manifest_update', rpcMethod: 'daemon.projects.manifest.update.v1' },
     cli: { acceptsServerId: true, commands: [{ path: ['project', 'manifest', 'update'], visibility: 'canonical' }] },
     inputSchema: ProjectManifestUpdateInputSchema, outputSchema: ProjectManifestUpdateOutputSchema,
     inputHints: { fields: [
-      { path: 'workspace', title: 'Qualified checkout', widget: 'json', required: true },
+      { path: 'workspace', title: 'Qualified checkout', prompt: 'Which workspace?', widget: 'json', required: true },
       { path: 'expectedBasis', title: 'Reviewed file basis', widget: 'json', required: true },
       { path: 'bytes', title: 'Project file contents', widget: 'textarea', required: true },
     ] },

@@ -2,7 +2,7 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AccessibleMachineAccessV1Schema } from '../machines/machineAccessV1.js';
 import { z } from 'zod';
 import { ApiTokenGrantV1Schema, ApiTokenSessionSpawnAdmissionV1Schema } from '../auth/apiTokenGrant.js';
-import { AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '../auth/authToken.js';
+import { AuthTokenAuthoritySchema, AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '../auth/authToken.js';
 import { ManagedAdmissionComputeInputV1Schema } from '../machines/managed/actionsV1.js';
 import { ManagedControllerV1Schema } from '../machines/managed/managedMachineV1.js';
 import { AccountEncryptionModeSchema, type AccountEncryptionMode } from '../features/payload/capabilities/encryptionCapabilities.js';
@@ -24,6 +24,8 @@ import type { createActionExecutor } from './actionExecutor.js';
 import { RunnerMachineContentKeyBindingV1Schema } from '../ephemeralRunner/machineContentKeyBindingSchema.js';
 import { RunnerClaimV1Schema } from '../ephemeralRunner/endpoint.js';
 import { MachineKindFromLegacyProjectionSchema } from '../machines/machineKind.js';
+import { PendingResetStartSetInputV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
+import { DaemonPluginMountedInvocationV1Schema } from '../plugins/actions/daemonInvocationV1.js';
 
 import {
   ActionExecuteFailureSchema,
@@ -31,6 +33,7 @@ import {
 } from './actionExecutionResult.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { getAccountScopedBlobCiphertextBase64LengthV1 } from '../crypto/accountScopedCipherEnvelope.js';
+import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
 import {
   measurePluginJsonUtf8Bytes,
   measureSerializedValidatedStrictPluginJsonUtf8Bytes,
@@ -833,10 +836,14 @@ export const ExternalActionRequestEnvelopeV1Schema = lazyZodSchema(() => z.objec
   requestId: ExternalActionRequestIdV1Schema.optional(),
   target: ExternalActionTargetV1Schema.optional(),
   input: StrictJsonValueSchema,
+  pluginInvocation: DaemonPluginMountedInvocationV1Schema.optional(),
   managedAdmission: ExternalActionManagedAdmissionV1Schema.optional(),
   sessionSpawnAdmission: ApiTokenSessionSpawnAdmissionV1Schema.optional(),
   handoffAdmission: ExternalActionHandoffAdmissionV1Schema.optional(),
 }).strict().superRefine((value, context) => {
+  if (value.pluginInvocation && !value.requestId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['requestId'], message: 'Mounted plugin invocation requires requestId' });
+  }
   if (!Object.prototype.hasOwnProperty.call(value, 'input')) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -914,11 +921,20 @@ const maximumResponseOuterFixedBytes = measureJsonUtf8Bytes({
   payload: { t: 'encrypted', c: '' },
 });
 
-export const EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2 =
+export const EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2 =
   maximumRequestOuterFixedBytes
   + getAccountScopedBlobCiphertextBase64LengthV1(
     EXTERNAL_ACTION_ENCRYPTED_REQUEST_PLAINTEXT_MAX_BYTES_V2,
   );
+const maximumPendingResetStartAdmission = {
+  sessionDigest: maximumRequestPayloadDigest, sourceDigest: maximumRequestPayloadDigest,
+  recordDigest: maximumRequestPayloadDigest, witnessDigest: maximumRequestPayloadDigest,
+  mutationDigest: maximumRequestPayloadDigest,
+};
+// Fixed canonical digests preserve unbounded valid identities without copying
+// decoded input into either the protected body framing or signed HTTP headers.
+export const EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2 = EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2
+  + measureJsonUtf8Bytes({ pendingResetStartAdmission: maximumPendingResetStartAdmission }) - 2;
 export const EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2 =
   maximumResponseOuterFixedBytes
   + getAccountScopedBlobCiphertextBase64LengthV1(
@@ -929,20 +945,85 @@ export const EXTERNAL_ACTION_RELAY_REQUEST_SOCKET_MIN_BUFFER_BYTES_V2 = EXTERNAL
 export const EXTERNAL_ACTION_RELAY_RESPONSE_SOCKET_MIN_BUFFER_BYTES_V2 = EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2
   + (EXTERNAL_ACTION_RELAY_RESPONSE_SOCKET_MIN_BUFFER_BYTES - EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES);
 
+const resetFactDigest = (fact: string, parts: readonly string[]) => computeCanonicalDomainSeparatedDigest(
+  // JSON escaping preserves lone UTF-16 surrogates that raw UTF-8 encoding
+  // would collapse into the replacement character, changing identity equality.
+  `happier.external-action.pending-reset-start.${fact}.v1`, parts.map(part => JSON.stringify(part)),
+);
+type ResetBinding = z.infer<typeof PendingResetStartSetInputV1Schema>['reset'];
+export function projectExternalActionPendingResetStartSessionDigestV1(sessionId: string): string {
+  return resetFactDigest('session', [PendingResetStartSetInputV1Schema.shape.sessionId.parse(sessionId)]);
+}
+export type ExternalActionPendingResetStartReadPurposeV1 =
+  | Readonly<{ kind: 'source'; source: ResetBinding['source'] }>
+  | Readonly<{ kind: 'record'; recordId: string }>
+  | Readonly<{ kind: 'witness'; witness: ResetBinding['witness'] }>;
+
+/** Same individually verifiable read selector representation used by the signed issuer. */
+export function projectExternalActionPendingResetStartReadPurposeDigestV1(purpose: ExternalActionPendingResetStartReadPurposeV1): string {
+  if (purpose.kind === 'record') return resetFactDigest('record', [PendingResetStartSetInputV1Schema.shape.reset.shape.recordId.parse(purpose.recordId)]);
+  if (purpose.kind === 'witness') {
+    const witness = PendingResetStartSetInputV1Schema.shape.reset.shape.witness.parse(purpose.witness);
+    return resetFactDigest('witness', [witness.id, String(witness.observedAtMs)]);
+  }
+  const source = PendingResetStartSetInputV1Schema.shape.reset.shape.source.parse(purpose.source);
+  return resetFactDigest('source', [source.bindingKind, source.ref.service.pluginId, source.ref.service.localId, source.ref.accountId,
+    ...(source.bindingKind === 'group_member' ? [source.groupId, source.groupGeneration === undefined ? '' : String(source.groupGeneration)] : [])]);
+}
+
+/** Fixed-size exact reset purpose; no raw quota identity is copied into JWT headers. */
+export const ExternalActionPendingResetStartAdmissionV1Schema = lazyZodSchema(() => z.object({
+  sessionDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+  sourceDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+  recordDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+  witnessDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+  mutationDigest: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
+}).strict());
+export type ExternalActionPendingResetStartAdmissionV1 = z.infer<typeof ExternalActionPendingResetStartAdmissionV1Schema>;
+
+export function projectExternalActionPendingResetStartAdmissionV1(input: unknown): ExternalActionPendingResetStartAdmissionV1 {
+  const { sessionId, localId, reset } = PendingResetStartSetInputV1Schema.parse(input);
+  const sessionDigest = projectExternalActionPendingResetStartSessionDigestV1(sessionId);
+  const sourceDigest = projectExternalActionPendingResetStartReadPurposeDigestV1({ kind: 'source', source: reset.source });
+  const recordDigest = projectExternalActionPendingResetStartReadPurposeDigestV1({ kind: 'record', recordId: reset.recordId });
+  const witnessDigest = projectExternalActionPendingResetStartReadPurposeDigestV1({ kind: 'witness', witness: reset.witness });
+  return { sessionDigest, sourceDigest, recordDigest, witnessDigest,
+    mutationDigest: resetFactDigest('mutation', [sessionId, localId, reset.meterId, sourceDigest, recordDigest, witnessDigest]) };
+}
+
 /** V2 is closed at every routing and encryption boundary; content is opaque. */
 export const ExternalActionRequestEnvelopeV2Schema = lazyZodSchema(() => z.object({
   v: z.literal(2), requestId: ExternalActionRequestIdV1Schema,
   target: ExternalActionTargetV1Schema.optional(),
+  pluginInvocation: DaemonPluginMountedInvocationV1Schema.optional(),
   payload: z.object({ t: z.literal('encrypted'), c: z.string().min(1).max(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2) }).strict(),
   managedAdmission: ExternalActionManagedAdmissionV1Schema.optional(),
   sessionSpawnAdmission: ApiTokenSessionSpawnAdmissionV1Schema.optional(),
   handoffAdmission: ExternalActionHandoffAdmissionV1Schema.optional(),
+  pendingResetStartAdmission: ExternalActionPendingResetStartAdmissionV1Schema.optional(),
 }).strict());
 export type ExternalActionRequestEnvelopeV2 = z.infer<typeof ExternalActionRequestEnvelopeV2Schema>;
 export const ExternalActionRequestEnvelopeSchema = lazyZodSchema(() => z.union([
   ExternalActionRequestEnvelopeV1Schema, ExternalActionRequestEnvelopeV2Schema,
 ]));
 export type ExternalActionRequestEnvelope = z.infer<typeof ExternalActionRequestEnvelopeSchema>;
+/** One input-bound reset purpose for both Home issuance and ordinary daemon relay. */
+export function projectExternalActionPendingResetStartEnvelopeAdmissionV1(input: Readonly<{
+  actionId: string; envelope: ExternalActionRequestEnvelope; target?: ExternalActionTargetV1;
+}>): ExternalActionPendingResetStartAdmissionV1 | undefined {
+  if (input.actionId !== 'session.pending.resetStart.set') {
+    if (input.envelope.v === 2 && input.envelope.pendingResetStartAdmission) throw new TypeError('Unexpected reset admission');
+    return undefined;
+  }
+  const admission = input.envelope.v === 1
+    ? projectExternalActionPendingResetStartAdmissionV1(input.envelope.input)
+    : ExternalActionPendingResetStartAdmissionV1Schema.parse(input.envelope.pendingResetStartAdmission);
+  const target = input.target ?? input.envelope.target;
+  if (target?.kind === 'session' && projectExternalActionPendingResetStartSessionDigestV1(target.sessionId) !== admission.sessionDigest) {
+    throw new TypeError('Reset admission target mismatch');
+  }
+  return admission;
+}
 /** Plain permits genuine protected transport too; encrypted never downgrades to V1. */
 export function isExternalActionRequestVersionAllowedForAccountModeV1(input: Readonly<{
   accountEncryptionMode: AccountEncryptionMode; envelopeVersion: 1 | 2;
@@ -962,9 +1043,12 @@ export type PreparedExternalActionResponseEnvelope = Readonly<{
 
 /** Version-specific ceilings retain the V1 decoded-content contract. */
 export function isExternalActionRequestWithinLimit(envelope: ExternalActionRequestEnvelope): boolean {
-  return measurePluginJsonUtf8Bytes(JSON.stringify(envelope), 'externalActionRequest') <= (
-    envelope.v === 1 ? EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES : EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2
-  );
+  if (envelope.v === 1) return measurePluginJsonUtf8Bytes(JSON.stringify(envelope), 'externalActionRequest') <= EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES;
+  const { pendingResetStartAdmission, ...withoutResetAdmission } = envelope;
+  if (pendingResetStartAdmission === undefined) return measurePluginJsonUtf8Bytes(JSON.stringify(envelope), 'externalActionRequest') <= EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2;
+  return measurePluginJsonUtf8Bytes(JSON.stringify(envelope), 'externalActionRequest') <= EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2
+    && measurePluginJsonUtf8Bytes(JSON.stringify(withoutResetAdmission), 'externalActionRequest') <= EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2
+    && measureJsonUtf8Bytes(pendingResetStartAdmission) <= measureJsonUtf8Bytes(maximumPendingResetStartAdmission);
 }
 
 const ExternalActionServerPrincipalIdV1Schema = lazyZodSchema(() => z.string()
@@ -994,7 +1078,7 @@ export const ExternalActionSignedAuthenticationV1Schema = lazyZodSchema(() => z.
 export type ExternalActionSignedAuthenticationV1 = z.infer<typeof ExternalActionSignedAuthenticationV1Schema>;
 export const ExternalActionAccountServerPrincipalV1Schema = lazyZodSchema(() => z.object({
   accountId: ExternalActionServerPrincipalIdV1Schema,
-  authority: z.literal('present_user'),
+  authority: AuthTokenAuthoritySchema,
   authentication: ExternalActionAccountAuthenticationV1Schema,
 }).strict());
 export const ExternalActionTerminalServerPrincipalV1Schema = lazyZodSchema(() => z.object({
@@ -1062,6 +1146,7 @@ const externalActionExecutionAuthorizationRoutingShapeV1 = () => ({
     sessionActionOrigin: SessionActionRpcOriginV1Schema.optional(),
     sessionActionSource: ExternalActionSessionSourceV1Schema.optional(),
     workflowActionOrigin: ExternalActionWorkflowOriginV1Schema.optional(),
+    pendingResetStartAdmission: ExternalActionPendingResetStartAdmissionV1Schema.optional(),
   });
 export const ExternalActionExecutionAuthorizationBindingV1Schema = lazyZodSchema(() => z.union([
   ExternalActionApiTokenServerPrincipalV1Schema.omit({ authority: true })
@@ -1071,6 +1156,10 @@ export const ExternalActionExecutionAuthorizationBindingV1Schema = lazyZodSchema
   ExternalActionTerminalServerPrincipalV1Schema.omit({ authority: true })
     .extend(externalActionExecutionAuthorizationRoutingShapeV1()).strict(),
 ]).superRefine((value, context) => {
+  if (value.pendingResetStartAdmission && (value.actionId !== 'session.pending.resetStart.set'
+    || value.target.kind === 'session' && projectExternalActionPendingResetStartSessionDigestV1(value.target.sessionId) !== value.pendingResetStartAdmission.sessionDigest)) {
+    context.addIssue({ code: 'custom', path: ['pendingResetStartAdmission'], message: 'Reset admission binds only its exact Session set input' });
+  }
   if (value.workflowActionOrigin && (value.sessionActionOrigin || value.managedContinuation || value.handoffAdmission
     || value.workflowActionOrigin.requestId !== value.requestId)) {
     context.addIssue({ code: 'custom', path: ['workflowActionOrigin'], message: 'FIN origin binds only its original invocation' });
@@ -1209,7 +1298,8 @@ export function bindExternalActionExecutionAuthorizationHttpPathV1(actionId: str
 export function bindExternalActionExecutionAuthorizationVerifyHttpPathV1(actionId: string): string {
   return `${bindExternalActionExecutionAuthorizationHttpPathV1(actionId)}/verify`;
 }
-export const ExternalActionExecutionAuthorizationRequestV1Schema = lazyZodSchema(() => z.object({
+function externalActionExecutionAuthorizationRequestSchemaV1(actionId?: 'session.board.item.upsert') {
+  return z.object({
   v: z.literal(1), machineId: ExternalActionTargetIdV1Schema, envelope: ExternalActionRequestEnvelopeSchema,
   executionAuthorization: ExternalActionExecutionAuthorizationV1Schema.optional(),
   sessionActionOrigin: SessionActionRpcOriginV1Schema.optional(),
@@ -1237,10 +1327,14 @@ export const ExternalActionExecutionAuthorizationRequestV1Schema = lazyZodSchema
     || value.envelope.target?.kind !== 'machine' || value.envelope.target.machineId !== value.machineId)) {
     context.addIssue({ code: 'custom', path: ['workflowActionOrigin'], message: 'FIN origin requires its exact installed executor invocation' });
   }
+  const target = value.envelope.target;
+  const bindsOriginalTarget = actionId === 'session.board.item.upsert'
+    ? target?.kind === 'session' && target.sessionId === value.sessionActionOrigin?.caller.sessionId
+      && value.sessionActionSource?.machineId === value.machineId
+    : target?.kind === 'machine' && target.machineId === value.machineId;
   if (value.sessionActionOrigin && (value.managedContinuation
-    || value.sessionActionOrigin.requestId !== value.envelope.requestId
-    || value.envelope.target?.kind !== 'machine' || value.envelope.target.machineId !== value.machineId)) {
-    context.addIssue({ code: 'custom', path: ['sessionActionOrigin'], message: 'Initial Session origin must bind the exact original Machine request' });
+    || value.sessionActionOrigin.requestId !== value.envelope.requestId || !bindsOriginalTarget)) {
+    context.addIssue({ code: 'custom', path: ['sessionActionOrigin'], message: 'Initial Session origin must bind the exact original Action target' });
   }
   if ((value.sessionActionOrigin === undefined) !== (value.sessionActionSource === undefined)) {
     context.addIssue({ code: 'custom', path: ['sessionActionSource'], message: 'Session origin requires its source installation' });
@@ -1280,7 +1374,15 @@ export const ExternalActionExecutionAuthorizationRequestV1Schema = lazyZodSchema
       context.addIssue({ code: 'custom', path: ['handoffPreflight'], message: 'Handoff preflight requires its exact Home-issued root and destination' });
     }
   }
-}));
+  });
+}
+export const ExternalActionExecutionAuthorizationRequestV1Schema = lazyZodSchema(() => externalActionExecutionAuthorizationRequestSchemaV1());
+const SessionVisualExecutionAuthorizationRequestV1Schema = lazyZodSchema(() => externalActionExecutionAuthorizationRequestSchemaV1('session.board.item.upsert'));
+/** The trusted routed Action selects framing; JSON never claims this exception. */
+export function externalActionExecutionAuthorizationRequestSchemaForActionV1(actionId: string): typeof ExternalActionExecutionAuthorizationRequestV1Schema {
+  return actionId === 'session.board.item.upsert'
+    ? SessionVisualExecutionAuthorizationRequestV1Schema : ExternalActionExecutionAuthorizationRequestV1Schema;
+}
 export type ExternalActionExecutionAuthorizationRequestV1 = z.infer<typeof ExternalActionExecutionAuthorizationRequestV1Schema>;
 export const ExternalActionExecutionAuthorizationVerifyRequestV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),

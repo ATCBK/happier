@@ -73,7 +73,7 @@ export function createArtifactPublicLinkActionsV1(params: Readonly<{
       ...(create.isConsentRequired === undefined ? {} : { isConsentRequired: create.isConsentRequired }) });
     const result = StoredContentPublicShareCreateResponseV1Schema.parse(await params.request({ method: 'POST', path: '/v1/public-shares', body, signal: args.signal }));
     if (result.publicShare.subject.kind !== 'artifact' || result.publicShare.subject.id !== create.artifactId || result.publicShare.keyDerivation !== 'fragment_v1') throw Object.assign(new Error('public_share_subject_mismatch'), { code: 'public_share_subject_mismatch' });
-    const url = buildStoredContentPublicShareUrlV1({ ...material, origin: result.isolatedOrigin });
+    const url = buildStoredContentPublicShareUrlV1({ ...material, origin: result.viewerOrigin });
     try {
       await params.onPublicLinkIssued?.({ ...material, shareId: result.publicShare.id, url });
     } catch {

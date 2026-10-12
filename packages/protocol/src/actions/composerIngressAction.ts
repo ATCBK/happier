@@ -37,7 +37,7 @@ const addressHints = [
   { path: 'ref', title: 'Mounted composer', widget: 'json', required: true },
 ] as const;
 export const COMPOSER_INGRESS_ACTION_SPECS = [{
-  ...client, id: 'composer.transaction.apply', title: 'Apply composer transaction',
+  ...client, id: 'composer.transaction.apply', approval: {result: 'required'}, title: 'Apply composer transaction',
   cli: { commands: [{ path: ['composer', 'transaction', 'apply'], visibility: 'canonical' }] },
   description: 'Apply a revision-bound transaction to the exact mounted editable composer. Attachment selection is validated against its current composition; never submits input or grants staged-media custody.',
   safety: 'safe', sideEffectClass: 'external', bindings: { mcpToolName: 'composer_transaction_apply' },
@@ -47,7 +47,7 @@ export const COMPOSER_INGRESS_ACTION_SPECS = [{
     { path: 'attachmentContributor', title: 'Current attachment selection', widget: 'json', required: false }] },
   examples: { mcp: { argsExample: '{"scope":{"serverId":"home-a","accountId":"account-a"},"ref":{"kind":"newSession","instanceId":"composer-a"},"transaction":{"expectedRevision":1,"operations":[{"kind":"text.insert","position":{"offset":0},"text":"Context"}]}}' } },
 }, {
-  ...client, id: 'composer.attachments.pick', title: 'Pick composer attachments',
+  ...client, id: 'composer.attachments.pick', approval: {result: 'required'}, title: 'Pick composer attachments',
   cli: { commands: [{ path: ['composer', 'attachments', 'pick'], visibility: 'canonical' }] },
   description: 'Open the exact mounted composer file picker. Selected files use its existing staging custody and never auto-send. OS file handles and bytes cannot be authored in Action input.',
   safety: 'safe', sideEffectClass: 'external', bindings: { mcpToolName: 'composer_attachments_pick' },
@@ -55,14 +55,14 @@ export const COMPOSER_INGRESS_ACTION_SPECS = [{
   inputHints: { title: 'Pick composer attachments', fields: [...addressHints] },
   examples: { mcp: { argsExample: '{"scope":{"serverId":"home-a","accountId":"account-a"},"ref":{"kind":"newSession","instanceId":"composer-a"}}' } },
 }, {
-  ...client, id: 'repository.upload.pick', title: 'Pick repository upload',
+  ...client, id: 'repository.upload.pick', approval: {result: 'required'}, title: 'Pick repository upload',
   cli: { commands: [{ path: ['repository', 'upload', 'pick'], visibility: 'canonical' }] },
   description: 'Request the mounted repository file or folder picker for the exact workspace and destination. Existing transfer progress, conflicts and partial failure remain authoritative; requested does not acknowledge upload completion.',
   safety: 'danger', sideEffectClass: 'danger', bindings: { mcpToolName: 'repository_upload_pick' },
   inputSchema: RepositoryUploadPickInputV1Schema, outputSchema: RepositoryUploadPickResultV1Schema,
   inputHints: { title: 'Pick repository upload', fields: [
     addressHints[0],
-    { path: 'workspace', title: 'Workspace', widget: 'json', required: true },
+    { path: 'workspace', title: 'Workspace', prompt: 'Which workspace?', widget: 'json', required: true },
     { path: 'destinationDir', title: 'Destination directory', widget: 'text', required: true },
     { path: 'kind', title: 'Files or folder', widget: 'text', required: true },
   ] },

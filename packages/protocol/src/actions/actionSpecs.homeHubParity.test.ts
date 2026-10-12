@@ -18,7 +18,7 @@ describe('Home hub customization Action parity', () => {
     }
     const update = getActionSpec('home.hub.layout.update');
     for (const intent of [
-      { kind: 'reorder', sectionIds: ['usage', 'start', 'attention', 'setup', 'machines'] },
+      { kind: 'reorder', sectionIds: ['usage', 'start', 'attention', 'setup', 'automations'] },
       { kind: 'move', sectionId: 'usage', step: -1 },
       { kind: 'visibility', sectionId: 'widget:acme/latest', hidden: false },
       { kind: 'reset' },

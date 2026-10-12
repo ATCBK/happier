@@ -6,7 +6,7 @@ import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type 
 import { ACCOUNT_SCOPED_BLOB_V1_PREFIX_BYTES, ACCOUNT_SCOPED_SECRETBOX_NONCE_BYTES, ACCOUNT_SCOPED_SECRETBOX_OVERHEAD_BYTES } from '../crypto/accountScopedCipherEnvelope.js';
 import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
 import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
-import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import { StrictJsonValueSchema, sameStrictJsonValue } from '../json/strictJsonValue.js';
 import type { ActionExecuteResult } from './actionExecutionResult.js';
 import {
   ExternalActionActionIdV1Schema, ExternalActionRequestIdV1Schema,
@@ -20,6 +20,8 @@ import {
   prepareExternalActionResponseEnvelopeV1, isExternalActionRequestWithinLimit,
   externalActionTargetsEqualV1,
   measureExternalActionResponseEnvelopeUtf8BytesV1,
+  projectExternalActionPendingResetStartAdmissionV1,
+  projectExternalActionPendingResetStartSessionDigestV1,
   type ExternalActionRequestEnvelopeV2, type ExternalActionResponseEnvelopeV2,
   type PreparedExternalActionResponseEnvelope,
 } from './externalActionApi.js';
@@ -95,6 +97,7 @@ export function sealExternalActionRequestV2(params: SealOptions & Readonly<{
   binding: ExternalActionEncryptionBindingV2; input: unknown;
   managedAdmission?: ExternalActionRequestEnvelopeV2['managedAdmission'];
   sessionSpawnAdmission?: ExternalActionRequestEnvelopeV2['sessionSpawnAdmission'];
+  pluginInvocation?: ExternalActionRequestEnvelopeV2['pluginInvocation'];
 }>): ExternalActionRequestEnvelopeV2 {
   const payload = RequestSchema.parse({ ...params.binding, v: 2, direction: 'request', input: params.input });
   if (params.material.type !== 'dataKey' || params.material.machineKey.length !== 32) throw new TypeError('Invalid external Action material');
@@ -104,11 +107,16 @@ export function sealExternalActionRequestV2(params: SealOptions & Readonly<{
   const envelope: ExternalActionRequestEnvelopeV2 = { v: 2, requestId: payload.requestId, target: payload.target,
     payload: { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ ...params, kind, payload }) },
     ...(params.managedAdmission ? { managedAdmission: params.managedAdmission } : {}),
-    ...(params.sessionSpawnAdmission ? { sessionSpawnAdmission: params.sessionSpawnAdmission } : {}) };
+    ...(params.sessionSpawnAdmission ? { sessionSpawnAdmission: params.sessionSpawnAdmission } : {}),
+    ...(params.pluginInvocation ? { pluginInvocation: params.pluginInvocation } : {}),
+    ...(payload.actionId === 'session.pending.resetStart.set'
+      ? { pendingResetStartAdmission: projectExternalActionPendingResetStartAdmissionV1(payload.input) } : {}) };
+  if (envelope.pendingResetStartAdmission && payload.target.kind === 'session'
+    && projectExternalActionPendingResetStartSessionDigestV1(payload.target.sessionId) !== envelope.pendingResetStartAdmission.sessionDigest) throw new TypeError('Reset admission target mismatch');
   if (!isExternalActionRequestWithinLimit(envelope)) {
     throw new RangeError('External Action request exceeds its protected wire limit');
   }
-  return envelope;
+  return ExternalActionRequestEnvelopeV2Schema.parse(envelope);
 }
 
 /** No error details from unauthenticated plaintext may cross this boundary. */
@@ -125,6 +133,12 @@ export function openExternalActionRequestV2(params: Readonly<{
       EXTERNAL_ACTION_ENCRYPTED_REQUEST_PLAINTEXT_MAX_BYTES_V2,
     ));
     if (!decoded.success || !matches(decoded.data, params.binding)) return null;
+    if (decoded.data.actionId === 'session.pending.resetStart.set') {
+      const admission = projectExternalActionPendingResetStartAdmissionV1(decoded.data.input);
+      if (!envelope.pendingResetStartAdmission || decoded.data.target.kind === 'session'
+        && projectExternalActionPendingResetStartSessionDigestV1(decoded.data.target.sessionId) !== admission.sessionDigest
+        || !sameStrictJsonValue(admission, envelope.pendingResetStartAdmission)) return null;
+    } else if (envelope.pendingResetStartAdmission) return null;
     return isExternalActionRequestWithinLimit({ v: 1, requestId: decoded.data.requestId,
       target: decoded.data.target, input: decoded.data.input }) ? { input: decoded.data.input } : null;
   } catch { return null; }

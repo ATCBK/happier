@@ -1,5 +1,8 @@
 export * from './invocationAuthority.js';
+export * from './specs/machineResources.js';
+export * from './specs/storage.js';
 export * from './clientDispatchV1.js';
+export type { AccountHomeContinuationInputV1, AccountHomeContinuationOperationV1 } from './accountHomeContinuationV1.js';
 export { isSessionStateFieldActionId } from './sessionStateFieldActions.js';
 export * from './anchoredListOrderV1.js';
 export { ComposerTransactionApplyInputV1Schema, ComposerAttachmentsPickInputV1Schema, ComposerAttachmentsPickResultV1Schema,
@@ -7,6 +10,10 @@ export { ComposerTransactionApplyInputV1Schema, ComposerAttachmentsPickInputV1Sc
   type ComposerTransactionApplyInputV1, type ComposerAttachmentsPickInputV1,
   type RepositoryUploadPickInputV1, type RepositoryUploadPickResultV1 } from './composerIngressAction.js';
 export { WorkflowConversationBindInputV1Schema, WorkflowConversationBindResultV1Schema,
+  WorkflowDraftAddressV1Schema, WorkflowDraftGetInputV1Schema, WorkflowDraftEditInputV1Schema,
+  WorkflowReviewDraftSetInputV1Schema, WorkflowDraftMutationResultV1Schema, WorkflowMountedDraftV1Schema,
+  WorkflowDraftGetResultV1Schema, type WorkflowDraftEditInputV1, type WorkflowReviewDraftSetInputV1,
+  type WorkflowDraftMutationResultV1, type WorkflowMountedDraftV1, type WorkflowDraftGetResultV1,
   type WorkflowConversationBindInputV1, type WorkflowConversationBindResultV1 } from './workflowAuthoringAction.js';
 export { SessionOrganizationMoveInputSchema, SessionOrganizationMoveOutputSchema, SessionOrganizationPinSetInputSchema,
   type SessionOrganizationMoveInput, type SessionOrganizationMoveOutput, type SessionOrganizationPinSetInput } from './sessionOrganizationMoveAction.js';
@@ -14,6 +21,7 @@ export { UiFindInputSchema } from './findActionSpecs.js';
 export { WORKSPACE_ACTION_IDS, WORKSPACE_ACTION_INPUT_SCHEMAS, WORKSPACE_ACTION_OUTPUT_SCHEMAS, isWorkspaceActionId, type WorkspaceActionId, type WorkspaceTabsListOutput, type WorkspaceClosedTabsListOutput } from './workspaceActionFamily.js';
 export { SESSION_CANVAS_ACTION_IDS, SESSION_CANVAS_ACTION_INPUT_SCHEMAS, SESSION_CANVAS_ACTION_OUTPUT_SCHEMAS, isSessionCanvasActionId, type SessionCanvasActionId, type SessionCanvasActionOutcome } from './sessionCanvasActionFamily.js';
 export * from './scopeActionFamily.js';
+export * from './diagnosticsActionFamily.js';
 export * from './specs/homeHub.js';
 export * from './specs/projectWorkers.js';
 export * from './projectDefinitionActionFamily.js';
@@ -92,6 +100,7 @@ export {
   bindExternalActionExecutionAuthorizationHttpPathV1,
   bindExternalActionExecutionAuthorizationVerifyHttpPathV1,
   ExternalActionExecutionAuthorizationRequestV1Schema,
+  externalActionExecutionAuthorizationRequestSchemaForActionV1,
   ExternalActionExecutionAuthorizationVerifyRequestV1Schema,
   ExternalActionExecutionAuthorizationVerifyResponseV1Schema,
   type ExternalActionExecutionAuthorizationRequestV1,
@@ -516,8 +525,10 @@ export {
   projectApprovalStructuredAnswers,
   resolveApprovalRequestApproveAdmission,
   resolveApprovalPresentationInput,
+  resolveApprovalVisualPreview,
   shouldHideApprovalField,
   type ApprovalActionFieldRow,
+  type ApprovalVisualPreview,
   type ApprovalActionFieldsPresentation,
   type ApprovalRequestApproveAdmission,
   type ApprovalStructuredAnswer,

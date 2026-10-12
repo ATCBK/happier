@@ -47,7 +47,7 @@ const disclosure = machineAccessTrustedOsDisclosure('this machine');
 
 export const MACHINE_ACCESS_ACTION_SPECS = [
   {
-    id: 'machines.work.summary.get', title: 'Read machine work summary',
+    id: 'machines.work.summary.get', approval: {result: 'required'}, title: 'Read machine work summary',
     description: 'Read current requester identities and numeric work counts as the custodian or someone with current Manage access. No work titles, identifiers, paths or content are returned.',
     safety: 'safe', sideEffectClass: 'read', executionPlacement: 'machine', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_work_summary_get', voiceClientToolName: 'getMachineWorkSummary', rpcMethod: RPC_METHODS.MACHINES_WORK_SUMMARY_GET },
@@ -55,7 +55,7 @@ export const MACHINE_ACCESS_ACTION_SPECS = [
     inputHints: { fields: targetFields },
   },
   {
-    id: 'machines.access.grants.list', title: 'Read machine sharing',
+    id: 'machines.access.grants.list', approval: {result: 'required'}, title: 'Read machine sharing',
     description: 'Read the current audience as a manager, or your own effective access and readiness as a recipient. No key envelopes or other people’s work are returned.',
     safety: 'safe', sideEffectClass: 'read', executionPlacement: 'account', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_access_grants_list', voiceClientToolName: 'listMachineAccessGrants' },
@@ -64,7 +64,7 @@ export const MACHINE_ACCESS_ACTION_SPECS = [
     inputHints: { fields: targetFields },
   },
   {
-    id: 'machines.access.grant.set', title: 'Share a machine',
+    id: 'machines.access.grant.set', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Share a machine',
     description: `Save or change a current person, Team or group grant. Can manage includes sharing and owner-equivalent machine administration. ${disclosure}`,
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_access_grant_set', voiceClientToolName: 'setMachineAccessGrant' },
@@ -74,7 +74,7 @@ export const MACHINE_ACCESS_ACTION_SPECS = [
       { path: 'level', title: 'Access', widget: 'select', required: true, options: [{ value: 'view', label: 'Can use' }, { value: 'admin', label: 'Can manage' }] }] },
   },
   {
-    id: 'machines.access.grant.remove', title: 'Remove machine access',
+    id: 'machines.access.grant.remove', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Remove machine access',
     description: 'Remove or cancel this exact audience grant. Running and queued work loses access only when no independent grant remains.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_access_grant_remove', voiceClientToolName: 'removeMachineAccessGrant' },
@@ -83,7 +83,7 @@ export const MACHINE_ACCESS_ACTION_SPECS = [
     inputHints: { fields: [...targetFields, { path: 'principal', title: 'Person, Team or group', widget: 'json', required: true }] },
   },
   {
-    id: 'machines.access.leave', title: 'Leave a machine share',
+    id: 'machines.access.leave', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Leave a machine share',
     description: 'Remove your own direct Machine grant. Inherited Team or group access remains; this does not leave a Team.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_access_leave', voiceClientToolName: 'leaveMachineShare' },
@@ -92,7 +92,7 @@ export const MACHINE_ACCESS_ACTION_SPECS = [
     inputHints: { fields: targetFields },
   },
   {
-    id: 'machines.access.prepareKeys', title: 'Prepare secure machine access',
+    id: 'machines.access.prepareKeys', approvalPolicy: { uiConfirmation: 'policy' }, approval: {result: 'required'}, title: 'Prepare secure machine access',
     description: `Retry current recipient-key delivery using an authorized key holder. No raw keys are accepted or returned. ${disclosure}`,
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'machine', placements: [], surfaces,
     bindings: { mcpToolName: 'machines_access_prepare_keys', voiceClientToolName: 'prepareMachineAccessKeys' },

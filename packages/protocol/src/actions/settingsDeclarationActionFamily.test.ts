@@ -22,6 +22,7 @@ describe('explicit Settings resource target admission', () => {
       { kind: 'home', serverId: 'home-1' },
       { kind: 'team', serverId: 'home-1', teamId: 'team-1' },
       { kind: 'team_identity_connection', serverId: 'home-1', teamId: 'team-1', connectionId: 'connection-1' },
+      { kind: 'project', serverId: 'home-1', projectKey: 'project-1' },
     ]) {
       for (const actionId of ['settings.get', 'settings.set'] as const) {
         const input = { anchor: 'teams.authentication.admissionJit', ...(actionId === 'settings.set' ? { value: true } : {}), target };
@@ -31,6 +32,22 @@ describe('explicit Settings resource target admission', () => {
     }
     expect(SettingsDeclarationActionInputSchemasV1['settings.set'].safeParse({ anchor: 'appearance.themeMode', value: 'dark',
       target: { kind: 'team', serverId: 'home-1' } }).success).toBe(false);
+  });
+});
+
+describe('atmosphere picture operation input admission', () => {
+  it('accepts URL or exact Machine file acquisition and rejects authority, local-path and removal-input additions', () => {
+    const schema = SettingsDeclarationActionInputSchemasV1['settings.invoke'];
+    for (const source of [{ kind: 'url', url: 'https://example.test/image.webp' },
+      { kind: 'machine_file', machineId: 'machine-1', path: 'C:\\Pictures\\image.png' }]) {
+      expect(schema.safeParse({ anchor: 'appearance.atmospherePictureAdd', input: { kind: 'atmosphere_picture_add', source } }).success).toBe(true);
+      expect(schema.safeParse({ anchor: 'appearance.atmospherePictureAdd', input: { kind: 'atmosphere_picture_add', source: { ...source, accountId: 'other' } } }).success).toBe(false);
+    }
+    for (const source of [{ kind: 'url', url: 'file:///private/image.png' }, { kind: 'url', url: 'data:image/png;base64,aQ==' },
+      { kind: 'machine_file', path: '/image.png' }, { kind: 'file', path: '/image.png' }]) {
+      expect(schema.safeParse({ anchor: 'appearance.atmospherePictureAdd', input: { kind: 'atmosphere_picture_add', source } }).success).toBe(false);
+    }
+    expect(schema.safeParse({ anchor: 'appearance.atmospherePictureRemove', input: { kind: 'atmosphere_picture_remove', localId: 'user-1', confirmed: true } }).success).toBe(false);
   });
 });
 

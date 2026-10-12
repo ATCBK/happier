@@ -1,0 +1,58 @@
+import { describe, expect, it } from 'vitest';
+import { ACTION_IDS } from './actionIds.js';
+import { getActionSpec } from './actionSpecs.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
+import { isApprovalRequiredByActionsSettings, resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+
+const corridorActionIds = ACTION_IDS.filter(id => /^machines\.(managed\.|presets\.|pools\.|access\.|provisioners\.|replacement\.|add\.ssh\.|environment\.apply$)/.test(id)
+  || id.startsWith('connectedServices.authentication.'));
+
+describe('Corridor C approval defaults', () => {
+  it('honors a surface-specific waiver on every machine and provisioner Connect Action; an explicit Ask wins', () => {
+    expect(corridorActionIds.length).toBeGreaterThan(0);
+    for (const actionId of corridorActionIds) {
+      const spec = getActionSpec(actionId);
+      for (const surface of Object.keys(spec.surfaces) as (keyof typeof spec.surfaces)[]) {
+        if (!spec.surfaces[surface]) continue;
+        const context = { surface, authority: 'account_automation' } as const;
+        const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
+        expect(isApprovalRequiredByActionsSettings(actionId, waived, context), `${actionId}:${surface}`).toBe(false);
+        expect(resolveActionApprovalRouting({ actionId, spec, settings: waived, context }).required, `${actionId}:${surface}`).toBe(false);
+        const required = normalizeActionsSettingsV1({ ...waived, actions: { [actionId]: { approvalRequiredSurfaces: [surface] } } });
+        expect(resolveActionApprovalRouting({ actionId, spec, settings: required, context }).required, `${actionId}:${surface}`).toBe(true);
+      }
+      if (spec.safety === 'danger') {
+        expect(resolveActionApprovalRouting({ actionId, spec, settings: normalizeActionsSettingsV1({ v: 1 }),
+          context: { surface: 'agent', authority: 'account_automation' } }).required, actionId).toBe(true);
+      }
+    }
+  });
+
+  it('keeps Defaults, creation preferences and terminal host writes user-waivable through the shared Settings Action', () => {
+    for (const anchor of ['machines.defaults.local', 'machines.defaults.runningOnly', 'machines.defaults.stoppedBilled',
+      'machines.defaults.unknown', 'machines.defaults.creationEnabled', 'machines.terminal.host']) {
+      for (const actionId of ['settings.set', 'settings.reset'] as const) {
+        for (const surface of ['agent', 'mcp', 'ui', 'cli', 'voice', 'plugin', 'api'] as const) {
+          const context = { surface, authority: 'account_automation' } as const;
+          const args = { actionId, spec: getActionSpec(actionId), input: { anchor }, context };
+          expect(resolveActionApprovalRouting({ ...args, settings: normalizeActionsSettingsV1({ v: 1 }) }).required, `${anchor}:${surface}`).toBe(true);
+          const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
+          expect(resolveActionApprovalRouting({ ...args, settings: waived }).required, `${anchor}:${surface}`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('defaults pool Delete to Ask-first on UI and lets the user waive or restore it', () => {
+    const actionId = 'machines.pools.delete' as const;
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    const args = { actionId, spec: getActionSpec(actionId), context };
+    expect(resolveActionApprovalRouting({ ...args, settings: normalizeActionsSettingsV1({ v: 1 }) }))
+      .toMatchObject({ required: true, flow: 'deferred' });
+    const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
+    expect(resolveActionApprovalRouting({ ...args, settings: waived }).required).toBe(false);
+    expect(resolveActionApprovalRouting({ ...args, settings: waived, context: { surface: 'agent' } }).required).toBe(true);
+    const required = normalizeActionsSettingsV1({ ...waived, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+    expect(resolveActionApprovalRouting({ ...args, settings: required }).required).toBe(true);
+  });
+});

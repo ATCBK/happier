@@ -1,13 +1,106 @@
 import { PROVIDER_ACTION_INPUT_SCHEMAS_V1 as inputs, PROVIDER_ACTION_OUTPUT_SCHEMAS_V1 as outputs,
-  isProviderActionMachineRequiredV1, parseProviderActionRequestV1, type ProviderActionIdV1 } from '../../providers/providerActionsV1.js';
-import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+  isProviderActionMachineRequiredV1, resolveProviderActionExecutionPlacementsV1, parseProviderActionRequestV1, type ProviderActionIdV1 } from '../../providers/providerActionsV1.js';
+import type { ActionInputFieldHint, PreNormalizedActionSpec } from '../actionSpecs.js';
 import { readRecord } from '../../inputs/inputRecords.js';
+import { ProviderEndpointUrlSyntaxSchema } from '../../providers/endpointUrlSchema.js';
+import { CustomProviderTemplateV1Schema } from '../../providers/connections/customTemplateV1.js';
+import { ProviderClaudeHelperModelsV1Schema, ProviderConnectionPurposeBindingDefaultsV1Schema,
+  ProviderGatewayPlacementV1Schema } from '../../providers/connections/v1.js';
 
-/** Observations deliberately omit credentials, templates, endpoints and model inventories. */
+/** Outputs never disclose credentials, templates, endpoints or model inventories. */
 function projectProviderObservation(input: unknown): unknown {
   const value = readRecord(input);
   return Object.fromEntries(['status', 'action', 'machineId', 'connectionId', 'agentTargetKey', 'sourceProfileId']
     .filter(key => typeof value[key] === 'string').map(key => [key, value[key]]));
+}
+
+/** The same safe operands explain execution observations and approval effects. */
+function projectProviderInputObservation(input: unknown): unknown {
+  const value = readRecord(input);
+  const projected: Record<string, unknown> = { ...readRecord(projectProviderObservation(value)) };
+  for (const key of ['contributionKey', 'displayName', 'displayNameMode', 'newConnectionId', 'draftConnectionId', 'mode', 'scope',
+    'endpointTemplateId', 'credentialSlotId', 'modelId', 'purpose', 'candidateId']) {
+    if (typeof value[key] === 'string' || value[key] === null) projected[key] = value[key];
+  }
+  for (const key of ['enable', 'enabled', 'shown', 'visible', 'expectedRevision']) {
+    if (typeof value[key] === 'boolean' || typeof value[key] === 'number' || value[key] === null) projected[key] = value[key];
+  }
+  if (value.baseUrl === null) projected.baseUrl = null;
+  else {
+    const url = ProviderEndpointUrlSyntaxSchema.safeParse(value.baseUrl);
+    if (url.success) projected.baseUrl = url.data;
+  }
+  const template = CustomProviderTemplateV1Schema.safeParse(value.template);
+  if (template.success) {
+    projected.template = { ...template.data, credential: template.data.credential ?? null,
+      endpointTemplates: template.data.endpointTemplates.map(({ publicHeaders: _headers, ...endpoint }) => endpoint) };
+  }
+  const review = readRecord(value.authoringReview);
+  if (Array.isArray(review.endpointOverrides)) {
+    projected.authoringReview = { endpointOverrides: review.endpointOverrides.flatMap(entry => {
+      const endpoint = readRecord(entry);
+      const url = ProviderEndpointUrlSyntaxSchema.safeParse(endpoint.baseUrl);
+      return typeof endpoint.endpointTemplateId === 'string' && url.success
+        ? [{ endpointTemplateId: endpoint.endpointTemplateId, baseUrl: url.data }] : [];
+    }) };
+  }
+  const deployment = readRecord(value.deployment);
+  if (deployment.kind === 'external') projected.deployment = { kind: 'external' };
+  if (deployment.kind === 'managedLocal') {
+    const defaults = ProviderConnectionPurposeBindingDefaultsV1Schema.safeParse(deployment.purposeBindingDefaults);
+    if (defaults.success) projected.deployment = { kind: 'managedLocal', purposeBindingDefaults: defaults.data };
+  }
+  for (const [key, schema] of [['gatewayPlacement', ProviderGatewayPlacementV1Schema],
+    ['claudeHelperModels', ProviderClaudeHelperModelsV1Schema]] as const) {
+    if (value[key] === null) projected[key] = null;
+    else {
+      const parsed = schema.safeParse(value[key]);
+      if (parsed.success) projected[key] = parsed.data;
+    }
+  }
+  return projected;
+}
+
+const templateFields = (prefix: string) => [
+  { path: `${prefix}.name`, title: 'Connection name', widget: 'text' },
+  { path: `${prefix}.endpointTemplates.[].id`, title: 'Endpoint', widget: 'text' },
+  { path: `${prefix}.endpointTemplates.[].protocol`, title: 'Protocol', widget: 'text' },
+  { path: `${prefix}.endpointTemplates.[].baseUrl`, title: 'Provider address', widget: 'text' },
+  { path: `${prefix}.credential`, title: 'Credential requirement', widget: 'json' },
+  { path: `${prefix}.catalog`, title: 'Model catalog', widget: 'json' },
+] satisfies readonly ActionInputFieldHint[];
+
+function providerFields(id: ProviderActionIdV1): readonly ActionInputFieldHint[] {
+  const target = [
+    { path: 'connectionId', title: 'Provider connection', widget: 'text' },
+    { path: 'machineId', title: 'Computer', widget: 'text' },
+  ] satisfies readonly ActionInputFieldHint[];
+  const fields: Partial<Record<ProviderActionIdV1, readonly ActionInputFieldHint[]>> = {
+    'providers.connections.create_custom': [...templateFields('template'), { path: 'enable', title: 'Enable connection', widget: 'boolean' }],
+    'providers.connections.create_contribution': [
+      { path: 'contributionKey', title: 'Provider', widget: 'text' }, { path: 'displayName', title: 'Connection name', widget: 'text' },
+      { path: 'authoringReview.endpointOverrides', title: 'Provider addresses', widget: 'json' }, { path: 'enable', title: 'Enable connection', widget: 'boolean' },
+      { path: 'deployment.kind', title: 'Deployment', widget: 'text' },
+      { path: 'deployment.purposeBindingDefaults', title: 'Subscription slots', widget: 'json' },
+    ],
+    'providers.connections.update': [
+      { path: 'displayName', title: 'Connection name', widget: 'text' }, { path: 'expectedRevision', title: 'Connection revision', widget: 'text' },
+      ...templateFields('template'), { path: 'deployment.kind', title: 'Deployment', widget: 'text' },
+      { path: 'deployment.purposeBindingDefaults', title: 'Subscription slots', widget: 'json' },
+      { path: 'gatewayPlacement', title: 'Gateway runs on', widget: 'json' }, { path: 'claudeHelperModels', title: 'Claude Code helper models', widget: 'json' },
+    ],
+    'providers.connections.endpoint.set': [
+      { path: 'endpointTemplateId', title: 'Endpoint', widget: 'text' }, { path: 'baseUrl', title: 'Provider address', widget: 'json' },
+      { path: 'scope', title: 'Scope', widget: 'text' },
+    ],
+    'providers.connections.duplicate': [
+      { path: 'newConnectionId', title: 'New connection', widget: 'text' }, { path: 'displayName', title: 'Connection name', widget: 'text' }, { path: 'mode', title: 'Source', widget: 'text' },
+    ],
+    'providers.connections.enabled.set': [{ path: 'enabled', title: 'Enabled', widget: 'boolean' }, { path: 'scope', title: 'Scope', widget: 'text' }],
+    'providers.connections.secrets.bind': [{ path: 'credentialSlotId', title: 'Credential slot', widget: 'text' }, { path: 'scope', title: 'Scope', widget: 'text' }],
+    'providers.probe': [{ path: 'draftConnectionId', title: 'Draft connection', widget: 'text' }, ...templateFields('template')],
+  };
+  return [...target, ...(fields[id] ?? [])];
 }
 type ProviderActionSpec<Id extends ProviderActionIdV1> = PreNormalizedActionSpec & Readonly<{
   id: Id; inputSchema: (typeof inputs)[Id]; outputSchema: (typeof outputs)[Id];
@@ -16,15 +109,23 @@ function providerSpec<Id extends ProviderActionIdV1>(id: Id, title: string, summ
   danger?: boolean; read?: boolean; external?: boolean;
 }>): ProviderActionSpec<Id> {
   return {
-    id, title, safety: options.danger ? 'danger' : 'safe',
+    id, approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'required' }, title, safety: options.danger ? 'danger' : 'safe',
+    ...(id === 'providers.connections.update' ? { safetyForInput: (input: unknown) => {
+      const parsed = inputs['providers.connections.update'].safeParse(input);
+      if (!parsed.success) return 'danger' as const;
+      const displayKeys = new Set(['action', 'machineId', 'connectionId', 'expectedRevision', 'displayName', 'displayNameMode']);
+      return Object.keys(parsed.data).every(key => displayKeys.has(key)) ? 'safe' as const : 'danger' as const;
+    } } : {}),
     sideEffectClass: options.external ? 'external' : options.read ? 'read' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: isProviderActionMachineRequiredV1({ actionId: id }) ? 'machine' : 'account', placements: [],
     executionPlacementForInput: input => isProviderActionMachineRequiredV1(parseProviderActionRequestV1(id, input)) ? 'machine' : 'account',
+    executionPlacements: resolveProviderActionExecutionPlacementsV1(id),
+    ...(id === 'providers.defaults.set' ? { originalExecution: { accountRoot: 'allowed' as const } } : {}),
     surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: true },
     bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') },
     inputSchema: inputs[id], outputSchema: outputs[id],
-    projectObservationInput: projectProviderObservation, projectObservationOutput: projectProviderObservation,
-    inputHints: { description: summary, fields: [] }, cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
+    projectObservationInput: projectProviderInputObservation, projectObservationOutput: projectProviderObservation,
+    inputHints: { description: summary, fields: providerFields(id) }, cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
   } satisfies ProviderActionSpec<Id>;
 }
 export const PROVIDER_ACTION_SPECS_V1 = [

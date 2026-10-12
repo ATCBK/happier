@@ -11,7 +11,7 @@ import { composeUsageRecap } from '../../usage/composeUsageRecap.js';
 import { UsageCalendarExportInputSchema, buildUsageCalendarFileResult } from '../../usage/usageCalendarExport.js';
 import { ConnectedServiceQuotaGetResultV1Schema, type ConnectedServiceQuotaGetInputV1, type ConnectedServiceQuotaGetResultV1 } from '../../connect/providerAccountUsageHistory.js';
 import { sameQualifiedConnectedAccountRef } from '../../connect/qualifiedConnectedAccountPersistence.js';
-import { UsageModelPriceCatalogSchema, type UsageModelPriceCatalog } from '../../usage/usageModelPriceCatalog.js';
+import { UsageModelPriceCatalogSchema, type UsageModelPriceCatalog } from '../../usage/usageModelPriceSchemas.js';
 
 export type UsageActionPorts = Readonly<{
   prices?: Readonly<{

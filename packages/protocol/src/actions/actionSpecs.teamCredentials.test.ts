@@ -51,7 +51,7 @@ describe('Team credential Action contracts', () => {
         ui: true,
         cli: true,
         agent: true,
-        mcp: id === 'teams.credentials.test' || id === 'teams.credentials.preparation.get',
+        mcp: id === 'teams.credentials.test' || String(id) === 'teams.credentials.preparation.get',
         api: id !== 'teams.credentials.test',
         plugin: true,
       });
@@ -186,8 +186,9 @@ describe('Team credential Action contracts', () => {
     expect(spec.inputSchema.parse({ teamId: 'team/one', resourceId: 'resource-1' })).toEqual({
       teamId: 'team/one', resourceId: 'resource-1', view: 'readiness',
     });
-    const output = { status: 'not_ready', reason: 'preparation_pending', counts: { ready: 2, pending: 1 } };
+    const output = { status: 'not_ready', reason: 'preparation_pending', counts: { pending: 1 } };
     expect(spec.outputSchema.parse(output)).toEqual(output);
+    expect(spec.outputSchema.safeParse({ ...output, counts: { ...output.counts, ready: 2 } }).success).toBe(false);
     for (const field of ['recipients', 'encryptedDataKey', 'storedContent', 'ciphertext']) {
       expect(spec.outputSchema.safeParse({ ...output, [field]: 'private-material' }).success).toBe(false);
     }

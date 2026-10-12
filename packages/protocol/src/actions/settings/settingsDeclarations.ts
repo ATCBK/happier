@@ -1,12 +1,12 @@
 import { ACCOUNT_SETTING_DEFINITIONS, accountSettingsParse, type AccountSettingKey } from '../../account/settings/accountSettings.js';
-import { SettingsDeclarationValueV1Schema, type SettingsDeclarationTargetKindV1 } from '../settingsDeclarationActionFamily.js';
+import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationValueV1Schema, type SettingsDeclarationActionIdV1, type SettingsDeclarationTargetKindV1 } from '../settingsDeclarationActionFamily.js';
 import { BUILT_IN_SETTINGS_METADATA_V1 } from './builtInSettingsMetadata.js';
 import type { z } from 'zod';
 import type { TeamSettingBindingV1 } from './settingsOwnerActions.js';
 import { readPortableAccountSettingBindingV1 } from './accountSettingBindings.js';
 
 export type PortableSettingStorageV1 = Readonly<{
-  scope: 'account' | 'local' | 'home' | 'team';
+  scope: 'account' | 'local' | 'home' | 'team' | 'project';
   kind?: string;
   key?: string;
   field?: string;
@@ -17,8 +17,8 @@ export type PortableSettingStorageV1 = Readonly<{
   owner?: string;
   options?: readonly unknown[];
   mode?: string;
-  /** This existing UI preference selects a different Account key on web and native. */
-  prerequisite?: 'ui_platform';
+  /** Some settings require the answering client's platform or picture release catalog. */
+  prerequisite?: 'ui_platform' | 'ui_picture_catalog';
 }>;
 export type PortableSettingDeclarationV1 = Readonly<{
   anchor: string;
@@ -45,6 +45,21 @@ export const BUILT_IN_SETTINGS_DECLARATIONS_V1: readonly PortableSettingDeclarat
 const declarationsByAnchor = new Map(BUILT_IN_SETTINGS_DECLARATIONS_V1.map(declaration => [declaration.anchor, declaration]));
 export function readBuiltInSettingDeclarationV1(anchor: unknown): PortableSettingDeclarationV1 | null {
   return typeof anchor === 'string' ? declarationsByAnchor.get(anchor) ?? null : null;
+}
+
+/** Approval copy consumes the same declaration that names the setting on its page and in discovery. */
+export function describeSettingsDeclarationApprovalSummaryV1(actionId: SettingsDeclarationActionIdV1, input: unknown): string | null {
+  const parsed = SettingsDeclarationActionInputSchemasV1[actionId].safeParse(input);
+  if (!parsed.success || !('anchor' in parsed.data)) return null;
+  const declaration = readBuiltInSettingDeclarationV1(parsed.data.anchor);
+  if (!declaration) return null;
+  const name = `“${declaration.title}”`;
+  const effect = actionId === 'settings.set'
+    ? `Change ${name}${!declaration.sensitive && 'value' in parsed.data && (parsed.data.value === null || typeof parsed.data.value !== 'object')
+      ? ` to ${JSON.stringify(parsed.data.value)}` : ''}.`
+    : actionId === 'settings.reset' ? `Reset ${name} to its default.`
+      : actionId === 'settings.invoke' ? `Run ${name}.` : null;
+  return effect && declaration.description ? `${effect} ${declaration.description}` : effect;
 }
 
 /** No headless default: the current row's meaning depends on its observed UI platform. */
@@ -92,7 +107,9 @@ function replacePath(value: unknown, path: readonly string[], next: unknown): un
   const current = object(value);
   return { ...current, [key]: replacePath(current[key], rest, next) };
 }
-function accountDefinition(declaration: PortableSettingDeclarationV1) {
+type AccountSettingDeclarationBindingV1 = Pick<PortableSettingDeclarationV1, 'storage' | 'sensitive'>;
+
+function accountDefinition(declaration: AccountSettingDeclarationBindingV1) {
   const binding = declaration.storage;
   if (binding?.scope !== 'account' || !binding.key || binding.kind && binding.kind !== 'field') return null;
   return Object.hasOwn(ACCOUNT_SETTING_DEFINITIONS, binding.key)
@@ -100,13 +117,13 @@ function accountDefinition(declaration: PortableSettingDeclarationV1) {
 }
 
 /** Unbound rows remain discoverable; readers must not confuse them with an unset value. */
-export function hasBuiltInAccountSettingBindingV1(declaration: PortableSettingDeclarationV1): boolean {
+export function hasBuiltInAccountSettingBindingV1(declaration: AccountSettingDeclarationBindingV1): boolean {
   return declaration.storage?.scope === 'account'
     && (readPortableAccountSettingBindingV1(declaration) !== null || accountDefinition(declaration) !== null);
 }
 
 /** Strict incoming admission; stored-reader recovery defaults cannot admit malformed writes. */
-export function parseBuiltInAccountSettingValueV1(declaration: PortableSettingDeclarationV1, value: unknown):
+export function parseBuiltInAccountSettingValueV1(declaration: AccountSettingDeclarationBindingV1, value: unknown):
   Readonly<{ success: true; value: z.infer<typeof SettingsDeclarationValueV1Schema> }> | Readonly<{ success: false }> {
   const binding = declaration.storage;
   const owner = readPortableAccountSettingBindingV1(declaration);
@@ -120,6 +137,12 @@ export function parseBuiltInAccountSettingValueV1(declaration: PortableSettingDe
   const json = SettingsDeclarationValueV1Schema.safeParse(value);
   if (!json.success || binding.allowedValues && !binding.allowedValues.includes(json.data as string | number | boolean | null)) return { success: false };
   if (binding.invertBoolean && typeof json.data !== 'boolean') return { success: false };
+  const defaultValue = binding.path ? readPath(definition.default, binding.path) : definition.default;
+  // Account schemas may recover legacy persisted values with coercion. Action writes are a
+  // stricter boundary: a scalar intent must already have the canonical scalar type.
+  const defaultType = typeof defaultValue;
+  if ((defaultType === 'boolean' || defaultType === 'number' || defaultType === 'string')
+    && typeof json.data !== defaultType) return { success: false };
   const stored = binding.invertBoolean ? !json.data : json.data;
   const parsed = definition.parseMutationValue(binding.path ? replacePath(definition.default, binding.path, stored) : stored);
   if (!parsed.success) return { success: false };
@@ -128,7 +151,7 @@ export function parseBuiltInAccountSettingValueV1(declaration: PortableSettingDe
   return result.success ? { success: true, value: result.data } : { success: false };
 }
 
-export function readBuiltInAccountSettingValueV1(declaration: PortableSettingDeclarationV1, settings: Readonly<Record<string, unknown>>): unknown {
+export function readBuiltInAccountSettingValueV1(declaration: AccountSettingDeclarationBindingV1, settings: Readonly<Record<string, unknown>>): unknown {
   const owner = readPortableAccountSettingBindingV1(declaration);
   if (owner) return owner.read(accountSettingsParse(settings));
   const binding = declaration.storage;
@@ -137,8 +160,15 @@ export function readBuiltInAccountSettingValueV1(declaration: PortableSettingDec
   return binding.invertBoolean && typeof value === 'boolean' ? !value : value;
 }
 
+/** Reset is a validated default intent, never replacement of an owning settings object. */
+export function resolveBuiltInAccountSettingResetValueV1(declaration: AccountSettingDeclarationBindingV1):
+  ReturnType<typeof parseBuiltInAccountSettingValueV1> {
+  return parseBuiltInAccountSettingValueV1(declaration,
+    readBuiltInAccountSettingValueV1(declaration, accountSettingsParse({})));
+}
+
 /** Sparse intent rebuilt against every latest Account snapshot by the existing CAS writer. */
-export function buildBuiltInAccountSettingMutationV1(declaration: PortableSettingDeclarationV1, settings: Readonly<Record<string, unknown>>, value: unknown):
+export function buildBuiltInAccountSettingMutationV1(declaration: AccountSettingDeclarationBindingV1, settings: Readonly<Record<string, unknown>>, value: unknown):
   Readonly<Record<string, unknown>> | null {
   const binding = declaration.storage;
   const owner = readPortableAccountSettingBindingV1(declaration);

@@ -19,7 +19,7 @@ import {
   type ActionDefinitionSummaryV1,
   type ActionDefinitionV1,
 } from './actionDefinitionV1.js';
-import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject } from './actionInputJsonSchema.js';
+import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject, type JsonSchemaObject } from './actionInputJsonSchema.js';
 
 export type SerializedActionSpec = ActionDefinitionSummaryV1;
 
@@ -145,23 +145,27 @@ function resolveActionCatalogSurfaceProjection(
   };
 }
 
+/** Optional output metadata must not hide otherwise discoverable Actions. */
+export function projectActionOutputJsonSchema(
+  schema: ActionSpec['outputSchema'],
+  options?: Parameters<typeof zodSchemaToJsonSchemaObject>[1],
+): JsonSchemaObject | undefined {
+  if (!schema) return undefined;
+  try {
+    return zodSchemaToJsonSchemaObject(schema, options);
+  } catch (error) {
+    // Omit only an unsupported output claim; input projection remains strict.
+    if (!(error instanceof ActionJsonSchemaProjectionError)) throw error;
+    return undefined;
+  }
+}
+
 export function serializeActionSpec(
   spec: ActionSpec,
   params?: ActionCatalogSurfaceParams,
 ): SerializedActionSpec {
   const projection = resolveActionCatalogSurfaceProjection(spec, params?.surface);
-  let outputSchema: Readonly<Record<string, unknown>> | undefined;
-  if (projection.outputSchema) {
-    try {
-      outputSchema = zodSchemaToJsonSchemaObject(projection.outputSchema);
-    } catch (error) {
-      // Output schemas are optional discovery metadata. One genuinely
-      // unrepresentable output must not hide every otherwise discoverable
-      // Action; omit only that unsupported claim. Input projection remains
-      // strict in actionSpecToActionDefinitionV1 because callers author it.
-      if (!(error instanceof ActionJsonSchemaProjectionError)) throw error;
-    }
-  }
+  const outputSchema = projectActionOutputJsonSchema(projection.outputSchema, { target: 'draft-7' });
   return {
     id: spec.id,
     title: spec.title,
@@ -177,6 +181,7 @@ export function serializeActionSpec(
     surfaces: spec.surfaces,
     inputHints: projection.inputHints ?? null,
     ...(spec.toolExposure ? { toolExposure: spec.toolExposure } : {}),
+    ...(spec.prompting ? { prompting: spec.prompting } : {}),
     ...(spec.contextualDefaults ? { contextualDefaults: spec.contextualDefaults } : {}),
     ...(outputSchema ? { outputSchema } : {}),
     ...(spec.execution ? { execution: spec.execution } : {}),
@@ -193,7 +198,7 @@ export function actionSpecToActionDefinitionV1(
   return {
     kindVersion: 1,
     ...serializeActionSpec(spec, params),
-    inputSchema: zodSchemaToJsonSchemaObject(projection.inputSchema),
+    inputSchema: zodSchemaToJsonSchemaObject(projection.inputSchema, { target: 'draft-7' }),
   };
 }
 
@@ -289,6 +294,7 @@ export function projectActionDefinitionSummaryForExternalDiscovery(
     examples: projectActionDiscoveryExamples(definition.examples),
     surfaces: definition.surfaces,
     ...(definition.toolExposure === undefined ? {} : { toolExposure: definition.toolExposure }),
+    ...(definition.prompting === undefined ? {} : { prompting: definition.prompting }),
     ...(definition.contextualDefaults === undefined ? {} : { contextualDefaults: definition.contextualDefaults }),
     inputHints: definition.inputHints,
     ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),

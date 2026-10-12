@@ -1,4 +1,6 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { TeamMembershipHistoryActionIdV1, TeamMembershipHistoryInputV1 } from '../../teams/membershipHistoryPreparationV1.js';
+import type { SessionConnectedServiceAuthSwitchRpcParams } from '../../connect/sessionConnectedServiceAuthSwitch.js';
 import type { MemoryWindowRequestV1 } from '../../memory/memoryWindow.js';
 import type { SessionModelMutationExpectedV1 } from '../../sessions/control/modelTransitionV1.js';
 import type { AcpCatalogSnapshotV1, AcpCatalogRowMutationV1 } from '../../acp/catalog/catalogRowsV1.js';
@@ -11,15 +13,17 @@ export type { MemoryScopeTargetV1 } from '../../prompts/library/memoryActionsV1.
 import type { SetSessionPinRequest } from '../../sessions/organization/mutations.js';
 import type { ProfileActionRequestV1 } from '../../profiles/profileActionsV1.js';
 import type { PromptDocCreateActionInputV1 } from '../../prompts/library/promptDocV2.js';
+import type { PromptBundleCreateActionInputV1, PromptBundleUpdateActionInputV1 } from '../../prompts/library/promptBundleSchemas.js';
 import type { McpServerActionRequestV1 } from '../../mcp/servers/serverActionsV1.js';
 import type { ProviderActionRequestV1 } from '../../providers/providerActionsV1.js';
 import type { RemoteHostActionRequestV1 } from '../../remoteHosts/remoteHostActionsV1.js';
 import type { HomeRuntimeActionRequestV1 } from '../../home/runtime/actionsV1.js';
+import type { AccountLifecycleActionId, AccountLifecycleActionInput } from '../accountLifecycleActionFamily.js';
 import type { FilesystemActionId } from '../filesystemActionFamily.js';
 import type { SessionStateFieldActionWrite } from '../sessionStateFieldActions.js';
 import type { ProjectContextUpdateInputV1, ProjectContextUpdateOutputV1 } from '../../projects/projectContextV1.js';
 import type { SessionWorkerPublishInputV1 } from '../../sessions/relations/workerUpdateV1.js';
-import type { WorkflowAuthoringActionId } from '../workflowAuthoringAction.js';
+import type { WorkflowAuthoringActionId } from '../workflowAuthoringActionIds.js';
 import type { ManagedMachineActionIdV1, ManagedMachineActionInputV1 } from '../../machines/managed/actionsV1.js';
 import type { MachineReferenceCensusV1 } from '../../machines/machineReferenceCensusV1.js';
 import type { MachinePresetActionIdV1, MachinePresetActionInputV1 } from '../../machines/managed/machinePresetActionsV1.js';
@@ -40,8 +44,9 @@ import type {
   ProjectSourcesUpdateOutputV1, ProjectSourcesDeleteOutputV1,
 } from '../../projects/sources/projectSourceV1.js';
 import type { SessionAuthoringOpenV1, SessionAuthoringOpenResultV1 } from '../../plugins/ui/hostApiRequests.js';
-import type { MachineAddSshActionId } from '../specs/machineConnection.js';
+import type { MachineAddSshActionId, MachinePageActionId, MachinePageActionInput } from '../specs/machineConnection.js';
 import type { MachineAccessActionId } from '../specs/machineAccess.js';
+import type { MachineVitalsActionId, MachineVitalsActionInput } from '../specs/machineVitals.js';
 import type { MachineTerminalActionId, MachineTerminalActionInput } from '../specs/machineTerminal.js';
 import type { HomeConnectInputSchema, HomeConnectOutputSchema, MachineAddCommandInputSchema, MachineAddCommandOutputSchema, MachinePairingCreateInputSchema, MachinePairingCreateOutputSchema, MachineTerminalOpenInputSchema, MachineTerminalListInputSchema } from '../specs/machineConnection.js';
 import type {
@@ -63,6 +68,7 @@ import type { ExecutionRunGetResponse } from '../../execution/runs/responseSchem
 import type { ExecutionRunLaunchOrigin } from '../../execution/runs/startRequest.js';
 import type { ActionsSettingsV1 } from '../actionSettings.js';
 import type { ScopeActionId } from '../scopeActionFamily.js';
+import type { DiagnosticsActionId } from '../diagnosticsActionFamily.js';
 import type {
   NotificationsNotifyMeInputV1,
   NotificationsNotifyMeResultV1,
@@ -105,6 +111,9 @@ import type { VoiceConversationActionId } from '../voiceConversationActionFamily
 import type { AppShellActionId } from '../appShellActionFamily.js';
 import type { NotificationConfigurationActionId } from '../notificationConfigurationActionFamily.js';
 import type { AppUpdateActionId } from '../appUpdateActionFamily.js';
+import type { BugReportSubmitInput, BugReportSubmitOutput } from '../specs/bugReport.js';
+import type { UpdatesActionId } from '../updatesActionFamily.js';
+import type { ClipboardWriteResultSchema } from '../clipboardActionFamily.js';
 import type { ActionUiPlacement } from '../actionUiPlacements.js';
 import type { ActionDefinitionSummaryV1 } from '../actionDefinitionV1.js';
 import type { ExternalActionTargetV1, ExternalActionExecutionAuthorizationV1 } from '../externalActionApi.js';
@@ -208,6 +217,10 @@ import type {
   PluginWebhookEndpointRevokeInputV1,
 } from '../../plugins/webhooks/endpointV1.js';
 import type {
+  PluginWebhookDeliveryDiscardInputV1,
+  PluginWebhookDeliveryReplayInputV1,
+} from '../../plugins/webhooks/statusV1.js';
+import type {
   AutomationConversationActionIdV1,
   AutomationConversationAdmitInputV1,
   AutomationConversationTargetVerifyInputV1,
@@ -277,6 +290,7 @@ import type {
 import type { AccountHistoricalEncryptionKeyForgetResultV1, AccountEncryptionAutomationTemplatesRecoverResultV1 } from '../../auth/accountSecurity.js';
 import type { PluginMachineMaterializationRefV1 } from '../../plugins/availability/materializationRefV1.js';
 import type { PluginSettingsAdministrationActionIdV1 } from '../../plugins/settingsAdministration.js';
+import type { PluginExecutionOriginActionId } from '../pluginExecutionOriginActionFamily.js';
 import type { AutomationRunCause } from '../../automations/automationRunCause.js';
 import type { MachinePoolActionIdV1, MachinePoolActionInputV1 } from '../../machines/pools/actionsV1.js';
 import type { ProjectWorkerActionIdV1, ProjectWorkerActionInputV1, ProjectWorkerActionOutputV1 } from '../specs/projectWorkers.js';
@@ -439,6 +453,8 @@ export type PluginWebhookActionArgs = Readonly<{
     | PluginWebhookEndpointRetargetInputV1
     | PluginWebhookEndpointCheckCorrespondenceInputV1
     | PluginWebhookDeliveryMovePendingInputV1
+    | PluginWebhookDeliveryReplayInputV1
+    | PluginWebhookDeliveryDiscardInputV1
     | PluginWebhookEndpointCredentialConfigureInputV1
     | PluginWebhookEndpointCredentialRotateInputV1
     | PluginWebhookEndpointCredentialFinishRotationInputV1;
@@ -469,6 +485,8 @@ export type AutomationConversationActionArgs = Readonly<{
     | AutomationConversationTargetVerifyInputV1
     | AutomationConversationAdmitInputV1;
   caller: ActionPluginCaller;
+  /** Invocation routing/request identity for hosts that delegate to the canonical daemon owner. */
+  context?: ActionExecutorContext;
   signal?: AbortSignal;
 }>;
 
@@ -548,6 +566,9 @@ export type ActionExecutorContext = Readonly<{
 
   /** Host-private current admission of the deciding human; never accepted from Action input. */
   verifyMachineAdmissionCurrent?: () => Promise<boolean>;
+
+  /** Incumbent UI field/target intent, retained only in-process across its approval wait. Never Action input or RPC authority. */
+  isPluginSettingsIntentCurrent?: () => boolean;
 
   /**
    * In-process acceptance from an admitted domain operation. The runner keeps
@@ -735,6 +756,18 @@ export type ActionExecutorContext = Readonly<{
    * unrelated surfaces cannot attach misleading transcript links.
    */
   approvalOrigin?: ApprovalRequestOriginV1 | null;
+
+  /**
+   * Exact present-user consent minted only by the approval owner after its
+   * authenticated decision and execution claim. Never accepted from Action
+   * input or inferred from a persisted decision alone; requester identity stays intact.
+   */
+  presentUserApproval?: Readonly<{
+    artifactId: string;
+    actionId: ActionId;
+    requestId: string;
+    inputDigest: string;
+  }>;
 
   /**
    * Exact target-path evidence recovered only from an approved
@@ -973,6 +1006,12 @@ export type WorkflowActionExecute = (args: WorkflowActionExecuteArgs) => Promise
   | WorkflowActionFailureV1
 >;
 
+export type PluginSettingsAdministrationActionRequest = Readonly<{
+  actionId: PluginSettingsAdministrationActionIdV1;
+  input: unknown;
+  context: ActionExecutorContext;
+}>;
+
 export type ActionExecutorDeps = Readonly<{
   /** Authenticated source ownership, independent of the Machine executing a persisted read. */
   resolveApiTokenGrantSessionMachineId?: (args: Readonly<{
@@ -1000,7 +1039,7 @@ export type ActionExecutorDeps = Readonly<{
   /** Mode-aware Account Artifact authority for Home layout and configured instances. */
   homeHubArtifacts?: HomeHubArtifactPortV1;
   /** Captured authenticated Home/Account authority; never taken from widget input. */
-  widgetAccountScope?: () => Readonly<{ serverId: string; accountId: string }> | null;
+  widgetAccountScope?: () => import('../../widgets/widgetActionScopeV1.js').WidgetActionAccountScopeV1 | null;
   widgetSurfaceActions?: Partial<Readonly<Record<WidgetSurfaceRefV1['owner']['kind'], WidgetActionSurfacePortV1>>>;
   widgetAreaLayouts?: import('../../widgets/actionsV1.js').WidgetAreaLayoutActionPortV1;
   /** Answering mounted area owner; a successful selection changes only its device-local presentation. */
@@ -1204,6 +1243,9 @@ export type ActionExecutorDeps = Readonly<{
   remoteHostActionExecute?: (request: RemoteHostActionRequestV1, context: ActionExecutorContext) => Promise<ActionExecuteResult>;
   /** Client runtime controls delegate to the answering client's native SystemTask owner. */
   homeRuntimeActionExecute?: (request: HomeRuntimeActionRequestV1, context: ActionExecutorContext) => Promise<ActionExecuteResult>;
+  /** The answering client's existing Auth and self-erasure lifecycle owners. */
+  accountLifecycleAction?: (args: Readonly<{ actionId: AccountLifecycleActionId; input: AccountLifecycleActionInput;
+    context: ActionExecutorContext }>) => Promise<ActionExecuteResult>;
   roleActionExecute?: (args: Readonly<{
     actionId: RoleActionIdV1;
     input: unknown;
@@ -1460,11 +1502,12 @@ export type ActionExecutorDeps = Readonly<{
   projectsWorkspaceForget?: (args: import('../../projects/projectWorkspaceActionsV1.js').ProjectWorkspaceForgetInputV1, context?: ActionExecutorContext) => Promise<import('../../projects/projectWorkspaceActionsV1.js').ProjectWorkspaceForgetOutputV1>;
   promptInvocationsList?: (args: Readonly<{ limit?: number; signal?: AbortSignal }>) => Promise<unknown>;
   promptInvocationResolve?: (args: Readonly<{ invocationId: string; argsText?: string; sessionId?: string | null; signal?: AbortSignal }>) => Promise<unknown>;
-  machinesList: (args: Readonly<{ serverId?: string; limit?: number }>) => Promise<unknown>;
+  machinesList: (args: Readonly<{ serverId?: string; limit?: number; refresh?: boolean; purpose?: 'input' }>) => Promise<unknown>;
   homeConnect?: (input: z.infer<typeof HomeConnectInputSchema>, context: ActionExecutorContext) => Promise<z.infer<typeof HomeConnectOutputSchema> | ActionExecuteFailure>;
   machineAddCommand?: (input: z.infer<typeof MachineAddCommandInputSchema>, context: ActionExecutorContext) => Promise<z.infer<typeof MachineAddCommandOutputSchema> | ActionExecuteFailure>;
   machineAddSshTaskAction?: (actionId: MachineAddSshActionId, input: unknown, context: ActionExecutorContext) => Promise<unknown>;
   machinePairingCreate?: (input: z.infer<typeof MachinePairingCreateInputSchema>, context: ActionExecutorContext) => Promise<z.infer<typeof MachinePairingCreateOutputSchema> | ActionExecuteFailure>;
+  machinePageAction?: (request: Readonly<{ actionId: MachinePageActionId; input: MachinePageActionInput; context: ActionExecutorContext }>) => Promise<unknown>;
   machineTerminalAction?: (request: Readonly<{ actionId: MachineTerminalActionId; input: MachineTerminalActionInput; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   serversList: (args: Readonly<{ limit?: number }>) => Promise<unknown>;
   reviewEnginesList: (args: Readonly<{ sessionId: string | null; machineId?: string; includeDisabled?: boolean; scope?: 'paths' }>) => Promise<unknown>;
@@ -1583,7 +1626,7 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<unknown>;
   sessionStateFieldSet?: (args: SessionStateFieldActionWrite) => Promise<unknown>;
-  sessionStop?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
+  sessionStop?: (args: Readonly<{ sessionId: string; serverId?: string | null; signal?: AbortSignal }>) => Promise<unknown>;
   sessionTurnCancel?: (args: Readonly<{ sessionId: string; serverId?: string | null; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionTerminalComposerClear?: (args: Readonly<{
     sessionId: string;
@@ -1600,9 +1643,7 @@ export type ActionExecutorDeps = Readonly<{
     sessionId: string; localId: string; serverId?: string; targetExecutionRunId?: string;
     context: ActionExecutorContext;
   }>) => Promise<unknown>;
-  sessionPendingResetStartSet?: (args: Readonly<{
-    sessionId: string; localId: string; serverId?: string;
-    reset: import('../../sessions/pending/pendingRequestedActionV1.js').PendingResetStartBindingV1;
+  sessionPendingResetStartSet?: (args: Readonly<import('../../sessions/pending/pendingRequestedActionV1.js').PendingResetStartSetInputV1 & {
     context: ActionExecutorContext;
   }>) => Promise<unknown>;
   sessionPendingResetStartCancel?: (args: Readonly<{
@@ -1613,11 +1654,12 @@ export type ActionExecutorDeps = Readonly<{
     context?: ActionExecutorContext;
     callerInputConstraints?: CallerInputConstraintsV1;
     permissionMode: string;
-    applyTiming?: 'immediate' | 'next_prompt';
+    applyTiming?: 'immediate';
     serverId?: string | null;
   }>) => Promise<unknown>;
   sessionModelSet?: (args: Readonly<{
     sessionId: string;
+    applyTiming?: 'immediate' | 'next_prompt';
     context?: ActionExecutorContext;
     callerInputConstraints?: CallerInputConstraintsV1;
     modelId?: string;
@@ -1794,6 +1836,9 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<unknown>;
   sessionModeSet: (args: Readonly<{ sessionId: string; modeId: string }>) => Promise<unknown>;
+  sessionConfigOptionSet?: (args: Readonly<{ sessionId: string; configId: string; valueId: string }>) => Promise<unknown>;
+  sessionMcpSelectionSet?: (args: Readonly<{ sessionId: string; selection: unknown; sessionActive: boolean; serverId?: string | null }>) => Promise<unknown>;
+  sessionConnectedServicesAuthSet?: (args: SessionConnectedServiceAuthSwitchRpcParams & Readonly<{ machineId: string; serverId?: string | null }>) => Promise<unknown>;
   sessionModesList: (args: Readonly<{ sessionId: string }>) => Promise<unknown>;
 
   // Voice panel targeting + session query tools
@@ -1880,6 +1925,14 @@ export type ActionExecutorDeps = Readonly<{
     request: ApprovalRequest;
     signal?: AbortSignal;
   }>) => Promise<boolean>;
+  /** Reacquires host-private requester ports for a verified exact-daemon replay. Never persisted. */
+  prepareApprovalExecutionAuthorization?: (args: Readonly<{
+    authorization: ExternalActionExecutionAuthorizationV1;
+    signal?: AbortSignal;
+  }>) => Promise<Readonly<{
+    authorization: ExternalActionExecutionAuthorizationV1;
+    dispose?: () => Promise<void>;
+  }> | null>;
   approvalsResolveBlockingDecision?: (args: Readonly<{
     artifactId: string;
     decision: 'approve' | 'reject';
@@ -1890,11 +1943,11 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<{ resolved: boolean }>;
   /**
    * Private host factory port for one actual containing operation or exact
-   * CLI invocation holding prompted material in memory. It changes
+   * CLI/UI invocation holding prompted material in memory. It changes
    * approval custody, never policy or consent, and is not an Action input.
    */
   hostActionApprovalLifetime?: Readonly<{ operationId: string; signal: AbortSignal }>
-    | Readonly<{ actionId: ActionId; signal: AbortSignal }>;
+    | Readonly<{ actionId: ActionId; signal: AbortSignal; surface?: 'cli' | 'ui' }>;
   approvalsWaitForDecision?: (args: Readonly<{
     artifactId: string;
     request: ApprovalRequest;
@@ -1982,6 +2035,8 @@ export type ActionExecutorDeps = Readonly<{
   promptDocGet?: (args: Readonly<{ artifactId: string; signal?: AbortSignal }>) => Promise<unknown>;
   promptDocCreate?: (args: PromptDocCreateActionInputV1 & Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
   promptDocFavoriteSet?: (args: Readonly<{ artifactId: string; favorite: boolean; signal?: AbortSignal }>) => Promise<unknown>;
+  modelFavoriteSet?: (input: import('../../providers/modelFavoritesV1.js').ModelFavoriteMutationV1, context: ActionExecutorContext) => Promise<Pick<import('../../account/settings/accountSettingMutationV1.js').AccountSettingsMutationResult, 'status'>>;
+  sessionModelUnarm?: (args: Readonly<{ sessionId: string; serverId?: string | null; context: ActionExecutorContext }>) => Promise<unknown>;
   promptsLibraryList?: (args: Readonly<{ query?: string; includeBundles?: false; signal?: AbortSignal }>) => Promise<unknown>;
   promptDocUpdate?: (args: Readonly<{
     artifactId: string;
@@ -1992,14 +2047,8 @@ export type ActionExecutorDeps = Readonly<{
     tags?: readonly string[];
     signal?: AbortSignal;
   }>) => Promise<unknown>;
-  promptBundleUpdate?: (args: Readonly<{
-    artifactId: string;
-    title: string;
-    skillMarkdown: string;
-    folderId?: string | null;
-    tags?: readonly string[];
-    signal?: AbortSignal;
-  }>) => Promise<unknown>;
+  promptBundleCreate?: (args: PromptBundleCreateActionInputV1 & Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
+  promptBundleUpdate?: (args: PromptBundleUpdateActionInputV1 & Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
   promptAssetExport?: (args: Readonly<{
     artifactId: string;
     machineId: string;
@@ -2051,11 +2100,17 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<unknown>;
 
   /** One host-owned Settings administration dispatch into existing Settings/Secrets owners. */
-  pluginSettingsAdministrationAction?: (args: Readonly<{
-    actionId: PluginSettingsAdministrationActionIdV1;
+  pluginExecutionOriginAction?: (args: Readonly<{
+    actionId: PluginExecutionOriginActionId;
     input: unknown;
     context: ActionExecutorContext;
   }>) => Promise<unknown>;
+
+  /** One host-owned Settings administration dispatch into existing Settings/Secrets owners. */
+  pluginSettingsAdministrationAction?: ((args: PluginSettingsAdministrationActionRequest) => Promise<unknown>) & Readonly<{
+    /** Declaration-only admission before Set operands can reach interception or approval custody. */
+    admitInput?: (args: PluginSettingsAdministrationActionRequest) => Promise<ActionExecuteFailure | null>;
+  }>;
 
   /**
    * The UI-present host path for erasing only the current Account’s data for
@@ -2198,10 +2253,24 @@ export type ActionExecutorDeps = Readonly<{
     context: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
+  /** Client encryption custody; no envelope material crosses this public Action boundary. */
+  teamMembershipHistoryAction?: (args: Readonly<{
+    actionId: TeamMembershipHistoryActionIdV1;
+    input: TeamMembershipHistoryInputV1;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
 
   /** Mounted client view owner. Headless hosts leave this port absent. */
   scopeAction?: (args: Readonly<{
     actionId: ScopeActionId;
+    input: unknown;
+    context: ActionExecutorContext;
+  }>) => Promise<unknown>;
+
+  /** Mounted diagnostic page owner; reads retain their captured Home and Account. */
+  diagnosticsAction?: (args: Readonly<{
+    actionId: DiagnosticsActionId;
     input: unknown;
     context: ActionExecutorContext;
   }>) => Promise<unknown>;
@@ -2240,6 +2309,9 @@ export type ActionExecutorDeps = Readonly<{
     context: ActionExecutorContext;
   }>) => Promise<unknown>;
 
+  /** The answering client's existing report validation, diagnostics and submission owner. */
+  bugReportSubmit?: (input: BugReportSubmitInput, context: ActionExecutorContext) => Promise<BugReportSubmitOutput | ActionExecuteFailure>;
+
   /** Compound webhook edits through the captured Account's canonical settings writer. */
   notificationConfigurationAction?: (args: Readonly<{
     actionId: NotificationConfigurationActionId; input: unknown; context: ActionExecutorContext;
@@ -2248,6 +2320,14 @@ export type ActionExecutorDeps = Readonly<{
   appUpdateAction?: (args: Readonly<{
     actionId: AppUpdateActionId; input: unknown; context: ActionExecutorContext;
   }>) => Promise<unknown>;
+  /** Current Updates selection; all effects remain with the existing update and batch owners. */
+  updatesAction?: (args: Readonly<{
+    actionId: UpdatesActionId; input: unknown; context: ActionExecutorContext;
+  }>) => Promise<unknown>;
+  /** The answering client's platform clipboard boundary; copied text never enters observation records. */
+  clipboardWrite?: (args: Readonly<{ text: string; signal?: AbortSignal }>) => Promise<
+    z.infer<typeof ClipboardWriteResultSchema> | ActionExecuteFailure
+  >;
 
   /** Client-owned Inbox acknowledgement and draft deletion; headless hosts leave it absent. */
   appShellAction?: (args: Readonly<{
@@ -2293,6 +2373,15 @@ export type ActionExecutorDeps = Readonly<{
     context: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<SessionBoardActionPortResultV1>;
+
+  /** Exact Account owner read; missing wiring cannot pre-approve guest egress. */
+  readAgentHtmlNetworkPolicy?: (args: Readonly<{ context: ActionExecutorContext }>) => Promise<unknown>;
+  /** Acquire a workspace publication through the same Session adapter before approval custody. */
+  sessionBoardPrepareItem?: (args: Readonly<{
+    input: unknown;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+  }>) => Promise<import('../../sessions/board/actions.js').SessionBoardItemUpsertInputV1 | ActionExecuteFailure>;
 
   /**
    * One host-stamped current-Session presentation seam. The host resolves the
@@ -2383,6 +2472,46 @@ export type ActionExecutorDeps = Readonly<{
   /** Safe Machine-owned inventory projection; never an Account HTTP access operation. */
   machineWorkSummaryGet?: (args: Readonly<{
     input: import('../../machines/machineWorkSummaryV1.js').MachineWorkSummaryGetInputV1;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
+
+  /** Read Machine samples/history and compose Account summaries through the existing scoped transports. */
+  machineVitalsAction?: (args: Readonly<{
+    actionId: MachineVitalsActionId;
+    input: MachineVitalsActionInput;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
+
+  machineResourcesPolicyAction?: (args: Readonly<{
+    actionId: import('../specs/machineResources.js').MachineResourcesActionId;
+    input: import('../specs/machineResources.js').MachineResourcesActionInput;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
+
+  /** Scoped Machine process reads/effects; the daemon rechecks identity and ownership. */
+  machineProcessesAction?: (args: Readonly<{
+    actionId: import('../specs/machineProcesses.js').MachineProcessesActionId;
+    input: import('../specs/machineProcesses.js').MachineProcessesActionInput;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
+
+  machineGuardAction?: (args: Readonly<{
+    actionId: import('../../machines/guard/actionIdsV1.js').MachineGuardActionId;
+    input: import('../specs/machineGuard.js').MachineGuardActionInput;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+    /** Host-private original restoration selected by the admitted target-local Activity owner. */
+    executeCanonicalAction?: (actionId: ActionId, input: unknown) => Promise<ActionExecuteResult>;
+  }>) => Promise<unknown>;
+
+  /** Machine-local storage reads and explicit remeasurement through authenticated RPC. */
+  machineStorageAction?: (args: Readonly<{
+    actionId: import('../specs/storage.js').MachineStorageActionId;
+    input: import('../specs/storage.js').MachineStorageActionInput;
     context: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<unknown>;

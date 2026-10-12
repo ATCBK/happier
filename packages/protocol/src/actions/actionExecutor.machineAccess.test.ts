@@ -11,7 +11,7 @@ import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 
 const target = { serverId: 'home', machineId: 'machine' };
 const principal = { kind: 'account', accountId: 'bob' } as const;
-const saved = { kind: 'saved', grant: { machineId: 'machine', principal, level: 'view' }, readiness: 'ready' } as const;
+const saved = { kind: 'saved', grant: { machineId: 'machine', principal, level: 'view' }, readiness: 'ready', canPrepareKeys: false } as const;
 const cases = [
   ['machines.access.grants.list', target, { kind: 'refused', code: 'access_denied' }],
   ['machines.access.grant.set', { ...target, principal, level: 'view' }, saved],

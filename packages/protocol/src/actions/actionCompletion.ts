@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import { sameStrictJsonValue, projectNativeJsonValueForTransport, StrictJsonValueSchema, type JsonValue } from '../json/strictJsonValue.js';
 import { validateExecutionRunProfileResult } from '../execution/runs/resultContract.js';
@@ -44,7 +45,7 @@ export function readActionCompletionRunObservationV1(native: Readonly<{
     const tool = native.latestToolResult;
     const raw = native.structuredMeta?.kind === 'scm_diff_summary.v1' ? native.structuredMeta.payload
       : tool;
-    const output = ScmDiffSummaryGenerateOutputSchema.safeParse(raw);
+    const output = createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema).safeParse(raw);
     const matches = output.success && output.data.comparison?.id === observation.comparisonId
       && (!observation.resultId || output.data.resultId === observation.resultId);
     // A refused/cancelled prose operation does not erase genuine reviewer
@@ -77,7 +78,7 @@ export function readActionCompletionRunObservationV1(native: Readonly<{
   let result: JsonValue;
   try { result = projectNativeJsonValueForTransport(native.latestToolResult); }
   catch { return { kind: 'outcome_uncertain', code: 'execution_run_result_unavailable' }; }
-  const evidence = ReviewPublicationEvidenceSchema.safeParse(result);
+  const evidence = createStoredReadSchema(ReviewPublicationEvidenceSchema).safeParse(result);
   return { kind: 'completed', result, ...(evidence.success ? evidence.data : {}) };
 }
 
@@ -92,14 +93,14 @@ export type ActionCompletionContextV1 = Readonly<{ serverId?: string | null }>;
 
 type ExecutionRunCompletionDeclaration = Readonly<{
   awaits: 'execution_runs';
-  launched: (output: unknown) => Readonly<{
+  launched: (output: unknown, purpose?: 'input' | 'stored') => Readonly<{
     runs: readonly ActionCompletionRun[];
     failed: readonly ActionCompletionLaunchFailure[];
   }>;
   terminalOutputSchema: z.ZodType;
   terminal: (output: unknown, runs: readonly Readonly<
     ActionCompletionRun & { outcome: ExecutionRunTerminalObservation }
-  >[]) => unknown;
+  >[], purpose?: 'input' | 'stored') => unknown;
 }>;
 
 type OperationCompletionDeclaration = Readonly<{
@@ -204,8 +205,8 @@ export async function resumeActionCompletionV1(params: Readonly<{
   observeOperation?: (operation: ActionCompletionOperation) => Promise<unknown>;
 }>): Promise<ActionCompletionResult> {
   const uncertain = { kind: 'outcome_uncertain', errorCode: 'outcome_uncertain' } as const;
-  const contract = ActionCompletionContractV1Schema.safeParse(params.completion);
-  const state = ActionCompletionStateV1Schema.safeParse(params.state);
+  const contract = createStoredReadSchema(ActionCompletionContractV1Schema).safeParse(params.completion);
+  const state = createStoredReadSchema(ActionCompletionStateV1Schema).safeParse(params.state);
   if (!contract.success || !state.success) return uncertain;
   if (contract.data.awaits === 'action_operations') {
     try {
@@ -246,7 +247,7 @@ export async function resumeActionCompletionV1(params: Readonly<{
   try {
     declaration = params.resolveDeclaration(params.actionId);
     if (!declaration || declaration.awaits !== 'execution_runs') return uncertain;
-    const launches = ActionCompletionLaunchesSchema.parse(declaration.launched(state.data.output));
+    const launches = ActionCompletionLaunchesSchema.parse(declaration.launched(state.data.output, 'stored'));
     if (!sameStrictJsonValue(launches.runs, state.data.awaitedRuns)) return uncertain;
     hasUnknownLaunch = launches.failed.some((failure) => failure.runCreation === 'outcomeUnknown');
   } catch {
@@ -263,7 +264,7 @@ export async function resumeActionCompletionV1(params: Readonly<{
   }
   let terminal: unknown;
   try {
-    terminal = declaration.terminal(state.data.output, runs);
+    terminal = declaration.terminal(state.data.output, runs, 'stored');
   } catch {
     // The current retained-state parser no longer understands this persisted invocation.
     return uncertain;

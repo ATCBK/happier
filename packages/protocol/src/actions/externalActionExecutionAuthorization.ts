@@ -26,7 +26,8 @@ export function isExternalActionAuthorizationBoundToEnvelope(binding: ExternalAc
   input: Readonly<{ actionId: string; machineId: string; envelope: ExternalActionRequestEnvelope }>): boolean {
   return binding.actionId === input.actionId && binding.machineId === input.machineId
     && binding.requestId === input.envelope.requestId
-    && input.envelope.target?.kind === 'machine' && input.envelope.target.machineId === input.machineId
+    && (input.envelope.target?.kind === 'session'
+      || input.envelope.target?.kind === 'machine' && input.envelope.target.machineId === input.machineId)
     && encodeExternalActionResolvedTargetV1(binding.target) === encodeExternalActionResolvedTargetV1(input.envelope.target)
     && binding.requestEnvelopeDigest === computeExternalActionRequestEnvelopeDigestV1(input.envelope);
 }

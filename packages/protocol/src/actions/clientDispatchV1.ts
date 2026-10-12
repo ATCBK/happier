@@ -9,6 +9,8 @@ import { ApprovalExecutionOriginCallerV1Schema } from '../approvals/approvalRequ
 import { ExternalActionTargetV1Schema } from './externalActionApi.js';
 import { isSettingsDeclarationActionIdV1 } from './settingsDeclarationActionFamily.js';
 import { RPC_METHODS } from '../rpc/methods.js';
+import { isWorkflowAuthoringActionId } from './workflowAuthoringActionIds.js';
+import { isAppShellActionId } from './appShellActionFamily.js';
 
 /** Private continuation of an Action admitted by the authenticated Machine host. */
 export const UiActionDispatchRequestV1Schema = lazyZodSchema(() => z.object({
@@ -50,6 +52,8 @@ export const UiActionDispatchResultV1Schema = lazyZodSchema(() => z.object({
 
 /** Absence is a declared domain result where the Action has one, otherwise a typed failure. */
 export function clientActionUnavailable(actionId: ActionId): ActionExecuteResult {
+  if (isAppShellActionId(actionId) && actionId !== 'inbox.mark_all_read') return { ok: true, result: { status: 'unavailable' } };
+  if (isWorkflowAuthoringActionId(actionId)) return { ok: true, result: { status: 'unavailable' } };
   if (actionId === 'usage.sources.dismiss') return { ok: true, result: { status: 'unavailable' } };
   if (actionId === 'session.authoring.open') {
     return { ok: true, result: { kind: 'unavailable', reason: 'client_unavailable' } };

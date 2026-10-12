@@ -1,13 +1,140 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeApprovalActionFields } from './actionApprovalPresentation.js';
+import { describeApprovalActionFields, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
+import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
 import { getActionSpec } from './actionSpecs.js';
 import { readActionSchemaTopLevelFieldNames } from './actionCliProjection.js';
 import { MACHINE_PRESET_ACTION_IDS_V1 } from '../machines/managed/machinePresetActionIdsV1.js';
 import { MANAGED_MACHINE_ACTION_IDS_V1 } from '../machines/managed/actionIdsV1.js';
 import { MACHINE_POOL_ACTION_IDS_V1 } from '../machines/pools/actionsV1.js';
+import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations.js';
 
 describe('approval field presentation', () => {
+  it('names a declared setting while preserving the exact proposed value and anchor', () => {
+    const anchor = 'delegation.workDepthLimit';
+    const declaration = readBuiltInSettingDeclarationV1(anchor)!;
+    const input = { anchor, value: 3 };
+    expect(getActionSpec('settings.set').approvalPresentation?.summary(input))
+      .toBe(`Change “${declaration.title}” to 3.`);
+    expect(describeApprovalActionFields({ actionId: 'settings.set', actionArgs: input }))
+      .toMatchObject({ unrepresentable: null, rows: [
+        { path: 'anchor', value: anchor, reference: { kind: 'setting', id: anchor } },
+        { path: 'value', value: '3' },
+      ] });
+    const structured = { kind: 'example', nested: [false, null, ' unchanged '] };
+    const presentation = describeApprovalActionFields({ actionId: 'settings.set', actionArgs: { anchor, value: structured } });
+    expect(presentation.rows.find(row => row.path === 'value')).toMatchObject({ value: JSON.stringify(structured) });
+    expect(getActionSpec('settings.reset').approvalPresentation?.summary({ anchor }))
+      .toBe(`Reset “${declaration.title}” to its default.`);
+    expect(getActionSpec('settings.set').approvalPresentation?.summary({ anchor: 'unknown.setting', value: 3 })).toBeNull();
+  });
+  it('reads a Board visual by its title and destination, with its identity only in technical details', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'session.board.item.upsert', actionArgs: {
+      itemId: '1e3cb262-opaque', expectedItemRevision: null, destination: 'board',
+      item: { v: 1, title: 'Daily usage', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
+        source: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Usage' } } } },
+    } });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows.find(row => row.path === 'itemId')).toMatchObject({ technical: true });
+    expect(presentation.rows.find(row => row.path === 'destination')).toMatchObject({ value: 'Board', title: 'Destination' });
+    expect(presentation.rows.filter(row => row.kind === 'value' && !row.technical).map(row => row.value))
+      .not.toContain('1e3cb262-opaque');
+  });
+  it('declares Provider operands as references and keeps empty setup data out of the reading', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'providers.connections.create_contribution', actionArgs: {
+      action: 'createContribution', connectionId: 'pc_new', contributionKey: 'happier.provider.deepseek/deepseek',
+      displayName: 'Work source', savedSecretId: null, enable: true,
+      deployment: { kind: 'managedLocal', purposeBindingDefaults: {} },
+    } });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows.find(row => row.path === 'connectionId')).toMatchObject({
+      reference: { kind: 'providerConnection', id: 'pc_new', displayName: 'Work source' },
+    });
+    expect(presentation.rows.find(row => row.path === 'contributionKey')).toMatchObject({
+      reference: { kind: 'providerContribution', id: 'happier.provider.deepseek/deepseek' },
+    });
+    expect(presentation.rows.find(row => row.path === 'enable')).toMatchObject({ valueFormat: 'boolean' });
+    expect(presentation.rows.some(row => row.path === 'action' && row.kind === 'value' && !row.technical)).toBe(false);
+  });
+  it.each([
+    ['prompts.stack.update', { surface: 'coding', expectedRevision: 4,
+      intent: { kind: 'set_budget', entryId: 'entry-a', maxChars: 3001 } }],
+    ['remote_hosts.connect', { hostId: 'home-host', expectedRevision: 4 }],
+  ] as const)('admits %s with its complete invocation and intentionally narrower observation', (actionId, raw) => {
+    const spec = getActionSpec(actionId);
+    const actionArgs = spec.inputSchema.parse(raw);
+    const preview = { actionId, actionArgs: spec.projectObservationInput?.(actionArgs) };
+    const request: ApprovalRequestV2 = { v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'system' }, actionId, actionArgs, preview, summary: spec.title,
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'request-a',
+        surface: 'ui', serverId: 'home', actionId } };
+    const admission = resolveApprovalRequestApproveAdmission(ApprovalRequestV2Schema.parse(request));
+    expect(admission).toMatchObject({ status: 'available' });
+    if (actionId === 'prompts.stack.update') {
+      expect(preview.actionArgs).not.toHaveProperty('intent');
+      expect(admission.presentation.rows).toContainEqual(expect.objectContaining({
+        kind: 'value', path: 'intent', value: JSON.stringify(raw.intent),
+      }));
+    }
+    expect(resolveApprovalRequestApproveAdmission(ApprovalRequestV2Schema.parse({ ...request, actionArgs: null })))
+      .toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+    const { expectedRevision: _revision, ...missingRevision } = actionArgs;
+    expect(resolveApprovalRequestApproveAdmission(ApprovalRequestV2Schema.parse({ ...request, actionArgs: missingRevision })))
+      .toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+    if (actionId === 'prompts.stack.update') {
+      const { intent: _intent, ...missingIntent } = actionArgs;
+      expect(resolveApprovalRequestApproveAdmission(ApprovalRequestV2Schema.parse({ ...request, actionArgs: missingIntent })))
+        .toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+    }
+  });
+  it('reviews the full saved profile even when its observer preview deliberately contains only identity', () => {
+    const profile = { v: 2, id: 'profile-a', name: 'Payments release workspace', createdAt: 1, updatedAt: 2,
+      placement: { fixed: { serverId: 'home-a', machineId: 'machine-a' }, directory: '/tmp/checkout-service' } };
+    const actionArgs = { id: profile.id, expectedRevision: 'absent', profile };
+    const spec = getActionSpec('launch_profiles.save');
+    expect(spec.inputSchema.safeParse(actionArgs).success).toBe(true);
+    const observed = spec.projectObservationInput?.(actionArgs);
+    expect(JSON.stringify(observed)).not.toContain(profile.name);
+    const presentation = describeApprovalActionFields({ actionId: spec.id, actionArgs,
+      preview: { actionId: spec.id, actionArgs: observed } });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'expectedRevision', value: 'absent' }));
+    const row = presentation.rows.find(row => row.path === 'profile');
+    expect(row).toMatchObject({ kind: 'value', value: JSON.stringify(profile), entries: expect.arrayContaining([
+      expect.objectContaining({ label: 'Name', value: profile.name }),
+      expect.objectContaining({ label: 'Directory', value: '/tmp/checkout-service' }),
+    ]) });
+  });
+
+  it('presents supplied operands even when an Action has no form field hints', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'launch_profiles.favorite.set',
+      actionArgs: { id: 'profile-a', favorite: false } });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'id', value: 'profile-a' }),
+      expect.objectContaining({ path: 'favorite', value: 'false' }),
+    ]));
+  });
+
+  it('reviews a private Account security choice without adding it to shared observations', () => {
+    const spec = getActionSpec('account.security.terminalPresentUser.set');
+    const actionArgs = { policy: 'allowed' };
+    expect(spec.projectObservationInput?.(actionArgs)).toEqual({});
+    expect(describeApprovalActionFields({ actionId: spec.id, actionArgs,
+      preview: { actionId: spec.id, actionArgs: {} } })).toMatchObject({ unrepresentable: null,
+        rows: [expect.objectContaining({ path: 'policy', value: 'allowed' })] });
+  });
+
+  it('refuses an approval when its reviewed input cannot be presented', () => {
+    const request: ApprovalRequestV2 = { v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, actionId: 'launch_profiles.save', actionArgs: { id: 'profile-a' }, summary: 'Save profile',
+      executionOriginV1: { v: 1, authority: 'account_automation', caller: { kind: 'host' }, requestId: 'request-a',
+        surface: 'cli', serverId: 'home', actionId: 'launch_profiles.save' } };
+    for (const actionId of ['launch_profiles.save', 'launch_profiles.enabled.set'] as const) {
+      expect(resolveApprovalRequestApproveAdmission({ ...request, actionId,
+        executionOriginV1: { ...request.executionOriginV1, actionId } }))
+        .toMatchObject({ status: 'unavailable', reason: 'context_unavailable' });
+    }
+  });
   it('lets the widget Action own a human approval summary with names instead of raw structure', () => {
     const input = {
       surface: {
@@ -366,6 +493,7 @@ describe('approval field presentation', () => {
       const actionArgs = getActionSpec(actionId).inputSchema.parse(raw);
       const presentation = describeApprovalActionFields({ actionId, actionArgs });
       expect(presentation.unrepresentable, actionId).toBeNull();
+      if (typeof actionArgs !== 'object' || actionArgs === null) throw new Error(`Expected object Action input for ${actionId}`);
       for (const [path, value] of Object.entries(actionArgs)) {
         expect(presentation.rows, `${actionId}:${path}`).toContainEqual(expect.objectContaining({
           path, value: typeof value === 'object' ? JSON.stringify(value) : String(value),
@@ -389,5 +517,89 @@ describe('approval field presentation', () => {
     expect(entries).toContainEqual({ label: 'Size', value: '1.5 KB', depth: 4 });
     // Admission and copy still read the exact literal.
     expect(row).toMatchObject({ kind: 'value', value: JSON.stringify(item) });
+  });
+
+  it('says what network an HTML visual will get, including none when it declares nothing', () => {
+    const html = { v: 1, entrypoint: 'index.html', files: { 'index.html': { mime: 'text/html', contentBase64: 'PGI+aGk8L2I+' } } };
+    const networkOf = (requestedCapabilities?: unknown) => {
+      const item = { v: 1, title: 'Build health', source: { kind: 'hostedHtml', source: html,
+        ...(requestedCapabilities === undefined ? {} : { requestedCapabilities }) } };
+      const rows = describeApprovalActionFields({ actionId: 'session.board.item.upsert',
+        actionArgs: { sessionId: 'session-1', itemId: 'build-health', expectedItemRevision: null, destination: 'transcript', item } }).rows;
+      const row = rows.find((candidate) => candidate.title === 'Network');
+      return row && row.kind === 'value' && !row.technical ? row.value : null;
+    };
+    expect(networkOf()).toBe('No network access');
+    expect(networkOf({ networkOrigins: ['https://api.example.com', 'https://cdn.example.com'] }))
+      .toBe('Only https://api.example.com, https://cdn.example.com');
+    expect(networkOf({ network: 'open' })).toBe('Any site');
+    // A typed visual runs no code, so it has no network to state.
+    expect(describeApprovalActionFields({ actionId: 'session.board.item.upsert', actionArgs: { sessionId: 'session-1',
+      itemId: 'notes', expectedItemRevision: null, destination: 'transcript',
+      item: { v: 1, source: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Hi' } } } } } })
+      .rows.some((row) => row.title === 'Network')).toBe(false);
+  });
+
+  it('previews the visual being approved, and an HTML one with no network until it is approved', () => {
+    const html = { v: 1, entrypoint: 'index.html', files: { 'index.html': { mime: 'text/html', contentBase64: 'PGI+aGk8L2I+' } } };
+    const args = (source: unknown) => ({ sessionId: 'session-1', itemId: 'visual', expectedItemRevision: null,
+      destination: 'transcript', item: { v: 1, title: 'Build health', source } });
+    const document = { version: 1, root: { kind: 'text', text: 'Hi' } };
+    expect(resolveApprovalVisualPreview({ actionId: 'session.board.item.upsert', actionArgs: args({ kind: 'declarative', document }) }))
+      .toEqual({ kind: 'declarative', title: 'Build health', document });
+    expect(resolveApprovalVisualPreview({ actionId: 'session.board.item.upsert',
+      actionArgs: args({ kind: 'hostedHtml', source: html, requestedCapabilities: { network: 'open', actions: [] } }) }))
+      .toEqual({ kind: 'html', title: 'Build health', source: html, requestedCapabilities: { network: 'none' } });
+    expect(resolveApprovalVisualPreview({ actionId: 'settings.set', actionArgs: args({ kind: 'declarative', document }) })).toBeNull();
+  });
+
+  it('keeps a previewed visual’s arguments under technical details, and its network in view', () => {
+    const html = { v: 1, entrypoint: 'index.html', files: { 'index.html': { mime: 'text/html', contentBase64: 'PGI+aGk8L2I+' } } };
+    const rows = describeApprovalActionFields({ actionId: 'session.board.item.upsert', actionArgs: { sessionId: 'session-1',
+      itemId: 'build', expectedItemRevision: null, destination: 'transcript',
+      item: { v: 1, title: 'Build time', source: { kind: 'hostedHtml', source: html } } } }).rows;
+    const item = rows.find((row) => row.path === 'item');
+    expect(item && item.kind === 'value' && item.technical).toBe(true);
+    const network = rows.find((row) => row.title === 'Network');
+    expect(network && network.kind === 'value' && !network.technical).toBe(true);
+  });
+
+  it('summarizes a visual approval as what will appear and where, not as the Action’s documentation', () => {
+    const summary = getActionSpec('session.board.item.upsert').approvalPresentation?.summary;
+    const ask = (destination: string, expectedItemRevision: string | null = null) => summary?.({ sessionId: 'session-1',
+      itemId: 'build', expectedItemRevision, destination, item: { v: 1, title: 'Build time by package',
+        source: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Hi' } } } } });
+    expect(ask('transcript')).toBe('Show “Build time by package” in the conversation.');
+    expect(ask('board')).toBe('Show “Build time by package” on the Board.');
+    expect(ask('both')).toBe('Show “Build time by package” in the conversation and on the Board.');
+    expect(ask('both', 'ssr1.AAAACHN5c3JlY18xAAAAAQ')).toBe('Update “Build time by package” in the conversation and on the Board.');
+  });
+});
+
+describe('workspace file approvals read as the effect, not the mechanism', () => {
+  const rootPath = '/home/happier/d-dc-hello-world';
+  const args = { rootPath, path: `${rootPath}/docs/getting-started.md`, content: '', expectedHash: null };
+
+  it('summarizes a write by its file and checkout', () => {
+    expect(getActionSpec('daemon.filesystem.writeFile').approvalPresentation?.summary(args))
+      .toBe('Write docs/getting-started.md in d-dc-hello-world');
+    expect(getActionSpec('daemon.filesystem.writeFile').approvalPresentation?.summary({ ...args, expectedHash: 'abc' }))
+      .toBe('Save changes to docs/getting-started.md in d-dc-hello-world');
+    expect(getActionSpec('daemon.filesystem.createDirectory').approvalPresentation?.summary({ rootPath, path: 'docs' }))
+      .toBe('Create the folder docs in d-dc-hello-world');
+    expect(getActionSpec('daemon.filesystem.delete').approvalPresentation?.summary({ rootPath, path: 'docs', recursive: true }))
+      .toBe('Delete docs and everything in it from d-dc-hello-world');
+  });
+
+  it('shows what will be written as its size, never as base64', () => {
+    const empty = describeApprovalActionFields({ actionId: 'daemon.filesystem.writeFile', actionArgs: args });
+    const rows = empty.rows.filter((row) => row.kind === 'value');
+    expect(empty.unrepresentable).toBeNull();
+    expect(rows.find((row) => row.path === 'content')).toMatchObject({ title: 'Content', value: 'Empty file' });
+    expect(rows.find((row) => row.path === 'path')).toMatchObject({ value: 'docs/getting-started.md' });
+    expect(JSON.stringify(empty.rows)).not.toMatch(/base64/i);
+    const sized = describeApprovalActionFields({ actionId: 'daemon.filesystem.writeFile',
+      actionArgs: { ...args, content: 'aGVsbG8gd29ybGQK' } });
+    expect(sized.rows.find((row) => row.path === 'content')).toMatchObject({ value: '12 bytes' });
   });
 });

@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { ActionIdSchema } from './actionIds.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
+// Catalog initialization belongs to collection, not an individual test's budget.
+import './actionSpecs.js';
 
 describe('local Voice Action contract', () => {
   it('declares the exact local conversation and Brief operation identities', () => {
     for (const id of ['get', 'start', 'end', 'set_muted', 'recover', 'dismiss', 'hold_begin', 'hold_release', 'hold_cancel', 'turn_control',
       'brief.request', 'brief.retry', 'brief.stop', 'brief.close', 'glance.open', 'glance.close', 'transcript.set_visible',
-      'companion.reveal', 'position.set', 'setup.open', 'setup.close', 'open_conversation']) {
+      'companion.reveal', 'position.set', 'setup.open', 'setup.close', 'open_conversation',
+      'dictation.start', 'dictation.finish', 'dictation.cancel', 'dictation.dismiss']) {
       expect(ActionIdSchema.safeParse(`ui.voice_global.${id}`).success, id).toBe(true);
     }
   });
@@ -15,7 +18,8 @@ describe('local Voice Action contract', () => {
     const { getActionSpec, PublicActionIdSchema } = await import('./actionSpecs.js');
     for (const id of ['get', 'start', 'end', 'set_muted', 'recover', 'dismiss', 'hold_begin', 'hold_release', 'hold_cancel', 'turn_control',
       'brief.request', 'brief.retry', 'brief.stop', 'brief.close', 'glance.open', 'glance.close', 'transcript.set_visible',
-      'companion.reveal', 'position.set', 'setup.open', 'setup.close', 'open_conversation']) {
+      'companion.reveal', 'position.set', 'setup.open', 'setup.close', 'open_conversation',
+      'dictation.start', 'dictation.finish', 'dictation.cancel', 'dictation.dismiss']) {
       const actionId = `ui.voice_global.${id}`;
       const parsed = ActionIdSchema.safeParse(actionId);
       expect(parsed.success, actionId).toBe(true);
@@ -34,10 +38,11 @@ describe('local Voice Action contract', () => {
     const { resolveActionApprovalRouting } = await import('./actionApprovalPolicy.js');
     for (const [operation, required] of [
       ['start', true], ['recover', true], ['hold_begin', true], ['brief.request', true], ['brief.retry', true],
-      ['get', false], ['end', false], ['set_muted', false], ['dismiss', false], ['hold_release', false],
+      ['get', false], ['end', false], ['set_muted', true], ['dismiss', false], ['hold_release', false],
       ['hold_cancel', false], ['turn_control', false], ['brief.stop', false], ['brief.close', false],
       ['glance.open', false], ['glance.close', false], ['transcript.set_visible', false], ['companion.reveal', false],
       ['position.set', false], ['setup.open', false], ['setup.close', false], ['open_conversation', false],
+      ['dictation.start', true], ['dictation.finish', false], ['dictation.cancel', false], ['dictation.dismiss', false],
     ] as const) {
       const actionId = ActionIdSchema.parse(`ui.voice_global.${operation}`);
       const spec = getActionSpec(actionId);
@@ -47,6 +52,33 @@ describe('local Voice Action contract', () => {
         const settings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
         expect(resolveActionApprovalRouting({ actionId, spec, context, settings }).required).toBe(false);
       }
+    }
+  });
+
+  it('requires automation approval for unmute while mute and present-user UI controls remain direct', async () => {
+    const { getActionSpec } = await import('./actionSpecs.js');
+    const { resolveActionApprovalRouting, isApprovalRequiredByActionsSettings } = await import('./actionApprovalPolicy.js');
+    const actionId = 'ui.voice_global.set_muted';
+    const spec = getActionSpec(actionId);
+    for (const surface of ['agent', 'mcp', 'plugin'] as const) {
+      const context = { surface, authority: 'account_automation' as const };
+      for (const muted of [true, false]) {
+        const input = { expectedAttempt: 'current-attempt', muted };
+        expect(resolveActionApprovalRouting({ actionId, spec, context, input }).required).toBe(!muted);
+        const settings = normalizeActionsSettingsV1({ v: 1 });
+        expect(isApprovalRequiredByActionsSettings(actionId, settings, context, undefined, undefined, input)).toBe(!muted);
+        const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
+        expect(resolveActionApprovalRouting({ actionId, spec, context, input, settings: waived }).required).toBe(false);
+        const required = normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: [surface] } } });
+        expect(resolveActionApprovalRouting({ actionId, spec, context, input, settings: required }).required).toBe(true);
+      }
+      expect(resolveActionApprovalRouting({ actionId, spec, context, input: { muted: true } }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId, spec, context,
+        input: { expectedAttempt: 'current-attempt', muted: true }, defaultSafety: 'danger' }).required).toBe(true);
+    }
+    for (const muted of [true, false]) {
+      expect(resolveActionApprovalRouting({ actionId, spec, input: { expectedAttempt: 'current-attempt', muted },
+        context: { surface: 'ui', authority: 'present_user' } }).required).toBe(false);
     }
   });
 

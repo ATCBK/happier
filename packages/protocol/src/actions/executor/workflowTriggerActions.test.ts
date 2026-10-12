@@ -19,6 +19,10 @@ import { AutomationTriggerDetailSchema } from '../../automations/automationTrigg
 import { AutomationPullRequestTriggerSchema } from '../../automations/automationTriggerDefinition.js';
 import { openAutomationTriggerDefinitionStoredEnvelopeV1, sealAutomationTriggerDefinitionStoredEnvelopeV1 } from '../../automations/automationTriggerDefinitionStoredContent.js';
 import { markSessionListQueryResultV1 } from '../../sessions/awareness/action.js';
+import { ActionIdSchema } from '../actionIds.js';
+import { getActionSpec } from '../actionSpecs.js';
+import { zodSchemaToJsonSchemaObject } from '../actionInputJsonSchema.js';
+import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 
 const definition = WorkflowDefinitionV1Schema.parse({ version: 1,
   defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } },
@@ -144,7 +148,7 @@ function fixture() {
           executionRecipe: input.executionRecipe ?? current.executionRecipe, triggers };
         rows.set(id, row); return row;
       },
-      delete: async (id) => { rows.delete(id); },
+      delete: async (id) => { rows.delete(id); return { ok: true }; },
     },
   };
   return { rows, deps, actions: createWorkflowTriggerActions(deps), loseSource: () => { artifacts.delete(workflow); },
@@ -292,18 +296,40 @@ describe('workflow trigger Automation composition', () => {
     expect(result.sets.some(set => 'scopeSessionId' in set && set.scopeSessionId === 'session-one')).toBe(true);
     expect((await f.actions.list({ scope: 'account_inline' })).sets).toHaveLength(1);
   });
-  it('prepares Session birth triggers without writing or choosing the source Session', async () => {
+  it.each([
+    { ref: workflow, event: 'sessionStarted' },
+    { ref: 'builtin:review-and-converge', event: 'parentTurnCompleted' },
+  ] as const)('prepares inherited $ref birth triggers without writing or choosing the source Session', async ({ ref, event }) => {
     const { rows, deps } = fixture();
     const actions = createWorkflowTriggerActions({ ...deps,
-      resolveMaterializer: async () => ({ effects: { resolveTargetAvailability: async () => true } }) });
+      resolveMaterializer: async () => ({
+        roleSelection: { defaultEngine: { agentTargetKey: 'agent:happier.agent.claude/claude' } },
+        effects: { resolveTargetAvailability: async () => true,
+          readActionContract: async (actionId) => {
+            const spec = getActionSpec(ActionIdSchema.parse(actionId));
+            if (!spec.outputSchema) throw new Error('Inherited workflow requires its canonical Action result contract');
+            return {
+              inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
+              outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.outputSchema, { target: 'draft-7' })),
+            };
+          },
+        },
+      }) });
     const prepared = await actions.prepareSessionInitialTriggers({ project, initialTriggers: [{
-      target: { kind: 'workflow', ref: workflow },
-      trigger: { kind: 'sessionLifecycle', enabled: true, events: ['sessionStarted'], policy: { kind: 'firstMatch' } },
-    }] });
+      target: { kind: 'workflow', ref },
+      ...(ref === 'builtin:review-and-converge'
+        ? { inputs: { engines: ['agent:happier.agent.claude/claude'] } } : {}),
+      trigger: { kind: 'sessionLifecycle', enabled: true, events: [event], policy: { kind: 'everyMatch' } },
+    }], caller: ownCaller }).catch((error: unknown) => {
+      if (error instanceof Error && 'details' in error) {
+        throw new Error(`${error.message}: ${JSON.stringify(error.details)}`, { cause: error });
+      }
+      throw error;
+    });
     expect(rows.size).toBe(0);
-    expect(prepared).toMatchObject([{ workflowDefinitionId: workflow, assignments: [{ machineId: project.machineId }],
+    expect(prepared).toMatchObject([{ workflowDefinitionId: ref, assignments: [{ machineId: project.machineId }],
       executionRecipe: { v: 2, workflow: { t: 'plain', v: { workspace: { directory: project.directory } } } },
-      triggers: [{ trigger: { events: ['sessionStarted'] } }] }]);
+      triggers: [{ trigger: { events: [event], policy: { kind: 'everyMatch' } } }] }]);
     expect(prepared[0]).not.toHaveProperty('scopeSessionId');
     expect(prepared[0]?.triggers[0]?.trigger).not.toHaveProperty('sourceSessionId');
     await expect(actions.prepareSessionInitialTriggers({ project, initialTriggers: [{
@@ -379,13 +405,14 @@ describe('workflow trigger Automation composition', () => {
 
   it.each(['prComment', 'ciFailed'] as const)('attaches %s through the PR binding owner and returns its link', async (triggerKind) => {
     const { deps } = fixture();
-    const bindings = new Map<string, { provider: 'github'; repository: string; number: number }>();
+    const bindings = new Map<string, { provider: 'github'; repository: string; number: number; url: string }>();
     const selected = { repository: 'happier-dev/happier', number: 42 };
     const actions = createWorkflowTriggerActions({ ...deps,
       resolveSession: async () => ({ project, nativeGoalOwner: false }),
       pullRequests: {
         listLinks: async () => [...bindings.values()],
-        attach: async ({ triggerId, pullRequest }) => { bindings.set(triggerId, { provider: 'github', ...pullRequest }); },
+        attach: async ({ triggerId, pullRequest }) => { bindings.set(triggerId, { provider: 'github', ...pullRequest,
+          url: `https://github.com/${pullRequest.repository}/pull/${pullRequest.number}` }); },
         removeTrigger: async () => undefined,
       },
     });
@@ -398,12 +425,12 @@ describe('workflow trigger Automation composition', () => {
     await actions.sessionRemove({ sessionId: 'session-one', triggerId: result.triggerId! });
     const afterRemoval = await actions.sessionList({ sessionId: 'session-one' });
     expect(afterRemoval.sets.flatMap((set) => set.triggers)).toEqual([]);
-    expect(afterRemoval.pullRequestLinks).toEqual([{ provider: 'github', ...selected }]);
+    expect(afterRemoval.pullRequestLinks).toEqual([{ provider: 'github', ...selected, url: 'https://github.com/happier-dev/happier/pull/42' }]);
   });
 
   it('requires a selected or single linked PR before writing a scoped PR trigger', async () => {
     const { deps, rows } = fixture();
-    let links: { provider: 'github'; repository: string; number: number }[] = [];
+    let links: { provider: 'github'; repository: string; number: number; url: string }[] = [];
     const actions = createWorkflowTriggerActions({ ...deps,
       resolveSession: async () => ({ project, nativeGoalOwner: false }),
       pullRequests: { listLinks: async () => links, attach: async () => undefined, removeTrigger: async () => undefined },
@@ -412,9 +439,9 @@ describe('workflow trigger Automation composition', () => {
       trigger: { kind: 'prComment' as const, enabled: true } };
     await expect(actions.sessionAdd(request)).rejects.toMatchObject({ code: 'pull_request_link_required' });
     expect(rows.size).toBe(0);
-    links = [{ provider: 'github', repository: 'happier-dev/happier', number: 42 }];
+    links = [{ provider: 'github', repository: 'happier-dev/happier', number: 42, url: 'https://github.com/happier-dev/happier/pull/42' }];
     expect((await actions.sessionAdd(request)).set.triggers).toMatchObject([{ kind: 'prComment', pullRequest: { repository: links[0]!.repository, number: 42 } }]);
-    links.push({ provider: 'github', repository: 'happier-dev/happier', number: 43 });
+    links.push({ provider: 'github', repository: 'happier-dev/happier', number: 43, url: 'https://github.com/happier-dev/happier/pull/43' });
     await expect(actions.sessionAdd(request)).rejects.toMatchObject({ code: 'pull_request_link_required' });
   });
 
@@ -590,7 +617,7 @@ describe('workflow trigger Automation composition', () => {
         return { ok: true };
       },
       isApprovalExecutionOriginCurrent: async ({ origin }) => origin.caller.kind === 'session'
-        && origin.caller.sessionId === 'session-one',
+        && origin.caller.sessionId === 'session-one' && origin.machineId === project.machineId,
       // Account trigger approval is mandatory even when configurable policy waives it.
       isActionApprovalRequired: () => false,
       resolveAgentStartContext: async () => policyFactsAvailable ? { ...ownCaller.agentStartContext,
@@ -601,6 +628,7 @@ describe('workflow trigger Automation composition', () => {
     const executor = createExecutor();
     const context: ActionExecutorContext = { ...ownCaller, surface: 'cli', authority: 'account_automation',
       serverId: 'home-one', actionRequestId: 'session-action-request', defaultSessionId: 'untrusted-default', callerPermissionMode: 'default',
+      defaultSessionMachineId: project.machineId,
       approvalOrigin: { kind: 'transcript_tool_call', sessionId: 'session-one', toolCallId: 'tool-one' },
       actionCaller: { kind: 'session', sessionId: 'session-one', starterDepth: 0, turnDepth: 0 } };
     expect(await executor.execute('workflow.trigger.list', { scope: 'account_inline' }, context)).toMatchObject({ ok: true, result: { sets: [] } });
@@ -731,6 +759,37 @@ describe('workflow trigger Automation composition', () => {
     await actions.removeForWorkflow(workflow);
     expect([...rows.values()]).toMatchObject([{ scopeSessionId: 'session-two', workflowDefinitionId: null }]);
   });
+  it('admits a manual deferred panel without preapproving its trigger authoring or exceeding Run depth', async () => {
+    const { deps } = fixture();
+    const source = WorkflowDefinitionV1Schema.parse({ version: 1, defaults: {}, blocks: [
+      { kind: 'wait', id: 'choose', document: { text: 'Choose planners', references: [], attachments: [] },
+        result: { kind: 'json', schema: { type: 'array', items: { type: 'string' } } } },
+      { kind: 'action', id: 'panel', actionId: 'subagents.plan.start', input: {
+        target: { kind: 'literal', value: { kind: 'detached' } },
+        instructions: { kind: 'literal', value: 'Plan the change' },
+        backendTargetKeys: { kind: 'result', producer: { blockId: 'choose', scope: { kind: 'current' } }, path: [] },
+      } },
+    ] });
+    const admitted: string[] = [];
+    const actions = createWorkflowTriggerActions({ ...deps,
+      automations: { ...deps.automations, runNow: async (automationId) => {
+        admitted.push(automationId); return manualReceipt(automationId);
+      } },
+      resolveMaterializer: async () => ({ effects: { resolveTargetAvailability: async () => true,
+        readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }) } }),
+    });
+    const caller = { ...ownCaller, agentStartContext: { ...ownCaller.agentStartContext, workDepthLimit: 1 } };
+    await expect(actions.add({ target: { kind: 'inline', definition: source }, project, trigger }, caller))
+      .rejects.toMatchObject({ code: 'definition_exceeds_authority' });
+    const added = await actions.add({ target: { kind: 'inline', definition: source }, project, trigger });
+    await expect(actions.runNow({ automationId: added.set.automationId }, caller))
+      .resolves.toEqual(manualReceipt(added.set.automationId));
+    await expect(actions.runNow({ automationId: added.set.automationId }, { ...caller,
+      agentStartContext: { ...caller.agentStartContext, caller: { ...caller.agentStartContext.caller, turnDepth: 1 } },
+    })).rejects.toMatchObject({ code: 'work_depth_exceeded' });
+    expect(admitted).toEqual([added.set.automationId]);
+  });
+
   it('admits Account agent add/update through the same materialized ORC trigger policy', async () => {
     const { deps, rows } = fixture();
     const admitted: string[] = [];

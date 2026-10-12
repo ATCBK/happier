@@ -1,6 +1,6 @@
 import type {
   AutomationDefinitionCreateRequest, AutomationDefinitionDetail, AutomationDefinitionListResponse,
-  AutomationDefinitionReconcileRequest, AutomationTriggerReconcileExistingItem, AutomationDefinitionListRequest,
+  AutomationDefinitionReconcileRequest, AutomationTriggerReconcileExistingItem, AutomationDefinitionListRequest, AutomationDeleteResponse,
 } from '../../automations/automationApiV3.js';
 import { AutomationV3RunMutationResponseSchema, type AutomationV3RunMutationResponse } from '../../automations/automationApiV3.js';
 import { AutomationTriggerIdSchema } from '../../automations/automationTriggerIdentity.js';
@@ -32,7 +32,7 @@ import { SessionInitialTriggerAdmissionV1Schema, type SessionInitialTriggerAdmis
 import { AutomationPullRequestTriggerSchema, type AutomationPullRequestTrigger } from '../../automations/automationTriggerDefinition.js';
 import { admitAgentStartV1 } from '../../account/settings/admitAgentStartV1.js';
 import { SessionAgentSpawnPolicyV1StrictSchema } from '../../account/settings/sessionAgentSpawnPolicyV1.js';
-import { materializeWorkflowAcceptedSnapshotV1, materializeWorkflowDefinitionAuthorityV1, type MaterializeWorkflowAcceptedSnapshotV1Input } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
+import { materializeWorkflowAcceptedSnapshotV1, materializeWorkflowDefinitionAuthorityV1, readWorkflowRunLeafStartRequestV1, type MaterializeWorkflowAcceptedSnapshotV1Input } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
 import { validateWorkflowDefinition } from '../../workflows/workflowValidationV1.js';
 import type { WorkflowDefinitionV1 } from '../../workflows/workflowV1.js';
 import { resolveWorkflowDestinationsV1 } from '../../workflows/workflowDestinationsV1.js';
@@ -42,6 +42,7 @@ import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { canonicalizeAutomationSessionLifecycleEvents } from '../../automations/automationSessionLifecycle.js';
 import type { AutomationRunLifecycleSource } from '../../automations/automationRunLifecycle.js';
 import { ManagedPowerInputV1Schema, ManagedDeleteInputV1Schema } from '../../machines/managed/actionsV1.js';
+import { computeActionInputApprovalDigestV1 } from '../decisionAuthority.js';
 import type { ManagedMachineV1 } from '../../machines/managed/managedMachineV1.js';
 
 type Caller = WorkflowActionExecuteArgs['context'];
@@ -52,7 +53,7 @@ export type WorkflowTriggerAutomationOperations = Readonly<{
   create: (input: AutomationDefinitionCreateRequest, beforeWrite?: () => Promise<void>) => Promise<AutomationDefinitionDetail>;
   reconcile: (automationId: string, input: AutomationDefinitionReconcileRequest,
     current?: AutomationDefinitionDetail, beforeWrite?: () => Promise<void>) => Promise<AutomationDefinitionDetail>;
-  delete: (automationId: string) => Promise<void>;
+  delete: (automationId: string) => Promise<AutomationDeleteResponse>;
   runNow?: (automationId: string, options?: Readonly<{ idempotencyKey?: string }>) => Promise<AutomationV3RunMutationResponse>;
 }>;
 export type WorkflowTriggerActionsDependencies = Readonly<{
@@ -262,7 +263,7 @@ export function createWorkflowTriggerActions(deps: WorkflowTriggerActionsDepende
         }
         if (runNow) {
           for (const leaf of materialized.agentStartLeaves.filter((leaf) => (leaf.sourceKey ?? '$root') === sourceKey)) {
-            const admitted = admitAgentStartV1(policy.data, { kind: 'workflow_run_leaf', leaf,
+            const admitted = admitAgentStartV1(policy.data, { ...readWorkflowRunLeafStartRequestV1(leaf),
               ...(sessionId ? { targetSessionId: sessionId } : {}) }, { ...authority, roles });
             if (!admitted.ok) refuse(admitted.refusal.code, admitted.refusal);
           }
@@ -552,8 +553,13 @@ export function createWorkflowTriggerActions(deps: WorkflowTriggerActionsDepende
       let current: Readonly<{ target: TriggerTargetV1; context: WorkflowTriggerContextV1 }>;
       let reviewedProject: WorkflowTriggerAddRequestV1['project'] | undefined;
       if (input.confirmLegacyConversion) {
-        if (caller?.authority !== 'present_user' || isWorkflowTriggerAgentCallerV1(caller)
-          || (caller.actionCaller !== undefined && caller.actionCaller.kind !== 'host')) refuse('present_user_required');
+        const directUser = caller?.authority === 'present_user' && !isWorkflowTriggerAgentCallerV1(caller)
+          && (caller.actionCaller === undefined || caller.actionCaller.kind === 'host');
+        const proof = caller?.presentUserApproval;
+        const approvedRequest = caller?.authority === 'present_user' && caller.bypassApprovals === true
+          && proof?.actionId === 'workflow.trigger.update' && proof.requestId === caller.actionRequestId
+          && proof.inputDigest === computeActionInputApprovalDigestV1('workflow.trigger.update', input);
+        if (!directUser && !approvedRequest) refuse('present_user_required');
         if (!row.templateCiphertext || !await deps.requiresLegacyReview?.(row)
           || input.patch.target?.kind !== 'inline' || !input.patch.project) refuse('invalid_input');
         const sessionId = readAutomationTemplateStoredEnvelopeV1(row.templateCiphertext)?.legacyExistingSessionId;
@@ -609,7 +615,7 @@ export function createWorkflowTriggerActions(deps: WorkflowTriggerActionsDepende
         setEnabled, nextProject === undefined || (reviewedProject !== undefined
           && createCanonicalJsonSigningInput(reviewedProject) === createCanonicalJsonSigningInput(targetProject)), caller), input.triggerId);
     },
-    remove: async (raw: WorkflowTriggerRemoveRequestV1, sessionId?: string, caller?: Caller) => {
+    remove: async (raw: WorkflowTriggerRemoveRequestV1 & { triggerId: string }, sessionId?: string, caller?: Caller) => {
       const input = WorkflowTriggerRemoveRequestV1Schema.parse(raw);
       const row = await read(input.automationId, sessionId);
       const trigger = row.triggers.find((item) => item.id === input.triggerId);
@@ -730,7 +736,16 @@ export function createWorkflowTriggerActions(deps: WorkflowTriggerActionsDepende
     },
     add: (raw: WorkflowTriggerAddRequestV1, caller?: Caller) => actions.add(raw, caller),
     update: (raw: WorkflowTriggerUpdateRequestV1, caller?: Caller) => actions.update(raw, caller),
-    remove: (raw: WorkflowTriggerRemoveRequestV1) => actions.remove(raw),
+    remove: async (raw: WorkflowTriggerRemoveRequestV1) => {
+      const input = WorkflowTriggerRemoveRequestV1Schema.parse(raw);
+      if (input.triggerId !== undefined) return actions.remove({ ...input, triggerId: input.triggerId });
+      // Account lookup rejects Session-scoped or foreign sets. Deletion needs no
+      // private recipe or live Machine; the Automation owner retains Run history.
+      const row = await read(input.automationId);
+      const deleted = await deps.automations.delete(row.id);
+      return { automationId: row.id, deleted: true as const,
+        ...(deleted.removedRevision === undefined ? {} : { removedRevision: deleted.removedRevision }) };
+    },
     sessionList: async (raw: SessionTriggerListRequestV1, caller?: Caller) => {
       const input = SessionTriggerListRequestV1Schema.parse(raw);
       await session(input.sessionId, caller);

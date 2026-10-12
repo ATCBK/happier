@@ -7,8 +7,8 @@ import type { ActionSpec } from './actionSpecs.js';
  * which value it describes, reporting whether any of them admits absence or null.
  */
 export function unwrapActionInputSchema(
-  schema: z.ZodTypeAny,
-): Readonly<{ schema: z.ZodTypeAny; optional: boolean; nullable: boolean }> {
+  schema: z.core.$ZodType,
+): Readonly<{ schema: z.core.$ZodType; optional: boolean; nullable: boolean }> {
   let current = schema;
   let optional = false;
   let nullable = false;
@@ -49,18 +49,19 @@ export function actionInputFieldAcceptsNull(
   spec: Pick<ActionSpec, 'inputSchema'>,
   path: string,
 ): boolean {
-  let current: z.ZodTypeAny | undefined = spec.inputSchema as z.ZodTypeAny | undefined;
-  if (!current) return false;
-  for (const segment of path.split('.').map((part) => part.trim()).filter(Boolean)) {
-    const inner: z.ZodTypeAny = unwrapActionInputSchema(current).schema;
+  const segments = path.split('.').map((part) => part.trim()).filter(Boolean);
+  const acceptsNull = (schema: z.core.$ZodType, index: number): boolean => {
+    if (index === segments.length) return z.safeParse(schema, null).success;
+    const inner = unwrapActionInputSchema(schema).schema;
+    if (inner instanceof z.ZodUnion) return inner.options.some((option) => acceptsNull(option, index));
+    const segment = segments[index];
     if (segment === '[]') {
       if (!(inner instanceof z.ZodArray)) return false;
-      current = inner.element as z.ZodTypeAny;
-      continue;
+      return acceptsNull(inner.element as z.ZodTypeAny, index + 1);
     }
     if (!(inner instanceof z.ZodObject)) return false;
-    current = (inner.shape as Record<string, z.ZodTypeAny | undefined>)[segment];
-    if (!current) return false;
-  }
-  return current.safeParse(null).success;
+    const field = (inner.shape as Record<string, z.ZodTypeAny | undefined>)[segment!];
+    return field !== undefined && acceptsNull(field, index + 1);
+  };
+  return spec.inputSchema !== undefined && acceptsNull(spec.inputSchema as z.ZodTypeAny, 0);
 }

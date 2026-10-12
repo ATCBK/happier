@@ -1,6 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 import type { PreNormalizedActionSpec } from './actionSpecs.js';
+import { UpdateItemStateSchema, UpdateItemActionVerbSchema } from './updatesActionFamily.js';
 
 export const APP_UPDATE_ACTION_IDS = ['app.updates.get', 'app.updates.check', 'app.updates.update',
   'app.updates.retry', 'app.updates.restart', 'app.updates.skip'] as const;
@@ -16,9 +17,9 @@ export const AppUpdateActionInputSchemas = {
 } as const;
 export const AppUpdateStatusResultSchema = lazyZodSchema(() => z.object({
   channel: z.enum(['desktop', 'native-store', 'web-ui', 'ota', 'none']),
-  state: z.enum(['unchecked', 'checking', 'upToDate', 'available', 'required', 'running', 'ready', 'failed', 'unknown', 'offline']),
+  state: UpdateItemStateSchema,
   currentVersion: z.string().nullable(), latestVersion: z.string().nullable(), checkedAt: z.number().nullable(),
-  action: z.enum(['update', 'retry', 'restart', 'reload', 'store']).nullable(), skipped: z.boolean(), canSkip: z.boolean(),
+  action: UpdateItemActionVerbSchema.nullable(), skipped: z.boolean(), canSkip: z.boolean(),
 }).strict());
 const OperationResultSchema = lazyZodSchema(() => z.object({ status: z.literal('requested') }).strict());
 export const AppUpdateActionOutputSchemas = {
@@ -27,7 +28,7 @@ export const AppUpdateActionOutputSchemas = {
   'app.updates.retry': OperationResultSchema, 'app.updates.restart': OperationResultSchema, 'app.updates.skip': OperationResultSchema,
 } as const;
 export const APP_UPDATE_ACTION_SPECS = APP_UPDATE_ACTION_IDS.map((id): PreNormalizedActionSpec => ({
-  id, title: {
+  id, approval: { result: 'required' }, title: {
     'app.updates.get': 'Get app update status', 'app.updates.check': 'Check for app updates',
     'app.updates.update': 'Update this app', 'app.updates.retry': 'Retry app update',
     'app.updates.restart': 'Restart to update this app', 'app.updates.skip': 'Skip this app version',

@@ -67,7 +67,7 @@ function projectSharedSavedSecretObservationInput(id: string, input: unknown): u
 export const SHARED_SAVED_SECRET_ACTION_SPECS: readonly PreNormalizedActionSpec[] = Object.freeze(
   SHARED_SAVED_SECRET_ACTION_IDS_V1.map((id): PreNormalizedActionSpec => {
     const row = homeDomainActionRow({
-      id,
+      id, approval: READ_ACTIONS.has(id) ? { result: 'required' } : { result: 'required', flow: 'deferred' },
       title: {
         'secrets.shared.list': 'List shared Saved Secrets',
         'secrets.shared.create': 'Create shared Saved Secret',

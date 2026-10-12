@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { AccountUsernameUpdateErrorV1Schema } from '../account/profile.js';
 import { z } from 'zod';
 import { ACTION_ID_FAMILIES_V1 } from './actionIds.js';
 
@@ -6,7 +7,7 @@ import {
   HOME_GOVERNANCE_ACTION_IDS_V1,
   type HomeGovernanceActionIdV1,
 } from '../home/governance/actionsV1.js';
-import { TEAM_ACTION_IDS_V1, type TeamActionIdV1 } from '../teams/actionsV1.js';
+import { TEAM_HOME_ACTION_IDS_V1 } from '../teams/actionsV1.js';
 import {
   MANAGED_IDENTITY_PROVIDER_ACTION_IDS_V1,
   type ManagedIdentityProviderActionIdV1,
@@ -46,9 +47,10 @@ import {
  * that lets a route and its catalog entry drift apart.
  */
 export const HOME_DOMAIN_ACTION_IDS_V1 = [
+  ...ACTION_ID_FAMILIES_V1.account_profile,
   ...HOME_GOVERNANCE_ACTION_IDS_V1,
   ...HOME_IDENTITY_ACTION_IDS_V1,
-  ...TEAM_ACTION_IDS_V1,
+  ...TEAM_HOME_ACTION_IDS_V1,
   ...MANAGED_IDENTITY_PROVIDER_ACTION_IDS_V1,
   ...MANAGED_GITHUB_APP_ACTION_IDS_V1,
   ...SHARED_SAVED_SECRET_ACTION_IDS_V1,
@@ -59,9 +61,10 @@ export const HOME_DOMAIN_ACTION_IDS_V1 = [
 ] as const;
 
 export type HomeDomainActionIdV1 =
+  | typeof ACTION_ID_FAMILIES_V1.account_profile[number]
   | HomeGovernanceActionIdV1
   | HomeIdentityActionIdV1
-  | TeamActionIdV1
+  | typeof TEAM_HOME_ACTION_IDS_V1[number]
   | ManagedIdentityProviderActionIdV1
   | ManagedGitHubAppActionIdV1
   | SharedSavedSecretActionIdV1
@@ -77,6 +80,7 @@ export function isHomeDomainActionIdV1(value: string): value is HomeDomainAction
 }
 
 const HOME_DOMAIN_ERROR_SCHEMAS_V1 = [
+  AccountUsernameUpdateErrorV1Schema,
   HomeGovernanceErrorV1Schema,
   HomeSettingsInvalidErrorV1Schema,
   TeamErrorV1Schema,

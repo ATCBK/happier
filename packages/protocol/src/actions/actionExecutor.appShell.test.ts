@@ -2,8 +2,21 @@ import { describe, expect, it } from 'vitest';
 
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { getActionSpec } from './actionSpecs.js';
+import { AppShellActionOutputSchemas } from './appShellActionFamily.js';
 
 describe('app shell Actions', () => {
+  it('accepts canonical Inbox Automation and approval pointers but rejects private approval bodies', () => {
+    const snapshot = { status: 'ready', groups: [{ key: 'automation:weekly',
+      root: { kind: 'automation', automationId: 'weekly', serverId: 'home-a', runId: 'run-a' },
+      items: [{ kind: 'automation_run', key: 'automation-run:run-a', runId: 'run-a' },
+        { kind: 'approval', key: 'approval:approval-a', artifactId: 'approval-a' }] }],
+      approvalIds: ['approval-a'], automationRunIds: ['run-a'], usageNoticeIds: [], friendRequestIds: [],
+      readySessions: [], actionOperations: [], isLoading: false, refreshFailed: false };
+    const schema = AppShellActionOutputSchemas['inbox.get'];
+    expect(schema.parse(snapshot)).toEqual(snapshot);
+    expect(schema.safeParse({ ...snapshot, groups: [{ ...snapshot.groups[0],
+      items: [{ kind: 'approval', key: 'approval:approval-a', artifactId: 'approval-a', body: 'private' }] }] }).success).toBe(false);
+  });
   it.each(['session.work.get', 'inbox.get'] as const)('exposes %s as a strict client read with explicit availability', (actionId) => {
     const spec = getActionSpec(actionId);
     expect(spec.executionPlacement).toBe('client');

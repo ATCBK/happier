@@ -4,6 +4,16 @@ import { AutomationTriggerIdSchema } from '../../automations/automationTriggerId
 import type { AvailableAutomationAccountEncryptionV1 } from '../../automations/automationAccountCurrentnessV1.js';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '../../crypto/accountScopedCipher.js';
 import { createAccountWorkflowTriggerActions } from './workflowTriggerAccountHost.js';
+import { createActionExecutor } from '../actionExecutor.js';
+import type { ActionExecutorContext } from './types.js';
+import { createWorkflowActionExecutor } from './workflowAccountActions.js';
+import { createWorkflowDefinitionActions } from './workflowDefinitions.js';
+import { ApprovalRequestV2Schema, type ApprovalRequest } from '../../approvals/approvalRequestV1.js';
+import { decideApprovalRequestTransition } from '../../approvals/approvalRequestTransition.js';
+import { ActionsSettingsV1Schema } from '../actionSettings.js';
+import { isApprovalRequiredByActionsSettings } from '../actionApprovalPolicy.js';
+import { describeApprovalActionFields } from '../actionApprovalPresentation.js';
+import { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } from '../../account/settings/sessionAgentSpawnPolicyV1.js';
 import { WorkflowTriggerListResultV1Schema } from '../../workflows/triggers/workflowTriggerActionsV1.js';
 import { WorkflowTriggerListRequestV1Schema, WorkflowTriggerUpdateRequestV1Schema } from '../../workflows/triggers/workflowTriggerActionsV1.js';
 import { AUTOMATION_TEMPLATE_V02_PLAIN, AUTOMATION_TEMPLATE_V02_ENCRYPTED, AUTOMATION_TEMPLATE_V02_RAW_ENCRYPTED,
@@ -29,7 +39,7 @@ function fixture(templateCiphertext: string, encryption = plain, targetType: Aut
       executionSelection: { agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } } }),
     newId: () => 'unused', resolveWorkflow: async () => { throw new Error('No Artifact is read for legacy rows'); },
     automations: { get: async () => row, list: async () => ({ automations: [row], nextCursor: null }),
-      create: async () => { throw new Error('No Automation is created'); }, delete: async () => {},
+      create: async () => { throw new Error('No Automation is created'); }, delete: async () => ({ ok: true as const }),
       reconcile: async (_id: string, input: AutomationDefinitionReconcileRequest) => {
         if (input.expectedTemplateVersion !== row.templateVersion) throw Object.assign(new Error('conflict'), { code: 'currentness_conflict' });
         writes++;
@@ -47,7 +57,170 @@ function fixture(templateCiphertext: string, encryption = plain, targetType: Aut
   return { params, row: () => row, writes: () => writes, written: () => written };
 }
 
+async function conversionApprovalFixture(surface: 'agent' | 'mcp' | 'cli' = 'mcp') {
+  const f = fixture(AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED, plain, 'existingSession');
+  f.row().enabled = false;
+  const observations: ActionExecutorContext[] = [];
+  const agentStartContext = {
+    caller: { kind: 'session' as const, sessionId: 'session-old', starterDepth: 0, turnDepth: 0 },
+    baseline: { machineId: 'machine-one', directory: '/repo', configuration: {
+      agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+    } },
+    ledSubtreeSessionIds: [], workDepthLimit: 4, roles: {}, callerPermissionCeiling: 'default' as const,
+  };
+  const host = createAccountWorkflowTriggerActions({ ...f.params,
+    resolveRetainedSession: async (sessionId) => ({ sessionId, encryptionMode: 'e2ee' as const,
+      material: { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) } }),
+    resolveSession: async (_sessionId, caller) => {
+      if (caller) observations.push(caller);
+      return f.params.resolveSession();
+    },
+    resolveMaterializer: async () => ({ effects: { resolveTargetAvailability: async () => true } }),
+  });
+  const human = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'home-one' } as const;
+  const { sets } = await host.list({ automationId: 'legacy-one', review: true }, human);
+  const input = WorkflowTriggerUpdateRequestV1Schema.parse({ automationId: 'legacy-one', expectedRevision: 3,
+    confirmLegacyConversion: true, patch: { target: sets[0]!.target, project: sets[0]!.project, enabled: true } });
+  const definitions = createWorkflowDefinitionActions({ artifactStore: {
+    list: async () => ({ items: [] }), read: async () => null,
+    create: async () => { throw new Error('Unexpected definition write'); },
+    update: async () => { throw new Error('Unexpected definition write'); }, delete: async () => ({ ok: true }),
+  }, encodeListCursor: (row) => row.artifactId, assertDefinitionWriteAllowed: async () => undefined });
+  let request: ApprovalRequest | null = null;
+  const settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
+    'workflow.trigger.update': ['agent', 'mcp', 'cli'],
+  } });
+  // Approval Artifact persistence and authenticated Session metadata are system boundaries.
+  // The real executor, approval transitions, materializer, crypto and trigger owner run beneath them.
+  const reloadExecutor = () => createActionExecutor({
+    workflowAction: createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true, definitions, triggers: host,
+      runs: { execute: async () => { throw new Error('Unexpected Run write'); } } }),
+    approvalsCreate: async ({ request: created }) => {
+      request = ApprovalRequestV2Schema.parse(JSON.parse(JSON.stringify(created)));
+      return { artifactId: 'conversion-approval' };
+    },
+    approvalsGet: async () => request,
+    approvalsUpdate: async ({ request: next }) => {
+      const parsed = ApprovalRequestV2Schema.parse(JSON.parse(JSON.stringify(next)));
+      if (!request) throw new Error('Missing approval');
+      const transition = decideApprovalRequestTransition(request, parsed);
+      if (transition.ok) request = parsed;
+      return transition;
+    },
+    isApprovalExecutionOriginCurrent: async ({ origin }) => origin.serverId === 'home-one',
+    resolveAgentStartContext: async () => agentStartContext,
+    isActionApprovalRequired: (actionId, context, actionInput) =>
+      isApprovalRequiredByActionsSettings(actionId, settings, context, undefined, undefined, actionInput),
+    observeActionExecution: async ({ context }) => { observations.push(context); },
+  });
+  const context: ActionExecutorContext = { surface, authority: 'account_automation', serverId: 'home-one',
+    actionRequestId: 'conversion-request', actionsSettings: settings,
+    ...(surface === 'agent' ? { actionCaller: agentStartContext.caller, defaultSessionId: 'session-old',
+      sessionAgentSpawnPolicyV1: DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, agentStartContext,
+      approvalOrigin: { kind: 'transcript_tool_call' as const, sessionId: 'session-old', toolCallId: 'convert-tool' } }
+      : { actionCaller: { kind: 'host' as const } }),
+  };
+  return { ...f, host, executor: reloadExecutor(), reloadExecutor, input, context, human, observations,
+    request: () => ApprovalRequestV2Schema.parse(request) };
+}
+
 describe('0.2 Automation Account trigger host', () => {
+  it.each(['agent', 'mcp', 'cli'] as const)('converts a %s request only after the exact present-user approval, despite always-allow', async (surface) => {
+    const f = await conversionApprovalFixture(surface);
+    expect(await f.executor.execute('workflow.trigger.update', f.input, f.context))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'conversion-approval' } });
+    expect(f.writes()).toBe(0);
+    expect(f.row().templateCiphertext).toBe(AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED);
+    expect(f.request()).toMatchObject({ status: 'open', actionArgs: f.input,
+      executionOriginV1: { surface, caller: f.context.actionCaller, requestId: 'conversion-request' } });
+    const fields = describeApprovalActionFields(f.request());
+    expect(fields.unrepresentable).toBeNull();
+    expect(fields.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'automationId', value: 'legacy-one' }),
+      expect.objectContaining({ path: 'confirmLegacyConversion', value: 'true' }),
+      expect.objectContaining({ path: 'expectedRevision', value: '3' }),
+      expect.objectContaining({ path: 'patch.target', value: JSON.stringify(f.input.patch.target) }),
+      expect.objectContaining({ path: 'patch.project', value: JSON.stringify(f.input.patch.project) }),
+    ]));
+    expect(await f.executor.execute('approval.request.decide', { artifactId: 'conversion-approval', decision: 'approve' }, f.context))
+      .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(f.request().status).toBe('open');
+    expect(f.writes()).toBe(0);
+    expect(await f.reloadExecutor().execute('approval.request.decide', { artifactId: 'conversion-approval', decision: 'approve' }, f.human))
+      .toMatchObject({ ok: true });
+    expect(f.request()).toMatchObject({ status: 'executed', decision: { kind: 'approve', authority: 'present_user' }, execution: { ok: true } });
+    expect(f.writes()).toBe(1);
+    expect(f.row().templateCiphertext).toBeUndefined();
+    expect(f.row().executionRecipe).toMatchObject({ v: 2, workflow: { t: 'plain', v: {
+      workspace: { directory: '/repo' }, inlineDefinition: f.input.patch.target?.kind === 'inline' ? f.input.patch.target.definition : undefined,
+    } } });
+    expect(f.written()).toMatchObject({ enabled: true, expectedTemplateVersion: 3,
+      assignments: [{ machineId: 'machine-one', enabled: true, priority: 2 }] });
+    expect(f.observations.filter((entry) => entry.bypassApprovals).at(-1))
+      .toMatchObject({ surface, actionCaller: f.context.actionCaller, actionRequestId: 'conversion-request' });
+  });
+  it('leaves denied conversion requests unchanged', async () => {
+    const f = await conversionApprovalFixture();
+    expect(await f.executor.execute('workflow.trigger.update', f.input, f.context))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(await f.executor.execute('approval.request.decide', { artifactId: 'conversion-approval', decision: 'reject' }, f.human))
+      .toMatchObject({ ok: true });
+    expect(f.request().status).toBe('rejected');
+    expect(f.writes()).toBe(0);
+    expect(f.row()).toMatchObject({ enabled: false, templateVersion: 3, templateCiphertext: AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED });
+  });
+  it('refuses a stale conversion revision on approved replay', async () => {
+    const f = await conversionApprovalFixture();
+    expect(await f.executor.execute('workflow.trigger.update', f.input, f.context))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    f.row().templateVersion = 4;
+    await f.executor.execute('approval.request.decide', { artifactId: 'conversion-approval', decision: 'approve' }, f.human);
+    expect(f.request()).toMatchObject({ status: 'failed', execution: { ok: false, errorCode: 'currentness_conflict' } });
+    expect(f.writes()).toBe(0);
+    expect(f.row().templateCiphertext).toBe(AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED);
+  });
+  it('preserves direct present-user UI conversion through the executor', async () => {
+    const f = await conversionApprovalFixture();
+    expect(await f.executor.execute('workflow.trigger.update', f.input, f.human)).toMatchObject({ ok: true, result: { set: { revision: 4 } } });
+    expect(f.writes()).toBe(1);
+    expect(f.row().templateCiphertext).toBeUndefined();
+  });
+  it('refuses a bare approval bypass or an agent with only present-user authority', async () => {
+    const f = await conversionApprovalFixture('agent');
+    expect(await f.executor.execute('workflow.trigger.update', f.input, { ...f.context, bypassApprovals: true }))
+      .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(await f.executor.execute('workflow.trigger.update', f.input, { ...f.context, authority: 'present_user', bypassApprovals: true }))
+      .toMatchObject({ ok: false });
+    await expect(f.host.update(f.input, { ...f.context, authority: 'present_user', bypassApprovals: true }))
+      .rejects.toMatchObject({ code: 'present_user_required' });
+    expect(f.writes()).toBe(0);
+  });
+  it('binds approval proof to the Action, original request and every reviewed operand', async () => {
+    const f = await conversionApprovalFixture('agent');
+    await f.executor.execute('workflow.trigger.update', f.input, f.context);
+    await f.executor.execute('approval.request.decide', { artifactId: 'conversion-approval', decision: 'approve' }, f.human);
+    expect(f.request()).toMatchObject({ status: 'executed', execution: { ok: true } });
+    const replay = f.observations.find((entry) => entry.presentUserApproval);
+    expect(replay?.presentUserApproval).toBeDefined();
+    if (!replay?.presentUserApproval) throw new Error('Missing approved context');
+    const fresh = await conversionApprovalFixture('agent');
+    for (const { input, code } of [
+      { input: { ...f.input, expectedRevision: 2 }, code: 'currentness_conflict' },
+      { input: { ...f.input, patch: { ...f.input.patch, project: { machineId: 'machine-one', directory: '/different' } } }, code: 'present_user_required' },
+      { input: { ...f.input, patch: { ...f.input.patch, enabled: false } }, code: 'present_user_required' },
+    ]) {
+      await expect(fresh.host.update(input, replay)).rejects.toMatchObject({ code });
+    }
+    for (const context of [
+      { ...replay, actionRequestId: 'another-request' },
+      { ...replay, presentUserApproval: { ...replay.presentUserApproval, actionId: 'workflow.trigger.add' as const } },
+      { ...replay, authority: 'account_automation' as const },
+      { ...replay, bypassApprovals: false },
+    ]) {
+      await expect(fresh.host.update(f.input, context)).rejects.toMatchObject({ code: 'present_user_required' });
+    }
+    expect(fresh.writes()).toBe(0);
+  });
   it.each([{ placement: 'zero', explicitProject: false }, { placement: 'plural', explicitProject: false },
     { placement: 'plural', explicitProject: true }])
     ('keeps converted $placement placements through an ordinary trigger edit (explicit project: $explicitProject)', async ({ placement, explicitProject }) => {

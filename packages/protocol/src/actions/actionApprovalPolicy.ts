@@ -1,7 +1,4 @@
 import { ACTION_IDS } from './actionIds.js';
-import { MCP_SERVER_ACTION_IDS_V1 } from '../mcp/servers/serverActionIdsV1.js';
-import { PROVIDER_ACTION_IDS_V1 } from '../providers/providerActionIdsV1.js';
-import { USAGE_COACH_ACTION_IDS } from '../usage/usageActionIdsV1.js';
 import { isAutomationApprovalRequestSurface, canRequestPresentUserApprovalForActionInputV1 } from './decisionAuthority.js';
 import { ActionIdSchema, type ActionId } from './actionIds.js';
 import type { ActionExecutorContext } from './actionExecutor.js';
@@ -11,13 +8,9 @@ import type {
   ActionSettingsOverride,
 } from './actionSettings.js';
 import { resolveActionApprovalFlow, type ActionApprovalFlow, type ActionApprovalResult } from './actionApprovalMetadata.js';
-import { getActionSpec, type ActionSpec, type ActionSurfaces } from './actionSpecs.js';
-import { readWidgetActionSurfaceV1, readWidgetActionDestinationV1 } from '../widgets/actionsV1.js';
-import { isFilesystemActionId } from './filesystemActionFamily.js';
-import { isRemoteHostActionIdV1 } from '../remoteHosts/remoteHostActionIdsV1.js';
-import { NOTIFICATION_CONFIGURATION_ACTION_IDS } from './notificationConfigurationActionIds.js';
-import type { WidgetSurfaceRefV1 } from '../widgets/widgetInstanceV1.js';
-import { sameStrictJsonValue } from '../json/strictJsonValue.js';
+import { getActionSpec, type ActionSpec } from './actionSpecs.js';
+import { isAgentOrUnresolvedSurface, resolveApprovalSurface } from './actionApprovalSurface.js';
+export { isAgentOrUnresolvedSurface } from './actionApprovalSurface.js';
 
 export type ActionApprovalRoutingDecision = Readonly<{
   required: boolean;
@@ -25,50 +18,12 @@ export type ActionApprovalRoutingDecision = Readonly<{
   result: ActionApprovalResult;
 }>;
 
-/** Host-admitted personal presentation edits share the incumbent owner policy. */
-export function resolveWidgetActionContextualSafetyV1(args: Readonly<{
-  actionId: ActionId;
-  surface: WidgetSurfaceRefV1;
-  destination?: WidgetSurfaceRefV1 | null;
-  /** Current Artifact admission, never an Action input flag. */
-  isShared?: boolean;
-}>): ActionSpec['safety'] | undefined {
-  const { actionId, surface, destination, isShared } = args;
-  if (isShared === true) return 'danger';
-  const personalOwner = (target: WidgetSurfaceRefV1) => target.owner.kind === 'home' || target.owner.kind === 'companion';
-  if (destination && personalOwner(surface) && personalOwner(destination)) {
-    return surface.owner.kind === 'home' || destination.owner.kind === 'home'
-      ? getActionSpec('home.hub.layout.update').safety : getActionSpec('session.presentation.apply').safety;
-  }
-  if (destination && !sameStrictJsonValue(surface, destination)) return 'danger';
-  if (surface.owner.kind === 'home') return getActionSpec('home.hub.layout.update').safety;
-  if (surface.owner.kind === 'companion') return getActionSpec('session.presentation.apply').safety;
-  const personalArea = isShared === false && (surface.owner.kind === 'pluginArea' || surface.owner.kind === 'corePage'
-    || surface.owner.kind === 'project');
-  if (!personalArea) return undefined;
-  switch (actionId) {
-    case 'widgets.item.rename':
-    case 'widgets.item.size.set':
-    case 'widgets.item.frame.set':
-    case 'widgets.item.move':
-    case 'widgets.group.set':
-    case 'widgets.area.layout.create':
-    case 'widgets.area.layout.rename':
-    case 'widgets.area.layout.reorder':
-    case 'widgets.area.layout.reset':
-    case 'widgets.area.layout.undo':
-      return 'safe';
-    default:
-      return undefined;
-  }
-}
-
 export type ResolveActionApprovalRoutingArgs = Readonly<{
   actionId: ActionId;
   spec: ActionSpec;
   input?: unknown;
   settings?: ActionsSettingsV1 | null;
-  context?: Pick<ActionExecutorContext, 'surface' | 'authority' | 'presentUserConfirmation' | 'bypassApprovals' | 'actionCaller'> | null;
+  context?: Pick<ActionExecutorContext, 'surface' | 'authority' | 'presentUserConfirmation' | 'bypassApprovals' | 'actionCaller' | 'isPluginSettingsIntentCurrent'> | null;
   requiredByPolicy?: boolean;
   /** Host-proved contextual classification; overrides cannot waive mandatory Agent trigger approval. */
   defaultSafety?: ActionSpec['safety'];
@@ -79,243 +34,24 @@ export type ResolveActionApprovalRoutingArgs = Readonly<{
 }>;
 
 function isApprovalAction(actionId: ActionId): boolean {
-  return actionId === 'approval.request.list'
-    || actionId === 'approval.request.get'
-    || actionId === 'approval.request.create'
-    || actionId === 'approval.request.decide';
+  return getActionSpec(actionId).approvalPolicy?.control === true;
 }
 
-/**
- * Non-danger egress-sensitive leaves that must reach human consent on `agent` even though
- * their `safety` is `'safe'`. These capture page/region/element pixels or summaries that egress to
- * the composer/agent turn (or expose/copy public URLs), so the agent-initiated forms are
- * approval-floored.
- *
- * RESERVED for non-danger egress leaves ONLY. Mutating/navigating/danger actions must NOT be added
- * here — they are classified `safety: 'danger'` in the actionSpecs danger SSOT and are picked up
- * automatically by the danger-floor derivation below. Keeping that split preserves the single
- * source of truth (CON-2: do not hand-add browser verbs to this const).
- *
- * Annotation `start`/`cancel` + `attachComment`/`attachStroke`/`attachStyleIntent` are local
- * UI-state edits with no page egress and stay unprompted.
- */
-export const EGRESS_SENSITIVE_AGENT_FLOOR = [
-  'artifact.public_link.audit',
-  'computer.targets.list',
-  'computer.capture',
-  'computer.query',
-  'browser.context.capturePage',
-  'browser.context.captureScreenshot',
-  'browser.context.captureSelectedElement',
-  'browser.context.captureNetworkSummary',
-  'browser.context.captureConsoleSummary',
-  'browser.context.annotation.captureRegion',
-  'browser.context.annotation.captureElement',
-  'browser.context.attachToComposer',
-  'browser.context.attachToAgentTurn',
-  'browser.recording.attachToComposer',
-  'localServices.publicPreview.status',
-  'localServices.publicPreview.copyUrl',
-] as const satisfies readonly ActionId[];
-
-/** Safe authority transitions still require a human decision by default on the agent surface. */
-export const SURFACE_AUTHORITY_AGENT_FLOOR = [
-  'session.permission.respond',
-  'computer.permissions.openSettings',
-  'browser.control.takeControl',
-  'browser.control.handBack',
-  'computer.target.select',
-  'computer.control.interrupt',
-  'computer.control.handBack',
-] as const satisfies readonly ActionId[];
-
-// FIN 03 §5.4/§5.7: scoped removal is direct after own/led Session or exact
-// originating-trigger admission. Its danger metadata still fails ambiguous callers closed.
-const SCOPED_SESSION_TRIGGER_APPROVAL_EXEMPT_ACTION_ID = 'session.trigger.remove' satisfies ActionId;
-
-/**
- * The danger floor, DERIVED from the actionSpecs danger SSOT: every action that is both
- * `safety: 'danger'` and surfaced on `agent` requires human consent by default when
- * initiated through the agent surface, except the approved scoped Session-trigger removal.
- * Marking any other `agent` action as `safety: 'danger'` floors it automatically
- * (CON-1/CON-2/CON-3).
- *
- * This intentionally uses the full action catalog, not only `RUNTIME_ACTION_IDS_V1`: LIVE-1 caught
- * `prompt_doc.update`, a dangerous Session agent prompt-library action that still needs the same
- * consent floor even though it is not part of the runtime-action family.
- */
-const DERIVED_DANGER_AGENT_FLOOR_IDS: readonly ActionId[] = ACTION_IDS.filter(
-  (id) => {
-    const spec = getActionSpec(id);
-    return spec.safety === 'danger' && spec.surfaces.agent === true
-      && id !== SCOPED_SESSION_TRIGGER_APPROVAL_EXEMPT_ACTION_ID;
-  },
-);
-
-/**
- * The effective agent-initiated approval floor: the derived danger floor UNIONED with the
- * non-danger egress floor. Excluding the approved scoped-removal exception, the
- * danger ∩ agent subset is contained in the floor, which also includes safe egress.
- *
- * Per FINALIZATION-PLAN §4.2 / §12.8 / §15-Δ1 / §16-Δ1 this is a SURFACE-KEYED default — NOT a
- * global `RESULT_REQUIRED_APPROVAL_ACTION_IDS` addition (that set is a blocking-result contract,
- * not a human-approval gate). Human approval is decided here, via the persisted
- * surface-keyed ActionsSettings policy: dangerous exposed Actions prompt by default on every
- * user-configurable surface except scoped removal, while non-danger egress forms remain agent-gated.
- *
- * Persisted overrides may require or explicitly waive default confirmation on a known surface;
- * Agent Workflow trigger writes retain the mandatory rule below.
- * Missing or malformed policy retains this default. Egress redaction is independent.
- *
- * Note: `network.intercept` (named in §4.2) is a plugin GRANT capability, not an ActionSpec id,
- * so it is gated by the durable plugin-grants store (§12.2), not by this approval policy.
- */
-export const AGENT_INITIATED_APPROVAL_REQUIRED_ACTION_IDS: readonly ActionId[] = [
-  ...DERIVED_DANGER_AGENT_FLOOR_IDS,
-  ...EGRESS_SENSITIVE_AGENT_FLOOR,
-  ...SURFACE_AUTHORITY_AGENT_FLOOR,
-];
-
-/**
- * Dangerous Actions are confirmation-floored on every user-configurable surface
- * where the Action is actually exposed. This is separate from the agent egress
- * floor above: safe capture/egress Actions remain agent-only, while destructive
- * Actions keep the same default-on, user-overridable confirmation contract for
- * UI, CLI, MCP, API, plugin, voice, and Agent callers.
- */
-const DANGEROUS_ACTION_APPROVAL_REQUIRED_ACTION_ID_SET: ReadonlySet<ActionId> = new Set(
-  ACTION_IDS.filter((id) => getActionSpec(id).safety === 'danger'),
-);
-
-const AGENT_INITIATED_APPROVAL_REQUIRED_ACTION_ID_SET: ReadonlySet<ActionId> = new Set(
-  AGENT_INITIATED_APPROVAL_REQUIRED_ACTION_IDS,
-);
-
-/**
- * Dangerous Actions whose product-UI invocation has no direct present-user
- * confirmation host of its own, so their confirmation IS this policy's default:
- * required on the present-user UI too, and waivable only through Actions
- * settings. The present-user UI suppression below assumes a UI-local host; these
- * rows do not have one, and must not grow one (no picker-local prompt, no
- * domain approval resolver).
- *
- * - `session.responsibility.set`: teams-lane-04/11-responsible-assignment.md
- *   §7.1 — "Dangerous mutation confirmation is required by default and may be
- *   explicitly disabled by the user in the canonical Actions policy."
- * - Shared Board edits, definition edits/deletion and frozen snapshot publication:
- *   widgets-platform §4 — the same configurable policy owns their UI approval.
- */
-const PRESENT_USER_UI_POLICY_CONFIRMED_ACTION_ID_SET: ReadonlySet<ActionId> = new Set<ActionId>([
-  'memory.clear_index',
-  // MCP Actions have no separate UI-local confirmation host.
-  ...MCP_SERVER_ACTION_IDS_V1.filter(id => getActionSpec(id).safety === 'danger'),
-  // Provider settings use the canonical approval owner, not a local prompt.
-  ...PROVIDER_ACTION_IDS_V1.filter(id => getActionSpec(id).safety === 'danger'),
-  // Endpoint edits have no separate UI-local confirmation host.
-  ...NOTIFICATION_CONFIGURATION_ACTION_IDS.filter(id => getActionSpec(id).safety === 'danger'),
-  // Coach uses this policy's confirmation owner, not a finding-card-local prompt.
-  ...USAGE_COACH_ACTION_IDS,
-  // Legacy Provider conversion reviews collect input; this owner confirms the effect.
-  'launch_profiles.legacy.convert',
-  'launch_profiles.legacy.resolve_conflict',
-  'connectedServices.accounts.revoke',
-  'connectedServices.configuration.replace',
-  'action.operations.cancel',
-  // Public admitted-creation CAS does not have a separate UI confirmation host.
-  'machines.managed.cancel',
-  'machines.managed.setup.skip',
-  'machines.environment.apply',
-  'session.responsibility.set',
-  'session.reports_to.set',
-  'session.board.item.upsert',
-  'session.board.layout.update',
-  'projects.worker.preferences.set',
-  'projects.worker.copy.retire',
-  'projects.worker.preferences.reset',
-  'projects.manifest.update',
-  'projects.service.placement.set',
-  'machines.worker.policy.set',
-  // Machine sharing uses this same configurable Ask-first policy, not a
-  // ShareSheet-local confirmation or retained disclosure acknowledgement.
-  'machines.access.grant.set',
-  'machines.access.grant.remove',
-  'machines.access.leave',
-  'machines.access.prepareKeys',
-  'machines.terminal.open',
-  'machines.terminal.write',
-  'machines.terminal.close',
-  'machines.terminal.restart',
-  'widgets.definition.update',
-  'widgets.definition.delete',
-  'widgets.fragment.update',
-  'widgets.fragment.delete',
-  'widgets.snapshot.post',
-]);
-
-function usesPresentUserUiPolicyConfirmation(actionId: ActionId, input: unknown): boolean {
-  if (isRemoteHostActionIdV1(actionId) && getActionSpec(actionId).safety === 'danger') return true;
-  if (PRESENT_USER_UI_POLICY_CONFIRMED_ACTION_ID_SET.has(actionId)) return true;
-  if (!actionId.startsWith('widgets.item.') || getActionSpec(actionId).safety !== 'danger') return false;
-  const surface = readWidgetActionSurfaceV1(input);
-  const destination = actionId === 'widgets.item.move' ? readWidgetActionDestinationV1(input) : null;
-  // Missing target facts cannot establish that a write is only personal. The
-  // executor supplies admitted input; Home/Companion inherit their safe owner policy.
-  return !surface || surface.owner.kind === 'sessionBoard' || destination?.owner.kind === 'sessionBoard';
-}
-
-type ActionSurfaceKey = keyof ActionSurfaces;
-type NonAgentActionSurfaceKey = Exclude<ActionSurfaceKey, 'agent'>;
-
-const NON_AGENT_ACTION_SURFACE_KEY_RECORD = {
-  ui: true,
-  voice: true,
-  mcp: true,
-  cli: true,
-  rpc: true,
-  api: true,
-  plugin: true,
-} satisfies Record<NonAgentActionSurfaceKey, true>;
-
-const NON_AGENT_ACTION_SURFACE_KEYS: ReadonlySet<string> = new Set(
-  Object.keys(NON_AGENT_ACTION_SURFACE_KEY_RECORD),
-);
-
-type ApprovalSurfaceResolution =
-  | Readonly<{ kind: 'agent'; surface: 'agent' }>
-  | Readonly<{ kind: 'non_agent'; surface: NonAgentActionSurfaceKey }>
-  | Readonly<{ kind: 'ambiguous' }>;
-
-function resolveApprovalSurface(
-  ctx?: Pick<ActionExecutorContext, 'surface'> | null,
-): ApprovalSurfaceResolution {
-  const surface: unknown = ctx?.surface ?? null;
-  if (surface === 'agent') return { kind: 'agent', surface };
-  if (typeof surface === 'string' && NON_AGENT_ACTION_SURFACE_KEYS.has(surface)) {
-    return { kind: 'non_agent', surface: surface as NonAgentActionSurfaceKey };
-  }
-  return { kind: 'ambiguous' };
-}
-
-/**
- * The single fail-closed surface test shared by every agent trust-boundary decision: the caller
- * is the agent, or the surface could not be resolved and is therefore treated as the agent.
- * Only an explicitly recognised non-agent surface (`ui`/`voice`/`mcp`/`cli`/`rpc`/`api`/`plugin`)
- * escapes it.
- */
-function isAgentOrUnresolvedSurface(
-  ctx?: Pick<ActionExecutorContext, 'surface'> | null,
-): boolean {
-  const surface = resolveApprovalSurface(ctx);
-  return surface.kind === 'agent' || surface.kind === 'ambiguous';
-}
+/** Published projections of the declaration-owned confirmation defaults. */
+export const EGRESS_SENSITIVE_AGENT_FLOOR: readonly ActionId[] = ACTION_IDS.filter(id => getActionSpec(id).approvalPolicy?.agentDefault === "egress");
+export const SURFACE_AUTHORITY_AGENT_FLOOR: readonly ActionId[] = ACTION_IDS.filter(id => getActionSpec(id).approvalPolicy?.agentDefault === "authority");
+export const AGENT_INITIATED_APPROVAL_REQUIRED_ACTION_IDS: readonly ActionId[] = ACTION_IDS.filter(id => {
+  const spec = getActionSpec(id);
+  return spec.approvalPolicy?.agentDefault !== undefined || (spec.safety === "danger" && spec.surfaces.agent && spec.approvalPolicy?.scopeAdmissionOwnsConfirmation !== true);
+});
 
 /** Account-level trigger writes always require human approval for agent callers (FIN 03 §5.4). */
 function requiresWorkflowTriggerAgentApproval(
   actionId: ActionSettingsActionId,
   ctx?: Pick<ActionExecutorContext, 'surface'> | null,
 ): boolean {
-  return isAgentOrUnresolvedSurface(ctx) && (actionId === 'workflow.trigger.add'
-    || actionId === 'workflow.trigger.update' || actionId === 'workflow.trigger.remove');
+  const parsed = ActionIdSchema.safeParse(actionId);
+  return isAgentOrUnresolvedSurface(ctx) && parsed.success && getActionSpec(parsed.data).approvalPolicy?.mandatoryAgent === true;
 }
 
 /**
@@ -343,7 +79,9 @@ export function requiresAgentEgressRedaction(
  * user require, waive, or restore the default confirmation policy.
  */
 export function isAgentInitiatedApprovalRequiredByDefault(actionId: ActionId): boolean {
-  return AGENT_INITIATED_APPROVAL_REQUIRED_ACTION_ID_SET.has(actionId);
+  const spec = getActionSpec(actionId);
+  return spec.approvalPolicy?.agentDefault !== undefined
+    || (spec.safety === 'danger' && spec.surfaces.agent === true && spec.approvalPolicy?.scopeAdmissionOwnsConfirmation !== true);
 }
 
 function requiresDefaultApprovalFloor(
@@ -353,43 +91,47 @@ function requiresDefaultApprovalFloor(
   input?: unknown,
 ): boolean {
   const surface = resolveApprovalSurface(ctx);
-  if (actionId === 'capture.view') return true;
+  const spec = getActionSpec(actionId);
+  const policy = spec.approvalPolicy;
+  const uiPolicyConfirmation = policy?.uiConfirmationForInput?.(input) ?? (policy?.uiConfirmation === 'policy');
+  defaultSafety ??= spec.safetyForInput?.(input);
+  if (policy?.pluginCaptureWaiver === true) return true;
   // Permission answers share the Agent default on MCP too; persisted surface
   // waivers remain resolved by the same ActionsSettings owner above this floor.
-  if (actionId === 'session.permission.respond' && surface.kind === 'non_agent' && surface.surface === 'mcp') return true;
+  if (surface.kind !== 'ambiguous' && policy?.requiredSurfaces?.includes(surface.surface)) return true;
   // Scoped removal is dangerous metadata, but its own/led Session policy owns
   // admission (FIN 03 §5.4/§5.7); it does not acquire the Account trigger approval floor.
-  if (actionId === SCOPED_SESSION_TRIGGER_APPROVAL_EXEMPT_ACTION_ID && surface.kind !== 'ambiguous') return false;
+  if (policy?.scopeAdmissionOwnsConfirmation === true && surface.kind !== 'ambiguous') return false;
   // UI owns a direct present-user confirmation host for its ordinary dangerous
   // Actions, except the rows whose confirmation is this policy's own default.
   // Host-proved contextual danger also uses this policy: a contextual safe
   // neighbor must not need a separate UI review merely to share this Action.
-  // CLI suppresses the duplicate default only when its host records a completed
+  // CLI and UI suppress the duplicate default when the host records a completed
   // confirmation for this exact Action. Explicit settings are evaluated first
   // and still win.
   if (
     surface.kind === 'non_agent'
     && (
-      (surface.surface === 'ui' && defaultSafety !== 'danger' && !usesPresentUserUiPolicyConfirmation(actionId, input))
-      || (surface.surface === 'cli' && ctx?.presentUserConfirmation?.actionId === actionId)
+      (surface.surface === 'ui' && defaultSafety !== 'danger' && !uiPolicyConfirmation)
+      || ((surface.surface === 'cli' || surface.surface === 'ui') && ctx?.presentUserConfirmation?.actionId === actionId)
     )
     && ctx?.authority === 'present_user'
   ) {
     return false;
   }
-  if (defaultSafety === 'danger' || (defaultSafety === undefined && DANGEROUS_ACTION_APPROVAL_REQUIRED_ACTION_ID_SET.has(actionId))) {
+  if (defaultSafety === 'danger' || (defaultSafety === undefined && spec.safety === 'danger')) {
     if (surface.kind === 'ambiguous') return true;
     // General RPC remains an internal transport surface. These new semantic
     // filesystem methods are directly reachable effect entry points, however,
     // and use the same configurable Ask-first owner as their other surfaces.
     // Released unrooted aliases retain their separate incumbent admission path.
-    if (surface.surface !== 'rpc' || isFilesystemActionId(actionId)) {
-      return getActionSpec(actionId).surfaces[surface.surface] === true;
+    if (surface.surface !== 'rpc' || policy?.rpcConfirmation === true) {
+      return spec.surfaces[surface.surface] === true;
     }
   }
   return isAgentOrUnresolvedSurface(ctx) && (defaultSafety === undefined
     ? isAgentInitiatedApprovalRequiredByDefault(actionId)
-    : [...EGRESS_SENSITIVE_AGENT_FLOOR, ...SURFACE_AUTHORITY_AGENT_FLOOR].some((id) => id === actionId));
+    : policy?.agentDefault !== undefined);
 }
 
 /**
@@ -412,7 +154,7 @@ export function isApprovalRequiredByActionsSettings(
   input?: unknown,
 ): boolean {
   const requestActionId = ActionIdSchema.safeParse(actionId);
-  if (isAutomationApprovalRequestSurface(ctx?.surface) && requestActionId.success
+  if (requestActionId.success && isAutomationApprovalRequestSurface(ctx?.surface, getActionSpec(requestActionId.data), input)
     && canRequestPresentUserApprovalForActionInputV1(getActionSpec(requestActionId.data), input)) return true;
   if (requiresWorkflowTriggerAgentApproval(actionId, ctx)) return true;
   const surface = resolveApprovalSurface(ctx);
@@ -420,7 +162,7 @@ export function isApprovalRequiredByActionsSettings(
   const override: ActionSettingsOverride | undefined = settings.actions?.[actionId];
   const required = Array.isArray(override?.approvalRequiredSurfaces) ? override.approvalRequiredSurfaces : [];
   if (typeof rawSurface === 'string' && required.some((requiredSurface) => requiredSurface === rawSurface)) return true;
-  if (actionId === 'capture.view') {
+  if (requestActionId.success && getActionSpec(requestActionId.data).approvalPolicy?.pluginCaptureWaiver === true) {
     return ctx?.surface !== 'plugin' || ctx.actionCaller?.kind !== 'plugin'
       || settings.pluginHostCaptureApprovalWaived?.includes(ctx.actionCaller.pluginId) !== true;
   }
@@ -454,9 +196,9 @@ function resolveUnwiredApprovalDefault(
 }
 
 export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingArgs): ActionApprovalRoutingDecision {
-  const presentUserRequest = isAutomationApprovalRequestSurface(args.context?.surface)
+  const presentUserRequest = isAutomationApprovalRequestSurface(args.context?.surface, args.spec, args.input)
     && canRequestPresentUserApprovalForActionInputV1(args.spec, args.input);
-  const computerAction = args.actionId === 'computer.capture' || args.actionId === 'computer.query' || args.actionId === 'computer.input';
+  const computerAction = args.spec.approvalPolicy?.computerConsent === true;
   const computerConsent = computerAction && args.computerConsentGranted === true
     && args.context?.authority !== 'present_user' && args.context?.bypassApprovals !== true;
   const explicitComputerApproval = args.settings?.actions?.[args.actionId]?.approvalRequiredSurfaces
@@ -480,8 +222,9 @@ export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingA
 
   // The public Action API reports a created approval artifact to its caller;
   // it cannot retain an HTTP or server-relay request as the blocking waiter.
-  // The present-user UI ordinarily has the same lifecycle shape: its mounted
-  // continuation follows the Artifact and consumes the replayed typed result,
+  // UI ingress has the same lifecycle shape, including an automation-narrowed
+  // Account carrier: its mounted continuation follows the Artifact and consumes
+  // the replayed typed result,
   // while the original invocation returns immediately. CLI commands likewise
   // need the Artifact id before exiting, rather than a silent daemon HTTP
   // waiter whose response expires before a human can discover the approval.
@@ -493,16 +236,22 @@ export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingA
   // blocking callers unchanged.
   const custodyStaysOnLiveInvocation = args.spec.approvalResultCustody === 'live_only'
     || args.spec.approvalInputCustody === 'live_only';
+  // A mounted Settings field already owns an exact declaration/target intent.
+  // Retain that same closure with the incumbent human waiter; Artifact replay
+  // cannot restore a host-private field assertion. Other UI/CLI callers keep
+  // their existing deferred custody.
+  const retainPluginSettingsFieldIntent = args.context?.surface === 'ui'
+    && (!args.context.actionCaller || args.context.actionCaller.kind === 'host')
+    && typeof args.context.isPluginSettingsIntentCurrent === 'function'
+    && args.spec.safety === 'danger'
+    && args.spec.approvalPolicy?.retainUiFieldIntent === true;
   const mustReturnApprovalCustody = !custodyStaysOnLiveInvocation
     && (
       args.context?.surface === 'api'
       || args.context?.surface === 'cli'
-      || (
-        args.context?.surface === 'ui'
-        && args.context?.authority === 'present_user'
-      )
+      || args.context?.surface === 'ui'
     );
-  const flow = required && args.retainHostOperationApproval === true
+  const flow = required && (args.retainHostOperationApproval === true || retainPluginSettingsFieldIntent)
     ? 'blocking'
     : required && (mustReturnApprovalCustody
     || (presentUserRequest && args.spec.approvalInputCustody !== 'live_only'))

@@ -38,7 +38,9 @@ export const MANAGED_MACHINE_ACTION_SPECS = MANAGED_MACHINE_ACTION_IDS_V1.map((a
     || actionId === 'machines.managed.list' || actionId === 'machines.managed.get'
     || actionId === 'machines.managed.cancel' || actionId === 'machines.managed.references.get' || actionId === 'machines.managed.setup.skip';
   return {
-    id: actionId,
+    id: actionId, approval: { result: 'required' }, originalExecution: { accountRoot: 'allowed', terminalRoot: 'allowed' },
+    ...(actionId === 'machines.managed.cancel' || actionId === 'machines.managed.setup.skip' || actionId === 'machines.environment.apply'
+      ? { approvalPolicy: { uiConfirmation: 'policy' as const } } : {}),
     title: titles[actionId],
     description: actionId === 'machines.managed.acquire'
       ? 'Create compute and install Happier using the reviewed selection on the exact Home and controller.'

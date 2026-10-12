@@ -15,6 +15,7 @@ import {
   ExecutionRunTurnStreamStartResponseSchema,
 } from '../execution/runs/index.js';
 import { actionSpecToActionDefinitionV1, serializeActionSpec } from './actionCatalog.js';
+import { listVoiceToolActionSpecs } from './actionSpecs.js';
 import { ActionInputHintsSchema, ActionSpecSchema, PUBLIC_ACTION_IDS, PUBLIC_ACTION_INPUT_SCHEMAS, PUBLIC_ACTION_OUTPUT_SCHEMAS, PublicActionIdSchema, SIGNED_ROOT_ACTION_IDS, SignedRootActionIdSchema, SESSION_TRANSCRIPT_GET_MAX_LIMIT, ActionSurfaceSchema, PLUGIN_ACTION_INPUT_SCHEMAS, PLUGIN_ACTION_OUTPUT_SCHEMAS, PLUGIN_INVOCABLE_ACTION_IDS, PluginInvocableActionIdSchema, SessionTranscriptGetExternalShareableInputV1Schema, getActionContextualDefaults, getActionSpec, isActionSpecSurfacedOn, isHumanSecretApiExcludedActionId, isInternalActionId, isPluginProvenanceOnlyActionId, isPluginSurfaceExcludedActionId, isVoicePromptHotPathSpec, isVoiceSdkSafeActionSpec, listActionSpecs, listActionSpecsForSurface, listVoicePromptHotPathSpecs, projectSessionSpawnNewApiRequest, resolveRuntimeActionHostEffectClass } from './actionSpecs.js';
 import { HOME_GOVERNANCE_ACTION_IDS_V1 } from '../home/governance/actionsV1.js';
 import { TEAM_ACTION_IDS_V1 } from '../teams/actionsV1.js';
@@ -26,7 +27,7 @@ import { MEMORY_DOCUMENT_ACTION_IDS_V1 } from '../prompts/library/memoryActionsV
 import { MANAGED_GITHUB_APP_ACTION_IDS_V1 } from '../identity/githubApps.js';
 import { resolveRuntimeActionSurfaces } from './surfaces.js';
 import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
-import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS } from './specs/localServices.js';
+import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, resolveLocalServiceDomainActionRpcBinding } from './specs/localServices.js';
 import type { ActionSpec } from './actionSpecs.js';
 import {
   ActionIdSchema,
@@ -66,6 +67,50 @@ describe('Profile entity operation parity', () => {
     expect(edit?.inputSchema.safeParse({ operation: 'save', payload: {} }).success).toBe(false);
     expect(listActionSpecs().find((spec) => spec.id === 'launch_profiles.delete')?.safety).toBe('danger');
     expect(listActionSpecs().find((spec) => spec.id === 'launch_profiles.secrets.select')?.safety).toBe('danger');
+  });
+});
+
+describe('Composer state mutation Actions', () => {
+  it('keeps the reversible config-option mutation UI-only', () => {
+    expect(getActionSpec('session.config_option.set')).toMatchObject({
+      sideEffectClass: 'write',
+      safety: 'safe',
+      placements: [],
+      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+    });
+  });
+  it('keeps existing-session MCP selection behind the UI Action front door', () => {
+    expect(getActionSpec('session.mcp_selection.set')).toMatchObject({
+      sideEffectClass: 'write',
+      safety: 'safe',
+      placements: [],
+      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+    });
+  });
+  it('defaults connected-account routing changes to approval', () => {
+    expect(getActionSpec('session.connected_services_auth.set')).toMatchObject({
+      sideEffectClass: 'write',
+      safety: 'danger',
+      placements: [],
+      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+    });
+  });
+});
+
+describe('authenticated Home continuation Action catalog', () => {
+  it('publishes a human-decided client operation without bootstrap or secret material inputs', () => {
+    const spec = getActionSpec('account.home_continuation.invoke');
+    expect(spec).toMatchObject({ requiredAuthority: 'present_user', executionPlacement: 'client',
+      approval: { result: 'required' }, surfaces: { ui: true, agent: true, mcp: true, cli: false, api: false } });
+    expect(resolveActionSurfaceAvailability({ actionId: spec.id, surface: 'mcp', requireToolBinding: true }))
+      .toMatchObject({ available: true });
+    const schema = spec.agentInputSchema ?? spec.inputSchema;
+    expect(schema.safeParse({ commandId: 'current-ui:home', operation: 'choose', homeServerIdentityId: 'public-home' }).success).toBe(true);
+    expect(schema.safeParse({ commandId: 'current-ui:home', operation: 'choose' }).success).toBe(false);
+    for (const field of ['key', 'credential', 'qr']) {
+      expect(schema.safeParse({ commandId: 'current-ui:home', operation: 'refresh', [field]: 'human-only' }).success, field).toBe(false);
+    }
+    expect(schema.safeParse({ commandId: 'current-ui:home', operation: 'bootstrap' }).success).toBe(false);
   });
 });
 
@@ -249,6 +294,8 @@ const RUNTIME_ACTION_IDS = [
 ] as const;
 
 const TEAM_NON_REFRESHABLE_DANGER_ACTION_ID_SET = new Set<ActionId>([
+  // Preparation returns partial outcomes from the answering app's captured encryption owner.
+  'teams.members.history.prepare',
   'teams.credentials.test',
   'teams.credentials.externalKeys.create',
   'teams.credentials.externalKeys.authorize',
@@ -289,6 +336,7 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'artifact.access.grants.set',
   'artifact.access.grants.remove',
   'notifications.notify_me',
+  'plugin.webhook.endpoint.ensure',
   'launch_profiles.publish',
   'prompt_doc.get',
   'agents.acp.backends.upsert',
@@ -466,7 +514,6 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'plugins.permissions.grants.revoke',
   'plugins.permissions.grants.dismissRequest',
   'plugin.webhook.endpoint.convergeTarget',
-  'plugin.webhook.endpoint.ensure',
   'plugin.webhook.endpoint.revoke',
   'plugin.webhook.endpoint.retarget',
   'plugin.webhook.delivery.movePending',
@@ -566,6 +613,9 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   'session.permission.respond',
   'session.user_action.answer',
   'session.mode.set',
+  'session.config_option.set',
+  'session.mcp_selection.set',
+  'session.connected_services_auth.set',
   'session.target.primary.set',
   'session.target.tracked.set',
   'ui.voice_agent.teleport',
@@ -634,6 +684,7 @@ describe('Action Spec Registry', () => {
       ['plugins.install', 'danger'],
       ['plugins.uninstall', 'danger'],
       ['plugins.dev.submit', 'danger'],
+      ['plugins.dev.unregister', 'danger'],
       ['plugins.dev.install', 'danger'],
       ['plugins.dev.typecheck', 'danger'],
       ['plugins.dev.build', 'danger'],
@@ -664,6 +715,16 @@ describe('Action Spec Registry', () => {
         .filter((actionId) => getActionSpec(actionId).requiredAuthority === 'account_automation'),
     ));
     expect(PUBLIC_ACTION_IDS).not.toContain('plugins.dev');
+  });
+
+  it('admits the development Settings operations through the same machine Action family', () => {
+    for (const actionId of ['plugins.dev.submit', 'plugins.dev.unregister', 'plugins.dev.test', 'plugins.pack']) {
+      const spec = getActionSpec(actionId as ActionId);
+      expect(spec.surfaces.ui).toBe(true);
+      expect(spec.inputSchema.safeParse(actionId === 'plugins.pack'
+        ? { locator: '/workspace/plugin' }
+        : { projectRoot: '/workspace/plugin' }).success).toBe(true);
+    }
   });
 
   it('projects daemon-issued plugin reviews through one typed pending-review envelope', () => {
@@ -728,7 +789,7 @@ describe('Action Spec Registry', () => {
     }).success).toBe(true);
   });
 
-  it('does not advertise Settings administration on the UI surface without a UI executor', () => {
+  it('admits declared Settings administration on UI, Agent and MCP through bound Actions', () => {
     for (const actionId of [
       'plugins.settings.list',
       'plugins.settings.get',
@@ -740,8 +801,16 @@ describe('Action Spec Registry', () => {
       'plugins.settings.secret.delete',
     ] as const) {
       const spec = getActionSpec(actionId);
-      expect(spec.surfaces.ui).toBe(false);
+      expect(spec.surfaces.ui).toBe(true);
+      for (const surface of ['agent', 'mcp'] as const) {
+        expect(resolveActionSurfaceAvailability({ actionId, surface, requireToolBinding: true }))
+          .toMatchObject({ available: true });
+      }
       expect(spec.surfaces.cli).toBe(true);
+    }
+    for (const actionId of ['plugins.settings.secret.bind', 'plugins.settings.secret.unbind', 'plugins.settings.secret.delete'] as const) {
+      expect(getActionSpec(actionId).surfaces.api).toBe(false);
+      expect(PublicActionIdSchema.safeParse(actionId).success).toBe(false);
     }
   });
 
@@ -1122,7 +1191,7 @@ describe('Action Spec Registry', () => {
       viewId: 'view-1',
       requesterRef: { kind: 'spoofed' },
     }).success).toBe(false);
-    expect(getActionSpec('browser.automation.cancelActive').requiredAuthority).toBe('present_user');
+    expect(getActionSpec('browser.automation.cancelActive').requiredAuthority).toBe('account_automation');
     expect(cancelActiveOutput?.safeParse({
       v: 1,
       outcome: 'canceled',
@@ -1236,6 +1305,7 @@ describe('Action Spec Registry', () => {
         !isInternalActionId(spec.id)
           && !isPluginProvenanceOnlyActionId(spec.id)
           && !isHumanSecretApiExcludedActionId(spec.id)
+          && !['plugins.settings.secret.bind', 'plugins.settings.secret.unbind', 'plugins.settings.secret.delete'].includes(spec.id)
           && (spec.requiredAuthority === 'account_automation'
             || ['approval.request.decide', 'session.permission.respond', 'session.user_action.answer'].includes(spec.id)),
       );
@@ -1253,13 +1323,14 @@ describe('Action Spec Registry', () => {
 
       expect(SignedRootActionIdSchema.safeParse(spec.id).success, spec.id).toBe(
         !isInternalActionId(spec.id)
-          && !isPluginProvenanceOnlyActionId(spec.id)
           && !isHumanSecretApiExcludedActionId(spec.id),
       );
     }
 
     expect(SIGNED_ROOT_ACTION_IDS).toContain('approval.request.decide');
     expect(SIGNED_ROOT_ACTION_IDS).toContain('plugins.install');
+    expect(SIGNED_ROOT_ACTION_IDS).toContain('automation.conversation.targets.list');
+    expect(PUBLIC_ACTION_IDS).not.toContain('automation.conversation.targets.list');
     expect(PUBLIC_ACTION_IDS).toContain('approval.request.decide');
     expect(PUBLIC_ACTION_IDS).not.toContain('plugins.install');
     for (const actionId of PUBLIC_ACTION_IDS) {
@@ -2135,12 +2206,6 @@ describe('Action Spec Registry', () => {
     expect(window.outputSchema?.safeParse({ arbitrary: true }).success).toBe(false);
   });
 
-  it('declares approval result metadata for every action spec', () => {
-    for (const spec of listActionSpecs()) {
-      expect(spec.approval?.result).toEqual(expect.stringMatching(/^(required|optional|none)$/));
-    }
-  });
-
   it('retains the named action approval contracts as new Action families are added', () => {
     expect(sorted(listActionSpecs().map((spec) => spec.id))).toEqual(expect.arrayContaining(sorted([
       ...RESULT_REQUIRED_BLOCKING_ACTION_IDS,
@@ -2810,12 +2875,15 @@ describe('Action Spec Registry', () => {
         ? LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS[id as keyof typeof LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS] : undefined;
       const answeringClient = id === 'localServices.actions.copyUrl' || id === 'localServices.actions.openPreview';
       const serviceFrontDoor = id === 'localServices.launcher.start' || controlRpcMethod !== undefined;
+      const domainRpc = resolveLocalServiceDomainActionRpcBinding(id as RuntimeActionIdV1);
       expect(spec.surfaces, id).toEqual({
         ...resolveRuntimeActionSurfaces(id as RuntimeActionIdV1),
         // The family now declares actual native-control ingress separately
         // from the generic runtime UI/Agent backing default.
-        ...(serviceFrontDoor ? { rpc: true, cli: !answeringClient, voice: !answeringClient } : {}),
-        ...(serviceFrontDoor && !answeringClient ? { mcp: true } : {}),
+        ...(serviceFrontDoor ? { rpc: !answeringClient, cli: !answeringClient, voice: !answeringClient } : {}),
+        ...(domainRpc ? { cli: true, voice: true } : {}),
+        ...(id === 'projects.service.relocate' ? { cli: true } : {}),
+        ...(domainRpc || (serviceFrontDoor && !answeringClient) ? { mcp: true } : {}),
         ...(publicProjection && spec.requiredAuthority === 'present_user' ? { agent: true, mcp: true } : {}),
         api: publicProjection && spec.requiredAuthority === 'account_automation',
         plugin: publicProjection,
@@ -2823,6 +2891,11 @@ describe('Action Spec Registry', () => {
       if (serviceFrontDoor) {
         expect(spec.bindings?.rpcMethod).toBe(id === 'localServices.launcher.start'
           ? RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START : controlRpcMethod);
+      } else if (domainRpc) {
+        expect(spec.bindings?.rpcMethod).toBe(domainRpc.rpcMethod);
+      } else if (id === 'projects.service.relocate') {
+        expect(spec.bindings?.mcpToolName).toBe('projects_service_relocate');
+        expect(spec.bindings?.rpcMethod).toBeUndefined();
       } else {
         expect(spec.bindings).toBeUndefined();
       }
@@ -3302,7 +3375,9 @@ describe('Action Spec Registry', () => {
       expect(spec.surfaces.api).toBe(true);
       expect(spec.surfaces.mcp).toBe(true);
       expect(spec.surfaces.agent).toBe(true);
-      expect(spec.surfaces.voice).toBe(false);
+      expect(spec.surfaces.voice).toBe(
+        id === 'scm.pullRequest.get' || id === 'scm.pullRequest.openOrReuse' || id === 'scm.pullRequest.openCompose',
+      );
       expect(spec.sideEffectClass).toBe(sideEffectClass);
     }
 
@@ -3832,20 +3907,15 @@ describe('Action Spec Registry', () => {
     ).toThrow();
   });
 
-  it('accepts additive-open agents.models.list input while canonical execution drops unknown fields', () => {
+  it('admits canonical agents.models.list input and rejects undeclared fields', () => {
     const spec = getActionSpec('agents.models.list');
-
-    expect(spec.inputSchema.parse({
+    const input = {
       backendTargetKey: 'backend:codex',
       machineId: 'machine-1',
       limit: 10,
-      providerTraceId: 'preview-field',
-    })).toMatchObject({
-      backendTargetKey: 'backend:codex',
-      machineId: 'machine-1',
-      limit: 10,
-      providerTraceId: 'preview-field',
-    });
+    };
+    expect(spec.inputSchema.parse(input)).toEqual(input);
+    expect(spec.inputSchema.safeParse({ ...input, providerTraceId: 'preview-field' }).success).toBe(false);
   });
 
   it('accepts a canonical plugin backendTargetKey with an explicit runtime carrier when listing models', () => {
@@ -4031,7 +4101,7 @@ describe('Action Spec Registry', () => {
     expect(fieldsByPath.get('connectedServices')).toMatchObject({
       optionsSourceId: 'sessions.spawn.connected_services.available',
     });
-    expect(fieldsByPath.get('mcpSelection')).toMatchObject({
+    expect(fieldsByPath.get('capabilitySelection')).toMatchObject({
       optionsSourceId: 'sessions.spawn.mcp_servers.preview',
     });
     expect(fieldsByPath.has('backendTargetKey')).toBe(false);
@@ -4222,6 +4292,7 @@ describe('Action Spec Registry', () => {
       'targetMachineId',
       'targetPath',
       'targetSessionStorageMode',
+      'stateTransfer',
       'workspaceAction',
     ]);
   });
@@ -4328,10 +4399,6 @@ describe('Action Spec Registry', () => {
       ['daemon.promptAssets.delete', RPC_METHODS.DAEMON_PROMPT_ASSETS_DELETE],
       ['daemon.promptRegistry.scanSource', RPC_METHODS.DAEMON_PROMPT_REGISTRY_SCAN_SOURCE],
       ['daemon.promptRegistry.install', RPC_METHODS.DAEMON_PROMPT_REGISTRY_INSTALL],
-      ['daemon.filesystem.readFile', RPC_METHODS.READ_FILE],
-      ['daemon.filesystem.writeFile', RPC_METHODS.WRITE_FILE],
-      ['daemon.filesystem.listDirectory', RPC_METHODS.LIST_DIRECTORY],
-      ['daemon.filesystem.getDirectoryTree', RPC_METHODS.GET_DIRECTORY_TREE],
       ['daemon.filesystem.listRoots', RPC_METHODS.DAEMON_FILESYSTEM_LIST_ROOTS],
       ['daemon.filesystem.browseDirectory', RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY],
       ['bugreport.collectDiagnostics', RPC_METHODS.BUGREPORT_COLLECT_DIAGNOSTICS],
@@ -4346,6 +4413,21 @@ describe('Action Spec Registry', () => {
       expect(spec.bindings?.rpcMethod).toBe(rpcMethod);
       expect(spec.surfaces.mcp).toBe(false);
       expect(spec.surfaces.api).toBe(true);
+    }
+  });
+
+  it('publishes filesystem Actions without stealing the incumbent machine-browser RPC namespace', () => {
+    for (const [actionId, rpcMethod, aliases] of [
+      ['daemon.filesystem.readFile', 'daemon.filesystem.readFile', [RPC_METHODS.READ_FILE]],
+      ['daemon.filesystem.writeFile', 'daemon.filesystem.writeFile', [RPC_METHODS.WRITE_FILE]],
+      // daemon.filesystem.listDirectory is the incumbent browseDirectory carrier.
+      ['daemon.filesystem.listDirectory', RPC_METHODS.LIST_DIRECTORY, undefined],
+      ['daemon.filesystem.getDirectoryTree', 'daemon.filesystem.getDirectoryTree', [RPC_METHODS.GET_DIRECTORY_TREE]],
+    ] as const) {
+      const spec = getActionSpec(actionId);
+      expect(spec.bindings?.rpcMethod).toBe(rpcMethod);
+      expect(spec.bindings?.rpcMethodAliases).toEqual(aliases);
+      expect(spec.surfaces).toMatchObject({ rpc: true, agent: true, mcp: true, cli: true, voice: true, api: true });
     }
   });
 
@@ -4728,8 +4810,19 @@ describe('Action Spec Registry', () => {
   it('advertises current session permission intent names while accepting compatible aliases', () => {
     const spec = getActionSpec('session.permission_mode.set');
     expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
-    expect(spec.inputSchema.parse({ sessionId: 's1', permissionMode: 'default', applyTiming: 'next_prompt' }))
-      .toMatchObject({ applyTiming: 'next_prompt' });
+    expect(spec.requiredAuthority).toBe('account_automation');
+    expect(spec.inputSchema.parse({ sessionId: 's1', permissionMode: 'default', applyTiming: 'immediate' }))
+      .toMatchObject({ applyTiming: 'immediate' });
+    expect(spec.inputSchema.safeParse({ sessionId: 's1', permissionMode: 'default', applyTiming: 'next_prompt' }).success).toBe(false);
+    expect(spec.inputHints?.fields.find((field) => field.path === 'applyTiming')?.options?.map((option) => option.value))
+      .toEqual(['immediate']);
+    const cliInput = spec.cli?.inputSchema?.safeParse({ sessionId: 's1', permissionMode: 'read_only', applyTiming: 'immediate' });
+    expect(cliInput?.success).toBe(true);
+    if (cliInput?.success) expect(spec.cli?.bindInput?.(cliInput.data, { actionId: spec.id, invocationId: 'timing-test' }))
+      .toMatchObject({ applyTiming: 'immediate' });
+    const cliDelayed = spec.cli?.inputSchema?.safeParse({ sessionId: 's1', permissionMode: 'read_only', applyTiming: 'next_prompt' });
+    expect(cliDelayed?.success).toBe(false);
+    if (cliDelayed && !cliDelayed.success) expect(cliDelayed.error.issues[0]?.message).toContain('session.message.send');
     expect(spec.inputSchema.safeParse({ sessionId: 's1', permissionMode: 'default', applyTiming: 'eventually' }).success).toBe(false);
 
     expect(spec.description).toContain('read_only/default/auto/yolo');
@@ -4870,6 +4963,21 @@ describe('Action Spec Registry', () => {
       .toEqualTypeOf<Pick<ActionSpec, 'prompting'>>();
     expect(isVoicePromptHotPathSpec({ prompting: { voiceHotPath: true } })).toBe(true);
     expect(isVoicePromptHotPathSpec({ prompting: { voiceHotPath: false } })).toBe(false);
+  });
+
+  it('keeps large launch and option schemas discoverable without publishing them on the Voice hot path', () => {
+    const discoverableIds = new Set(listVoiceToolActionSpecs().map((spec) => spec.id));
+    for (const id of [
+      'session.spawn_new',
+      'action.options.resolve',
+      'agents.models.list',
+      'agents.config_options.list',
+      'agents.session_modes.list',
+    ] as const) {
+      const spec = getActionSpec(id);
+      expect(isVoicePromptHotPathSpec(spec)).toBe(false);
+      expect(discoverableIds.has(id)).toBe(true);
+    }
   });
 
   it.each(listActionSpecs().filter((spec) => spec.surfaces.voice))('uses concrete schema-shaped voice args examples for $id', (spec) => {

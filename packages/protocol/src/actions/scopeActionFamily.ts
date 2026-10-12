@@ -6,6 +6,7 @@ import { SessionListFilterFieldsV1Schema } from '../sessions/listFilter/sessionL
 /** Client view controls; these never change a Session's access or ownership. */
 export const SCOPE_ACTION_IDS = [
   'session.list.view.get', 'session.list.view.set', 'session.list.view.reset',
+  'workflow.library.view.get', 'workflow.library.view.set', 'workflow.library.view.reset',
   'shell.column.get', 'shell.column.set',
 ] as const;
 export type ScopeActionId = typeof SCOPE_ACTION_IDS[number];
@@ -21,6 +22,8 @@ const SessionListViewTargetSchema = lazyZodSchema(() => z.object({
 }).strict());
 export const SessionListActionFiltersSchema = lazyZodSchema(() => SessionListFilterFieldsV1Schema.extend({ searchQuery: z.string() }));
 const MutationResultSchema = lazyZodSchema(() => z.object({ ok: z.literal(true) }).strict());
+export const WorkflowLibraryViewSchema = lazyZodSchema(() => z.enum(['all', 'triggered', 'running']));
+export type WorkflowLibraryView = z.infer<typeof WorkflowLibraryViewSchema>;
 
 export const ScopeActionInputSchemas = {
   'session.list.view.get': SessionListViewTargetSchema,
@@ -29,6 +32,9 @@ export const ScopeActionInputSchemas = {
     includeInactive: z.boolean().optional(),
   }).strict(),
   'session.list.view.reset': SessionListViewTargetSchema,
+  'workflow.library.view.get': z.object({}).strict(),
+  'workflow.library.view.set': z.object({ view: WorkflowLibraryViewSchema.optional(), searchQuery: z.string().optional() }).strict(),
+  'workflow.library.view.reset': z.object({}).strict(),
   'shell.column.get': z.object({}).strict(),
   'shell.column.set': z.object({ visible: z.boolean() }).strict(),
 } as const;
@@ -46,6 +52,12 @@ export const ScopeActionOutputSchemas = {
   }).strict(),
   'session.list.view.set': MutationResultSchema,
   'session.list.view.reset': MutationResultSchema,
+  'workflow.library.view.get': z.object({
+    view: WorkflowLibraryViewSchema, searchQuery: z.string(),
+    offeredViews: z.array(WorkflowLibraryViewSchema), visibleKeys: z.array(z.string()),
+  }).strict(),
+  'workflow.library.view.set': MutationResultSchema,
+  'workflow.library.view.reset': MutationResultSchema,
   'shell.column.get': z.object({ present: z.boolean(), visible: z.boolean(), available: z.boolean() }).strict(),
   'shell.column.set': MutationResultSchema,
 } as const;

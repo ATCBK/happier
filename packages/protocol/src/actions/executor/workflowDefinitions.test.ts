@@ -29,6 +29,17 @@ function readEmptyTriggerSummaries() {
 }
 
 describe('shared workflow definition create', () => {
+  it('refuses a non-UUID create identity before Artifact access rather than reporting a storage outage', async () => {
+    const unused = (): never => { throw new Error('unexpected_artifact_access'); };
+    const definitions = createWorkflowDefinitionActions({ artifactStore: {
+      read: unused, list: unused, create: unused, update: unused, delete: unused,
+    }, encodeListCursor: unused, assertDefinitionWriteAllowed: unused });
+    const execute = createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true, definitions,
+      runs: { execute: unused } });
+    expect(await execute({ actionId: 'workflow.definition.create', input: {
+      definitionId: 'live9a-wait-20261010', definition, metadata: { title: 'Wait' },
+    }, context: { surface: 'cli' } })).toMatchObject({ ok: false, errorCode: 'invalid_input' });
+  });
   it('projects current definition destinations without binding an unknown origin', async () => {
     const targeted = { ...definition, defaults: { ...definition.defaults,
       conversation: { kind: 'existing_session' as const, sessionId: 'destination', machineId: 'machine' } } };

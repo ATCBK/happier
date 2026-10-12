@@ -9,7 +9,7 @@ export const SessionPendingNextOutputSchema = lazyZodSchema(() => z.object({
 
 /** Navigation belongs to the current mounted client, never Session resume. */
 export const SESSION_PENDING_NEXT_ACTION_SPECS = [{
-  id: 'session.pending.next',
+  id: 'session.pending.next', approval: {result: 'required'},
   title: 'Go to the next pending request',
   description: 'Focus the oldest answerable pending request on the mounted client. Returns unavailable when no client can navigate.',
   safety: 'safe',

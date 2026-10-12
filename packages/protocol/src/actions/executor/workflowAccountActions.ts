@@ -17,11 +17,13 @@ export function normalizeWorkflowActionThrownError(error: unknown): WorkflowActi
     : rawCode === 'session_key_required' || rawCode === 'encryption_material_unavailable'
     || rawCode === 'encryption_mode_mismatch' || rawCode === 'invalid_template'
     ? 'content_unavailable' : rawCode;
+  const details = error !== null && typeof error === 'object' && 'details' in error ? error.details : undefined;
   const failure = WorkflowActionFailureV1Schema.safeParse({
     ok: false,
     errorCode: code,
     error: error instanceof Error ? error.message : code,
-    ...(error !== null && typeof error === 'object' && 'details' in error && error.details !== undefined ? { details: error.details } : {}),
+    ...(details !== undefined ? { details } : code === 'target_unavailable'
+      ? { details: { code: 'target_unavailable', reason: 'selection_unavailable' } } : {}),
   });
   return failure.success ? failure.data : { ok: false, errorCode: 'storage_unavailable', error: 'storage_unavailable' };
 }

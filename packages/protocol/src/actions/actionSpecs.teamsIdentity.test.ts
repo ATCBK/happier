@@ -82,7 +82,7 @@ describe('Team identity Action contracts', () => {
     expect(JSON.stringify(portalProjection)).not.toContain('portal-secret');
   });
 
-  it('keeps identity removal present-user-only while publishing the approved directory removal SDK action', () => {
+  it('keeps identity removal present-user-only', () => {
     const preview = getActionSpec('teams.identity.connections.remove.preview');
     expect(preview.safety).toBe('safe');
     expect(preview.requiredAuthority).toBe('account_automation');
@@ -96,17 +96,5 @@ describe('Team identity Action contracts', () => {
     expect(remove.surfaces.cli).toBe(true);
     expect(remove.approval).toMatchObject({ result: 'required' });
 
-    const directoryPreview = getActionSpec('teams.directory.sources.remove.preview');
-    expect(directoryPreview.safety).toBe('safe');
-    expect(directoryPreview.requiredAuthority).toBe('account_automation');
-    expect(directoryPreview.surfaces.agent).toBe(true);
-
-    const directoryRemove = getActionSpec('teams.directory.sources.remove');
-    expect(directoryRemove.safety).toBe('danger');
-    expect(directoryRemove.requiredAuthority).toBe('account_automation');
-    expect(directoryRemove.surfaces.agent).toBe(false);
-    expect(directoryRemove.surfaces.api).toBe(true);
-    expect(directoryRemove.surfaces.plugin).toBe(true);
-    expect(directoryRemove.approval).toEqual({ result: 'required', flow: 'deferred' });
   });
 });

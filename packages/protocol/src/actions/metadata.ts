@@ -49,3 +49,10 @@ export const ActionToolExposureSchema = lazyZodSchema(() => z
   })
   .strict());
 export type ActionToolExposure = z.infer<typeof ActionToolExposureSchema>;
+
+/** Authored discovery instructions; unknown fields cannot acquire prompt meaning. */
+export const ActionPromptingSchema = lazyZodSchema(() => z.object({
+  voiceHotPath: z.boolean().optional(),
+  agentGuidance: z.string().min(1).optional(),
+}).strict());
+export type ActionPrompting = z.infer<typeof ActionPromptingSchema>;

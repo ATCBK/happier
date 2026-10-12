@@ -48,7 +48,7 @@ const placementHint = { path: 'placement', title: 'Placement', widget: 'select',
 const inputFields = {
   'session.canvas.tabs.list': [scopeHint, canvasHint],
   'session.canvas.tabs.open': [scopeHint, canvasHint,
-    { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+    { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
     { path: 'leafId', title: 'Destination pane id', widget: 'text', required: true }, placementHint, beforeHint],
   'session.canvas.tabs.activate': [scopeHint, canvasHint, tabHint],
   'session.canvas.tabs.close': [scopeHint, canvasHint, tabHint],
@@ -59,7 +59,7 @@ const inputFields = {
 } satisfies Record<SessionCanvasActionId, readonly ActionInputFieldHint[]>;
 function row<const T extends SessionCanvasActionId>(actionId: T, title: string) {
   return {
-    id: actionId, title, description: 'Operate on the answering mounted Session canvas in the exact Home, Account and workspace. Opening keeps existing Sessions; an unavailable canvas performs no effect.',
+    id: actionId, approval: { result: 'required' }, title, description: 'Operate on the answering mounted Session canvas in the exact Home, Account and workspace. Opening keeps existing Sessions; an unavailable canvas performs no effect.',
     safety: 'safe', sideEffectClass: actionId === 'session.canvas.tabs.list' ? 'read' : 'external',
     executionPlacement: 'client', placements: [],
     surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: false },

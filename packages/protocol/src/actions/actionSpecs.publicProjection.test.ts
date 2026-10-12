@@ -84,7 +84,7 @@ describe('Action public projection', () => {
     expect(spec.inputSchema.safeParse({ ...input, intent: { ...input.intent, entry: { ...input.intent.entry, placement: 'provider_asset' } } }).success).toBe(false);
     expect(spec.inputSchema.safeParse({ ...input, intent: { ...input.intent, entry: { ...input.intent.entry, ref: { ...input.intent.entry.ref, credential: 'secret' } } } }).success).toBe(false);
   });
-  it('keeps Artifact and Team automation rows in the public type and runtime projections', () => {
+  it('keeps Artifact and Team request rows in the public type and runtime projections', () => {
     const publicIds = [
       'artifact.access.grants.list',
       'artifact.access.grants.set',
@@ -94,8 +94,6 @@ describe('Action public projection', () => {
       'teams.directory.sourceSetup.list',
       'teams.directory.sources.get',
       'teams.directory.sources.list',
-      'teams.directory.sources.remove',
-      'teams.directory.sources.remove.preview',
       'teams.externalGroupBindings.list',
       'teams.externalGroupBindings.remove',
       'teams.externalGroupBindings.set',
@@ -111,7 +109,7 @@ describe('Action public projection', () => {
     expectTypeOf<Pick<PublicActionResultById, PublicFamilyId>>()
       .toEqualTypeOf<Pick<PluginActionResultById, PublicFamilyId>>();
     for (const id of publicIds) {
-      expect(getActionSpec(id).requiredAuthority).toBe('account_automation');
+      expect(getActionSpec(id).requiredAuthority, id).toBe('account_automation');
       expect(PublicActionIdSchema.safeParse(id).success).toBe(true);
       expect(PUBLIC_ACTION_INPUT_SCHEMAS[id]).toBe(PLUGIN_ACTION_INPUT_SCHEMAS[id]);
       expect(PUBLIC_ACTION_OUTPUT_SCHEMAS[id]).toBe(PLUGIN_ACTION_OUTPUT_SCHEMAS[id]);
@@ -120,6 +118,8 @@ describe('Action public projection', () => {
     const presentUserIds = [
       'teams.directory.sources.create',
       'teams.directory.sources.sync',
+      'teams.directory.sources.remove',
+      'teams.directory.sources.remove.preview',
       'teams.identity.connections.create',
       'teams.identity.connections.remove',
     ] as const;

@@ -1,8 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { getActionSpec, SignedRootActionIdSchema } from './actionSpecs.js';
+import { ActionsSettingsV1Schema } from './actionSettings.js';
+import { isApprovalRequiredByActionsSettings, resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
 
 describe('Notify me Action', () => {
+  it('keeps result custody separate from default consent and honors a Session caller Require setting before delivery', async () => {
+    const actionId = 'notifications.notify_me';
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'mcp' as const, serverId: 'home', runtimeAccountId: 'owner',
+      actionRequestId: 'notify-one', actionCaller: { kind: 'session' as const, sessionId: 'session-one', starterDepth: 0, turnDepth: 0 } };
+    expect(spec.approval.result).toBe('required');
+    expect(resolveActionApprovalRouting({ actionId, spec, context })).toMatchObject({ required: false, result: 'required' });
+    let request: ApprovalRequest | null = null;
+    let delivered = false;
+    const settings = ActionsSettingsV1Schema.parse({ v: 1,
+      actions: { [actionId]: { approvalRequiredSurfaces: ['agent'] } } });
+    const executor = createActionExecutor({
+      isActionApprovalRequired: (id, caller, input) => isApprovalRequiredByActionsSettings(id, settings, caller, undefined, undefined, input),
+      approvalsCreate: async ({ request: pending }) => { request = pending; return { artifactId: 'notify-approval' }; },
+      approvalsWaitForDecision: async ({ request: pending }) => ({ decision: 'reject', request: pending }),
+      approvalsUpdate: async ({ request: settled }) => { request = settled; return { ok: true }; },
+      notificationsNotifyMe: async () => { delivered = true; return { attemptedChannels: 1, deliveredChannels: 1 }; },
+    });
+    expect(await executor.execute(actionId, { message: 'Finished' }, context))
+      .toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+    expect(request).toMatchObject({ actionId, status: 'rejected', approval: { flow: 'blocking', result: 'required' } });
+    expect(delivered).toBe(false);
+  });
   it('binds a Session caller to its own session and agent surface before notification delivery', async () => {
     const executor = createActionExecutor({ notificationsNotifyMe: async (_input: unknown, context: unknown) => {
       expect(context).toMatchObject({ surface: 'agent', defaultSessionId: 'session-one',

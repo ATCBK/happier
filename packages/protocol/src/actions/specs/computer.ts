@@ -16,6 +16,21 @@ import {
   ComputerOpenSettingsResponseV1Schema,
 } from '../../computer/v1.js';
 import type { RuntimeActionSpecFamily } from './common.js';
+import type { ApprovalNarrowing } from '../../approvals/approvalNarrowing.js';
+import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
+
+export const computerTargetSelectionNarrowing: ApprovalNarrowing = {
+  narrow(original, chosen) {
+    const source = ComputerTargetSelectRequestV1Schema.safeParse(original);
+    const selection = ComputerTargetSelectRequestV1Schema.safeParse(chosen);
+    if (!source.success || !selection.success || !selection.data.target) return null;
+    const { target: _sourceTarget, access: sourceAccess, ...sourceSubject } = source.data;
+    const { target: _chosenTarget, access: chosenAccess, ...chosenSubject } = selection.data;
+    if (!sameStrictJsonValue(sourceSubject, chosenSubject)
+      || (sourceAccess === 'see' && (chosenAccess ?? 'use') !== 'see')) return null;
+    return selection.data;
+  },
+};
 
 export function projectComputerObservationInput(input: unknown): unknown {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
@@ -54,6 +69,17 @@ export const COMPUTER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
 });
 
 export const COMPUTER_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
+  approvalPolicies: {
+    'computer.target.close': { agentDefault: 'authority', requiredSurfaces: ['agent', 'mcp', 'plugin', 'api'] },
+    'computer.targets.list': { agentDefault: 'egress' },
+    'computer.capture': { agentDefault: 'egress', computerConsent: true },
+    'computer.query': { agentDefault: 'egress', computerConsent: true },
+    'computer.input': { computerConsent: true },
+    'computer.permissions.openSettings': { agentDefault: 'authority' },
+    'computer.target.select': { agentDefault: 'authority' },
+    'computer.control.interrupt': { agentDefault: 'authority' },
+    'computer.control.handBack': { agentDefault: 'authority' },
+  },
   titles: {
     'computer.targets.list': 'List computer targets',
     'computer.target.get': 'Get the Session’s selected computer target',

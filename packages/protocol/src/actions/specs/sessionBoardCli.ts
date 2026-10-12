@@ -3,12 +3,23 @@ import { z } from 'zod';
 
 import { SessionSurfaceItemIdSchema } from '../../sessions/board/ids.js';
 import { SessionSurfaceItemV1Schema, SessionSurfaceItemDestinationV1Schema } from '../../sessions/board/item.js';
+import { SessionBoardItemUpsertInputV1Schema, SessionVisualCopySourceV1Schema } from '../../sessions/board/actions.js';
 import {
   SessionBoardItemPlacementV1Schema,
   SessionBoardLayoutOperationV1Schema,
 } from '../../sessions/board/layoutOperations.js';
 import { SessionSystemRecordRevisionSchema } from '../../sessions/system/records/sessionSystemRecordRevision.js';
 import { actionCliDerivedDefault, type ActionCliProjection } from '../actionCliProjection.js';
+import type { ActionInputFieldHint } from '../actionInputHints.js';
+
+/** One reading for a visual's destination across the Action form and CLI projection. */
+export const SESSION_VISUAL_DESTINATION_HINT: ActionInputFieldHint = {
+  path: 'destination', title: 'Destination', widget: 'select', options: [
+    { value: 'transcript', label: 'Conversation' },
+    { value: 'board', label: 'Board' },
+    { value: 'both', label: 'Conversation and Board' },
+  ],
+};
 
 /**
  * The canonical Board Actions leave `sessionId` optional because an in-Session
@@ -37,9 +48,15 @@ export const SessionBoardItemUpsertCliInputSchema = lazyZodSchema(() => z.object
   itemId: SessionSurfaceItemIdSchema,
   expectedItemRevision: SessionSystemRecordRevisionSchema.optional(),
   destination: SessionSurfaceItemDestinationV1Schema.optional(),
-  item: z.lazy(() => SessionSurfaceItemV1Schema),
+  item: z.lazy(() => SessionSurfaceItemV1Schema).optional(),
+  copySource: SessionVisualCopySourceV1Schema.optional(),
   placement: SessionBoardItemPlacementV1Schema.optional(),
-}).strict());
+}).strict().superRefine((input, context) => {
+  const canonical = SessionBoardItemUpsertInputV1Schema.safeParse({ ...input, expectedItemRevision: input.expectedItemRevision ?? null });
+  if (!canonical.success) for (const issue of canonical.error.issues) context.addIssue({
+    code: 'custom', path: issue.path, message: issue.message,
+  });
+}));
 export type SessionBoardItemUpsertCliInput = z.infer<typeof SessionBoardItemUpsertCliInputSchema>;
 
 export const SessionBoardItemRemoveCliInputSchema = lazyZodSchema(() => z.object({
@@ -65,7 +82,8 @@ export function bindSessionBoardItemUpsertCliInput(
     sessionId: value.sessionId,
     itemId: value.itemId,
     expectedItemRevision: value.expectedItemRevision ?? actionCliDerivedDefault(null),
-    item: value.item,
+    ...(value.item ? { item: value.item } : {}),
+    ...(value.copySource ? { copySource: value.copySource } : {}),
     ...(value.destination ? { destination: value.destination } : {}),
     ...(value.placement ? { placement: value.placement } : {}),
   };
@@ -110,8 +128,9 @@ export const SESSION_BOARD_ITEM_UPSERT_CLI_PROJECTION: ActionCliProjection = {
       { path: 'sessionId', title: 'Session id or prefix', widget: 'text', required: true },
       { path: 'itemId', title: 'Item id', widget: 'text', required: true },
       { path: 'expectedItemRevision', title: 'Expected item revision (omit to create)', widget: 'text' },
-      { path: 'destination', title: 'Destination (transcript, board, both)', widget: 'text' },
-      { path: 'item', title: 'Item', widget: 'json', required: true },
+      SESSION_VISUAL_DESTINATION_HINT,
+      { path: 'item', title: 'Item (or copy source)', widget: 'json' },
+      { path: 'copySource', title: 'Exact other-Session visual to copy', widget: 'json' },
       { path: 'placement', title: 'Placement', widget: 'json' },
     ],
   },

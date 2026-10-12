@@ -30,7 +30,7 @@ import {
   BrowserNavigateCommandV1Schema,
   BrowserTakeControlCommandV1Schema,
 } from '../browser/control/v1.js';
-import { ComputerTargetSelectRequestV1Schema, type ComputerTargetV1 } from '../computer/v1.js';
+import { ComputerTargetSelectRequestV1Schema } from '../computer/v1.js';
 import type {
   ExternalSessionMaterializeActionResultV1,
 } from '../sessions/external/operationActionSchemasV1.js';
@@ -195,8 +195,8 @@ describe('ActionSpec-generated plugin action types', () => {
       .toEqualTypeOf<z.input<typeof ComputerTargetSelectRequestV1Schema>>();
     expectTypeOf<PublicActionInputById['computer.target.select']>()
       .toEqualTypeOf<PluginActionInputById['computer.target.select']>();
-    expectTypeOf<PluginActionInputById['approval.request.decide']['computerTarget']>()
-      .toEqualTypeOf<ComputerTargetV1 | undefined>();
+    expectTypeOf<PluginActionInputById['approval.request.decide']['narrowedInput']>()
+      .toEqualTypeOf<unknown>();
     expectTypeOf<PluginActionResultById['execution.run.start']>().toEqualTypeOf<ExecutionRunStartResponse>();
     expectTypeOf<PluginActionResultById['execution.run.list']>().toEqualTypeOf<ExecutionRunListResponse>();
     expectTypeOf<PluginActionResultById['execution.run.get']>().toEqualTypeOf<ExecutionRunGetResponse>();
@@ -537,6 +537,7 @@ describe('ActionSpec-generated plugin action types', () => {
       'workflow.trigger.add',
       'workflow.trigger.update',
       'workflow.trigger.remove',
+      'workflow.trigger.run_now',
       'session.trigger.remove',
     ]);
 

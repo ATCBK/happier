@@ -58,9 +58,10 @@ export function bindSessionAccessActionHttpRequestV1(
   if (actionId === 'session.public_link.create') {
     // Current fragment-wrapped keys must never reach the released token writer:
     // a predecessor can strip new fields while retaining its legacy token hash.
-    const { sessionId, ...settings } = SessionPublicLinkCreateActionInputV1Schema.parse(input);
+    const { sessionId, networkOff, ...settings } = SessionPublicLinkCreateActionInputV1Schema.parse(input);
     return { method: spec.serverTransport.method, path: spec.serverTransport.path,
-      body: { subject: { kind: 'session', id: sessionId }, ...settings } };
+      body: { subject: { kind: 'session', id: sessionId }, ...settings,
+        ...(networkOff === true ? { networkOff: true } : {}) } };
   }
   return bindHomeDomainHttpRequestV1({
     transport: spec.serverTransport,

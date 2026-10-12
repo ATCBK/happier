@@ -35,6 +35,39 @@ const sessionSpawnInput = {
 } as const;
 
 describe('createActionExecutor (durable plugin approval caller provenance)', () => {
+  it.each([true, false])('routes unsigned Account replay through the deciding profile only after Home verification (%s)', async (homeCurrent) => {
+    let stored: ApprovalRequest | null = null;
+    const contexts: ActionExecutorContext[] = [];
+    const deps = {
+      approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { artifactId: 'relation-approval' }; },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+      isActionApprovalRequired: actionId => actionId === 'session.reports_to.set',
+      // Home/Account authentication and the relation HTTP writer are system boundaries.
+      isApprovalExecutionOriginCurrent: async () => homeCurrent,
+      sessionReportsToSet: async ({ context, sessionId, leadSessionId }) => {
+        contexts.push(context);
+        return context.serverId === 'app-profile'
+          ? { ok: true, sessionId, leadSessionId, attachedAt: 1 }
+          : { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+      },
+    } satisfies Pick<ActionExecutorDeps, 'approvalsCreate' | 'approvalsGet' | 'approvalsUpdate'
+      | 'isActionApprovalRequired' | 'isApprovalExecutionOriginCurrent' | 'sessionReportsToSet'>;
+    const executor = createActionExecutor(deps as unknown as ActionExecutorDeps);
+    expect(await executor.execute('session.reports_to.set', {
+      sessionId: 'worker', leadSessionId: 'lead', expectedLeadSessionId: null,
+    }, { surface: 'cli', authority: 'account_automation', serverId: 'cli-profile',
+      serverIdentityId: 'srv_same_home', runtimeAccountId: 'account', actionCaller: { kind: 'host' },
+      actionRequestId: 'attach-request' })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(await executor.execute('approval.request.decide', { artifactId: 'relation-approval', decision: 'approve' }, {
+      surface: 'ui', authority: 'present_user', serverId: 'app-profile',
+      serverIdentityId: 'srv_same_home', runtimeAccountId: 'account',
+    })).toMatchObject({ ok: true, result: { status: homeCurrent ? 'executed' : 'failed',
+      execution: homeCurrent ? { ok: true } : { ok: false, errorCode: 'approval_stale' } } });
+    expect(contexts).toMatchObject(homeCurrent ? [{ serverId: 'app-profile', surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } }] : []);
+    expect(stored).toMatchObject({ executionOriginV1: { serverId: 'cli-profile', requestId: 'attach-request' } });
+  });
+
   it('persists the complete authenticated Session caller for an approved Account mutation', async () => {
     let stored: ApprovalRequest | null = null;
     const caller = { kind: 'session', sessionId: 'parent-1', starterDepth: 2, turnDepth: 3 } as const;
@@ -343,6 +376,7 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       surface, authority: 'account_automation', serverId: 'home-original',
       serverIdentityId: 'stable-home-identity',
       defaultSessionId: 'session-original', sessionListAccess: 'current_session',
+      defaultSessionMachineId: 'machine-1',
       actionRequestId: 'list-request',
     });
     expect(admitted).toEqual({ ok: true, result: { sessions: [], nextCursor: null, hasNext: false } });
@@ -732,6 +766,7 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
     await expect(executor.execute('execution.run.action', { sessionId: 'session-1', runId: 'run-1', actionId: 'review.triage', input: {} }, {
       surface: 'agent', authority: 'account_automation', serverId: 'server-1',
       defaultSessionId: 'session-1', actionRequestId: 'stop-request-1',
+      defaultSessionMachineId: 'machine-1',
       callerPermissionMode: 'safe-yolo', causalPermissionAuthority,
     })).resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
     await expect(executor.execute('approval.request.decide', {
@@ -1356,6 +1391,7 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
         sessionId: 'session-1',
         runId: 'run-1',
         runOccurrenceId: 'occurrence-original',
+        machineId: 'machine-1',
         actionId: 'execution.run.stop',
         requestId: 'request-run-stop-1',
       },
@@ -1419,6 +1455,7 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
         credentialId: 'credential-1',
         serverId: 'server-1',
         sessionId: 'session-1',
+        machineId: 'machine-1',
         target: { kind: 'session', sessionId: 'session-1' },
         actionId: 'session.title.set',
         requestId: 'request-1',

@@ -56,8 +56,7 @@ const authored = {
   id: 'my-agent',
   name: 'my-agent',
   title: 'My agent',
-  command: 'my-agent',
-  args: ['--acp'],
+  launch: { kind: 'command' as const, command: 'my-agent', args: ['--acp'] },
 };
 
 describe('createActionExecutor (custom ACP agent catalog)', () => {

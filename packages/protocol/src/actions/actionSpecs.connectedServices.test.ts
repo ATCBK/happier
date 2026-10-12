@@ -5,6 +5,17 @@ import { ActionIdSchema, type ActionId } from './actionIds.js';
 const service = { pluginId: 'happier.agent.codex', localId: 'openai' };
 
 describe('connected-service configuration Action parity', () => {
+  it('exposes provider billing through CLI and MCP while retaining client placement and an admitted account destination', () => {
+    const spec = getActionSpec('connectedServices.billing.open');
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true });
+    expect(spec.bindings.mcpToolName).toBe('connected_services_billing_open');
+    expect(spec.cli).toMatchObject({ commands: [], acceptsServerId: true });
+    expect(spec.executionPlacement).toBe('client');
+    expect(spec.safety).toBe('safe');
+    const input = { account: { service, accountId: 'work' }, machineId: 'machine' };
+    expect(spec.inputSchema.safeParse(input).success).toBe(true);
+    expect(spec.inputSchema.safeParse({ ...input, url: 'https://caller-selected.test' }).success).toBe(false);
+  });
   it('keeps service-configuration secret replacements in live approval custody and outside observation', () => {
     const spec = getActionSpec('connectedServices.configuration.replace');
     const input = { service, modeId: 'configured', expectedRevision: 'before',

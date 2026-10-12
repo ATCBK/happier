@@ -27,7 +27,7 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
  */
 export function zodSchemaToJsonSchemaObject(
   schema: z.ZodTypeAny,
-  options?: Readonly<{ target?: 'draft-2020-12' | 'draft-7' }>,
+  options?: Readonly<{ target?: 'draft-2020-12' | 'draft-7'; reused?: 'inline' | 'ref' }>,
 ): JsonSchemaObject {
   try {
     // The top-level projector supplies native processors for genuine Mini/Core
@@ -35,6 +35,7 @@ export function zodSchemaToJsonSchemaObject(
     const projectedSchema = z.toJSONSchema(schema, {
       io: 'input',
       target: options?.target ?? 'draft-2020-12',
+      reused: options?.reused ?? 'inline',
       unrepresentable: 'throw',
     });
     if (!isJsonSchemaObject(projectedSchema)) {

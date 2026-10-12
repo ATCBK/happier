@@ -97,7 +97,7 @@ function row<const T extends SessionTerminalActionId>(actionId: T, title: string
   const mutatesProcess = actionId === 'session.terminals.close' || actionId === 'session.terminals.close_tab'
     || actionId === 'session.terminals.close_others';
   return {
-    id: actionId, title,
+    id: actionId, approval: { result: 'required' }, title,
     description: 'Operate on the invoking mounted client terminal pane for a Home-qualified Session or an accepted requester Project checkout. Open, split and run_script return a pane member intent, not a ready shell. Restart requests the mounted controller, not a completed process restart. The Machine open/restart Actions own physical launch approval with the original caller provenance. Project shells retain their exact accepted workspace. A headless host returns unsupported_action. Closing stops owned shell terminals; attached agent terminals and borrowed views are only removed from the pane.',
     safety: mutatesProcess ? 'danger' : 'safe',
     sideEffectClass: actionId === 'session.terminals.list' ? 'read' : mutatesProcess ? 'danger' : 'external',

@@ -110,6 +110,15 @@ describe('Workflow per-run key admission', () => {
     if (!key) throw new Error('admitted_run_key_unavailable');
     const rootId = '22222222-2222-4222-8222-222222222222';
     const heldId = '33333333-3333-4333-8333-333333333333';
+    const rootIndex = { id: rootId, runId, sequence: '0', parentRecordId: null, memberOrdinal: '0',
+      attempt: '0', contentRevision: '8', lifecycle: 'running', createdAt: run.createdAt, updatedAt: run.updatedAt };
+    const rootEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+      mode: 'e2ee', runDataKey: key, randomBytes,
+      binding: { v: 1, purpose: 'invocation_progress', accountId: 'owner', runId, recordId: rootId,
+        sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0' },
+      progress: { kind: 'happier.workflow-progress.v1', blockKind: 'root', invocationPath: { blockId: '$root', scope: [] },
+        attempt: '0', logicalInvocationRecordId: rootId, stepProgress: { completed: 0, total: 1 } },
+    }));
     const index = { id: heldId, runId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0',
       attempt: '0', contentRevision: '4', lifecycle: 'waiting_for_review', createdAt: run.createdAt, updatedAt: run.updatedAt };
     const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
@@ -140,7 +149,7 @@ describe('Workflow per-run key admission', () => {
           contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(viewer.material.contentPublicKeyFingerprint) }, material: viewer.material },
       storage: { execute: async operation => {
         if (operation.operation === 'get') return { run: { ...run, state: 'waiting_for_review', revision: 6 }, acceptedEnvelope: admitted?.acceptedEnvelope,
-          checkpointEnvelope, resultEnvelope: null, keyCensus: census };
+          checkpointEnvelope, resultEnvelope: null, keyCensus: census, rootProgress: { index: rootIndex, contentEnvelope: rootEnvelope } };
         if (operation.operation === 'run-key.census') return census;
         // Mirror the server's opaque storage shape, including its private key census.
         if (operation.operation === 'invocations.list') return { invocations: operation.cursor ? [] : [index], parentRevision: 6, keyCensus: census,
@@ -155,7 +164,8 @@ describe('Workflow per-run key admission', () => {
     const request = { actionId: 'workflow.run.get' as const, input: { runId }, context: { callerPermissionMode: 'default' as const } };
     const opened = await readAs(false).execute(request);
     expect(opened).toMatchObject({ definition: { blocks: [{ kind: 'wait' }] }, acceptedContext: { source: { kind: 'inline' },
-      origin: { kind: 'direct' } }, checkpoint: { rootRecordId: rootId, nextSequence: '2' } });
+      origin: { kind: 'direct' } }, checkpoint: { rootRecordId: rootId, nextSequence: '2' },
+      run: { stepProgress: { completed: 0, total: 1 }, stepProgressCurrentness: { recordId: rootId, attempt: '0', contentRevision: '8' } } });
     expect(opened).not.toHaveProperty('acceptedContext.origin.originSessionId');
     expect(await readAs(false).execute({ actionId: 'workflow.run.invocations.get', input: { runId, invocationId: heldId }, context: {} }))
       .toMatchObject({ invocation: { index: { id: heldId, contentRevision: '4', lifecycle: 'waiting_for_review' },

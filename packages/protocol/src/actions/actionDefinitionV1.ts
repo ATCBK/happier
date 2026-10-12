@@ -9,6 +9,7 @@ import {
   ActionRequiredAuthoritySchema,
   ActionSurfaceSchema,
   ActionToolExposureSchema,
+  ActionPromptingSchema,
 } from './metadata.js';
 import { ActionSafetySchema } from './safety.js';
 import { ActionOperationDeclarationV1Schema } from './operations/v1.js';
@@ -129,6 +130,7 @@ export const ActionDefinitionSummaryV1Schema = lazyZodSchema(() => z
     examples: ActionDefinitionExamplesV1Schema,
     surfaces: SerializedActionSurfaceSchema,
     toolExposure: ActionToolExposureSchema.optional(),
+    prompting: ActionPromptingSchema.optional(),
     contextualDefaults: ActionContextualDefaultsSchema.optional(),
     inputHints: ActionInputHintsSchema.nullable(),
     outputSchema: LooseJsonObjectSchema.optional(),

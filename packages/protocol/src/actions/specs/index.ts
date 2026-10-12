@@ -17,6 +17,7 @@ import {
   COMPUTER_RUNTIME_ACTION_OUTPUT_SCHEMAS,
   COMPUTER_RUNTIME_ACTION_SPEC_FAMILY,
   projectComputerObservationInput,
+  computerTargetSelectionNarrowing,
 } from './computer.js';
 import {
   LOCAL_SERVICES_RUNTIME_ACTION_INPUT_SCHEMAS,
@@ -54,6 +55,9 @@ function mergeRuntimeActionTextMaps(
 
 const RUNTIME_ACTION_TITLES = mergeRuntimeActionTextMaps((family) => family.titles);
 const RUNTIME_ACTION_DESCRIPTIONS = mergeRuntimeActionTextMaps((family) => family.descriptions);
+const RUNTIME_ACTION_APPROVAL_POLICIES: NonNullable<RuntimeActionSpecFamily['approvalPolicies']> = Object.freeze(
+  Object.assign({}, ...RUNTIME_ACTION_SPEC_FAMILIES.map((family: RuntimeActionSpecFamily) => family.approvalPolicies ?? {})),
+);
 
 /**
  * The sole aggregate runtime-schema owner. Family maps retain literal schema
@@ -133,7 +137,7 @@ function createRuntimeActionSpecFor<
   const domainRpc = resolveLocalServiceDomainActionRpcBinding(actionId);
   const serviceCli = createLocalServiceActionCliProjection(actionId);
   return {
-    id: actionId,
+    id: actionId, approvalPolicy: { ...RUNTIME_ACTION_APPROVAL_POLICIES[actionId] }, approval: actionId === 'computer.secret.fill' || actionId === 'browser.automation.secret.fill' ? { result: 'required', flow: 'deferred' } : { result: 'required' },
     title,
     description: executorReal ? humanDescription : RUNTIME_ACTION_PROJECTION_CONTRACT_DESCRIPTION,
     safety: RUNTIME_DANGER_ACTION_IDS.has(actionId) ? 'danger' : 'safe',
@@ -142,11 +146,13 @@ function createRuntimeActionSpecFor<
       ...resolveRuntimeActionSurfaces(actionId),
       ...(actionId === 'localServices.launcher.start' || controlRpcMethod ? { rpc: !requiresAnsweringClient, cli: !requiresAnsweringClient, voice: !requiresAnsweringClient } : {}),
       ...(domainRpc ? { cli: true, voice: true } : {}),
+      ...(actionId === 'projects.service.relocate' && executorReal ? { cli: true } : {}),
       ...(actionId === 'localServices.launcher.start' || domainRpc || (controlRpcMethod && !requiresAnsweringClient) ? { mcp: true } : {}),
     },
     sideEffectClass,
     outputSchema: params.outputSchema,
     inputSchema: params.inputSchema,
+    ...(actionId === 'computer.target.select' ? { approvalNarrowing: computerTargetSelectionNarrowing } : {}),
     ...(serviceCli ? { cli: serviceCli } : {}),
     ...(domainRpc ? { executionPlacement: 'machine' as const, bindings: { rpcMethod: domainRpc.rpcMethod,
       voiceClientToolName: actionId.replaceAll('.', '_'), mcpToolName: actionId.replaceAll('.', '_') } } : {}),

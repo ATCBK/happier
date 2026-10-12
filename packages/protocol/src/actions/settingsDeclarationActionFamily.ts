@@ -13,11 +13,13 @@ export function isSettingsDeclarationActionIdV1(value: string): value is Setting
 export const SettingsDeclarationValueV1Schema = StrictJsonValueSchema;
 const SettingsDeclarationScalarChoiceV1Schema = lazyZodSchema(() => z.union([z.string(), z.number().finite(), z.boolean(), z.null()]));
 const AnchorSchema = lazyZodSchema(() => z.string().trim().min(1));
+const SettingKeySchema = lazyZodSchema(() => z.string().trim().min(1));
 const OperationIdSchema = lazyZodSchema(() => z.string().trim().min(1));
-export const SettingsDeclarationTargetKindV1Schema = lazyZodSchema(() => z.enum(['home', 'team', 'team_identity_connection']));
+export const SettingsDeclarationTargetKindV1Schema = lazyZodSchema(() => z.enum(['home', 'team', 'team_identity_connection', 'project']));
 /** Resource identity only; caller Account and authority come from Action admission. */
 export const SettingsDeclarationTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('home'), serverId: OperationIdSchema }).strict(),
+  z.object({ kind: z.literal('project'), serverId: OperationIdSchema, projectKey: OperationIdSchema }).strict(),
   z.object({ kind: z.literal('team'), serverId: OperationIdSchema, teamId: OperationIdSchema }).strict(),
   z.object({ kind: z.literal('team_identity_connection'), serverId: OperationIdSchema, teamId: OperationIdSchema, connectionId: OperationIdSchema }).strict(),
 ]));
@@ -25,6 +27,11 @@ export type SettingsDeclarationTargetV1 = z.infer<typeof SettingsDeclarationTarg
 export type SettingsDeclarationTargetKindV1 = SettingsDeclarationTargetV1['kind'];
 /** Exact operation targets, never a settings path, credential value or caller confirmation. */
 export const SettingsDeclarationOperationInputV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('atmosphere_picture_add'), source: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('url'), url: z.url().refine(value => /^https?:\/\//i.test(value)) }).strict(),
+    z.object({ kind: z.literal('machine_file'), machineId: OperationIdSchema, path: OperationIdSchema }).strict(),
+  ]) }).strict(),
+  z.object({ kind: z.literal('atmosphere_picture_remove'), localId: OperationIdSchema }).strict(),
   z.object({ kind: z.literal('account_settings_history_purge'), versions: z.array(z.number().int().nonnegative().safe()).nonempty() }).strict(),
   z.object({ kind: z.literal('model_pack'), packId: OperationIdSchema, machineId: OperationIdSchema.optional() }).strict(),
   z.object({ kind: z.literal('voice_preview'), voiceId: OperationIdSchema }).strict(),
@@ -72,8 +79,8 @@ const SettingReversalInputSchema = lazyZodSchema(() => z.discriminatedUnion('kin
 
 export const SettingsDeclarationActionInputSchemasV1 = {
   'settings.list': z.object({ pageId: z.string().trim().min(1).optional() }).strict(),
-  'settings.get': z.object({ anchor: AnchorSchema, target: SettingsDeclarationTargetV1Schema.optional(), includeVersion: z.literal(true).optional() }).strict(),
-  'settings.set': z.object({ anchor: AnchorSchema, value: SettingsDeclarationValueV1Schema, target: SettingsDeclarationTargetV1Schema.optional(),
+  'settings.get': z.object({ anchor: AnchorSchema, key: SettingKeySchema.optional(), target: SettingsDeclarationTargetV1Schema.optional(), includeVersion: z.literal(true).optional() }).strict(),
+  'settings.set': z.object({ anchor: AnchorSchema, key: SettingKeySchema.optional(), value: SettingsDeclarationValueV1Schema, target: SettingsDeclarationTargetV1Schema.optional(),
     expectedSettingsVersion: SettingsVersionSchema.optional(), reversal: SettingReversalInputSchema.optional() }).strict()
     .refine(value => value.reversal?.kind !== 'restore' || value.expectedSettingsVersion === undefined || value.expectedSettingsVersion === value.reversal.appliedVersion),
   'settings.reset': z.object({ anchor: AnchorSchema, target: SettingsDeclarationTargetV1Schema.optional() }).strict(),

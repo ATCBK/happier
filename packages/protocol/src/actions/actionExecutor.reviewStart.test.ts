@@ -75,6 +75,41 @@ describe('createActionExecutor (review.start)', () => {
     { value: 'claude', label: 'Claude', capabilities: { structuredNarration: true } },
     { value: 'coderabbit', label: 'CodeRabbit', capabilities: { structuredNarration: false } },
   ] };
+  it('keeps detached review narration and explanation on the exact Machine without inheriting a default Session', async () => {
+    const executionRunStart = vi.fn<ActionExecutorDeps['executionRunStart']>(async () => ({ runId: 'review-1', callId: 'call-1', sidechainId: 'call-1' }));
+    const executionRunAction = vi.fn<ActionExecutorDeps['executionRunAction']>(async (_sessionId, request) => request.actionId === 'review.explain_findings'
+      ? { ok: true, result: { refinement: { actionId: 'scm.diffSummary.refine', input: {
+        cwd: '/repo', resultId: 'result-1', expectedRevision: 2, output: 'walkthrough', stopIds: ['stop-1'], instructions: 'Explain selected finding.',
+      } } } } : { ok: true, result: { runId: 'narrator-1', state: 'collecting' } });
+    const refinements: unknown[] = [];
+    const executor = createActionExecutor({ executionRunStart, executionRunAction,
+      executionRunCheckProtocolV2: async () => ({ ok: true }), reviewEnginesList: async () => narrationInventory,
+      scmActionExecute: async ({ input, context }) => {
+        refinements.push({ input, sessionId: context.defaultSessionId, machineId: context.executionRunTargetMachineId });
+        return { success: false, errorCode: 'revision_conflict', error: 'Saved result changed', latestRevision: 3 };
+      },
+    } as ActionExecutorDeps);
+    const context = { surface: 'ui' as const, defaultSessionId: 'unrelated-session', serverId: 'home-1',
+      externalActionTarget: { kind: 'machine' as const, machineId: 'machine-1', project: { machineId: 'machine-1', directory: '/repo' } } };
+    const started = await executor.execute('review.start', { target: { kind: 'detached' }, cwd: '/untrusted-root', engineIds: ['codex', 'claude'],
+      instructions: 'Review.', outputs: ['walkthrough'], comparisonId: 'comparison-1' }, context);
+    expect(started).toMatchObject({ ok: true, result: { sessionId: null, narration: { runId: 'narrator-1' } } });
+    expect(executionRunStart.mock.calls[0]).toMatchObject([null, { cwd: '/repo' }, { targetMachineId: 'machine-1' }]);
+    expect(executionRunAction.mock.calls[0]).toMatchObject([null, { actionId: 'review.walkthrough' }, { targetMachineId: 'machine-1' }]);
+    expect(await executor.execute('review.walkthrough', { target: { kind: 'detached' }, runId: 'review-1', comparisonId: 'comparison-1' }, context))
+      .toMatchObject({ ok: true });
+    expect(await executor.execute('review.explain_findings', { target: { kind: 'detached' }, runId: 'review-1', cwd: '/repo',
+      resultId: 'result-1', expectedRevision: 2, findingIds: [{ runId: 'review-1', findingId: 'finding-1' }] }, context))
+      .toMatchObject({ ok: true, result: { success: false, errorCode: 'revision_conflict' } });
+    expect(executionRunAction.mock.calls.every(call => call[0] === null && call[2]?.targetMachineId === 'machine-1')).toBe(true);
+    expect(refinements).toMatchObject([{ input: { cwd: '/repo' }, sessionId: undefined, machineId: 'machine-1' }]);
+    executionRunAction.mockClear();
+    expect(await executor.execute('review.walkthrough', { target: { kind: 'detached' }, sessionId: 'private-session',
+      runId: 'review-1', comparisonId: 'comparison-1' }, context)).toMatchObject({ ok: false });
+    expect(await executor.execute('review.walkthrough', { runId: 'review-1', comparisonId: 'comparison-1' }, { surface: 'cli' }))
+      .toMatchObject({ ok: false, errorCode: 'session_not_selected' });
+    expect(executionRunAction).not.toHaveBeenCalled();
+  });
   it('offers capable narrators without hiding findings-only reviewer choices', async () => {
     const executor = createActionExecutor({ reviewEnginesList: async () => narrationInventory } as ActionExecutorDeps);
     const narrator = await executor.execute('action.options.resolve', {
@@ -241,6 +276,7 @@ describe('createActionExecutor (review.start)', () => {
     } as ActionExecutorDeps);
     const result = await executor.execute('review.start', {
       ...(target ? { target } : {}), engineIds: ['codex'], instructions: 'Review the workspace.',
+      cwd: '/caller/other-checkout',
       workflowRunId: 'forged-input-id',
     }, {
       surface: 'agent', executionRunTargetMachineId: 'machine-1',
@@ -431,7 +467,7 @@ describe('createActionExecutor (review.start)', () => {
     expect(executionRunStart).toHaveBeenCalledWith('s1', expect.objectContaining({ permissionMode: 'workspace_write' }), expect.any(Object));
   });
 
-  it('starts a plugin Agent review through the detached host review run', async () => {
+  it('starts a qualified plugin Agent review in the genuine Session scope', async () => {
     const executionRunStart = vi.fn(async () => ({ runId: 'run_1', callId: 'call_1', sidechainId: 'call_1' }));
     const pluginAgentId = 'acme.review/reviewer';
 
@@ -487,7 +523,7 @@ describe('createActionExecutor (review.start)', () => {
       's1',
       expect.objectContaining({
         intent: 'review',
-        backendTarget: { kind: 'builtInAgent', agentId: pluginAgentId },
+        backendTarget: { kind: 'agent', identity: { pluginId: 'acme.review', localId: 'reviewer' } },
         retentionPolicy: 'resumable',
         ioMode: 'streaming',
         intentInput: expect.objectContaining({ engineId: pluginAgentId }),

@@ -5,12 +5,11 @@ import { RPC_ERROR_CODES } from '../rpc/index.js';
 import { RpcError } from '../rpc/errors.js';
 import { deriveSessionCreationTagV1 } from '../sessions/creation/sessionCreationIdentityV1.js';
 import { createActionExecutor } from './actionExecutor.js';
-import { actionSpecToActionDefinitionV1, projectActionDefinitionForExternalDiscovery } from './actionCatalog.js';
-import { getActionSpec } from './actionSpecs.js';
 import type { ActionExecutorDeps } from './executor/types.js';
 import type { ResolvedRolesSnapshotV1 } from '../prompts/roles/rolesV1.js';
 import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 import { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } from '../account/settings/sessionAgentSpawnPolicyV1.js';
+import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 
 const canonicalInput = {
   creationKey: 'plugin-operation-7',
@@ -73,6 +72,77 @@ function createExternalSpawnApprovalContext(requestId: string) {
 }
 
 describe('session.spawn_new canonical execution', () => {
+  const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
+
+  it('carries attestation only for the host-stamped plugin spawn caller', async () => {
+    const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>(async () => ({
+      type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted',
+    }));
+    const executor = createActionExecutor({ sessionSpawnNew } as unknown as ActionExecutorDeps);
+    expect(await executor.execute('session.spawn_new', { ...canonicalInput, attestedContext }, {
+      surface: 'plugin', authority: 'account_automation',
+      actionCaller: { kind: 'plugin', pluginId: 'happier.channels' },
+    })).toMatchObject({ ok: true });
+    expect(sessionSpawnNew.mock.calls[0]?.[0]).toMatchObject({ attestedContext });
+  });
+
+  it.each(['ui', 'agent', 'mcp', 'cli', 'api', 'plugin'] as const)(
+    'refuses attestation from an unstamped %s caller before spawn', async (surface) => {
+      const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>();
+      const executor = createActionExecutor({ sessionSpawnNew } as unknown as ActionExecutorDeps);
+      expect(await executor.execute('session.spawn_new', { ...canonicalInput, attestedContext }, {
+        surface, authority: 'present_user', actionCaller: { kind: 'host' },
+      })).toMatchObject({ ok: false, errorCode: 'session_attested_context_forbidden' });
+      expect(sessionSpawnNew).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses API-token attestation even with a valid spawn grant', async () => {
+    const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>();
+    const executor = createActionExecutor({ sessionSpawnNew } as unknown as ActionExecutorDeps);
+    const result = await executor.execute('session.spawn_new', { ...canonicalInput, attestedContext }, {
+      ...createExternalSpawnApprovalContext('attestation-spoof'),
+    });
+    expect(result).toMatchObject({ ok: false, errorCode: 'session_attested_context_forbidden' });
+    expect(sessionSpawnNew).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { roleId: 'orchestrator', ref: 'builtin:plan-with-a-panel', events: ['sessionStarted'], inputs: { request: 'Plan the issue with a panel before implementing it.' } },
+    { roleId: 'builder', ref: 'builtin:review-and-converge', events: ['parentTurnCompleted'], inputs: {} },
+  ])('admits an Agent-created $roleId with its inherited $ref trigger', async ({ roleId, ref, events, inputs }) => {
+    // Native Session creation is the system boundary; Action parsing, role and Agent admission remain real.
+    const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>(async () => ({
+      type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted',
+    }));
+    const executor = createActionExecutor({ sessionSpawnNew } as unknown as ActionExecutorDeps);
+    const initialTriggers = [{
+      target: { kind: 'workflow', ref },
+      trigger: { kind: 'sessionLifecycle', enabled: true, events, policy: { kind: 'firstMatch' } },
+      inputs,
+      onComplete: { kind: 'originating_session' },
+    }];
+    const result = await executor.execute('session.spawn_new', {
+      ...canonicalInput, roleId, initialTriggers,
+    }, {
+      surface: 'agent', authority: 'account_automation',
+      serverId: 'server-1', runtimeAccountId: 'account-1', defaultSessionId: 'parent-session',
+      agentStartContext: { ...agentStartContext, roles: {
+        [roleId]: { roleId, name: roleId, instructions: 'Complete the brief.',
+          engine: { agentTargetKey: buildBackendTargetKeyV2(canonicalInput.agentTarget) },
+          runsAs: { kind: 'session' }, workspaceWrites: 'deny', secondOpinion: 'off', enabled: true },
+      } }, callerPermissionMode: 'yolo',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' },
+      sessionInputSource: { sourceSessionId: 'parent-session', sourceTurnId: 'parent-turn-1', via: 'action' },
+      sessionAgentSpawnPolicyV1: DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
+    });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { type: 'pending', outcome: 'accepted' } });
+    expect(sessionSpawnNew.mock.calls[0]?.[0]).toMatchObject({
+      roleId, initialTriggers, reportsTo: { sessionId: 'parent-session' },
+    });
+    expect(sessionSpawnNew.mock.calls[0]?.[0].initialTriggers?.[0]?.inputs).not.toHaveProperty('engines');
+  });
+
   it.each([{ FEATURE_FLAG: 'enabled' }, {}])('refuses the environment policy before approval or native spawn: %j', async (environmentVariables) => {
     // Approval storage and native Session creation are genuine system boundaries.
     const approvalsCreate = vi.fn();
@@ -405,49 +475,50 @@ describe('session.spawn_new canonical execution', () => {
     expect(sessionSpawnNew).not.toHaveBeenCalled();
   });
 
-  it('binds host Voice creation retries to the admitted Home and Account without promoting authority', async () => {
+  it.each(['voice', 'cli'] as const)('binds host %s creation retries to the admitted Home and Account without promoting authority', async (surface) => {
     const sessionSpawnNew = vi.fn<ActionExecutorDeps['sessionSpawnNew']>(async () => ({
       type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted',
     }));
     const executor = createActionExecutor({ sessionSpawnNew, isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
     const context = {
-      surface: 'voice' as const, authority: 'account_automation' as const,
-      actionCaller: { kind: 'host' as const }, serverId: 'server-1', runtimeAccountId: 'account-1',
-      actionRequestId: 'voice-request-1',
+      surface, authority: 'account_automation' as const,
+      serverId: 'server-1', runtimeAccountId: 'account-1',
+      actionRequestId: 'host-request-1',
     };
     const { creationKey: _creationKey, ...input } = canonicalInput;
-    for (const scope of [context, context, { ...context, runtimeAccountId: 'account-2' }, { ...context, serverId: 'server-2' }]) {
+    for (const scope of [context, { ...context, actionCaller: { kind: 'host' as const } },
+      { ...context, runtimeAccountId: 'account-2' }, { ...context, serverId: 'server-2' }]) {
       expect(await executor.execute('session.spawn_new', input, scope)).toMatchObject({ ok: true });
     }
     const args = sessionSpawnNew.mock.calls.map(([args]) => args);
     expect(args[0]?.sessionCreationTag).toBe(deriveSessionCreationTagV1({
-      callerCreationNamespace: JSON.stringify(['voice', 'server-1', 'account-1']),
-      creationKey: 'action-request:voice-request-1',
+      callerCreationNamespace: JSON.stringify([surface, 'server-1', 'account-1']),
+      creationKey: 'action-request:host-request-1',
     }));
     expect(args[1]?.sessionCreationTag).toBe(args[0]?.sessionCreationTag);
     expect(new Set(args.map((args) => args.sessionCreationTag)).size).toBe(3);
     expect(args.every((args) => args.context?.authority === 'account_automation')).toBe(true);
   });
 
-  it.each([
-    { serverId: 'server-1' },
-    { runtimeAccountId: 'account-1' },
-    { serverId: 'server-1', runtimeAccountId: 'account-1', authority: undefined },
-  ])('refuses host Voice creation with incomplete admitted scope: %j', async (scope) => {
+  it.each((['voice', 'cli'] as const).flatMap((surface) => [
+    { surface, serverId: 'server-1' },
+    { surface, runtimeAccountId: 'account-1' },
+    { surface, serverId: 'server-1', runtimeAccountId: 'account-1', authority: undefined },
+  ]))('refuses host creation with incomplete admitted scope: %j', async (scope) => {
     const sessionSpawnNew = vi.fn();
     const executor = createActionExecutor({ sessionSpawnNew, isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
     expect(await executor.execute('session.spawn_new', canonicalInput, {
-      surface: 'voice', authority: 'account_automation', actionCaller: { kind: 'host' }, ...scope,
+      authority: 'account_automation', actionCaller: { kind: 'host' }, ...scope,
     })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
     expect(sessionSpawnNew).not.toHaveBeenCalled();
   });
 
-  it('retains required approval for a scoped host Voice creation', async () => {
+  it.each(['voice', 'cli'] as const)('retains required approval for a scoped host %s creation', async (surface) => {
     const sessionSpawnNew = vi.fn();
     const approvalsCreate = vi.fn(async () => ({ artifactId: 'voice-spawn-approval' }));
     const executor = createActionExecutor({ sessionSpawnNew, approvalsCreate, isActionApprovalRequired: () => true } as unknown as ActionExecutorDeps);
     expect(await executor.execute('session.spawn_new', canonicalInput, {
-      surface: 'voice', authority: 'account_automation', actionCaller: { kind: 'host' },
+      surface, authority: 'account_automation', actionCaller: { kind: 'host' },
       serverId: 'server-1', runtimeAccountId: 'account-1',
     })).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'voice-spawn-approval' } });
     expect(sessionSpawnNew).not.toHaveBeenCalled();
@@ -644,11 +715,6 @@ describe('session.spawn_new canonical execution', () => {
   });
 
   it('projects compact spawn input schemas and hints when API callers discover Action specs', async () => {
-    // Exercise the real catalog first so serialization failures retain their
-    // cause instead of the executor's generic invalid_parameters result.
-    projectActionDefinitionForExternalDiscovery(actionSpecToActionDefinitionV1(
-      getActionSpec('session.spawn_new'), { surface: 'api' },
-    ));
     const executor = createActionExecutor({
       isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
@@ -672,12 +738,15 @@ describe('session.spawn_new canonical execution', () => {
     const discovery = z.object({ result: z.object({ actionSpec: z.object({ inputSchema: z.object({
       properties: z.object({ directory: z.record(z.string(), z.unknown()) }),
       $defs: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+      definitions: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
     }) }) }) }).parse(getResult);
     const advertisedSchema = discovery.result.actionSpec.inputSchema;
     const reference = advertisedSchema.properties.directory.$ref;
-    if (typeof reference === 'string') expect(reference).toMatch(/^#\/\$defs\/[^/]+$/u);
+    if (typeof reference === 'string') expect(reference).toMatch(/^#\/(?:\$defs|definitions)\/[^/]+$/u);
     const directorySchema = typeof reference === 'string'
-      ? advertisedSchema.$defs?.[reference.slice('#/$defs/'.length)]
+      ? reference.startsWith('#/$defs/')
+        ? advertisedSchema.$defs?.[reference.slice('#/$defs/'.length)]
+        : advertisedSchema.definitions?.[reference.slice('#/definitions/'.length)]
       : advertisedSchema.properties.directory;
     expect(directorySchema).toMatchObject({
       oneOf: expect.arrayContaining([

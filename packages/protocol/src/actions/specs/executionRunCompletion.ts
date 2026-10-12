@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import type { ActionCompletionDeclaration, ActionCompletionRun, ExecutionRunTerminalObservation } from '../actionCompletion.js';
 import { readExecutionRunStartRunCreation } from '../../execution/runs/responseSchemas.js';
@@ -67,9 +68,11 @@ const NarrationLaunchSchema = lazyZodSchema(() => z.object({ runId: z.string().m
 }).passthrough().refine((launch) => !launch.observation || launch.observation.comparisonId === launch.comparisonId,
   'Narrator observation must bind the launched comparison'));
 
-function narrationTerminalValue(run: ObservedRun) {
+function narrationTerminalValue(run: ObservedRun, purpose: 'input' | 'stored') {
   if (run.outcome.kind === 'outcome_uncertain') throw new Error('Unsettled narration');
-  const output = run.outcome.kind === 'completed' ? ScmDiffSummaryGenerateOutputSchema.safeParse(run.outcome.result) : undefined;
+  const output = run.outcome.kind === 'completed' ? (purpose === 'stored'
+    ? createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema)
+    : ScmDiffSummaryGenerateOutputSchema).safeParse(run.outcome.result) : undefined;
   const outputState = output?.success ? output.data.outputs?.walkthrough?.state : undefined;
   return { runId: run.runId, outcome: run.outcome.kind,
     ...(outputState && outputState !== 'pending' && outputState !== 'writing' ? { outputState } : {}),
@@ -88,24 +91,25 @@ export const ReviewStartTerminalValueV1Schema = lazyZodSchema(() => z.object({
 export const reviewWalkthroughCompletion: ActionCompletionDeclaration = {
   awaits: 'execution_runs',
   terminalOutputSchema: z.object({ narration: NarrationTerminalValueSchema }).strict(),
-  launched: (output) => {
-    const launch = NarrationLaunchSchema.parse(output);
+  launched: (output, purpose = 'input') => {
+    const launch = (purpose === 'stored' ? createStoredReadSchema(NarrationLaunchSchema) : NarrationLaunchSchema).parse(output);
     return { runs: [{ key: 'narrator', runId: launch.runId,
       observation: launch.observation ?? { kind: 'review_walkthrough', comparisonId: launch.comparisonId } }], failed: [] };
   },
-  terminal: (_output, runs) => {
+  terminal: (_output, runs, purpose = 'input') => {
     if (runs.length !== 1) throw new Error('Narrator identity changed');
-    return { narration: narrationTerminalValue(runs[0]!) };
+    return { narration: narrationTerminalValue(runs[0]!, purpose) };
   },
 };
 
 export const reviewStartCompletion: ActionCompletionDeclaration = {
   awaits: 'execution_runs',
   terminalOutputSchema: ReviewStartTerminalValueV1Schema,
-  launched: (output) => {
+  launched: (output, purpose = 'input') => {
     const launches = readLaunches(output, 'review');
     const retained = readFanoutOutput(output, 'review');
-    const parsedNarration = NarrationLaunchSchema.safeParse(retained.narration);
+    const parsedNarration = (purpose === 'stored' ? createStoredReadSchema(NarrationLaunchSchema) : NarrationLaunchSchema)
+      .safeParse(retained.narration);
     if (!parsedNarration.success) return launches;
     const narration = parsedNarration.data;
     const observation = narration.observation ?? { kind: 'review_walkthrough' as const, comparisonId: narration.comparisonId };
@@ -114,12 +118,13 @@ export const reviewStartCompletion: ActionCompletionDeclaration = {
       ? launches.runs.map((run) => run.runId === narration.runId ? { ...run, observation } : run)
       : [...launches.runs, { key: 'narrator', runId: narration.runId, observation }] };
   },
-  terminal: (output, runs) => {
+  terminal: (output, runs, purpose = 'input') => {
     const retained = readFanoutOutput(output, 'review');
     const originalLaunches = readLaunches(output, 'review');
     const narrationRun = runs.find((run) => run.observation);
     const narrated = narrationRun?.outcome.kind === 'completed'
-      ? ScmDiffSummaryGenerateOutputSchema.safeParse(narrationRun.outcome.result) : undefined;
+      ? (purpose === 'stored' ? createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema) : ScmDiffSummaryGenerateOutputSchema)
+        .safeParse(narrationRun.outcome.result) : undefined;
     const reviewedRuns = narrated?.success ? narrated.data.producer?.reviewedRuns
       : narrationRun?.outcome.kind === 'failed' || narrationRun?.outcome.kind === 'cancelled'
         ? narrationRun.outcome.reviewedRuns : undefined;
@@ -127,7 +132,8 @@ export const reviewStartCompletion: ActionCompletionDeclaration = {
       .map((run): ObservedRun => {
         if (!run.observation) return run;
         const provenance = reviewedRuns?.find((review) => review.runId === run.runId);
-        const evidence = provenance ? ReviewPublicationEvidenceSchema.parse(provenance) : undefined;
+        const evidence = provenance ? (purpose === 'stored'
+          ? createStoredReadSchema(ReviewPublicationEvidenceSchema) : ReviewPublicationEvidenceSchema).parse(provenance) : undefined;
         // Narration success alone never certifies findings or materialized comments.
         const outcome: ExecutionRunTerminalObservation = provenance?.hasOutput
           && (provenance.reviewOutcome === 'complete' || provenance.reviewOutcome === 'partial')
@@ -165,7 +171,7 @@ export const reviewStartCompletion: ActionCompletionDeclaration = {
         }),
         ...launchFailureOutcomes(output, 'review'),
       ],
-      ...(retained.narration ? { narration: narrationRun ? narrationTerminalValue(narrationRun)
+      ...(retained.narration ? { narration: narrationRun ? narrationTerminalValue(narrationRun, purpose)
         : { outcome: 'launch_failed', errorCode: 'review_narration_failed' } } : {}),
     };
   },

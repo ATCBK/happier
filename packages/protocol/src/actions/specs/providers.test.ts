@@ -3,10 +3,22 @@ import { PROVIDER_ACTION_SPECS_V1 } from './providers.js';
 import { isProviderActionMachineRequiredV1 } from '../../providers/providerActionsV1.js';
 
 describe('Provider Action placement declarations', () => {
+  it('classifies validated display-only updates as safe while consequential and malformed updates stay dangerous', () => {
+    const spec = PROVIDER_ACTION_SPECS_V1.find(spec => spec.id === 'providers.connections.update')!;
+    const rename = { action: 'update', connectionId: 'connection', expectedRevision: 1, displayName: 'Gateway' };
+    expect(spec.safetyForInput?.(rename) ?? spec.safety).toBe('safe');
+    for (const input of [undefined, { ...rename, gatewayPlacement: null }, { ...rename, claudeHelperModels: {} },
+      { ...rename, template: {} }, { ...rename, unknown: true }]) {
+      expect(spec.safetyForInput?.(input) ?? spec.safety).toBe('danger');
+    }
+  });
   it('places Account configuration separately from exact machine observations and effects', () => {
     const cases = [
       ['providers.connections.describe', {}, 'account'],
       ['providers.connections.describe', { machineId: 'machine' }, 'machine'],
+      ['providers.connections.create_contribution', { action: 'createContribution', connectionId: 'connection',
+        contributionKey: 'happier.provider.cliproxyapi/cliproxyapi', displayName: 'Main gateway', savedSecretId: null,
+        enable: true, deployment: { kind: 'managedLocal', purposeBindingDefaults: {} } }, 'account'],
       ['providers.connections.update', { action: 'update', connectionId: 'connection', expectedRevision: 1,
         gatewayPlacement: { kind: 'machine', machineId: 'hub' } }, 'account'],
       ['providers.connections.update', { action: 'update', machineId: 'machine', connectionId: 'connection', expectedRevision: 1 }, 'account'],
@@ -19,7 +31,7 @@ describe('Provider Action placement declarations', () => {
       ['providers.models.projection', { agentTargetKey: 'agent:com.acme.agent/acme' }, 'account'],
       ['providers.models.projection', { agentTargetKey: 'agent:com.acme.agent/acme', machineId: 'machine' }, 'machine'],
       ['providers.models.manual.remove', { action: 'manualRemove', connectionId: 'connection', modelId: 'model', expectedConnectionRevision: 1 }, 'account'],
-      ['providers.models.visibility.set', { action: 'setVisibility', ref: { agentTargetKey: 'agent:com.acme.agent/acme', providerConnectionId: 'connection', modelId: 'model' }, hidden: true }, 'account'],
+      ['providers.models.visibility.set', { action: 'setVisibility', ref: { scope: 'agent', agentTargetKey: 'agent:com.acme.agent/acme', providerConnectionId: 'connection', modelId: 'model' }, hidden: true }, 'account'],
       ['providers.models.source_visibility.set', { action: 'setConnectionVisibility', connectionId: 'connection', shown: false }, 'account'],
       ['providers.defaults.set', { agentTargetKey: 'agent:codex', selection: null }, 'account'],
       ['providers.connections.start_local', { action: 'startLocal', machineId: 'machine', contributionKey: 'example.gateway/gateway' }, 'machine'],

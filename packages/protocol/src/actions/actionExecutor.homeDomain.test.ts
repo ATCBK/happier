@@ -24,7 +24,7 @@ function homeAccountRow(): HomeAccountRowV1 {
     accountId: 'account-2',
     homeRole: 'admin' as const,
     status: 'active' as const,
-    profile: { firstName: 'Ada', lastName: null, username: null, avatarUrl: null },
+    profile: { name: 'Ada', firstName: 'Ada', lastName: null, username: null, avatarUrl: null },
     createdAt: 1,
     authentication: { signInEmail: null, usableMethodIds: ['key_challenge'] },
     mutationCapabilities: {
@@ -595,7 +595,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
     }));
   });
 
-  it('admits only the approved directory-source removal mutation to API automation', async () => {
+  it('refuses directory mutations from API automation without bypassing their present-user authority', async () => {
     const output = {
       v: 1 as const,
       status: 'removed' as const,
@@ -624,18 +624,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       serverId: 'home-1',
       runtimeAccountId: 'account-1',
       actionCaller: { kind: 'host' },
-    })).resolves.toEqual({ ok: true, result: output });
-
-    expect(homeDomainAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      actionId: 'teams.directory.sources.remove',
-      input: { v: 1, teamId: 'team-1', sourceId: 'source-1' },
-      context: expect.objectContaining({
-        surface: 'api',
-        authority: 'account_automation',
-        serverId: 'home-1',
-        runtimeAccountId: 'account-1',
-      }),
-    }));
+    })).resolves.toEqual({ ok: false, errorCode: 'present_user_required', error: 'present_user_required' });
 
     await expect(executor.execute('teams.directory.sources.sync', {
       v: 1,
@@ -653,7 +642,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       error: 'present_user_required',
     });
 
-    expect(homeDomainAction).toHaveBeenCalledTimes(1);
+    expect(homeDomainAction).not.toHaveBeenCalled();
   });
 
   it('returns a transferable invitation bearer to its direct caller but redacts the shared execution observation', async () => {
@@ -762,8 +751,10 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       }, { surface: 'ui', authority: 'present_user', serverId: 'home-1', runtimeAccountId: 'account-1',
         actionCaller: { kind: 'host' } });
       expect(decision).toMatchObject({ ok: true, result: { liveExecution: { ok: true, result: output } } });
-      const observed = await executor.execute('approval.request.get', { artifactId: 'invitation-approval' }, requester);
-      expect(observed.ok).toBe(true);
+      // Approval snapshots are host-internal RPC reads, not another Agent tool.
+      const observed = await executor.execute('approval.request.get', { artifactId: 'invitation-approval' },
+        { ...requester, surface: 'rpc' });
+      expect(observed).toMatchObject({ ok: true });
       expect(JSON.stringify(observed)).not.toContain(joinUrl);
       expect(persisted.at(-1)?.execution).toMatchObject({ ok: true, result: { joinUrl: null } });
       expect(JSON.stringify(persisted)).not.toContain(joinUrl);

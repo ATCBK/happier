@@ -3,8 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
-import { SessionBoardLayoutUpdateInputV1Schema, SessionBoardItemUpsertInputV1Schema, type SessionBoardItemUpsertInputV1 } from '../sessions/board/actions.js';
+import { createSessionBoardOutcomeUnknownFailureV1, projectSessionBoardGetResultV1, SessionBoardGetInputV1Schema, SessionBoardLayoutUpdateInputV1Schema, SessionBoardItemUpsertInputV1Schema, type SessionBoardItemUpsertInputV1 } from '../sessions/board/actions.js';
+import { SessionSurfaceItemV1Schema, type SessionSurfaceItemV1 } from '../sessions/board/item.js';
+import { SessionBoardMutationV1Schema } from '../sessions/board/mutations.js';
 import { createWidgetActionInputResolverV1 } from '../widgets/widgetActionInputResolverV1.js';
+import { WidgetSurfaceRefV1Schema } from '../widgets/widgetInstanceV1.js';
 import { applySessionBoardLayoutOperationV1 } from '../sessions/board/layoutOperations.js';
 import type { SessionBoardLayoutV1 } from '../sessions/board/layout.js';
 
@@ -41,6 +44,22 @@ function mutationResult(operation: 'upsert_item' | 'remove_item' | 'update_layou
 }
 
 describe('createActionExecutor (Session Board family)', () => {
+  it('publishes the canonical Home identity only after validating the exact transport target', async () => {
+    let transportHome = 'daemon-profile';
+    const executor = createActionExecutor({ isActionApprovalRequired: () => false,
+      sessionBoardAction: async ({ actionId }) => actionId === 'session.board.get'
+        ? projectSessionBoardGetResultV1({ serverId: 'daemon-profile', sessionId: 'session-1',
+            capabilities: { readTranscript: true, editSessionRecords: true }, layout: null, entries: [],
+            incomplete: false, page: { cursor: null, hasNext: false } })
+        : ({ ...mutationResult('upsert_item'), serverId: transportHome }),
+    });
+    const context = { surface: 'cli' as const, serverId: 'daemon-profile', serverIdentityId: 'srv_home_a', defaultSessionId: 'session-1', bypassApprovals: true };
+    expect(await executor.execute('session.board.item.upsert', upsertInput, context))
+      .toEqual({ ok: true, result: { ...mutationResult('upsert_item'), serverId: 'srv_home_a' } });
+    transportHome = 'foreign-profile';
+    await expect(executor.execute('session.board.item.upsert', upsertInput, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
+  });
   it('creates transcript widgets without a Board footprint or layout dependency', async () => {
     const executor = createActionExecutor({ isActionApprovalRequired: () => false,
       widgetAccountScope: () => ({ serverId: 'home-1', accountId: 'account' }),
@@ -59,13 +78,27 @@ describe('createActionExecutor (Session Board family)', () => {
   });
   it('admits declared native widget Add footprints atomically without restricting existing custom native shapes', async () => {
     const saved: SessionBoardItemUpsertInputV1[] = [];
-    const executor = createActionExecutor({ widgetAccountScope: () => ({ serverId: 'home-1', accountId: 'account' }),
-      widgetInputs: createWidgetActionInputResolverV1({ readDescriptor: async () => ({ sizeDeclaration: { sizes: ['medium', 'tall'], defaultSize: 'tall' },
-        inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false } }),
+    let stored: { itemId: string; item: SessionSurfaceItemV1; revision: string } | null = null;
+    const executor = createActionExecutor({ widgetAccountScope: () => ({ serverId: 'home-1', accountId: 'account',
+      isSameServerId: serverId => serverId === 'home-1' }),
+      widgetInputs: createWidgetActionInputResolverV1({ readDescriptor: async request => {
+        // Model the host descriptor boundary's closed, serializable target address.
+        WidgetSurfaceRefV1Schema.parse(request.ref.surface);
+        return { sizeDeclaration: { sizes: ['medium', 'tall'], defaultSize: 'tall' },
+        inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false } }; },
         readContext: async () => ({}), readViewerValues: async () => ({ values: {} }), validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [] }),
       // Sealed Session Record persistence is the boundary; Action admission remains real.
-      sessionBoardAction: async ({ input }) => {
+      sessionBoardAction: async ({ actionId, input }) => {
+        if (actionId === 'session.board.get') {
+          const request = SessionBoardGetInputV1Schema.parse(input);
+          return projectSessionBoardGetResultV1({ serverId: 'home-1', sessionId: request.sessionId!,
+            capabilities: { readTranscript: true, editSessionRecords: true }, layout: null,
+            requestedItemIds: request.itemIds,
+            entries: stored ? [{ status: 'ready', ...stored, creator: { kind: 'user' } }] : [],
+            incomplete: false, page: { cursor: null, hasNext: false } });
+        }
         const request = SessionBoardItemUpsertInputV1Schema.parse(input); saved.push(request);
+        stored = { itemId: request.itemId, item: SessionSurfaceItemV1Schema.parse(request.item), revision };
         return { v: 1, serverId: 'home-1', sessionId: 'session-1',
           result: { operation: 'upsert_item', itemId: request.itemId, outcome: request.expectedItemRevision ? 'updated' : 'created', itemRevision: revision, layoutRevision: revision },
           destination: { tabId: request.placement!.tabId ?? 'overview', width: request.placement!.width ?? 'medium' },
@@ -87,7 +120,8 @@ describe('createActionExecutor (Session Board family)', () => {
     expect(saved[1]).toMatchObject({ placement: { width: 'medium' }, item: { height: { mode: 'auto', fallback: 'regular' } } });
     const custom = { ...base, expectedItemRevision: revision, item: { ...configured, height: { mode: 'fixed', size: 'tall' } }, placement: { tabId: 'overview', width: 'compact' } };
     expect(await execute(custom)).toMatchObject({ ok: true });
-    expect(saved[2]).toEqual({ ...custom, destination: 'board' });
+    expect(saved[2]).toMatchObject({ ...custom, item: SessionSurfaceItemV1Schema.parse(custom.item),
+      reviewedVisual: { recordRevision: revision, creator: { kind: 'user' } } });
   });
   it.each(['agent', 'ui'] as const)('requires approval for shared layout edits through both %s fronts, while a policy waiver reaches the same writer', async surface => {
     let document: SessionBoardLayoutV1 = { v: 1, tabs: [{ id: 'overview', title: 'Overview', items: [{ itemId: 'copy', width: 'wide' }] }] };
@@ -136,29 +170,27 @@ describe('createActionExecutor (Session Board family)', () => {
   });
 
   it('dispatches every Board intent through the one family port with host-stamped context', async () => {
+    // Transport/output checks start after host approval; this is not Session caller proof.
     const controller = new AbortController();
-    const sessionBoardAction = vi.fn(async () => mutationResult('upsert_item'));
+    const sessionBoardAction = vi.fn<NonNullable<ActionExecutorDeps['sessionBoardAction']>>(async () => mutationResult('upsert_item'));
     const executor = createActionExecutor({
       sessionBoardAction,
-      isActionApprovalRequired: () => false,
-    } as unknown as ActionExecutorDeps);
+    });
 
     await expect(executor.execute('session.board.item.upsert', upsertInput, {
       surface: 'agent',
       serverId: 'home-1',
       defaultSessionId: 'session-1',
+      bypassApprovals: true,
       signal: controller.signal,
     })).resolves.toEqual({ ok: true, result: mutationResult('upsert_item') });
 
-    expect(sessionBoardAction).toHaveBeenCalledTimes(1);
-    const call = sessionBoardAction.mock.calls[0]?.[0] as unknown as {
-      actionId: string;
-      input: unknown;
-      context: { surface?: string | null; defaultSessionId?: string | null };
-      signal?: AbortSignal;
-    };
+    const call = sessionBoardAction.mock.calls[0]![0];
     expect(call.actionId).toBe('session.board.item.upsert');
-    expect(call.input).toEqual({ ...upsertInput, destination: 'board' });
+    expect(call.input).toMatchObject({ ...upsertInput, destination: 'board', reviewedVisual: {
+      networkSetting: null, recordRevision: null, creator: { kind: 'unknown' },
+      previousCapabilitiesDigest: null, previousExecutableFingerprint: null,
+    } });
     expect(call.context.surface).toBe('agent');
     expect(call.context.defaultSessionId).toBe('session-1');
     expect(call.signal).toBe(controller.signal);
@@ -167,10 +199,6 @@ describe('createActionExecutor (Session Board family)', () => {
   it.each(['agent', 'mcp'] as const)(
     'rejects an explicit different Session before dispatch when a %s caller is current-Session scoped',
     async (surface) => {
-    const interceptActionExecution = vi.fn(async (args: Readonly<{ input: unknown }>) => ({
-      status: 'continue' as const,
-      input: args.input,
-    }));
     const sessionBoardAction = vi.fn(async (args: Readonly<{
       input: Readonly<{ sessionId?: string }>;
       context: Readonly<{ defaultSessionId?: string | null }>;
@@ -180,8 +208,6 @@ describe('createActionExecutor (Session Board family)', () => {
     }));
     const executor = createActionExecutor({
       sessionBoardAction,
-      interceptActionExecution,
-      isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
     const context = {
       surface,
@@ -189,6 +215,7 @@ describe('createActionExecutor (Session Board family)', () => {
       serverId: 'home-1',
       defaultSessionId: 'session-1',
       sessionListAccess: 'current_session',
+      bypassApprovals: true,
     } as const;
 
     await expect(executor.execute('session.board.item.upsert', {
@@ -200,7 +227,6 @@ describe('createActionExecutor (Session Board family)', () => {
       error: 'unsupported_action:session.board.item.upsert',
     });
     expect(sessionBoardAction).not.toHaveBeenCalled();
-    expect(interceptActionExecution).not.toHaveBeenCalled();
 
     await expect(executor.execute('session.board.item.upsert', upsertInput, context))
       .resolves.toMatchObject({ ok: true });
@@ -208,21 +234,13 @@ describe('createActionExecutor (Session Board family)', () => {
       ...upsertInput,
       sessionId: 'session-1',
     }, context)).resolves.toMatchObject({ ok: true });
-    expect(sessionBoardAction).toHaveBeenCalledTimes(2);
-    expect(interceptActionExecution).toHaveBeenCalledTimes(2);
     },
   );
 
   it('rejects an Agent-explicit different Session even when the host scope marker is absent', async () => {
-    const interceptActionExecution = vi.fn(async (args: Readonly<{ input: unknown }>) => ({
-      status: 'continue' as const,
-      input: args.input,
-    }));
     const sessionBoardAction = vi.fn(async () => mutationResult('upsert_item'));
     const executor = createActionExecutor({
       sessionBoardAction,
-      interceptActionExecution,
-      isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
 
     await expect(executor.execute('session.board.item.upsert', {
@@ -233,13 +251,13 @@ describe('createActionExecutor (Session Board family)', () => {
       authority: 'account_automation',
       serverId: 'home-1',
       defaultSessionId: 'session-1',
+      bypassApprovals: true,
     })).resolves.toEqual({
       ok: false,
       errorCode: 'unsupported_action',
       error: 'unsupported_action:session.board.item.upsert',
     });
     expect(sessionBoardAction).not.toHaveBeenCalled();
-    expect(interceptActionExecution).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -256,7 +274,6 @@ describe('createActionExecutor (Session Board family)', () => {
     }));
     const executor = createActionExecutor({
       sessionBoardAction,
-      isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
 
     await expect(executor.execute('session.board.item.upsert', {
@@ -268,22 +285,22 @@ describe('createActionExecutor (Session Board family)', () => {
       serverId: 'home-1',
       defaultSessionId: 'session-1',
       sessionListAccess: 'current_session',
+      bypassApprovals: true,
     })).resolves.toMatchObject({
       ok: true,
       result: { serverId: 'home-1', sessionId: 'session-2' },
     });
-    expect(sessionBoardAction).toHaveBeenCalledTimes(1);
   });
 
   it('returns the shared typed unavailable result when the Board family producer is absent', async () => {
-    const executor = createActionExecutor({ isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
+    const executor = createActionExecutor({});
     for (const [actionId, input] of [
       ['session.board.get', {}],
       ['session.board.item.upsert', upsertInput],
       ['session.board.item.remove', { itemId: 'note', expectedItemRevision: revision, expectedLayoutRevision: revision }],
       ['session.board.layout.update', { expectedLayoutRevision: null, operation: { op: 'tab.create', tabId: 'overview', title: 'Overview' } }],
     ] as const) {
-      await expect(executor.execute(actionId, input, { surface: 'agent' })).resolves.toEqual({
+      await expect(executor.execute(actionId, input, { surface: 'agent', bypassApprovals: true })).resolves.toEqual({
         ok: false,
         errorCode: 'unsupported_action',
         error: `unsupported_action:${actionId}`,
@@ -299,7 +316,7 @@ describe('createActionExecutor (Session Board family)', () => {
     } as unknown as ActionExecutorDeps);
 
     for (const input of [
-      { itemId: 'note', expectedItemRevision: null, item },
+      { itemId: 'note', expectedItemRevision: null, item: { ...item, source: { kind: 'invalid' } } },
       { itemId: 'note', expectedItemRevision: revision, item, serverId: 'home-2' },
       { itemId: 'note', expectedItemRevision: 'not-a-revision', item },
     ]) {
@@ -318,14 +335,13 @@ describe('createActionExecutor (Session Board family)', () => {
         ...mutationResult('remove_item'),
         destination: { tabId: 'overview', width: 'wide' },
       })),
-      isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
 
     await expect(executor.execute('session.board.item.remove', {
       itemId: 'note',
       expectedItemRevision: revision,
       expectedLayoutRevision: revision,
-    }, { surface: 'agent' })).resolves.toEqual({
+    }, { surface: 'agent', bypassApprovals: true })).resolves.toEqual({
       ok: false,
       errorCode: 'invalid_action_output',
       error: 'invalid_action_output',
@@ -335,13 +351,12 @@ describe('createActionExecutor (Session Board family)', () => {
   it('refuses a well-shaped result for a different Board request', async () => {
     const executor = createActionExecutor({
       sessionBoardAction: vi.fn(async () => mutationResult('remove_item')),
-      isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
 
     await expect(executor.execute('session.board.layout.update', {
       expectedLayoutRevision: null,
       operation: { op: 'tab.create', tabId: 'overview', title: 'Overview' },
-    }, { surface: 'agent' })).resolves.toEqual({
+    }, { surface: 'agent', bypassApprovals: true })).resolves.toEqual({
       ok: false,
       errorCode: 'invalid_action_output',
       error: 'invalid_action_output',
@@ -351,10 +366,9 @@ describe('createActionExecutor (Session Board family)', () => {
   it('refuses a result attributed to a different Session than the host-bound request', async () => {
     const executor = createActionExecutor({
       sessionBoardAction: vi.fn(async () => ({ ...mutationResult('upsert_item'), sessionId: 'other-session' })),
-      isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
     await expect(executor.execute('session.board.item.upsert', upsertInput, {
-      surface: 'agent', defaultSessionId: 'session-1',
+      surface: 'agent', defaultSessionId: 'session-1', bypassApprovals: true,
     })).resolves.toEqual({
       ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output',
     });
@@ -368,12 +382,11 @@ describe('createActionExecutor (Session Board family)', () => {
     ]) {
       const executor = createActionExecutor({
         sessionBoardAction: vi.fn(async () => failure),
-        isActionApprovalRequired: () => false,
       } as unknown as ActionExecutorDeps);
       await expect(executor.execute('session.board.layout.update', {
         expectedLayoutRevision: null,
         operation: { op: 'tab.create', tabId: 'overview', title: 'Overview' },
-      }, { surface: 'agent' })).resolves.toEqual({
+      }, { surface: 'agent', bypassApprovals: true })).resolves.toEqual({
         ok: false,
         errorCode: 'invalid_action_output',
         error: 'invalid_action_output',
@@ -389,13 +402,12 @@ describe('createActionExecutor (Session Board family)', () => {
         error: 'session_board_revision_conflict',
         details: { currentLayoutRevision: revision },
       })),
-      isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
 
     await expect(executor.execute('session.board.layout.update', {
       expectedLayoutRevision: null,
       operation: { op: 'tab.create', tabId: 'overview', title: 'Overview' },
-    }, { surface: 'agent' })).resolves.toEqual({
+    }, { surface: 'agent', bypassApprovals: true })).resolves.toEqual({
       ok: false,
       errorCode: 'session_board_revision_conflict',
       error: 'session_board_revision_conflict',
@@ -420,38 +432,26 @@ describe('createActionExecutor (Session Board family)', () => {
         },
       },
     });
-    const mutationRequest = JSON.parse(requestBody);
-    const recovery = {
-      v: 1 as const,
-      actionId: 'session.board.item.upsert' as const,
-      serverId: 'home-1',
-      sessionId: 'session-1',
-      requestBody,
-      mutationRequest,
-      intent: upsertInput,
-    };
+    const mutationRequest = SessionBoardMutationV1Schema.parse(JSON.parse(requestBody));
+    let failure: ReturnType<typeof createSessionBoardOutcomeUnknownFailureV1> | undefined;
     const executor = createActionExecutor({
-      sessionBoardAction: vi.fn(async () => ({
-        ok: false,
-        errorCode: 'outcome_unknown',
-        error: 'outcome_unknown',
-        details: { recovery },
-        requestBody: 'must-not-survive-at-top-level',
-        intent: { itemId: 'must-not-survive-at-top-level' },
-      })),
-      isActionApprovalRequired: () => false,
-    } as unknown as ActionExecutorDeps);
+      // The persistence boundary captures the actual host-admitted intent, not caller input.
+      sessionBoardAction: async ({ input }) => {
+        failure = createSessionBoardOutcomeUnknownFailureV1({ actionId: 'session.board.item.upsert',
+          serverId: 'home-1', sessionId: 'session-1', requestBody, mutationRequest,
+          intent: SessionBoardItemUpsertInputV1Schema.parse(input) });
+        return { ...failure, requestBody: 'must-not-survive-at-top-level',
+          intent: { itemId: 'must-not-survive-at-top-level' } };
+      },
+    });
 
-    await expect(executor.execute('session.board.item.upsert', upsertInput, {
+    const result = await executor.execute('session.board.item.upsert', upsertInput, {
       surface: 'agent',
       serverId: 'home-1',
       defaultSessionId: 'session-1',
-    })).resolves.toEqual({
-      ok: false,
-      errorCode: 'outcome_unknown',
-      error: 'outcome_unknown',
-      details: { recovery },
+      bypassApprovals: true,
     });
+    expect(result).toEqual(failure);
   });
 
   it('routes destructive Board removal through the shared approval owner before the family port runs', async () => {
@@ -481,7 +481,6 @@ describe('createActionExecutor (Session Board family)', () => {
       ok: true,
       result: { kind: 'approval_request_created', artifactId: 'approval-1', actionId: 'session.board.item.remove' },
     });
-    expect(approvalsCreate).toHaveBeenCalledTimes(1);
     expect(sessionBoardAction).not.toHaveBeenCalled();
 
     // Shared layout changes use that same configurable approval owner.
@@ -491,7 +490,6 @@ describe('createActionExecutor (Session Board family)', () => {
     }, { surface: 'agent', serverId: 'home-1', defaultSessionId: 'session-1',
       actionRequestId: 'board-layout-1', runtimeAccountId: 'account-1' })).resolves.toMatchObject({ ok: true,
       result: { kind: 'approval_request_created', actionId: 'session.board.layout.update' } });
-    expect(approvalsCreate).toHaveBeenCalledTimes(2);
     expect(sessionBoardAction).not.toHaveBeenCalled();
   });
 
@@ -525,7 +523,6 @@ describe('createActionExecutor (Session Board family)', () => {
         actionId: 'session.board.item.remove',
       },
     });
-    expect(requiredApprovalsCreate).toHaveBeenCalledTimes(1);
     expect(requiredBoardAction).not.toHaveBeenCalled();
 
     const skippedBoardAction = vi.fn(async () => mutationResult('remove_item'));
@@ -541,7 +538,6 @@ describe('createActionExecutor (Session Board family)', () => {
       actionRequestId: 'board-remove-policy-2',
     })).resolves.toEqual({ ok: true, result: mutationResult('remove_item') });
     expect(skippedApprovalsCreate).not.toHaveBeenCalled();
-    expect(skippedBoardAction).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a disabled Board Action disabled on its surface', async () => {

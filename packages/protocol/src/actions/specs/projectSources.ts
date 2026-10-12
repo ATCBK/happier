@@ -19,7 +19,7 @@ const common = {
 
 export const PROJECT_SOURCE_ACTION_SPECS_V1 = [
   {
-    ...common, id: 'projects.sources.list', title: 'List repository sources',
+    ...common, id: 'projects.sources.list', approval: {result: 'required'}, title: 'List repository sources',
     description: 'Search authorized personal and Team repository metadata on the selected Home. Coverage describes the returned catalog page.',
     safety: 'safe', sideEffectClass: 'read',
     bindings: { mcpToolName: 'projects_sources_list', voiceClientToolName: 'listProjectSources' },
@@ -29,7 +29,7 @@ export const PROJECT_SOURCE_ACTION_SPECS_V1 = [
       { path: 'cursor', title: 'Page cursor', widget: 'text' }, { path: 'limit', title: 'Page size', widget: 'text' }] },
   },
   {
-    ...common, id: 'projects.sources.read', title: 'Read repository source',
+    ...common, id: 'projects.sources.read', approval: {result: 'required'}, title: 'Read repository source',
     description: 'Read a Source’s current metadata, revision and management rights as the authenticated actor. Source visibility does not grant repository or Machine access.',
     safety: 'safe', sideEffectClass: 'read',
     bindings: { mcpToolName: 'projects_sources_read', voiceClientToolName: 'readProjectSource' },
@@ -38,7 +38,7 @@ export const PROJECT_SOURCE_ACTION_SPECS_V1 = [
       { path: 'sourceId', title: 'Source id', widget: 'text', required: true }] },
   },
   {
-    ...common, id: 'projects.sources.create', title: 'Save repository source',
+    ...common, id: 'projects.sources.create', approval: {result: 'required'}, title: 'Save repository source',
     description: 'Save credential-free repository metadata for its selected audience. Code, setup commands and credentials remain separate.',
     safety: 'danger', sideEffectClass: 'write',
     bindings: { mcpToolName: 'projects_sources_create', voiceClientToolName: 'createProjectSource' },
@@ -51,7 +51,7 @@ export const PROJECT_SOURCE_ACTION_SPECS_V1 = [
       { path: 'audience', title: 'Audience', widget: 'json' }] },
   },
   {
-    ...common, id: 'projects.sources.update', title: 'Update repository source',
+    ...common, id: 'projects.sources.update', approval: {result: 'required'}, title: 'Update repository source',
     description: 'Edit Source metadata or one exact context/dashboard attachment under the current Source revision. Artifact content and grants are independent.',
     safety: 'danger', sideEffectClass: 'write',
     bindings: { mcpToolName: 'projects_sources_update', voiceClientToolName: 'updateProjectSource' },
@@ -62,7 +62,7 @@ export const PROJECT_SOURCE_ACTION_SPECS_V1 = [
       { path: 'patch', title: 'Metadata or attachment intent', widget: 'json', required: true }] },
   },
   {
-    ...common, id: 'projects.sources.delete', title: 'Delete repository source',
+    ...common, id: 'projects.sources.delete', approval: {result: 'required'}, title: 'Delete repository source',
     description: 'Delete the Source metadata for its audience under the current revision. Checkout files, Artifact bytes and Artifact grants stay.',
     safety: 'danger', sideEffectClass: 'write',
     bindings: { mcpToolName: 'projects_sources_delete', voiceClientToolName: 'deleteProjectSource' },

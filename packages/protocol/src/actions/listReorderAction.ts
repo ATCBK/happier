@@ -36,16 +36,16 @@ const shared = {
   ] },
 } as const;
 export const LIST_REORDER_ACTION_SPECS = [
-  { ...shared, id: 'session.pending.reorder', title: 'Reorder pending input',
+  { ...shared, id: 'session.pending.reorder', approval: {result: 'required'}, title: 'Reorder pending input',
     cli: { commands: [{ path: ['session', 'pending', 'reorder'], visibility: 'canonical' }] },
     description: 'Move pending input relative to current membership of an exact Session and recipient queue. Does not transfer input custody or recipients.',
     inputHints: { fields: [
       ...shared.inputHints.fields,
-      { path: 'sessionId', title: 'Session', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'recipient', title: 'Recipient (null for Main)', widget: 'json', required: true },
     ] },
     bindings: { mcpToolName: 'session_pending_reorder' }, inputSchema: PendingReorderInputV1Schema },
-  { ...shared, id: 'todos.reorder', title: 'Reorder undone todo',
+  { ...shared, id: 'todos.reorder', approval: {result: 'required'}, title: 'Reorder undone todo',
     cli: { commands: [{ path: ['todos', 'reorder'], visibility: 'canonical' }] },
     description: 'Move an undone todo relative to current undone membership. Does not change completion status.',
     bindings: { mcpToolName: 'todos_reorder' }, inputSchema: TodoReorderInputV1Schema },

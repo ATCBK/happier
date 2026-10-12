@@ -84,7 +84,7 @@ function defineScmActionSpec<
 /** Core repository Actions reuse the backend's canonical request and result schemas. */
 const SCM_GIT_ACTION_SPECS_PREFIX = [
   defineScmActionSpec({
-    id: 'scm.backend.describe',
+    id: 'scm.backend.describe', approval: {result: 'required'},
     title: 'Backend describe',
     description: 'Backend describe in the explicitly selected source-control repository.',
     safety: 'safe',
@@ -102,7 +102,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.status.snapshot',
+    id: 'scm.status.snapshot', approval: {result: 'required'},
     title: 'Status snapshot',
     description: 'Status snapshot in the explicitly selected source-control repository.',
     safety: 'safe',
@@ -121,7 +121,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.worktrees.enrichment',
+    id: 'scm.worktrees.enrichment', approval: {result: 'required'},
     title: 'Worktrees enrichment',
     description: 'Worktrees enrichment in the explicitly selected source-control repository.',
     safety: 'safe',
@@ -140,7 +140,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.diff.file',
+    id: 'scm.diff.file', approval: {result: 'required'},
     title: 'Diff file',
     description: 'Diff file in the explicitly selected source-control repository.',
     safety: 'safe',
@@ -160,7 +160,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.diff.commit',
+    id: 'scm.diff.commit', approval: {result: 'required'},
     title: 'Diff commit',
     description: 'Diff commit in the explicitly selected source-control repository.',
     safety: 'safe',
@@ -179,7 +179,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.change.include',
+    id: 'scm.change.include', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","paths":["src/app.ts"]}' } },
     workspaceWrite: true,
     title: 'Change include',
     description: 'Change include in the explicitly selected source-control repository.',
@@ -200,7 +201,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.change.exclude',
+    id: 'scm.change.exclude', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","paths":["src/app.ts"]}' } },
     workspaceWrite: true,
     title: 'Change exclude',
     description: 'Change exclude in the explicitly selected source-control repository.',
@@ -221,7 +223,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.change.discard',
+    id: 'scm.change.discard', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","entries":[{"path":"src/app.ts","kind":"modified"}]}' } },
     workspaceWrite: true,
     title: 'Change discard',
     description: 'Change discard in the explicitly selected source-control repository.',
@@ -241,7 +244,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.commit.create',
+    id: 'scm.commit.create', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","message":"fix: selected changes"}' } },
     workspaceWrite: true,
     title: 'Commit create',
     description: 'Commit create in the explicitly selected source-control repository.',
@@ -266,7 +270,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.commit.resolveOutcome',
+    id: 'scm.commit.resolveOutcome', approval: {result: 'required'},
     title: 'Resolve commit outcome',
     description: 'Inspect a known candidate commit and its expected target history without publishing or retrying it.',
     safety: 'safe',
@@ -285,7 +289,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.commit.undoLast',
+    id: 'scm.commit.undoLast', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","expectedHeadOid":"1111111111111111111111111111111111111111"}' } },
     workspaceWrite: true,
     title: 'Undo last commit',
     description: 'Undo the observed unpushed HEAD commit and keep all changes staged.',
@@ -305,7 +310,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.commit.backout',
+    id: 'scm.commit.backout', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","commit":"1111111111111111111111111111111111111111"}' } },
     workspaceWrite: true,
     title: 'Commit backout',
     description: 'Commit backout in the explicitly selected source-control repository.',
@@ -325,7 +331,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.history.entries',
+    id: 'scm.history.entries', approval: {result: 'required'},
     title: 'Entry history',
     description: 'Read actual last-touch commits for demanded entries in the explicitly selected repository.',
     safety: 'safe',
@@ -344,7 +350,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.log.list',
+    id: 'scm.log.list', approval: {result: 'required'},
     title: 'Log list',
     description: 'Log list in the explicitly selected source-control repository.',
     safety: 'safe',
@@ -366,7 +372,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.branch.list',
+    id: 'scm.branch.list', approval: {result: 'required'},
     title: 'Branch list',
     description: 'Branch list in the explicitly selected source-control repository.',
     safety: 'safe',
@@ -385,7 +391,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.branch.create',
+    id: 'scm.branch.create', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","name":"feature/example"}' } },
     workspaceWrite: true,
     title: 'Branch create',
     description: 'Branch create in the explicitly selected source-control repository.',
@@ -407,7 +414,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.branch.checkout',
+    id: 'scm.branch.checkout', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","name":"feature/example","strategy":"bring_changes"}' } },
     workspaceWrite: true,
     title: 'Branch checkout',
     description: 'Branch checkout in the explicitly selected source-control repository.',
@@ -429,7 +437,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.branch.merge',
+    id: 'scm.branch.merge', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","sourceRef":"feature/example"}' } },
     workspaceWrite: true,
     title: 'Branch merge',
     description: 'Branch merge in the explicitly selected source-control repository.',
@@ -449,7 +458,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.branch.rebase',
+    id: 'scm.branch.rebase', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","sourceRef":"feature/example"}' } },
     workspaceWrite: true,
     title: 'Branch rebase',
     description: 'Branch rebase in the explicitly selected source-control repository.',
@@ -469,7 +479,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.branch.operation.continue',
+    id: 'scm.branch.operation.continue', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","operation":"rebase"}' } },
     workspaceWrite: true,
     title: 'Branch operation continue',
     description: 'Branch operation continue in the explicitly selected source-control repository.',
@@ -489,7 +500,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.branch.operation.skip',
+    id: 'scm.branch.operation.skip', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","operation":"rebase"}' } },
     workspaceWrite: true,
     title: 'Branch operation skip',
     description: 'Branch operation skip in the explicitly selected source-control repository.',
@@ -509,7 +521,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.branch.operation.abort',
+    id: 'scm.branch.operation.abort', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","operation":"rebase"}' } },
     workspaceWrite: true,
     title: 'Branch operation abort',
     description: 'Branch operation abort in the explicitly selected source-control repository.',
@@ -529,7 +542,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.conflict.acceptSide',
+    id: 'scm.conflict.acceptSide', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","path":"src/app.ts","side":"ours"}' } },
     workspaceWrite: true,
     title: 'Conflict accept Side',
     description: 'Conflict accept Side in the explicitly selected source-control repository.',
@@ -550,7 +564,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.conflict.markResolved',
+    id: 'scm.conflict.markResolved', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","paths":["src/app.ts"]}' } },
     workspaceWrite: true,
     title: 'Conflict mark Resolved',
     description: 'Conflict mark Resolved in the explicitly selected source-control repository.',
@@ -570,7 +585,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.worktree.create',
+    id: 'scm.worktree.create', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Worktree create',
     description: 'Worktree create in the explicitly selected source-control repository.',
@@ -592,7 +607,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.worktree.remove',
+    id: 'scm.worktree.remove', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Worktree remove',
     description: 'Worktree remove in the explicitly selected source-control repository.',
@@ -614,7 +629,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.worktree.prune',
+    id: 'scm.worktree.prune', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Worktree prune',
     description: 'Worktree prune in the explicitly selected source-control repository.',
@@ -633,7 +648,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.remote.add',
+    id: 'scm.remote.add', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Remote add',
     description: 'Remote add in the explicitly selected source-control repository.',
@@ -655,7 +670,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.remote.setUrl',
+    id: 'scm.remote.setUrl', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Remote set Url',
     description: 'Remote set Url in the explicitly selected source-control repository.',
@@ -677,7 +692,7 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.remote.remove',
+    id: 'scm.remote.remove', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Remote remove',
     description: 'Remote remove in the explicitly selected source-control repository.',
@@ -697,7 +712,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.remote.fetch',
+    id: 'scm.remote.fetch', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","remote":"origin"}' } },
     workspaceWrite: true,
     title: 'Remote fetch',
     description: 'Remote fetch in the explicitly selected source-control repository.',
@@ -718,7 +734,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.remote.pull',
+    id: 'scm.remote.pull', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","remote":"origin"}' } },
     workspaceWrite: true,
     title: 'Remote pull',
     description: 'Remote pull in the explicitly selected source-control repository.',
@@ -744,7 +761,8 @@ const SCM_GIT_ACTION_SPECS_PREFIX = [
 
 const SCM_GIT_ACTION_SPECS_SUFFIX = [
   defineScmActionSpec({
-    id: 'scm.remote.push',
+    id: 'scm.remote.push', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","remote":"origin"}' } },
     workspaceWrite: true,
     title: 'Remote push',
     description: 'Remote push in the explicitly selected source-control repository.',
@@ -767,7 +785,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.remote.publish',
+    id: 'scm.remote.publish', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Remote publish',
     description: 'Remote publish in the explicitly selected source-control repository.',
@@ -787,7 +805,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.stash.list',
+    id: 'scm.stash.list', approval: {result: 'required'},
     title: 'Stash list',
     description: 'Stash list in the explicitly selected source-control repository.',
     safety: 'safe',
@@ -806,7 +824,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.stash.show',
+    id: 'scm.stash.show', approval: {result: 'required'},
     title: 'Stash show',
     description: 'Stash show in the explicitly selected source-control repository.',
     safety: 'safe',
@@ -826,7 +844,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.stash.create',
+    id: 'scm.stash.create', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Stash create',
     description: 'Stash create in the explicitly selected source-control repository.',
@@ -846,7 +864,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.stash.apply',
+    id: 'scm.stash.apply', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Stash apply',
     description: 'Stash apply in the explicitly selected source-control repository.',
@@ -866,7 +884,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.stash.pop',
+    id: 'scm.stash.pop', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Stash pop',
     description: 'Stash pop in the explicitly selected source-control repository.',
@@ -886,7 +904,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.stash.drop',
+    id: 'scm.stash.drop', approval: {result: 'required'},
     workspaceWrite: true,
     title: 'Stash drop',
     description: 'Stash drop in the explicitly selected source-control repository.',
@@ -906,7 +924,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.pullRequest.list',
+    id: 'scm.pullRequest.list', approval: {result: 'required'},
     title: 'List pull requests',
     description: 'List pull requests for the current source-control repository.',
     safety: 'safe',
@@ -949,7 +967,8 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.pullRequest.get',
+    id: 'scm.pullRequest.get', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","prReference":{"number":42}}' } },
     title: 'Get pull request',
     description: 'Read one pull request by number, URL, or head branch.',
     safety: 'safe',
@@ -980,7 +999,8 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.pullRequest.openOrReuse',
+    id: 'scm.pullRequest.openOrReuse', approval: {result: 'optional',flow: 'deferred'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","base":"main","head":"feature/example","title":"Example change"}' } },
     title: 'Open or reuse pull request',
     description: 'Create a pull request or return an existing one for the current branch.',
     safety: 'danger',
@@ -991,7 +1011,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
     surfaces: {
       ui: true,
-      voice: false,
+      voice: true,
       agent: true,
       mcp: true,
       cli: true,
@@ -1014,7 +1034,8 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.pullRequest.openCompose',
+    id: 'scm.pullRequest.openCompose', approval: {result: 'required'},
+    examples: { voice: { argsExample: '{"cwd":"/repo","base":"main","head":"feature/example"}' } },
     title: 'Open pull-request compose URL',
     description: 'Build a provider-approved compose URL for the current branch.',
     safety: 'safe',
@@ -1024,7 +1045,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
       sdkMethod: 'scm.pullRequest.openCompose',
     },
     surfaces: {
-      ui: false,
+      ui: true,
       voice: true,
       agent: true,
       mcp: true,
@@ -1045,7 +1066,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.pullRequest.checkout',
+    id: 'scm.pullRequest.checkout', approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
     title: 'Check out pull request',
     description: 'Check out a pull request reference in the current repository.',
@@ -1077,7 +1098,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.pullRequest.prepareWorktree',
+    id: 'scm.pullRequest.prepareWorktree', approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
     title: 'Prepare pull-request worktree',
     description: 'Prepare a local worktree for a pull request reference.',
@@ -1119,7 +1140,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.reviewWorkspace.materializePrepared',
+    id: 'scm.reviewWorkspace.materializePrepared', approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
     title: 'Materialize or verify prepared review workspace',
     description: 'Materialize prepared checkout facts or read the local HEAD of an already-prepared path in one exact selected workspace.',
@@ -1150,7 +1171,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.pullRequest.runStacked',
+    id: 'scm.pullRequest.runStacked', approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
     title: 'Run stacked pull-request workflow',
     description: 'Run a structured branch, commit, push, and pull-request workflow.',
@@ -1210,7 +1231,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.repository.clone',
+    id: 'scm.repository.clone', approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
     title: 'Clone source-control repository',
     description: 'Clone a hosting-provider repository into an explicitly selected local destination.',
@@ -1254,7 +1275,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.repository.init',
+    id: 'scm.repository.init', approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
     title: 'Initialize source-control repository',
     description: 'Initialize source control for a directory through the SCM provisioning route.',
@@ -1265,7 +1286,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
       sdkMethod: 'scm.repository.init',
     },
     surfaces: {
-      ui: false,
+      ui: true,
       voice: false,
       agent: true,
       mcp: true,
@@ -1284,7 +1305,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.repository.removeIndexLock',
+    id: 'scm.repository.removeIndexLock', approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
     title: 'Remove stale source-control index lock',
     description: 'Remove a confirmed stale Git index lock using backend-owned path resolution.',
@@ -1295,7 +1316,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
       sdkMethod: 'scm.repository.removeIndexLock',
     },
     surfaces: {
-      ui: false,
+      ui: true,
       voice: false,
       agent: true,
       mcp: true,
@@ -1315,7 +1336,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.hostingRepository.resolveAddress',
+    id: 'scm.hostingRepository.resolveAddress', approval: {result: 'required'},
     title: 'Resolve repository address',
     description: 'Resolve a credential-free repository address through the selected Machine’s SCM hosting providers.',
     safety: 'safe', placements: [], sideEffectClass: 'read',
@@ -1328,7 +1349,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     inputHints: { title: 'Resolve repository address', fields: [{ path: 'address', title: 'Repository address', widget: 'text', required: true }] },
   }),
   defineScmActionSpec({
-    id: 'scm.hostingRepository.describePublishTargets',
+    id: 'scm.hostingRepository.describePublishTargets', approval: {result: 'required'},
     title: 'Describe hosting repository publish targets',
     description: 'Describe authenticated hosting-provider targets that can receive a repository publish.',
     safety: 'safe',
@@ -1368,7 +1389,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.hostingRepository.publish',
+    id: 'scm.hostingRepository.publish', approval: {result: 'optional',flow: 'deferred'},
     workspaceWrite: true,
     title: 'Publish repository to hosting provider',
     description: 'Create or bind a hosting repository and publish the active source-control state.',
@@ -1379,7 +1400,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
       sdkMethod: 'scm.hostingRepository.publish',
     },
     surfaces: {
-      ui: false,
+      ui: true,
       voice: false,
       agent: true,
       mcp: true,
@@ -1453,7 +1474,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.capture',
+    id: 'scm.diffSummary.capture', approval: {result: 'required'},
     examples: { voice: { argsExample: '{"cwd":"/repo","source":{"kind":"workingTree"}}' } },
     title: 'Capture source-control comparison',
     description: 'Read comparison inventory and evidence without starting model analysis.',
@@ -1466,12 +1487,12 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
     outputSchema: ScmComparisonCaptureOutputSchema,
     inputHints: { title: 'Capture comparison', fields: [
       { path: 'cwd', title: 'Repository directory', widget: 'text', required: true },
-      { path: 'sessionId', title: 'Session id', widget: 'text' },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
       { path: 'source.kind', title: 'Comparison source', widget: 'text', required: true },
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.generate',
+    id: 'scm.diffSummary.generate', approval: {result: 'required'},
     examples: { voice: { argsExample: '{"cwd":"/repo","source":{"kind":"workingTree"},"outputs":["summary"]}' } },
     title: 'Generate source-control diff summary',
     description: 'Capture comparison evidence and start retained summary, walkthrough, or commit-plan analysis.',
@@ -1500,7 +1521,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
       description: 'Read captured changes immediately while the selected session analyses them. Turn and session evidence is resolved by the host.',
       fields: [
         { path: 'cwd', title: 'Repository directory', widget: 'text', required: true },
-        { path: 'sessionId', title: 'Session id', widget: 'text' },
+        { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text' },
         {
           path: 'source.kind',
           title: 'Summary source',
@@ -1527,7 +1548,7 @@ const SCM_GIT_ACTION_SPECS_SUFFIX = [
 
 const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
   defineScmActionSpec({
-    id: 'scm.diffSummary.result.list', title: 'List saved change explanations',
+    id: 'scm.diffSummary.result.list', approval: {result: 'required'}, title: 'List saved change explanations',
     description: 'Read permitted saved results, storage usage and available seven-day cost records from the selected machine.',
     safety: 'safe', placements: [], sideEffectClass: 'read',
     bindings: { rpcMethod: 'scm.diffSummary.result.list', sdkMethod: 'scm.diffSummary.result.list', mcpToolName: 'scm_diff_summary_result_list', voiceClientToolName: 'listScmDiffSummaryResults' },
@@ -1537,7 +1558,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     inputHints: { title: 'List saved change explanations', fields: [] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.result.clear', title: 'Clear selected saved change explanations',
+    id: 'scm.diffSummary.result.clear', approval: {result: 'required'}, title: 'Clear selected saved change explanations',
     description: 'Delete only explicitly listed saved revisions and their manual edits on the selected machine.',
     safety: 'danger', placements: [], sideEffectClass: 'write',
     bindings: { rpcMethod: 'scm.diffSummary.result.clear', sdkMethod: 'scm.diffSummary.result.clear', mcpToolName: 'scm_diff_summary_result_clear', voiceClientToolName: 'clearScmDiffSummaryResults' },
@@ -1549,7 +1570,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.commitPlan.accept', title: 'Accept and apply commit proposals',
+    id: 'scm.diffSummary.commitPlan.accept', approval: {result: 'required'}, title: 'Accept and apply commit proposals',
     description: 'Apply the exact ordered pending proposal bound to the checkout and current saved revision.',
     safety: 'danger', workspaceWrite: true, placements: [], sideEffectClass: 'write',
     bindings: { rpcMethod: 'scm.diffSummary.commitPlan.accept', sdkMethod: 'scm.diffSummary.commitPlan.accept', mcpToolName: 'scm_diff_summary_commit_plan_accept', voiceClientToolName: 'acceptScmCommitPlan' },
@@ -1565,7 +1586,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.commitPlan.stop', title: 'Stop after the current commit',
+    id: 'scm.diffSummary.commitPlan.stop', approval: {result: 'required'}, title: 'Stop after the current commit',
     description: 'Let the active atomic writer finish, then admit no next commit group.',
     safety: 'safe', placements: [], sideEffectClass: 'write',
     bindings: { rpcMethod: 'scm.diffSummary.commitPlan.stop', sdkMethod: 'scm.diffSummary.commitPlan.stop', mcpToolName: 'scm_diff_summary_commit_plan_stop', voiceClientToolName: 'stopScmCommitPlan' },
@@ -1580,7 +1601,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.commitPlan.includeHookChanges', title: 'Include displayed hook changes and commit',
+    id: 'scm.diffSummary.commitPlan.includeHookChanges', approval: {result: 'required'}, title: 'Include displayed hook changes and commit',
     description: 'Explicitly accept only the displayed hook tree at the current paused revision.',
     safety: 'danger', workspaceWrite: true, placements: [], sideEffectClass: 'write',
     bindings: { rpcMethod: 'scm.diffSummary.commitPlan.includeHookChanges', sdkMethod: 'scm.diffSummary.commitPlan.includeHookChanges', mcpToolName: 'scm_diff_summary_commit_plan_include_hook_changes', voiceClientToolName: 'includeScmCommitPlanHookChanges' },
@@ -1598,7 +1619,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.commitPlan.cancel', title: 'Cancel remaining commit proposals',
+    id: 'scm.diffSummary.commitPlan.cancel', approval: {result: 'required'}, title: 'Cancel remaining commit proposals',
     description: 'Cancel remaining steps without resetting commits or worktree changes.',
     safety: 'safe', placements: [], sideEffectClass: 'write',
     bindings: { rpcMethod: 'scm.diffSummary.commitPlan.cancel', sdkMethod: 'scm.diffSummary.commitPlan.cancel', mcpToolName: 'scm_diff_summary_commit_plan_cancel', voiceClientToolName: 'cancelScmCommitPlan' },
@@ -1613,7 +1634,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.commitPlan.recover', title: 'Reconcile an uncertain commit outcome',
+    id: 'scm.diffSummary.commitPlan.recover', approval: {result: 'required'}, title: 'Reconcile an uncertain commit outcome',
     description: 'Resolve recorded Git publication without retrying or rolling back.',
     safety: 'safe', placements: [], sideEffectClass: 'read',
     bindings: { rpcMethod: 'scm.diffSummary.commitPlan.recover', sdkMethod: 'scm.diffSummary.commitPlan.recover', mcpToolName: 'scm_diff_summary_commit_plan_recover', voiceClientToolName: 'recoverScmCommitPlan' },
@@ -1628,7 +1649,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.reviewed.mark', title: 'Mark changes reviewed',
+    id: 'scm.diffSummary.reviewed.mark', approval: {result: 'required'}, title: 'Mark changes reviewed',
     examples: { voice: { argsExample: '{"cwd":"/repo","resultId":"result-main","changeRefs":["change-main"]}' } },
     description: 'Explicitly mark exact changes reviewed in the authenticated personal Account.',
     safety: 'safe', placements: [], sideEffectClass: 'write',
@@ -1643,7 +1664,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.reviewed.unmark', title: 'Unmark reviewed changes',
+    id: 'scm.diffSummary.reviewed.unmark', approval: {result: 'required'}, title: 'Unmark reviewed changes',
     examples: { voice: { argsExample: '{"cwd":"/repo","resultId":"result-main","changeRefs":["change-main"]}' } },
     description: 'Explicitly remove personal reviewed marks for exact comparison changes.',
     safety: 'safe', placements: [], sideEffectClass: 'write',
@@ -1658,7 +1679,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.result.read', title: 'Read saved change explanation',
+    id: 'scm.diffSummary.result.read', approval: {result: 'required'}, title: 'Read saved change explanation',
     examples: { voice: { argsExample: '{"cwd":"/repo","resultId":"result-main"}' } },
     description: 'Read the current saved result and revision from its owning machine.',
     safety: 'safe', placements: [], sideEffectClass: 'read',
@@ -1672,7 +1693,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.result.edit', title: 'Edit saved change explanation',
+    id: 'scm.diffSummary.result.edit', approval: {result: 'required'}, title: 'Edit saved change explanation',
     examples: { voice: { argsExample: '{"cwd":"/repo","resultId":"result-main","expectedRevision":1,"edit":{"kind":"renameWalkthrough","title":"Changes"}}' } },
     description: 'Apply a structured edit to the expected result revision.',
     safety: 'safe', placements: [], sideEffectClass: 'write',
@@ -1688,7 +1709,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.result.undo', title: 'Undo change explanation edit',
+    id: 'scm.diffSummary.result.undo', approval: {result: 'required'}, title: 'Undo change explanation edit',
     examples: { voice: { argsExample: '{"cwd":"/repo","resultId":"result-main","expectedRevision":1}' } },
     description: 'Restore the immediate previous output at the expected result revision.',
     safety: 'safe', placements: [], sideEffectClass: 'write',
@@ -1703,7 +1724,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.result.delete', title: 'Delete saved change explanation',
+    id: 'scm.diffSummary.result.delete', approval: {result: 'required'}, title: 'Delete saved change explanation',
     examples: { voice: { argsExample: '{"cwd":"/repo","resultId":"result-main","expectedRevision":1}' } },
     description: 'Delete a saved result and its manual edits at the expected revision.',
     safety: 'danger', placements: [], sideEffectClass: 'write',
@@ -1718,7 +1739,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.refine', title: 'Refine change explanation',
+    id: 'scm.diffSummary.refine', approval: {result: 'required'}, title: 'Refine change explanation',
     examples: { voice: { argsExample: '{"cwd":"/repo","resultId":"result-main","expectedRevision":1,"output":"summary","instructions":"Explain the user-visible changes."}' } },
     description: 'Request targeted structured refinement without overwriting newer edits.',
     safety: 'safe', placements: [], sideEffectClass: 'external',
@@ -1736,7 +1757,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.addOutputs', title: 'Add change explanation outputs',
+    id: 'scm.diffSummary.addOutputs', approval: {result: 'required'}, title: 'Add change explanation outputs',
     examples: { voice: { argsExample: '{"cwd":"/repo","resultId":"result-main","expectedRevision":1,"outputs":["walkthrough"]}' } },
     description: 'Continue the saved comparison analysis with additional requested outputs.',
     safety: 'safe', placements: [], sideEffectClass: 'external',
@@ -1752,7 +1773,7 @@ const SCM_DIFF_SUMMARY_RESULT_ACTION_SPECS = [
     ] },
   }),
   defineScmActionSpec({
-    id: 'scm.diffSummary.discuss', title: 'Discuss change explanation',
+    id: 'scm.diffSummary.discuss', approval: {result: 'required'}, title: 'Discuss change explanation',
     examples: { voice: { argsExample: '{"cwd":"/repo","resultId":"result-main","expectedRevision":1,"message":"What should I review first?"}' } },
     description: 'Send a follow-up to the actual retained generator or explicitly start a seeded conversation.',
     safety: 'safe', placements: [], sideEffectClass: 'external',

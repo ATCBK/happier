@@ -3,6 +3,8 @@ import { createActionExecutor } from './actionExecutor.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './executor/types.js';
 import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 import { buildSessionPermissionRespondRpcParamsV1, type SessionPermissionRespondRpcParamsV1 } from '../sessions/permissions/respondRpcParamsV1.js';
+import { projectSessionBoardGetResultV1, SessionBoardGetInputV1Schema } from '../sessions/board/actions.js';
+import { SessionSurfaceItemV1Schema } from '../sessions/board/item.js';
 
 function context(ids: string[], sessions = ['s1']): ActionExecutorContext {
   return {
@@ -15,6 +17,67 @@ function context(ids: string[], sessions = ['s1']): ActionExecutorContext {
 }
 
 describe('ActionExecutor API token grant admission', () => {
+  it('refuses cross-Session copy source reads outside the credential target grant', async () => {
+    const sourceReads: string[] = [];
+    // This port models authenticated Board HTTP failure, not the source grant evaluator.
+    const sessionBoardAction: NonNullable<ActionExecutorDeps['sessionBoardAction']> = async ({ input }) => {
+      sourceReads.push(String((input as Readonly<{ sessionId?: string }>).sessionId));
+      return { ok: false, errorCode: 'session_board_forbidden', error: 'session_board_forbidden' };
+    };
+    const executor = createActionExecutor({ sessionBoardAction } as unknown as ActionExecutorDeps);
+    const ctx = { ...context(['session.board.item.upsert']), serverId: 'home' };
+    const result = await executor.execute('session.board.item.upsert', {
+      sessionId: 's1', itemId: 'copied', expectedItemRevision: null,
+      copySource: { serverId: 'home', sessionId: 's2', itemId: 'original', expectedItemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' },
+    }, ctx);
+    expect(sourceReads).toEqual([]);
+    expect(result).toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
+  });
+  it('attributes the copy source through the same machine grant owner and rechecks frozen source scope at invocation', async () => {
+    const revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
+    const sourceItem = SessionSurfaceItemV1Schema.parse({ v: 1, destination: 'transcript', title: 'Source', frame: 'card',
+      height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'declarative',
+        document: { version: 1, root: { kind: 'markdown', text: 'Independent copy' } } } });
+    const sourceReads: string[] = [];
+    let writes = 0;
+    let sourceMachine = 'm-source';
+    const sessionBoardAction: NonNullable<ActionExecutorDeps['sessionBoardAction']> = async ({ actionId, input }) => {
+      if (actionId === 'session.board.get') {
+        const request = SessionBoardGetInputV1Schema.parse(input);
+        sourceReads.push(request.sessionId!);
+        return projectSessionBoardGetResultV1({ serverId: 'home', sessionId: request.sessionId!, layout: null,
+          entries: [{ status: 'ready', itemId: 'original', revision, item: sourceItem }], incomplete: false,
+          ...(request.itemIds ? { requestedItemIds: request.itemIds } : {}),
+          capabilities: { readTranscript: true, editSessionRecords: false }, page: { cursor: null, hasNext: false } });
+      }
+      writes++;
+      return { v: 1, serverId: 'home', sessionId: 's1', destination: null, itemDestination: 'transcript',
+        result: { operation: 'upsert_item', itemId: 'copied', outcome: 'created', itemRevision: revision } };
+    };
+    const executor = createActionExecutor({ sessionBoardAction,
+      // Authenticated host attribution, not copy-specific local permission.
+      resolveApiTokenGrantSessionMachineId: async () => sourceMachine,
+    } as unknown as ActionExecutorDeps);
+    const ctx: ActionExecutorContext = { ...context(['session.board.item.upsert']), serverId: 'home', surface: 'cli', authority: 'present_user',
+      presentUserConfirmation: { actionId: 'session.board.item.upsert' } };
+    if (!ctx.externalActionCredential?.grant) throw new Error('Expected grant');
+    ctx.externalActionCredential.grant.targets = { sessions: ['s1'], machines: ['m-source'] };
+    const input = { sessionId: 's1', itemId: 'copied', expectedItemRevision: null, destination: 'transcript',
+      copySource: { serverId: 'home', sessionId: 's2', itemId: 'original', expectedItemRevision: revision } };
+    sourceMachine = 'm-other';
+    expect(await executor.prepare('session.board.item.upsert', input, ctx))
+      .toMatchObject({ kind: 'settled', result: { ok: false, errorCode: 'credential_scope_denied' } });
+    expect(sourceReads).toEqual([]);
+    sourceMachine = 'm-source';
+    const prepared = await executor.prepare('session.board.item.upsert', input, ctx);
+    expect(prepared.kind, JSON.stringify(prepared)).toBe('ready');
+    if (prepared.kind !== 'ready') throw new Error('Expected frozen copy admission');
+    expect(sourceReads).toEqual(['s2']);
+    ctx.externalActionCredential.grant.targets = { sessions: ['s1'], machines: [] };
+    expect(await prepared.invocation.run()).toMatchObject({ ok: false, errorCode: 'credential_scope_denied' });
+    expect(sourceReads).toEqual(['s2']);
+    expect(writes).toBe(0);
+  });
   it('admits machine-granted persisted Session reads only through authenticated source attribution', async () => {
     const sessionTranscriptGet = async () => ({ ok: true as const, sessionId: 's1', items: [], nextCursor: null, hasMore: false,
       diagnostics: { rawRowsScanned: 0, pagesFetched: 0, scanLimitReached: false, payloadTruncations: 0 } });
@@ -24,11 +87,12 @@ describe('ActionExecutor API token grant admission', () => {
     ctx.externalActionCredential.grant.targets = { sessions: [], machines: ['m1'] };
     // The host attribution port models authenticated HTTP, not the grant evaluator.
     let sourceMachineId = 'm1';
+    const attributedSessions: string[] = [];
     const executor = createActionExecutor({ sessionTranscriptGet,
-      resolveApiTokenGrantSessionMachineId: async () => sourceMachineId,
+      resolveApiTokenGrantSessionMachineId: async ({ sessionId }: { sessionId: string }) => { attributedSessions.push(sessionId); return sourceMachineId; },
     } as unknown as ActionExecutorDeps);
     const read = await executor.execute('session.transcript.get', { sessionId: 's1' }, ctx);
-    expect(read.ok ? null : read).toBeNull();
+    expect(read.ok ? null : read, JSON.stringify(attributedSessions)).toBeNull();
     const prepared = await executor.prepare('session.transcript.get', { sessionId: 's1' }, ctx);
     expect(prepared.kind).toBe('ready');
     if (prepared.kind !== 'ready') throw new Error('Expected admitted read');

@@ -8,6 +8,33 @@ import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1,
   readBuiltInSettingsOperationPolicyV1 } from './settingsDeclarations.js';
 
 describe('portable built-in Settings declarations', () => {
+  it('reads and strictly mutates agent HTML network through the Account declaration without touching siblings', () => {
+    const declaration = readBuiltInSettingDeclarationV1('transcript.agentHtmlNetworkPolicy');
+    expect(declaration).not.toBeNull();
+    if (!declaration) throw new Error('agent HTML network declaration unavailable');
+    expect(readBuiltInAccountSettingValueV1(declaration, accountSettingsParse({}))).toBe('allowed');
+    expect(readBuiltInAccountSettingValueV1(declaration, accountSettingsParse({ agentHtmlNetworkPolicy: 'open' }))).toBe('ask');
+    for (const value of ['allowed', 'ask', 'off']) {
+      expect(parseBuiltInAccountSettingValueV1(declaration, value)).toEqual({ success: true, value });
+      expect(buildBuiltInAccountSettingMutationV1(declaration, accountSettingsParse({ transcriptShowToolCalls: false }), value))
+        .toEqual({ agentHtmlNetworkPolicy: value });
+    }
+    for (const malformed of ['open', null, true, { network: 'allowed' }]) {
+      expect(parseBuiltInAccountSettingValueV1(declaration, malformed)).toEqual({ success: false });
+      expect(buildBuiltInAccountSettingMutationV1(declaration, accountSettingsParse({}), malformed)).toBeNull();
+    }
+    const input = { anchor: declaration.anchor, value: 'allowed' };
+    expect(isPresentUserSettingWriteV1('settings.set', input)).toBe(false);
+    for (const surface of ['agent', 'mcp'] as const) {
+      expect(isAccountSettingActionSurfaceAllowedV1('settings.set', input, surface)).toBe(true);
+      expect(isApprovalRequiredByActionsSettings('settings.set', accountSettingsParse({}).actionsSettingsV1,
+        { surface }, undefined, undefined, input)).toBe(true);
+      const waived = accountSettingsParse({ actionsSettingsV1: { v: 1,
+        approvalWaivedSurfaces: { 'settings.set': [surface] } } }).actionsSettingsV1;
+      expect(isApprovalRequiredByActionsSettings('settings.set', waived,
+        { surface }, undefined, undefined, input)).toBe(false);
+    }
+  });
   it('admits Dictation operations under their own purpose while retaining Conversation policies', () => {
     for (const operation of ['stt_prepare', 'stt_remove', 'stt_update', 'readiness_inspect']) {
       const conversation = readBuiltInSettingsOperationPolicyV1('voiceSettingsOperation', [operation, 'conversation']);
@@ -96,6 +123,21 @@ describe('portable built-in Settings declarations', () => {
     expect(updated.sessionAgentSpawnPolicyV1.allowCustomDirectory).toBe(false);
     expect(readBuiltInAccountSettingValueV1(declaration, updated)).toBe(false);
     expect(buildBuiltInAccountSettingMutationV1(declaration, settings, 'yes')).toBeNull();
+  });
+  it('rejects malformed allow-list writes while retaining fail-closed stored recovery', () => {
+    const declaration = readBuiltInSettingDeclarationV1('actions.createSession.allowedRoleIds')!;
+    const baseline = accountSettingsParse({ sessionAgentStartAllowListsV1: {
+      allowedRoleIds: [''], allowedAgentTargetKeys: ['agent:happier.agent.codex/codex'],
+    } });
+    expect(baseline.sessionAgentStartAllowListsV1.allowedRoleIds).toEqual([]);
+    for (const value of ['builder', [''], [false]]) {
+      expect(parseBuiltInAccountSettingValueV1(declaration, value)).toEqual({ success: false });
+      expect(buildBuiltInAccountSettingMutationV1(declaration, baseline, value)).toBeNull();
+    }
+    expect(parseBuiltInAccountSettingValueV1(declaration, null)).toEqual({ success: true, value: null });
+    expect(buildBuiltInAccountSettingMutationV1(declaration, baseline, ['builder']))
+      .toEqual({ sessionAgentStartAllowListsV1: { v: 1, allowedRoleIds: ['builder'],
+        allowedAgentTargetKeys: ['agent:happier.agent.codex/codex'] } });
   });
   it('keeps opt-out storage semantics and present-user consent at the shared declaration', () => {
     const declaration = readBuiltInSettingDeclarationV1('account.analytics')!;

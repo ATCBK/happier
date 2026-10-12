@@ -101,7 +101,7 @@ const inputFields = {
   'projects.execution.output.copy': outputFields,
 } satisfies Record<ActionOperationActionIdV1, ActionInputFieldHint[]>;
 export const ACTION_OPERATION_ACTION_SPECS = ACTION_OPERATION_ACTION_IDS_V1.map((id): PreNormalizedActionSpec => ({
-  id, title: titles[id], description: summaries[id],
+  id, approval: { result: 'required' }, approvalPolicy: { uiConfirmation: 'policy' }, title: titles[id], description: summaries[id],
   safety: id === 'action.operations.cancel' ? 'danger' : 'safe',
   sideEffectClass: id === 'action.operations.cancel' ? 'write' : 'read',
   executionPlacement: id === 'projects.execution.output.open' ? 'client' : 'machine', placements: [],

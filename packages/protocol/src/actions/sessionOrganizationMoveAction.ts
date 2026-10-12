@@ -36,7 +36,7 @@ export const SessionOrganizationPinSetInputSchema = lazyZodSchema(() => SetSessi
 export type SessionOrganizationPinSetInput = z.infer<typeof SessionOrganizationPinSetInputSchema>;
 
 export const SESSION_ORGANIZATION_MOVE_ACTION_SPECS = [{
-  id: 'session.organization.move', title: 'Move Session organization item',
+  id: 'session.organization.move', approval: {result: 'required'}, title: 'Move Session organization item',
   cli: { commands: [{ path: ['session', 'organization', 'move'], visibility: 'canonical' }] },
   description: 'Move a Session, folder or workspace through the mounted Session list organization owner. Current membership, Home, Account and ordering policy are revalidated before writing. Session reporting relationships use session.reports_to.set.',
   safety: 'safe', sideEffectClass: 'write', requiredAuthority: 'account_automation', executionPlacement: 'client',
@@ -67,7 +67,7 @@ export const SESSION_ORGANIZATION_MOVE_ACTION_SPECS = [{
       options: [{ value: 'top', label: 'Top' }, { value: 'bottom', label: 'Bottom' }, { value: null, label: 'No edge' }] },
   ] },
 }, {
-  id: 'session.organization.pin.set', title: 'Set personal Session pin',
+  id: 'session.organization.pin.set', approval: {result: 'required'}, title: 'Set personal Session pin',
   description: 'Set only the named personal list or Bot rail pin membership on the selected Home. Omitted surface means list. Rail additions require an existing Bot marker and never promote the Session. Ordering is shared across memberships.',
   safety: 'safe', sideEffectClass: 'write', requiredAuthority: 'account_automation', executionPlacement: 'account',
   placements: [], bindings: { mcpToolName: 'session_organization_pin_set' },
@@ -75,7 +75,7 @@ export const SESSION_ORGANIZATION_MOVE_ACTION_SPECS = [{
   inputSchema: SessionOrganizationPinSetInputSchema, outputSchema: SetSessionPinResponseSchema,
   serverTransport: { method: 'PUT', path: SESSION_ORGANIZATION_PIN_HTTP_PATH_V1 },
   inputHints: { fields: [
-    { path: 'sessionId', title: 'Session', widget: 'text', required: true },
+    { path: 'sessionId', title: 'Session', prompt: 'Which session?', widget: 'text', required: true },
     { path: 'pinned', title: 'Pinned', widget: 'boolean', required: true },
     { path: 'surface', title: 'Pin surface', widget: 'select', options: [{ value: 'list', label: 'Session list' }, { value: 'rail', label: 'Bot rail' }] },
   ] },

@@ -6,6 +6,32 @@ import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 
 describe('machine agent install Action parity', () => {
+  it('admits definition-qualified removal and enforces one confirmation for machine mutations', async () => {
+    expect(ActionIdSchema.safeParse('machines.agents.uninstall').success).toBe(true);
+    const uninstallId = ActionIdSchema.parse('machines.agents.uninstall');
+    for (const id of ['machines.agents.install', uninstallId, 'agents.acp.backends.delete'] as const) {
+      const spec = getActionSpec(id);
+      expect(resolveActionApprovalRouting({ actionId: id, spec, context: { surface: 'ui', authority: 'present_user' } }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId: id, spec, context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+    }
+    const requests: unknown[] = [];
+    const executor = createActionExecutor({
+      isActionApprovalRequired: () => false,
+      machineAgentInstallStart: async (args: Parameters<NonNullable<ActionExecutorDeps['machineAgentInstallStart']>>[0]) => {
+        requests.push(args); return { ok: true, jobId: 'definition-job' };
+      },
+    } as unknown as ActionExecutorDeps);
+    const context = { surface: 'ui' as const, authority: 'present_user' as const };
+    const target = { machineId: 'machine', agentId: 'custom-acp', definitionId: 'registry-agent' };
+    expect(await executor.execute('machines.agents.install', { ...target, intent: 'install' }, context)).toMatchObject({ ok: true });
+    expect(await executor.execute(uninstallId, target, context)).toMatchObject({ ok: true });
+    expect(requests).toMatchObject([
+      { ...target, intent: 'install', consent: { vendorRecipe: false } },
+      { ...target, intent: 'uninstall', consent: { vendorRecipe: false } },
+    ]);
+    expect(getActionSpec('machines.agents.install').inputSchema.safeParse({ ...target, intent: 'uninstall' }).success).toBe(false);
+  });
+
   it('exposes install jobs across caller surfaces with machine mutation approval', () => {
     for (const id of ['machines.agents.install', 'machines.agents.install.status', 'machines.agents.install.cancel'] as const) {
       expect(ActionIdSchema.safeParse(id).success, id).toBe(true);

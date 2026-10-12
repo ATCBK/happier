@@ -58,7 +58,7 @@ function remoteHostSpec<Id extends RemoteHostActionIdV1>(id: Id, title: string, 
   client?: boolean; read?: boolean; danger?: boolean;
 }>): PreNormalizedActionSpec & Readonly<{ id: Id; inputSchema: (typeof inputs)[Id]; outputSchema: (typeof outputs)[Id] }> {
   return {
-    id, title, safety: options.danger ? 'danger' : 'safe',
+    id, approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'required' }, title, safety: options.danger ? 'danger' : 'safe',
     sideEffectClass: options.read ? 'read' : options.danger ? 'danger' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: options.client ? 'client' : 'account', placements: [],
     surfaces: { ui: true, cli: !options.client, agent: true, mcp: true, voice: false, rpc: !options.client },

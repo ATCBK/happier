@@ -3,7 +3,7 @@ import { createArtifactPublicLinkActionsV1, type ArtifactPublicLinkActionIdV1, t
 import { openPublicShareDataKeyV1 } from '../../crypto/publicShareEncryptedDataKeyEnvelopeV0.js';
 
 const publicShare = { id: 'share-1', subject: { kind: 'artifact' as const, id: 'artifact-1' }, expiresAt: null,
-  maxUses: null, useCount: 0, isConsentRequired: false, createdAt: 1, updatedAt: 1, keyDerivation: 'fragment_v1' as const };
+  maxUses: null, useCount: 0, isConsentRequired: false, networkOff: false, createdAt: 1, updatedAt: 1, keyDerivation: 'fragment_v1' as const };
 
 describe('keyholding Artifact public-link Actions', () => {
   it('lets owners revoke existing layout publications after new publication admission is disabled', async () => {
@@ -54,7 +54,7 @@ describe('keyholding Artifact public-link Actions', () => {
       randomBytes: length => new Uint8Array(length).fill(randomCounter++),
       onPublicLinkIssued: link => { issued.push(link); }, request: async request => {
         bodies.push(request.body as Record<string, unknown>);
-        return { publicShare, isolatedOrigin: 'https://public.example.test' };
+        return { publicShare, viewerOrigin: 'https://public.example.test' };
       } });
     const result = await execute({ actionId: 'artifact.public_link.create', input: { artifactId: 'artifact-1' } });
     const link = issued[0]!;
@@ -74,7 +74,7 @@ describe('keyholding Artifact public-link Actions', () => {
     const execute = createArtifactPublicLinkActionsV1({ read: async () => ({ artifactId: 'artifact-1', access: 'owner', header: {}, encryptionMode: 'plain', dataKey: null }),
       randomBytes: length => new Uint8Array(length), request: async request => {
         requests.push(request.method);
-        if (request.method === 'POST') return { publicShare, isolatedOrigin: 'https://public.example.test' };
+        if (request.method === 'POST') return { publicShare, viewerOrigin: 'https://public.example.test' };
         return { publicShares: [{ ...publicShare, subject: { kind: 'artifact', id: 'other' } }] };
       } });
     await expect(execute({ actionId: 'artifact.public_link.create', input: { artifactId: 'artifact-1' } })).resolves.toMatchObject({ publicShare, url: expect.stringMatching(/^https:\/\/public.example.test\/s\/[^#]+#k=.+$/) });
@@ -85,7 +85,7 @@ describe('keyholding Artifact public-link Actions', () => {
     const execute = createArtifactPublicLinkActionsV1({
       read: async () => ({ artifactId: 'artifact-1', access: 'owner', header: {}, encryptionMode: 'plain', dataKey: null }),
       randomBytes: length => new Uint8Array(length).fill(1),
-      request: async () => ({ publicShare, isolatedOrigin: 'https://public.example.test' }),
+      request: async () => ({ publicShare, viewerOrigin: 'https://public.example.test' }),
       onPublicLinkIssued: link => { throw new Error(link.secret); },
     });
     await expect(execute({ actionId: 'artifact.public_link.create', input: { artifactId: 'artifact-1' } }))

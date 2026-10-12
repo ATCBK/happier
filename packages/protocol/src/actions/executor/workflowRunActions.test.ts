@@ -75,6 +75,59 @@ function ownerDeps(storage: WorkflowAccountRunActionDeps['storage']): WorkflowAc
 }
 
 describe('shared Account workflow run owner', () => {
+  it.each([false, true])('projects the held authored step and lane from the attention list, including frozen children (%s)', async nested => {
+    if (!acceptedSnapshotResult.ok) throw new Error('snapshot_fixture_failed');
+    const childResult = validateWorkflowDefinition({ version: 1, defaults: {}, blocks: [{ kind: 'parallel', id: 'lanes', failurePolicy: 'collect_outcomes',
+      branches: [{ id: 'changelog', name: 'Changelog', blocks: [{ kind: 'wait', id: 'review', name: 'Review the changelog',
+        document: { text: 'Review it', references: [], attachments: [] }, result: { kind: 'text' } }] }] }] });
+    if (!childResult.normalizedDefinition) throw new Error(JSON.stringify(childResult.issues));
+    const child = childResult.normalizedDefinition;
+    const accepted = WorkflowAcceptedSnapshotV1Schema.parse({ ...acceptedSnapshotResult.snapshot,
+      definition: nested ? { version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'workflow', id: 'child', workflowRef: 'builtin:child', input: {} }] } : child,
+      frozenChildren: nested ? { 'builtin:child': child } : {},
+    });
+    const snapshot = runSnapshot();
+    snapshot.acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId }, acceptedSnapshot: accepted,
+    }));
+    const index = { id: 'held-review', runId, sequence: '4', parentRecordId: 'branch-frame', memberOrdinal: '0', attempt: '0',
+      contentRevision: '7', lifecycle: 'waiting_for_review' as const, createdAt: snapshot.run.createdAt, updatedAt: snapshot.run.updatedAt };
+    const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+      mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId: 'account-1', runId,
+        recordId: index.id, sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt },
+      progress: { kind: 'happier.workflow-progress.v1', blockKind: 'wait', attempt: '0', logicalInvocationRecordId: index.id,
+        invocationPath: { blockId: 'review', scope: [...(nested ? [{ kind: 'workflow' as const, blockId: 'child' }] : []),
+          { kind: 'branch', blockId: 'lanes', branchId: 'changelog' }] } },
+    }));
+    let heldFact: unknown = { index, contentEnvelope };
+    const owner = createWorkflowAccountRunActionOwner(ownerDeps({ execute: async operation => {
+      if (operation.operation !== 'list') throw new Error('attention_must_not_read_per_run_detail');
+      return { runs: [{ ...snapshot.run, attentionRequired: true, heldCount: 5 }], acceptedEnvelopesByRunId: { [runId]: snapshot.acceptedEnvelope },
+        keyCensusByRunId: { [runId]: snapshot.keyCensus }, heldProgressByRunId: { [runId]: heldFact } };
+    } }));
+    const result = await owner.execute({ actionId: 'workflow.run.list', input: { attention: 'required' }, context: {} });
+    expect(result).toMatchObject({ runs: [{ heldCount: 5, heldStep: { invocationId: index.id, label: 'Review the changelog', laneLabel: 'Changelog' } }] });
+    for (const unavailable of [null, { index: { ...index, lifecycle: 'completed' }, contentEnvelope },
+      { index: { ...index, runId: 'other-run' }, contentEnvelope }, { index: { ...index, id: 'other-record' }, contentEnvelope }]) {
+      heldFact = unavailable;
+      expect(await owner.execute({ actionId: 'workflow.run.list', input: { attention: 'required' }, context: {} }))
+        .toMatchObject({ runs: [{ heldCount: 5, heldStep: null, startedBy: 'user', where: { directory: '/repo' } }] });
+    }
+    expect(await owner.execute({ actionId: 'workflow.run.list', input: {}, context: {} }))
+      .toMatchObject({ runs: [{ heldStep: undefined }] });
+  });
+  it('distinguishes an unavailable workspace from unavailable Agent inventory before admission', async () => {
+    const owner = createWorkflowAccountRunActionOwner({
+      ...ownerDeps({ execute: async () => { throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' }); } }),
+      resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true } }),
+      prepareWorkspace: async () => ({ ok: false, code: 'workspace_unavailable' }),
+    });
+    await expect(owner.execute({ actionId: 'workflow.run.start', input: { runId, source: { kind: 'inline', definition } },
+      context: { surface: 'ui', externalActionTarget: { kind: 'machine', machineId: 'machine-a',
+        project: { machineId: 'machine-a', directory: '/repo' } } },
+    }).catch(normalizeWorkflowActionThrownError)).resolves.toMatchObject({ ok: false, errorCode: 'target_unavailable',
+      details: { code: 'target_unavailable', reason: 'workspace_unavailable' } });
+  });
   it.each([
     ['Review & converge', REVIEW_AND_CONVERGE_WORKFLOW_V1, { engines: ['agent:happier.agent.codex/codex'] }, 4],
     ['Plan with a panel', PLAN_WITH_A_PANEL_WORKFLOW_V1, { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex'] }, 4],
@@ -1436,7 +1489,7 @@ describe('shared Account workflow run owner', () => {
     expect(requested).toEqual([{ targetSessionId: 'destination' }, { targetSessionId: 'destination', cursor: 'next-page' }]);
   });
 
-  it('opens completed authored progress in the lean list without reading Run detail', async () => {
+  it('opens the same authored progress in direct Run detail and the lean list', async () => {
     const snapshot = runSnapshot();
     const unreadableId = '22222222-2222-4222-8222-222222222222';
     const rootId = 'root-list-progress';
@@ -1451,6 +1504,8 @@ describe('shared Account workflow run owner', () => {
         stepProgress: { completed: 1, total: 3, currentLoop: { completed: 1, total: 4 } } },
     } });
     const owner = createWorkflowAccountRunActionOwner(ownerDeps({ execute: async (operation) => {
+      if (operation.operation === 'get') return { ...snapshot, rootProgress: { index, contentEnvelope } };
+      if (operation.operation === 'invocations.list') return { invocations: [] };
       if (operation.operation !== 'list') throw new Error('lean_list_must_not_read_detail_or_invocations');
       return {
         runs: [snapshot.run, { ...snapshot.run, id: unreadableId }],
@@ -1468,6 +1523,9 @@ describe('shared Account workflow run owner', () => {
       metadataByRunId: { [unreadableId]: { kind: 'unavailable', reason: 'content_unavailable' } } });
     // The name may be absent on a readable snapshot; its Where remains available.
     expect(result.metadataByRunId).not.toHaveProperty(runId);
+    const detail = await owner.execute({ actionId: 'workflow.run.get', input: { runId }, context: {} });
+    expect(detail.run.stepProgress).toEqual(result.runs[0]?.stepProgress);
+    expect(detail.run.stepProgressCurrentness).toEqual(result.runs[0]?.stepProgressCurrentness);
   });
 
   it.each(['unreadable', 'child', 'foreign-envelope', 'missing'] as const)
@@ -1485,6 +1543,9 @@ describe('shared Account workflow run owner', () => {
             blockKind: 'root', attempt: '0', logicalInvocationRecordId: rootId }
           : { malformed: true } } });
     const owner = createWorkflowAccountRunActionOwner(ownerDeps({ execute: async (operation) => {
+      if (operation.operation === 'get') return { ...snapshot,
+        ...(scenario === 'missing' ? {} : { rootProgress: { index, contentEnvelope } }) };
+      if (operation.operation === 'invocations.list') return { invocations: [] };
       if (operation.operation !== 'list') throw new Error('lean_list_must_not_read_detail');
       return { runs: [snapshot.run], acceptedEnvelopesByRunId: { [runId]: snapshot.acceptedEnvelope },
         keyCensusByRunId: { [runId]: snapshot.keyCensus },
@@ -1492,8 +1553,11 @@ describe('shared Account workflow run owner', () => {
     } }));
     await expect(owner.execute({ actionId: 'workflow.run.list', input: {}, context: {} }))
       .resolves.toMatchObject({ runs: [{ startedBy: 'user', where: { machineId: 'machine-a', directory: '/repo' },
-        stepProgress: null, stepProgressCurrentness: scenario === 'unreadable'
-          ? { recordId: rootId, attempt: '0', contentRevision: '9' } : null }] });
+        stepProgress: scenario === 'missing' ? undefined : null, stepProgressCurrentness: scenario === 'unreadable'
+          ? { recordId: rootId, attempt: '0', contentRevision: '9' } : scenario === 'missing' ? undefined : null }] });
+    const direct = await owner.execute({ actionId: 'workflow.run.get', input: { runId }, context: {} });
+    expect(direct.run).toMatchObject({ stepProgress: scenario === 'missing' ? undefined : null, stepProgressCurrentness: scenario === 'unreadable'
+      ? { recordId: rootId, attempt: '0', contentRevision: '9' } : scenario === 'missing' ? undefined : null });
   });
 
   it('narrows a listed resource to the explicit Machine and refuses restrictions the batch cannot represent', async () => {

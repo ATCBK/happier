@@ -69,7 +69,7 @@ const ACCOUNT_ID_FIELD = approvalField('accountId', 'Account ID', { required: tr
 export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
   {
     ...homeDomainActionRow({
-      id: 'home.search.rebuild', title: 'Rebuild Home search index',
+      id: 'home.search.rebuild', approval: {result: 'required'}, title: 'Rebuild Home search index',
       description: 'Rebuild this Personal Home’s derived search index from its canonical transcript rows.',
       safety: 'danger', sideEffectClass: 'danger', cliPath: ['home', 'search', 'rebuild'],
       path: '/v1/home/search/rebuild', inputSchema: HomeGovernanceGetInputV1Schema,
@@ -79,7 +79,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     requiredAuthority: 'present_user' as const,
   },
   homeDomainActionRow({
-    id: 'home.governance.get',
+    id: 'home.governance.get', approval: {result: 'required'},
     title: 'Get Home administration',
     description: 'Read this Home\'s governance projection for the authenticated Account.',
     safety: 'safe',
@@ -90,7 +90,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     outputSchema: HomeGovernanceProjectionV1Schema,
   }),
   homeDomainActionRow({
-    id: 'home.governance.eligibility.get',
+    id: 'home.governance.eligibility.get', approval: {result: 'required'},
     title: 'Get Home eligibility',
     description: 'Read only Teams availability and this Account\'s effective Team-creation eligibility.',
     safety: 'safe',
@@ -101,7 +101,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     outputSchema: HomeGovernanceEligibilityV1Schema,
   }),
   homeDomainActionRow({
-    id: 'home.emptiness.get',
+    id: 'home.emptiness.get', approval: {result: 'required'},
     title: 'Check whether this Home is empty',
     description: 'Read whether this Home has any sessions, other people, Teams or invitations.',
     safety: 'safe',
@@ -112,7 +112,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     outputSchema: HomeEmptinessV1Schema,
   }),
   homeDomainActionRow({
-    id: 'home.governance.claim',
+    id: 'home.governance.claim', approval: {result: 'required'},
     title: 'Claim this Home',
     description: 'Become the first owner of an ownerless Home with the one-time code printed by `happier-server --print-home-claim-code`. Every refusal reads the same.',
     safety: 'danger',
@@ -124,7 +124,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [approvalField('code', 'Claim code', { required: true })] },
   }),
   homeDomainActionRow({
-    id: 'home.accounts.list',
+    id: 'home.accounts.list', approval: {result: 'required'},
     title: 'List Home Accounts',
     description: 'Page through the Home People list as a Home administrator.',
     safety: 'safe',
@@ -135,7 +135,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     outputSchema: HomeAccountListResultV1Schema,
   }),
   homeDomainActionRow({
-    id: 'home.accounts.search',
+    id: 'home.accounts.search', approval: {result: 'required'},
     title: 'Search Home Accounts',
     description: 'Resolve people for an exact Home or Team scope without reading Home administration.',
     safety: 'safe',
@@ -151,7 +151,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'home.accounts.get',
+    id: 'home.accounts.get', approval: {result: 'required'},
     title: 'Get Home Account',
     description: 'Read one person as Home administration sees them: role, status, sign-in facts, Teams, counts and recent administration events.',
     safety: 'safe',
@@ -163,7 +163,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [ACCOUNT_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'home.accounts.role.set',
+    id: 'home.accounts.role.set', approval: {result: 'required'},
     title: 'Set Home role',
     description: 'Change one Account\'s Home role. The Home enforces its last-owner invariant.',
     safety: 'danger',
@@ -178,7 +178,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'home.accounts.disable',
+    id: 'home.accounts.disable', approval: {result: 'required'},
     title: 'Disable Home Account',
     description: 'Place one Account on a reversible hold, ending its access to this Home.',
     safety: 'danger',
@@ -190,7 +190,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [ACCOUNT_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'home.accounts.enable',
+    id: 'home.accounts.enable', approval: {result: 'required'},
     title: 'Re-enable Home Account',
     description: 'Lift a reversible hold and restore one Account\'s access to this Home.',
     safety: 'danger',
@@ -202,7 +202,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [ACCOUNT_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'home.accounts.delete',
+    id: 'home.accounts.delete', approval: {result: 'required'},
     title: 'Delete Home Account',
     description: 'Erase one Account through the Home\'s single erasure owner. Incomplete cleanup is reported explicitly.',
     safety: 'danger',
@@ -214,7 +214,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [ACCOUNT_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'home.accounts.signOutEverywhere',
+    id: 'home.accounts.signOutEverywhere', approval: {result: 'required'},
     title: 'Sign a Home Account out everywhere',
     description: 'End every signed-in session of one Account. API tokens stay valid until the Account is disabled.',
     safety: 'danger',
@@ -226,7 +226,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [ACCOUNT_ID_FIELD] },
   }),
   homeDomainActionRow({
-    id: 'home.policy.set',
+    id: 'home.policy.set', approval: {result: 'required'},
     title: 'Set Home policy',
     description: 'Update this Home\'s governance policy against the revision the caller last read.',
     safety: 'danger',
@@ -257,7 +257,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'home.settings.get',
+    id: 'home.settings.get', approval: {result: 'required'},
     title: 'Get Home settings',
     description: 'Read the effective server configuration of this Home with each value\'s source. Secrets report presence only.',
     safety: 'safe',
@@ -268,7 +268,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     outputSchema: HomeSettingsProjectionV1Schema,
   }),
   homeDomainActionRow({
-    id: 'home.settings.set',
+    id: 'home.settings.set', approval: {result: 'required'},
     title: 'Set Home settings',
     description: 'Store Home setting values against the revision the caller last read. A deployment env value still wins; restart settings apply at the next server start.',
     safety: 'danger',
@@ -282,7 +282,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     ] },
   }),
   homeDomainActionRow({
-    id: 'home.mailDelivery.get',
+    id: 'home.mailDelivery.get', approval: {result: 'required'},
     title: 'Get Home mail readiness',
     description: 'Read whether this Home can send mail: a configured transport and a buildable link.',
     safety: 'safe',
@@ -293,7 +293,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     outputSchema: HomeMailDeliveryReadinessV1Schema,
   }),
   homeDomainActionRow({
-    id: 'home.mailDelivery.test',
+    id: 'home.mailDelivery.test', approval: {result: 'required'},
     title: 'Send a test email',
     description: 'Send a fixed test message through this Home\'s mail settings. A failure reports its class only.',
     safety: 'danger',
@@ -305,7 +305,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [approvalField('to', 'Send to', { required: true })] },
   }),
   homeDomainActionRow({
-    id: 'home.audit.list',
+    id: 'home.audit.list', approval: {result: 'required'},
     title: 'List Home administration activity',
     description: 'Page through this Home\'s administration events, newest first, optionally about one target.',
     safety: 'safe',
@@ -316,7 +316,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     outputSchema: HomeAuditListResultV1Schema,
   }),
   homeDomainActionRow({
-    id: 'home.reachability.get',
+    id: 'home.reachability.get', approval: {result: 'required'},
     title: 'Get how this Home is reached',
     description: 'Read the effective public and web-app addresses with their sources, the hosting computer\'s access method when known, and the direct-connection state.',
     safety: 'safe',
@@ -327,7 +327,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     outputSchema: HomeReachabilityV1Schema,
   }),
   homeDomainActionRow({
-    id: 'home.reachability.iroh.set',
+    id: 'home.reachability.iroh.set', approval: {result: 'required'},
     title: 'Turn direct connections on or off',
     description: 'Turning direct (Iroh) connections off retires the current direct-connection identity for good; turning them on creates a new one. Addresses and sign-ins stay the same.',
     safety: 'danger',
@@ -339,7 +339,7 @@ export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
     inputHints: { fields: [approvalField('mode', 'Direct connections', { required: true })] },
   }),
   homeDomainActionRow({
-    id: 'home.retention.dryRun',
+    id: 'home.retention.dryRun', approval: {result: 'required'},
     title: 'Run a retention dry run',
     description: 'Run one retention sweep of this Home\'s current rules without deleting anything, and report what each domain would delete.',
     safety: 'safe',

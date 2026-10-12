@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { searchSerializedActionSpecsForSurface } from './actionCatalog.js';
+import { searchSerializedActionSpecsForSurface, actionSpecToActionDefinitionV1, projectActionDefinitionForExternalDiscovery } from './actionCatalog.js';
 import {
   WORKFLOW_ACTION_IDS_V1,
   type WorkflowActionIdV1,
@@ -38,8 +38,61 @@ import {
 } from './actionToolExposure.js';
 
 describe('actionToolExposure', () => {
+  it('delivers resource guidance through the same closed Action definition agents discover', () => {
+    const definition = projectActionDefinitionForExternalDiscovery(actionSpecToActionDefinitionV1(getActionSpec('machines.storage.trash.move')));
+    expect(definition.prompting).toMatchObject({ agentGuidance: expect.any(String) });
+  });
+
+  it('keeps the five resource overview reads direct and every resource effect discoverable', () => {
+    const directReads = new Set([
+      'machines.vitals.get', 'machines.processes.list', 'machines.storage.summary.get',
+      'machines.storage.suggestions.list', 'machines.guard.get',
+    ]);
+    const resourceSpecs = listActionSpecs().filter((spec) => /^machines\.(vitals|resources|processes|storage|guard)\./u.test(spec.id));
+    expect(resourceSpecs.length).toBeGreaterThan(directReads.size);
+    for (const spec of resourceSpecs) {
+      expect(isActionDiscoverableOnToolSurface(spec, 'agent'), spec.id).toBe(true);
+      expect(isActionDirectToolExposedOn(spec, 'agent'), spec.id).toBe(directReads.has(spec.id));
+      if (spec.sideEffectClass !== 'read') {
+        expect(spec.prompting?.agentGuidance, spec.id).toEqual(expect.any(String));
+      }
+    }
+    const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+      'machines.storage.deleteNow': { toolExposureModes: { agent: 'direct' } },
+    } });
+    expect(isActionDirectToolExposedOn(getActionSpec('machines.storage.deleteNow'), 'agent', { settings })).toBe(true);
+  });
+
+  it('derives the resource surface census from enabled specs, policy and canonical placement owners', () => {
+    const unbacked: string[] = [];
+    const resourceSpecs = listActionSpecs().filter((spec) => /^machines\.(vitals|resources|processes|storage|guard)\./u.test(spec.id));
+    for (const spec of resourceSpecs) {
+      for (const surface of ['ui', 'voice', 'agent', 'mcp', 'cli'] as const) {
+        if (!spec.surfaces[surface]) continue;
+        const policy = resolveActionSurfaceAvailability({ actionId: spec.id, surface });
+        if (!policy.available) { unbacked.push(`${spec.id}:${surface}:policy`); continue; }
+        // These schemas are the canonical DTO owners consumed by the SDK generator.
+        if (!spec.inputSchema || !spec.outputSchema) { unbacked.push(`${spec.id}:${surface}:dto`); continue; }
+        if (isRuntimeActionIdV1(spec.id)) {
+          if (!isRuntimeActionExecutorReal(spec.id)) unbacked.push(`${spec.id}:${surface}:runtime`);
+          continue;
+        }
+        if (spec.executionPlacement === 'client') {
+          // The answering-client adapter is the live handler; standalone CLI has no such transport.
+          if (surface === 'cli') unbacked.push(`${spec.id}:${surface}:no-client`);
+          continue;
+        }
+        // Remaining specs are owned by the canonical ActionExecutor dispatch corridor.
+        expect(spec.executionPlacement, spec.id).toMatch(/^(account|machine|session)$/u);
+      }
+    }
+    expect(unbacked).toEqual([]);
+  });
   it('exposes the backed sandbox installer to agent discovery without changing its danger classification', () => {
-    const spec = getActionSpec('browser.sandbox.install');
+    const actionId = 'browser.sandbox.install';
+    const spec = getActionSpec(actionId);
+    expect(isRuntimeActionExecutorReal(actionId)).toBe(true);
+    expect(resolveRuntimeActionSurfaces(actionId).agent).toBe(true);
     expect(isActionDiscoverableOnToolSurface(spec, 'agent')).toBe(true);
     expect(resolveActionSurfaceAvailability({ actionId: spec.id, surface: 'ui' }).available).toBe(true);
     expect(spec).toMatchObject({ safety: 'danger', requiredAuthority: 'account_automation' });

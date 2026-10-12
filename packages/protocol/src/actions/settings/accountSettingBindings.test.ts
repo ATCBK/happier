@@ -19,7 +19,7 @@ describe('portable coupled Account setting mutations', () => {
         const result = await selected.prepare(settings, false, {}, { isCurrent: () => current });
         expect(result.status).toBe('prepared');
         if (result.status !== 'prepared') return;
-        expect(result.mutate(settings)?.connectedServicesProviderStateSharingSettingsV1.defaults.stateMode).toBe('isolated');
+        expect(result.mutate(settings)?.connectedServicesProviderStateSharingSettingsV1?.defaults.stateMode).toBe('isolated');
         current = false;
         expect(result.mutate(settings)).toBeNull();
     });

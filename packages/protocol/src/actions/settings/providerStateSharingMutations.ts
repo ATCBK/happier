@@ -1,4 +1,11 @@
 import type { AccountSettings } from '../../account/settings/accountSettings.js';
+import { z } from 'zod';
+
+export const AgentProviderStateSharingChangeV1Schema = z.object({
+    agentId: z.string().trim().min(1),
+    configMode: z.enum(['linked', 'copied', 'isolated']).optional(),
+    stateMode: z.enum(['shared', 'isolated']).optional(),
+}).strict().refine(value => value.configMode !== undefined || value.stateMode !== undefined);
 
 type SharingSettings = AccountSettings['connectedServicesProviderStateSharingSettingsV1'];
 export type ProviderStateSharingSettingsMutationV1 = (current: SharingSettings) => SharingSettings | null;
@@ -21,7 +28,7 @@ export function readProviderStateSharingRiskAgentIdsV1(agents: readonly Provider
 export type ProviderStateSharingMutationServicesV1 = Readonly<{
     /** Null means no authoritative Agent catalog is available, never an empty risk set. */
     readProviderStateSharingRiskAgentIds?: () => readonly string[] | null;
-    /** Actual host human-consent boundary; generic Action confirmation supplies no acknowledgement. */
+    /** Host-owned consent admission, including an Action waiver; never a caller-authored acknowledgement. */
     confirmProviderStateSharingRiskAgents?: (agentIds: readonly string[]) => Promise<boolean>;
 }>;
 export type ProviderStateSharingPreparationResultV1 =
@@ -52,5 +59,27 @@ export async function prepareDefaultProviderStateSharingChangeV1(
             ...acknowledgedRisksByAgentId[agentId], sharedStatePrivacy: true,
         };
         return { ...current, defaults: { ...current.defaults, stateMode: shared ? 'shared' : 'isolated' }, acknowledgedRisksByAgentId };
+    } };
+}
+
+/** The same consent policy, scoped to one Agent; no caller-authored acknowledgement is accepted. */
+export async function prepareAgentProviderStateSharingChangeV1(
+    settings: SharingSettings,
+    change: z.infer<typeof AgentProviderStateSharingChangeV1Schema>,
+    services: ProviderStateSharingMutationServicesV1,
+): Promise<ProviderStateSharingPreparationResultV1> {
+    const scopedServices: ProviderStateSharingMutationServicesV1 = { ...services,
+        readProviderStateSharingRiskAgentIds: () => services.readProviderStateSharingRiskAgentIds?.()?.filter(id => id === change.agentId) ?? null,
+    };
+    const prepared = await prepareDefaultProviderStateSharingChangeV1(settings, change.stateMode === 'shared', scopedServices);
+    if (prepared.status !== 'prepared') return prepared;
+    return { status: 'prepared', mutate: current => {
+        const consent = prepared.mutate(current);
+        if (!consent) return null;
+        return { ...current, byAgentId: { ...current.byAgentId, [change.agentId]: {
+            ...current.byAgentId[change.agentId],
+            ...(change.configMode !== undefined ? { configMode: change.configMode } : {}),
+            ...(change.stateMode !== undefined ? { stateMode: change.stateMode } : {}),
+        } }, acknowledgedRisksByAgentId: consent.acknowledgedRisksByAgentId };
     } };
 }

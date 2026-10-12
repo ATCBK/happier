@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { isDeepStrictEqual } from 'node:util';
+import tweetnacl from 'tweetnacl';
 
-import { ApprovalRequestSchema, type ApprovalRequest, type ApprovalRequestV1, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
+import { ApprovalRequestSchema, ApprovalRequestV2Schema, type ApprovalRequest, type ApprovalRequestV1, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
 import { getActionSpec } from './actionSpecs.js';
-import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { createActionExecutor, type ActionExecutorDeps, type ActionExecutorContext } from './actionExecutor.js';
+import { computeExternalActionRequestEnvelopeDigestV1 } from './externalActionExecutionAuthorization.js';
+import type { ExternalActionExecutionAuthorizationV1 } from './externalActionApi.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
 import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
@@ -17,6 +20,7 @@ import { decideApprovalRequestTransition } from '../approvals/approvalRequestTra
 import { createWorkBoardArtifactBoundary } from '../boards/workBoardArtifactV1.testkit.js';
 import { createWidgetDefinitionArtifactPortV1 } from '../widgets/widgetDefinitionArtifactV1.js';
 import { createBlockingApprovalCoordinator } from './blockingApprovalCoordinator.js';
+import { signExternalActionApprovalInputV1, verifyExternalActionApprovalInputV1 } from './externalActionExecutionAuthorization.js';
 
 const defaultActionsSettings = ActionsSettingsV1Schema.parse({ v: 1 });
 const securityTokenSummary = {
@@ -26,6 +30,19 @@ const securityTokenSummary = {
   grant: API_TOKEN_FULL_GRANT_V1, parentTokenId: null, activeChildCount: 0, embedConfig: null,
 };
 const securityToken = `hap_v1_${securityTokenSummary.tokenId}_${'a'.repeat(43)}`;
+
+describe('Session public link approval narrowing', () => {
+  it('admits only turning public networking off while preserving the original share operands', () => {
+    const narrowing = getActionSpec('session.public_link.create').approvalNarrowing;
+    const original = { sessionId: 'session', maxUses: 3, isConsentRequired: true };
+    const off = { ...original, networkOff: true };
+    expect(narrowing?.narrow(original, off)).toEqual(off);
+    expect(narrowing?.narrow({ ...original, networkOff: true }, original)).toBeNull();
+    expect(narrowing?.narrow(original, { ...off, sessionId: 'different' })).toBeNull();
+    expect(narrowing?.narrow(original, { ...off, maxUses: 10 })).toBeNull();
+    expect(narrowing?.narrow(original, { ...off, isConsentRequired: false })).toBeNull();
+  });
+});
 
 function createApprovalRequest(
   status: ApprovalRequestV1['status'] = 'open',
@@ -55,6 +72,7 @@ function createApprovalRequest(
       surface: executionSurface,
       caller: { kind: 'host' },
       serverId,
+      machineId: 'machine-1',
       ...(sessionId ? { sessionId, target: { kind: 'session' as const, sessionId } } : {}),
       ...(actionId === 'session.list'
         && (executionSurface === 'agent' || executionSurface === 'mcp' || executionSurface === 'plugin')
@@ -151,6 +169,7 @@ function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
       // This approval harness represents a Session-bound host. Agent list
       // admission requires the same explicit corpus boundary as its runtime.
       defaultSessionId: 's1',
+      defaultSessionMachineId: 'machine-1',
       sessionListAccess: 'current_session',
       ...context,
     }),
@@ -158,6 +177,85 @@ function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
 }
 
 describe('createActionExecutor (approvals)', () => {
+  it.each(['teams.invitations.create', 'teams.invitations.reissue'] as const)(
+    'runs signed %s with the deciding app authority, never the proposal carrier', async actionId => {
+      const caller = { kind: 'session' as const, sessionId: 'source', starterDepth: 0, turnDepth: 0 };
+      const target = { kind: 'machine' as const, machineId: 'source-machine' };
+      const input = getActionSpec(actionId).inputSchema.parse(actionId.endsWith('create')
+        ? { v: 1, teamId: 'team', role: 'member', historyAccess: 'from_membership', recipientEmail: null, requestKey: 'create-request' }
+        : { v: 1, teamId: 'team', invitationId: 'old-invitation', recipientEmail: null, requestKey: 'reissue-request' });
+      const signing = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(29));
+      const authorization: ExternalActionExecutionAuthorizationV1 = { v: 1, token: 'signed-proposal-fixture', binding: {
+        serverIdentityId: 'stable-home', accountId: 'account', authentication: { kind: 'account', tokenEpoch: 0 },
+        machineId: target.machineId, custodianAccountId: 'account', installationId: 'installation',
+        actionId, requestId: 'proposal-request', target,
+        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId: 'proposal-request', target, input }),
+        sessionActionOrigin: { v: 1, caller, sourceTurnId: 'turn', callerPermissionMode: null, requestId: 'proposal-request' },
+        sessionActionSource: { machineId: target.machineId, installationId: 'installation' },
+      } };
+      let stored: ApprovalRequest | null = null;
+      const contexts: ActionExecutorContext[] = [];
+      const observations: unknown[] = [];
+      const invitation = { id: 'invitation', teamId: 'team', state: 'active', role: 'member',
+        historyAccess: 'from_membership', recipientEmailMask: null, expiresAt: 2, createdAt: 1,
+        createdByAccountId: 'account', acceptedByAccountId: null, lastEmailDelivery: null };
+      const joinUrl = 'https://home.invalid/join/live-result-sentinel';
+      const output = actionId.endsWith('create') ? { invitation, joinUrl }
+        : { previous: { ...invitation, id: 'old-invitation', state: 'revoked' }, replacement: invitation, joinUrl };
+      // The Artifact store, authenticated Home verifier and HTTP effect are process boundaries.
+      const deps = {
+        approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { artifactId: 'signed-invitation' }; },
+        approvalsGet: async () => stored,
+        approvalsUpdate: async ({ request }) => {
+          if (!stored) throw new Error('missing_approval');
+          const transition = decideApprovalRequestTransition(stored, request);
+          if (!transition.ok) return transition;
+          stored = ApprovalRequestV2Schema.parse(request);
+          return { ok: true as const };
+        },
+        isApprovalExecutionOriginCurrent: async ({ origin, request }) => Boolean(origin.target && origin.externalActionInputSignature
+          && verifyExternalActionApprovalInputV1({ authorizationToken: authorization.token, actionId: request.actionId,
+            target: origin.target, input: request.actionArgs, publicKey: signing.publicKey, signature: origin.externalActionInputSignature })),
+        homeDomainAction: async ({ input: effectInput, context }) => {
+          contexts.push(context);
+          if (context.externalActionExecutionAuthorization || context.externalActionCredential || context.authority !== 'present_user'
+            || context.surface !== 'ui' || context.actionCaller?.kind !== 'host' || !isDeepStrictEqual(effectInput, input)) {
+            return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+          }
+          return output;
+        },
+        observeActionExecution: async observation => { observations.push(observation); },
+      } satisfies Pick<ActionExecutorDeps, 'approvalsCreate' | 'approvalsGet' | 'approvalsUpdate'
+        | 'isApprovalExecutionOriginCurrent' | 'homeDomainAction' | 'observeActionExecution'>;
+      // Unused transport arms are absent from this boundary fixture.
+      const executor = createActionExecutor(deps as unknown as ActionExecutorDeps);
+      const pending = await executor.execute(actionId, input, { surface: 'agent', authority: 'account_automation',
+        serverId: 'creator-profile', serverIdentityId: 'stable-home', runtimeAccountId: 'account',
+        actionRequestId: 'proposal-request', actionCaller: caller, defaultSessionId: 'source', callerPermissionMode: null,
+        sessionInputSource: { sourceSessionId: 'source', sourceTurnId: 'turn', via: 'action' },
+        externalActionExecutionAuthorization: authorization, externalActionTarget: target,
+        signExternalActionApprovalInput: args => signExternalActionApprovalInputV1({ authorizationToken: args.authorization.token,
+          actionId: args.actionId, target: args.target, input: args.input, privateKey: signing.secretKey }),
+      });
+      expect(pending).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const decide = () => executor.execute('approval.request.decide', { artifactId: 'signed-invitation', decision: 'approve' }, {
+        surface: 'ui', authority: 'present_user', serverId: 'approver-profile', serverIdentityId: 'stable-home',
+        runtimeAccountId: 'account', actionCaller: { kind: 'host' }, actionRequestId: 'human-decision',
+      });
+      const result = await decide();
+      expect(result.ok && typeof result.result === 'object' && result.result !== null
+        && 'status' in result.result && result.result.status === 'executed').toBe(true);
+      expect(result.ok && JSON.stringify(result.result).includes(joinUrl)).toBe(true);
+      expect(contexts).toHaveLength(1);
+      expect(contexts[0]).toMatchObject({ authority: 'present_user', surface: 'ui', serverId: 'approver-profile',
+        actionCaller: { kind: 'host' }, actionRequestId: 'proposal-request' });
+      expect(contexts[0]).not.toHaveProperty('externalActionTarget');
+      expect(contexts[0]).not.toHaveProperty('sessionInputSource');
+      const repeated = await decide();
+      expect(contexts).toHaveLength(1);
+      for (const safe of [pending, repeated, stored, observations]) expect(JSON.stringify(safe).includes(joinUrl)).toBe(false);
+    },
+  );
   it('defaults reviewed managed rebuild to Ask first and invokes the managed owner only after explicit approval waiver', async () => {
     const input = { homeId: 'home', managedMachineId: 'managed', kind: 'rebuild', expectedRevision: 4, reviewedEffectDigest: 'reviewed-effects' };
     expect(getActionSpec('machines.managed.rebuild')).toMatchObject({ safety: 'danger', executionPlacement: 'machine' });
@@ -272,11 +370,15 @@ describe('createActionExecutor (approvals)', () => {
       approvalsResolveBlockingDecision: async () => ({ resolved: true }),
     });
     expect(await executor.execute('approval.request.decide', {
-      artifactId: 'computer-approval', decision: 'approve', computerTarget: target, computerAccess: 'see',
+      artifactId: 'computer-approval', decision: 'approve', narrowedInput: {
+        machineId: 'machine', requestedTarget: 'Editor', target, access: 'see',
+      },
     })).toMatchObject({ ok: true, result: { status: 'approved' } });
     expect(request).toMatchObject({ status: 'approved', actionArgs: {
-      machineId: 'machine', requestedTarget: 'Editor', target, access: 'see',
-    }, executionOriginV1: { authority: 'account_automation', surface: 'mcp' }, decision: { authority: 'present_user' } });
+      machineId: 'machine', requestedTarget: 'Editor', access: 'use',
+    }, executionOriginV1: { authority: 'account_automation', surface: 'mcp' }, decision: {
+      authority: 'present_user', narrowedInput: { machineId: 'machine', requestedTarget: 'Editor', target, access: 'see' },
+    } });
   });
 
   it('accepts a computer access choice only while approving an open computer selection', async () => {
@@ -296,9 +398,85 @@ describe('createActionExecutor (approvals)', () => {
         approvalsUpdate: async ({ request: value }) => { request = value; return { ok: true }; },
       });
       expect(await executor.execute('approval.request.decide', {
-        artifactId: 'computer-approval', decision, computerAccess: 'see',
+        artifactId: 'computer-approval', decision, narrowedInput: {
+          machineId: 'machine', requestedTarget: 'Editor', access: 'see',
+        },
       })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
       expect(request).toEqual(initialRequest);
+    }
+  });
+
+  it.each((['ui', 'terminal', 'session', 'external'] as const).flatMap(kind => [
+    { kind, addsItem: false }, { kind, addsItem: true },
+  ]))('executes the signed $kind process subset without replacing signed input (adds item: $addsItem)', async ({ kind, addsItem }) => {
+    const keys = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(23));
+    const actionId = 'machines.processes.stop' as const;
+    const target = { kind: 'machine' as const, machineId: 'machine' };
+    const caller = { kind: 'session' as const, sessionId: 'source', starterDepth: 0, turnDepth: 0 };
+    const process = { ref: 'one', expect: { level: 'proven' as const, owner: { kind: 'session' as const, sessionId: 'source' } } };
+    const actionArgs = { machineId: 'machine', targets: [process, { ...process, ref: 'two' }] };
+    const narrowedInput = { ...actionArgs, targets: [{ ...process, ...(addsItem ? { ref: 'added' } : {}) }] };
+    const surface = kind === 'ui' || kind === 'terminal' ? 'ui' : kind === 'session' ? 'agent' : 'api';
+    const binding = { serverIdentityId: 'home', accountId: 'account', machineId: 'machine',
+      custodianAccountId: 'account', installationId: 'installation', actionId, requestId: 'signed-subset',
+      requestEnvelopeDigest: 'a'.repeat(43), target,
+      ...(kind === 'external' ? { principalId: 'account', credentialId: '11111111-1111-4111-8111-111111111111', grant: API_TOKEN_FULL_GRANT_V1 }
+        : { authentication: { kind: kind === 'terminal' ? 'terminal' : 'account', tokenEpoch: 7 }, ...(kind === 'session' ? {
+          sessionActionOrigin: { v: 1, caller, sourceTurnId: 'turn', callerPermissionMode: 'yolo', requestId: 'signed-subset' },
+          sessionActionSource: { machineId: 'machine', installationId: 'installation' },
+        } : {}) }),
+    };
+    const authorization = { v: 1, token: 'home-signed-original', binding };
+    let request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'system' }, requestedSurface: surface, actionId, actionArgs, summary: 'Stop selected work',
+      approval: { flow: 'deferred', result: 'required' }, executionOriginV1: { v: 1, surface,
+        authority: kind === 'ui' ? 'present_user' : 'account_automation', caller: kind === 'session' ? caller : { kind: 'host' },
+        serverId: 'profile', serverIdentityId: 'home', accountId: 'account', machineId: 'machine', actionId, requestId: 'signed-subset', target,
+        ...(kind === 'external' ? { principalId: 'account', credentialId: binding.credentialId } : {}),
+        ...(kind === 'session' ? { callerPermissionMode: 'yolo', sessionInputSource: { sourceSessionId: 'source', sourceTurnId: 'turn', via: 'action' } } : {}),
+        externalActionExecutionAuthorization: authorization,
+        externalActionInputSignature: signExternalActionApprovalInputV1({ authorizationToken: authorization.token, actionId,
+          input: actionArgs, target, privateKey: keys.secretKey }),
+      } });
+    const effects: unknown[] = [];
+    const verifiedInputs: unknown[] = [];
+    // Persistence and Machine transport are the boundaries; the real signature,
+    // decision transition, catalog admission and executor replay remain composed.
+    const executor = createExecutor({ approvalsGet: async () => request,
+      approvalsUpdate: async ({ request: next }) => {
+        const transition = decideApprovalRequestTransition(request, next);
+        if (!transition.ok) return transition;
+        request = ApprovalRequestV2Schema.parse(next);
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async ({ origin, request: signedRequest }) => {
+        verifiedInputs.push(signedRequest.actionArgs);
+        return verifyExternalActionApprovalInputV1({ authorizationToken: origin.externalActionExecutionAuthorization?.token ?? '',
+          actionId: signedRequest.actionId, target, input: signedRequest.actionArgs,
+          publicKey: keys.publicKey, signature: origin.externalActionInputSignature ?? '' });
+      },
+      machineProcessesAction: async ({ input }) => { effects.push(input);
+        return { status: 'ended', outcomes: [{ ref: 'one', outcome: 'ended', freedBytes: 4096 }] }; },
+    });
+    if (kind === 'terminal') {
+      expect(await executor.execute('approval.request.decide', { artifactId: 'signed-subset', decision: 'approve' }, {
+        surface: 'ui', authority: 'account_automation',
+      })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      expect(request.status).toBe('open');
+      expect(effects).toEqual([]);
+    }
+    const result = await executor.execute('approval.request.decide', { artifactId: 'signed-subset', decision: 'approve', narrowedInput });
+    expect(request.actionArgs).toEqual(actionArgs);
+    if (addsItem) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+      expect(request.status).toBe('open');
+      expect(effects).toEqual([]);
+    } else {
+      expect(result).toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(effects).toEqual([narrowedInput]);
+      expect(request.decision).toMatchObject({ narrowedInput });
+      expect(verifiedInputs.length).toBeGreaterThan(0);
+      expect(verifiedInputs.every(input => isDeepStrictEqual(input, actionArgs))).toBe(true);
     }
   });
 
@@ -357,6 +535,62 @@ describe('createActionExecutor (approvals)', () => {
         artifactId: 'surface-approval', callerAuthority: 'account_automation',
       }), actionId).toMatchObject({ ok: false, errorCode: 'present_user_required' });
       expect(request.status).toBe('approved');
+    }
+  });
+
+  it('delegates ordinary approval decisions to a host agent only after the user waives that Action', async () => {
+    for (const surface of ['agent', 'mcp'] as const) {
+      let request = createApprovalRequest();
+      const messages: string[] = [];
+      const executor = createExecutor({
+        approvalsGet: async () => request,
+        approvalsUpdate: async ({ request: value }) => { request = value; return { ok: true }; },
+        sessionSendMessage: async ({ message }) => {
+          messages.push(message);
+          return { status: 'accepted', localId: 'delegated-message' };
+        },
+      });
+      const input = { artifactId: 'delegated-approval', decision: 'approve' };
+      const context = { surface, authority: 'account_automation', defaultSessionId: 'deciding-session',
+        actionCaller: { kind: 'host' },
+        actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {} }) } as const;
+      expect(await executor.execute('approval.request.decide', input, context))
+        .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      expect(request.status).toBe('open');
+      expect(messages).toEqual([]);
+      expect(await executor.execute('approval.request.decide', input, { ...context, bypassApprovals: true }))
+        .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: {},
+        approvalWaivedSurfaces: { 'approval.request.decide': [surface] } });
+      expect(await executor.execute('approval.request.decide', input, { ...context, actionsSettings,
+        defaultSessionId: 's1',
+      })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      expect(request.status).toBe('open');
+      expect(messages).toEqual([]);
+      const forwardedExecutor = createExecutor({
+        approvalsGet: async () => request,
+        approvalsUpdate: async ({ request: value }) => { request = value; return { ok: true }; },
+        // Exact-daemon replay transport is an external process boundary.
+        targetActionApprovalReplay: async () => {
+          request = createApprovalRequest('executed');
+          return { ok: true, result: { status: 'executed' } };
+        },
+      });
+      expect(await forwardedExecutor.execute('approval.request.decide', input, { ...context, actionsSettings,
+        defaultSessionId: 's1',
+      })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      expect(request.status).toBe('open');
+      const delegated = await executor.execute('approval.request.decide', input, { ...context, actionsSettings });
+      expect(delegated, JSON.stringify(delegated)).toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(request.status).toBe('executed');
+      expect(messages).toEqual(['hello']);
+      request = createApprovalRequest('open', { actionId: 'account.apiTokens.create', actionArgs: {} });
+      expect(await executor.execute('approval.request.decide', input, { ...context, actionsSettings }))
+        .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      expect(request.status).toBe('open');
+      expect(await executor.execute('approval.request.decide', input, { ...context, actionsSettings,
+        externalActionCredential: { accountId: 'account', principalId: 'token', credentialId: 'token', grant: API_TOKEN_FULL_GRANT_V1 },
+      })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
     }
   });
 
@@ -2404,6 +2638,65 @@ describe('createActionExecutor (approvals)', () => {
     dateNow.mockRestore();
   });
 
+  it.each(['throws', 'refuses'] as const)('preserves a known signed-out outcome when that effect retires its approval Account authority (%s)', async (settlement) => {
+    let storedRequest: ApprovalRequest | null = null;
+    let authorityRetired = false;
+    const signOut = vi.fn(async () => {
+      authorityRetired = true;
+      return { status: 'signed_out' };
+    });
+    const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+      'account.sessions.signOutEverywhere': { approvalRequiredSurfaces: ['ui'] },
+    } });
+    const executor = createExecutor({
+      isApprovalExecutionOriginCurrent: async () => !authorityRetired,
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context),
+      approvalsCreate: async ({ request }) => {
+        storedRequest = ApprovalRequestV2Schema.parse(request);
+        return { artifactId: 'leaving' };
+      },
+      approvalsGet: async () => storedRequest,
+      approvalsUpdate: async ({ request }) => {
+        // The authenticated Artifact HTTP boundary rejects the just-revoked bearer.
+        if (authorityRetired) {
+          if (settlement === 'throws') throw new Error('unauthorized');
+          return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+        }
+        storedRequest = request;
+        return { ok: true };
+      },
+      accountSessionsSignOutEverywhereAction: signOut,
+    });
+    const proposed = await executor.execute('account.sessions.signOutEverywhere', {});
+    expect(proposed).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'leaving' } });
+    expect(authorityRetired).toBe(false);
+    const outcome = await executor.execute('approval.request.decide', { artifactId: 'leaving', decision: 'approve' });
+    expect(authorityRetired).toBe(true);
+    expect(outcome).toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(storedRequest).toMatchObject({ status: 'executing' });
+    await expect(executor.execute('approval.request.decide', { artifactId: 'leaving', decision: 'approve' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+    expect(signOut).toHaveBeenCalledOnce();
+  });
+
+  it('does not report signed out when the effect has no confirmed retirement and settlement fails', async () => {
+    let storedRequest = createApprovalRequest('approved', { actionId: 'account.sessions.signOutEverywhere', actionArgs: {} });
+    const executor = createExecutor({
+      approvalsGet: async () => storedRequest,
+      approvalsUpdate: async ({ request }) => {
+        if (request.status === 'executing') {
+          storedRequest = request;
+          return { ok: true };
+        }
+        throw new Error('transport unavailable');
+      },
+      accountSessionsSignOutEverywhereAction: async () => ({ ok: false, errorCode: 'server_unreachable', error: 'server_unreachable' }),
+    });
+    await expect(executor.execute('approval.request.decide', { artifactId: 'leaving', decision: 'approve' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+    expect(storedRequest.status).toBe('executing');
+  });
+
   it('reports outcome unknown when the effect succeeds but terminal persistence fails', async () => {
     let storedRequest = createApprovalRequest('approved');
     const approvalsGet = vi.fn(async () => structuredClone(storedRequest));
@@ -2635,6 +2928,58 @@ describe('createActionExecutor (approvals)', () => {
       requestId: 'request-1',
     }));
     expect(sessionSendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['open', 'approved'] as const)('settles an origin-less CLI Session approval from %s without replaying its effect', async status => {
+    const proposal = ApprovalRequestV2Schema.parse(createApprovalRequest(status, {
+        actionId: 'session.board.layout.update',
+        requestedSurface: 'cli',
+        createdBy: { surface: 'cli' },
+        actionArgs: {
+          sessionId: 's1', expectedLayoutRevision: null,
+          operation: { op: 'tab.create', tabId: 'overview', title: 'Overview' },
+        },
+      }));
+    let storedRequest = ApprovalRequestV2Schema.parse({ ...proposal,
+      executionOriginV1: { ...proposal.executionOriginV1, machineId: undefined } });
+    const sessionBoardAction = vi.fn(async () => ({
+      v: 1 as const, serverId: 'server-1', sessionId: 's1', destination: null,
+      result: { operation: 'update_layout' as const, outcome: 'created' as const,
+        layoutRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' },
+    }));
+    // Exact-daemon replay is an RPC boundary; lack of origin cannot be repaired there.
+    const approvalRequestApprovedReplay = vi.fn(async () => ({
+      ok: false as const, errorCode: 'approval_origin_unavailable', error: 'approval_origin_unavailable',
+    }));
+    const executor = createExecutor({
+      approvalsGet: async () => storedRequest,
+      approvalsUpdate: async ({ request }) => {
+        const parsed = ApprovalRequestV2Schema.parse(request);
+        const transition = decideApprovalRequestTransition(storedRequest, parsed);
+        if (!transition.ok) return transition;
+        storedRequest = parsed;
+        return { ok: true as const };
+      },
+      sessionBoardAction,
+      approvalRequestApprovedReplay,
+    });
+    const expected = {
+      ok: true,
+      result: { status: 'failed', execution: {
+        ok: false, errorCode: 'approval_origin_unavailable',
+        error: expect.stringMatching(/cannot run.*origin.*unavailable/i),
+      } },
+    };
+    await expect(status === 'approved'
+      ? executor.replayApprovedApprovalRequest({ artifactId: 'a1' })
+      : executor.execute('approval.request.decide', { artifactId: 'a1', decision: 'approve' }))
+      .resolves.toMatchObject(expected);
+    expect(storedRequest.status).toBe('failed');
+    // A second decision observes the same terminal failure, never retries it.
+    await expect(executor.execute('approval.request.decide', { artifactId: 'a1', decision: 'approve' }))
+      .resolves.toMatchObject(expected);
+    expect(sessionBoardAction).not.toHaveBeenCalled();
+    expect(approvalRequestApprovedReplay).not.toHaveBeenCalled();
   });
 
   it('never delegates a rejected decision to an execution host', async () => {

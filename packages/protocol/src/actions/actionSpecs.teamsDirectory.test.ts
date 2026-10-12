@@ -55,7 +55,7 @@ describe('Team directory Action contracts', () => {
 
   it('makes removal preview and mutation requestable under the same present-user Action contract', () => {
     expect(PUBLIC_ACTION_IDS).not.toContain('teams.directory.sources.remove');
-    expect(SIGNED_ROOT_ACTION_IDS).not.toContain('teams.directory.sources.remove');
+    expect(SIGNED_ROOT_ACTION_IDS).toContain('teams.directory.sources.remove');
     expect(PUBLIC_ACTION_IDS).not.toContain('teams.directory.sources.remove.preview');
     expect(getActionSpec('teams.directory.sources.remove.preview').surfaces)
       .toMatchObject({ ui: true, cli: true, agent: true, mcp: true, api: false, plugin: true });

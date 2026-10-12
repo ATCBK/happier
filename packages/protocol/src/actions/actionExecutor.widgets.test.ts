@@ -11,12 +11,13 @@ import { createWorkBoardArtifactPortV1 } from '../boards/workBoardArtifactV1.js'
 import { createWorkBoardV1 } from '../boards/workBoardV1.js';
 import { createWorkBoardWidgetActionPortV1 } from '../widgets/workBoardWidgetActionPortV1.js';
 import { createWidgetDefinitionArtifactPortV1 } from '../widgets/widgetDefinitionArtifactV1.js';
-import { resolveWidgetBindingsV1, type WidgetInstanceV1 } from '../widgets/widgetInstanceV1.js';
+import { resolveWidgetBindingsV1, WidgetSurfaceRefV1Schema, type WidgetInstanceV1 } from '../widgets/widgetInstanceV1.js';
 import { ApiTokenGrantV1Schema } from '../auth/apiTokenGrant.js';
 import { createWidgetActionInputResolverV1 } from '../widgets/widgetActionInputResolverV1.js';
 import { createWidgetAreaActionPortV1, createWidgetAreaLayoutArtifactPortV1, createWidgetSurfaceArtifactPortV1 } from '../widgets/widgetSurfaceArtifactV1.js';
 import { WIDGET_INSTANCE_ACTION_IDS_V1 } from '../widgets/actionIdsV1.js';
 import { flattenWidgetLayoutWidgetsV1 } from '../widgets/widgetLayoutItemV1.js';
+import { WidgetInstanceActionOutputSchemasV1 } from '../widgets/actionsV1.js';
 
 const surface = { serverId: 'home', accountId: 'account', owner: { kind: 'home' } } as const;
 
@@ -151,7 +152,7 @@ describe('configured widget Actions', () => {
     const ref = { surface, instanceId: instance.id };
     expect(await executor.execute('widgets.item.inputs.reset', { ref, paths: ['connection'] },
       { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: true });
-    expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items)[0]?.instance.bindings).toEqual({ count: { kind: 'value', value: 3 } });
+    expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items).find(entry => entry.instance.id === instance.id)?.instance.bindings).toEqual({ count: { kind: 'value', value: 3 } });
   });
   it('selectively resets against the current Home winner without overwriting an unrelated concurrent edit', async () => {
     const boundary = createWorkBoardArtifactBoundary();
@@ -173,9 +174,9 @@ describe('configured widget Actions', () => {
     race = true;
     expect(await executor.execute('widgets.item.inputs.reset', { ref: { surface, instanceId: 'private-pin' }, paths: ['connection'] },
       { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: true });
-    expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items)[0]?.instance.bindings).toEqual({ count: { kind: 'value', value: 9 } });
+    expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items).find(entry => entry.instance.id === 'private-pin')?.instance.bindings).toEqual({ count: { kind: 'value', value: 9 } });
   });
-  it.each([false, true])('merges selected inputs into the current Home winner after complete validation (native=%s)', async native => {
+  it.each([false, true])('merges selected inputs of a grouped widget into the current Home winner after complete validation (native=%s)', async native => {
     const boundary = createWorkBoardArtifactBoundary();
     const transport = boundary.forAccount(surface.accountId);
     const concurrent = createHomeHubArtifactPortV1(transport, { accountId: surface.accountId });
@@ -191,17 +192,22 @@ describe('configured widget Actions', () => {
     } }, { accountId: surface.accountId });
     await homeHubArtifacts.apply({ kind: 'widget_add', instance: { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'count' },
       bindings: { selected: { kind: 'value', value: 1 }, count: { kind: 'value', value: 3 } } } });
-    const executor = createActionExecutor({ homeHubArtifacts, widgetAccountScope: () => ({ serverId: surface.serverId, accountId: surface.accountId }),
-      widgetInputs: createWidgetActionInputResolverV1({ readDescriptor: async () => ({ sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+    await homeHubArtifacts.apply({ kind: 'group_create', groupId: 'checks', instanceIds: ['copy'] });
+    const executor = createActionExecutor({ homeHubArtifacts, widgetAccountScope: () => ({ serverId: surface.serverId, accountId: surface.accountId,
+      isSameServerId: serverId => serverId === surface.serverId }),
+      widgetInputs: createWidgetActionInputResolverV1({ readDescriptor: async request => {
+        // The host's descriptor boundary consumes a wire reference, not its Account alias helpers.
+        WidgetSurfaceRefV1Schema.parse(request.ref.surface);
+        return { sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
         inputs: { fields: [{ path: 'count', title: 'Count', widget: 'integer' }, { path: 'selected', title: 'Selected', widget: 'integer' }] },
-        inputSchema: { type: 'object', properties: { count: { type: 'integer' }, selected: { type: 'integer' } }, required: ['count', 'selected'] } }),
+        inputSchema: { type: 'object', properties: { count: { type: 'integer' }, selected: { type: 'integer' } }, required: ['count', 'selected'] } }; },
         readContext: async () => ({}), readViewerValues: async () => ({ values: {} }), validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [] }) });
     race = true;
     const bindings = { selected: { kind: 'value' as const, value: 2 } };
     expect(await executor.execute(native ? 'home.hub.layout.update' : 'widgets.item.inputs.set', native
       ? { intent: { kind: 'widget_inputs', instanceId: 'copy', bindings, paths: ['selected'] } }
       : { ref: { surface, instanceId: 'copy' }, bindings, paths: ['selected'] }, { surface: 'mcp', bypassApprovals: true })).toMatchObject({ ok: true });
-    expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items)[0]?.instance.bindings).toEqual({ selected: { kind: 'value', value: 2 }, count: { kind: 'value', value: 9 } });
+    expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items).find(entry => entry.instance.id === 'copy')?.instance.bindings).toEqual({ selected: { kind: 'value', value: 2 }, count: { kind: 'value', value: 9 } });
   });
   it('discovers strict Project dashboard Actions and refuses default deletion before transport', async () => {
     const project = { ...surface, owner: { kind: 'project', projectId: 'project' } } as const;
@@ -238,12 +244,13 @@ describe('configured widget Actions', () => {
           readContext: async () => ({}), readViewerValues: async () => ({ values: {} }), validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [] }),
       });
       const instanceId = `default:${widget.key}`;
-      expect((await homeHubArtifacts.read()).items).toEqual([]);
+      expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items).find(entry => entry.instance.id === instanceId)).toBeUndefined();
+      expect(boundary.rows.size).toBe(0);
       const result = native
         ? await executor.execute('home.hub.layout.update', { intent: { kind: 'widget_size', instanceId, size: 'tall' } }, { surface: 'mcp', bypassApprovals: true })
         : await executor.execute('widgets.item.size.set', { ref: { surface, instanceId }, size: 'tall' }, { surface: 'mcp', bypassApprovals: true });
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
-      expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items)).toMatchObject([{ instance: { id: instanceId }, size: 'tall' }]);
+      expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items).find(entry => entry.instance.id === instanceId)).toMatchObject({ instance: { id: instanceId }, size: 'tall' });
     }
   });
   it('uses the exact declared size set for catalog, atomic Add and resize with the existing Artifact owner', async () => {
@@ -509,12 +516,17 @@ describe('configured widget Actions', () => {
     expect(await execute('widgets.item.size.set', { ref, size: 'full' })).toMatchObject({ ok: true });
     expect(await execute('widgets.item.frame.set', { ref, frameStyle: 'plain' })).toMatchObject({ ok: true });
     expect(await execute('widgets.item.rename', { ref, displayName: 'First' })).toMatchObject({ ok: true });
-    expect(await execute('widgets.item.move', { ref, toIndex: 1 })).toMatchObject({ ok: true });
+    const secondIndex = flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items).findIndex(entry => entry.instance.id === 'two');
+    expect(secondIndex).toBeGreaterThanOrEqual(0);
+    expect(await execute('widgets.item.move', { ref, toIndex: secondIndex })).toMatchObject({ ok: true });
     const result = await execute('widgets.item.list', { surface });
-    expect(result).toMatchObject({ ok: true, result: { instances: [
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('Home widget list must succeed');
+    const listed = WidgetInstanceActionOutputSchemasV1['widgets.item.list'].parse(result.result);
+    expect(listed.instances.filter(entry => entry.instance.id === 'one' || entry.instance.id === 'two')).toMatchObject([
       { instance: instance('two', 2), size: 'medium' },
       { instance: { ...instance('one', 3), displayName: 'First' }, size: 'full', frameStyle: 'plain' },
-    ] } });
+    ]);
     const before = await homeHubArtifacts.read();
     expect(await execute('widgets.item.move', { ref, toIndex: 0, to: { surface, index: 1 } })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
     expect(await execute('widgets.item.move', { ref, to: { surface: { ...surface, accountId: 'other' }, index: 0 } })).toMatchObject({ ok: false, errorCode: 'account_target_mismatch' });
@@ -528,7 +540,7 @@ describe('configured widget Actions', () => {
       .toMatchObject({ ok: false, errorCode: 'widget_inputs_invalid' });
     expect(await homeHubArtifacts.read()).toEqual(before);
     expect(await execute('widgets.item.remove', { ref })).toMatchObject({ ok: true, result: { instance: null } });
-    expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items).map(entry => entry.instance)).toEqual([instance('two', 2)]);
+    expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items).filter(entry => entry.instance.id === 'one' || entry.instance.id === 'two').map(entry => entry.instance)).toEqual([instance('two', 2)]);
   });
   it('fails closed before Artifact disclosure when the captured Account retires or the caller cancels', async () => {
     const boundary = createWorkBoardArtifactBoundary(); let reads = 0; let retired = false;

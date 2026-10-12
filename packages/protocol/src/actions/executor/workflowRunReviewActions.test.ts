@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { x25519 } from '@noble/curves/ed25519';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '../../crypto/accountScopedCipher.js';
@@ -323,11 +323,18 @@ describe('Account review Actions', () => {
       resultSource: { kind: 'human', accountId: 'editor' }, decision: { kind: 'use_result', requestedFromContentRevision: '4' } } });
   });
 
-  it('uses the exact stored value and source without generating input', async () => {
-    const h = harness();
-    await h.owner.execute({ actionId: 'workflow.run.invocations.complete_review', input: { ...target, mode: 'use_result' }, context: actor });
-    expect(h.progress()).toMatchObject({ result: 'continue', review: { resultSource: { kind: 'execution_input' } } });
-    expect(h.operations.filter(operation => operation.operation === 'invocations.complete_review')).toHaveLength(1);
+  it.each([false, true])('finishes the accepted occurrence once with its exact stored value and source (e2ee=%s)', async e2ee => {
+    const h = harness({ e2ee, progress: { timing: { startedAt: '2026-10-11T10:00:00.000Z' } } });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-11T10:03:00.000Z'));
+    try {
+      await h.owner.execute({ actionId: 'workflow.run.invocations.complete_review', input: { ...target, mode: 'use_result' }, context: actor });
+      expect(h.progress()).toMatchObject({ result: 'continue', review: { resultSource: { kind: 'execution_input' } },
+        timing: { startedAt: '2026-10-11T10:00:00.000Z', finishedAt: '2026-10-11T10:03:00.000Z' } });
+      clock.mockReturnValue(Date.parse('2026-10-11T11:00:00.000Z'));
+      await h.owner.execute({ actionId: 'workflow.run.invocations.complete_review', input: { ...target, mode: 'use_result' }, context: actor });
+      expect(h.progress().timing?.finishedAt).toBe('2026-10-11T10:03:00.000Z');
+      expect(h.operations.filter(operation => operation.operation === 'invocations.complete_review')).toHaveLength(1);
+    } finally { clock.mockRestore(); }
   });
 
   it('validates against the frozen leaf rather than a cached progress contract', async () => {

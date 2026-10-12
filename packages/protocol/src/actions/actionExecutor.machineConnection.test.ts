@@ -6,6 +6,32 @@ import { getActionSpec } from './actionSpecs.js';
 import { listActionSpecsForCatalogSurface } from './actionCatalog.js';
 
 describe('machine and Home connection Action parity', () => {
+  it('publishes machine page operations with the same caller input on UI and CLI', async () => {
+    for (const [id, input, result] of [
+      ['machines.metadata.update', { serverId: 'home', machineId: 'machine', expectedVersion: 3, patch: { displayName: 'Desk' } }, { version: 4 }],
+      ['machines.daemon.stop', { serverId: 'home', machineId: 'machine' }, { message: 'Stopped' }],
+      ['machines.remove', { serverId: 'home', machineId: 'machine' }, { ok: true, machineAlreadyRevoked: false, providerCleanup: 'complete' }],
+      ['machines.capabilities.install', { serverId: 'home', machineId: 'machine', capabilityId: 'dep.codex-acp', method: 'install' }, { supported: true, response: { ok: true, result: { logPath: '/tmp/install.log' } } }],
+    ] as const) {
+      const actionId = ActionIdSchema.parse(id);
+      const spec = getActionSpec(actionId);
+      expect(spec.surfaces).toMatchObject({ ui: true, cli: true, agent: true, mcp: true });
+      expect(spec.inputSchema.parse(input)).toEqual(input);
+      const seen: unknown[] = [];
+      const deps = { machinePageAction: async (request: unknown) => { seen.push(request); return result; } } as unknown as ActionExecutorDeps;
+      const executor = createActionExecutor(deps);
+      expect(await executor.execute(actionId, input, { surface: 'ui', authority: 'present_user', serverId: 'home', bypassApprovals: true }))
+        .toEqual({ ok: true, result });
+      expect(await executor.execute(actionId, input, { surface: 'cli', authority: 'present_user', serverId: 'home', bypassApprovals: true }))
+        .toEqual({ ok: true, result });
+      expect(seen).toHaveLength(2);
+    }
+    const install = getActionSpec('machines.capabilities.install');
+    expect(install).toMatchObject({ safety: 'danger', executionPlacement: 'machine', sideEffectClass: 'danger' });
+    expect(install.inputSchema.safeParse({ machineId: 'machine', capabilityId: 'cli.codex', method: 'install' }).success).toBe(false);
+    expect(install.inputSchema.safeParse({ machineId: 'machine', capabilityId: 'dep.codex-acp', method: 'probe' }).success).toBe(false);
+    expect(install.inputSchema.safeParse({ machineId: 'machine', capabilityId: 'dep.codex-acp', method: 'install', params: {} }).success).toBe(false);
+  });
   it('lists machine terminals as a read Action with exact Home routing and preserved unavailable/refused outcomes', async () => {
     const id = ActionIdSchema.parse('machines.terminal.list');
     const spec = getActionSpec(id);
@@ -27,6 +53,14 @@ describe('machine and Home connection Action parity', () => {
       expect(ActionIdSchema.safeParse(id).success).toBe(true);
       expect(getActionSpec(ActionIdSchema.parse(id)).executionPlacement).toBe('client');
     }
+    const start = getActionSpec('machines.add.ssh.start');
+    expect(start.inputSchema.safeParse({ serverId: 'home', savedHostId: 'box', expectedHostRevision: 4 }).success).toBe(true);
+    expect(start.inputSchema.safeParse({ serverId: 'home', savedHostId: 'box', expectedHostRevision: 4, password: 'secret' }).success).toBe(false);
+    expect(start.inputSchema.safeParse({ serverId: 'home', savedHostId: 'box', expectedHostRevision: 4, host: 'other-target' }).success).toBe(false);
+    const respond = getActionSpec('machines.add.ssh.respond');
+    expect(respond.inputSchema.safeParse({ taskId: 'task', answer: { kind: 'ssh.password' } }).success).toBe(true);
+    expect(respond.inputSchema.safeParse({ taskId: 'task', answer: { kind: 'ssh.password', password: 'secret' } }).success).toBe(false);
+    expect(start.surfaces.cli).toBe(false);
   });
   it('returns the canonical Home connection outcome and rejects removed classifications', async () => {
     const id = ActionIdSchema.parse('homes.connect');

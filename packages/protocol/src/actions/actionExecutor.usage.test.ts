@@ -5,6 +5,7 @@ import { resolveUsagePageAggregation } from '../usage/resolveUsagePageAggregatio
 import { UsageAnalyticsQueryResponseSchema } from '../usage/usageAnalyticsContracts.js';
 import { decodeBase64 } from '../crypto/base64.js';
 import type { UsageWorkEvidence } from '../usage/usageOutcomeAllocation.js';
+import { resolveInputOptions } from '../inputs/inputOptions.js';
 
 const accounting = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { eventCount: 1,
   tokens: { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 12 },
@@ -12,6 +13,25 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { eve
 const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, agents: ['a', 'b'] });
 
 describe('personal usage Action execution', () => {
+  it('resolves Usage filter choices from admitted accounting instead of execution target identities', async () => {
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, breakdowns: {
+      agent: [{ key: 'claude', label: 'Claude', ...accounting.totals }],
+      machine: [{ key: 'machine-1', label: 'Laptop', ...accounting.totals }],
+      project: [{ key: 'project-1', label: 'App', ...accounting.totals }],
+      source: [{ key: 'native', label: 'Native', ...accounting.totals }],
+    } });
+    // The authenticated accounting transport is the boundary; option/key/admission logic is real.
+    const deps = { machinesList: async () => ({ items: [{ id: 'machine-1', label: 'Laptop' }, { id: 'unaccounted', label: 'Another machine' }] }),
+      usageActions: { query: async (request: { queries: ReturnType<typeof normalizeUsageQuery>[] }) =>
+      resolveUsagePageAggregation({ queries: request.queries, accounting: request.queries.map(query => ({ query, value, status: 'available' as const })) }) } } as ActionExecutorDeps;
+    for (const [field, expected] of [['agents', { value: 'claude', label: 'Claude' }],
+      ['machines', { value: 'machine-1', label: 'Laptop' }], ['projects', { value: 'project-1', label: 'App' }],
+      ['sources', { value: 'native', label: 'Native' }]] as const) {
+      expect(await resolveInputOptions({ deps, ctx: { surface: 'ui', serverId: 'home-1' }, actionId: null,
+        optionsSourceId: `usage.filters.${field}`, input: {}, readFailure: () => null,
+        resolveSessionId: () => null, reviewScope: () => undefined })).toEqual({ ok: true, result: [expected] });
+    }
+  });
   it('publishes Coach evidence states through the same admitted query Action', async () => {
     const coachQuery = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
     const executor = createActionExecutor({ usageActions: {

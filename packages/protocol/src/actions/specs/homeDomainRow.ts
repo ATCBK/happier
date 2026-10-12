@@ -31,6 +31,7 @@ type HomeDomainActionRowInput<
   TOutputSchema extends z.ZodTypeAny,
 > = Readonly<{
   id: TActionId;
+  approval: PreNormalizedActionSpec['approval'];
   title: string;
   description: string;
   safety: 'safe' | 'danger';
@@ -89,7 +90,7 @@ export function homeDomainActionRow<
   'account_automation'
 > {
   return {
-    id: spec.id,
+    id: spec.id, approval: spec.approval,
     title: spec.title,
     description: spec.description,
     safety: spec.safety,

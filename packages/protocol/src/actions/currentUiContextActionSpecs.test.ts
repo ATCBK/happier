@@ -5,27 +5,54 @@ import { ActionIdSchema } from './actionIds.js';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
 import { WORKSPACE_ACTION_IDS } from './workspaceActionFamily.js';
 import { HOME_HUB_LAYOUT_ACTION_IDS } from './specs/homeHub.js';
+import { clientActionUnavailable } from './clientDispatchV1.js';
+import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('current UI context host ActionSpecs', () => {
   it('publishes mounted Workflow draft Actions with the canonical edit grammar and human discard admission', () => {
     const scope = { serverId: 'home-a', accountId: 'account-a' };
     const address = { scope, draftId: 'draft-a' };
     for (const id of ['workflow.authoring.draft.get', 'workflow.authoring.draft.edit', 'workflow.authoring.draft.undo',
-      'workflow.authoring.draft.redo', 'workflow.authoring.draft.save', 'workflow.authoring.draft.discard', 'workflow.run.review.draft.set']) {
-      const spec = getActionSpec(id as never);
+      'workflow.authoring.draft.redo', 'workflow.authoring.draft.save', 'workflow.authoring.draft.discard', 'workflow.run.review.draft.set'] as const) {
+      const spec = getActionSpec(id);
       expect(ActionIdSchema.safeParse(id).success, id).toBe(true);
       expect(ActionSpecSchema.safeParse(spec).success, id).toBe(true);
       expect(spec.executionPlacement).toBe('client');
       expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
       expect(spec.inputSchema.safeParse(JSON.parse(spec.examples?.mcp?.argsExample ?? 'null')).success, id).toBe(true);
+      expect(spec.inputSchema.safeParse(JSON.parse(spec.examples?.voice?.argsExample ?? 'null')).success, id).toBe(true);
+      expect(clientActionUnavailable(id)).toEqual({ ok: true, result: { status: 'unavailable' } });
     }
-    const edit = getActionSpec('workflow.authoring.draft.edit' as never);
+    const edit = getActionSpec('workflow.authoring.draft.edit');
     expect(edit.inputSchema.safeParse({ ...address, expectedDraftRevision: 3,
       ops: [{ kind: 'set_step_prompt', blockId: 'step-a', text: 'Keep the exact text' }] }).success).toBe(true);
     expect(edit.inputSchema.safeParse({ ...address, ops: [{ kind: 'invented' }] }).success).toBe(false);
-    expect(getActionSpec('workflow.authoring.draft.get' as never).inputSchema.safeParse({ scope }).success).toBe(true);
-    expect(getActionSpec('workflow.authoring.draft.save' as never).sideEffectClass).toBe('write');
-    expect(getActionSpec('workflow.authoring.draft.discard' as never).safety).toBe('danger');
+    expect(edit.inputSchema.safeParse({ ...address, expectedDraftRevision: 3, settings: {
+      description: 'Describe this draft', projectTarget: null, executionTarget: 'detached_run',
+      triggers: { rows: [], project: null, inputs: {} },
+    } }).success).toBe(true);
+    expect(edit.inputSchema.safeParse({ ...address, expectedDraftRevision: 3, settings: { unexpected: true } }).success).toBe(false);
+    expect(edit.inputSchema.safeParse({ ...address, expectedDraftRevision: 3, ops: [], settings: {} }).success).toBe(false);
+    expect(edit.inputSchema.safeParse({ ...address, expectedDraftRevision: 3, settings: { triggers: {
+      rows: [{ identity: { clientId: 'event-a' }, trigger: null, enabled: true },
+        { identity: { clientId: 'event-a' }, trigger: null, enabled: true }], project: null, inputs: {},
+    } } }).success).toBe(false);
+    expect(getActionSpec('workflow.authoring.draft.get').inputSchema.safeParse({ scope }).success).toBe(true);
+    expect(getActionSpec('workflow.authoring.draft.save').sideEffectClass).toBe('write');
+    expect(getActionSpec('workflow.authoring.draft.discard').safety).toBe('danger');
+    expect(getActionSpec('workflow.authoring.draft.discard').requiredAuthority).toBe('present_user');
+  });
+  it('never lets an agent approval waiver bypass human authority for draft Discard', async () => {
+    const actionId = 'workflow.authoring.draft.discard';
+    expect(resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), requiredByPolicy: false,
+      context: { surface: 'agent', authority: 'account_automation' } })).toMatchObject({ required: true });
+    const executor = createActionExecutor({
+      workflowAuthoringAction: async () => { throw new Error('Unapproved Discard reached the draft'); },
+    } as unknown as ActionExecutorDeps);
+    expect(await executor.execute('workflow.authoring.draft.discard',
+      { scope: { serverId: 'home-a', accountId: 'account-a' }, draftId: 'draft-a' },
+      { surface: 'agent', authority: 'account_automation', bypassApprovals: true }))
+      .toMatchObject({ ok: false, errorCode: 'present_user_required' });
   });
   it('publishes admitted Home layout and pool reorder invocation metadata', () => {
     for (const actionId of ['home.hub.layout.get', 'home.hub.layout.update', 'connectedServices.pools.reorder'] as const) {
@@ -197,7 +224,7 @@ describe('current UI context host ActionSpecs', () => {
     for (const actionId of ['ui.command_palette.list', 'ui.command_palette.invoke'] as const) {
       const spec = getActionSpec(actionId);
       expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
       expect(spec.inputSchema.safeParse(actionId.endsWith('.list') ? {} : { commandId: 'account' }).success).toBe(true);
     }
     expect(getActionSpec('ui.command_palette.invoke').inputSchema.safeParse({ commandId: 'account', href: '/dev' }).success).toBe(false);

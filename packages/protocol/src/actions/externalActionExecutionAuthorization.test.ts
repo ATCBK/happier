@@ -2,9 +2,30 @@ import { expect, it } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { computeExternalActionRequestEnvelopeDigestV1, signExternalActionMachineRequestV1, verifyExternalActionMachineRequestV1, signExternalActionApprovalInputV1, verifyExternalActionApprovalInputV1, signExternalActionMachineRpcRequestV1, verifyExternalActionMachineRpcRequestV1 } from './externalActionExecutionAuthorization.js';
 import { computeExternalActionSocketRpcRequestDigestV1 } from './externalActionExecutionAuthorization.js';
+import { isExternalActionAuthorizationBoundToEnvelope } from './externalActionExecutionAuthorization.js';
+import type { ExternalActionExecutionAuthorizationBindingV1, ExternalActionTargetV1 } from './externalActionApi.js';
 import { WorkspaceSyncSourceContextV1Schema, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncTargetRoutingV1Schema } from '../rpc/socket.js';
 import { RPC_METHODS } from '../rpc/methods.js';
 import { sealExternalActionRequestV2 } from './externalActionEncryption.js';
+
+it.each(['machine', 'session'] as const)('binds an original %s-targeted envelope to its exact root and execution Machine', kind => {
+  const target: ExternalActionTargetV1 = kind === 'session'
+    ? { kind, sessionId: 'session' } : { kind, machineId: 'machine' };
+  const envelope = { v: 1 as const, requestId: 'request', target, input: { sessionId: 'session' } };
+  const binding = { serverIdentityId: 'home', accountId: 'account', custodianAccountId: 'account',
+    machineId: 'machine', installationId: 'installation', actionId: 'session.fork', requestId: envelope.requestId,
+    target, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+    authentication: { kind: 'terminal', tokenEpoch: 1 } } satisfies ExternalActionExecutionAuthorizationBindingV1;
+  const input = { actionId: binding.actionId, machineId: binding.machineId, envelope };
+  expect(isExternalActionAuthorizationBoundToEnvelope(binding, input)).toBe(true);
+  expect(isExternalActionAuthorizationBoundToEnvelope(binding, { ...input, machineId: 'another-machine' })).toBe(false);
+  expect(isExternalActionAuthorizationBoundToEnvelope(binding, { ...input, actionId: 'session.message.send' })).toBe(false);
+  expect(isExternalActionAuthorizationBoundToEnvelope(binding, { ...input, envelope: { ...envelope, requestId: 'another-request' } })).toBe(false);
+  expect(isExternalActionAuthorizationBoundToEnvelope(binding, { ...input, envelope: { ...envelope, input: {} } })).toBe(false);
+  const changedTarget: ExternalActionTargetV1 = kind === 'session'
+    ? { kind, sessionId: 'another-session' } : { kind, machineId: 'another-machine' };
+  expect(isExternalActionAuthorizationBoundToEnvelope(binding, { ...input, envelope: { ...envelope, target: changedTarget } })).toBe(false);
+});
 
 it.each([1, 2] as const)('binds the installed TARGET decryption attestation to the original Project envelope v%s and logical SOURCE', version => {
   const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(27));
