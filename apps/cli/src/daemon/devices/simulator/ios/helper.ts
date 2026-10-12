@@ -4,6 +4,7 @@ import {
     type SpawnOptions,
 } from 'node:child_process';
 import { basename } from 'node:path';
+import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 
 import type {
     IosSimulatorAdapterHealthV1,
@@ -164,6 +165,7 @@ export function createIosSimulatorHelperProcessStarter(
         }
 
         const child = spawn(startInput.helperPath, [...startInput.args], {
+            env: withProcessOwnerEnvironment(process.env, { kind: 'happier', component: 'device_helper' }),
             stdio: 'ignore',
             windowsHide: true,
             shell: false,

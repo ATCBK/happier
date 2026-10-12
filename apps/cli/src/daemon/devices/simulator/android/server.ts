@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 import { createConnection } from 'node:net';
 import type { Socket } from 'node:net';
 
@@ -912,6 +913,7 @@ export function createDefaultAndroidScrcpyServerProcessStarter(input: Readonly<{
         let stderr = '';
         try {
             const child = spawn(startInput.command, [...startInput.args], {
+                env: withProcessOwnerEnvironment(process.env, { kind: 'happier', component: 'device_helper' }),
                 shell: false,
                 windowsHide: true,
                 stdio: ['ignore', 'pipe', 'pipe'],

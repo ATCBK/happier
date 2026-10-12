@@ -1,5 +1,14 @@
 import { Buffer } from 'node:buffer';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
+import { parseProcessOwnerTag } from '@/processes/ownerTag';
+
+// Genuine OS spawn boundary; helper admission and process adapter stay real.
+vi.mock('node:child_process', async (importOriginal) => ({
+    ...await importOriginal<typeof import('node:child_process')>(), spawn: vi.fn(),
+}));
 
 /** Flush enough microtask ticks for the lazily-started helper to register a pending command. */
 async function flushMicrotasks(): Promise<void> {
@@ -96,6 +105,19 @@ function frameLine(overrides: Record<string, unknown> = {}): Record<string, unkn
 }
 
 describe('iOS simulator helper session owner', () => {
+    it('stamps the device helper owner at the actual default OS spawn boundary', async () => {
+        const mod = await import(modulePath);
+        const child = Object.assign(new EventEmitter(), {
+            pid: 4242, killed: false, stdin: new PassThrough(), stdout: new PassThrough(), kill: vi.fn(() => true),
+        });
+        // Structural fixture at the genuine child-process boundary.
+        vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
+        const start = mod.createIosSimulatorHelperSessionProcessStarter();
+        await start({ helperPath: '/verified/ios-helper', args: ['--daemon-json'] });
+        const environment = vi.mocked(spawn).mock.calls.at(-1)?.[2]?.env;
+        expect(parseProcessOwnerTag(environment?.HAPPIER_PROCESS_OWNER)?.owner)
+            .toEqual({ kind: 'happier', component: 'device_helper' });
+    });
     it('bridges helper stdout frame lines to the active openStream consumer', async () => {
         const mod = await import(modulePath);
         const fake = createFakeHelperProcess();
@@ -298,6 +320,7 @@ describe('iOS simulator helper session owner', () => {
             emitMessage: () => {},
         });
         expect(startHelper).toHaveBeenCalledTimes(1);
+        const departedRoot = session.readProcessRoots()[0];
 
         // Bare process exit (a crash) is recoverable: the next openStream relaunches a fresh helper.
         first.emitExit({ exitCode: 9, signal: null });
@@ -308,6 +331,12 @@ describe('iOS simulator helper session owner', () => {
             emitMessage: () => {},
         });
         expect(startHelper).toHaveBeenCalledTimes(2);
+        // Both boundary children deliberately reuse PID 4242. A stale UI selection
+        // cannot borrow that number to stop the new helper generation.
+        await expect(departedRoot?.stop?.()).rejects.toMatchObject({ code: 'process_root_changed' });
+        expect(second.stopCalls).toBe(0);
+        await session.readProcessRoots()[0]?.stop?.();
+        expect(second.stopCalls).toBe(1);
     });
 
     it('restarts after a crash with a clean stream generation', async () => {
@@ -487,9 +516,14 @@ describe('iOS simulator helper session owner', () => {
             emitMessage: () => {},
         });
 
-        await Promise.all([session.stop(), session.stop()]);
+        const root = session.readProcessRoots()[0];
+        expect(root).toMatchObject({ owner: { kind: 'happier', component: 'device_helper' }, pid: 4242 });
+        await Promise.all([root?.stop?.(), root?.stop?.()]);
 
         expect(fake.stopCalls).toBe(1);
+        expect(session.readProcessRoots()).toEqual([]);
+        await expect(session.openStream({ sourceId: SOURCE_ID, streamId: STREAM_ID,
+            codecId: 'image.mjpeg', emitMessage: () => {} })).rejects.toMatchObject({ code: 'IOS_HELPER_SESSION_STOPPED' });
     });
 
     it('discards an unbounded newline-free stdout run instead of accumulating (bounded reframer)', async () => {

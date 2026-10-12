@@ -1,6 +1,8 @@
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { basename } from 'node:path';
+import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
 
 import { attachJsonlLineReader } from '../../../../agent/runtime/jsonl/attachJsonlLineReader';
 import {
@@ -74,6 +76,7 @@ export type IosSimulatorHelperSessionChild = Readonly<{
 export type IosSimulatorHelperSessionSpawn = (
     command: string,
     args: readonly string[],
+    options?: SpawnOptions,
 ) => IosSimulatorHelperSessionChild;
 
 export type IosSimulatorHelperSessionCommandResult = Readonly<
@@ -92,6 +95,7 @@ export type IosSimulatorHelperSession = Readonly<{
         command: IosSimulatorHelperControlCommand,
     ) => Promise<IosSimulatorHelperSessionCommandResult>;
     stop: () => Promise<void>;
+    readProcessRoots: () => readonly HappierProcessRootSource[];
 }>;
 
 export type CreateIosSimulatorHelperSessionInput = Readonly<{
@@ -129,7 +133,8 @@ export function createIosSimulatorHelperSessionProcessStarter(
     input: Readonly<{ spawn?: IosSimulatorHelperSessionSpawn }> = {},
 ): IosSimulatorHelperSessionStarter {
     const spawn = input.spawn
-        ?? ((command, args) => nodeSpawn(command, [...args], {
+        ?? ((command, args, options) => nodeSpawn(command, [...args], {
+            ...options,
             stdio: ['pipe', 'pipe', 'ignore'],
             windowsHide: true,
             shell: false,
@@ -141,7 +146,9 @@ export function createIosSimulatorHelperSessionProcessStarter(
                 { code: 'FORBIDDEN_HELPER_RUNTIME' },
             );
         }
-        const child = spawn(startInput.helperPath, [...startInput.args]);
+        const child = spawn(startInput.helperPath, [...startInput.args], {
+            env: withProcessOwnerEnvironment(process.env, { kind: 'happier', component: 'device_helper' }),
+        });
         return {
             ...(typeof child.pid === 'number' ? { pid: child.pid } : {}),
             onStdoutLine: (listener) => {
@@ -461,5 +468,17 @@ export function createIosSimulatorHelperSession(
         return await stopPromise;
     };
 
-    return { openStream, sendCommand, stop };
+    return { openStream, sendCommand, stop,
+        readProcessRoots: () => {
+            const handle = processHandle;
+            if (stopped || !handle || handle.pid === undefined) return [];
+            return [{ owner: { kind: 'happier', component: 'device_helper' }, pid: handle.pid,
+                stop: async () => {
+                    if (processHandle !== handle) {
+                        throw Object.assign(new Error('iOS helper root has changed'), { code: 'process_root_changed' });
+                    }
+                    await stop();
+                } }];
+        },
+    };
 }
