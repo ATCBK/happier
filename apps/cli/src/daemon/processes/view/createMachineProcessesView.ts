@@ -1,0 +1,209 @@
+import type { MachineProcessesListInputV1, MachineProcessesGetInputV1, MachineProcessesGetResultV1,
+    MachineProcessesCheckInputV1, MachineProcessesCheckResultV1, MachineProcessesWatchInputV1, MachineProcessesWatchResultV1, ProcessRowV1, NotHappierRowV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
+import { parkWatch } from '@/daemon/lifecycle/parkWatch';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+import type { MachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
+import type { LocalServiceInventoryRoutes } from '@/daemon/local/services/inventory/routes';
+import type { NormalizedLocalServiceInventorySnapshot } from '@/daemon/local/services/inventory/scanner';
+import type { ProcessRoleCatalog } from '@/processes/classification/processRoleCatalog';
+import { readProcessOwnershipBootTimeMs } from '../roots/listHappierProcessRoots';
+import type { createProcessOwnershipRuntime } from '../ownership/processOwnershipRuntime';
+import type { createLeftBehindPass } from '../leftBehind/leftBehindPass';
+import { processOwnerKey, type HappierProcessRoot, type ProcessOwnerRef } from '../ownership/types';
+import { createProcessMetrics } from './processMetrics';
+import { decodeProcessRef } from './processRef';
+import { projectMachineProcesses, type ProcessRequester, type ProcessRequesterIdentity, type ProcessesProjectionInput, type ProcessOwnershipRead } from './projectMachineProcesses';
+
+export type MachineProcessesViewOptions = Readonly<{
+    processOwnershipRuntime: ReturnType<typeof createProcessOwnershipRuntime>;
+    leftBehind: Pick<ReturnType<typeof createLeftBehindPass>, 'observe' | 'confirmed'>;
+    machineVitals: Pick<MachineVitalsSampler, 'demand' | 'subscribe' | 'latest'>;
+    platform: 'linux' | 'darwin' | 'win32'; selfPid?: number; bootTimeMs?: number;
+    allProcessesVisible(): boolean;
+    requesterForOwner(owner: ProcessOwnerRef, roots: readonly HappierProcessRoot[]): ProcessRequesterIdentity | null;
+    readRequesterIdentities?: () => Promise<ReadonlyMap<string, Readonly<{ accountId: string; displayName: string }>>>;
+    localServiceRoutes?: Pick<LocalServiceInventoryRoutes, 'readCurrentSnapshot' | 'getSnapshot' | 'watchSnapshot'>;
+    roleCatalog?: ProcessRoleCatalog;
+}>;
+
+/** The view consumes ownership and the Left-behind pass; it never owns another census or ownership rule. */
+export function createMachineProcessesView(options: MachineProcessesViewOptions) {
+    const metrics = createProcessMetrics();
+    let ports: NormalizedLocalServiceInventorySnapshot | undefined;
+    let bootTimeMs = options.bootTimeMs;
+    let latestRead: ProcessOwnershipRead | undefined;
+    let latestMetricAtMs: number | undefined;
+    const listeners = new Set<() => void>();
+    let releaseLive: (() => void) | undefined;
+    let unsubscribeVitals: (() => void) | undefined;
+    let portsController: AbortController | undefined;
+    let ticking: Promise<void> | undefined;
+    let disposed = false;
+    let requesterIdentities: ReadonlyMap<string, Readonly<{ accountId: string; displayName: string }>> | undefined;
+    const watches = new Set<AbortController>();
+    // Native daemon handles support unref; shared UI ambient types also expose numeric handles.
+    let metricExpiry: (ReturnType<typeof setTimeout> & Readonly<{ unref?: () => void }>) | undefined;
+    const clearMetrics = () => { metrics.reset(); currentMetrics = new Map(); };
+    const prepare = async () => {
+        if (options.platform === 'linux' && bootTimeMs === undefined) bootTimeMs = await readProcessOwnershipBootTimeMs(options.platform);
+    };
+    const capture = async (freshness: 'shared' | 'fresh') => {
+        const read = await options.processOwnershipRuntime.readOwners({ freshness });
+        const identities = await options.readRequesterIdentities?.().catch(() => undefined);
+        options.leftBehind.observe(read);
+        return { read, identities };
+    };
+    const project = (read: ProcessOwnershipRead, request: ProcessesProjectionInput, requester: ProcessRequester, watched = false,
+        facts: Readonly<{ ports?: NormalizedLocalServiceInventorySnapshot; identities?: typeof requesterIdentities }> = {}) =>
+        projectMachineProcesses(read, request, requester, { ...options, allProcessesVisible: options.allProcessesVisible(),
+            confirmed: options.leftBehind.confirmed(), ports: facts.ports ?? ports, bootTimeMs, requesterIdentities: facts.identities ?? requesterIdentities,
+            ...(watched ? { metrics: currentMetrics, history: metrics.history(), capturedAtMs: latestMetricAtMs } : {}) });
+    let currentMetrics: ReadonlyMap<number, import('./processMetrics').ProcessMetrics> = new Map();
+    const notify = () => { for (const listener of listeners) listener(); };
+    async function followPorts(signal: AbortSignal) {
+        const routes = options.localServiceRoutes;
+        if (!routes) return;
+        try {
+            const initial = await routes.getSnapshot();
+            if (signal.aborted) return;
+            ports = initial;
+            if (latestRead) notify();
+            while (!signal.aborted) {
+                const answer = await routes.watchSnapshot({ sinceGeneratedAt: ports.generatedAt, signal });
+                if (signal.aborted) return;
+                if (answer.changed) { ports = answer.snapshot; if (latestRead) notify(); }
+            }
+        } catch { /* Inventory failure cannot manufacture process evidence or start a competing scanner. */ }
+    }
+    function subscribe(listener: () => void) {
+        listeners.add(listener);
+        if (listeners.size === 1) {
+            clearTimeout(metricExpiry); metricExpiry = undefined;
+            const controller = new AbortController();
+            portsController = controller;
+            unsubscribeVitals = options.machineVitals.subscribe(({ sample }) => {
+                const ownership = latestRead;
+                if (ticking || ownership?.status !== 'ok') return;
+                ticking = (async () => {
+                    const snapshot = await options.processOwnershipRuntime.readOwnedProcessMetrics(ownership);
+                    if (disposed || controller.signal.aborted || !listeners.size) return;
+                    if (snapshot.status === 'ok') {
+                        const owners = new Map<string, number[]>();
+                        for (const row of ownership.rows) if (row.owner && row.level !== 'left_behind' && row.level !== 'not_happier') {
+                            const key = processOwnerKey(row.owner);
+                            const pids = owners.get(key) ?? [];
+                            pids.push(row.pid); owners.set(key, pids);
+                        }
+                        currentMetrics = metrics.observe(snapshot, sample.intervalMs, owners);
+                        latestMetricAtMs = snapshot.capturedAtMs;
+                    }
+                    else { metrics.reset(); currentMetrics = new Map(); }
+                    notify();
+                })().finally(() => { ticking = undefined; });
+                void ticking.catch(() => {});
+            });
+            releaseLive = options.machineVitals.demand('live');
+            void followPorts(controller.signal);
+        }
+        return () => {
+            listeners.delete(listener);
+            if (!listeners.size) {
+                unsubscribeVitals?.(); unsubscribeVitals = undefined;
+                releaseLive?.(); releaseLive = undefined;
+                portsController?.abort(); portsController = undefined;
+                // The same parked-watch boundary lets the existing client re-arm without
+                // losing its baseline. Only metrics survive; native tables and I/O do not.
+                if (disposed) clearMetrics();
+                else {
+                    metricExpiry = setTimeout(() => {
+                        metricExpiry = undefined; clearMetrics(); latestRead = undefined; latestMetricAtMs = undefined;
+                    }, MACHINE_WATCH_WINDOW_MS);
+                    metricExpiry.unref?.();
+                }
+                ports = undefined; requesterIdentities = undefined;
+            }
+        };
+    }
+    const scope = (requester: ProcessRequester) => requester.accountId === requester.custodianAccountId && options.allProcessesVisible() ? 'all' as const : 'happier' as const;
+    async function list(request: MachineProcessesListInputV1, requester: ProcessRequester) {
+        await prepare();
+        // Port presentation follows the inventory watch. Unrelated endpoint/HTTP
+        // probes must not hold the custody rows (or their fresh identity checks).
+        const observedPorts = options.localServiceRoutes?.readCurrentSnapshot();
+        const { read, identities } = await capture('shared');
+        return project(read, { ...request, scope: request.scope ?? 'happier', view: request.view ?? 'tree' }, requester, false, { ports: observedPorts, identities });
+    }
+    async function detailed(request: MachineProcessesGetInputV1 | MachineProcessesCheckInputV1, requester: ProcessRequester, detailToken?: string) {
+        await prepare();
+        const observedPorts = options.localServiceRoutes?.readCurrentSnapshot();
+        const { read, identities } = await capture('fresh');
+        if (read.status !== 'ok') throw new Error(`Process evidence unavailable: ${read.reason}`);
+        const answer = project(read, { machineId: request.machineId, scope: scope(requester), view: 'tree', ...(detailToken ? { detailToken } : {}) }, requester, true, { identities, ports: observedPorts });
+        if (answer.state === 'unavailable') throw new Error(`Process evidence unavailable: ${answer.reason}`);
+        return answer;
+    }
+    function visibleRows(answer: ReturnType<typeof project>): Array<ProcessRowV1 | NotHappierRowV1> {
+        return [...answer.owners.flatMap(owner => owner.members), ...answer.leftBehind, ...(answer.notHappier?.flatMap(group => group.members) ?? [])];
+    }
+    return {
+        list,
+        async watch(request: MachineProcessesWatchInputV1, requester: ProcessRequester, signal?: AbortSignal): Promise<MachineProcessesWatchResultV1> {
+            await prepare();
+            if (signal?.aborted || disposed) return { changed: false };
+            if (request.since === undefined || request.scope === 'all' && (requester.accountId !== requester.custodianAccountId || !options.allProcessesVisible())) {
+                const { read, identities } = await capture('shared');
+                if (signal?.aborted || disposed) return { changed: false };
+                latestRead = read;
+                latestMetricAtMs = read.status === 'ok' ? read.snapshot.capturedAtMs : undefined;
+                return { changed: true, answer: project(read, request, requester, false, { identities }) };
+            }
+            const ownershipCapturedAtMs = latestRead?.status === 'ok' ? latestRead.snapshot.capturedAtMs : undefined;
+            if (ownershipCapturedAtMs === undefined || Date.now() - ownershipCapturedAtMs >= MACHINE_WATCH_WINDOW_MS) {
+                const captured = await capture('shared');
+                if (signal?.aborted || disposed) return { changed: false };
+                latestRead = captured.read;
+                latestMetricAtMs = captured.read.status === 'ok' ? captured.read.snapshot.capturedAtMs : undefined;
+                requesterIdentities = captured.identities;
+            }
+            const identities = await options.readRequesterIdentities?.().catch(() => undefined);
+            if (signal?.aborted || disposed) return { changed: false };
+            const read = () => project(latestRead!, request, requester, true);
+            const newer = () => !!latestRead && (latestRead.status !== 'ok' || read().state === 'unavailable' || latestRead.snapshot.capturedAtMs > request.since!);
+            const controller = new AbortController();
+            const abort = () => controller.abort();
+            signal?.addEventListener('abort', abort, { once: true });
+            if (signal?.aborted) controller.abort();
+            watches.add(controller);
+            try {
+                const answer = await parkWatch({ isNewer: newer, subscribe: listener => { requesterIdentities = identities; return subscribe(listener); }, read,
+                    signal: controller.signal, windowMs: MACHINE_WATCH_WINDOW_MS });
+                return answer.changed ? { changed: true, answer: answer.snapshot } : { changed: false };
+            } finally { watches.delete(controller); signal?.removeEventListener('abort', abort); }
+        },
+        async get(request: MachineProcessesGetInputV1, requester: ProcessRequester): Promise<MachineProcessesGetResultV1> {
+            const answer = await detailed(request, requester, request.ref);
+            const row = visibleRows(answer).find(candidate => candidate.ref === request.ref) ?? null;
+            const owner = row ? answer.owners.find(candidate => candidate.members.some(member => member.ref === row.ref))?.owner
+                ?? answer.leftBehind.find(candidate => candidate.ref === row.ref)?.owner : undefined;
+            return { row, ...(owner ? { owner } : {}), ...(row && answer.history?.[row.ref] ? { history: [...answer.history[row.ref]] } : {}) };
+        },
+        async check(request: MachineProcessesCheckInputV1, requester: ProcessRequester): Promise<MachineProcessesCheckResultV1> {
+            const answer = await detailed(request, requester);
+            const rows = visibleRows(answer);
+            return { checks: request.refs.map(ref => {
+                const decoded = decodeProcessRef(ref);
+                const row = decoded ? rows.find(candidate => candidate.pid === decoded.pid) : undefined;
+                if (!row) return { ref, present: false, identityEqual: false };
+                if (row.ref !== ref) return { ref, present: true, identityEqual: false };
+                const owner = answer.owners.find(candidate => candidate.members.some(member => member.ref === ref))?.owner
+                    ?? answer.leftBehind.find(candidate => candidate.ref === ref)?.owner;
+                return { ref, present: true, identityEqual: true, level: 'level' in row ? row.level : 'not_happier', owner: owner ?? null, memoryBytes: row.memoryBytes };
+            }) };
+        },
+        dispose() { disposed = true; for (const controller of watches) controller.abort();
+            unsubscribeVitals?.(); releaseLive?.(); portsController?.abort();
+            clearTimeout(metricExpiry); metricExpiry = undefined; clearMetrics();
+            ports = undefined; requesterIdentities = undefined; latestRead = undefined; latestMetricAtMs = undefined; },
+    };
+}
+export type MachineProcessesView = ReturnType<typeof createMachineProcessesView>;
