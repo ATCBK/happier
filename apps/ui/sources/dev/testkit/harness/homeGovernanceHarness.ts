@@ -336,14 +336,16 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             // are registered with `vi.doMock`, and pulling the storage graph in
             // at testkit evaluation would resolve the real transport first.
             const { storage } = await import('@/sync/domains/state/storage');
+            const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+            const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
             const current = storage.getState().settings ?? {};
             const settings = {
                 ...current,
-                actionsSettingsV1: {
+                actionsSettingsV1: normalizeActionsSettingsV1({
                     v: 1,
                     actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } },
-                },
-            } as const;
+                }),
+            };
             // The live Account scope, as the sync owner establishes it for the
             // active Home: it activates the settings and profile scopes
             // together (`activateAccountSettingsScope`), and the Artifact
@@ -351,18 +353,22 @@ export function createHomeGovernanceHarness(): HomeGovernanceHarness {
             // sync owner names the Home by the active snapshot's scope id, which
             // for a Home that publishes a portable identity is that identity.
             const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: record.accountId };
+            const version = (loadAccountSettings(scope).version ?? 0) + 1;
             storage.setState({
                 settingsScope: scope,
                 profileScope: scope,
-                settings: settings as never,
             });
+            // Publish through the settings owner, including its persisted revision.
+            // Sync activation can otherwise replace a direct in-memory seed with
+            // the old baseline before the Action captures its Account policy.
+            storage.getState().applySettingsForScope(scope, settings, version);
             // The Action front door may capture the exact Home while another
             // surface changes the device's live settings scope. Persist the same
             // policy at this Home's real settings boundary so the request still
             // observes the Account-owned decision instead of falling back to the
             // harness's empty baseline.
             record.answers.set(ACCOUNT_SETTINGS_V2_PATH, {
-                body: { content: { t: 'plain', v: settings }, version: 1 },
+                body: { content: { t: 'plain', v: settings }, version },
             });
             seededApprovalRequirement = true;
             // The approval request itself crosses the Artifact write boundary,

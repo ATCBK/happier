@@ -300,6 +300,10 @@ describe('shared workspace filesystem Action admission', () => {
 
     it.each(operations)('$actionId defers its exact rooted effect until approval', async operation => {
         await homes.requireUiApproval(serverId, operation.actionId);
+        // The real sync owner can reactivate this Account between publication
+        // and admission. Its persisted revision must retain the Ask-first policy.
+        await storage.getState().activateSettingsScope({ serverId, accountId: 'account-a' });
+        expect(storage.getState().settings.actionsSettingsV1.actions[operation.actionId]?.approvalRequiredSurfaces).toContain('ui');
         const pending = await operation.run(target);
         expect(pending, JSON.stringify(pending)).toMatchObject({ success: false, errorCode: 'approval_required', approvalArtifactId: expect.any(String) });
         expect([...filesystem.paths]).toEqual(['/repo/a']);
