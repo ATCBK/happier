@@ -26,6 +26,7 @@ import {
     stagePluginSurfacePaneLaunch,
     usePluginSurfacePaneLaunch,
     usePluginSurfacePaneLaunchScope,
+    usePluginSurfaceDestinationNavigationBinding,
 } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 import type { PluginSurfaceScopedLaunchFacts } from '@/components/plugins/surfaces/pluginSurfaceLaunchAuthority';
 import { PluginReactNativeUnavailable } from '@/components/plugins/reactNative/PluginReactNativeUnavailable';
@@ -137,6 +138,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
     const isFocused = sceneFocused && destinationFocused;
     const pane = useAppPaneScope(props.scopeId);
     const surfaceNavigation = useSessionCockpitSurfaceNavigation();
+    const enclosingNavigation = usePluginSurfaceDestinationNavigationBinding();
     const registerCockpitChrome = useSessionCockpitChromeRegister();
     const openDetailsTabCount = useDetailsTabCount(props.scopeId);
     const surfaceNavigationRef = React.useRef(surfaceNavigation);
@@ -338,8 +340,10 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
         scopedLaunchFacts,
         runtimeAdmission,
         handlers: { rightSidebarTab: openPluginMobileTab },
+        enclosingOpenSurface: enclosingNavigation?.openSurface,
     }), [
         accountLifetime,
+        enclosingNavigation,
         openPluginMobileTab,
         pluginProjection.pluginUiProjection,
         runtimeAdmission,

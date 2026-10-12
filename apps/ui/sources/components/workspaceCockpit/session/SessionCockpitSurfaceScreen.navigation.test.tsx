@@ -6,8 +6,7 @@ import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plu
 
 import { invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installNavigationCommonModuleMocks } from '@/components/ui/navigation/navigationTestHelpers';
-import type { Message } from "@happier-dev/session-core/messages";
+import type { Message } from '@happier-dev/session-core/messages';
 import type { SessionMobileSurface } from './sessionCockpitState';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -15,7 +14,6 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const CockpitNavigatorFocusContext = React.createContext(true);
 
 const persistedStorage = vi.hoisted(() => new Map<string, string>());
-const approvalSessionTargets = vi.hoisted(() => [] as Array<{ serverId: string; sessionId: string } | null>);
 const sessionMachineTargetCalls = vi.hoisted(() => [] as unknown[]);
 const canonicalSessionPluginRuntime = vi.hoisted(() => ({ values: [] as object[] }));
 const cockpitNavigatorState = vi.hoisted(() => ({
@@ -50,10 +48,6 @@ vi.mock('react-native-mmkv', () => {
     return { MMKV };
 });
 
-const transcriptState = vi.hoisted(() => ({
-    ids: [] as string[],
-    messagesById: {} as Record<string, unknown>,
-}));
 const cockpitPluginProjectionState = vi.hoisted(() => ({
     value: {
         pluginUiProjection: null as unknown,
@@ -66,11 +60,7 @@ const cockpitPluginProjectionState = vi.hoisted(() => ({
 }));
 const cockpitDeviceType = vi.hoisted(() => ({ value: 'phone' as 'phone' | 'tablet' }));
 
-installNavigationCommonModuleMocks({
-    // The cockpit tree reaches far more typography styles than the navigation panel alone,
-    // so keep the real constants rather than a narrow stub.
-    typography: async () => await vi.importActual('@/constants/Typography'),
-    reactNative: async () => {
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             // Boundary stub for the RN list host: `any` mirrors the untyped mock-module shape.
@@ -95,19 +85,21 @@ installNavigationCommonModuleMocks({
                 }),
             },
         });
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useLocalSetting: () => null,
-            useForkedTranscriptSnapshot: () => null,
-            useSessionTranscriptIds: () => ({ ids: transcriptState.ids, isLoaded: true }),
-            useSessionMessagesById: () => transcriptState.messagesById,
-            useSessionMessages: () => ({ messages: [], isLoaded: true }),
-            useSessionCompanionPreferenceSlot: () => ({ storageKey: null, stored: undefined }),
-        });
-    },
 });
+
+// Install only presentation/platform boundaries. The composed cockpit uses
+// real storage and preference hooks, not the shared helper's navigation stub.
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key: string) => key });
+});
+vi.mock('@/components/ui/text/Text', () => ({
+    Text: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) => React.createElement('Text', props, children),
+}));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -192,16 +184,20 @@ vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
 }));
 
-vi.mock('@/components/sessions/shell/SessionView', () => ({
+vi.mock('@/components/sessions/shell/SessionView', async () => {
+    const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+    return {
     SessionView: (props: Record<string, unknown> & { contentOverride?: React.ReactNode }) => {
         const [composerDraft, setComposerDraft] = React.useState('');
+        const pane = useAppPaneScope(typeof props.scopeId === 'string' ? props.scopeId : 'session:session-1');
         return React.createElement(
             'SessionView',
-            { ...props, composerDraft, setComposerDraft },
+            { ...props, composerDraft, setComposerDraft, pane },
             props.contentOverride ?? null,
         );
     },
-}));
+    };
+});
 vi.mock('@/components/sessions/companion/SessionCompanionScreen', () => ({
     SessionCompanionScreen: (props: Record<string, unknown>) => React.createElement('SessionCompanionScreen', props),
 }));
@@ -279,9 +275,10 @@ vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/utils/platform/responsive')>()),
     useDeviceType: () => cockpitDeviceType.value,
 }));
-vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
-    captureActiveServerAccountScopeLifetime: () => null,
-}));
+vi.mock('socket.io-client', async (importOriginal) => {
+    const { createSocketIoClientBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    return createSocketIoClientBoundary(importOriginal);
+});
 vi.mock('@/components/sessions/localServices/useServicesOpenInBrowser', () => ({
     useServicesOpenInBrowser: () => () => {},
 }));
@@ -311,17 +308,6 @@ vi.mock('@/components/appShell/panes/hooks/useDetailsTabCount', () => ({
     useDetailsTabCount: () => 0,
 }));
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
-vi.mock('@/sync/store/hooks', async () => {
-    const { createUseLocalSettingMock } = await import('@/dev/testkit/mocks/storage');
-    return {
-    useLocalSetting: createUseLocalSettingMock(),
-    useActiveServerAccountScope: () => null,
-    useOpenApprovalArtifactsForSession: (target: { serverId: string; sessionId: string } | null) => {
-        approvalSessionTargets.push(target);
-        return [];
-    },
-    };
-});
 vi.mock('@/hooks/session/useUserMessageHistory', () => ({
     useUserMessageHistoryRemoteEntries: () => ({
         rows: [],
@@ -350,10 +336,17 @@ function userMessage(id: string, seq: number, text: string): Message {
     } as unknown as Message;
 }
 
-function seedTranscript() {
+async function seedTranscript() {
+    const { storage } = await import('@/sync/domains/state/storageStore');
+    const { createReducer } = await import('@happier-dev/session-core/reducer');
+    const { localSettingsParse } = await import('@/sync/domains/settings/localSettings');
     const messages = [userMessage('m3', 3, 'Run the tests')];
-    transcriptState.ids = messages.map((message) => message.id);
-    transcriptState.messagesById = Object.fromEntries(messages.map((message) => [message.id, message]));
+    const messagesById = Object.fromEntries(messages.map((message) => [message.id, message]));
+    storage.setState({ localSettings: localSettingsParse({}), sessionMessages: { 'session-1': {
+        messageIdsOldestFirst: messages.map((message) => message.id), messagesById, messagesMap: messagesById,
+        reducerState: createReducer(), latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null,
+        messagesVersion: 1, isLoaded: true,
+    } } });
 }
 
 /**
@@ -395,7 +388,7 @@ function createCockpitPluginProjection(input: Readonly<{
             interactionEnabled: true,
             // The canonical union producer stamps projection phase; currentness
             // is never inferred from the model or the interaction boolean.
-            phase: 'current',
+            phase: 'current' as const,
             executionOrigin: {
                 serverIdentityId: 'srv_account_one',
                 materializationRef: {
@@ -446,17 +439,21 @@ function createCockpitPluginProjection(input: Readonly<{
 async function loadCockpitHarness(): Promise<React.ComponentType<Readonly<{
     events: string[];
     initialSurface?: SessionMobileSurface;
+    routeServerId?: string;
+    enclosingBinding?: import('@/components/plugins/surfaces/pluginSurfaceDestinationNavigation').PluginSurfaceDestinationNavigationBinding;
 }>>> {
     const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
     const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
     const { SessionCockpitSurfaceNavigationProvider } = await import('./SessionCockpitSurfaceNavigation');
     const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
-    const { PluginSurfacePaneLaunchScope } = await import('@/components/plugins/surfaces/pluginSurfaceDestinationNavigation');
+    const { PluginSurfacePaneLaunchScope, PluginSurfaceDestinationNavigationBindingProvider } = await import('@/components/plugins/surfaces/pluginSurfaceDestinationNavigation');
     const { SessionBoardContinuityProvider } = await import('@/components/sessions/board/SessionBoardContinuity');
 
     return function CockpitHarness(props: Readonly<{
         events: string[];
         initialSurface?: SessionMobileSurface;
+        routeServerId?: string;
+        enclosingBinding?: import('@/components/plugins/surfaces/pluginSurfaceDestinationNavigation').PluginSurfaceDestinationNavigationBinding;
     }>) {
         const [surface, setSurface] = React.useState<SessionMobileSurface>(props.initialSurface ?? 'navigation');
         const switchSurface = React.useCallback((next: SessionMobileSurface) => {
@@ -466,13 +463,14 @@ async function loadCockpitHarness(): Promise<React.ComponentType<Readonly<{
 
         return (
             <AppPaneProvider>
+                <PluginSurfaceDestinationNavigationBindingProvider binding={props.enclosingBinding}>
                 <SessionCockpitChromeRegistryProvider>
                     <SessionCockpitSurfaceNavigationProvider value={{ switchSurface, returnToPreviousSurface: () => switchSurface('chat') }}>
                         <PluginSurfacePaneLaunchScope>
                             <SessionBoardContinuityProvider sessionId="session-1" serverId="server-1">
                                 <SessionCockpitSurfaceScreen
                                     sessionId="session-1"
-                                    routeHydrationState={{ kind: 'available', sessionId: 'session-1', serverId: 'server-1' }}
+                                    routeHydrationState={{ kind: 'available', sessionId: 'session-1', serverId: props.routeServerId ?? 'server-1' }}
                                     scopeId="session:session-1"
                                     surface={surface}
                                     terminalTabAvailable={false}
@@ -481,6 +479,7 @@ async function loadCockpitHarness(): Promise<React.ComponentType<Readonly<{
                         </PluginSurfacePaneLaunchScope>
                     </SessionCockpitSurfaceNavigationProvider>
                 </SessionCockpitChromeRegistryProvider>
+                </PluginSurfaceDestinationNavigationBindingProvider>
             </AppPaneProvider>
         );
     };
@@ -507,7 +506,7 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         await loadSyncSingletonForTests();
         standardCleanup();
         persistedStorage.clear();
-        seedTranscript();
+        await seedTranscript();
         await primeSessionBoardFeature(true);
         cockpitPluginProjectionState.value = {
             pluginUiProjection: null,
@@ -518,7 +517,6 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
             phase: 'establishing',
         };
         cockpitDeviceType.value = 'phone';
-        approvalSessionTargets.length = 0;
         sessionMachineTargetCalls.length = 0;
         canonicalSessionPluginRuntime.values = [];
         cockpitNavigatorState.activeSurface = 'chat';
@@ -526,6 +524,54 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         cockpitNavigatorState.hardwareBackHandlers = [];
         const { transcriptNavigationPaneStore } = await import('@/components/sessions/transcript/navigation/transcriptNavigationPaneStore');
         transcriptNavigationPaneStore.set('session-1', null);
+    });
+
+    it('presents pane opens and repeated Details reveals through the retained phone navigator', async () => {
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
+        const { SessionCockpitShell } = await import('./SessionCockpitShell');
+        const { createSessionScmReviewDetailsTab } = await import('@/components/sessions/panes/details/sessionDetailsTabBuilders');
+        const screen = await renderScreen(
+            <AppPaneProvider><SessionCockpitChromeRegistryProvider>
+                <SessionCockpitShell surface="chat" routeServerId="server-1" scopeId="session:session-1" sessionId="session-1" terminalTabAvailable={false} />
+            </SessionCockpitChromeRegistryProvider></AppPaneProvider>,
+        );
+        const chat = () => screen.tree.findAllByType('SessionView' as never)[0]!;
+        const pane = () => chat().props.pane as import('@/components/appShell/panes/hooks/useAppPaneScope').AppPaneScopeApi;
+        await act(async () => chat().props.setComposerDraft('keep my draft'));
+        await act(async () => pane().openRight({ tabId: 'git' }));
+        expect(cockpitNavigatorState.activeSurface).toBe('git');
+        await act(async () => pane().openDetailsTab(createSessionScmReviewDetailsTab()));
+        expect(cockpitNavigatorState.activeSurface).toBe('tabs');
+        await act(async () => cockpitNavigatorState.goBack?.());
+        expect(cockpitNavigatorState.activeSurface).toBe('git');
+        await act(async () => pane().openDetailsTab(createSessionScmReviewDetailsTab()));
+        expect(cockpitNavigatorState.activeSurface).toBe('tabs');
+        await act(async () => pane().setRightTab('services'));
+        await act(async () => {
+            pane().setRightTab('git');
+            pane().openRight();
+        });
+        expect(cockpitNavigatorState.activeSurface).toBe('git');
+        expect(chat().props.composerDraft).toBe('keep my draft');
+    });
+
+    it('presents a changed pane URL even when the persisted initial surface is Chat, without trapping phone Back', async () => {
+        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+        const { SessionCockpitChromeRegistryProvider } = await import('./SessionCockpitChromeRegistry');
+        const { SessionCockpitShell } = await import('./SessionCockpitShell');
+        const { parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+        const render = (paneUrlState: import('@/components/sessions/panes/url/sessionPaneUrlState').SessionPaneUrlState | null) => (
+            <AppPaneProvider><SessionCockpitChromeRegistryProvider>
+                <SessionCockpitShell surface="chat" routeServerId="server-1" scopeId="session:session-1" sessionId="session-1"
+                    terminalTabAvailable={false} paneUrlState={paneUrlState} />
+            </SessionCockpitChromeRegistryProvider></AppPaneProvider>
+        );
+        const screen = await renderScreen(render(null));
+        await screen.update(render(parseSessionPaneUrlState({ details: 'scmReview', view: 'walkthrough' })));
+        expect(cockpitNavigatorState.activeSurface).toBe('tabs');
+        await act(async () => cockpitNavigatorState.goBack?.());
+        expect(cockpitNavigatorState.activeSurface).toBe('chat');
     });
 
     it('routes repeated Companion work reveals to the separate Chat scene without losing its draft', async () => {
@@ -557,7 +603,6 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
 
         expect(cockpitNavigatorState.activeSurface).toBe('chat');
         expect(readChat().props.openWorkStateRequestKey).toBe(1);
-        expect(approvalSessionTargets.at(-1)).toEqual({ serverId: 'server-1', sessionId: 'session-1' });
 
         await act(async () => readChat().props.setComposerDraft('keep my draft'));
         await act(async () => cockpitNavigatorState.goBack?.());
@@ -917,9 +962,42 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         expect(screen.findByTestId(SCREEN_TEST_ID)).toBeNull();
     });
 
+    it('hands a Session plugin Browse request to the enclosing App page owner', async () => {
+        const projection = createCockpitPluginProjection();
+        cockpitPluginProjectionState.value = { pluginUiProjection: projection, machineId: 'machine-1', serverId: 'server-1',
+            interactionEnabled: true, platform: 'web', phase: 'current' };
+        const { createPluginSurfaceDestinationNavigationBinding } = await import('@/components/plugins/surfaces/pluginSurfaceDestinationNavigation');
+        const source = Object.values(projection.surfacePlacementsById)[0]!;
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId: REVIEW_PLUGIN_ID, destinationId: 'inventory', rendererId: 'inventory',
+            container: 'appPage', target: { kind: 'app' } });
+        if (!binding) throw new Error('App page fixture must be admitted');
+        const page = { ...source, id: `surfacePlacement:${REVIEW_PLUGIN_ID}:inventory`, descriptorId: 'inventory', binding, target: binding.target,
+            hostOrigin: { machineId: 'machine-1', serverId: 'server-1', phase: 'current' as const, interactionEnabled: true } };
+        const enclosing = createPluginSurfaceDestinationNavigationBinding({ placements: [page], targetKind: 'app' });
+        let presentedPage: string | null = null;
+        enclosing.registerOwner({ container: 'appPage', handler: (resolution) => {
+            presentedPage = resolution.placement.binding.destination.localId;
+            return { ok: true };
+        } });
+        const Harness = await loadCockpitHarness();
+        const screen = await renderScreen(<Harness events={[]} initialSurface={REVIEW_PLUGIN_SURFACE} enclosingBinding={enclosing} />);
+        const host = screen.tree.findByType('PluginSurfacePlacementHost' as never);
+        await act(async () => {
+            await expect(host.props.binding.openSurface({ destination: { pluginId: REVIEW_PLUGIN_ID, localId: 'inventory' } })).resolves.toEqual({ ok: true });
+        });
+        expect(presentedPage).toBe('inventory');
+    });
+
     it('routes a mounted cockpit plugin tab through the shared qualified resolver', async () => {
+        const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://cockpit.example.test', serverIdentityId: 'srv_cockpit' });
+        const projection = createCockpitPluginProjection();
+        for (const placement of Object.values(projection.surfacePlacementsById)) {
+            placement.hostOrigin.serverId = 'srv_cockpit';
+            placement.hostOrigin.executionOrigin.serverIdentityId = 'srv_cockpit';
+        }
         cockpitPluginProjectionState.value = {
-            pluginUiProjection: createCockpitPluginProjection(),
+            pluginUiProjection: projection,
             machineId: 'machine-1',
             serverId: 'server-1',
             interactionEnabled: true,
@@ -929,7 +1007,7 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         const events: string[] = [];
         const CockpitHarness = await loadCockpitHarness();
         const screen = await renderScreen(
-            <CockpitHarness events={events} initialSurface={REVIEW_PLUGIN_SURFACE} />,
+            <CockpitHarness events={events} initialSurface={REVIEW_PLUGIN_SURFACE} routeServerId="srv_cockpit" />,
         );
         const host = screen.tree.findByType('PluginSurfacePlacementHost' as never);
         const openSurface = host.props.binding?.openSurface as undefined | ((request: Readonly<{
@@ -949,6 +1027,8 @@ describe('SessionCockpitSurfaceScreen navigation surface', () => {
         expect(events).toEqual([`surface:${REVIEW_PLUGIN_SURFACE}`]);
         expect(screen.tree.findByType('PluginSurfacePlacementHost' as never).props.launchInput)
             .toEqual({ issueId: '42' });
+        await screen.unmount();
+        await connection.dispose();
     });
 
     it('rejects a desktop/tablet Session pane before a phone cockpit delegates to an unavailable owner', async () => {
@@ -990,7 +1070,7 @@ describe('SessionCockpitSurfaceScreen collaboration surface', () => {
     beforeEach(async () => {
         standardCleanup();
         persistedStorage.clear();
-        seedTranscript();
+        await seedTranscript();
         cockpitPluginProjectionState.value = {
             pluginUiProjection: null,
             machineId: null,

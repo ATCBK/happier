@@ -1,4 +1,6 @@
 import { usePaneRegion } from '../paneRegion';
+import { usePanePresentation } from '../panePresentation';
+import { createBuiltinPaneDestination } from '../model/selectedPaneDestination';
 import * as React from 'react';
 import { Platform } from 'react-native';
 import { useAppPaneContext } from '../AppPaneProvider';
@@ -108,6 +110,9 @@ function getScopeState(state: ReturnType<typeof useAppPaneContext>['state'], sco
 export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     const { state, dispatch, overlayFocusReturnOwner } = useAppPaneContext();
     const scopeState = getScopeState(state, scopeId);
+    const presentPane = usePanePresentation();
+    const selectedRightDestinationRef = React.useRef(scopeState?.right.selectedDestination ?? null);
+    selectedRightDestinationRef.current = scopeState?.right.selectedDestination ?? null;
     const rightOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'right');
     const detailsOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'details');
     const bottomOverlayFocusReturnRef = usePaneOverlayFocusReturnRef(scopeId, 'bottom');
@@ -134,20 +139,27 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
     }, [scopeState?.details?.tabs]);
 
     const openRight = React.useCallback((options?: Readonly<{ tabId?: string }>) => {
+        if (options?.tabId) selectedRightDestinationRef.current = createBuiltinPaneDestination(options.tabId);
         dispatch({ type: 'openRight', scopeId, tabId: options?.tabId });
-    }, [dispatch, scopeId]);
+        presentPane?.({ scopeId, pane: 'right', destination: selectedRightDestinationRef.current });
+    }, [dispatch, presentPane, scopeId]);
 
     const closeRight = React.useCallback(() => {
         dispatch({ type: 'closeRight', scopeId });
     }, [dispatch, scopeId]);
 
     const setRightTab = React.useCallback((tabId: string) => {
+        const destination = createBuiltinPaneDestination(tabId);
+        selectedRightDestinationRef.current = destination;
         dispatch({ type: 'setRightTab', scopeId, tabId });
-    }, [dispatch, scopeId]);
+        presentPane?.({ scopeId, pane: 'right', destination });
+    }, [dispatch, presentPane, scopeId]);
 
     const selectRightDestination = React.useCallback((destination: SelectedPaneDestinationV1) => {
+        selectedRightDestinationRef.current = destination;
         dispatch({ type: 'selectRightDestination', scopeId, destination });
-    }, [dispatch, scopeId]);
+        presentPane?.({ scopeId, pane: 'right', destination });
+    }, [dispatch, presentPane, scopeId]);
 
     const setRightTabState = React.useCallback((tabId: string, nextState: unknown) => {
         dispatch({ type: 'setRightTabState', scopeId, tabId, nextState });
@@ -190,7 +202,8 @@ export function useAppPaneScope(scopeId: string): AppPaneScopeApi {
         lastPreviewOpenRef.current = decision.nextLastPreviewOpen;
         const openAs = decision.openAs;
         dispatch({ type: 'openDetailsTab', scopeId, tab, openAs, origin: paneRegion });
-    }, [detailsPaneTabsBehavior, dispatch, paneRegion, scopeId]);
+        presentPane?.({ scopeId, pane: 'details' });
+    }, [detailsPaneTabsBehavior, dispatch, paneRegion, presentPane, scopeId]);
 
     const setDetailsTabState = React.useCallback((tabKey: string, nextState: unknown) => {
         dispatch({ type: 'setDetailsTabState', scopeId, tabKey, nextState });
