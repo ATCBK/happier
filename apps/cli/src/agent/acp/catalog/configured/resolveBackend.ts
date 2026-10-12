@@ -1,7 +1,7 @@
 import type {
   AcpBackendAuthConfigV1,
   AcpBackendCapabilitiesV1,
-  McpValueRefV1,
+  ValueRefV1,
 } from '@happier-dev/protocol';
 import type { AcpBackendDefinitionV1, AcpBackendLaunchV1, AcpConfiguredRuntimeV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
@@ -25,7 +25,7 @@ export type ResolvedConfiguredAcpBackend = Readonly<{
   title: string;
   description?: string;
   launch: AcpBackendLaunchV1;
-  env: Readonly<Record<string, McpValueRefV1>>;
+  env: Readonly<Record<string, ValueRefV1>>;
   auth?: AcpBackendAuthConfigV1;
   capabilities: AcpBackendCapabilitiesV1;
   defaultMode?: string;
