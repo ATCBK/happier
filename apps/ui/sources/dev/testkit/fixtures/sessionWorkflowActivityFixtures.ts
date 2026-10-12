@@ -1,10 +1,6 @@
-import {
-    SESSION_WORKFLOW_RUN_SNAPSHOT_PROJECTION_VERSION,
-    buildSessionWorkflowActivityHeadline,
-    type SessionWorkflowActivityHeadlineV1,
-    type SessionWorkflowRunHeadlineV1,
-    type SessionWorkflowRunSnapshotV1,
-} from '@happier-dev/protocol';
+import { SESSION_WORKFLOW_RUN_SNAPSHOT_PROJECTION_VERSION, type SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol/sessions/work/workflow/sessionWorkflowRunSnapshotV1';
+import { buildSessionWorkflowActivityHeadline } from '@happier-dev/protocol/sessions/work/workflow/sessionWorkflowActivityHeadlineBuild';
+import { type SessionWorkflowActivityHeadlineV1, type SessionWorkflowRunHeadlineV1 } from '@happier-dev/protocol/sessions/work/workflow/sessionWorkflowActivityHeadlineV1';
 
 export function makeSessionWorkflowRunHeadline(
     overrides: Partial<SessionWorkflowRunHeadlineV1> & { runId: string },

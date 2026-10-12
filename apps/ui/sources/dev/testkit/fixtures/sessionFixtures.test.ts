@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { SessionListQueryResponseV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture, createSessionOwnerViewerFixture } from './sessionFixtures';
 
 it('preserves private launch profile identity through the real owner metadata envelope', () => {

@@ -14,19 +14,8 @@ import { CustomProviderTemplateV1Schema } from '@happier-dev/protocol/providers/
 import { serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/selection/v1';
 import type { HomeDomainAnswer } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-import {
-    createProviderConnectionViewFixture,
-    createProviderConnectionsDescribeFixture,
-    createProviderModelsFixture,
-    createMachineAdministrationTargetSelectionMock,
-    createProviderSettingsHarness,
-    createDeferred,
-    flushHookEffects,
-    installMachineAdministrationTargetSelectionBoundary,
-    renderScreen,
-    standardCleanup,
-    withPopoverWebGlobals,
-} from '@/dev/testkit';
+import { createProviderConnectionViewFixture, createProviderConnectionsDescribeFixture, createProviderModelsFixture, createProviderSettingsHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createMachineAdministrationTargetSelectionMock, createDeferred, flushHookEffects, installMachineAdministrationTargetSelectionBoundary, renderScreen, standardCleanup, withPopoverWebGlobals } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import type { ProviderModelLoadUiResult } from '@/providers/hooks/useProviderModelLoadAction';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';

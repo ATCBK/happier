@@ -1,10 +1,13 @@
-import {
-    ARTIFACT_PLAIN_DATA_KEY_MARKER, MACHINE_PLAIN_DATA_KEY_MARKER, CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
-    AutomationDefinitionListResponseSchema, FeaturesResponseSchema, WorkflowDefinitionListResultV1Schema, WorkflowDefinitionGetResultV1Schema,
-    WorkflowRunListResultV1Schema, WorkflowRunRecipientCensusResponseV1Schema,
-    WorkflowAcceptedSnapshotV1Schema, encodePlainArtifactStoredContent, materializeWorkflowAcceptedSnapshotV1,
-    sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1,
-} from '@happier-dev/protocol';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
+import { AutomationDefinitionListResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { WorkflowDefinitionListResultV1Schema, WorkflowDefinitionGetResultV1Schema, WorkflowRunListResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
+import { WorkflowAcceptedSnapshotV1Schema } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';

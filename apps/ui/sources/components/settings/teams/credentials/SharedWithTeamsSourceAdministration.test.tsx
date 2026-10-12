@@ -3,17 +3,8 @@ import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionIdSchema, type MachinePoolViewV1 } from '@happier-dev/protocol';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    createMachineAdministrationTargetSelectionMock,
-    installHomeGovernanceBoundaries,
-    installMachineAdministrationTargetSelectionBoundary,
-    renderScreen,
-    standardCleanup,
-    teamCredentialResourceFixture,
-    teamCredentialSourceResourceFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, createMachineAdministrationTargetSelectionMock, installMachineAdministrationTargetSelectionBoundary, renderScreen, standardCleanup, teamCredentialResourceFixture, teamCredentialSourceResourceFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
 const CONNECTION_ID = ProviderConnectionIdSchema.parse('connection-1');

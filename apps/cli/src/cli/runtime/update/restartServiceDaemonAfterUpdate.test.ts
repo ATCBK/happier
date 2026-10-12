@@ -5,14 +5,9 @@ import { dirname, join } from 'node:path';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import type { DaemonOwnerEvaluation } from '@/daemon/ownership/evaluateCurrentDaemonOwner';
+import { spawnDaemonLifecycleOwner } from '@/testkit/process/daemonLifecycleOwner';
 
-vi.mock('@/daemon/doctor', async (importOriginal) => {
-  const [{ withCurrentProcessAsDaemonLifecycleOwner }, actual] = await Promise.all([
-    import('@/testkit/process/daemonLifecycleOwner'),
-    importOriginal<typeof import('@/daemon/doctor')>(),
-  ]);
-  return withCurrentProcessAsDaemonLifecycleOwner(actual);
-});
+let daemonOwner: ReturnType<typeof spawnDaemonLifecycleOwner> | undefined;
 
 const SCOPED_ENV_KEYS = [
   'HAPPIER_HOME_DIR',
@@ -34,8 +29,10 @@ async function loadWithSpawnRecorder(options: Readonly<{ onRestart?: (env: NodeJ
   restart: (params: Readonly<{ channel: 'stable' | 'preview'; updatedToVersion: string; ownerBeforeUpdate?: DaemonOwnerEvaluation }>) => Promise<unknown>;
   writeDaemonState: typeof import('@/persistence').writeDaemonState;
   serviceLabel: string;
+  daemonPid: number;
 }>> {
   const calls: SpawnCall[] = [];
+  daemonOwner = spawnDaemonLifecycleOwner();
   vi.resetModules();
   vi.doMock('node:child_process', async (importOriginal) => {
     const actual = await importOriginal<typeof import('node:child_process')>();
@@ -48,17 +45,14 @@ async function loadWithSpawnRecorder(options: Readonly<{ onRestart?: (env: NodeJ
       }),
     };
   });
-  const [
-    { planServiceDaemonRestartAfterUpdate, restartServiceDaemonOntoInstalledCli },
-    { writeDaemonState },
-    { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths },
-    { evaluateCurrentDaemonOwner },
-  ] = await Promise.all([
-    import('./restartServiceDaemonAfterUpdate'),
-    import('@/persistence'),
-    import('@/daemon/service/cli'),
-    import('@/daemon/ownership/evaluateCurrentDaemonOwner'),
-  ]);
+  // These owners import one another. Load their common update entrypoint
+  // before reading companion namespaces instead of racing cold module graphs.
+  const { planServiceDaemonRestartAfterUpdate, restartServiceDaemonOntoInstalledCli } =
+    await import('./restartServiceDaemonAfterUpdate');
+  const { writeDaemonState } = await import('@/persistence');
+  const { resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths } =
+    await import('@/daemon/service/cli');
+  const { evaluateCurrentDaemonOwner } = await import('@/daemon/ownership/evaluateCurrentDaemonOwner');
   const runtime = resolveDaemonServiceCliRuntimeFromEnv({
     channel: 'stable',
     targetMode: 'default-following',
@@ -87,13 +81,17 @@ async function loadWithSpawnRecorder(options: Readonly<{ onRestart?: (env: NodeJ
     await restartServiceDaemonOntoInstalledCli({ plan, expectedVersion: params.updatedToVersion });
     return { kind: 'restarted' };
   };
-  return { calls, restart, writeDaemonState, serviceLabel };
+  return { calls, restart, writeDaemonState, serviceLabel, daemonPid: daemonOwner.pid };
 }
 
 describe('service daemon restart after an update', { timeout: 300_000 }, () => {
   let envScope = createEnvKeyScope(SCOPED_ENV_KEYS);
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (daemonOwner) {
+      expect(await daemonOwner.kill()).toBe(true);
+      daemonOwner = undefined;
+    }
     envScope.restore();
     envScope = createEnvKeyScope(SCOPED_ENV_KEYS);
     vi.doUnmock('node:child_process');
@@ -120,7 +118,7 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
     await withTempDir('happier-self-update-restart-service-', async (homeDir) => {
       patchHome(homeDir);
       const writeState = (version: string, label: string) => ({
-        pid: process.pid,
+        pid: daemonPid,
         httpPort: 43150,
         startedAt: Date.now(),
         startedWithCliVersion: version,
@@ -129,7 +127,7 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
         serviceLabel: label,
       });
       let restartedLabel = '';
-      const { calls, restart, writeDaemonState, serviceLabel } = await loadWithSpawnRecorder({
+      const { calls, restart, writeDaemonState, serviceLabel, daemonPid } = await loadWithSpawnRecorder({
         onRestart: () => writeDaemonState(writeState('1.1.0', restartedLabel)),
       });
       restartedLabel = serviceLabel;
@@ -147,9 +145,9 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
   it('restarts the service daemon observed before an update that stopped it (Windows quiesce)', async () => {
     await withTempDir('happier-self-update-restart-quiesced-', async (homeDir) => {
       patchHome(homeDir);
-      const { calls, restart, serviceLabel, writeDaemonState } = await loadWithSpawnRecorder({
+      const { calls, restart, serviceLabel, writeDaemonState, daemonPid } = await loadWithSpawnRecorder({
         onRestart: () => writeDaemonState({
-          pid: process.pid,
+          pid: daemonPid,
           httpPort: 43153,
           startedAt: Date.now(),
           startedWithCliVersion: '1.1.0',
@@ -189,9 +187,9 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
   it('leaves a manual daemon and another channel\'s service daemon running', async () => {
     await withTempDir('happier-self-update-restart-skip-', async (homeDir) => {
       patchHome(homeDir);
-      const { calls, restart, writeDaemonState, serviceLabel } = await loadWithSpawnRecorder();
+      const { calls, restart, writeDaemonState, serviceLabel, daemonPid } = await loadWithSpawnRecorder();
       writeDaemonState({
-        pid: process.pid,
+        pid: daemonPid,
         httpPort: 43151,
         startedAt: Date.now(),
         startedWithCliVersion: '1.0.0',
@@ -201,7 +199,7 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
       expect(await restart({ channel: 'stable', updatedToVersion: '1.1.0' })).toEqual({ kind: 'skip', reason: 'not-service-managed' });
 
       writeDaemonState({
-        pid: process.pid,
+        pid: daemonPid,
         httpPort: 43152,
         startedAt: Date.now(),
         startedWithCliVersion: '1.0.0',
@@ -216,9 +214,9 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
   it('fails when the restarted service does not run the expected version, so the update can roll back', async () => {
     await withTempDir('happier-self-update-restart-unproven-', async (homeDir) => {
       patchHome(homeDir);
-      const { restart, writeDaemonState, serviceLabel } = await loadWithSpawnRecorder();
+      const { restart, writeDaemonState, serviceLabel, daemonPid } = await loadWithSpawnRecorder();
       writeDaemonState({
-        pid: process.pid,
+        pid: daemonPid,
         httpPort: 43154,
         startedAt: Date.now(),
         startedWithCliVersion: '1.0.0',
@@ -278,7 +276,7 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
         const path = join(happierHomeDir, 'servers', serverId, 'daemon.state.json');
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, JSON.stringify({
-          pid: process.pid,
+          pid: daemonPid,
           httpPort: 43160,
           startedAt: Date.now(),
           startedWithCliVersion: version,
@@ -289,7 +287,7 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
       };
 
       let defaultLabel = '';
-      const { calls, writeDaemonState, serviceLabel } = await loadWithSpawnRecorder({
+      const { calls, writeDaemonState, serviceLabel, daemonPid } = await loadWithSpawnRecorder({
         onRestart: (env) => {
           // The default service and `personal` come back on the new version; `company` does not.
           if (env?.HAPPIER_DAEMON_SERVICE_INSTANCE_ID === 'personal') writeServerDaemonState('personal', '1.1.0', personalLabel);
@@ -298,7 +296,7 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
       });
       defaultLabel = serviceLabel;
       writeDaemonState({
-        pid: process.pid,
+        pid: daemonPid,
         httpPort: 43161,
         startedAt: Date.now(),
         startedWithCliVersion: '1.0.0',
@@ -350,9 +348,9 @@ describe('service daemon restart after an update', { timeout: 300_000 }, () => {
   it('leaves other servers\' service daemons alone when the update did not stop them', async () => {
     await withTempDir('happier-self-update-restart-own-only-', async (homeDir) => {
       patchHome(homeDir);
-      const { writeDaemonState, serviceLabel } = await loadWithSpawnRecorder();
+      const { writeDaemonState, serviceLabel, daemonPid } = await loadWithSpawnRecorder();
       writeDaemonState({
-        pid: process.pid,
+        pid: daemonPid,
         httpPort: 43162,
         startedAt: Date.now(),
         startedWithCliVersion: '1.0.0',

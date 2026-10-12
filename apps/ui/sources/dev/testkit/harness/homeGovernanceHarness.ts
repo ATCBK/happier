@@ -1,4 +1,6 @@
-import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema, CurrentCursorResponseSchema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
+import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { vi } from 'vitest';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';

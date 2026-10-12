@@ -2,7 +2,7 @@ import { SessionCurrentProjectionRecordV1Schema, type SessionCurrentProjectionRe
 import { SessionAccessGrantsListRequestV1Schema, SessionAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { SessionResponsibilityCandidatesRequestSchema } from '@happier-dev/protocol/sessions/access/sessionResponsibilityV1';
 import { SessionDiscussionListResponseV1Schema } from '@happier-dev/protocol/sessions/discussions/api';
-import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { createSessionAccessFixture } from '../fixtures/sessionFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';

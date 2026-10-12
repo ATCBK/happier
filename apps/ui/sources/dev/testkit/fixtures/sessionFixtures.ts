@@ -1,24 +1,15 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { ENCRYPTED_DATA_KEY_V1_BYTES } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
-import {
-    createPlainSessionOwnerMetadataEnvelopeV1,
-    createSessionOwnerMetadataV1,
-    projectSessionAccessCapabilitiesV1,
-    projectSessionSharedMetadataV1,
-    SessionCurrentProjectionRecordV1Schema,
-    V2SessionRecordSchema,
-    type V2SessionRecord,
-    type SessionCurrentProjectionRecordV1,
-    ABSENT_SESSION_FOLLOW_FACTS_V1,
-    NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1,
-    projectViewerReadStateV1,
-    resolveSessionEffectiveNotificationV1,
-    resolveSessionPersonalAttentionV1,
-    resolveSessionPersonalRelevanceV1,
-    SessionViewerProjectionV1Schema,
-    type SessionViewerProjectionV1,
-} from '@happier-dev/protocol';
+import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { SessionCurrentProjectionRecordV1Schema, type SessionCurrentProjectionRecordV1 } from '@happier-dev/protocol/sessions/listing/response';
+import { V2SessionRecordSchema, type V2SessionRecord } from '@happier-dev/protocol/sessions/control/contract';
+import { ABSENT_SESSION_FOLLOW_FACTS_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, projectViewerReadStateV1, resolveSessionPersonalRelevanceV1 } from '@happier-dev/protocol';
+import { resolveSessionEffectiveNotificationV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
+import { resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/sessions/personal/attention';
+import { SessionViewerProjectionV1Schema, type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
 
 export function createSessionDataKeyFixture(fill = 7): Uint8Array {
     return new Uint8Array(ENCRYPTED_DATA_KEY_V1_BYTES).fill(fill);

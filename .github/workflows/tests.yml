@@ -556,8 +556,9 @@ jobs:
         # Each native project is a separate process; neither job replays the suite.
         run: yarn -s typecheck:compiler --prepared-workspaces --compiler-partition=host
       - name: Build the CLI distribution
-        # The shared producer already prepared the physical runtime closure.
-        run: yarn workspace @happier-dev/cli build:prepared
+        # This job has just checked and emitted the current CLI source graph.
+        # Consume those declarations without loading that graph a second time.
+        run: yarn workspace @happier-dev/cli build:prepared --prepared-declarations
       - name: Load the prepared Iroh native runtime
         run: yarn workspace @happier-dev/iroh-native verify:native --package-root "$GITHUB_WORKSPACE/apps/cli/node_modules/@happier-dev/iroh-native"
       - name: Probe the staged CLI runtime through its canonical owner

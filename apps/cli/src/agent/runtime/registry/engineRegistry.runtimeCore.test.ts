@@ -234,7 +234,8 @@ describe('resolveCliEngineRegistry runtimeCore', () => {
     });
 
     beforeEach(() => {
-        vi.resetModules();
+        // Owners are imported once above; reset their fixture state rather than
+        // re-evaluating the dynamic runtime graph into duplicate module instances.
         resolveMergedContributionRegistryMock.mockReset();
         resolveExecutablePluginRuntimeRegistryMock.mockReset();
         resolvePluginBackendSurfaceHandlersMock.mockReset();

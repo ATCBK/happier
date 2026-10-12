@@ -4,24 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ProviderConnectionIdSchema, ProviderConnectionSecurityFingerprintV1Schema } from '@happier-dev/protocol';
 
-import {
-    collectRenderedTestIds,
-    createMachineAdministrationTargetSelectionMock,
-    createProviderConnectionViewFixture,
-    createProviderConnectionsDescribeFixture,
-    createProviderSettingsHarness,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    installMachineAdministrationTargetSelectionBoundary,
-    installProviderSettingsRpcBoundary,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamCredentialResourceFixture,
-    teamCredentialSourceCandidateFixture,
-    teamCredentialViewerFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, createMachineAdministrationTargetSelectionMock, installMachineAdministrationTargetSelectionBoundary, renderScreen, standardCleanup, teamCapabilitiesFixture, teamCredentialResourceFixture, teamCredentialSourceCandidateFixture, teamCredentialViewerFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createProviderConnectionViewFixture, createProviderConnectionsDescribeFixture, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 

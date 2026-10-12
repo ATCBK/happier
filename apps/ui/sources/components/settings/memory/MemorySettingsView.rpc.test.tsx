@@ -242,7 +242,6 @@ afterEach(() => {
         serverId: 'srv_1',
         machine: { id: 'm1' },
     };
-    vi.resetModules();
 });
 
 describe('MemorySettingsView', () => {

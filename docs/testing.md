@@ -374,7 +374,9 @@ the Gate restores its previous environment before package adjunct checks.
 CLI nightly partitions, integration runs and explicit diagnostic sharding retain
 their existing invocation policies. Unit partitions target at most 20 minutes and have a
 30-minute job deadline including current-run artifact restoration/headroom, not
-shared preparation. The existing Gate selector also owns one shared preparation
+shared preparation. The UI wrapper does not impose a separate default watchdog;
+an explicit `HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS` remains available for diagnostic runs.
+The existing Gate selector also owns one shared preparation
 job: canonical frozen installation, native preparation and CLI/workspace closure
 publication run there before compiler, unit and artifact jobs consume its exact-run
 artifact. `prepare:typecheck:workspaces` combines the root package set and all
@@ -421,8 +423,13 @@ The repository deliberately separates the compiler from the programmatic TypeScr
 - `scripts/workspaces/resolveTypeScriptCliInvocation.mjs` is the only compiler-selection owner. First-party scripts must use `runTypeScriptCli.mjs`, `buildTypeScriptPackageDist.mjs`, or that resolver directly; do not invoke a bare `tsc` shim or resolve `typescript/bin/tsc`.
 - `yarn tsc ...` is defined at the repository root and in every TypeScript-owning workspace; it delegates to the shared native runner and therefore uses TypeScript 7.
 
-CLI typechecks run `tsconfig.source.json` and `tsconfig.test.json` sequentially
-through that runner. UI checks its dependency-ordered `tsconfig.foundation.json`,
+CLI typechecks run `tsconfig.foundation.json`, `tsconfig.services.json`,
+`tsconfig.core.json`, `tsconfig.source.json` and `tsconfig.test.json` sequentially
+through that runner, with declaration-producing project references between source
+partitions. Before compilation, the input owner checks their combined authored
+roots against `apps/cli/tsconfig.json`; an unassigned or duplicate root fails with
+the project paths to update. Every partition retains strict diagnostics.
+UI checks its dependency-ordered `tsconfig.foundation.json`,
 `tsconfig.core.json`, `tsconfig.source.json`, then `tsconfig.test-components.json`
 and `tsconfig.test-other.json`, including the root source-workspace lane. The two
 test projects inherit `tsconfig.test.json` and share its explicit fixture/config
@@ -444,6 +451,13 @@ and artifact jobs. Both use `--prepared-workspaces` after the shared preparation
 neither repeats the complete compiler suite. The standalone root command still
 checks every owner. Validate the partitions against the measured approximately
 16 GB hosted memory boundary; parsed coverage alone is not memory-fit evidence.
+
+After that same job's current-source compiler succeeds, the Gate passes
+`--prepared-declarations` to `build:prepared`. The existing CLI build consumes
+the source projects' declaration outputs instead of checking the whole source
+graph again, and fails if a required emitted leaf is missing. Ordinary builds,
+Stack callers and publication retain their independent strict source check;
+the declaration-reuse flag cannot bypass publication lifecycle checks.
 
 Ordinary CLI builds also use one native checker. Under the existing CLI
 publication lock, `apps/cli/scripts/build.mjs` reuses the source-generation path

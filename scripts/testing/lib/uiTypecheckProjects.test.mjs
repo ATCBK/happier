@@ -34,6 +34,7 @@ function publicFiniteCompiler(packageDir, fixtureDir, write, invocation) {
   assert.equal(resolve(packageDir, owner), resolve('scripts/workspaces/runTypeScriptCli.mjs'));
   const projects = [];
   const fixtureArgs = compilerArgs.map((arg, index) => {
+    if (compilerArgs[index - 1] === '--verifyProjectCoverage') return join(fixtureDir, arg);
     if (!['--project', '-p'].includes(compilerArgs[index - 1])) return arg;
     projects.push(arg);
     return join(fixtureDir, arg);
@@ -46,10 +47,8 @@ function publicFiniteCompiler(packageDir, fixtureDir, write, invocation) {
     const cp = require('node:child_process');
     const spawn = cp.spawn;
     cp.spawn = function(command, args, options) {
-      const compilerArgs = command === process.execPath && args[0] === ${JSON.stringify(invocation.compilerPath)}
-        ? args.slice(1)
-        : command === 'python3' && args[3] === ${JSON.stringify(invocation.compilerPath)}
-          ? args.slice(4) : null;
+      const compilerIndex = args.indexOf(${JSON.stringify(invocation.compilerPath)});
+      const compilerArgs = compilerIndex >= 0 ? args.slice(compilerIndex + 1) : null;
       if (compilerArgs) require('node:fs').appendFileSync(${JSON.stringify(spawnLog)}, JSON.stringify(compilerArgs) + '\\n');
       return spawn(command, args, options);
     };
@@ -263,24 +262,29 @@ for (const name of ['foundation', 'core']) {
 
 test('CLI projects preserve every original root and compiler strictness', () => {
   const packageDir = resolve('apps/cli');
-  assertProjectCoverage(packageDir, ['tsconfig.source.json']);
+  const sourceNames = ['tsconfig.foundation.json', 'tsconfig.services.json', 'tsconfig.core.json', 'tsconfig.source.json'];
+  const pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
+  const args = pkg.scripts['typecheck:source:finite'].trim().split(/\s+/u);
+  assert.deepEqual(args.filter((arg, index) => ['--project', '-p'].includes(args[index - 1])),
+    [...sourceNames, 'tsconfig.test.json'], 'public CLI compiler must release each source partition before checking its consumer');
+  assertProjectCoverage(packageDir, sourceNames);
   const original = readProject('tsconfig.json', packageDir);
-  const source = readProject('tsconfig.source.json', packageDir);
+  const sources = sourceNames.map((name) => readProject(name, packageDir));
   const tests = readProject('tsconfig.test.json', packageDir);
   const isTest = (path) => /\.(?:test|spec)\.tsx?$/u.test(path)
     || path.replaceAll('\\', '/').includes('/__tests__/');
   assert.equal(original.fileNames.some(isTest), true, 'inherited CLI project must contain test roots');
-  assert.equal(source.fileNames.some(isTest), false, 'CLI source must not declaration-emit test roots');
+  assert.equal(sources.some((source) => source.fileNames.some(isTest)), false, 'CLI source must not declaration-emit test roots');
   for (const file of original.fileNames.filter(isTest)) {
     assert.ok(tests.fileNames.includes(file), `CLI test project lost ${file}`);
   }
-  assert.notEqual(tests.options.tsBuildInfoFile, source.options.tsBuildInfoFile);
+  assert.equal(new Set([...sources, tests].map((project) => project.options.tsBuildInfoFile)).size, 5);
   const invocation = resolveTypeScriptCliInvocation({ repoRoot: resolve('.'), workspaceDir: packageDir });
   const inputs = spawnSync(invocation.command, [...invocation.argsPrefix,
-    '--project', join(packageDir, 'tsconfig.source.json'), '--listFilesOnly'],
+    ...sourceNames.flatMap((name) => ['--project', join(packageDir, name)]), '--listFilesOnly'],
   { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
   assert.equal(inputs.status, 0, inputs.stdout + inputs.stderr);
-  const roots = new Set(source.fileNames.map((file) => resolve(file)));
+  const roots = new Set(sources.flatMap((source) => source.fileNames.map((file) => resolve(file))));
   const unlisted = inputs.stdout.trim().split(/\r?\n/u).map((file) => resolve(file.trim()))
     .filter((file) => /\.[cm]?tsx?$/u.test(file) && !/\.d\.[cm]?ts$/u.test(file) && !roots.has(file));
   assert.deepEqual(unlisted, [],
@@ -290,6 +294,10 @@ test('CLI projects preserve every original root and compiler strictness', () => 
 function assertNativeProjectBoundary(packageDir) {
   const sourceConfig = ts.readConfigFile(join(packageDir, 'tsconfig.source.json'), ts.sys.readFile).config;
   const testConfig = ts.readConfigFile(join(packageDir, 'tsconfig.test.json'), ts.sys.readFile).config;
+  const pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
+  const publicArgs = pkg.scripts['typecheck:source:finite'].trim().split(/\s+/u);
+  const sourceNames = publicArgs.filter((arg, index) => publicArgs[index - 1] === '--project' && arg !== 'tsconfig.test.json');
+  const precedingNames = sourceNames.filter((name) => name !== 'tsconfig.source.json');
   const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-ui-typecheck-'));
   const write = (file, value) => {
     mkdirSync(dirname(join(fixtureDir, file)), { recursive: true });
@@ -301,11 +309,29 @@ function assertNativeProjectBoundary(packageDir) {
     { encoding: 'utf8', cwd: fixtureDir });
   try {
     const options = { types: [], paths: { '@/*': ['./sources/*'] }, rootDir: '.' };
+    write('tsconfig.json', JSON.stringify({ include: ['sources/**/*.ts', 'stage/**/*.ts'], exclude: ['sources/trash/**'] }));
+    for (const [index, name] of precedingNames.entries()) {
+      const label = name.slice('tsconfig.'.length, -'.json'.length);
+      const previous = precedingNames[index - 1]?.slice('tsconfig.'.length, -'.json'.length);
+      write(`stage/${label}.ts`, previous
+        ? `import { value } from './${previous}'; export const valueAtStage: string = value; export { value };\n`
+        : "export const value: string = 'checked';\n");
+      write(name, JSON.stringify({
+        extends: join(packageDir, 'tsconfig.json'),
+        compilerOptions: { ...options, ...sourceConfig.compilerOptions, rootDir: '.',
+          outDir: `./cache/${label}`, tsBuildInfoFile: `./cache/${label}.tsbuildinfo` },
+        references: precedingNames.slice(0, index).map((path) => ({ path: `./${path}` })),
+        files: [`stage/${label}.ts`], include: [],
+      }));
+      const green = run(name);
+      assert.equal(green.status, 0, green.stdout + green.stderr);
+    }
     write('tsconfig.source.json', JSON.stringify({
       extends: join(packageDir, 'tsconfig.json'),
       compilerOptions: { ...options, ...sourceConfig.compilerOptions,
         rootDir: '.', outDir: './cache/source', tsBuildInfoFile: './cache/source.tsbuildinfo' },
       files: ['node_modules/fixture-native-package/src/index.ts'],
+      references: precedingNames.map((path) => ({ path: `./${path}` })),
       include: ['sources/**/*.ts', 'external/**/*.ts', 'external/**/*.json'], exclude: ['**/*.test.ts'],
     }));
     write('tsconfig.test.json', JSON.stringify({
@@ -347,7 +373,7 @@ function assertNativeProjectBoundary(packageDir) {
     assert.ok(!files.includes(join(fixtureDir, 'node_modules/fixture-native-package/src/index.ts')),
       'authored dependency TypeScript must not be checked in both projects');
     const publicCompiler = publicFiniteCompiler(packageDir, fixtureDir, write, invocation);
-    assert.deepEqual(publicCompiler.projects, ['tsconfig.source.json', 'tsconfig.test.json']);
+    assert.deepEqual(publicCompiler.projects, [...sourceNames, 'tsconfig.test.json']);
     write('sources/model.ts', 'export interface Model { label: string }; export const model: Model = { label: 42 };\n');
     write('sources/model.test.ts', "import { model, type Model } from '@/model'; const valid: Model = { label: 'ok', enabled: true }; const label: number = model.label;\n");
     const publicRed = publicCompiler.run();
@@ -364,10 +390,8 @@ function assertNativeProjectBoundary(packageDir) {
     if (process.platform === 'linux') {
       const reports = measured.stderr.split('\n').filter((line) => line.startsWith('[typescript] {'))
         .map((line) => JSON.parse(line.slice('[typescript] '.length)));
-      assert.deepEqual(reports.map(({ project, status, signal }) => ({ project, status, signal })), [
-        { project: join(fixtureDir, 'tsconfig.source.json'), status: 0, signal: null },
-        { project: join(fixtureDir, 'tsconfig.test.json'), status: 0, signal: null },
-      ]);
+      assert.deepEqual(reports.map(({ project, status, signal }) => ({ project, status, signal })),
+        publicCompiler.projects.map((project) => ({ project: join(fixtureDir, project), status: 0, signal: null })));
       assert.ok(reports.every(({ maxRssKiB }) => maxRssKiB > 0));
     }
   } finally {
@@ -586,7 +610,7 @@ test('native CLI source project includes the workspace resolver imported by UI c
       ...actual, extends: join(packageDir, 'tsconfig.json'),
       compilerOptions: { ...actual.compilerOptions, rootDir: '../..',
         outDir: '../../cache/source', tsBuildInfoFile: '../../cache/source.tsbuildinfo' },
-      files: actual.files.filter((file) => closureFiles.has(file)),
+      files: actual.files.filter((file) => closureFiles.has(file)), include: [], references: [],
     }));
     const result = spawnSync(process.execPath, [resolve('scripts/workspaces/runTypeScriptCli.mjs'),
       '--singleThreaded', '--project', join(fixtureDir, 'apps/cli/tsconfig.source.json'), '--pretty', 'false'],

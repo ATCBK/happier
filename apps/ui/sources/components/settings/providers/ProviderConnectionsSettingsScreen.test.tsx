@@ -2,16 +2,8 @@ import * as React from 'react';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-    createProviderConnectionViewFixture,
-    createProviderConnectionsDescribeFixture,
-    createProviderSettingsHarness,
-    flushHookEffects,
-    installProviderSettingsRpcBoundary,
-    renderInCollectionLayout,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
+import { createProviderConnectionViewFixture, createProviderConnectionsDescribeFixture, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { flushHookEffects, renderInCollectionLayout, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';

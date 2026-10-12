@@ -3,7 +3,44 @@ import {
   readFileSync as defaultReadFileSync,
   rmSync as defaultRmSync,
 } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
+
+export async function verifyTypeScriptProjectCoverage({ baselinePath, projectPaths, cwd = process.cwd() }) {
+  // Retain the compiler API for configuration parsing only. Native TypeScript
+  // still owns every semantic diagnostic and declaration emission.
+  const { default: ts } = await import('typescript');
+  const parse = (path) => {
+    const configPath = normalizeProjectPath(path, cwd);
+    const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+      ...ts.sys,
+      onUnRecoverableConfigFileDiagnostic(diagnostic) {
+        throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+      },
+    });
+    if (parsed.errors.length) throw new Error(parsed.errors.map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')).join('\n'));
+    return { configPath, fileNames: parsed.fileNames };
+  };
+  const baseline = parse(baselinePath);
+  const assignments = new Map();
+  for (const path of projectPaths) {
+    const project = parse(path);
+    for (const file of project.fileNames) {
+      const owners = assignments.get(file) ?? [];
+      owners.push(project.configPath);
+      assignments.set(file, owners);
+    }
+  }
+  const missing = baseline.fileNames.filter((file) => !assignments.has(file));
+  const duplicates = [...assignments].filter(([file, owners]) => owners.length > 1
+    && !/\.d\.[cm]?ts$/u.test(file));
+  if (missing.length || duplicates.length) {
+    throw new Error(`TypeScript partition coverage for ${baseline.configPath} is incomplete; update ${projectPaths.join(', ')}:\n`
+      + missing.map((file) => `- unassigned: ${relative(cwd, file)}`).join('\n')
+      + (duplicates.length ? '\n' + duplicates.map(([file, owners]) =>
+        `- duplicate: ${relative(cwd, file)} (${owners.join(', ')})`).join('\n') : ''));
+  }
+}
 
 function readJson(path, { readFileSync = defaultReadFileSync } = {}) {
   return JSON.parse(String(readFileSync(path, 'utf8')));

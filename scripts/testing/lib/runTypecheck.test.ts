@@ -144,7 +144,7 @@ test('compiler-only typecheck executes compilers after preparation and reports c
   assert.equal(cliExecutable, 'node');
   assert.equal(resolve('apps/cli', cliOwner), resolve('scripts/workspaces/runTypeScriptCli.mjs'));
   assert.deepEqual(cliCompilerArgs.filter((_, index) => cliCompilerArgs[index - 1] === '--project'), [
-    'tsconfig.source.json', 'tsconfig.test.json',
+    'tsconfig.foundation.json', 'tsconfig.services.json', 'tsconfig.core.json', 'tsconfig.source.json', 'tsconfig.test.json',
   ]);
 });
 

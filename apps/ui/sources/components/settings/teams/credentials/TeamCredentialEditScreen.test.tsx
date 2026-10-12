@@ -8,21 +8,8 @@ import {
     type MachinePoolViewV1,
 } from '@happier-dev/protocol';
 
-import {
-    collectRenderedTestIds,
-    createDeferred,
-    createHomeGovernanceHarness,
-    createMachineAdministrationTargetSelectionMock,
-    installHomeGovernanceBoundaries,
-    installMachineAdministrationTargetSelectionBoundary,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamCredentialResourceFixture,
-    teamCredentialSourceCandidateFixture,
-    teamCredentialViewerFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, createDeferred, createMachineAdministrationTargetSelectionMock, installMachineAdministrationTargetSelectionBoundary, renderScreen, standardCleanup, teamCapabilitiesFixture, teamCredentialResourceFixture, teamCredentialSourceCandidateFixture, teamCredentialViewerFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
     applyTeamCredentialResource,
     applyTeamCredentialResourcesPage,

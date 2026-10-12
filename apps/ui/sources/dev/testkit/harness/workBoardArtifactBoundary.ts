@@ -1,5 +1,5 @@
-import { buildWorkBoardArtifactHeaderV1, type WorkBoardArtifactTransportV1, type WorkBoardArtifactV1,
-    WorkBoardsV1Schema, type WorkBoardsV1 } from '@happier-dev/protocol';
+import { buildWorkBoardArtifactHeaderV1, type WorkBoardArtifactTransportV1, type WorkBoardArtifactV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
+import { WorkBoardsV1Schema, type WorkBoardsV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import type { HomeHubArtifactTransportV1 } from '@happier-dev/protocol/home';
 
 /** Persistence only: the real schema, editor, queue, projection and CAS replay run above it. */

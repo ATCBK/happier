@@ -3,21 +3,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TeamIdentityConnectionV1 } from '@happier-dev/protocol/teams';
 
-import {
-    collectRenderedTestIds,
-    createDeferred,
-    createHomeGovernanceHarness,
-    decideApprovalAsInbox,
-    homeAccountPickerRowFixture,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamGroupFixture,
-    teamInvitationRowFixture,
-    teamMembershipFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, createDeferred, decideApprovalAsInbox, homeAccountPickerRowFixture, renderScreen, standardCleanup, teamCapabilitiesFixture, teamGroupFixture, teamInvitationRowFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 

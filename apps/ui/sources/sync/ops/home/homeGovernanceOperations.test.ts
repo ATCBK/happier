@@ -1,14 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-    createHomeGovernanceHarness,
-    homeAccountRowFixture,
-    homeAdministrationEventFixture,
-    homeGovernancePolicyProjectionFixture,
-    homeSettingsProjectionFixture,
-    installHomeGovernanceBoundaries,
-    standardCleanup,
-} from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { homeAccountRowFixture, homeAdministrationEventFixture, homeGovernancePolicyProjectionFixture, homeSettingsProjectionFixture, standardCleanup } from '@/dev/testkit';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createManagedResourceDependencyFixture } from '@/dev/testkit/fixtures/managedResourceDependencyFixtures';
 import { homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGovernanceFixtures';

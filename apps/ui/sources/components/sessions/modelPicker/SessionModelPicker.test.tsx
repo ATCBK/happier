@@ -3,7 +3,8 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
-import { createProviderModelProjectionGroupFixture, renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
+import { createProviderModelProjectionGroupFixture } from '@/dev/testkit/harness/providerSettingsHarness';
+import { renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
 import {
     buildSessionModelPickerNotes,
     resolveSessionModelPickerSelection,

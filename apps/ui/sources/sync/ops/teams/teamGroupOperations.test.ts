@@ -6,11 +6,8 @@ import {
     type TeamGroupV1,
 } from '@happier-dev/protocol/teams';
 
-import {
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    standardCleanup,
-} from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { standardCleanup } from '@/dev/testkit';
 
 /**
  * The Group wrappers, through the path they actually take.

@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import {
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    standardCleanup,
-    teamGroupFixture,
-    teamMembershipFixture,
-} from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { standardCleanup, teamGroupFixture, teamMembershipFixture } from '@/dev/testkit';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);

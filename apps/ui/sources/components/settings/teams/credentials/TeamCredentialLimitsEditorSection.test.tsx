@@ -2,7 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { accountDisplayProfileFixture, createDeferred, createHomeGovernanceHarness, installHomeGovernanceBoundaries, renderScreen, standardCleanup, teamCredentialResourceFixture, teamGroupFixture, teamMembershipFixture } from '@/dev/testkit';
+import { accountDisplayProfileFixture, createDeferred, renderScreen, standardCleanup, teamCredentialResourceFixture, teamGroupFixture, teamMembershipFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 import type { TeamSectionContext } from '../teamSectionContext';

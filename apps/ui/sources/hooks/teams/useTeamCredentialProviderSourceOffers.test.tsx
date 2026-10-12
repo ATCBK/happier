@@ -7,15 +7,8 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import {
-    createProviderConnectionViewFixture,
-    createProviderConnectionsDescribeFixture,
-    createProviderSettingsHarness,
-    flushHookEffects,
-    installProviderSettingsRpcBoundary,
-    renderHook,
-    standardCleanup,
-} from '@/dev/testkit';
+import { createProviderConnectionViewFixture, createProviderConnectionsDescribeFixture, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import type { ProviderSettingsMachineRowV1 } from '@/providers/hooks/targetMachine';
 
 const providerHarness = createProviderSettingsHarness();

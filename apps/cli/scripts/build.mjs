@@ -144,6 +144,46 @@ function createImmutableBuildSource({ packageRoot, outputDir, reuseCompilerCache
   };
 }
 
+function copyPreparedCliDeclarations(packageRoot, declarationSourceDir) {
+  // This explicit consumer is entered only after the same job's current-source
+  // compiler succeeded. Project references own the complete declaration graph;
+  // ordinary builds and publication still run their independent strict checker.
+  const visited = new Set();
+  let copied = 0;
+  const sourceRoot = resolve(packageRoot, 'src');
+  const copyProject = (configPath) => {
+    if (visited.has(configPath)) return;
+    visited.add(configPath);
+    const project = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+      ...ts.sys,
+      onUnRecoverableConfigFileDiagnostic(diagnostic) {
+        throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+      },
+    });
+    if (project.errors.length) throw new Error(project.errors.map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')).join('\n'));
+    for (const reference of project.projectReferences ?? []) {
+      copyProject(ts.resolveProjectReferencePath(reference));
+    }
+    for (const source of project.fileNames) {
+      const localPath = relative(sourceRoot, source);
+      if (localPath === '..' || localPath.startsWith(`..${sep}`) || isAbsolute(localPath)
+        || !/\.[cm]?tsx?$/u.test(source) || /\.d\.[cm]?ts$/u.test(source)) continue;
+      const declarationPath = ts.getOutputFileNames(project, source, !ts.sys.useCaseSensitiveFileNames)
+        .find((path) => /\.d\.[cm]?ts$/u.test(path));
+      if (!declarationPath || !existsSync(declarationPath)) {
+        throw new Error(`missing prepared CLI declaration ${declarationPath ?? source} from ${configPath}; run the current source compiler before this consumer`);
+      }
+      const target = join(declarationSourceDir, localPath.replace(/\.([cm]?)tsx?$/u, '.d.$1ts'));
+      mkdirSync(dirname(target), { recursive: true });
+      cpSync(declarationPath, target);
+      copied += 1;
+    }
+  };
+  copyProject(join(packageRoot, 'tsconfig.source.json'));
+  if (!copied) throw new Error('missing prepared CLI declaration graph; run the current source compiler before this consumer');
+}
+
 export async function buildCliDist(options = {}) {
   const lexicalPackageRoot = resolve(String(options.packageRoot ?? process.cwd()));
   const packageJsonPath = realpathSync.native(join(lexicalPackageRoot, 'package.json'));
@@ -234,18 +274,23 @@ async function buildCliDistUnlocked(options = {}) {
     // Executable preparation does not consume a semantic check. Strict npm
     // publication retains checking, including lifecycle-forced strict mode.
     if (buildMode === 'strict') {
-      const typeScriptInvocation = (options.resolveTypeScriptCliInvocationImpl ?? resolveTypeScriptCliInvocation)({
-        processExecPath: process.execPath,
-      });
       declarationSourceDir = mkdtempSync(join(immutableSource.packageRoot, '.tmp.hstack-cli-declarations.'));
-      // Emit checked declarations with the canonical native compiler once.
-      // Pkgroll still bundles public types, but no longer builds another TS5
-      // source program after this strict compile has succeeded.
-      await measure('typecheck', () => (options.runTypecheckImpl ?? runNodeScript)(typeScriptInvocation.argsPrefix[0], [...typeScriptInvocation.argsPrefix.slice(1), '-p', 'tsconfig.build.json', '--noEmit', 'false', '--emitDeclarationOnly', '--outDir', declarationSourceDir, '--singleThreaded'], {
-        command: typeScriptInvocation.command,
-        cwd: immutableSource.packageRoot,
-        env,
-      }));
+      // Only the named Gate build consumer accepts this same-job input.
+      // Other callers retain the shared lifecycle policy's strict source check.
+      if (options.preparedDeclarations === true && env.npm_lifecycle_event === 'build:prepared') {
+        await measure('prepared-declarations', () => copyPreparedCliDeclarations(packageRoot, declarationSourceDir));
+      } else {
+        const typeScriptInvocation = (options.resolveTypeScriptCliInvocationImpl ?? resolveTypeScriptCliInvocation)({
+          processExecPath: process.execPath,
+        });
+        // Emit checked declarations with the canonical native compiler once.
+        // Pkgroll bundles those public types without another source program.
+        await measure('typecheck', () => (options.runTypecheckImpl ?? runNodeScript)(typeScriptInvocation.argsPrefix[0], [...typeScriptInvocation.argsPrefix.slice(1), '-p', 'tsconfig.build.json', '--noEmit', 'false', '--emitDeclarationOnly', '--outDir', declarationSourceDir, '--singleThreaded'], {
+          command: typeScriptInvocation.command,
+          cwd: immutableSource.packageRoot,
+          env,
+        }));
+      }
     }
     await bundle();
     const finalWorkspaceRuntimeIdentity = readWorkspaceRuntimeIdentity({
@@ -302,7 +347,7 @@ const invokedAsMain = (() => {
 
 if (invokedAsMain) {
   try {
-    await buildCliDist();
+    await buildCliDist({ preparedDeclarations: process.argv.includes('--prepared-declarations') });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     exitWithCommandResult({ status: 1, signal: error?.signal });

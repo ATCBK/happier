@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
-import { createProviderConnectionViewFixture } from '@/dev/testkit';
+import { createProviderConnectionViewFixture } from '@/dev/testkit/harness/providerSettingsHarness';
 import { buildPoolGatewayChoices, buildPoolGatewayMutation } from './poolGatewayChoices';
 
 const codex = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };

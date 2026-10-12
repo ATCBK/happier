@@ -82,9 +82,10 @@ export function resolveVitestShardRange(env, shardCount) {
 }
 
 export function resolveVitestShardTimeoutMs(env) {
-  // Gate partitions have an approved twenty-minute execution budget; the job
-  // separately allows preparation/headroom. Keep the owning watchdog aligned.
-  return parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS) ?? 1_200_000;
+  // CI owns the whole job deadline, including restore and test execution.
+  // The twenty-minute performance target is not a subordinate kill timer.
+  // Keep an explicit watchdog for focused diagnostics outside that lifecycle.
+  return parsePositiveInt(env?.HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS) ?? undefined;
 }
 
 export function resolveVitestShardConcurrency(env, argv) {
@@ -323,12 +324,12 @@ function startVitestRun({ vitestCommand, configPath, env, passthroughArgs, posit
     onProcessSignal: (signal) => { operatorSignal ??= signal; },
   });
   let timedOut = false;
-  const timeout = setTimeout(() => {
+  const timeout = timeoutMs === undefined ? undefined : setTimeout(() => {
     timedOut = true;
     onTimeout?.();
     void lifecycle.cleanupChild('SIGTERM');
   }, timeoutMs);
-  timeout.unref?.();
+  timeout?.unref?.();
 
   const promise = new Promise((resolve) => {
     child.once('error', (error) => {

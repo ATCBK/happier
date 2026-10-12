@@ -19,6 +19,7 @@ Canonical UI-local testing surface for `apps/ui`.
 
 - Prefer importing from `@/dev/testkit` in new tests.
 - Import a bucket module directly only when its helper is intentionally not part of the root testkit surface.
+- Import `homeGovernanceHarness` and `providerSettingsHarness` from their own `harness/` modules. They load domain runtime state and are deliberately not exported by the lightweight root surface.
 - Prefer `renderSettingsView` or `renderScreen` over file-local `findByTestId` helpers.
 - Prefer `renderHook` and `flushHookEffects` over local `renderer.create` hook harnesses and bespoke promise loops.
 - Prefer canonical mock factories for `@/text`, `@/modal`, `expo-router`, `react-native`, `react-native-unistyles`, and `@/sync/domains/state/storage`.

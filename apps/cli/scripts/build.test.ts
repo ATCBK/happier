@@ -28,6 +28,66 @@ function writeBuildPackageManifest(packageRoot: string) {
 }
 
 describe('buildCliDist', () => {
+  it.each([false, true])('consumes checked source partitions without another compiler and rejects a missing declaration (%s)', async (missingLeaf) => {
+    const packageRoot = createTempDirSync('happier-cli-prepared-declarations-');
+    try {
+      writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+        name: '@happier-dev/build-fixture', version: '0.0.0',
+        main: './dist/index.cjs', module: './dist/index.mjs', types: './dist/index.d.cts',
+      }));
+      mkdirSync(join(packageRoot, 'src'));
+      mkdirSync(join(packageRoot, 'node_modules'));
+      symlinkSync(dirname(createRequire(import.meta.url).resolve('typescript/package.json')),
+        join(packageRoot, 'node_modules/typescript'), process.platform === 'win32' ? 'junction' : 'dir');
+      writeFileSync(join(packageRoot, 'src/foundation.ts'), "export interface Result { label: string }; export const label = 'prepared';\n");
+      writeFileSync(join(packageRoot, 'src/index.ts'), "import { label, type Result } from './foundation'; export const result: Result = { label };\n");
+      writeFileSync(join(packageRoot, 'tsconfig.json'), JSON.stringify({ compilerOptions: {
+        strict: true, target: 'ESNext', module: 'ESNext', moduleResolution: 'Bundler',
+        types: [], skipLibCheck: true, rootDir: 'src', noEmit: true, declaration: true,
+      }, include: ['src/**/*.ts'] }));
+      writeFileSync(join(packageRoot, 'tsconfig.build.json'), '{"extends":"./tsconfig.json"}');
+      for (const name of ['foundation', 'source']) {
+        writeFileSync(join(packageRoot, `tsconfig.${name}.json`), JSON.stringify({
+          extends: './tsconfig.json', compilerOptions: { composite: true, noEmit: false,
+            emitDeclarationOnly: true, disableSourceOfProjectReferenceRedirect: true,
+            outDir: `node_modules/.cache/${name}`, tsBuildInfoFile: `node_modules/.cache/${name}.tsbuildinfo` },
+          files: [name === 'source' ? 'src/index.ts' : 'src/foundation.ts'], include: [],
+          ...(name === 'source' ? { references: [{ path: './tsconfig.foundation.json' }] } : {}),
+        }));
+      }
+      const compilerRunner = resolve(dirname(fileURLToPath(import.meta.url)), '../../../scripts/workspaces/runTypeScriptCli.mjs');
+      const checked = spawnSync(process.execPath, [compilerRunner, '--singleThreaded', '--project', 'tsconfig.foundation.json', '--project', 'tsconfig.source.json'], {
+        cwd: packageRoot, encoding: 'utf8',
+      });
+      expect(checked.status, checked.stdout + checked.stderr).toBe(0);
+      if (missingLeaf) rmSync(join(packageRoot, 'node_modules/.cache/foundation/foundation.d.ts'));
+      const build = buildCliDist({
+        packageRoot, repoRoot: packageRoot, lockPath: join(packageRoot, 'build.lock'),
+        preparedDeclarations: true,
+        env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict', npm_lifecycle_event: 'build:prepared' },
+        // The native compiler executable is the boundary. Prepared consumers
+        // must never launch it after this same source graph has succeeded.
+        runTypecheckImpl: () => { throw new Error('duplicate source compiler'); },
+      });
+      if (missingLeaf) {
+        await expect(build).rejects.toThrow(/missing prepared CLI declaration.*foundation\.d\.ts/u);
+        expect(existsSync(join(packageRoot, 'dist/index.mjs'))).toBe(false);
+      } else {
+        await build;
+        expect(await import(join(packageRoot, 'dist/index.mjs'))).toMatchObject({ result: { label: 'prepared' } });
+        expect(readFileSync(join(packageRoot, 'dist/index.d.cts'), 'utf8')).toMatch(/interface Result/u);
+        // Publication must re-check current source even when a complete, valid
+        // declaration graph was available to the preceding Gate consumer.
+        writeFileSync(join(packageRoot, 'src/index.ts'), "export const result: number = 'invalid after preparation';\n");
+        await expect(buildCliDist({
+          packageRoot, repoRoot: packageRoot, lockPath: join(packageRoot, 'build.lock'),
+          preparedDeclarations: true,
+          env: { HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev', npm_lifecycle_event: 'prepack' },
+        })).rejects.toThrow(/exited with status [12]/u);
+        expect(readFileSync(join(packageRoot, 'dist/index.mjs'), 'utf8')).toContain('prepared');
+      }
+    } finally { rmSync(packageRoot, { recursive: true, force: true }); }
+  });
   it.each(['source-dev', 'qa-runtime'])('emits semantic-invalid runtime without launching a checker (%s)', async (mode) => {
     const packageRoot = createTempDirSync('happier-cli-runtime-emission-');
     try {

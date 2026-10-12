@@ -9,7 +9,7 @@ import { withConfiguredDaemonTestHome, writeDaemonSettingsFixture } from '@/daem
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { captureStderr, captureStdout, captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
-import { mockCurrentProcessAsDaemonLifecycleOwner } from '@/testkit/process/daemonLifecycleOwner';
+import { spawnDaemonLifecycleOwner } from '@/testkit/process/daemonLifecycleOwner';
 import type { DaemonLocallyPersistedState } from '@/persistence';
 import type { DaemonStopResult } from '@/daemon/controlClient';
 import { planDaemonServiceInstall } from './plan';
@@ -131,7 +131,6 @@ describe('runDaemonServiceCliCommand', () => {
     vi.doUnmock('node:child_process');
     vi.doUnmock('./commandExistsInPath');
     vi.doUnmock('@/daemon/controlClient');
-    vi.doUnmock('@/daemon/doctor');
     vi.doUnmock('@/daemon/restartDaemonAndWait');
     vi.doUnmock('@/daemon/waitForDaemonRunningWithinBudget');
     vi.unmock('node:child_process');
@@ -1638,7 +1637,6 @@ describe('runDaemonServiceCliCommand', () => {
     { keepDisabled: true, hasDaemonOwner: true },
     { keepDisabled: true, hasDaemonOwner: false },
   ])('preserves a running Windows service across install and retry ($keepDisabled, $hasDaemonOwner)', async ({ keepDisabled, hasDaemonOwner }) => {
-    mockCurrentProcessAsDaemonLifecycleOwner();
     await withTempDir('happier-service-install-win32-same-owner-', async (homeDir) => {
       const happierHomeDir = `${homeDir}/.happier`;
       const lifecycleEvents: string[] = [];
@@ -1653,106 +1651,114 @@ describe('runDaemonServiceCliCommand', () => {
         HAPPIER_DAEMON_SERVICE_OWNERSHIP_WAIT_POLL_MS: '10',
         HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS: '20',
       });
-      vi.resetModules();
-      vi.doMock('node:child_process', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('node:child_process')>();
-        return {
-          ...actual,
-          spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
-            if (command !== 'schtasks') {
+      const daemonOwner = spawnDaemonLifecycleOwner();
+      try {
+        vi.resetModules();
+        vi.doMock('node:child_process', async (importOriginal) => {
+          const actual = await importOriginal<typeof import('node:child_process')>();
+          return {
+            ...actual,
+            spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
+              if (command.endsWith('powershell.exe') && String(args.at(-1)).includes('RegisterTask')) {
+                lifecycleEvents.push('registered');
+              }
+              if (command !== 'schtasks') {
+                return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
+              }
+              const action = String(args[0] ?? '');
+              lifecycleEvents.push(action);
+              if (action === '/Run' && writeDaemonStateImpl) {
+                writeDaemonStateImpl({
+                  pid: daemonOwner.pid,
+                  httpPort: 43141,
+                  startedAt: Date.now(),
+                  startedWithCliVersion: configuration.currentCliVersion,
+                  startedWithPublicReleaseChannel: currentPublicReleaseChannel,
+                  startupSource: 'background-service',
+                  serviceLabel: paths.label,
+                  runtimeId: 'runtime-win32-install',
+                });
+              }
+              if (action === '/Query') {
+                return {
+                  status: 0,
+                  stdout: Buffer.from('Status: Running\nScheduled Task State: Enabled\n'),
+                  stderr: Buffer.from(''),
+                };
+              }
               return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
-            }
-            const action = String(args[0] ?? '');
-            lifecycleEvents.push(action);
-            if (action === '/Run' && writeDaemonStateImpl) {
-              writeDaemonStateImpl({
-                pid: process.pid,
-                httpPort: 43141,
-                startedAt: Date.now(),
-                startedWithCliVersion: configuration.currentCliVersion,
-                startedWithPublicReleaseChannel: currentPublicReleaseChannel,
-                startupSource: 'background-service',
-                serviceLabel: paths.label,
-                runtimeId: 'runtime-win32-install',
-              });
-            }
-            if (action === '/Query') {
-              return {
-                status: 0,
-                stdout: Buffer.from('Status: Running\nScheduled Task State: Enabled\n'),
-                stderr: Buffer.from(''),
-              };
-            }
-            return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
-          }),
-        };
-      });
-      vi.doMock('./commandExistsInPath', () => ({
-        commandExistsInPath: vi.fn(() => true),
-      }));
+            }),
+          };
+        });
+        vi.doMock('./commandExistsInPath', () => ({
+          commandExistsInPath: vi.fn(() => true),
+        }));
 
-      const controlClient = await import('@/daemon/controlClient');
-      const [{ clearDaemonStateForTestTeardown, writeDaemonState }, { configuration }] = await Promise.all([
-        import('@/persistence'),
-        import('@/configuration'),
-      ]);
-      vi.spyOn(controlClient, 'stopDaemon').mockImplementation(async () => {
-        lifecycleEvents.push('stopDaemon');
-        await clearDaemonStateForTestTeardown();
-        return { status: 'stopped', method: 'graceful' };
-      });
+        const controlClient = await import('@/daemon/controlClient');
+        const [{ clearDaemonStateForTestTeardown, writeDaemonState }, { configuration }] = await Promise.all([
+          import('@/persistence'),
+          import('@/configuration'),
+        ]);
+        vi.spyOn(controlClient, 'stopDaemon').mockImplementation(async () => {
+          lifecycleEvents.push('stopDaemon');
+          await clearDaemonStateForTestTeardown();
+          return { status: 'stopped', method: 'graceful' };
+        });
 
-      const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }] = await Promise.all([
-        loadCliModule(),
-      ]);
-      writeDaemonStateImpl = writeDaemonState;
+        const [{ runDaemonServiceCliCommand, resolveDaemonServiceCliRuntimeFromEnv, resolveDaemonServicePaths }] = await Promise.all([
+          loadCliModule(),
+        ]);
+        writeDaemonStateImpl = writeDaemonState;
 
-      const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
-      const paths = resolveDaemonServicePaths(runtime);
-      const currentPublicReleaseChannel = runtime.channel === 'publicdev' ? 'dev' : runtime.channel;
-      mkdirSync(dirname(paths.installedPath), { recursive: true });
-      writeValidInstalledWindowsDaemonServiceFile(paths.installedPath);
-      if (hasDaemonOwner) writeDaemonState({
-        pid: process.pid,
-        httpPort: 43140,
-        startedAt: Date.now(),
-        startedWithCliVersion: configuration.currentCliVersion,
-        startedWithPublicReleaseChannel: currentPublicReleaseChannel,
-        startupSource: 'background-service',
-        serviceLabel: paths.label,
-        runtimeId: 'runtime-win32-existing',
-      });
+        const runtime = resolveDaemonServiceCliRuntimeFromEnv({ targetMode: 'default-following' });
+        const paths = resolveDaemonServicePaths(runtime);
+        const currentPublicReleaseChannel = runtime.channel === 'publicdev' ? 'dev' : runtime.channel;
+        mkdirSync(dirname(paths.installedPath), { recursive: true });
+        writeValidInstalledWindowsDaemonServiceFile(paths.installedPath);
+        if (hasDaemonOwner) writeDaemonState({
+          pid: daemonOwner.pid,
+          httpPort: 43140,
+          startedAt: Date.now(),
+          startedWithCliVersion: configuration.currentCliVersion,
+          startedWithPublicReleaseChannel: currentPublicReleaseChannel,
+          startupSource: 'background-service',
+          serviceLabel: paths.label,
+          runtimeId: 'runtime-win32-existing',
+        });
 
-      const output = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
-      try {
-        await runDaemonServiceCliCommand({ argv: ['install', '--yes', '--json', ...(keepDisabled ? ['--keep-disabled'] : [])] });
-        const payload = output.json();
-        expect(payload.ok).toBe(true);
-        expect(payload.platform).toBe('win32');
+        const output = captureStdoutJsonOutput<{ ok: boolean; platform: string }>();
+        try {
+          await runDaemonServiceCliCommand({ argv: ['install', '--yes', '--json', ...(keepDisabled ? ['--keep-disabled'] : [])] });
+          const payload = output.json();
+          expect(payload.ok).toBe(true);
+          expect(payload.platform).toBe('win32');
+        } finally {
+          output.restore();
+        }
+
+        const stopIndex = lifecycleEvents.indexOf('stopDaemon');
+        const createIndex = lifecycleEvents.indexOf('registered');
+        const runIndex = lifecycleEvents.indexOf('/Run');
+        if (hasDaemonOwner) expect(stopIndex).toBeGreaterThanOrEqual(0);
+        else expect(stopIndex).toBe(-1);
+        expect(createIndex).toBeGreaterThan(stopIndex);
+        expect(runIndex).toBeGreaterThan(createIndex);
+
+        const repeated = captureStdoutJsonOutput<{ ok: boolean }>();
+        try {
+          await runDaemonServiceCliCommand({ argv: ['install', '--yes', '--json', ...(keepDisabled ? ['--keep-disabled'] : [])] });
+          expect(repeated.json().ok).toBe(true);
+          const { readDaemonState } = await import('@/persistence');
+          expect(await readDaemonState()).toMatchObject({ runtimeId: 'runtime-win32-install' });
+          const repeatedStopIndex = lifecycleEvents.lastIndexOf('stopDaemon');
+          const repeatedRunIndex = lifecycleEvents.lastIndexOf('/Run');
+          expect(repeatedStopIndex).toBeGreaterThan(stopIndex);
+          expect(repeatedRunIndex).toBeGreaterThan(repeatedStopIndex);
+        } finally {
+          repeated.restore();
+        }
       } finally {
-        output.restore();
-      }
-
-      const stopIndex = lifecycleEvents.indexOf('stopDaemon');
-      const createIndex = lifecycleEvents.indexOf('/Create');
-      const runIndex = lifecycleEvents.indexOf('/Run');
-      if (hasDaemonOwner) expect(stopIndex).toBeGreaterThanOrEqual(0);
-      else expect(stopIndex).toBe(-1);
-      expect(createIndex).toBeGreaterThan(stopIndex);
-      expect(runIndex).toBeGreaterThan(createIndex);
-
-      const repeated = captureStdoutJsonOutput<{ ok: boolean }>();
-      try {
-        await runDaemonServiceCliCommand({ argv: ['install', '--yes', '--json', ...(keepDisabled ? ['--keep-disabled'] : [])] });
-        expect(repeated.json().ok).toBe(true);
-        const { readDaemonState } = await import('@/persistence');
-        expect(await readDaemonState()).toMatchObject({ runtimeId: 'runtime-win32-install' });
-        const repeatedStopIndex = lifecycleEvents.lastIndexOf('stopDaemon');
-        const repeatedRunIndex = lifecycleEvents.lastIndexOf('/Run');
-        expect(repeatedStopIndex).toBeGreaterThan(stopIndex);
-        expect(repeatedRunIndex).toBeGreaterThan(repeatedStopIndex);
-      } finally {
-        repeated.restore();
+        expect(await daemonOwner.kill()).toBe(true);
       }
     });
   });

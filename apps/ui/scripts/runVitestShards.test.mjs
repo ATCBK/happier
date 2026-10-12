@@ -13,11 +13,18 @@ import {
   resolveVitestPassthroughArgs,
   resolveVitestPositionalFilters,
   resolveVitestShardCountForFileCount,
+  resolveVitestShardTimeoutMs,
 } from './runVitestShards.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = dirname(scriptsDir);
 const runnerPath = join(scriptsDir, 'runVitestShards.mjs');
+
+test('the containing job owns the default deadline while explicit diagnostic watchdogs remain available', () => {
+  assert.equal(resolveVitestShardTimeoutMs({}), undefined);
+  assert.equal(resolveVitestShardTimeoutMs({ HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS: 'invalid' }), undefined);
+  assert.equal(resolveVitestShardTimeoutMs({ HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS: '5000' }), 5000);
+});
 
 for (const scenario of [
   { name: 'legacy UI budget', env: { VITEST_UI_MAX_FORKS: '1' }, args: [], workers: 1 },

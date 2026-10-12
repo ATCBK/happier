@@ -5,7 +5,8 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
-import { AccountSettingsStoredContentEnvelopeSchema, AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol';
+import { AccountSettingsStoredContentEnvelopeSchema } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
+import { AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import type { Settings } from '@/sync/domains/settings/settings';
 
 // File identities belong to Node, not Vite's client asset URL transform.

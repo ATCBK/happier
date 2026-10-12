@@ -1,7 +1,5 @@
-import {
-    ProviderConnectionIdSchema,
-    createProviderErrorV1,
-} from '@happier-dev/protocol';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import {
     DaemonProviderConnectionViewV1Schema,
     DaemonProviderConnectionMutationResponseV1Schema,

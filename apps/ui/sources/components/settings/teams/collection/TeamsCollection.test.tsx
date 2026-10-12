@@ -2,7 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { collectRenderedTestIds, createHomeGovernanceHarness, installHomeGovernanceBoundaries, renderScreen, standardCleanup, teamSummaryFixture } from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';

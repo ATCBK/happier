@@ -4,7 +4,7 @@ import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exitWithCommandResult, runCommand } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 
-import { prepareTypeScriptProjectBuildFromArgs } from './prepareTypeScriptProjectBuild.mjs';
+import { prepareTypeScriptProjectBuildFromArgs, verifyTypeScriptProjectCoverage } from './prepareTypeScriptProjectBuild.mjs';
 import {
   resolveTypeScriptCliInvocation,
   shouldRouteTypeScriptCliThroughHstack,
@@ -13,6 +13,17 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..', '..');
 const args = process.argv.slice(2);
+let coverageBaseline;
+for (let index = 0; index < args.length; index += 1) {
+  if (args[index] !== '--verifyProjectCoverage') continue;
+  coverageBaseline = args[index + 1];
+  if (!coverageBaseline || coverageBaseline.startsWith('-')) {
+    process.stderr.write('--verifyProjectCoverage requires a baseline tsconfig path\n');
+    process.exit(1);
+  }
+  args.splice(index, 2);
+  index -= 1;
+}
 
 // Plugin SDK's finite task delegates to its existing prepared compiler script.
 const lifecycleTask = process.env.npm_lifecycle_event === 'typecheck:tests:prepared'
@@ -77,7 +88,8 @@ async function runCompiler(invocation, project, isCancelled) {
 if (process.platform !== 'win32' && shouldRouteTypeScriptCliThroughHstack({ args, env: process.env })) {
   const launcher = resolve(repoRoot, 'apps', 'stack', 'bin', 'hstack-exec');
   const scriptFromWorkspace = relative(process.cwd(), fileURLToPath(import.meta.url));
-  const routedResult = await runCommand(launcher, ['--', 'node', scriptFromWorkspace, ...args], {
+  const routedArgs = coverageBaseline ? ['--verifyProjectCoverage', coverageBaseline, ...args] : args;
+  const routedResult = await runCommand(launcher, ['--', 'node', scriptFromWorkspace, ...routedArgs], {
     ownedProcessGroup: true,
     cwd: process.cwd(),
     stdio: 'inherit',
@@ -85,6 +97,15 @@ if (process.platform !== 'win32' && shouldRouteTypeScriptCliThroughHstack({ args
   });
   exitWithCommandResult(routedResult);
 } else {
+  if (coverageBaseline) {
+    try {
+      await verifyTypeScriptProjectCoverage({ baselinePath: coverageBaseline,
+        projectPaths: compilerProjects(args).map(({ project }) => project).filter(Boolean) });
+    } catch (error) {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(1);
+    }
+  }
   const invocation = resolveTypeScriptCliInvocation({
     args,
     repoRoot,

@@ -1,6 +1,8 @@
 import { vi } from 'vitest';
-import { CurrentCursorResponseSchema, FeaturesResponseSchema, SessionCurrentProjectionRecordV1Schema,
-    SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol';
+import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { loadSyncSingletonForTests } from './syncSingletonLoader';
 import { installVitestRnShim } from '@/dev/vitestRnShim';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';

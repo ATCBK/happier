@@ -7,6 +7,9 @@
 // unrelated Teams/ops suites render against the real sync runtime. Import that
 // fixture from '@/dev/testkit/fixtures/agentCatalogFixtures' directly.
 //
+// Home/provider composition harnesses also import the real Account and Sync
+// owners. Keep them behind their harness paths so unrelated render helpers
+// do not initialize those graphs or capture their current state.
 // Rule: re-export a module here only when it pulls in fixtures, mocks and
 // render helpers. A module that value-imports `@/sync/**`, `@/agents/registry/**`
 // or any other runtime singleton stays behind its own deep path.
@@ -34,8 +37,6 @@ export * from './harness/popoverHarness';
 export * from './fixtures/homeGovernanceFixtures';
 export * from './fixtures/teamFixtures';
 export * from './harness/approvalInbox';
-export * from './harness/homeGovernanceHarness';
-export * from './harness/providerSettingsHarness';
 export * from './harness/rootLayoutTestkit';
 export * from './harness/serverScopedContextHarness';
 export * from './harness/settingsViewHarness';

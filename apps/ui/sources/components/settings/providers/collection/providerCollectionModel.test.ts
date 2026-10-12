@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-    createProviderConnectionViewFixture,
-    createProviderConnectionsDescribeFixture,
-} from '@/dev/testkit';
+import { createProviderConnectionViewFixture, createProviderConnectionsDescribeFixture } from '@/dev/testkit/harness/providerSettingsHarness';
 
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
 import { areProviderGatewayDeclarationsKnown, buildProviderCollection, buildProviderGatewayCollection, providerConnectionDetailRoute, resolveProviderCollectionLandingId } from './providerCollectionModel';
