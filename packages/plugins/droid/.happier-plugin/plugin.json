@@ -132,6 +132,7 @@
         }
       }
     ],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -149,6 +150,7 @@
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
       "discoverySources": [],
@@ -158,6 +160,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],

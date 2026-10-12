@@ -53,6 +53,7 @@ export const DROID_PLUGIN = definePlugin({
       // The host keeps Session V1 canonical and exposes the separately
       // versioned detached Run context through the same declarative ACP core.
       capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+        skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
         sessions: {
           open: ['create', 'resume'],
           delivery: ['newTurn', 'followUp'],
