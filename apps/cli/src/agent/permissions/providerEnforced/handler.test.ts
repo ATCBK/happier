@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { accountSettingsParse } from '@happier-dev/protocol';
+import { accountSettingsParse, buildSessionPermissionRespondRpcParamsV1 } from '@happier-dev/protocol';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -74,6 +74,75 @@ async function settledState<T>(promise: Promise<T>): Promise<'pending' | 'fulfil
   ]);
   return result === pending ? 'pending' : result;
 }
+
+describe('QA Edit button payloads at the native permission owner', () => {
+  const buttons = [
+    { name: 'allow once', fields: {} },
+    { name: 'accept edits for session', fields: {
+      mode: 'acceptEdits' as const,
+      updatedPermissions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }],
+    } },
+  ];
+
+  it.each(buttons)('settles $name with exact custody and preserves its provider update', async ({ fields }) => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[QA Edit]' });
+    const pending = handler.handleToolCall('qa-edit', 'Edit', { file_path: 'src/alpha.txt', old_string: 'before', new_string: 'after' }, {
+      turnId: 'qa-turn',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+    });
+    await vi.waitFor(() => expect(session.agentState.requests['qa-edit']).toMatchObject({ tool: 'Edit', turnId: 'qa-turn' }));
+    // These are the Action normalizer's actual allow-once/all-edits carriers;
+    // Session transport adds executing-client evidence, not another decision.
+    const payload = { ...buildSessionPermissionRespondRpcParamsV1({ id: 'qa-edit', turnId: 'qa-turn', decision: 'allow', ...fields }),
+      answeringClientCategory: 'web' as const };
+    const respond = session.rpcHandlerManager.handlers.get('session.permission.respond')!;
+    await expect(respond(payload)).resolves.toBeUndefined();
+    await expect(pending).resolves.toEqual({ decision: 'approved' });
+    expect(session.agentState.requests['qa-edit']).toBeUndefined();
+    expect(session.agentState.completedRequests['qa-edit']).toMatchObject({
+      status: 'approved', decision: 'approved', turnId: 'qa-turn', answeringClientCategory: 'web',
+      ...('updatedPermissions' in fields ? { updatedPermissions: fields.updatedPermissions } : {}),
+      permissionDecisionActorV1: { kind: 'accountUser', accountId: 'account-owner', relationship: 'owner' },
+    });
+    await expect(respond(payload)).resolves.toBeUndefined();
+    // A setMode update is for the native provider; it must not turn the answer
+    // into a reusable host tool grant or a different RPC decision.
+    expect(handler.getImmediateDecision('another-edit', 'Edit', { file_path: 'src/beta.txt' })).toBeNull();
+    await handler.reset();
+  });
+
+  it.each(buttons)('refuses stale custody and unattributable actors for $name without consuming the request', async ({ fields }) => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[QA Edit]' });
+    const pending = handler.handleToolCall('qa-edit', 'Edit', { file_path: 'src/alpha.txt' }, { turnId: 'qa-turn' });
+    await vi.waitFor(() => expect(session.agentState.requests['qa-edit']).toMatchObject({ turnId: 'qa-turn' }));
+    const respond = session.rpcHandlerManager.handlers.get('session.permission.respond')!;
+    const payload = { ...buildSessionPermissionRespondRpcParamsV1({ id: 'qa-edit', turnId: 'qa-turn', decision: 'allow', ...fields }),
+      answeringClientCategory: 'web' as const };
+    for (const invalidCustody of [{ id: 'unknown' }, { turnId: 'previous-turn' }, { turnId: undefined }]) {
+      await expect(respond({ ...payload, ...invalidCustody })).resolves.toMatchObject({ ok: false, errorCode: 'permission_request_not_found' });
+    }
+    for (const authorization of [undefined, { kind: 'session.permission.respond', sessionId: 'another-session',
+      actor: { kind: 'accountUser', accountId: 'account-owner', relationship: 'owner' } },
+      { kind: 'session.permission.respond', sessionId: session.sessionId, actor: { kind: 'accountUser', accountId: '' } }]) {
+      await expect(respond(payload, { signal: new AbortController().signal, authorization })).resolves.toMatchObject({
+        ok: false, errorCode: 'permission_actor_unattributable',
+      });
+    }
+    expect(await respond({ ...payload, mode: 'accept-edits' })).toMatchObject({
+      ok: false, errorCode: 'permission_response_invalid',
+    });
+    await expect(respond({ ...payload, updatedPermissions: [{ type: 'setMode', mode: 'bypassPermissions', destination: 'session' }] }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'permission_response_invalid' });
+    expect(await settledState(pending)).toBe('pending');
+    expect(session.agentState.requests['qa-edit']).toMatchObject({ turnId: 'qa-turn' });
+    expect(session.agentState.completedRequests['qa-edit']).toBeUndefined();
+    await expect(respond(payload)).resolves.toBeUndefined();
+    await expect(pending).resolves.toEqual({ decision: 'approved' });
+    await handler.reset();
+  });
+});
 
 describe('native Agent tool approval policy', () => {
   it('uses an existing session grant without widening a once-only native approval', async () => {
