@@ -1,18 +1,21 @@
 import type { AIBackendProfile } from './backendProfileSchema.js';
 import {
   buildBackendTargetKey,
-  type BackendTargetRefV1,
+  BackendTargetRefSchema,
 } from '../backends/targets/backendTargetRef.js';
 import {
-  buildBackendTargetKeyV2,
-  readBackendTargetRefV2,
+  readBackendTargetKeyV2,
 } from '../backends/targets/backendTargetRefV2.js';
 
 export function isProfileCompatibleWithBackendTarget(
   profile: Pick<AIBackendProfile, 'compatibilityByTargetKey' | 'compatibility' | 'isBuiltIn'>,
-  target: BackendTargetRefV1,
+  targetInput: unknown,
 ): boolean {
-  const targetKey = buildBackendTargetKeyV2(readBackendTargetRefV2(target));
+  const parsedTarget = BackendTargetRefSchema.safeParse(targetInput);
+  if (!parsedTarget.success) return false;
+  const target = parsedTarget.data;
+  const targetKey = readBackendTargetKeyV2(target);
+  if (targetKey === null) return false;
   const explicitByTargetKey = profile.compatibilityByTargetKey?.[targetKey];
   if (typeof explicitByTargetKey === 'boolean') return explicitByTargetKey;
   const legacyExplicitByTargetKey = profile.compatibilityByTargetKey?.[buildBackendTargetKey(target)];

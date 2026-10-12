@@ -245,6 +245,24 @@ describe('profiles (protocol)', () => {
     expect(isProfileCompatibleWithAgent({ compatibilityByTargetKey: { 'agent:claude': true }, isBuiltIn: true }, 'claude')).toBe(true);
   });
 
+  it('rejects invalid reader targets before profile overrides without crashing', () => {
+    const profile = { compatibilityByTargetKey: { 'agent:custom-acp': true, 'agent:bad:target': true }, isBuiltIn: false };
+    expect(isProfileCompatibleWithAgent(profile, 'custom-acp')).toBe(false);
+    expect(isProfileCompatibleWithBackendTarget(profile, { kind: 'builtInAgent', agentId: 'bad:target' })).toBe(false);
+    expect(isProfileCompatibleWithBackendTarget(profile, { kind: 'builtInAgent', agentId: '' })).toBe(false);
+    expect(isProfileCompatibleWithBackendTarget(profile, { kind: 'configuredAcpBackend', backendId: '' })).toBe(false);
+    expect(isProfileCompatibleWithBackendTarget(profile, null)).toBe(false);
+    expect(isProfileCompatibleWithBackendTarget(profile, { kind: 'builtInAgent' })).toBe(false);
+  });
+
+  it('preserves operational failures instead of classifying them as incompatible targets', () => {
+    const failure = new Error('Target source unavailable');
+    expect(() => isProfileCompatibleWithBackendTarget({ isBuiltIn: false }, {
+      kind: 'builtInAgent',
+      get agentId(): string { throw failure; },
+    })).toThrow(failure);
+  });
+
   it('returns required env var names (secret vs config)', async () => {
     const { getRequiredSecretEnvVarNames, getRequiredConfigEnvVarNames, getMissingRequiredConfigEnvVarNames } = await import('./index.js');
 
