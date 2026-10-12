@@ -9,9 +9,11 @@ export const SETTINGS_PAGE_IDS = {
     groupProfileAndAccount: 'groupProfileAndAccount',
     groupGeneral: 'groupGeneral',
     groupAiAndAgents: 'groupAiAndAgents',
+    groupToolsAndModels: 'groupToolsAndModels',
     groupSessionsBehavior: 'groupSessionsBehavior',
     groupFilesAndSourceControl: 'groupFilesAndSourceControl',
     groupSystem: 'groupSystem',
+    groupPlugins: 'groupPlugins',
 
     account: 'account',
     teams: 'teams',

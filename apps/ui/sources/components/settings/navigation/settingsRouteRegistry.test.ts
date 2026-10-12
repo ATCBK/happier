@@ -371,7 +371,8 @@ describe('resolveSettingsRouteTitleKey', () => {
         expect(resolveSettingsRouteTitleKey('/settings/prompts/docs/new')).toBe('promptLibrary.newPrompt');
         expect(resolveSettingsRouteTitleKey('/settings/prompts/docs/abc')).toBe('promptLibrary.editPrompt');
         // The Providers stack is a nested navigator; its screens resolve under `/settings/providers`.
-        expect(resolveSettingsRouteTitleKey('/settings/providers/conn-1')).toBe('settingsProviders.detailTitle');
+        // A connection's page names itself in its header, so its bar says where it lives, as an Agent's does.
+        expect(resolveSettingsRouteTitleKey('/settings/providers/conn-1')).toBe('settingsProviders.title');
         // So is the Teams collection.
         expect(resolveSettingsRouteTitleKey('/settings/teams')).toBe('teams.title');
         expect(resolveSettingsRouteTitleKey('/settings/teams/home-a/team-1/members')).toBe('teams.tabs.members');

@@ -182,7 +182,7 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
             },
             {
                 id: 'groupAiAndAgents',
-                titleKey: 'settings.aiAndAgents',
+                titleKey: 'settings.agentsGroup',
                 keywordsKey: 'settingsSearchKeywords.groupAiAndAgents',
                 icon: ({ theme }) => <Icon name="sparkle" size={16} color={theme.colors.text.secondary} />,
                 children: [
@@ -193,15 +193,6 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                         route: SETTINGS_ROUTES.agents,
                         keywordsKey: 'settingsSearchKeywords.agents',
                         icon: ({ theme }) => <Icon name="sparkle" size={16} color={theme.colors.text.secondary} />,
-                    },
-                    {
-                        id: 'providers',
-                        titleKey: 'settingsProviders.title',
-                        subtitleKey: 'settingsProviders.entrySubtitle',
-                        route: SETTINGS_ROUTES.providers,
-                        keywordsKey: 'settingsSearchKeywords.providers',
-                        gate: { featureId: 'providers' },
-                        icon: ({ theme }) => <Icon name="cube" size={16} color={theme.colors.text.secondary} />,
                     },
                     {
                         id: 'subAgent',
@@ -237,6 +228,37 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                         icon: ({ theme }) => <Icon name="tree-structure" size={16} color={theme.colors.text.secondary} />,
                     },
                     {
+                        id: 'voice',
+                        titleKey: 'settings.voiceAssistant',
+                        subtitleKey: 'settings.voiceAssistantSubtitle',
+                        route: SETTINGS_ROUTES.voice,
+                        keywordsKey: 'settingsSearchKeywords.voice',
+                        icon: ({ theme }) => <Icon name="microphone" size={16} color={theme.colors.text.secondary} />,
+                        children: [
+                            { id: 'voiceConversations', titleKey: 'settingsVoice.intents.conversations.title', subtitleKey: 'settingsVoice.intents.conversations.subtitle', route: SETTINGS_ROUTES.voiceConversations, gate: { featureId: 'voice' }, keywordsKey: 'settingsSearchKeywords.voiceConversations', icon: ({ theme }) => <Icon name="chat-circle" size={16} color={theme.colors.text.secondary} /> },
+                            { id: 'voiceDictation', titleKey: 'settingsVoice.intents.dictation.title', subtitleKey: 'settingsVoice.intents.dictation.subtitle', route: SETTINGS_ROUTES.voiceDictation, keywordsKey: 'settingsSearchKeywords.voiceDictation', icon: ({ theme }) => <Icon name="microphone" size={16} color={theme.colors.text.secondary} /> },
+                            { id: 'voicePrivacy', titleKey: 'settingsVoice.intents.privacy.title', subtitleKey: 'settingsVoice.intents.privacy.subtitle', route: SETTINGS_ROUTES.voicePrivacy, keywordsKey: 'settingsSearchKeywords.voicePrivacy', icon: ({ theme }) => <Icon name="shield-check" size={16} color={theme.colors.text.secondary} /> },
+                            { id: 'voiceAdvanced', titleKey: 'settingsVoice.intents.advanced.title', subtitleKey: 'settingsVoice.intents.advanced.subtitle', route: SETTINGS_ROUTES.voiceAdvanced, keywordsKey: 'settingsSearchKeywords.voiceAdvanced', icon: ({ theme }) => <Icon name="sliders-horizontal" size={16} color={theme.colors.text.secondary} /> },
+                        ],
+                    },
+                ],
+            },
+            {
+                id: 'groupToolsAndModels',
+                titleKey: 'settings.toolsAndModels',
+                keywordsKey: 'settingsSearchKeywords.groupToolsAndModels',
+                icon: ({ theme }) => <Icon name="wrench" size={16} color={theme.colors.text.secondary} />,
+                children: [
+                    {
+                        id: 'providers',
+                        titleKey: 'settingsProviders.title',
+                        subtitleKey: 'settingsProviders.entrySubtitle',
+                        route: SETTINGS_ROUTES.providers,
+                        keywordsKey: 'settingsSearchKeywords.providers',
+                        gate: { featureId: 'providers' },
+                        icon: ({ theme }) => <Icon name="cube" size={16} color={theme.colors.text.secondary} />,
+                    },
+                    {
                         id: 'connectedServices',
                         titleKey: 'settings.connectedServices',
                         subtitleKey: 'settings.connectedServicesSubtitle',
@@ -265,7 +287,7 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                     },
                     {
                         id: 'plugins',
-                        titleKey: 'settingsPlugins.title',
+                        titleKey: 'settingsPlugins.surfaces.navigationTitle',
                         subtitleKey: 'settingsPlugins.subtitle',
                         route: SETTINGS_ROUTES.plugins,
                         keywordsKey: 'settingsSearchKeywords.plugins',
@@ -286,20 +308,6 @@ export const SETTINGS_PAGE_CATALOG: readonly SettingsPageNode[] = [
                             { id: 'promptsRegistries', titleKey: 'promptLibrary.registries', route: SETTINGS_ROUTES.promptsRegistries, keywordsKey: 'settingsSearchKeywords.promptsRegistries', gate: { featureId: 'prompts.skills.registries' }, icon: ({ theme }) => <Icon name="globe" size={16} color={theme.colors.text.secondary} /> },
                             { id: 'promptsLibrary', titleKey: 'promptLibrary.prompts', route: SETTINGS_ROUTES.promptsLibrary, keywordsKey: 'settingsSearchKeywords.promptsLibrary', icon: ({ theme }) => <Icon name="books" size={16} color={theme.colors.text.secondary} /> },
                             { id: 'promptsAssets', titleKey: 'promptLibrary.externalAssets', route: SETTINGS_ROUTES.promptsAssets, keywordsKey: 'settingsSearchKeywords.promptsAssets', gate: { featureId: 'prompts.assets.external' }, icon: ({ theme }) => <Icon name="cloud" size={16} color={theme.colors.text.secondary} /> },
-                        ],
-                    },
-                    {
-                        id: 'voice',
-                        titleKey: 'settings.voiceAssistant',
-                        subtitleKey: 'settings.voiceAssistantSubtitle',
-                        route: SETTINGS_ROUTES.voice,
-                        keywordsKey: 'settingsSearchKeywords.voice',
-                        icon: ({ theme }) => <Icon name="microphone" size={16} color={theme.colors.text.secondary} />,
-                        children: [
-                            { id: 'voiceConversations', titleKey: 'settingsVoice.intents.conversations.title', subtitleKey: 'settingsVoice.intents.conversations.subtitle', route: SETTINGS_ROUTES.voiceConversations, gate: { featureId: 'voice' }, keywordsKey: 'settingsSearchKeywords.voiceConversations', icon: ({ theme }) => <Icon name="chat-circle" size={16} color={theme.colors.text.secondary} /> },
-                            { id: 'voiceDictation', titleKey: 'settingsVoice.intents.dictation.title', subtitleKey: 'settingsVoice.intents.dictation.subtitle', route: SETTINGS_ROUTES.voiceDictation, keywordsKey: 'settingsSearchKeywords.voiceDictation', icon: ({ theme }) => <Icon name="microphone" size={16} color={theme.colors.text.secondary} /> },
-                            { id: 'voicePrivacy', titleKey: 'settingsVoice.intents.privacy.title', subtitleKey: 'settingsVoice.intents.privacy.subtitle', route: SETTINGS_ROUTES.voicePrivacy, keywordsKey: 'settingsSearchKeywords.voicePrivacy', icon: ({ theme }) => <Icon name="shield-check" size={16} color={theme.colors.text.secondary} /> },
-                            { id: 'voiceAdvanced', titleKey: 'settingsVoice.intents.advanced.title', subtitleKey: 'settingsVoice.intents.advanced.subtitle', route: SETTINGS_ROUTES.voiceAdvanced, keywordsKey: 'settingsSearchKeywords.voiceAdvanced', icon: ({ theme }) => <Icon name="sliders-horizontal" size={16} color={theme.colors.text.secondary} /> },
                         ],
                     },
                     {
