@@ -62,6 +62,17 @@ export const ANTIGRAVITY_PLUGIN = definePlugin({
             callbackUrl: ANTIGRAVITY_OAUTH_PROFILE.callbackUrl,
             scopes: [...ANTIGRAVITY_OAUTH_PROFILE.scopes], pkce: 'required', outcomeReconciliation: 'none',
             allowRawAuthorizationCode: ANTIGRAVITY_OAUTH_PROFILE.allowRawAuthorizationCode,
+          }, {
+            id: 'native-import', kind: 'manual', title: 'Import native login', outcomeReconciliation: 'none',
+            fields: [{ id: 'source', title: 'Native login source', secret: false,
+              description: 'Importing shares this native login with Happier. The native app may ask you to sign in again when Happier renews it. On macOS, ACP import reads the Keychain without testing write availability.',
+              schema: { type: 'string', enum: ['acp', 'cli', 'cli-file'] }, default: 'acp',
+              presentation: { control: 'select', options: [
+                { value: 'acp', title: 'Antigravity ACP' },
+                { value: 'cli', title: 'Antigravity CLI (macOS and Linux)' },
+                { value: 'cli-file', title: 'Antigravity CLI credential file' },
+              ] },
+            }],
           }],
         },
       },
@@ -79,16 +90,15 @@ export const ANTIGRAVITY_PLUGIN = definePlugin({
             executable: { kind: 'managedDependency', id: 'agy-acp-server' },
           },
           definition: {
-            auth: { methodId: 'oauth-personal' },
+            auth: { methodId: 'oauth-personal',
+              // ACP 1.3.0 marks failed refresh/onboarding separately from generic missing authentication.
+              setupFailure: { requestErrorCode: -32000, dataReason: 'onboarding_failed' },
+            },
             mcp: { policy: 'pass_through' },
             // Rendered diagnostic in the pinned ACP 1.3.0 quota_errors.py; advisory reset prose never creates a reset instant.
             usageLimitDiagnostic: {
               pattern: String.raw`^Usage Limit Reached\n\nYou have reached your current quota for this period\.(?: Your limit will reset (?:in \d+ (?:days?|hours?|minutes?|seconds?)(?:, \d+ (?:days?|hours?|minutes?|seconds?))?|on [A-Z][a-z]{2} \d{1,2}, \d{4} \d{2}:\d{2} UTC)\.)?$`,
               connectedAccountService: { pluginId: 'happier.agent.antigravity', localId: 'antigravity-account' },
-            },
-            usageLimitRecoveryBackoff: {
-              fallbackBackoffEnvKey: 'HAPPIER_AGY_USAGE_LIMIT_RECOVERY_FALLBACK_BACKOFF_MS',
-              maxAttemptsEnvKey: 'HAPPIER_AGY_USAGE_LIMIT_RECOVERY_MAX_ATTEMPTS',
             },
           },
         },
@@ -139,13 +149,13 @@ export const ANTIGRAVITY_PLUGIN = definePlugin({
           credentialKinds: ['oauth'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn'],
             cancel: true,
             executionRunContext: { versions: [1] },
-            usageLimitRecovery: { inactive: ['checkNow'] },
           },
         }),
         surfaces: {

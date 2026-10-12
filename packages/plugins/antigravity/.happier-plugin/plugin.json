@@ -18,7 +18,15 @@
             "open": [
               "create",
               "resume"
-            ]
+            ],
+            "usageLimitRecovery": {
+              "active": [
+                "checkNow"
+              ],
+              "inactive": [
+                "checkNow"
+              ]
+            }
           },
           "surfaces": [
             "terminal",
@@ -95,17 +103,15 @@
         "connectedAccounts": [
           {
             "credentialKinds": [
-              "token"
+              "oauth"
             ],
             "materializationKinds": [
+              "files",
               "environment"
             ],
             "purpose": "model_upstream",
             "required": false,
-            "service": {
-              "localId": "gemini-account",
-              "pluginId": "happier.agent.gemini"
-            }
+            "service": "antigravity-account"
           }
         ],
         "id": "antigravity",
@@ -113,10 +119,21 @@
         "runtime": {
           "definition": {
             "auth": {
-              "methodId": "oauth-personal"
+              "methodId": "oauth-personal",
+              "setupFailure": {
+                "dataReason": "onboarding_failed",
+                "requestErrorCode": -32000
+              }
             },
             "mcp": {
               "policy": "pass_through"
+            },
+            "usageLimitDiagnostic": {
+              "connectedAccountService": {
+                "localId": "antigravity-account",
+                "pluginId": "happier.agent.antigravity"
+              },
+              "pattern": "^Usage Limit Reached\\n\\nYou have reached your current quota for this period\\.(?: Your limit will reset (?:in \\d+ (?:days?|hours?|minutes?|seconds?)(?:, \\d+ (?:days?|hours?|minutes?|seconds?))?|on [A-Z][a-z]{2} \\d{1,2}, \\d{4} \\d{2}:\\d{2} UTC)\\.)?$"
             }
           },
           "kind": "acp",
@@ -135,7 +152,7 @@
             },
             "sources": [
               {
-                "contentSearch": false,
+                "contentSearch": true,
                 "instances": [
                   {
                     "constants": {},
@@ -192,6 +209,7 @@
         "title": "Antigravity"
       }
     ],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -201,7 +219,71 @@
     "composerControls": [],
     "composerReferences": [],
     "composerRegions": [],
-    "connectedAccountDescriptors": [],
+    "connectedAccountDescriptors": [
+      {
+        "authentication": {
+          "defaultModeId": "oauth-personal",
+          "modes": [
+            {
+              "allowRawAuthorizationCode": true,
+              "callbackUrl": "https://antigravity.google/oauth-callback",
+              "id": "oauth-personal",
+              "kind": "oauthAuthorizationCode",
+              "outcomeReconciliation": "none",
+              "pkce": "required",
+              "scopes": [
+                "https://www.googleapis.com/auth/cloud-platform",
+                "https://www.googleapis.com/auth/userinfo.email",
+                "https://www.googleapis.com/auth/aicode"
+              ],
+              "title": "Sign in with Google"
+            },
+            {
+              "fields": [
+                {
+                  "default": "acp",
+                  "description": "Importing shares this native login with Happier. The native app may ask you to sign in again when Happier renews it. On macOS, ACP import reads the Keychain without testing write availability.",
+                  "id": "source",
+                  "presentation": {
+                    "control": "select",
+                    "options": [
+                      {
+                        "title": "Antigravity ACP",
+                        "value": "acp"
+                      },
+                      {
+                        "title": "Antigravity CLI (macOS and Linux)",
+                        "value": "cli"
+                      },
+                      {
+                        "title": "Antigravity CLI credential file",
+                        "value": "cli-file"
+                      }
+                    ]
+                  },
+                  "schema": {
+                    "enum": [
+                      "acp",
+                      "cli",
+                      "cli-file"
+                    ],
+                    "type": "string"
+                  },
+                  "secret": false,
+                  "title": "Native login source"
+                }
+              ],
+              "id": "native-import",
+              "kind": "manual",
+              "outcomeReconciliation": "none",
+              "title": "Import native login"
+            }
+          ]
+        },
+        "id": "antigravity-account",
+        "title": "Google Antigravity"
+      }
+    ],
     "daemonDatabases": [],
     "dragSources": [],
     "dropTargets": [],
@@ -209,6 +291,7 @@
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [
       {
         "architectures": [
@@ -233,41 +316,51 @@
             },
             "assetsByPlatform": {
               "darwin-arm64": {
-                "archiveUrl": "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-agy_acp_server_1.1.1-darwin-arm64.zip",
+                "archiveUrl": "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.3.0-darwin-arm64.zip",
                 "executableSubpath": "agy_acp_server.par",
-                "sha256": "fdfa915652cdb7ba8085cc8fffed072cbe009251aa2c951aabdda07a8c28a189"
+                "sha256": "7cd97045f7b4fe81175a107cdf16f9c51484e3c78a5162cae415338bb6aa5b88",
+                "sizeBytes": 111456962
+              },
+              "darwin-x64": {
+                "archiveUrl": "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.3.0-darwin-x86_64.zip",
+                "executableSubpath": "agy_acp_server.par",
+                "sha256": "bb23956b89984bf5d354af2c3725e6c57f0cc1b7228e77a0e91c9c2bc1d47646",
+                "sizeBytes": 117245544
               },
               "linux-arm64": {
-                "archiveUrl": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_1.1.1-linux-arm64.zip",
+                "archiveUrl": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.3.0-linux-arm64.zip",
                 "args": [
                   "--uid="
                 ],
                 "executableSubpath": "agy_acp_server.par",
-                "sha256": "ed69e64b308fcb123ab54bf3277bf9cb0d651064f885ea5aab0ff520c7175398"
+                "sha256": "500b0bc0fb858e88f4df404d4cedf80bf9298c178291e39e383d6c50b111cbdf",
+                "sizeBytes": 321690363
               },
               "linux-x64": {
-                "archiveUrl": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_1.1.1-linux-x86_64.zip",
+                "archiveUrl": "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.3.0-linux-x86_64.zip",
                 "args": [
                   "--uid="
                 ],
                 "executableSubpath": "agy_acp_server.par",
-                "sha256": "38f62d01b32deb0907b3d39a71ec301fd36369f6ffd1cf262d4af385177f79df",
-                "sizeBytes": 681969407
+                "sha256": "9fb60956af0a9d76220a4db91ca9ac88e2a2372ad68f985ab5fceace6b825b96",
+                "sizeBytes": 333727150
               },
               "win32-arm64": {
-                "archiveUrl": "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-agy_acp_server_1.1.1-windows-arm64.zip",
+                "archiveUrl": "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.3.0-windows-arm64.zip",
                 "executableSubpath": "agy_acp_server.exe",
-                "sha256": "35f4b1f47ba6a3fea7b0a3e30010df5ea73a64b4f0e7cf991cddc673ddfbcafc"
+                "sha256": "4a0f469720e9beb9438a979f543fdbfad5022ebe0992c052c590bd78b3144ca3",
+                "sizeBytes": 124654803
               },
               "win32-x64": {
-                "archiveUrl": "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-agy_acp_server_1.1.1-windows-x86_64.zip",
+                "archiveUrl": "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.3.0-windows-x86_64.zip",
                 "executableSubpath": "agy_acp_server.exe",
-                "sha256": "47cb50eef14f0a4655d78cfcfda869bcea7aaee5f9787e936bc2935ea612c3b8"
+                "sha256": "65215e0688681fa3116e048a9eab27ef53af1bbd6f3da3f1c52bd4911d8b17f9",
+                "sizeBytes": 124509787
               }
             },
             "installId": "dep.antigravity.agy-acp-server",
             "kind": "pinnedArchive",
-            "version": "1.1.1"
+            "version": "1.3.0"
           }
         ],
         "title": "Antigravity ACP server"
@@ -281,6 +374,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
@@ -327,6 +421,27 @@
     "optional": [],
     "required": [
       {
+        "capability": "network",
+        "id": "antigravity-oauth",
+        "reason": "Authorize and refresh the selected Google Antigravity account.",
+        "scope": {
+          "methods": [
+            "GET",
+            "POST"
+          ],
+          "targets": [
+            {
+              "kind": "fixedOrigin",
+              "origin": "https://oauth2.googleapis.com"
+            },
+            {
+              "kind": "fixedOrigin",
+              "origin": "https://www.googleapis.com"
+            }
+          ]
+        }
+      },
+      {
         "capability": "filesystem",
         "id": "antigravity-external-session-transcripts",
         "reason": "Read source-qualified Antigravity CLI transcripts for External Session observation.",
@@ -346,6 +461,10 @@
         "id": "antigravity-acp-process",
         "reason": "Launch the pinned official Antigravity ACP server through host-mediated execution.",
         "scope": {
+          "envKeys": [
+            "GEMINI_HOME",
+            "AGY_ACP_FORCE_FILE_STORAGE"
+          ],
           "executables": [
             {
               "id": "agy-acp-server",
@@ -363,6 +482,26 @@
             {
               "id": "antigravity-cli",
               "kind": "systemTool"
+            }
+          ]
+        }
+      },
+      {
+        "capability": "network",
+        "id": "antigravity-quota",
+        "reason": "Read quota for the selected Antigravity Connected Account.",
+        "scope": {
+          "methods": [
+            "POST"
+          ],
+          "targets": [
+            {
+              "kind": "fixedOrigin",
+              "origin": "https://cloudcode-pa.googleapis.com"
+            },
+            {
+              "kind": "fixedOrigin",
+              "origin": "https://daily-cloudcode-pa.googleapis.com"
             }
           ]
         }
