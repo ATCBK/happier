@@ -8,6 +8,7 @@ import { serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/
 import { parseToken } from '@/utils/auth/parseToken';
 import { storage } from '@/sync/domains/state/storage';
 import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { subscribeMachineUpdates } from '@/sync/store/domains/machines';
 
 import { MachineWorkSummarySection, type MachineWorkSummaryState } from './MachineWorkSummarySection';
 
@@ -23,6 +24,9 @@ type Props = Readonly<{
 
 function unavailable(previous: MachineWorkSummaryState, reason: 'loading' | 'offline' | 'unavailable'): MachineWorkSummaryState {
     if (previous.kind === 'summary' && previous.summary.kind === 'current') return { ...previous, stale: reason };
+    // A re-read keeps the last answer on screen (an unavailable line with its Retry) rather than flipping the
+    // line back to "Checking" on every heartbeat; only a first read shows the loading line.
+    if (reason === 'loading' && previous.kind === 'summary') return previous;
     return reason === 'loading' ? { kind: 'loading' } : reason === 'offline'
         ? { kind: 'offline' } : { kind: 'summary', summary: { kind: 'unavailable' } };
 }
@@ -36,14 +40,18 @@ function ScopedMachineWorkSummaryReader(props: Props) {
     const context = React.useMemo(() => ({ surface: 'ui' as const, source: 'ui_button' as const, authority: 'present_user' as const,
         serverId: props.scope.serverId, expectedAccountId: props.scope.accountId }), [props.scope.serverId, props.scope.accountId]);
     const load = React.useCallback(async () => {
-        pending.current?.abort();
         const lifetime = lifetimeRef.current;
         if (!lifetime || lifetime.signal.aborted) return;
-        if (!props.online) { setState(previous => unavailable(previous, 'offline')); return; }
+        if (!props.online) { pending.current?.abort(); setState(previous => unavailable(previous, 'offline')); return; }
+        // Heartbeats and this RPC's own transport hydration update the same
+        // Machine row. Let its current, budgeted read settle before refreshing;
+        // replacing it on every update can cancel setup or discard its response.
+        if (pending.current && !pending.current.signal.aborted) return;
         const request = new AbortController();
         pending.current = request;
         setState(previous => unavailable(previous, 'loading'));
         const result = await execute('machines.work.summary.get', target, { ...context, signal: request.signal }).catch(() => null);
+        if (pending.current === request) pending.current = null;
         if (request.signal.aborted || lifetime.signal.aborted) return;
         const parsed = result?.ok ? MachineWorkSummaryGetResultV1Schema.safeParse(result.result) : null;
         const failure = result && !result.ok ? result.errorCode : undefined;
@@ -63,13 +71,20 @@ function ScopedMachineWorkSummaryReader(props: Props) {
         let lifetime = new AbortController();
         lifetimeRef.current = lifetime;
         let observedMachine = resolveServerScopedMachine(storage.getState(), props.scope.serverId, props.machineId);
-        const stopMachine = storage.subscribe(nextState => {
+        let observedActiveAt = observedMachine?.activeAt;
+        const observeMachine = (nextState: ReturnType<typeof storage.getState>) => {
             const next = resolveServerScopedMachine(nextState, props.scope.serverId, props.machineId);
-            if (next === observedMachine) return;
+            if (next === observedMachine && next?.activeAt === observedActiveAt) return;
             observedMachine = next;
+            observedActiveAt = next?.activeAt;
             // The incumbent Machine writer receives readiness and liveness;
             // neither its update nor this observer carries requester counts.
             void load();
+        };
+        const stopMachine = storage.subscribe(observeMachine);
+        const stopMachineUpdates = subscribeMachineUpdates((serverId, machineIds) => {
+            if (areServerProfileIdentifiersEquivalent(serverId, props.scope.serverId)
+                && machineIds.includes(props.machineId)) observeMachine(storage.getState());
         });
         const stopWake = subscribeHomeAccountChange(event => {
             if (areServerProfileIdentifiersEquivalent(event.serverId, props.scope.serverId)
@@ -90,7 +105,7 @@ function ScopedMachineWorkSummaryReader(props: Props) {
                 void load();
             }
         });
-        return () => { lifetime.abort(); stopMachine(); stopWake(); stopCredentials(); pending.current?.abort(); };
+        return () => { lifetime.abort(); stopMachine(); stopMachineUpdates(); stopWake(); stopCredentials(); pending.current?.abort(); };
     }, [load, props.scope.serverId, props.scope.accountId, props.machineId]);
     React.useEffect(() => { void load(); }, [load, props.refreshKey]);
     return <MachineWorkSummarySection machineName={props.machineName} state={state}

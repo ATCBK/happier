@@ -38,6 +38,40 @@ const initial: MachineAccessGrantsListResponseV1 = {
 };
 
 describe('Machine sharing through the canonical controller and sheet', () => {
+    it.each(['machines.access.grant.remove', 'machines.access.leave'] as const)('honors the %s UI waiver without another local confirmation', async actionId => {
+        const leaving = actionId === 'machines.access.leave';
+        let snapshot: MachineAccessGrantsListResponseV1 = leaving ? { ...initial, canManage: false, grants: [], ownDirectGrant: true,
+            access: { ...initial.access, role: 'use' }, ownAccessSources: [{ principal: bob, displayName: 'Bob' }] } : initial;
+        const accountId = leaving ? 'bob' : 'alice';
+        const home = await serveActionHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-removal-waiver.test', accountId, settings: {
+            actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { [actionId]: ['ui'] } },
+        } }], route: request => {
+            if (request.path !== '/v1/machines/machine/access') return undefined;
+            if (request.method === 'GET') return Response.json(snapshot);
+            if (request.method === 'DELETE') {
+                snapshot = { ...snapshot, grants: [], ownDirectGrant: false, ownAccessSources: [] };
+                return Response.json(leaving ? { kind: 'left', effectiveAccess: 'none' } : { kind: 'removed', effectiveAccess: 'manage' });
+            }
+            return undefined;
+        } });
+        try {
+            const scope = { serverId: home.homes.machine!.id, accountId };
+            function Surface() {
+                const controller = useMachineShareController({ machineId: 'machine', machineName: 'Devbox', scope });
+                return <ShareSheet model={controller.model} actions={controller.actions}
+                    adapter={createMachineShareAdapter({ machineName: 'Devbox', online: true, controller })}
+                    presentation="full" testID="machine-share-editor" />;
+            }
+            const screen = await renderScreen(<Surface />);
+            const rowId = leaving ? 'machine-share-your-access' : 'machine-share-grant-account:bob';
+            await vi.waitFor(() => expect(screen.findByTestId(rowId)).not.toBeNull());
+            await screen.pressByTestIdAsync(rowId);
+            expect(screen.getTextContent()).toContain(t('machines.sharing.effectiveLoss'));
+            await screen.pressByTestIdAsync('machine-share-remove:account:bob');
+            await vi.waitFor(() => expect(home.requests.filter(request => request.method === 'DELETE')).toHaveLength(1));
+            expect(home.requests.find(request => request.method === 'DELETE')?.body).toEqual(leaving ? {} : { principal: bob });
+        } finally { home.dispose(); }
+    });
     it('retains dated census for transport loss, then clears it on denial and discards an older read', async () => {
         let mode: 'ready' | 'transport' | 'unavailable' | 'pending' | 'denied' = 'ready';
         let pending: { signal: AbortSignal | null | undefined; finish: (response: Response) => void } | undefined;
@@ -201,7 +235,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             await screen.pressByTestIdAsync('machine-share-level:team:team:admin');
             await vi.waitFor(() => expect(home.requests.filter(request => request.method === 'PUT').map(request => request.body))
                 .toEqual([{ principal: team, level: 'admin' }]));
-            await vi.waitFor(() => expect(screen.findByTestId('machine-share-level:team:team:admin')?.props.accessibilityState.selected).toBe(true));
+            await vi.waitFor(() => expect(screen.findByTestId('machine-share-level:team:team:admin')?.props.accessibilityState.checked).toBe(true));
             expect(home.requests.filter(request => request.path.includes('data-key-envelopes'))).toEqual([]);
             // A later eligible joiner is recoverable even while Cara remains incompatible.
             snapshot = { ...snapshot, grants: snapshot.grants.map(row => ({ ...row, audience: [
@@ -291,11 +325,11 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             expect(home.requests.filter(request => request.path.endsWith('/access') && request.method === 'GET')).toHaveLength(reads + 1);
             expect(screen.findByTestId('machine-share-search')?.props.value).toBe('Bob');
             expect(screen.findByTestId('machine-share-retry:account:bob')).not.toBeNull();
-            expect(screen.findByTestId('machine-share-level:account:bob:admin')?.props.accessibilityState.selected).toBe(true);
+            expect(screen.findByTestId('machine-share-level:account:bob:admin')?.props.accessibilityState.checked).toBe(true);
             expect(home.requests.filter(request => request.method === 'PUT')).toHaveLength(1);
         } finally { home.dispose(); }
     });
-    it('offers Use and Manage, retains the exact failed level intent, and confirms effective loss in the same row', async () => {
+    it('offers Use and Manage, retains the exact failed level intent, and discloses effective loss in the same row', async () => {
         let snapshot = initial;
         let failSave = true;
         const writes: unknown[] = [];
@@ -329,7 +363,7 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             expect(screen.findByTestId('machine-share-level:account:bob:edit')).toBeNull();
             await screen.pressByTestIdAsync('machine-share-level:account:bob:admin');
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-retry:account:bob')).not.toBeNull());
-            expect(screen.findByTestId('machine-share-level:account:bob:admin')?.props.accessibilityState.selected).toBe(true);
+            expect(screen.findByTestId('machine-share-level:account:bob:admin')?.props.accessibilityState.checked).toBe(true);
             failSave = false;
             await screen.pressByTestIdAsync('machine-share-retry:account:bob');
             await vi.waitFor(() => {
@@ -339,10 +373,10 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             expect(screen.findByTestId('machine-share-retry:account:bob')).toBeNull();
             expect(screen.findByTestId('machine-share-search')?.props.value).toBe('Bob');
             expect(writes).toEqual([{ principal: bob, level: 'admin' }, { principal: bob, level: 'admin' }]);
-            await screen.pressByTestIdAsync('machine-share-remove:account:bob');
             expect(screen.findByTestId('machine-share-remove-consequence:account:bob')?.props.children).toBe(`Bob: ${t('machines.sharing.effectiveLoss')}`);
             expect(screen.findByTestId('machine-share-trusted-os')).not.toBeNull();
-            await screen.pressByTestIdAsync('machine-share-remove-cancel:account:bob');
+            expect(screen.getTextContent()).toContain(t('machines.sharing.trustedOsLead', { machine: 'Devbox' }));
+            expect(screen.findByTestId('machine-share-manage-consequence')).not.toBeNull();
             expect(screen.findByTestId('machine-share-remove-confirm:account:bob')).toBeNull();
             expect(screen.findByTestId('machine-share-remove:account:bob')).not.toBeNull();
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-browse:team')).not.toBeNull());
@@ -354,7 +388,29 @@ describe('Machine sharing through the canonical controller and sheet', () => {
         } finally { home.dispose(); }
     });
 
-    it('keeps Leave confirmation after failure and acknowledges overlapping inherited access without exposing a manager roster', async () => {
+    it('tells someone it is shared with only that it is offline, and gives them the same person mark as the people under it', async () => {
+        const snapshot: MachineAccessGrantsListResponseV1 = { ...initial, canManage: false, grants: [], ownDirectGrant: false,
+            access: { ...initial.access, role: 'use' }, ownAccessSources: [{ principal: { kind: 'team', teamId: 'team' }, displayName: 'Teammates' }] };
+        const home = await serveActionHomes({ homes: [{ key: 'machine', serverUrl: 'https://machine-recipient.test', accountId: 'bob' }],
+            route: request => request.path === '/v1/machines/machine/access' && request.method === 'GET' ? Response.json(snapshot) : undefined });
+        try {
+            const scope = { serverId: home.homes.machine!.id, accountId: 'bob' };
+            function Surface() {
+                const controller = useMachineShareController({ machineId: 'machine', machineName: 'Devbox', scope });
+                return <ShareSheet model={controller.model} actions={controller.actions}
+                    adapter={createMachineShareAdapter({ machineName: 'Devbox', online: false, controller })}
+                    presentation="full" testID="machine-share-editor" />;
+            }
+            const screen = await renderScreen(<Surface />);
+            await vi.waitFor(() => expect(screen.findByTestId('machine-share-your-access')).not.toBeNull());
+            const text = screen.getTextContent();
+            expect(text).toContain(t('machines.sharing.offlineRecipient', { machine: 'Devbox' }));
+            expect(text).not.toContain(t('machines.sharing.offline', { machine: 'Devbox' }));
+            expect(screen.findByTestId('machine-share-your-access-visual')).not.toBeNull();
+        } finally { home.dispose(); }
+    });
+
+    it('retries waived Leave after failure and discloses overlapping inherited access without exposing a manager roster', async () => {
         let failLeave = true;
         let snapshot: MachineAccessGrantsListResponseV1 = { ...initial, canManage: false, grants: [], ownDirectGrant: true,
             access: { ...initial.access, role: 'use' }, ownAccessSources: [
@@ -382,12 +438,18 @@ describe('Machine sharing through the canonical controller and sheet', () => {
             }
             const screen = await renderScreen(<Surface />);
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-your-access')).not.toBeNull());
+            // Someone it is shared with reads whose operating-system user their work runs as, not the owner's
+            // exposure warning, and no Manage legend they cannot give; their access names the Team it comes through.
+            const text = screen.getTextContent();
+            expect(text).toContain(t('machines.sharing.recipientTrustLead', { machine: 'Devbox' }));
+            expect(text).not.toContain(t('machines.sharing.trustedOsLead', { machine: 'Devbox' }));
+            expect(screen.findByTestId('machine-share-manage-consequence')).toBeNull();
+            expect(text).toContain(t('machines.sharing.through', { audience: 'Teammates' }));
             await screen.pressByTestIdAsync('machine-share-your-access');
             await screen.pressByTestIdAsync('machine-share-remove:account:bob');
             expect(screen.findByTestId('machine-share-remove-consequence:account:bob')?.props.children).toBe(t('machines.sharing.overlap'));
-            await screen.pressByTestIdAsync('machine-share-remove-confirm:account:bob');
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-retry:account:bob')).not.toBeNull());
-            expect(screen.findByTestId('machine-share-remove-cancel:account:bob')).not.toBeNull();
+            expect(screen.findByTestId('machine-share-remove-confirm:account:bob')).toBeNull();
             failLeave = false;
             await screen.pressByTestIdAsync('machine-share-retry:account:bob');
             await vi.waitFor(() => expect(screen.findByTestId('machine-share-remove-reason:account:bob')).not.toBeNull());

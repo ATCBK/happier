@@ -1,34 +1,82 @@
 import * as React from 'react';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { View } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { Modal } from '@/modal';
+import type { CustomModalInjectedProps } from '@/modal/types';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
-import { useDeviceType } from '@/utils/platform/responsive';
 import { ShareSheet } from '../ShareSheet';
 import type { ShareSheetPresentation } from '../shareSheetTypes';
 import { createMachineShareAdapter } from './machineShareAdapter';
 import { useMachineShareController } from './useMachineShareController';
 
-function ScopedMachineSharingSection(props: Readonly<{
+type MachineShareSheetProps = Readonly<{
     machineId: string; machineName: string; scope: ServerAccountScope; online: boolean;
-    presentation?: ShareSheetPresentation;
-}>) {
+    presentation: ShareSheetPresentation;
+    onRequestClose?: () => void;
+    testID: string;
+}>;
+
+/** The machine's one share sheet: the page's Sharing section and the "Share <machine>" sheet mount the same model. */
+function ScopedMachineShareSheet(props: MachineShareSheetProps) {
     const controller = useMachineShareController(props);
-    const deviceType = useDeviceType();
     const router = useRouter();
     const adapter = createMachineShareAdapter({ machineName: props.machineName, online: props.online, controller,
         openApproval: artifactId => router.push(`/inbox/approvals/${encodeURIComponent(artifactId)}?serverId=${encodeURIComponent(props.scope.serverId)}`),
     });
-    return <ItemGroup title={t('machines.sharing.title')} description={t('machines.sharing.description', { machine: props.machineName })}>
-        <SectionContentRow testID="machine-detail-sharing">
-            <ShareSheet model={controller.model} actions={controller.actions} adapter={adapter}
-                presentation={props.presentation ?? (deviceType === 'phone' ? 'full' : 'inline')} testID="machine-share-editor" />
-        </SectionContentRow>
+    return <ShareSheet model={controller.model} actions={controller.actions} adapter={adapter}
+        presentation={props.presentation} onRequestClose={props.onRequestClose} testID={props.testID} />;
+}
+
+/** Scope changes discard no other host's state. */
+function MachineShareSheet(props: MachineShareSheetProps) {
+    return <ScopedMachineShareSheet key={`${props.scope.serverId}:${props.scope.accountId}:${props.machineId}`} {...props} />;
+}
+
+/** The machine page's Sharing section; its page (the Sharing sub-page) carries the title and the description. */
+export function MachineSharingSection(props: Readonly<{
+    machineId: string; machineName: string; scope: ServerAccountScope; online: boolean;
+}>) {
+    // The section's sheet is the share sheet's surface on every width: `full` would draw a second card inside it.
+    // Its rows carry their own row inset, so the sheet sits directly in the card (lab m-share A/Ap: field, trust
+    // block and people share one edge); a content row around it would inset everything twice.
+    return <ItemGroup>
+        <View testID="machine-detail-sharing">
+            <MachineShareSheet {...props} presentation="inline" testID="machine-share-editor" />
+        </View>
     </ItemGroup>;
 }
 
-/** The incumbent Machine page hosts the same sheet; scope changes discard no other host's state. */
-export function MachineSharingSection(props: React.ComponentProps<typeof ScopedMachineSharingSection>) {
-    return <ScopedMachineSharingSection key={`${props.scope.serverId}:${props.scope.accountId}:${props.machineId}`} {...props} />;
+type MachineShareModalProps = CustomModalInjectedProps & Readonly<{
+    machineId: string; machineName: string; scope: ServerAccountScope; online: boolean;
+}>;
+
+function MachineShareModal(props: MachineShareModalProps) {
+    const { onClose, setChrome: _setChrome, ...sheet } = props;
+    return <MachineShareSheet {...sheet} presentation="full" onRequestClose={onClose} testID="machine-share-editor" />;
+}
+
+/** The machine's ⋯ → "Share <machine>": the same sheet at full presentation, with its search and Done (lab m-share S). */
+export function showMachineShareSheet(params: Readonly<{
+    machineId: string; machineName: string; scope: ServerAccountScope; online: boolean;
+    /** What the machine is, for example "Linux · End-to-end encrypted". */
+    subtitle?: string;
+}>): void {
+    const { subtitle, ...sheet } = params;
+    Modal.show({
+        component: MachineShareModal,
+        props: sheet,
+        chrome: {
+            kind: 'card',
+            phonePresentation: 'sheet',
+            testID: 'machine-share-modal',
+            title: t('shareSheet.documents.shareTitle', { name: params.machineName }),
+            ...(subtitle ? { subtitle } : {}),
+            scrollHost: 'overlay',
+            bodyScroll: 'none',
+            dimensions: { width: 560, maxHeightRatio: 0.92, size: 'md' },
+        },
+        closeOnBackdrop: true,
+    });
 }

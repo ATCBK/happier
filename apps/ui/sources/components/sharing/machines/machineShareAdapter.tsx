@@ -9,6 +9,7 @@ import { SurfaceStateCard, type SurfaceStateKind } from '@/components/ui/surface
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { t } from '@/text';
 import { ShareGrantRow, ShareLevelControl, ShareRowAction } from '../ShareGrantRow';
+import { SharePrincipalVisual } from '../buildShareSheetSelectionStep';
 import type { ShareSheetAdapter } from '../shareSheetTypes';
 import type { MachineShareGrantRow, useMachineShareController } from './useMachineShareController';
 import { MachineShareTrustDisclosure } from './MachineShareTrustDisclosure';
@@ -39,6 +40,10 @@ export function createMachineShareAdapter(input: Readonly<{
         removalLabels: row => row.viewer ? { request: t('machines.sharing.leave'), confirm: t('machines.sharing.leave') }
             : row.readiness === 'key_pending' ? { request: t('common.cancel'), confirm: t('shareSheet.confirmRemove') } : undefined,
         renderGrantDetails: (row, context) => <View style={styles.details}>
+            {row.removal.kind !== 'blocked' ? row.removalConsequences.map(consequence => <Text key={consequence} style={styles.detail}
+                testID={`${context.idPrefix}machine-share-remove-consequence:${row.principal.key}`}>
+                {consequence}
+            </Text>) : null}
             {row.canPrepareKeys ? <>
                 <Text style={styles.detail} testID={`${context.idPrefix}machine-share-key-pending:${row.principal.key}`} accessibilityLiveRegion="polite">
                     {t('machines.sharing.pending', { machine })}
@@ -83,6 +88,8 @@ export function createMachineShareAdapter(input: Readonly<{
             const through = own ? controller.inherited[0] : undefined;
             if (own && !context.directoryKind) leading.push({ kind: 'static', id: 'machine-own-access', title: t('machines.sharing.yourAccess'), options: [{
                 id: 'machine-viewer-access', testID: `${context.idPrefix}machine-share-your-access`, label: own.principal.displayName,
+                // The same person mark as the rows under it, so the card keeps one leading edge.
+                icon: () => <SharePrincipalVisual principal={own.principal} testID={`${context.idPrefix}machine-share-your-access-visual`} />,
                 ...(through ? { subtitle: t('machines.sharing.through', { audience: through.displayName
                     ?? t(through.principal.kind === 'group' ? 'shareSheet.group' : 'shareSheet.team') }) } : {}),
                 onSelect: () => context.onExpand('machine-viewer-access'),
@@ -104,7 +111,9 @@ export function createMachineShareAdapter(input: Readonly<{
             if (controller.loading) notices.push(notice('loading', 'loading', t('machines.sharing.loading', { machine })));
             if (controller.issue) notices.push(notice('read-error', 'error', controller.issue.message,
                 controller.issue.retryable ? { label: t('common.retry'), onPress: () => { void controller.retryContent(); } } : undefined));
-            if (!input.online) notices.push(notice('offline', 'unavailable', t('machines.sharing.offline', { machine })));
+            // Only someone who can change access is told that changes are saved while it is offline.
+            if (!input.online) notices.push(notice('offline', 'unavailable', t(controller.response?.canManage === false
+                ? 'machines.sharing.offlineRecipient' : 'machines.sharing.offline', { machine })));
             if (controller.notice) notices.push(notice('notice', 'warning', controller.notice.message));
             if (controller.approvalId && input.openApproval) {
                 const id = controller.approvalId;

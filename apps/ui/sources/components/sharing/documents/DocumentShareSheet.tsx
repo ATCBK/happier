@@ -14,6 +14,8 @@ import { DocumentPublicLinkSection } from './DocumentPublicLinkSection';
 export type DocumentShareSheetProps = Readonly<{
     artifactId: string;
     kind: DocumentShareKind;
+    /** A saved-copy handoff stays bound to the Account that acknowledged it. */
+    scope?: ServerAccountScope;
     /** The document's in-app route for Copy link. */
     linkPath?: string;
     /** The host's existing copy hand-off (for example a workflow's JSON export). */
@@ -30,7 +32,7 @@ function ScopedDocumentShareSheet(props: DocumentShareSheetProps & Readonly<{ sc
     const canManagePublicLink = publicLinkEnabled && getArtifactKindPolicyV1(props.kind).publicLinkAllowed && controller.model.owner !== null
         && controller.model.editable && !controller.loading && !controller.issue && !controller.model.stale;
     const publicLink = useDocumentPublicLinkController({ artifactId: props.artifactId, scope: props.scope,
-        enabled: canManagePublicLink, canManage: canManagePublicLink });
+        enabled: canManagePublicLink, canManage: canManagePublicLink, kind: props.kind });
     const publicLinkState = publicLink.error ? t('common.error')
         : !publicLink.loaded ? t('common.loading') : t(publicLink.publication ? 'common.on' : 'common.off');
     const baseAdapter = createDocumentShareAdapter({
@@ -73,7 +75,8 @@ const UNSCOPED_MODEL: ShareSheetModel = {
  * the Artifact grant Actions. Hosts mount it from their own share slot (see `showDocumentShareSheet`).
  */
 export function DocumentShareSheet(props: DocumentShareSheetProps): React.ReactElement {
-    const scope = useActiveServerAccountScope();
+    const activeScope = useActiveServerAccountScope();
+    const scope = props.scope ?? activeScope;
     if (scope) return <ScopedDocumentShareSheet key={`${scope.serverId}:${scope.accountId}:${props.artifactId}`} {...props} scope={scope} />;
     const adapter = createDocumentShareAdapter({
         artifactId: props.artifactId,

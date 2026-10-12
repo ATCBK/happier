@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ArtifactActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
+import { readArtifactPublicNetworkPolicyV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import type { ArtifactPublicLinkIssuedV1 } from '@happier-dev/protocol/actions/executor/artifactPublicLinkActions';
 import type { StoredContentPublicShareV1 } from '@happier-dev/protocol/sharing/storedContentPublicShareV1';
 import { createActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
@@ -14,13 +15,16 @@ import { t } from '@/text';
 import { HappyError } from '@/utils/errors/errors';
 import { SessionAccessApiError } from '@/sync/api/session/sessionAccessApi';
 import { presentSessionAccessFailure } from '@/components/sessions/access/presentSessionAccessFailure';
+import { prepareArtifactPublicNetworkOff, readArtifactPublicNetworkResource, type ArtifactPublicNetworkOpenedV1 } from './artifactPublicNetworkPreparation';
+import { hasSamePublicLinkNetworkPolicy } from '../PublicLinkNetworkConfirmation';
 
-type PublicLinkAction = 'artifact.public_link.create' | 'artifact.public_link.list' | 'artifact.public_link.revoke' | 'artifact.public_link.audit';
+type PublicLinkAction = 'artifact.public_link.create' | 'artifact.public_link.list' | 'artifact.public_link.revoke' | 'artifact.public_link.audit' | 'artifact.get' | 'artifact.update';
 type State = Readonly<{ publication: StoredContentPublicShareV1 | null; loaded: boolean; loading: boolean; error: boolean }>;
 
 /** One document's local bearer custody. Publication authority stays with the Action/server owner. */
 export function useDocumentPublicLinkController(input: Readonly<{
     artifactId: string; scope: ServerAccountScope; enabled: boolean; canManage: boolean;
+    kind?: string | null;
 }>) {
     const { artifactId, scope, enabled, canManage } = input;
     const scopeKey = JSON.stringify([scope.serverId, scope.accountId, artifactId]);
@@ -32,6 +36,8 @@ export function useDocumentPublicLinkController(input: Readonly<{
     const issued = React.useRef<ArtifactPublicLinkIssuedV1 | null>(null);
     const publication = React.useRef<StoredContentPublicShareV1 | null>(null);
     const [state, setState] = React.useState<State>({ publication: null, loaded: false, loading: false, error: false });
+    const [networkPolicy, setNetworkPolicy] = React.useState<ReturnType<typeof readArtifactPublicNetworkPolicyV1> | null>(null);
+    const visual = input.kind === 'html' || input.kind === 'widget-definition.v1';
     const [execute] = React.useState(() => createFrontDoorActionExecute(undefined, {
         onPublicLinkIssued: (value) => { if (mounted.current && permitted.current) issued.current = value; },
     }));
@@ -80,24 +86,65 @@ export function useDocumentPublicLinkController(input: Readonly<{
         return result.result;
     }, [approval.requestApproval, execute, isCurrent, scope.serverId, scope.accountId]);
 
+    const openNetworkResource = React.useCallback((opened: ArtifactPublicNetworkOpenedV1) =>
+        readArtifactPublicNetworkResource({ opened, scope }), [scope.serverId, scope.accountId]);
+
     const reload = React.useCallback(async () => {
         if (!enabled || !isCurrent()) return;
         const reading = ++revision.current;
         setState(previous => ({ ...previous, loading: true, error: false }));
         try {
-            const value = await request('artifact.public_link.list', { artifactId });
+            const [value, content] = await Promise.all([
+                request('artifact.public_link.list', { artifactId }),
+                visual ? request('artifact.get', { artifactId }) : Promise.resolve(null),
+            ]);
             if (!isCurrent() || reading !== revision.current || value === null) return;
             const response = ArtifactActionOutputSchemasV1['artifact.public_link.list'].parse(value);
+            if (visual) {
+                const opened = ArtifactActionOutputSchemasV1['artifact.get'].parse(content).artifact;
+                if (!opened) throw new HappyError(t('session.collaboration.pane.linkLoadFailed'), false);
+                const resource = await openNetworkResource(opened);
+                if (!isCurrent() || reading !== revision.current) return;
+                setNetworkPolicy(resource.policy);
+            }
             apply(response.publicShares.find(row => row.subject.kind === 'artifact' && row.subject.id === artifactId) ?? null);
         } catch {
             if (isCurrent() && reading === revision.current) setState(previous => ({ ...previous, loading: false, error: true }));
         }
-    }, [apply, artifactId, enabled, isCurrent, request]);
+    }, [apply, artifactId, enabled, isCurrent, request, visual, openNetworkResource]);
     refreshRef.current = reload;
     React.useEffect(() => { void reload(); }, [reload]);
 
     const create = React.useCallback(async (options: SessionPublicLinkCreateOptions) => {
         ++revision.current;
+        if (visual) {
+            const content = await request('artifact.get', { artifactId });
+            if (content === null || !isCurrent()) return null;
+            const opened = ArtifactActionOutputSchemasV1['artifact.get'].parse(content).artifact;
+            if (!opened) throw new HappyError(t('session.collaboration.pane.linkLoadFailed'), false);
+            const resource = await openNetworkResource(opened);
+            if (!isCurrent()) return null;
+            setNetworkPolicy(resource.policy);
+            if (!options.networkOff && (!networkPolicy || !hasSamePublicLinkNetworkPolicy(networkPolicy, resource.policy))) {
+                throw new HappyError(t('approvals.staleFailure'), true, { code: 'approval_stale' });
+            }
+            if (options.networkOff && resource.policy.network !== 'none') {
+                const prepared = await prepareArtifactPublicNetworkOff({ opened, resource, request, isCurrent });
+                if (prepared.kind !== 'ready') return null;
+                // A receipt proves our update committed; reread the saved copy before
+                // issuance so another writer cannot turn an off choice into open egress.
+                const currentContent = await request('artifact.get', { artifactId });
+                if (currentContent === null || !isCurrent()) return null;
+                const currentOpened = ArtifactActionOutputSchemasV1['artifact.get'].parse(currentContent).artifact;
+                if (!currentOpened) throw new HappyError(t('session.collaboration.pane.linkLoadFailed'), false);
+                const currentResource = await openNetworkResource(currentOpened);
+                if (!isCurrent()) return null;
+                setNetworkPolicy(currentResource.policy);
+                if (currentResource.policy.network !== 'none') {
+                    throw new HappyError(t('approvals.staleFailure'), true, { code: 'approval_stale' });
+                }
+            }
+        }
         const value = await request('artifact.public_link.create', { artifactId,
             ...(options.expiresInDays ? { expiresAt: Date.now() + options.expiresInDays * 24 * 60 * 60 * 1000 } : {}),
             ...(options.maxUses ? { maxUses: options.maxUses } : {}), isConsentRequired: options.isConsentRequired });
@@ -107,7 +154,7 @@ export function useDocumentPublicLinkController(input: Readonly<{
         publication.current = null;
         apply(result.publicShare);
         return result.publicShare;
-    }, [apply, artifactId, isCurrent, request]);
+    }, [apply, artifactId, isCurrent, request, visual, openNetworkResource, networkPolicy]);
     const remove = React.useCallback(async () => {
         const current = publication.current;
         if (!current) return;
@@ -124,7 +171,7 @@ export function useDocumentPublicLinkController(input: Readonly<{
         if (result === null || !isCurrent()) throw new HappyError(t('errors.permissionDenied'), false);
         return ArtifactActionOutputSchemasV1['artifact.public_link.audit'].parse(result);
     }, [artifactId, isCurrent, request]);
-    return { ...state, shareUrl: canManage && issued.current?.shareId === state.publication?.id ? issued.current?.url ?? null : null,
+    return { ...state, networkPolicy, scopeKey, configurationScope: scope, shareUrl: canManage && issued.current?.shareId === state.publication?.id ? issued.current?.url ?? null : null,
         readOnly: !canManage, pendingApproval: approval.approvalPending, reload, create, remove, listAccessLog,
         openPendingApproval: () => { if (approval.approvalId) router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId)}?serverId=${encodeURIComponent(scope.serverId)}`); } };
 }

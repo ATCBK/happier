@@ -1,8 +1,7 @@
 import * as React from 'react';
 import { ArtifactAccessGrantMutationResponseV1Schema, ArtifactAccessGrantsListResponseV1Schema, type ArtifactAccessGrantRowV1, type ArtifactAccessGrantsListResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
-import { ArtifactActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
-import { getWidgetSharedInputIssuesV1, readWidgetConnectedAccountPurposeV1, readWidgetSurfaceArtifactV1, WidgetInstanceActionOutputSchemasV1,
+import { flattenWidgetLayoutWidgetsV1, getWidgetSharedInputIssuesV1, readWidgetConnectedAccountPurposeV1, readWidgetSurfaceArtifactV1, WidgetInstanceActionOutputSchemasV1,
     type WidgetInstanceRefV1 } from '@happier-dev/protocol/widgets';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
@@ -113,23 +112,45 @@ export function useDocumentShareController(input: Readonly<{ artifactId: string;
     }, [identity]);
 
     const readDashboard = React.useCallback(async (): Promise<DashboardReview> => {
-        const result = await execute('artifact.get', { artifactId }, {
-            surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
+        // Widget layouts are internal documents: the widget owner's native Artifact transport
+        // admits their read, while generic artifact.get deliberately refuses internal kinds.
+        const document = await import('@/sync/ops/actions/actionAccountContext').then(async owner => {
+            const account = await owner.captureLazyActionAccountContext(scope.serverId);
+            try {
+                account.assertCurrent();
+                if (account.accountId !== scope.accountId) return null;
+                const row = await account.homeHubArtifactTransport.read(artifactId);
+                account.assertCurrent();
+                return row;
+            } finally { account.dispose(); }
         }).catch(() => null);
-        const opened = result?.ok ? ArtifactActionOutputSchemasV1['artifact.get'].safeParse(result.result) : null;
-        const document = opened?.success ? opened.data.artifact : null;
         const layout = document && document.artifactId === artifactId ? readWidgetSurfaceArtifactV1(document) : null;
         if (!layout || !document || typeof document.body !== 'string' || layout.surface.serverId !== scope.serverId) {
             return { phase: 'error', choices: NO_PRIVATE_CHOICES,
-                issue: presentDocumentShareFailure(result && !result.ok ? readFailureCode(result) : 'invalid_widget_area_record') };
+                issue: presentDocumentShareFailure('invalid_widget_area_record') };
         }
         // Scan original stored JSON: the tolerant layout projection deliberately drops additive
         // fields, but those fields must never hide a private selection from review.
         const stored = record(JSON.parse(document.body));
-        const entries = Array.isArray(stored?.instances) ? stored.instances : [];
+        const entries: unknown[] = Array.isArray(stored?.items) ? stored.items : [];
+        const originalWidgets = entries.flatMap(entry => {
+            const item = record(entry);
+            return item?.kind === 'group' && Array.isArray(item.children) ? item.children : [entry];
+        });
         const registry = getConnectedServiceRegistrySnapshot();
-        const groups = await Promise.all(layout.instances.map(async ({ instance }, at): Promise<PrivateChoice[]> => {
-            const original = record(record(entries[at])?.instance);
+        const groupChoices: PrivateChoice[] = layout.items.flatMap(item => {
+            if (item.kind !== 'group') return [];
+            const original = record(entries.find(entry => record(entry)?.kind === 'group' && record(entry)?.id === item.id));
+            // Children are reviewed as widgets below; retain every other raw group field.
+            const { children: _children, ...group } = original ?? {};
+            return getWidgetSharedInputIssuesV1(group).map(issue => ({
+                id: JSON.stringify([item.id, issue.path]), widget: item.title ?? item.id,
+                ref: { surface: { ...layout.surface, artifactId }, instanceId: item.id },
+                ...(issue.service ? { service: resolveQualifiedConnectedServiceRegistryDisplayName(registry, issue.service, t) } : {}),
+            }));
+        });
+        const groups = await Promise.all(flattenWidgetLayoutWidgetsV1(layout.items).map(async ({ instance }): Promise<PrivateChoice[]> => {
+            const original = record(record(originalWidgets.find(entry => record(record(entry)?.instance)?.id === instance.id))?.instance);
             const issues = getWidgetSharedInputIssuesV1(original);
             if (issues.length === 0) return [];
             const ref = { surface: { ...layout.surface, artifactId }, instanceId: instance.id };
@@ -152,8 +173,8 @@ export function useDocumentShareController(input: Readonly<{ artifactId: string;
                     ...(issue.service ? { service: resolveQualifiedConnectedServiceRegistryDisplayName(registry, issue.service, t) } : {}) };
             });
         }));
-        return { phase: 'ready', choices: groups.flat() };
-    }, [artifactId, execute, scope.serverId, scope.accountId]);
+        return { phase: 'ready', choices: [...groupChoices, ...groups.flat()] };
+    }, [artifactId, scope.serverId, scope.accountId]);
 
     const loadReview = React.useCallback(async () => {
         if (!dashboard) {

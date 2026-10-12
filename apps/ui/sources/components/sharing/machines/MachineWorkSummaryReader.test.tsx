@@ -10,11 +10,97 @@ import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHel
 
 installSettingsViewCommonModuleMocks({ text: async () => vi.importActual<typeof import('@/text')>('@/text'),
     // The reader must observe the same real store that receives socket activity.
-    storage: async importOriginal => await importOriginal(),
+    storage: 'real',
 });
 afterEach(() => standardCleanup());
 
 describe('MachineWorkSummaryReader', () => {
+    it('settles an in-flight read when heartbeat updates arrive before its response', async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { MachineWorkSummaryReader } = await import('./MachineWorkSummaryReader');
+        const previousState = storage.getState();
+        const serverId = 'work-heartbeat-home';
+        const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
+        let finish: ((value: unknown) => void) | undefined;
+        let signal: AbortSignal | undefined;
+        let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        // Only the asynchronous Machine RPC boundary is delayed; the real
+        // Action and scoped store must keep the request admitted until it settles.
+        const executor = createActionExecutor({ machineWorkSummaryGet: async args => {
+            signal = args.signal;
+            return new Promise<unknown>(resolve => { finish = resolve; });
+        } });
+        try {
+            storage.setState(state => ({ ...state, machines: { machine },
+                machineListByServerId: { ...state.machineListByServerId, [serverId]: [machine] },
+                machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverId]: 'idle' },
+            }));
+            screen = await renderScreen(<MachineWorkSummaryReader machineId="machine" machineName="devbox"
+                scope={{ serverId, accountId: 'alice' }} online execute={executor.execute} />);
+            const admittedSignal = signal;
+            const admittedResponse = finish;
+            for (let index = 1; index <= 3; index++) {
+                await act(async () => { storage.getState().applyMachines([
+                    { ...machine, activeAt: machine.activeAt + index },
+                ], false, { sourceServerId: serverId }); });
+            }
+            expect(admittedSignal?.aborted).toBe(false);
+            await act(async () => { admittedResponse?.({ kind: 'current', requesters: [] }); });
+            expect(screen.findByTestId('machine-work-summary.empty')).not.toBeNull();
+            expect(screen.findByTestId('machine-work-summary.loading')).toBeNull();
+        } finally {
+            await act(async () => { screen?.tree.unmount(); });
+            storage.setState(previousState);
+        }
+    });
+    it('keeps its last answer on screen while a heartbeat re-reads it, instead of flipping back to checking', async () => {
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { MachineWorkSummaryReader } = await import('./MachineWorkSummaryReader');
+        const previousState = storage.getState();
+        const serverId = 'work-recheck-home';
+        const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
+        let reads = 0;
+        let finish: ((value: unknown) => void) | undefined;
+        // First read answers unavailable; the heartbeat's re-read is held open at the RPC boundary.
+        const executor = createActionExecutor({ machineWorkSummaryGet: async () => {
+            reads++;
+            return reads === 1 ? { kind: 'unavailable' } : new Promise<unknown>(resolve => { finish = resolve; });
+        } });
+        let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+        try {
+            storage.setState(state => ({ ...state, machines: { machine },
+                machineListByServerId: { ...state.machineListByServerId, [serverId]: [machine] },
+                machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverId]: 'idle' },
+            }));
+            screen = await renderScreen(<MachineWorkSummaryReader machineId="machine" machineName="devbox"
+                scope={{ serverId, accountId: 'alice' }} online execute={executor.execute} />);
+            expect(screen.findByTestId('machine-work-summary.unavailable')).not.toBeNull();
+            await act(async () => { storage.getState().applyMachines([{ ...machine, activeAt: machine.activeAt + 1 }], false, { sourceServerId: serverId }); });
+            expect(reads).toBe(2);
+            expect(screen.findByTestId('machine-work-summary.unavailable')).not.toBeNull();
+            expect(screen.findByTestId('machine-work-summary.loading')).toBeNull();
+            await act(async () => { finish?.({ kind: 'current', requesters: [
+                { accountId: 'bob', displayName: 'Bob', sessions: 1, tasks: 0, terminals: 0 },
+            ] }); });
+            expect(screen.findByTestId('machine-work-summary.bob')).not.toBeNull();
+            // Repeated inventory hydration with unchanged liveness needs no new RPC.
+            await act(async () => { storage.getState().applyMachines([{ ...machine }], false, { sourceServerId: serverId }); });
+            expect(reads).toBe(2);
+            // Later heartbeats preserve the Machine object and store containers;
+            // a settled reader still needs the next exact-target receipt.
+            await act(async () => { storage.getState().applyMachines([{ ...machine, activeAt: machine.activeAt + 1 }], false, { sourceServerId: serverId }); });
+            expect(reads).toBe(3);
+            expect(screen.findByTestId('machine-work-summary.bob')).not.toBeNull();
+            expect(screen.findByTestId('machine-work-summary.stale')).not.toBeNull();
+            expect(screen.findByTestId('machine-work-summary.loading')).toBeNull();
+            await act(async () => { finish?.({ kind: 'current', requesters: [] }); });
+            expect(screen.findByTestId('machine-work-summary.bob')).toBeNull();
+            expect(screen.findByTestId('machine-work-summary.empty')).not.toBeNull();
+        } finally {
+            await act(async () => { screen?.tree.unmount(); });
+            storage.setState(previousState);
+        }
+    });
     it('refreshes from existing exact-Machine liveness without following another Home or Machine', async () => {
         const { storage } = await import('@/sync/domains/state/storageStore');
         const { handleEphemeralSocketUpdate, flushMachineActivityUpdates } = await import('@/sync/engine/socket/socket');
