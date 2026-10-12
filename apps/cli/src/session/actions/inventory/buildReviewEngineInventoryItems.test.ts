@@ -164,8 +164,8 @@ describe('buildReviewEngineInventoryItems', () => {
     const accountSettings = AccountSettingsSchema.parse({});
     const acpCatalogSnapshot = { status: 'ready', revision: 3, record: AcpCatalogRecordV1Schema.parse({
       v: 1, definitions: [{
-        id: 'review-bot', name: 'review-bot', title: 'Review Bot', command: 'review-bot',
-        args: [], env: {}, capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
+        id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
+         env: {}, capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
           supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' }, createdAt: 1, updatedAt: 1,
       }],
     }) } satisfies AcpCatalogSnapshotV1;

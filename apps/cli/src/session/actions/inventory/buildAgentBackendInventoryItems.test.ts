@@ -80,8 +80,8 @@ describe('buildAgentBackendInventoryItems', () => {
 
   it('keeps configured ACP definitions selectable under their declared Agent identity', async () => {
     const acpCatalogSnapshot = { status: 'ready', revision: 2, record: { v: 1, definitions: [{
-      id: 'review-bot', name: 'review-bot', title: 'Review Bot', description: 'Configured ACP backend', command: 'review-bot',
-      args: [], env: {}, capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
+      id: 'review-bot', name: 'review-bot', title: 'Review Bot', description: 'Configured ACP backend', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
+       env: {}, capabilities: { supportsLoadSession: false, supportsModes: 'unknown', supportsModels: 'unknown',
         supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' }, createdAt: 1, updatedAt: 1,
     }] } } satisfies AcpCatalogSnapshotV1;
     const items = await buildAgentBackendInventoryItems({ includeDisabled: true, acpCatalogSnapshot });

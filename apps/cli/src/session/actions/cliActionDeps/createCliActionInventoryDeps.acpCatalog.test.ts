@@ -19,8 +19,8 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { buildAgentBackendInventoryItems } from '../inventory/buildAgentBackendInventoryItems';
 import { buildReviewEngineInventoryItems } from '../inventory/buildReviewEngineInventoryItems';
 
-const record = { v: 1, definitions: [{ id: 'row-review', name: 'row-review', title: 'Row Review', command: 'review-agent',
-  args: ['acp'], env: {}, capabilities: { supportsLoadSession: true, supportsModes: 'yes', supportsModels: 'yes',
+const record = { v: 1, definitions: [{ id: 'row-review', name: 'row-review', title: 'Row Review', launch: { kind: 'command' as const, command: 'review-agent', args: ['acp'] },
+   env: {}, capabilities: { supportsLoadSession: true, supportsModes: 'yes', supportsModels: 'yes',
     supportsConfigOptions: 'unknown', promptImageSupport: 'no' }, createdAt: 1, updatedAt: 2 }] } satisfies AcpCatalogRecordV1;
 const privateDefinitionRecord = { v: 1, definitions: [{ ...record.definitions[0],
   env: { CONFIG: { t: 'literal', v: 'private-config' }, TOKEN: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('private-get-resource') } },
@@ -52,7 +52,7 @@ async function createInventory(status: 'ready' | 'partial' | 'unavailable' = 're
   let interleaved = false;
   const server = createServer((request, response) => {
     requests.push(`${request.method} ${request.url}`);
-    expect(request.headers.authorization).toBe('Bearer requester-acp');
+    expect(request.headers.authorization, request.url).toBe('Bearer requester-acp');
     response.setHeader('Content-Type', 'application/json');
     if (request.url === '/v1/account/encryption/currentness') {
       response.end(JSON.stringify({ mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
@@ -235,10 +235,14 @@ describe('ACP Action inventory row authority', () => {
     }
   });
 
-  it.each(['partial', 'unavailable'] as const)('refuses a %s inventory and configured metadata fallback', async status => {
+  it.each(['partial', 'unavailable'] as const)('discovers built-in inventory with %s ACP authority but refuses configured metadata fallback', async status => {
     const { deps } = await createInventory(status);
-    await expect(deps.agentsBackendsList!({})).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE' });
-    await expect(deps.reviewEnginesList!({ sessionId: 'requester-session' })).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE' });
+    const agents = await deps.agentsBackendsList!({});
+    expect(agents.items).toContainEqual(expect.objectContaining({ agentId: 'claude' }));
+    expect(agents.items).not.toContainEqual(expect.objectContaining({ backendId: 'row-review' }));
+    const reviews = await deps.reviewEnginesList!({ sessionId: 'requester-session' });
+    expect(reviews).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ engineId: 'claude' })]) });
+    expect(reviews).toMatchObject({ items: expect.not.arrayContaining([expect.objectContaining({ engineId: targetKey })]) });
     await expect(deps.agentsModelsList!({ agentId: 'customAcp', backendTargetKey: targetKey }))
       .rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE' });
     await expect(deps.agentsSessionModesList!({ agentId: 'customAcp', backendTargetKey: targetKey }))
@@ -268,13 +272,18 @@ describe('ACP Action inventory row authority', () => {
     await expect(deps.agentsBackendsList!({})).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE' });
   });
 
-  it('shares one ready facet with both direct builders and refuses missing authority', async () => {
+  it('shares ready ACP authority between builders and retains only built-ins without it', async () => {
     const catalogSnapshot = { status: 'ready', record, revision: 4 } as const;
     expect(await buildAgentBackendInventoryItems({ acpCatalogSnapshot: catalogSnapshot })).toContainEqual(
       expect.objectContaining({ backendId: 'row-review' }));
     expect(await buildReviewEngineInventoryItems({ acpCatalogSnapshot: catalogSnapshot })).toContainEqual(
       expect.objectContaining({ engineId: targetKey }));
-    await expect(buildAgentBackendInventoryItems({})).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE' });
+    const builtInAgents = await buildAgentBackendInventoryItems({});
+    expect(builtInAgents).toContainEqual(expect.objectContaining({ agentId: 'claude' }));
+    expect(builtInAgents).not.toContainEqual(expect.objectContaining({ backendId: 'row-review' }));
+    const builtInReviews = await buildReviewEngineInventoryItems({});
+    expect(builtInReviews).toContainEqual(expect.objectContaining({ engineId: 'claude' }));
+    expect(builtInReviews).not.toContainEqual(expect.objectContaining({ engineId: targetKey }));
   });
 
   it('uses current captured preferences on later row-backed inventory requests', async () => {

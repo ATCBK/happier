@@ -9,7 +9,7 @@ import { buildReviewEngineInventoryItems } from './buildReviewEngineInventoryIte
 
 const emptyCatalog = { status: 'ready', revision: 1, record: { v: 1 as const, definitions: [] } } as const;
 const definitions = ['review-a', 'review-b'].map((id) => AcpBackendDefinitionV1Schema.parse({
-  id, name: id, title: id, command: id, args: [], env: {}, createdAt: 1, updatedAt: 1,
+  id, name: id, title: id, launch: { kind: 'command' as const, command: id, args: [] }, env: {}, createdAt: 1, updatedAt: 1,
 }));
 const configuredCatalog = { status: 'ready', revision: 2, record: { v: 1 as const, definitions } } as const;
 
@@ -48,6 +48,8 @@ describe('buildAgentBackendInventoryItems with the bundled catalog', () => {
     expect(reviews.filter((item) => item.backendId === 'review-a' || item.backendId === 'review-b').map((item) => item.backendId)).toEqual(['review-b']);
     expect(reviews.some((item) => item.engineId === 'custom-acp')).toBe(false);
     expect((await buildReviewEngineInventoryItems({ acpCatalogSnapshot: emptyCatalog })).some((item) => item.backendId === 'custom-acp')).toBe(false);
-    await expect(buildAgentBackendInventoryItems({ acpCatalogSnapshot: { status: 'unavailable', reason: 'source-transfer-required' } })).rejects.toMatchObject({ code: 'ACP_CATALOG_UNAVAILABLE' });
+    const unavailableItems = await buildAgentBackendInventoryItems({ acpCatalogSnapshot: { status: 'unavailable', reason: 'source-transfer-required' } });
+    expect(unavailableItems).toContainEqual(expect.objectContaining({ agentId: 'claude' }));
+    expect(unavailableItems.some((item) => item.agentId === 'custom-acp')).toBe(false);
   });
 });
