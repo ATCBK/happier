@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { View, Platform } from 'react-native';
+import { Platform, View, type TextStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
+import { resolveCodeMonoFontFamily } from '@/components/ui/code/codeTypography';
 import type { TranscriptFindSourceRange } from './find/transcriptFindRowStore';
 
 
@@ -24,6 +25,10 @@ interface CommandViewProps {
     errorFindRanges?: readonly TranscriptFindSourceRange[];
 }
 
+/** Web keeps an unbroken token inside the line box; native Text already breaks it by character. */
+// `wordBreak` is a web-only style React Native's TextStyle does not declare (same pattern as SimpleSyntaxHighlighter).
+const LONG_TOKEN_WRAP: TextStyle = Platform.OS === 'web' ? ({ wordBreak: 'break-word' } as unknown as TextStyle) : {};
+
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
         // Tool cards already provide a container; keep this view visually lightweight so it
@@ -39,44 +44,53 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'baseline',
         flexDirection: 'row',
         flexWrap: 'wrap',
+        // The line spans its container so a long command wraps inside it instead of running off a phone's edge.
+        alignSelf: 'stretch',
+        minWidth: 0,
     },
     promptText: {
-        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+        fontFamily: resolveCodeMonoFontFamily(),
         fontSize: 14,
         lineHeight: 20,
         color: theme.colors.state.success.foreground ?? theme.colors.text.primary,
         fontWeight: '600',
     },
     commandText: {
-        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+        fontFamily: resolveCodeMonoFontFamily(),
         fontSize: 14,
         color: theme.colors.text.primary,
         lineHeight: 20,
         flex: 1,
+        minWidth: 0,
+        // An unbroken token (JSON, a URL, a long path) breaks where it must rather than overflowing.
+        ...LONG_TOKEN_WRAP,
     },
     stdout: {
-        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+        fontFamily: resolveCodeMonoFontFamily(),
         fontSize: 13,
         color: theme.colors.text.primary,
         lineHeight: 18,
         marginTop: 8,
+        ...LONG_TOKEN_WRAP,
     },
     stderr: {
-        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+        fontFamily: resolveCodeMonoFontFamily(),
         fontSize: 13,
         color: theme.colors.state.neutral.foreground ?? theme.colors.text.secondary,
         lineHeight: 18,
         marginTop: 8,
+        ...LONG_TOKEN_WRAP,
     },
     error: {
-        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+        fontFamily: resolveCodeMonoFontFamily(),
         fontSize: 13,
         color: theme.colors.state.danger.foreground ?? theme.colors.state.danger.foreground ?? theme.colors.text.primary,
         lineHeight: 18,
         marginTop: 8,
+        ...LONG_TOKEN_WRAP,
     },
     emptyOutput: {
-        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+        fontFamily: resolveCodeMonoFontFamily(),
         fontSize: 13,
         color: theme.colors.text.secondary,
         lineHeight: 18,
