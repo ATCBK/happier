@@ -105,4 +105,36 @@ describe('buildNewSessionAgentPickerOptions', () => {
         expect(result.selectableBackendEntries.map((entry) => entry.backendId)).toEqual(['claude', 'antigravity-localharness']);
         expect(result.agentPickerOptions?.map((option) => option.label)).toEqual(['Claude', 'Antigravity']);
     });
+
+    it('names a per-Agent reason on its rail row but leaves an unknown machine to the picker header', () => {
+        const entry = (id: 'claude' | 'codex') => createEntry({
+            backendId: id, kind: 'builtInAgent', title: id, providerId: id, catalogAgentId: id, builtInAgentId: id,
+            capabilities: { session: { supported: true } },
+        });
+        const claude = entry('claude');
+        const codex = entry('codex');
+        const result = buildNewSessionAgentPickerOptions({
+            useProfiles: false,
+            projectionCurrent: true,
+            selectedProfileId: null,
+            profileMap: new Map(),
+            resolvedBackendEntries: [claude, codex],
+            getCompatibleProfileBackendEntries: () => [],
+            isBackendEntrySelectable: () => false,
+            // Nothing is known about Claude on an unreachable machine; Codex is known to be signed out.
+            getBackendEntryUnavailabilityReason: (candidate) => candidate === claude ? 'agent-not-ready:claude' : 'logged-out:codex',
+            getEngineSelectionForTargetKey: () => ({ modelId: 'default', sessionModeId: null, configOverrides: {} }),
+            selectEngineSelection: vi.fn(),
+            selectedMachineId: 'machine-1',
+            capabilityServerId: 'server-1',
+            selectedPath: '/repo',
+            selectedBackendTargetKey: claude.backendTargetKey,
+            selectedModelId: 'default',
+            settings: {} as any,
+        });
+
+        const byLabel = new Map(result.agentPickerOptions?.map((option) => [option.label, option]));
+        expect(byLabel.get('claude')?.subtitle).toBeUndefined();
+        expect(byLabel.get('codex')?.subtitle).toBe('profiles.machineLogin.status.notLoggedIn');
+    });
 });

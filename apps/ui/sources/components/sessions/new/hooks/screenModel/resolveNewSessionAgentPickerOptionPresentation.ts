@@ -21,7 +21,7 @@ export type NewSessionAgentPickerOptionPresentation = Readonly<{
 
 function resolveBackendUnavailableSubtitle(
     reason: NewSessionProfileAvailabilityReason | null | undefined,
-): string {
+): string | undefined {
     if (reason?.startsWith('cli-not-detected:')) {
         const agentId = reason.split(':')[1];
         const cli = agentId && isBundledAgentId(agentId)
@@ -32,6 +32,12 @@ function resolveBackendUnavailableSubtitle(
 
     if (reason?.startsWith('logged-out:')) {
         return t('profiles.machineLogin.status.notLoggedIn');
+    }
+
+    // Nothing is known about this Agent on the machine (unreachable or not reported yet): that is
+    // one machine-wide fact the picker header states once, not a reason to repeat on every row.
+    if (reason?.startsWith('agent-not-ready:')) {
+        return undefined;
     }
 
     return t('common.unavailable');
