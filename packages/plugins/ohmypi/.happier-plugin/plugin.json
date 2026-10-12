@@ -185,7 +185,7 @@
             },
             "sources": [
               {
-                "contentSearch": false,
+                "contentSearch": true,
                 "instances": [
                   {
                     "constants": {},
@@ -242,6 +242,7 @@
         "title": "Oh My Pi"
       }
     ],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -271,6 +272,7 @@
       }
     ],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
       "discoverySources": [],
@@ -280,6 +282,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
@@ -321,7 +324,7 @@
               "kind": "theme",
               "token": "orange"
             },
-            "ionName": "code-slash-outline"
+            "ionName": "code"
           },
           "sections": [
             {
@@ -423,7 +426,7 @@
         {
           "locale": "fr",
           "messages": {
-            "settingsAgents.plugins.ohmypi.fields.ohMyPiAgentDir.subtitle": "Racine de données Oh My Pi facultative. Laissez vide pour utiliser ~/.omp/agent.",
+            "settingsAgents.plugins.ohmypi.fields.ohMyPiAgentDir.subtitle": "Racine de données Oh My Pi facultative. Laisse vide pour utiliser ~/.omp/agent.",
             "settingsAgents.plugins.ohmypi.fields.ohMyPiAgentDir.title": "Répertoire de l’agent",
             "settingsAgents.plugins.ohmypi.sections.storage.footer": "Ce répertoire sert uniquement aux sessions Oh My Pi lancées ou découvertes par Happier.",
             "settingsAgents.plugins.ohmypi.sections.storage.title": "Stockage",
