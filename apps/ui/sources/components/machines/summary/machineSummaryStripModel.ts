@@ -1,0 +1,137 @@
+import type { MachineResourceSummaryV1 } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
+
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
+import { t } from '@/text';
+
+import type { MachineSummaryMetric } from './machineSummarySettingModel';
+
+export {
+    DEFAULT_MACHINE_SUMMARY_METRICS, DEFAULT_MACHINE_SUMMARY_STYLE, MACHINE_SUMMARY_METRICS, MACHINE_SUMMARY_STYLES, normalizeMachineSummaryMetrics,
+    type MachineSummaryMetric, type MachineSummaryStyle,
+} from './machineSummarySettingModel';
+
+export type MachineResourceTone = MachineResourceSummaryV1['cpu']['tone'];
+
+/** Tone → colour, resolved once (§4.9): calm is ink, warn amber, crit rose. Tone always comes from plan 20. */
+/**
+ * The colour of a machine's attention word or sentence lead ("Short on memory"), at either level: "Needs you"
+ * is the one attention amber wherever it appears, and rose means failure only (DESIGN.md). An instrument's
+ * value past its threshold keeps its own `crit` tone through {@link resolveMachineResourceToneColor}.
+ */
+export function resolveMachineAttentionWordColor(colors: Parameters<typeof resolveMachineResourceToneColor>[1]): string {
+    return resolveMachineResourceToneColor('warn', colors);
+}
+
+export function resolveMachineResourceToneColor(
+    tone: MachineResourceTone,
+    colors: Readonly<{ text: Readonly<{ primary: string }>; state: Readonly<{ attention: Readonly<{ textForeground: string }>; danger: Readonly<{ textForeground: string }> }> }>,
+): string {
+    if (tone === 'crit') return colors.state.danger.textForeground;
+    if (tone === 'warn') return colors.state.attention.textForeground;
+    return colors.text.primary;
+}
+
+/** One instrument as every style draws it: the figure, its fill (0–1, by used), its line, its tone and its exact name. */
+export type MachineSummaryInstrument = Readonly<{
+    metric: MachineSummaryMetric;
+    /** The short figure ("12%", "71 GB", "Critical"); `null` when the machine did not measure it (never "0"). */
+    figure: string | null;
+    /** How full the meter or ring is, by what is used (R9); `null` when unmeasured. */
+    used: number | null;
+    /** The 5-minute line, already scaled 0–1; empty when no line belongs to this metric (disk). */
+    line: readonly (number | null)[];
+    tone: MachineResourceTone;
+    /** The exact reading for the tooltip and the accessible name ("Memory 71 GB free, 57 GB in use"). */
+    exact: string | null;
+}>;
+
+/** CPU's line scales to its recent peak but never below 40 %, so a 2 → 3 % wiggle stays flat (no min–max). */
+export const CPU_LINE_FLOOR_PCT = 40;
+
+function scaleLine(points: MachineResourceSummaryV1['cpu']['series'], max: number): (number | null)[] {
+    if (max <= 0) return points.map(point => (point.y === null ? null : 0));
+    return points.map(point => (point.y === null ? null : Math.max(0, Math.min(1, point.y / max))));
+}
+
+function formatRate(bps: number): string {
+    return t('machineSummary.rate', { value: formatHappierDataBytes(bps, { kind: 'storage' }) });
+}
+
+/**
+ * The instruments of one summary, by the value convention (R7, R9, MPG-20): CPU percent in use; memory and
+ * disk free, with the pressure word when memory is not calm; bars and rings fill by used; network is the
+ * download rate on an auto-scaled line. Nothing is re-derived: tone and values are plan 20's.
+ */
+export function buildMachineSummaryInstruments(summary: MachineResourceSummaryV1): Readonly<Record<MachineSummaryMetric, MachineSummaryInstrument>> {
+    const cpuPct = summary.cpu.busyPct;
+    const cpuPeak = Math.max(CPU_LINE_FLOOR_PCT, ...summary.cpu.series.map(point => point.y ?? 0));
+    const memory = summary.memory;
+    const memoryUsed = memory.availableBytes !== null && memory.totalBytes !== null && memory.totalBytes > 0
+        ? Math.max(0, Math.min(1, 1 - memory.availableBytes / memory.totalBytes)) : null;
+    const pressureWord = memory.pressure === 'critical' ? t('machineSummary.pressure.critical')
+        : memory.pressure === 'elevated' ? t('machineSummary.pressure.elevated') : null;
+    const memoryFree = memory.availableBytes !== null ? formatHappierDataBytes(memory.availableBytes, { kind: 'memory' }) : null;
+    const disk = summary.disk;
+    const diskUsed = disk.availableBytes !== null && disk.totalBytes !== null && disk.totalBytes > 0
+        ? Math.max(0, Math.min(1, 1 - disk.availableBytes / disk.totalBytes)) : null;
+    const diskFree = disk.availableBytes !== null ? formatHappierDataBytes(disk.availableBytes, { kind: 'storage' }) : null;
+    const rx = summary.network.rxBps;
+    const rxPeak = Math.max(1, ...summary.network.rxSeries.map(point => point.y ?? 0));
+    return {
+        cpu: {
+            metric: 'cpu',
+            figure: cpuPct === null ? null : `${Math.round(cpuPct)}%`,
+            used: cpuPct === null ? null : cpuPct / 100,
+            line: scaleLine(summary.cpu.series, cpuPeak),
+            tone: summary.cpu.tone,
+            exact: cpuPct === null ? null : t('machineSummary.exact.cpu', { percent: Math.round(cpuPct) }),
+        },
+        memory: {
+            metric: 'memory',
+            // A machine under pressure says the word in tone; a calm one (or one without a pressure signal) its free memory.
+            figure: pressureWord && memory.tone !== 'calm' ? pressureWord : memoryFree,
+            used: memoryUsed,
+            line: scaleLine(memory.series, 100),
+            tone: memory.tone,
+            exact: memoryFree === null ? null : memory.availableBytes !== null && memory.totalBytes !== null
+                ? t('machineSummary.exact.memory', { free: memoryFree, used: formatHappierDataBytes(Math.max(0, memory.totalBytes - memory.availableBytes), { kind: 'memory' }) })
+                : t('machineSummary.exact.memoryFree', { free: memoryFree }),
+        },
+        disk: {
+            metric: 'disk',
+            figure: diskFree,
+            used: diskUsed,
+            line: [],
+            tone: disk.tone,
+            exact: diskFree === null ? null : disk.totalBytes === null
+                ? t('machineSummary.exact.diskFree', { free: diskFree })
+                : t('machineSummary.exact.disk', { free: diskFree, total: formatHappierDataBytes(disk.totalBytes, { kind: 'storage' }) }),
+        },
+        network: {
+            metric: 'network',
+            figure: rx === null ? null : formatRate(rx),
+            used: null,
+            line: scaleLine(summary.network.rxSeries, rxPeak),
+            tone: summary.network.tone,
+            exact: rx === null ? null : t('machineSummary.exact.network', {
+                down: formatRate(rx), up: formatRate(summary.network.txBps ?? 0),
+            }),
+        },
+    };
+}
+
+/**
+ * Which metrics fit, given room for `capacity` of them: calm metrics yield first, a toned metric never
+ * drops (MPG-20). The kept ones stay in canonical order.
+ */
+export function fitMachineSummaryMetrics(
+    metrics: readonly MachineSummaryMetric[],
+    instruments: Readonly<Record<MachineSummaryMetric, MachineSummaryInstrument>> | null,
+    capacity: number,
+): readonly MachineSummaryMetric[] {
+    if (metrics.length <= capacity) return metrics;
+    const toned = metrics.filter(metric => instruments?.[metric].tone !== undefined && instruments[metric].tone !== 'calm');
+    const calm = metrics.filter(metric => !toned.includes(metric));
+    const keep = new Set([...toned, ...calm.slice(0, Math.max(0, capacity - toned.length))]);
+    return metrics.filter(metric => keep.has(metric));
+}

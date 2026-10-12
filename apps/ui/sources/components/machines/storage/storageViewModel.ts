@@ -1,0 +1,240 @@
+import type { HappierStorageCategoryIdV1, HappierStorageSummaryV1 } from '@happier-dev/protocol/storage/storageV1';
+
+import type { MachineStorageState } from '@/sync/domains/machines/storage/machineStorageStore';
+import { t } from '@/text';
+
+/**
+ * What the Happier view of the Storage tab says, decided from the machine's storage summary alone
+ * (plan 40 STO-1/2/5, STO-24, lab `rs` H / HR / HRV). Nothing here reads a store or draws; the tab and
+ * its pieces render these facts.
+ */
+
+export type StorageSummary = HappierStorageSummaryV1;
+export type StorageVolume = StorageSummary['volumes'][number];
+export type StorageCategory = StorageSummary['categories'][number];
+
+// ── The tab's state (STO-24) ─────────────────────────────────────────────────────────────────────────
+
+export type StorageTabView =
+    | Readonly<{ kind: 'not_reported' }>
+    /** First sizing in progress (never sized): the boxes are reserved. */
+    | Readonly<{ kind: 'loading' }>
+    | Readonly<{ kind: 'error' }>
+    | Readonly<{ kind: 'offline_empty' }>
+    | Readonly<{
+        kind: 'ready';
+        summary: StorageSummary;
+        /** The machine is away: last known sizes, nothing can change. */
+        offline: boolean;
+        /** Sizing again did not land; the sizes shown are the last good ones. */
+        stale: boolean;
+        /** The person uses this machine without managing it: totals only (STO-29). */
+        recipient: boolean;
+    }>;
+
+export function selectStorageTabView(input: Readonly<{
+    status: MachineStorageState['status'];
+    summary: StorageSummary | null;
+    offline: boolean;
+    recipient: boolean;
+}>): StorageTabView {
+    if (input.status === 'not_reported') return { kind: 'not_reported' };
+    if (input.summary) {
+        return { kind: 'ready', summary: input.summary, offline: input.offline, stale: input.status === 'error' && !input.offline, recipient: input.recipient };
+    }
+    if (input.offline) return { kind: 'offline_empty' };
+    if (input.status === 'error') return { kind: 'error' };
+    return { kind: 'loading' };
+}
+
+// ── Totals and the sentence ──────────────────────────────────────────────────────────────────────────
+
+/** Happier's bytes as the volumes counted them (one deduplicated union per disk). */
+export function readHappierStorageBytes(summary: StorageSummary): number {
+    if (summary.volumes.length > 0) return summary.volumes.reduce((sum, volume) => sum + volume.happierBytes, 0);
+    return summary.categories.reduce((sum, category) => sum + category.size.allocatedBytes, 0);
+}
+
+export function readStorageCanGoBytes(summary: StorageSummary): number {
+    return summary.categories.reduce((sum, category) => sum + category.canGoBytes, 0);
+}
+
+/** The disk the sentence speaks of: the one holding most of Happier, else the first. */
+export function selectStorageHeadlineVolume(summary: StorageSummary): StorageVolume | null {
+    let best: StorageVolume | null = null;
+    for (const volume of summary.volumes) {
+        if (!best || volume.happierBytes > best.happierBytes) best = volume;
+    }
+    return best;
+}
+
+export type StorageSentenceFacts = Readonly<{
+    /** "412 GB free." of the headline disk; null without volumes. */
+    freeBytes: number | null;
+    happierBytes: number;
+    /** The headline disk's name, or how many disks hold Happier when it is spread over several. */
+    where: Readonly<{ kind: 'volume'; label: string }> | Readonly<{ kind: 'across'; count: number }> | Readonly<{ kind: 'none' }>;
+    /** What can go; null when the reader is not shown the breakdown. */
+    canGoBytes: number | null;
+    /** What sits in Happier's Trash and comes back when it empties (lab RD); 0 for a reader not shown it. */
+    trashBytes: number;
+    trashEmptiesAt: number | null;
+}>;
+
+export function describeStorageSentence(summary: StorageSummary, options: Readonly<{ recipient: boolean }>): StorageSentenceFacts {
+    const headline = selectStorageHeadlineVolume(summary);
+    const holding = summary.volumes.filter(volume => volume.happierBytes > 0).length;
+    return {
+        freeBytes: headline ? headline.freeBytes : null,
+        happierBytes: readHappierStorageBytes(summary),
+        where: !headline ? { kind: 'none' } : holding > 1 ? { kind: 'across', count: holding } : { kind: 'volume', label: storageVolumeName(headline) },
+        canGoBytes: options.recipient ? null : readStorageCanGoBytes(summary),
+        trashBytes: options.recipient ? 0 : summary.trash.allocatedBytes,
+        trashEmptiesAt: options.recipient ? null : summary.trash.emptiesNextAt ?? null,
+    };
+}
+
+/**
+ * A disk's name: its own label; an unnamed root (Linux `/`, whose label is often just its mount path) reads as
+ * the system disk, never a bare slash.
+ */
+export function storageVolumeName(volume: StorageVolume): string {
+    const label = volume.volume.label.trim();
+    if (label && label !== volume.volume.mountPath) return label;
+    return volume.volume.mountPath === '/' ? t('machineStorage.volumes.systemDisk') : volume.volume.mountPath;
+}
+
+/** The mount path beside the name, when it says something the name does not ("/Volumes/Work"). */
+export function storageVolumeMountHint(volume: StorageVolume): string | null {
+    const path = volume.volume.mountPath;
+    if (path === '/' || /^[A-Za-z]:[\\/]?$/u.test(path)) return null;
+    return path === storageVolumeName(volume) ? null : path;
+}
+
+// ── A disk's bar (STO-1, the ghost of R24) ───────────────────────────────────────────────────────────
+
+export type StorageVolumeParts = Readonly<{
+    everythingElse: number;
+    /** Happier's bytes not in the pile. */
+    happier: number;
+    /** Happier's bytes collected to clear: the hatched ghost. */
+    pile: number;
+    /** Happier's bytes already in its Trash on this disk: still taken, back when the Trash empties (lab RD). */
+    trash: number;
+    free: number;
+    /** Space the system may reclaim; null when the capacity owner did not report it. Never free-now. */
+    purgeable: number | null;
+    /** Free space once the pile is cleared; null with an empty pile. */
+    afterCleanupFree: number | null;
+    /** Free space once the Trash empties; null with an empty Trash. */
+    afterTrashFree: number | null;
+}>;
+
+/**
+ * Everything else · Happier · in the pile · free, as parts of the disk's capacity. A volume's free
+ * figure is the OS's; what is neither Happier's nor free is everything else (never negative).
+ */
+export function resolveStorageVolumeParts(volume: StorageVolume): StorageVolumeParts {
+    const total = Math.max(0, volume.totalBytes);
+    const free = Math.min(total, Math.max(0, volume.freeBytes));
+    const happierAll = Math.min(Math.max(0, volume.happierBytes), total - free);
+    const pile = Math.min(Math.max(0, volume.pileBytes), happierAll);
+    const trash = Math.min(Math.max(0, volume.trashBytes), happierAll - pile);
+    const everythingElse = Math.max(0, total - free - happierAll);
+    const purgeable = volume.availableIncludingPurgeableBytes === undefined ? null
+        : Math.min(everythingElse, Math.max(0, volume.availableIncludingPurgeableBytes - free));
+    return {
+        everythingElse: everythingElse - (purgeable ?? 0),
+        happier: happierAll - pile - trash,
+        pile,
+        trash,
+        free,
+        purgeable,
+        afterCleanupFree: pile > 0 ? free + pile : null,
+        afterTrashFree: trash > 0 ? free + trash : null,
+    };
+}
+
+// ── The breakdown (STO-2) and its ring (STO-5) ───────────────────────────────────────────────────────
+
+/** Recordings appear only once there are some; every other kind is always listed (STO-2). */
+export function orderStorageCategories(summary: StorageSummary): readonly StorageCategory[] {
+    return summary.categories
+        .filter(category => category.categoryId !== 'recordings' || category.count > 0 || category.size.allocatedBytes > 0)
+        .slice()
+        .sort((a, b) => b.size.allocatedBytes - a.size.allocatedBytes);
+}
+
+export type StorageCategoryTrailing =
+    | Readonly<{ kind: 'can_go'; bytes: number }>
+    | Readonly<{ kind: 'always_kept' }>
+    | Readonly<{ kind: 'trash'; emptiesAt: number | null }>
+    | Readonly<{ kind: 'none' }>;
+
+/** Kinds Happier never offers to clear (agent sign-ins, its own state). */
+const ALWAYS_KEPT: ReadonlySet<HappierStorageCategoryIdV1> = new Set(['agentHomes', 'ownData']);
+
+/** The row's right-hand words: what can go, that it is always kept, or when the Trash empties. */
+export function describeStorageCategoryTrailing(category: StorageCategory, summary: StorageSummary): StorageCategoryTrailing {
+    if (category.categoryId === 'trash') {
+        return category.count > 0 ? { kind: 'trash', emptiesAt: summary.trash.emptiesNextAt ?? null } : { kind: 'none' };
+    }
+    if (category.canGoBytes > 0) return { kind: 'can_go', bytes: category.canGoBytes };
+    if (ALWAYS_KEPT.has(category.categoryId)) return { kind: 'always_kept' };
+    return { kind: 'none' };
+}
+
+export function readStorageCategoryFact(category: StorageCategory, key: 'canGoCount' | 'keepCount'): number {
+    const value = category.detailFacts[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/** A category whose owner could not tell everything it holds (its size is a floor). */
+export function isStorageCategoryPartial(category: StorageCategory): boolean {
+    return category.size.atLeast || category.detailFacts.factsReported === false;
+}
+
+export type StorageRingPart = Readonly<{
+    id: string;
+    /** A category, the rest folded together, or the pile. */
+    kind: 'category' | 'rest' | 'pile';
+    categoryId: HappierStorageCategoryIdV1 | null;
+    bytes: number;
+    /** Share of the ring (0..1). */
+    fraction: number;
+    /** Tone step: 0 darkest … 3 lightest; the pile is hatched instead. */
+    tone: 0 | 1 | 2 | 3;
+}>;
+
+/** Named kinds before the rest fold together: a ring reads four greys apart, not ten. */
+const RING_NAMED_PARTS = 3;
+
+/**
+ * Happier's bytes by kind as one ring (lab `rs` HR, HRV ★). The pile is the hatched arc closing the
+ * ring; the kinds share what would be left after cleanup in proportion to their sizes, so the centre's
+ * "after" figure and the solid arcs say the same thing. The legend keeps every exact size.
+ */
+export function buildStorageRing(summary: StorageSummary): Readonly<{
+    parts: readonly StorageRingPart[];
+    totalBytes: number;
+    pileBytes: number;
+    afterBytes: number;
+}> {
+    const categories = orderStorageCategories(summary).filter(category => category.size.allocatedBytes > 0);
+    const totalBytes = readHappierStorageBytes(summary);
+    const pileBytes = Math.min(totalBytes, Math.max(0, summary.pile.freesBytes));
+    const afterBytes = totalBytes - pileBytes;
+    const named = categories.slice(0, RING_NAMED_PARTS);
+    const rest = categories.slice(RING_NAMED_PARTS).reduce((sum, category) => sum + category.size.allocatedBytes, 0);
+    const kinds = [
+        ...named.map((category, index) => ({ id: category.categoryId, kind: 'category' as const, categoryId: category.categoryId, bytes: category.size.allocatedBytes, tone: index as 0 | 1 | 2 })),
+        ...(rest > 0 ? [{ id: 'rest', kind: 'rest' as const, categoryId: null, bytes: rest, tone: 3 as const }] : []),
+    ];
+    const kindsTotal = kinds.reduce((sum, part) => sum + part.bytes, 0);
+    const solidShare = totalBytes > 0 ? afterBytes / totalBytes : 0;
+    const parts: StorageRingPart[] = kinds.map(part => ({ ...part, fraction: kindsTotal > 0 ? (part.bytes / kindsTotal) * solidShare : 0 }));
+    if (pileBytes > 0 && totalBytes > 0) {
+        parts.push({ id: 'pile', kind: 'pile', categoryId: null, bytes: pileBytes, fraction: pileBytes / totalBytes, tone: 3 });
+    }
+    return { parts, totalBytes, pileBytes, afterBytes };
+}

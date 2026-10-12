@@ -1,0 +1,945 @@
+import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import {
+  HappierSkeletonBlock,
+  happierPageTextMetrics,
+} from '@happier-dev/plugin-ui/presentation';
+import type {
+  HappierStorageCategoryIdV1,
+  StorageItemV1,
+} from '@happier-dev/protocol/storage/storageV1';
+
+import type {
+  MachinePageTabBarAccessoryProps,
+  MachinePageTabBodyProps,
+  MachinePageTabParams,
+} from '@/components/machines/page/machinePageTabQuery';
+import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { Icon } from '@/components/ui/icons/Icon';
+import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { useMachineStorageCleanup } from '@/sync/domains/machines/storage/useMachineStorageCleanup';
+import { useMachineStorageItems } from '@/sync/domains/machines/storage/useMachineStorageItems';
+import { useMachineStorageScan } from '@/sync/domains/machines/storage/useMachineStorageScan';
+import { useMachineStorageSummary } from '@/sync/domains/machines/storage/useMachineStorageSummary';
+import { t } from '@/text';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
+import { fireAndForget } from '@/utils/system/fireAndForget';
+
+import { StorageBreakdown } from './StorageBreakdown';
+import { StorageCategoryPage } from './StorageCategoryPage';
+import { useStorageCollect } from './StorageCollectToggle';
+import { StorageItemRow } from './StorageItemRow';
+import { StorageSaySection } from './StoragePageHead';
+import { StoragePileDock } from './StoragePileDock';
+import { formatStorageDay } from './storageCategoryText';
+import { StorageProtectedFoldersPage } from './StorageProtectedFoldersPage';
+import {
+  describeStorageVerdict,
+  storageReasonLabel,
+} from './storageReasonPresentation';
+import { describeStorageApplyResult } from './storageReviewModel';
+import { StorageSuggestionsPage } from './StorageSuggestionsPage';
+import { StorageTidySettings } from './StorageTidySettings';
+import { StorageVolumes } from './StorageVolumes';
+import { StorageWholeDiskView } from './StorageWholeDiskView';
+import { StorageWorktreesPage } from './StorageWorktreesPage';
+import { useMachineTabCompactLayout } from '@/components/machines/page/useMachineTabCompactLayout';
+import { useMachineTabFacts } from '@/components/machines/page/useMachineTabFacts';
+import {
+  describeStorageSentence,
+  readStorageCanGoBytes,
+  selectStorageTabView,
+  storageVolumeName,
+  type StorageSentenceFacts,
+  type StorageSummary,
+} from './storageViewModel';
+
+type StorageParams = Extract<MachinePageTabParams, { id: 'storage' }>;
+/** The suggestions the Happier view lists in place before "All suggestions" (lab `rs` H). */
+const TOP_SUGGESTIONS = 3;
+
+export const MachineStorageTab = React.memo(function MachineStorageTab(
+  props: MachinePageTabBodyProps,
+) {
+  const params: StorageParams =
+    props.params.id === 'storage' ? props.params : { id: 'storage' };
+  const { setParams } = props;
+  const openCategory = React.useCallback(
+    (categoryId: HappierStorageCategoryIdV1) => {
+      setParams(
+        categoryId === 'worktrees'
+          ? { id: 'storage', page: 'worktrees' }
+          : { id: 'storage', page: 'category', categoryId },
+      );
+    },
+    [setParams],
+  );
+  const back = React.useCallback(
+    () => setParams({ id: 'storage' }),
+    [setParams],
+  );
+  const page = {
+    serverId: props.serverId,
+    machineId: props.machineId,
+    machineName: props.machineName,
+    onBack: back,
+  };
+  if (params.page === 'category' && params.categoryId)
+    return <StorageCategoryPage {...page} categoryId={params.categoryId} />;
+  if (params.page === 'worktrees') return <StorageWorktreesPage {...page} />;
+  if (params.page === 'suggestions')
+    return <StorageSuggestionsPage {...page} />;
+  if (params.page === 'protected')
+    return <StorageProtectedFoldersPage {...page} />;
+  return (
+    <StorageMainView
+      serverId={props.serverId}
+      machineId={props.machineId}
+      machineName={props.machineName}
+      params={params}
+      setParams={setParams}
+      onOpenCategory={openCategory}
+      barAccessoryShown={props.barAccessoryShown === true}
+    />
+  );
+});
+
+/** "Sized 10:41 · Size again" (or the scan's age on Whole disk) and Happier | Whole disk, at the end of the tab bar on a wide page. */
+export const StorageTabBarAccessory = React.memo(
+  function StorageTabBarAccessory(props: MachinePageTabBarAccessoryProps) {
+    if (
+      !props.params ||
+      props.params.id !== 'storage' ||
+      !props.setParams ||
+      props.params.page === 'protected'
+    )
+      return null;
+    return (
+      <StorageTabControls
+        serverId={props.serverId}
+        machineId={props.machineId}
+        params={props.params}
+        setParams={props.setParams}
+      />
+    );
+  },
+);
+
+function StorageTabControls(
+  props: Readonly<{
+    serverId: string;
+    machineId: string;
+    params: StorageParams;
+    setParams: (next: MachinePageTabParams) => void;
+    /** In the body (a phone): the age leads on the left and the switch ends the line (lab `rs` Hp). */
+    inBody?: boolean;
+  }>,
+) {
+  const { recipient } = useMachineTabFacts(props.serverId, props.machineId);
+  const storage = useMachineStorageSummary({
+    machineId: props.machineId,
+    serverId: props.serverId,
+  });
+  const disk = props.params.view === 'disk';
+  const [sizing, setSizing] = React.useState(false);
+  const { sizeAgain } = storage;
+  const onSizeAgain = React.useCallback(() => {
+    setSizing(true);
+    fireAndForget(
+      sizeAgain().finally(() => setSizing(false)),
+      { tag: 'MachineStorageTab.sizeAgain' },
+    );
+  }, [sizeAgain]);
+  if (!storage.summary) return null;
+  return (
+    <View style={[styles.controls, props.inBody ? styles.controlsInBody : null]}>
+      {disk ? (
+        <ScanFreshness
+          serverId={props.serverId}
+          machineId={props.machineId}
+          summary={storage.summary}
+          offline={storage.offline}
+        />
+      ) : (
+        <StorageFreshnessLine
+          sizedAt={storage.summary.sizedAt}
+          offline={storage.offline}
+          stale={storage.status === 'error' && !storage.offline}
+          sizing={sizing}
+          onSizeAgain={storage.offline ? null : onSizeAgain}
+        />
+      )}
+      {!recipient ? (
+        <SegmentedTabBar<'happier' | 'disk'>
+          role="radiogroup"
+          targetSize="platform"
+          segmentSizing="content"
+          accessibilityLabel={t('machineStorage.scope.label')}
+          testIDPrefix="machine-storage-scope"
+          tabs={[
+            { id: 'happier', label: t('machineStorage.scope.happier') },
+            { id: 'disk', label: t('machineStorage.scope.disk') },
+          ]}
+          activeTabId={disk ? 'disk' : 'happier'}
+          onSelectTab={(next) =>
+            props.setParams(
+              next === 'disk'
+                ? { id: 'storage', view: 'disk' }
+                : { id: 'storage' },
+            )
+          }
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** "Scanned today 10:41 · Scan again" for the whole-disk view; nothing while a scan runs (its progress speaks). */
+function ScanFreshness(
+  props: Readonly<{
+    serverId: string;
+    machineId: string;
+    summary: StorageSummary;
+    offline: boolean;
+  }>,
+) {
+  const scan =
+    props.summary.wholeDisk.scans
+      .slice()
+      .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
+  const control = useMachineStorageScan({
+    machineId: props.machineId,
+    serverId: props.serverId,
+  });
+  if (!scan || scan.status === 'running' || !scan.finishedAt) return null;
+  return (
+    <SurfaceFreshnessLine
+      testID="machine-storage-scan-freshness"
+      presentation="chip"
+      signal={props.offline ? 'quiet' : undefined}
+      reason={t(
+        props.offline
+          ? 'machineStorage.disk.scannedOffline'
+          : 'machineStorage.disk.scanned',
+        { time: formatAsOfTime(scan.finishedAt) },
+      )}
+      action={props.offline ? undefined : {
+        label: t('machineStorage.disk.scanAgain'),
+        testID: 'machine-storage-scan-again',
+        onPress: () => control.start({ target: scan.target }),
+      }}
+    />
+  );
+}
+
+function StorageMainView(
+  props: Readonly<{
+    serverId: string;
+    machineId: string;
+    machineName: string;
+    params: StorageParams;
+    setParams: (next: MachinePageTabParams) => void;
+    onOpenCategory: (categoryId: HappierStorageCategoryIdV1) => void;
+    barAccessoryShown: boolean;
+  }>,
+) {
+  const { recipient } = useMachineTabFacts(props.serverId, props.machineId);
+  const storage = useMachineStorageSummary({
+    machineId: props.machineId,
+    serverId: props.serverId,
+  });
+  const view = selectStorageTabView({
+    status: storage.status,
+    summary: storage.summary,
+    offline: storage.offline,
+    recipient,
+  });
+  const layout = useMachineTabCompactLayout();
+  const { retry } = storage;
+
+  if (view.kind === 'not_reported' || view.kind === 'offline_empty') {
+    return (
+      // The page's tab strip already leaves the gap before a tab's first block.
+      <ItemGroup header="none">
+        <SurfaceStateCard
+          testID={`machine-storage-${view.kind}`}
+          kind="unavailable"
+          size="line"
+          title={t(
+            view.kind === 'not_reported'
+              ? 'machineStorage.states.notReported'
+              : 'machineStorage.states.offlineEmpty',
+            { machine: props.machineName },
+          )}
+        />
+      </ItemGroup>
+    );
+  }
+  if (view.kind === 'error') {
+    return (
+      <ItemGroup header="none">
+        <SurfaceStateCard
+          testID="machine-storage-error"
+          kind="error"
+          size="line"
+          title={t('machineStorage.states.error', {
+            machine: props.machineName,
+          })}
+          action={{
+            label: t('machineStorage.tryAgain'),
+            onPress: retry,
+            testID: 'machine-storage-retry',
+          }}
+        />
+      </ItemGroup>
+    );
+  }
+  const disk =
+    props.params.view === 'disk' && view.kind === 'ready' && !view.recipient;
+  return (
+    <View testID="machine-storage" onLayout={layout.onLayout}>
+      {!props.barAccessoryShown ? (
+        <ItemGroup surface="none" header="none">
+          <StorageTabControls
+            serverId={props.serverId}
+            machineId={props.machineId}
+            params={props.params}
+            setParams={props.setParams}
+            inBody
+          />
+        </ItemGroup>
+      ) : null}
+      {view.kind === 'loading' ? (
+        <StorageLoading />
+      ) : disk ? (
+        <StorageWholeDiskView
+          serverId={props.serverId}
+          machineId={props.machineId}
+          machineName={props.machineName}
+          summary={view.summary}
+          offline={view.offline}
+          params={props.params}
+          setParams={props.setParams}
+        />
+      ) : (
+        <StorageHappierView
+          serverId={props.serverId}
+          machineId={props.machineId}
+          machineName={props.machineName}
+          summary={view.summary}
+          offline={view.offline}
+          recipient={view.recipient}
+          compact={layout.compact}
+          lowDiskVolumeId={
+            props.params.prepare === 'lowDisk'
+              ? (props.params.volumeId ?? null)
+              : null
+          }
+          onOpenCategory={props.onOpenCategory}
+          setParams={props.setParams}
+        />
+      )}
+    </View>
+  );
+}
+
+/** The Happier view (lab `rs` H / Hp / HR / RD / LD): what Happier keeps, what can go, and the pile. */
+function StorageHappierView(
+  props: Readonly<{
+    serverId: string;
+    machineId: string;
+    machineName: string;
+    summary: StorageSummary;
+    offline: boolean;
+    recipient: boolean;
+    compact: boolean;
+    lowDiskVolumeId: string | null;
+    onOpenCategory: (categoryId: HappierStorageCategoryIdV1) => void;
+    setParams: (next: MachinePageTabParams) => void;
+  }>,
+) {
+  const lowDisk = props.lowDiskVolumeId
+    ? (props.summary.volumes.find(
+        (volume) => volume.volume.volumeId === props.lowDiskVolumeId,
+      ) ?? null)
+    : null;
+  const custodian = !props.recipient;
+  const nothingToClear =
+    custodian &&
+    readStorageCanGoBytes(props.summary) === 0 &&
+    props.summary.suggestionsTop.length === 0;
+  return (
+    <>
+      {lowDisk && custodian ? null : (
+        <StorageSentence
+          facts={describeStorageSentence(props.summary, {
+            recipient: props.recipient,
+          })}
+          tidy={nothingToClear}
+          machineName={props.machineName}
+        />
+      )}
+      {lowDisk && custodian ? (
+        <StorageLowDisk
+          serverId={props.serverId}
+          machineId={props.machineId}
+          machineName={props.machineName}
+          volumeId={lowDisk.volume.volumeId}
+          volumeName={storageVolumeName(lowDisk)}
+          summary={props.summary}
+          compact={props.compact}
+          offline={props.offline}
+        />
+      ) : null}
+      <StorageVolumes summary={props.summary} compact={props.compact} />
+      {/* What just happened reads under the disk it changed (lab `rs` RD): the disk stays the view's first block. */}
+      {custodian ? (
+        <StorageResultSection
+          serverId={props.serverId}
+          machineId={props.machineId}
+        />
+      ) : null}
+      {props.recipient ? (
+        <ItemGroup>
+          <SurfaceStateCard
+            testID="machine-storage-recipient"
+            kind="unavailable"
+            size="line"
+            title={t('machineStorage.breakdown.recipient', {
+              machine: props.machineName,
+            })}
+          />
+        </ItemGroup>
+      ) : (
+        <>
+          <StorageBreakdown
+            serverId={props.serverId}
+            machineId={props.machineId}
+            summary={props.summary}
+            compact={props.compact}
+            onOpenCategory={props.onOpenCategory}
+          />
+          {nothingToClear ? (
+            <ItemGroup>
+              <SurfaceStateCard
+                testID="machine-storage-nothing"
+                kind="success"
+                title={t('machineStorage.nothing.title')}
+                reason={t('machineStorage.nothing.body')}
+                secondaryAction={
+                  props.offline
+                    ? undefined
+                    : {
+                        label: t('machineStorage.invite.scanWholeDisk'),
+                        onPress: () =>
+                          props.setParams({ id: 'storage', view: 'disk' }),
+                      }
+                }
+              />
+            </ItemGroup>
+          ) : lowDisk ? null : (
+            <StorageTopSuggestions
+              serverId={props.serverId}
+              machineId={props.machineId}
+              items={props.summary.suggestionsTop}
+              compact={props.compact}
+              offline={props.offline}
+              onOpenAll={() =>
+                props.setParams({ id: 'storage', page: 'suggestions' })
+              }
+            />
+          )}
+          {!props.summary.wholeDisk.scans.some(
+            (scan) => scan.status === 'complete',
+          ) &&
+          !props.offline &&
+          !nothingToClear ? (
+            <StorageInvite
+              summary={props.summary}
+              machineName={props.machineName}
+              onScan={() => props.setParams({ id: 'storage', view: 'disk' })}
+            />
+          ) : null}
+          <StorageTidySettings
+            serverId={props.serverId}
+            machineId={props.machineId}
+            machineName={props.machineName}
+            summary={props.summary}
+            onOpenProtected={() =>
+              props.setParams({ id: 'storage', page: 'protected' })
+            }
+          />
+          <StoragePileDock
+            serverId={props.serverId}
+            machineId={props.machineId}
+            machineName={props.machineName}
+            summary={props.summary}
+            compact={props.compact}
+            readOnly={props.offline}
+            {...(lowDisk
+              ? {
+                  readyNote: t('machineStorage.lowDisk.pileNote', {
+                    volume: storageVolumeName(lowDisk),
+                  }),
+                }
+              : {})}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+/** "Easy to get back": the three biggest verified suggestions, tickable in place (lab `rs` H). */
+function StorageTopSuggestions(
+  props: Readonly<{
+    serverId: string;
+    machineId: string;
+    items: readonly StorageItemV1[];
+    compact: boolean;
+    offline: boolean;
+    onOpenAll: () => void;
+  }>,
+) {
+  const collect = useStorageCollect({
+    serverId: props.serverId,
+    machineId: props.machineId,
+    readOnly: props.offline,
+  });
+  if (props.items.length === 0) return null;
+  const shown = props.items.slice(0, TOP_SUGGESTIONS);
+  const total = props.items.reduce(
+    (sum, item) => sum + item.size.freesBytes,
+    0,
+  );
+  const largest = shown.reduce(
+    (max, item) => Math.max(max, item.size.allocatedBytes),
+    0,
+  );
+  return (
+    <ItemGroup
+      title={t('machineStorage.suggestions.easy')}
+      titleAccessory={
+        <Text style={styles.accessory}>
+          {props.compact
+            ? formatMachineBytes(total, 'storage')
+            : t('machineStorage.suggestions.easyMeta', {
+                amount: formatMachineBytes(total, 'storage'),
+              })}
+        </Text>
+      }
+      action={
+        <TextLinkButton
+          testID="machine-storage-all-suggestions"
+          label={t('machineStorage.suggestions.all')}
+          onPress={props.onOpenAll}
+        />
+      }
+    >
+      {shown.map((item, index) => (
+        <StorageItemRow
+          key={item.itemId}
+          testID={`machine-storage-top-suggestion-${item.itemId}`}
+          title={item.title}
+          evidence={item.evidence.join(' · ')}
+          bytes={item.size.allocatedBytes}
+          atLeast={item.size.atLeast}
+          largest={largest}
+          chip={describeStorageVerdict(item)}
+          compact={props.compact}
+          freesBytes={item.size.freesBytes}
+          collect={collect.rowProps(item, shown)}
+          showDivider={index < shown.length - 1}
+        />
+      ))}
+    </ItemGroup>
+  );
+}
+
+/**
+ * The low-disk moment (STO-23, lab `rs` LD / LDp): the quickest verified Safe items for the disk. The
+ * entry the person tapped ("Free up space") already put them in the pile (`beginMachinePageTabIntent`);
+ * this only shows the prepared pile, each still untickable, and the disk's ghost. It writes nothing.
+ */
+function StorageLowDisk(
+  props: Readonly<{
+    serverId: string;
+    machineId: string;
+    machineName: string;
+    volumeId: string;
+    volumeName: string;
+    summary: StorageSummary;
+    compact: boolean;
+    offline: boolean;
+  }>,
+) {
+  const quickest = useMachineStorageItems({
+    machineId: props.machineId,
+    serverId: props.serverId,
+    list: 'suggestions',
+    quickestForVolume: props.volumeId,
+  });
+  const collect = useStorageCollect({
+    serverId: props.serverId,
+    machineId: props.machineId,
+    readOnly: props.offline,
+  });
+  const items = React.useMemo(
+    () =>
+      (quickest.page?.items ?? []).filter((item) => item.verdict === 'safe'),
+    [quickest.page],
+  );
+  const volume = props.summary.volumes.find(
+    (entry) => entry.volume.volumeId === props.volumeId,
+  );
+  const frees = items.reduce((sum, item) => sum + item.size.freesBytes, 0);
+  const pct = (free: number) =>
+    volume && volume.totalBytes > 0
+      ? Math.round(((volume.totalBytes - free) / volume.totalBytes) * 100)
+      : 0;
+  const largest = items.reduce(
+    (max, item) => Math.max(max, item.size.allocatedBytes),
+    0,
+  );
+  return (
+    <>
+      <StorageSaySection
+        testID="machine-storage-lowdisk-sentence"
+        lead={t('machineStorage.lowDisk.lead', { amount: formatMachineBytes(frees, 'storage'), volume: props.volumeName })}
+        text={volume
+          ? t('machineStorage.lowDisk.about', {
+              from: pct(volume.freeBytes),
+              to: pct(volume.freeBytes + frees),
+            })
+          : ''}
+      />
+      {quickest.page && items.length === 0 ? (
+        <ItemGroup>
+          <SurfaceStateCard
+            kind="empty"
+            size="line"
+            title={t('machineStorage.lowDisk.none', {
+              volume: props.volumeName,
+            })}
+          />
+        </ItemGroup>
+      ) : (
+        <ItemGroup
+          title={t('machineStorage.lowDisk.title', {
+            amount: formatMachineBytes(frees, 'storage'),
+          })}
+          description={t('machineStorage.lowDisk.description', {
+            count: items.length,
+            machine: props.machineName,
+          })}
+        >
+          {items.map((item, index) => (
+            <StorageItemRow
+              key={item.itemId}
+              testID={`machine-storage-lowdisk-${item.itemId}`}
+              title={item.title}
+              evidence={item.evidence.join(' · ')}
+              bytes={item.size.allocatedBytes}
+              atLeast={item.size.atLeast}
+              largest={largest}
+              chip={describeStorageVerdict(item)}
+              compact={props.compact}
+              freesBytes={item.size.freesBytes}
+              collect={collect.rowProps(item, items)}
+              showDivider={index < items.length - 1}
+            />
+          ))}
+        </ItemGroup>
+      )}
+    </>
+  );
+}
+
+/** "Just now": what the last review did not act on, each with its reason (lab `rs` RD). */
+function StorageResultSection(
+  props: Readonly<{ serverId: string; machineId: string }>,
+) {
+  const { theme } = useUnistyles();
+  const { receipt } = useMachineStorageCleanup({
+    machineId: props.machineId,
+    serverId: props.serverId,
+  });
+  if (receipt?.kind !== 'applied') return null;
+  const counts = describeStorageApplyResult(receipt.result);
+  if (counts.notActed.length === 0) return null;
+  const name = (itemId: string) =>
+    (receipt.paths[itemId] ?? itemId).split(/[\\/]/u).filter(Boolean).pop() ??
+    itemId;
+  const time = formatAsOfTime(receipt.at);
+  return (
+    <ItemGroup
+      title={t('machineStorage.result.title')}
+      titleAccessory={
+        <Text style={styles.accessory}>
+          {t('machineStorage.result.meta', {
+            acted: counts.acted,
+            skipped: counts.skipped + counts.refused + counts.failed,
+            mode: receipt.result.mode,
+          })}
+        </Text>
+      }
+    >
+      {counts.notActed.map((outcome, index) => (
+        <Item
+          key={outcome.itemId}
+          testID={`machine-storage-result-${outcome.itemId}`}
+          mode="info"
+          showChevron={false}
+          icon={
+            <Icon
+              name="warning-circle"
+              size={18}
+              color={theme.colors.state.attention.textForeground}
+            />
+          }
+          title={t(
+            `machineStorage.result.${outcome.status === 'skipped' ? 'skipped' : outcome.status === 'refused' ? 'refused' : 'failed'}`,
+            { name: name(outcome.itemId) },
+          )}
+          subtitle={
+            outcome.reason ? storageReasonLabel(outcome.reason) : undefined
+          }
+          detail={time}
+          showDivider={index < counts.notActed.length - 1}
+        />
+      ))}
+    </ItemGroup>
+  );
+}
+
+/** "Everything else on leeroy-mbp": the invitation to the whole disk (lab `rs` H, Hp). */
+function StorageInvite(
+  props: Readonly<{
+    summary: StorageSummary;
+    machineName: string;
+    onScan: () => void;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const elsewhere = props.summary.volumes.reduce(
+    (sum, volume) =>
+      sum +
+      Math.max(0, volume.totalBytes - volume.freeBytes - volume.happierBytes),
+    0,
+  );
+  return (
+    <ItemGroup>
+      <Item
+        testID="machine-storage-invite"
+        mode="info"
+        showChevron={false}
+        accessoryLayout="adaptive"
+        icon={
+          <Icon
+            name="hard-drives"
+            size={20}
+            color={theme.colors.text.secondary}
+          />
+        }
+        title={t('machineStorage.invite.title', { machine: props.machineName })}
+        subtitle={t('machineStorage.invite.body', {
+          amount: formatMachineBytes(elsewhere, 'storage'),
+        })}
+        rightElement={
+          <TextLinkButton
+            testID="machine-storage-invite-scan"
+            tone="strong"
+            label={t('machineStorage.invite.scanWholeDisk')}
+            onPress={props.onScan}
+          />
+        }
+      />
+    </ItemGroup>
+  );
+}
+
+/** "Sized 10:41 · Size again", "Sizing…", "Offline · as of 10:41", or the failed re-size with its retry. */
+function StorageFreshnessLine(
+  props: Readonly<{
+    sizedAt: number;
+    offline: boolean;
+    stale: boolean;
+    sizing: boolean;
+    onSizeAgain: (() => void) | null;
+  }>,
+) {
+  const time = formatAsOfTime(props.sizedAt);
+  const label = props.sizing
+    ? t('machineStorage.sizing')
+    : props.offline
+      ? t('machineStorage.offlineAsOf', { time })
+      : t('machineStorage.sized', { time });
+  const failed = props.stale && !props.sizing;
+  return (
+    <SurfaceFreshnessLine
+      testID="machine-storage-freshness"
+      presentation="chip"
+      busy={props.sizing}
+      signal={props.offline ? 'quiet' : undefined}
+      tone={failed ? 'warning' : 'neutral'}
+      reason={failed ? `${label} · ${t('machineStorage.sizeAgainFailed')}` : label}
+      action={props.onSizeAgain && !props.sizing ? {
+        label: props.stale ? t('machineStorage.tryAgain') : t('machineStorage.sizeAgain'),
+        testID: 'machine-storage-size-again',
+        onPress: props.onSizeAgain,
+      } : undefined}
+    />
+  );
+}
+
+/** "412 GB free. Happier uses 96 GB of Macintosh HD. About 49 GB of that can go." — or "All tidy." when nothing can. */
+function StorageSentence(
+  props: Readonly<{
+    facts: StorageSentenceFacts;
+    tidy: boolean;
+    machineName: string;
+  }>,
+) {
+  const { facts } = props;
+  const happier = formatMachineBytes(facts.happierBytes, 'storage');
+  if (props.tidy) {
+    return (
+      <StorageSaySection
+        testID="machine-storage-sentence"
+        lead={t('machineStorage.nothing.lead')}
+        text={t('machineStorage.nothing.sentence', {
+          happier,
+          machine: props.machineName,
+        })}
+      />
+    );
+  }
+  const uses =
+    facts.where.kind === 'volume'
+      ? t('machineStorage.sentence.uses', {
+          happier,
+          volume: facts.where.label,
+        })
+      : facts.where.kind === 'across'
+        ? t('machineStorage.sentence.usesAcross', {
+            happier,
+            count: facts.where.count,
+          })
+        : t('machineStorage.sentence.usesNoVolume', { happier });
+  const canGo =
+    facts.canGoBytes === null
+      ? null
+      : facts.canGoBytes > 0
+        ? t('machineStorage.sentence.canGo', {
+            amount: formatMachineBytes(facts.canGoBytes, 'storage'),
+          })
+        : t('machineStorage.sentence.nothingCanGo');
+  return (
+    <StorageSaySection
+      testID="machine-storage-sentence"
+      lead={facts.freeBytes !== null ? t('machineStorage.sentence.free', { free: formatMachineBytes(facts.freeBytes, 'storage') }) : null}
+      text={
+        // After a move to Trash the space is not back yet: say what returns and when, not what can go (lab RD).
+        facts.trashBytes > 0
+          ? facts.trashEmptiesAt !== null
+            ? t('machineStorage.sentence.trashReturns', { amount: formatMachineBytes(facts.trashBytes, 'storage'), date: formatStorageDay(facts.trashEmptiesAt) })
+            : t('machineStorage.sentence.trashReturnsLater', { amount: formatMachineBytes(facts.trashBytes, 'storage') })
+          : [uses, canGo].filter(Boolean).join(' ')
+      }
+    />
+  );
+}
+
+/** The first sizing (never sized): the sentence, a disk and the breakdown rows at their final size. */
+function StorageLoading() {
+  const { theme } = useUnistyles();
+  const color = theme.colors.border.default;
+  return (
+    <View
+      testID="machine-storage-loading"
+      accessibilityLabel={t('machineStorage.states.loading')}
+      accessibilityRole="progressbar"
+    >
+      <ItemGroup surface="none" header="none">
+        <View style={styles.freshness}>
+          <HappierSkeletonBlock color={color} width={96} height={14} />
+        </View>
+        <View style={styles.sentenceSkeleton}>
+          <HappierSkeletonBlock color={color} width="70%" height={16} />
+        </View>
+      </ItemGroup>
+      <ItemGroup>
+        <View style={styles.skeletonVolume}>
+          <HappierSkeletonBlock color={color} width="30%" height={16} />
+          <HappierSkeletonBlock color={color} width="100%" height={8} />
+          <HappierSkeletonBlock color={color} width="45%" height={12} />
+        </View>
+      </ItemGroup>
+      <ItemGroup title={t('machineStorage.states.loading')}>
+        {Array.from({ length: 6 }, (_, index) => (
+          <View key={index} style={styles.skeletonRow}>
+            <HappierSkeletonBlock color={color} width="36%" height={14} />
+            <HappierSkeletonBlock color={color} width="52%" height={12} />
+          </View>
+        ))}
+      </ItemGroup>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create((theme) => ({
+  controls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: theme.space.s12,
+    marginLeft: 'auto',
+  },
+  controlsInBody: {
+    justifyContent: 'space-between',
+    marginLeft: 0,
+  },
+  freshness: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    columnGap: theme.space.s6,
+    rowGap: theme.space.s2,
+    minHeight: 24,
+  },
+  freshnessText: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+    fontVariant: ['tabular-nums'],
+  },
+  accessory: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.secondary,
+    fontVariant: ['tabular-nums'],
+  },
+  sentenceSkeleton: {
+    marginTop: theme.space.s10,
+    minHeight: 20,
+  },
+  skeletonVolume: {
+    gap: theme.space.s12,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s16,
+  },
+  skeletonRow: {
+    gap: theme.space.s8,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: 14,
+  },
+}));

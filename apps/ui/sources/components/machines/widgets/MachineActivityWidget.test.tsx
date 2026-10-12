@@ -1,0 +1,277 @@
+import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
+import type { MachineGuardActivityRowV1 } from '@happier-dev/protocol/machines/guard/activityV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import type { WidgetSizeV1 } from '@happier-dev/protocol/widgets';
+
+import { renderScreen } from '@/dev/testkit';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import {
+  createHomeGovernanceHarness,
+  installHomeGovernanceBoundaries,
+} from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import type { Machine } from '@/sync/domains/state/storageTypes';
+
+installDisconnectedServerSocketBoundary();
+const transport = vi.hoisted(() => ({ rpc: vi.fn() }));
+// Only the Machine network is replaced; credential binding, the Actions front door, the guard store and the rows run for real.
+vi.mock(
+  '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc',
+  () => ({ machineRpcWithServerScope: transport.rpc }),
+);
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { machineGuardStore } =
+  await import('@/sync/domains/machines/guard/machineGuardStore');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { MachineActivityWidget } = await import('./MachineActivityWidget');
+
+function machine(id: string, host: string): Machine {
+  return createMachineFixture({
+    id,
+    active: true,
+    activeAt: Date.now(),
+    storageMode: 'plain',
+    isShared: false,
+    metadata: {
+      host,
+      platform: 'linux',
+      happyCliVersion: '0.3.0',
+      happyHomeDir: '/home/leeroy/.happier',
+      homeDir: '/home/leeroy',
+    },
+    access: {
+      role: 'manage',
+      custodian: { accountId: 'owner', displayName: 'Owner' },
+      resourceMode: 'plain',
+      accessState: 'ready',
+    },
+  });
+}
+
+function entry(
+  overrides: Partial<MachineGuardActivityRowV1>,
+): MachineGuardActivityRowV1 {
+  return {
+    v: 1,
+    id: 'e1',
+    at: Date.now() - 60_000,
+    kind: 'stopped_session',
+    rule: 'idle_sessions',
+    subject: { kind: 'session', sessionId: 's-1', title: 'Docs link sweep' },
+    freedBytes: 700 * 1024 ** 2,
+    outcome: 'done',
+    wayBack: [
+      {
+        label: 'resume',
+        actionId: 'session.open',
+        input: { sessionId: 's-1' },
+      },
+    ],
+    attribution: { kind: 'unknown' },
+    ...overrides,
+  } as MachineGuardActivityRowV1;
+}
+const list = (entries: MachineGuardActivityRowV1[]) => ({
+  entries,
+  counts: { stopped: entries.length, cleanedUp: 0, needsLook: 0, others: 0 },
+  asOf: Date.now(),
+});
+
+async function mount(
+  options: Readonly<{
+    size?: WidgetSizeV1;
+    bound: boolean;
+    machines: Machine[];
+    rpc: (method: string, payload: Record<string, unknown>) => unknown;
+  }>,
+) {
+  const serverId = await home.addHome({
+    name: 'Activity Home',
+    serverUrl: `https://activity-widget-${Math.random().toString(36).slice(2)}.test`,
+    serverIdentityId: 'srv_activity_widget',
+    accountId: 'owner',
+  });
+  home.answer(serverId, '/v2/account/settings', {
+    body: { content: { t: 'plain', v: {} }, version: 1 },
+  });
+  storage.setState({
+    machines: {},
+    machineListByServerId: { [serverId]: options.machines },
+    machineListStatusByServerId: { [serverId]: 'idle' },
+  });
+  transport.rpc.mockImplementation(
+    async ({
+      method,
+      payload,
+    }: {
+      method: string;
+      payload: Record<string, unknown>;
+    }) => {
+      const answer = options.rpc(method, payload);
+      if (answer !== undefined) return answer;
+      throw new Error(`unexpected ${method}`);
+    },
+  );
+  const input: Readonly<Record<string, JsonValue>> = options.bound
+    ? { machine: { serverId, machineId: options.machines[0]!.id } }
+    : {};
+  const screen = await renderScreen(
+    <WidgetPresentationProvider
+      value={{
+        size: options.size ?? 'medium',
+        footprint: {
+          columns: 2,
+          columnSpan: 1,
+          rowSpan: 2,
+          width: 'half',
+          height: 'regular',
+        },
+      }}
+    >
+      <MachineActivityWidget
+        input={input}
+        serverId={serverId}
+        testID="activity-widget"
+      />
+    </WidgetPresentationProvider>,
+  );
+  return { screen, serverId };
+}
+
+const before = storage.getState();
+beforeEach(async () => {
+  await home.reset();
+  machineGuardStore.reset();
+  transport.rpc.mockReset();
+});
+afterEach(async () => {
+  standardCleanup();
+  machineGuardStore.reset();
+  storage.setState(before);
+  await home.reset();
+});
+
+describe('MachineActivityWidget', () => {
+  it('resumes a stopped session through the receipt’s own Undo and then shows what happened', async () => {
+    const undone: unknown[] = [];
+    let entries = [entry({})];
+    const { screen } = await mount({
+      bound: true,
+      machines: [machine('m1', 'leeroy-mbp')],
+      rpc: (method, payload) => {
+        if (method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)
+          return list(entries);
+        if (method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_UNDO) {
+          undone.push(payload.entryId);
+          entries = [
+            entry({
+              id: 'e2',
+              at: Date.now(),
+              kind: 'undone',
+              ref: 'e1',
+              wayBack: undefined,
+              freedBytes: undefined,
+            }),
+            entry({ undoneAt: Date.now() }),
+          ];
+          return { ok: true };
+        }
+        return undefined;
+      },
+    });
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(
+          screen.findByTestId('machine-activity-e1-resume'),
+        ).not.toBeNull(),
+      );
+    });
+    expect(screen.getTextContent()).toContain('Stopped “Docs link sweep”');
+    expect(screen.getTextContent()).toContain(
+      '1 automatic action this week · 1 can be undone',
+    );
+    await act(async () => {
+      screen.pressByTestId('machine-activity-e1-resume');
+    });
+    await act(async () => {
+      await vi.waitFor(() => expect(undone).toEqual(['e1']));
+    });
+    // The next answer says what happened; the undone receipt has no way back left.
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(screen.getTextContent()).toContain('Undid an earlier stop'),
+      );
+    });
+    expect(screen.findByTestId('machine-activity-e1-resume')).toBeNull();
+  });
+
+  it('lists every machine’s receipts newest first, each naming its machine, when no machine is bound', async () => {
+    const { screen } = await mount({
+      bound: false,
+      machines: [machine('m1', 'leeroy-mbp'), machine('m2', 'edge-1'), { ...machine('m3', 'studio'), active: false, activeAt: Date.now() - 86_400_000 }],
+      rpc: (method, payload) => {
+        if (method !== RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST)
+          return undefined;
+        return payload.machineId === 'm1'
+          ? list([entry({ id: 'a', at: Date.now() - 120_000 })])
+          : list([
+              entry({
+                id: 'b',
+                at: Date.now() - 30_000,
+                kind: 'stopped_service',
+                rule: 'memory_guard',
+                subject: { kind: 'service', label: 'website · dev server' },
+                wayBack: undefined,
+              }),
+            ]);
+      },
+    });
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(screen.findByTestId('machine-activity-a')).not.toBeNull(),
+      );
+    });
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(screen.findByTestId('machine-activity-b')).not.toBeNull(),
+      );
+    });
+    const text = screen.getTextContent();
+    expect(text).toContain('leeroy-mbp');
+    expect(text).toContain('edge-1');
+    expect(text.indexOf('website · dev server')).toBeLessThan(
+      text.indexOf('Docs link sweep'),
+    );
+    // Each machine is its own daemon read; an offline machine is not asked.
+    const asked = transport.rpc.mock.calls.map(([call]) => (call as { method: string; payload?: { machineId?: string } }))
+      .filter((call) => call.method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST).map((call) => call.payload?.machineId);
+    expect(new Set(asked)).toEqual(new Set(['m1', 'm2']));
+  });
+
+  it('says nothing happened this week as one quiet line, never an empty list', async () => {
+    const { screen } = await mount({
+      bound: true,
+      machines: [machine('m1', 'leeroy-mbp')],
+      rpc: (method) =>
+        method === RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST
+          ? list([])
+          : undefined,
+    });
+    await act(async () => {
+      await vi.waitFor(() =>
+        expect(
+          screen.findByTestId('activity-widget.notSetUp.empty') ??
+            screen.findByTestId('activity-widget.nothing.empty'),
+        ).not.toBeNull(),
+      );
+    });
+    // Every rule of this machine is off by default (R29), so it says how to get automatic actions.
+    expect(screen.getTextContent()).toContain('No automatic actions yet');
+  });
+});

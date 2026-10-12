@@ -1,0 +1,258 @@
+import * as React from 'react';
+import { RefreshControl, View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
+import { useHappierCollectionLayout } from '@happier-dev/plugin-ui/presentation';
+
+import { Stack, useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useManagedEnrolledMachine, useManagedMachineHeaderIdentity } from '@/components/settings/machines/managed/ManagedMachineSections';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { FieldItem } from '@/components/ui/forms/FieldItem';
+import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemList } from '@/components/ui/lists/ItemList';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { Modal } from '@/modal';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { sync } from '@/sync/sync';
+import { t } from '@/text';
+import { runRefreshDiagnosticAction } from '@/utils/system/userInteractionDiagnostics';
+import { useDeviceType } from '@/utils/platform/responsive';
+
+import { MachinePageHeader } from './MachinePageHeader';
+import { MachinePageStateContext, type MachinePageState } from './machinePageContext';
+import { readRememberedMachinePageTab, rememberMachinePageTab } from './machinePageTabMemory';
+import { isMachinePageTabRoot, machinePageTabQuery, machinePageTabRouteParams } from './machinePageTabQuery';
+import { MACHINE_PAGE_TABS, resolveMachinePageTab } from './machinePageTabs';
+import { MachineResourcesAskBlock } from '@/components/machines/resources/ask/MachineResourcesAskBlock';
+import type { MachinePageTabId, MachinePageTabParams } from './machinePageTabQuery';
+import { useMachinePageTarget } from './useMachinePageTarget';
+
+const styles = StyleSheet.create(() => ({
+    // The tab strip is the one divider between the identity and the tab's body: the same breath above and below it,
+    // so a body that opens with a sentence (Guard) or a sheet (Overview) never touches the strip.
+    tabsGroup: {
+        paddingTop: PAGE_LIST_METRICS.pageHeaderColumnGapPx,
+        paddingBottom: PAGE_LIST_METRICS.sheetInsetPx,
+    },
+    tabBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 12,
+    },
+    renameActions: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: 8,
+    },
+}));
+
+/**
+ * One machine's page (R1, R2), the same in both doors: its header, the tabs that exist (Overview
+ * alone draws no bar), then the active tab's body. The tab is the route's `tab` query, switched in
+ * place without a history entry; an absent `tab` returns to the tab last open on this machine.
+ */
+export function MachinePageScreen() {
+    const target = useMachinePageTarget();
+    const router = useRouter();
+    const routeParams = useLocalSearchParams<Record<string, string>>();
+    const { machine, machineId, serverId } = target;
+
+    // A machine Happier created reads as what it is: its provider's mark, where it came from, and its
+    // observed power and kind. The same read feeds the Overview's managed sections.
+    const managedEnrolled = useManagedEnrolledMachine({ enrolledMachineId: machineId || undefined, serverId });
+    // A connected daemon's start is when this machine's Happier came up: the header's "Running 3 h".
+    const daemonStartedAt = target.online && typeof machine?.daemonState?.startedAt === 'number' ? machine.daemonState.startedAt : undefined;
+    const managedIdentity = useManagedMachineHeaderIdentity(managedEnrolled.machine, managedEnrolled.serverId, { runningSince: daemonStartedAt });
+
+    const [refreshKey, bumpRefreshKey] = React.useReducer((value: number) => value + 1, 0);
+    const { execute: refreshInventory } = useMountedActionExecution(serverId);
+    const reload = React.useCallback(async () => {
+        bumpRefreshKey();
+        const result = await refreshInventory('machines.list', { serverId, refresh: true });
+        if (!result.ok) throw new Error(result.error);
+    }, [refreshInventory, serverId]);
+    const [isRefreshing, setIsRefreshing] = React.useState(false);
+    const handleRefresh = React.useCallback(async () => {
+        setIsRefreshing(true);
+        try {
+            await runRefreshDiagnosticAction({ action: 'pull_to_refresh', screen: 'machine_detail' }, reload);
+        } finally {
+            setIsRefreshing(false);
+        }
+    }, [reload]);
+
+    const rename = useMachineRenameDraft(target);
+
+    // An explicit tab in the link wins; otherwise the tab last open on this machine this session.
+    const remembered = machineId ? readRememberedMachinePageTab({ serverId, machineId }) : null;
+    const tab = resolveMachinePageTab(routeParams.tab ? routeParams : remembered ? machinePageTabQuery(remembered) : {});
+    const setTabParams = React.useCallback((next: MachinePageTabParams) => {
+        if (machineId) rememberMachinePageTab({ serverId, machineId }, next);
+        // A tab is view state of this page: switching it replaces the query, not the history.
+        router.setParams(machinePageTabRouteParams(next));
+    }, [machineId, router, serverId]);
+    const selectTab = React.useCallback((id: MachinePageTabId) => {
+        const entry = MACHINE_PAGE_TABS.find(candidate => candidate.id === id);
+        if (entry) setTabParams(entry.parseParams({ tab: id }));
+    }, [setTabParams]);
+
+    // The page header names the machine, so the native header keeps a plain, empty title. Hosted in
+    // a Machines collection, the collection owns the navigation chrome: no second header.
+    const hostedInCollection = useHappierCollectionLayout() !== null;
+    const phone = useDeviceType() === 'phone';
+    const headerBackTitle = t('machine.back');
+    const screenOptions = React.useMemo(() => ({
+        headerShown: !hostedInCollection,
+        headerTitle: '',
+        headerBackTitle,
+    } as const), [headerBackTitle, hostedInCollection]);
+
+    const pageState = React.useMemo((): MachinePageState => ({ target, managedEnrolled, refreshKey, reload }), [managedEnrolled, refreshKey, reload, target]);
+
+    if (!machine) {
+        // The page keeps its identity while the machine loads or when it no longer exists: the same
+        // header with a placeholder name, then the state where the sections would be.
+        return (
+            <>
+                <Stack.Screen options={screenOptions} />
+                <ItemList pageColumn="wide">
+                    <MachinePageHeader target={target} managedIdentity={null} renaming={false} onRename={rename.start} />
+                    <ItemGroup surface="none">
+                        {target.isHydratingMachine ? (
+                            <SurfaceStateCard testID="machine-detail-loading" kind="loading" title={t('common.loading')} />
+                        ) : (
+                            <SurfaceStateCard testID="machine-detail-not-found" kind="unavailable" title={t('machine.notFound')} />
+                        )}
+                    </ItemGroup>
+                </ItemList>
+            </>
+        );
+    }
+
+    const Body = tab.entry.Body;
+    // A wide page draws the tab's accessory at the end of the tab bar (lab `rv` O); a phone keeps it in the body.
+    const BarAccessory = MACHINE_PAGE_TABS.length > 1 && !phone ? tab.entry.BarAccessory : undefined;
+    return (
+        <MachinePageStateContext.Provider value={pageState}>
+            <Stack.Screen options={screenOptions} />
+            <ItemList
+                // The wide column, as All machines: the two doors' index and the page keep one edge, and the
+                // tabs' tables, charts and maps get the room the lab draws them at (a created machine's
+                // receipt columns share it).
+                pageColumn="wide"
+                refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={handleRefresh} />}
+                keyboardShouldPersistTaps="handled"
+            >
+                <MachinePageHeader target={target} managedIdentity={managedIdentity} renaming={rename.saving} onRename={rename.start} />
+                {MACHINE_PAGE_TABS.length > 1 ? (
+                    // In the page column like every section, so the tabs line up with the header and the sheets.
+                    <ItemGroup header="none" surface="none" style={styles.tabsGroup}>
+                    <View testID="machine-page-tabs" style={styles.tabBar}>
+                        <SegmentedTabBar<MachinePageTabId>
+                            role="tablist"
+                            targetSize="platform"
+                            segmentSizing="content"
+                            tabs={MACHINE_PAGE_TABS.map(entry => ({ id: entry.id, label: t(entry.titleKey) }))}
+                            activeTabId={tab.entry.id}
+                            onSelectTab={selectTab}
+                            accessibilityLabel={target.machineName}
+                            testIDPrefix="machine-page-tab"
+                        />
+                        {BarAccessory ? <BarAccessory serverId={serverId} machineId={machineId} online={target.online} params={tab.params} setParams={setTabParams} /> : null}
+                    </View>
+                    </ItemGroup>
+                ) : null}
+                {rename.editor}
+                <Body
+                    key={tab.entry.id}
+                    serverId={serverId}
+                    machineId={machineId}
+                    machineName={target.machineName}
+                    online={target.online}
+                    params={tab.params}
+                    setParams={setTabParams}
+                    barAccessoryShown={BarAccessory !== undefined}
+                />
+                {/* Ask an agent closes every Resources tab's root (plan 60 AGW-11), never a page the tab pushes; Overview places it before its machine sections. */}
+                {tab.entry.id !== 'overview' && isMachinePageTabRoot(tab.params) ? (
+                    <MachineResourcesAskBlock serverId={serverId} machineId={machineId} machineName={target.machineName} />
+                ) : null}
+            </ItemList>
+        </MachinePageStateContext.Provider>
+    );
+}
+
+/** Renaming in place under the header (the header `⋯` → Rename); the draft belongs to one machine and Home. */
+function useMachineRenameDraft(target: ReturnType<typeof useMachinePageTarget>): Readonly<{
+    start(): void;
+    saving: boolean;
+    editor: React.ReactNode;
+}> {
+    const { machine, machineId, serverId } = target;
+    const metadataExecution = useMountedActionExecution(serverId);
+    const [draft, setDraft] = React.useState<{ machineId: string; serverId: string; value: string } | null>(null);
+    const [saving, setSaving] = React.useState(false);
+    const current = draft && draft.machineId === machineId && areServerProfileIdentifiersEquivalent(draft.serverId, serverId) ? draft : null;
+    React.useEffect(() => {
+        setDraft((value) => value && value.machineId === machineId && areServerProfileIdentifiersEquivalent(value.serverId, serverId) ? value : null);
+    }, [machineId, serverId]);
+
+    const start = React.useCallback(() => {
+        if (!machine || !machineId || saving) return;
+        setDraft({ machineId, serverId, value: machine.metadata?.displayName || '' });
+    }, [machine, machineId, saving, serverId]);
+
+    const save = async () => {
+        if (!machine || !machineId || !current || saving || target.isServerSwitching) return;
+        const saved = current;
+        setSaving(true);
+        try {
+            const execution = await metadataExecution.execute('machines.metadata.update', {
+                serverId, machineId, expectedVersion: machine.metadataVersion,
+                patch: { displayName: saved.value.trim() || null },
+            });
+            if (!execution.ok) throw new Error(execution.error);
+            setDraft((value) => value === saved ? null : value);
+        } catch (error) {
+            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('machine.renameFailed'));
+            await sync.refreshMachines();
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const editor = current && machine ? (
+        <ItemGroup>
+            <SectionContentRow>
+                <FieldItem label={t('machine.renameTitle')} supportingText={t('machine.renameDescription')}>
+                    <FieldTextInput
+                        testID="machine-detail-name-input"
+                        accessibilityLabel={t('machine.renameTitle')}
+                        value={current.value}
+                        placeholder={machine.metadata?.host || t('machine.renamePlaceholder')}
+                        editable={!saving}
+                        onChangeText={(value) => setDraft((previous) => previous ? { ...previous, value } : previous)}
+                        onSubmitEditing={save}
+                    />
+                </FieldItem>
+            </SectionContentRow>
+            <SectionContentRow>
+                <View style={styles.renameActions}>
+                    <RoundButton testID="machine-detail-name-save" size="small" title={t('common.save')} loading={saving}
+                        disabled={saving || target.isServerSwitching} action={save} />
+                    <RoundButton testID="machine-detail-name-cancel" size="small" display="secondary" title={t('common.cancel')}
+                        disabled={saving} onPress={() => setDraft(null)} />
+                </View>
+            </SectionContentRow>
+        </ItemGroup>
+    ) : null;
+
+    return { start, saving, editor };
+}

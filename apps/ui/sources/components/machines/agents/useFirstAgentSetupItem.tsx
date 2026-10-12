@@ -11,7 +11,7 @@ import { subscribeSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepo
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { useMachineListByServerId } from '@/sync/domains/state/storage';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 
 import { AgentSetupForm } from './AgentSetupForm';
@@ -43,9 +43,9 @@ function useHomeComposerMachine(serverId: string) {
     return React.useMemo(() => {
         const live = (machines ?? []).filter((machine) => !machine.revokedAt);
         return live.find((machine) => machine.id === draftMachineId)
-            ?? live.find((machine) => isMachineReachable(serverId, machine))
+            ?? live.find((machine) => isMachineSelectableForFleet(scope, machine))
             ?? null;
-    }, [draftMachineId, machines, reachabilityRevision, serverId]);
+    }, [draftMachineId, machines, reachabilityRevision, scope]);
 }
 
 /**
@@ -56,7 +56,9 @@ export function useFirstAgentSetupItem(input: Readonly<{ phone: boolean }>): Set
     const router = useRouter();
     const serverId = useActiveServerSnapshot().serverId;
     const machine = useHomeComposerMachine(serverId);
-    const machineId = machine && isMachineReachable(serverId, machine) ? machine.id : null;
+    const { binding } = useServerCredentialAccountScopeBinding(serverId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
+    const machineId = machine && isMachineSelectableForFleet(scope, machine) ? machine.id : null;
     // A hub asks no machine anything (DESIGN.md "Hubs"): cached and last-known facts only; the composer
     // and the machine page own the probes that fill them.
     const inventory = useMachineAgents({ serverId, machineId, load: false });

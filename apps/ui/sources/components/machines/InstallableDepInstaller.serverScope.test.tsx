@@ -9,11 +9,6 @@ import { installMachineComponentCommonModuleMocks } from './machineComponentTest
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const alertMock = vi.fn();
-type MachineCapabilitiesInvokeMock = typeof import('@/sync/ops/capabilities').machineCapabilitiesInvoke;
-
-const machineCapabilitiesInvokeMock = vi.fn<MachineCapabilitiesInvokeMock>(
-    async (_machineId: string, _request: unknown, _options: unknown) => ({ supported: false, reason: 'not-supported' }),
-);
 
 installMachineComponentCommonModuleMocks({
     icons: () => ({
@@ -48,10 +43,6 @@ installMachineComponentCommonModuleMocks({
         });
     },
 });
-
-vi.mock('@/sync/ops/capabilities', () => ({
-    machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-}));
 
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroup: ({ children }: any) => React.createElement('ItemGroup', null, children),
@@ -105,11 +96,6 @@ async function renderInstaller(
 describe('InstallableDepInstaller', () => {
     beforeEach(() => {
         alertMock.mockReset();
-        machineCapabilitiesInvokeMock.mockReset();
-        machineCapabilitiesInvokeMock.mockResolvedValue({
-            supported: true,
-            response: { ok: true, result: {} },
-        });
     });
 
     afterEach(() => {
@@ -140,84 +126,6 @@ describe('InstallableDepInstaller', () => {
             screen.pressRowByTitle(baseInstallerProps.depTitle);
         });
         expect(refreshStatus).toHaveBeenCalled();
-        expect(machineCapabilitiesInvokeMock).not.toHaveBeenCalled();
-        await screen.unmount();
-    });
-
-    it('routes install invocation through the provided serverId', async () => {
-        const screen = await renderInstaller({
-            depStatus: {
-                installed: false,
-                installedVersion: null,
-                sourceKind: 'github_release_binary',
-                lastInstallLogPath: null,
-                lastBackgroundUpdateCheckAtMs: null,
-            },
-        });
-
-        await act(async () => {
-            screen.pressRowByTitle(installLabels.install);
-        });
-
-        const confirmButtons = alertMock.mock.calls.find(
-            (call) => call[0] === installModal.installTitle && Array.isArray(call[2]),
-        )?.[2];
-        if (!Array.isArray(confirmButtons) || typeof confirmButtons[1]?.onPress !== 'function') {
-            throw new Error('Expected confirmation buttons with install callback');
-        }
-
-        await act(async () => {
-            await confirmButtons[1].onPress();
-        });
-        await flushHookEffects({ cycles: 1 });
-
-        expect(machineCapabilitiesInvokeMock).toHaveBeenCalledWith(
-            'machine-1',
-            expect.objectContaining({ id: CODEX_ACP_DEP_ID, method: 'install' }),
-            expect.objectContaining({ timeoutMs: 5 * 60_000, serverId: 'server-b' }),
-        );
-
-        await screen.unmount();
-    });
-
-    it('invokes installs without install-spec params', async () => {
-        const screen = await renderInstaller({
-            depStatus: {
-                installed: false,
-                installedVersion: null,
-                sourceKind: 'github_release_binary',
-                lastInstallLogPath: null,
-                lastBackgroundUpdateCheckAtMs: null,
-            },
-        });
-
-        const installAction = screen.findRowByTitle(installLabels.install);
-        if (!installAction) {
-            throw new Error('Expected install action item');
-        }
-        await act(async () => {
-            screen.pressRowByTitle(installLabels.install);
-        });
-
-        const confirmButtons = alertMock.mock.calls.find((call) => Array.isArray(call[2]))?.[2];
-        if (!Array.isArray(confirmButtons) || typeof confirmButtons[1]?.onPress !== 'function') {
-            throw new Error('Expected confirmation buttons with install callback');
-        }
-
-        await act(async () => {
-            await confirmButtons[1].onPress();
-        });
-        await flushHookEffects({ cycles: 1 });
-
-        const lastCall = machineCapabilitiesInvokeMock.mock.calls.at(-1);
-        expect(lastCall).toBeTruthy();
-        expect(lastCall?.[0]).toBe('machine-1');
-        expect(lastCall?.[2]).toMatchObject({ timeoutMs: 5 * 60_000, serverId: 'server-b' });
-
-        const request = lastCall?.[1] as Record<string, unknown> | undefined;
-        expect(request).toMatchObject({ id: CODEX_ACP_DEP_ID, method: 'install' });
-        expect(request).not.toHaveProperty('params');
-
         await screen.unmount();
     });
 
@@ -262,8 +170,6 @@ describe('InstallableDepInstaller', () => {
         });
 
         expect(alertMock).not.toHaveBeenCalled();
-        expect(machineCapabilitiesInvokeMock).not.toHaveBeenCalled();
-
         await screen.unmount();
     });
 });

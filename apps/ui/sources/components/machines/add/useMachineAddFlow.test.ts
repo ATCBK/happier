@@ -4,6 +4,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -52,6 +53,44 @@ async function admitSsh(serverId: string, accountId: string) {
 beforeEach(async () => { await harness.reset(); });
 afterEach(async () => { await act(async () => discardMachineAdd()); publishAppliedActiveServerRuntimeAvailability(false); vi.useRealTimers(); standardCleanup(); });
 describe('machine add flow lifetime', () => {
+    it.each([
+        { kind: 'auth.approveRemoteProvisioning', approved: true },
+        { kind: 'daemon.replaceRemoteBackgroundServices', replaceExistingServices: true },
+        { kind: 'releaseChannel.switchDefaultForSetup', switchDefaultReleaseChannel: true },
+    ] as const)('honors a user waiver for the SSH $kind answer without requiring present-user authority', async answer => {
+        const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');
+        const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
+        const { createMachineAddSshTaskAction } = await import('./machineAddSshTaskAction');
+        const previous = storage.getState();
+        const serverId = await harness.addHome({ serverUrl: 'https://ssh-waiver.example.test', name: 'SSH waiver', accountId: 'alice' });
+        const manual = createManualSystemTaskRunner('native');
+        vi.stubGlobal('isTauri', true);
+        try {
+            await setActiveServerId(serverId);
+            await admitSsh(serverId, 'alice');
+            const hook = await renderHook(() => useMachineAddFlow({ runner: manual.runner, initialPath: 'ssh' }));
+            await act(async () => hook.getCurrent().ssh.setDraft({ ...hook.getCurrent().ssh.draft, host: 'box' }));
+            await act(async () => hook.getCurrent().startSsh());
+            await vi.waitFor(() => expect(readMachineAddFlowDraft().sshTask?.taskId).toBeTruthy());
+            const taskId = readMachineAddFlowDraft().sshTask!.taskId!;
+            await act(async () => manual.emitEvent(taskId, { type: 'prompt', message: 'Review setup', data: { kind: answer.kind,
+                ...(answer.kind === 'releaseChannel.switchDefaultForSetup' ? { targetReleaseChannel: 'stable' } : { publicKey: 'remote-key' }) } }));
+            // The OS bridge and Home HTTP are boundaries; policy, executor and retained task are real.
+            const executor = createActionExecutor(createActionExecutorBoundaryFixture({ machineAddSshTaskAction: createMachineAddSshTaskAction() }));
+            const input = { taskId, answer };
+            const context = { surface: 'agent', authority: 'account_automation', serverId } as const;
+            expect(await executor.execute('machines.add.ssh.respond', input, context))
+                .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            expect(manual.bridge.respond).not.toHaveBeenCalled();
+            const settings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'machines.add.ssh.respond': ['agent'] } });
+            let response: unknown;
+            await act(async () => { response = await executor.execute('machines.add.ssh.respond', input, { ...context, actionsSettings: settings }); });
+            expect(response).toEqual({ ok: true, result: { taskId } });
+            expect(manual.runner.getSnapshot(taskId)?.cancelRequested).toBe(false);
+            expect(manual.bridge.respond.mock.calls.at(-1)).toEqual([taskId, Object.fromEntries(Object.entries(answer).filter(([key]) => key !== 'kind'))]);
+            await hook.unmount();
+        } finally { await act(async () => discardMachineAdd()); storage.setState(previous); vi.unstubAllGlobals(); }
+    });
     it('resumes its canonical SSH password prompt after remount and waits for the Home feed, not just task success', async () => {
         const previous = storage.getState();
         const previousServerId = getActiveServerId();

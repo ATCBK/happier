@@ -60,7 +60,9 @@ describe('Agent sign-in terminal lifecycle on web', () => {
         const laterStream = createDeferred<DaemonTerminalStreamReadResponse>();
         let streamRead = false;
         const machine = createMachineFixture({ id: machineId, activeAt: Date.now() });
-        getStorage().setState({ machines: { [machineId]: machine } });
+        getStorage().setState({ machines: { [machineId]: machine },
+            machineListByServerId: { 'fixture-server': [machine] },
+            machineListStatusByServerId: { 'fixture-server': 'idle' } });
         boundary.rpc.mockImplementation(async ({ method }: { method: string }) => {
             if (method === 'daemon.agents.signIn.prepare') return { method: 'native', launch: { kind: 'agent_login', agentId: 'codex' } };
             if (method === 'daemon.terminal.ensure') return ensure.promise;

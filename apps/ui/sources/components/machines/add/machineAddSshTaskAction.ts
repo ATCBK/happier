@@ -214,8 +214,7 @@ export function createMachineAddSshTaskAction(runnerOverride?: SystemTaskRunner)
                     ...('existingFingerprint' in prompt ? { existingFingerprint: prompt.existingFingerprint } : {}),
                     ...('target' in prompt ? { target: prompt.target } : {}),
                     ...('publicKey' in prompt ? { publicKey: prompt.publicKey } : {}),
-                    requiresPresentUser: prompt.kind === 'ssh.password' && !handle.sshSubmission?.draft.savedHostId || prompt.kind === 'auth.approveRemoteProvisioning'
-                        || prompt.kind === 'daemon.replaceRemoteBackgroundServices' || prompt.kind === 'releaseChannel.switchDefaultForSetup',
+                    requiresPresentUser: prompt.kind === 'ssh.password' && !handle.sshSubmission?.draft.savedHostId,
                 }, machineId, errorCode: result && !result.ok ? result.error.code : null };
         }
         if (actionId === 'machines.add.ssh.cancel') {
@@ -229,8 +228,6 @@ export function createMachineAddSshTaskAction(runnerOverride?: SystemTaskRunner)
         if (!prompt || snapshot.cancelRequested) return fail('no_prompt');
         if (!handle.sshSubmission) return fail('machine_setup_submission_unavailable');
         if (prompt.kind === 'ssh.password' && !handle.sshSubmission.draft.savedHostId && context.authority !== 'present_user') return fail('present_user_secret_required');
-        if ((prompt.kind === 'auth.approveRemoteProvisioning' || prompt.kind === 'daemon.replaceRemoteBackgroundServices'
-            || prompt.kind === 'releaseChannel.switchDefaultForSetup') && context.authority !== 'present_user') return fail('present_user_required');
         if (answer.kind !== prompt.kind) return fail('prompt_mismatch');
         if (answer.kind === 'ssh.password') {
             return runWithForm(handle.sshSubmission, async form => {

@@ -15,19 +15,26 @@ import {
 import type { LocalDaemonStatusData } from '@/components/settings/machines/localControl/useLocalDaemonControl';
 import { isThisComputerMachineOfHome, resolveMachineAddPaths, type MachineAddPath } from './machineAddPaths';
 
+/**
+ * This computer's machine id as its local daemon reports it (`null` before it has one). Reads the
+ * canonical status projection; it does not start another daemon status task.
+ */
+export function useThisComputerMachineId(taskRunner?: SystemTaskRunner): string | null {
+    const runner = taskRunner ?? getSystemTasksRunner();
+    const subscribe = React.useCallback((listener: () => void) => subscribeLocalDaemonSharedState(runner, listener), [runner]);
+    const read = React.useCallback(() => readLocalDaemonSharedState<LocalDaemonStatusData>(runner), [runner]);
+    return React.useSyncExternalStore(subscribe, read, read).status?.machineId ?? null;
+}
+
 /** Reads the canonical status projection; it does not start another daemon status task. */
 export function useMachineAddPaths(serverId?: string, taskRunner?: SystemTaskRunner): readonly MachineAddPath[] {
     const activeServer = useActiveServerSnapshot();
     const machinesByServer = useMachineListByServerId();
-    const runner = taskRunner ?? getSystemTasksRunner();
-    const subscribe = React.useCallback((listener: () => void) => subscribeLocalDaemonSharedState(runner, listener), [runner]);
-    const read = React.useCallback(() => readLocalDaemonSharedState<LocalDaemonStatusData>(runner), [runner]);
-    const daemon = React.useSyncExternalStore(subscribe, read, read);
+    const thisMachineId = useThisComputerMachineId(taskRunner);
     const device = isDesktopHost() ? 'desktop' : Platform.OS === 'web' ? 'browser' : 'phone';
     const nativeSshAvailable = device === 'phone' && getNativeSshAvailability().available === true;
     const policy = React.useMemo(() => resolveSetupSurfacePolicy().machine, []);
     const machines = machinesByServer[serverId ?? activeServer.serverId];
-    const thisMachineId = daemon.status?.machineId ?? null;
     const joined = isThisComputerMachineOfHome(thisMachineId, machines);
     return React.useMemo(() => resolveMachineAddPaths({
         device, thisComputerJoined: joined, thisComputerMachineId: joined ? thisMachineId : null, nativeSshAvailable, policy,
