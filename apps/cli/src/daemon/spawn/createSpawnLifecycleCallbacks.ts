@@ -222,11 +222,25 @@ export function createSpawnLifecycleCallbacks<
             }
             activationSessionId = normalizedSessionId;
             activationPromise ??= (async () => {
+              const retiredStartupFailure = (): DaemonSpawnStartupReadinessFailure | null =>
+                trackedSession.reportMarkerCustody?.retiring === true
+                  ? trackedSession.spawnStartupReadinessFailure ?? {
+                      type: 'error',
+                      errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK,
+                      errorMessage: 'Runner exited before Connected Account startup custody was ready',
+                    }
+                  : null;
+              const beforeActivation = retiredStartupFailure();
+              if (beforeActivation) return beforeActivation;
               const failure =
                 await params.activateConnectedAccountSessionBindingOnCanonicalSession!(
                   normalizedSessionId,
                 );
               if (failure) return failure;
+              // Exit owns retirement while activation is awaiting its canonical
+              // Session scope. Never republish that target or rearm its cleanup.
+              const afterActivation = retiredStartupFailure();
+              if (afterActivation) return afterActivation;
               if (trackedSession.spawnStartupReadinessFailure) {
                 return trackedSession.spawnStartupReadinessFailure;
               }

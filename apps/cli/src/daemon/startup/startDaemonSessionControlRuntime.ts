@@ -13385,10 +13385,18 @@ export async function startDaemonSessionControlRuntime(
   });
   const isCurrentRuntimeGenerationTarget = (
     target: ConnectedServiceRuntimeTarget,
-  ): boolean =>
-    connectedServiceRuntimeRegistry
+  ): boolean => {
+    // Exit settlement can retain a tracked entry after its purpose lease is
+    // disposed, or remove it before unregistering the target. Registry
+    // membership alone cannot authorize Session rematerialization.
+    if (!connectedServiceRuntimeRegistry.isRunTarget(target)) {
+      const tracked = params.pidToTrackedSession.get(target.pid);
+      if (!tracked || tracked.reportMarkerCustody?.retiring === true) return false;
+    }
+    return connectedServiceRuntimeRegistry
       .listTargets()
       .some((candidate) => candidate === target);
+  };
   const reconciledProjectionByRuntimeTarget = new WeakMap<
     ConnectedServiceRuntimeTarget,
     ConnectedServiceProjectionSnapshot
