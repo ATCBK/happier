@@ -6,6 +6,7 @@
  */
 
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
+import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol';
 
 import {
   SESSION_RUNNER_EXIT_CODES,
@@ -13,6 +14,7 @@ import {
   type SpawnSessionOptions,
 } from '@/session/shared/spawnSessionContract';
 import type { TrackedSession } from '@/daemon/types';
+import { DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE } from '@/mcp/pluginToolCatalogError';
 
 import {
   DEFAULT_INTENDED_RESTART_WINDOW_MS,
@@ -52,6 +54,7 @@ export type SessionRunnerRespawnTerminalReason =
   | 'not_authenticated'
   | 'resume_not_supported'
   | 'session_directory_missing'
+  | 'startup_dependency_failure'
   | 'startup_instructions_cold_resume_unproven'
   | 'stop_requested';
 
@@ -169,6 +172,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   maxDelayMs: number;
   jitterMs: number;
   isSessionAlreadyRunning: (sessionId: string) => boolean | Promise<boolean>;
+  readStartupFailure?: (input: Readonly<{ sessionId: string; trackedSession: TrackedSession }>) => Promise<SessionRuntimeIssueV1 | null>;
   spawnSession: (opts: SpawnSessionOptions) => Promise<unknown>;
   resolveRespawnOptions?: SessionRunnerRespawnOptionsResolver;
   onRespawnSuccess?: (input: Readonly<{
@@ -317,8 +321,9 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     spawnOptions: SpawnSessionOptions,
     vendorResumeId: string,
     event: TerminationEvent,
-    previousPid: number,
+    trackedSession: TrackedSession,
   ) => {
+    const previousPid = trackedSession.pid;
     const state = stateBySessionId.get(sessionId);
     if (!state) return;
 
@@ -340,7 +345,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
       decision.delayMs,
       decision.attempt,
       event,
-      previousPid,
+      trackedSession,
     );
   };
 
@@ -352,29 +357,48 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     delayMs: number,
     attempt: number,
     event: TerminationEvent,
-    previousPid: number,
+    trackedSession: TrackedSession,
   ) => {
+    const previousPid = trackedSession.pid;
     clearTimer(sessionId);
     const existing = stateBySessionId.get(sessionId);
     if (!existing) return;
 
     const timer = setTimeout(() => {
       void (async () => {
-        const finishIfStopRequested = (): boolean => {
+        const finishIfCycleRetired = (): boolean => {
           const stopRequest = stopRequestedBySessionId.get(sessionId);
-          if (!stopRequest) return false;
+          // Explicit Resume can clear Stop while an old Home read is still pending.
+          // Clearing that intent does not revive the retired supervision cycle.
+          if (!stopRequest) return stateBySessionId.get(sessionId) !== existing;
           endRespawnCycle(sessionId);
           params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'stop_requested' });
           return true;
         };
 
         const alreadyRunning = await params.isSessionAlreadyRunning(sessionId);
+        if (finishIfCycleRetired()) return;
         if (alreadyRunning) {
           endRespawnCycle(sessionId);
           params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'already_running' });
           return;
         }
-        if (finishIfStopRequested()) return;
+        const issue = await params.readStartupFailure?.({ sessionId, trackedSession });
+        if (finishIfCycleRetired()) return;
+        const processStartTimeMs = trackedSession.processStartTimeMs;
+        // Home retains the host's typed failure. An older occurrence's issue must not
+        // veto a fresh explicit Resume or a later runner's ordinary crash recovery.
+        if (issue?.scope === 'primary_session' && issue.status === 'failed'
+          && issue.source === 'dependency_failure'
+          && issue.code !== 'preparation_pending'
+          && issue.code !== DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
+          && typeof processStartTimeMs === 'number' && Number.isFinite(processStartTimeMs)
+          && issue.occurredAt >= processStartTimeMs) {
+          endRespawnCycle(sessionId);
+          params.logWarn(`[DAEMON RUN] Respawn suppressed for session ${sessionId} (startup dependency: ${issue.code})`);
+          params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'startup_dependency_failure', detail: issue.code });
+          return;
+        }
 
         // A snapshot resolver receives observed identity separately; do not relabel it as explicit Resume intent.
         const defaultVendorResumeId = params.resolveRespawnOptions ? '' : vendorResumeId;
@@ -386,7 +410,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         const respawnOptions = params.resolveRespawnOptions
           ? await params.resolveRespawnOptions({ sessionId, spawnOptions, vendorResumeId, defaultOptions })
           : defaultOptions;
-        if (finishIfStopRequested()) return;
+        if (finishIfCycleRetired()) return;
 
         params.logDebug(
           `[DAEMON RUN] Respawning runner for session ${sessionId} after ${delayMs}ms (attempt ${attempt})`,
@@ -451,7 +475,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
                   ? `respawn_failed:${String((result as any).errorCode)}`
                   : 'respawn_failed',
             };
-            scheduleRetryFromTermination(sessionId, retrySpawnOptions, vendorResumeId, retryEvent, previousPid);
+            scheduleRetryFromTermination(sessionId, retrySpawnOptions, vendorResumeId, retryEvent, trackedSession);
           })
           .catch((error) => {
             params.logDebug(`[DAEMON RUN] Failed to respawn runner for session ${sessionId}`, error);
@@ -460,16 +484,17 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
               errorName: error instanceof Error ? error.name : 'Error',
               errorMessage: error instanceof Error ? error.message : String(error),
             };
-            scheduleRetryFromTermination(sessionId, retrySpawnOptions, vendorResumeId, retryEvent, previousPid);
+            scheduleRetryFromTermination(sessionId, retrySpawnOptions, vendorResumeId, retryEvent, trackedSession);
           });
       })().catch((error) => {
+        if (stateBySessionId.get(sessionId) !== existing) return;
         params.logDebug(`[DAEMON RUN] Failed to evaluate respawn preflight for session ${sessionId}`, error);
         const retryEvent: TerminationEvent = {
           type: 'spawn_error',
           errorName: error instanceof Error ? error.name : 'Error',
           errorMessage: error instanceof Error ? error.message : String(error),
         };
-        scheduleRetryFromTermination(sessionId, retrySpawnOptions, vendorResumeId, retryEvent, previousPid);
+        scheduleRetryFromTermination(sessionId, retrySpawnOptions, vendorResumeId, retryEvent, trackedSession);
       });
     }, delayMs) as unknown as { unref?: () => void };
     timer.unref?.();
@@ -596,7 +621,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         forceRestart ? 0 : decision.delayMs,
         decision.attempt,
         event,
-        trackedSession.pid,
+        trackedSession,
       );
       return 'scheduled';
     },

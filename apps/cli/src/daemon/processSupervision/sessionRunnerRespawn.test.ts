@@ -17,6 +17,107 @@ type RespawnOptionsResolver = (input: Readonly<{
 }>) => SpawnSessionOptions | Promise<SpawnSessionOptions>;
 
 describe('createSessionRunnerRespawnManager', () => {
+  it('retains a typed startup dependency failure without repeatedly launching the runner', async () => {
+    vi.useFakeTimers();
+    try {
+      const spawnSession = vi.fn(async () => ({ type: 'success' as const, pid: 222 }));
+      const onRespawnTerminal = vi.fn();
+      const issue = { v: 1, scope: 'primary_session', status: 'failed',
+        source: 'dependency_failure', code: 'profile_missing', occurredAt: 1_100,
+        sanitizedPreview: 'Prompt context could not be prepared.' } as const;
+      const manager = createSessionRunnerRespawnManager({
+        enabled: true, maxRestarts: 10, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+        isSessionAlreadyRunning: async () => false, spawnSession, onRespawnTerminal,
+        random: () => 0, logDebug: () => {}, logWarn: () => {},
+        // Home transport returns the retained issue for this exact exited runner.
+        readStartupFailure: async () => issue,
+      });
+      const tracked: TrackedSession = { startedBy: 'daemon', pid: 111,
+        happySessionId: 'startup-failed', processStartTimeMs: 1_000,
+        spawnOptions: { directory: '/repo' } };
+      expect(manager.handleUnexpectedExit(tracked, { reason: 'process-exit', code: 1, signal: null })).toBe('scheduled');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(spawnSession).not.toHaveBeenCalled();
+      expect(onRespawnTerminal).toHaveBeenCalledWith({ sessionId: 'startup-failed', previousPid: 111,
+        reason: 'startup_dependency_failure', detail: 'profile_missing' });
+
+      // Unavailable transport is transient; keep ordinary crash recovery reachable.
+      for (const code of ['preparation_pending', 'daemon_plugin_catalog_unavailable']) {
+        const transientFailure = createSessionRunnerRespawnManager({
+          enabled: true, maxRestarts: 10, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+          isSessionAlreadyRunning: async () => false, spawnSession, onRespawnTerminal,
+          random: () => 0, logDebug: () => {}, logWarn: () => {},
+          readStartupFailure: async () => ({ ...issue, code }),
+        });
+        transientFailure.handleUnexpectedExit(tracked, { reason: 'process-exit', code: 1, signal: null });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(spawnSession).toHaveBeenCalledOnce();
+        spawnSession.mockClear();
+      }
+
+      // Explicit Resume starts a fresh occurrence; Home has no matching startup failure.
+      const fresh = createSessionRunnerRespawnManager({
+        enabled: true, maxRestarts: 10, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+        isSessionAlreadyRunning: async () => false, spawnSession,
+        random: () => 0, logDebug: () => {}, logWarn: () => {},
+        readStartupFailure: async () => issue,
+      });
+      fresh.handleUnexpectedExit({ ...tracked, pid: 333, processStartTimeMs: 2_000 },
+        { reason: 'process-exit', code: 1, signal: null });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(spawnSession).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets Stop veto respawn while the Home startup-failure read is pending', async () => {
+    vi.useFakeTimers();
+    try {
+      let finishRead!: () => void;
+      const pendingRead = new Promise<null>((resolve) => { finishRead = () => resolve(null); });
+      const spawnSession = vi.fn(async () => ({ type: 'success' as const }));
+      const manager = createSessionRunnerRespawnManager({
+        enabled: true, maxRestarts: 10, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+        isSessionAlreadyRunning: async () => false, readStartupFailure: () => pendingRead,
+        spawnSession, random: () => 0, logDebug: () => {}, logWarn: () => {},
+      });
+      manager.handleUnexpectedExit({ startedBy: 'daemon', pid: 111, happySessionId: 'pending-home-read',
+        spawnOptions: { directory: '/repo' } }, { reason: 'process-exit', code: 1, signal: null });
+      await vi.advanceTimersByTimeAsync(50);
+      manager.markStopRequested('pending-home-read', { reason: 'daemon_stop_session', requestedAtMs: 100 });
+      finishRead();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(spawnSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not resume an old preflight after Stop and a fresh explicit Resume clear its stop intent', async () => {
+    vi.useFakeTimers();
+    try {
+      let finishRead!: () => void;
+      const pendingRead = new Promise<null>((resolve) => { finishRead = () => resolve(null); });
+      const spawnSession = vi.fn(async () => ({ type: 'success' as const }));
+      const manager = createSessionRunnerRespawnManager({
+        enabled: true, maxRestarts: 10, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+        isSessionAlreadyRunning: async () => false, readStartupFailure: () => pendingRead,
+        spawnSession, random: () => 0, logDebug: () => {}, logWarn: () => {},
+      });
+      manager.handleUnexpectedExit({ startedBy: 'daemon', pid: 111, happySessionId: 'resume-during-read',
+        spawnOptions: { directory: '/repo' } }, { reason: 'process-exit', code: 1, signal: null });
+      await vi.advanceTimersByTimeAsync(50);
+      manager.markStopRequested('resume-during-read', { reason: 'daemon_stop_session', requestedAtMs: 100 });
+      manager.prepareFreshExplicitResumeAdmission('resume-during-read')();
+      finishRead();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(spawnSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stops automatic managed-folder recovery without carrying forward prior recreation consent', async () => {
     vi.useFakeTimers();
     const onRespawnTerminal = vi.fn();

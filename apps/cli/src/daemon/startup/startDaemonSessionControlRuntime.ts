@@ -2746,12 +2746,14 @@ export async function startDaemonSessionControlRuntime(
     (() => false);
   const resolveSessionAccountContext = async (
     sessionId: string,
+    retainedAttribution?: TrackedSession['requesterWorkAttributionV1'],
   ): Promise<RequesterSessionRuntimeContext | null> => {
     const tracked = findTrackedSessionByHappySessionId(
       params.pidToTrackedSession.values(),
       sessionId,
     );
     const attribution =
+      retainedAttribution ??
       tracked?.requesterWorkAttributionV1 ??
       tracked?.spawnOptions?.requesterWorkAttributionV1;
     const context =
@@ -2781,10 +2783,11 @@ export async function startDaemonSessionControlRuntime(
   const assertSessionAccountCurrent = async (
     sessionId: string,
     expected: RequesterSessionRuntimeContext | null,
+    retainedAttribution?: TrackedSession['requesterWorkAttributionV1'],
   ): Promise<void> => {
     await assertRequesterSessionAccountContextCurrent({
       expected,
-      resolveCurrent: () => resolveSessionAccountContext(sessionId),
+      resolveCurrent: () => resolveSessionAccountContext(sessionId, retainedAttribution),
       readTrackedContext: () =>
         findTrackedSessionByHappySessionId(
           params.pidToTrackedSession.values(),
@@ -5879,6 +5882,19 @@ export async function startDaemonSessionControlRuntime(
     ),
     isSessionAlreadyRunning: async (sessionId) =>
       await isSessionRunnerActive(sessionId),
+    readStartupFailure: async ({ sessionId, trackedSession: tracked }) => {
+      if (typeof tracked.processStartTimeMs !== 'number'
+        || !Number.isFinite(tracked.processStartTimeMs)) return null;
+      const attribution = tracked.requesterWorkAttributionV1 ?? tracked.spawnOptions?.requesterWorkAttributionV1;
+      const context = await resolveSessionAccountContext(sessionId, attribution);
+      const rawSession = await withSessionAccountHome(context, () => fetchSessionByIdCompat({
+        token: context?.bootstrap.credentials.token ?? params.credentials.token,
+        sessionId,
+      }));
+      await assertSessionAccountCurrent(sessionId, context, attribution);
+      return rawSession?.id === sessionId && rawSession.latestTurnStatus === 'failed'
+        ? rawSession.lastRuntimeIssue ?? null : null;
+    },
     spawnSession: spawnSessionForInternalResume,
     resolveRespawnOptions: async (input) =>
       await resolveRespawnSessionOptionsWithRuntimeSnapshot({
