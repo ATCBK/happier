@@ -15,7 +15,7 @@ import { resolveWorkspaceFileUploadTarget } from '@/transfers/targets/resolveWor
 import {
     hashTransferRecoveryTestkitDestination,
     resolveStackTransferFinalizeRecoveryFault,
-} from './transferFinalizeRecoveryFault';
+} from '@/daemon/startup/transferFinalizeRecoveryFault';
 
 const createdRoots: string[] = [];
 

@@ -20,7 +20,7 @@ export async function resolveStackDebugDirectPeerStartServer(input?: Readonly<{
     }
     const module = await (
         input?.loadModule
-        ?? (() => import('@/testkit/transfers/startStackDebugDirectPeerTransferServer'))
+        ?? (() => import('./startStackDebugDirectPeerTransferServer'))
     )();
     return module.startStackDebugDirectPeerTransferServer;
 }
