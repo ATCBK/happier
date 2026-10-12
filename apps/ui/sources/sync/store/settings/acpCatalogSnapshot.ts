@@ -1,6 +1,7 @@
 import type { AcpCatalogRecordV1, AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { AcpCatalogCleanupV1 } from '@happier-dev/protocol/acp/catalog/catalogMutationsV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
 export type AcpCatalogSnapshot = Readonly<{ scope: ServerAccountScope; catalog: AcpCatalogSnapshotV1; data: AcpCatalogRecordV1 | null;
     revision: number | 'absent'; stale: boolean; cleanup?: AcpCatalogCleanupV1 }>;
@@ -13,7 +14,7 @@ export function getAcpCatalogSnapshot(scope: ServerAccountScope | null | undefin
 }
 export function applyAcknowledgedAcpCatalog(scope: ServerAccountScope, record: AcpCatalogRecordV1, revision: number, current: boolean): void {
     const previous = getAcpCatalogSnapshot(scope);
-    if (!current || typeof previous?.revision === 'number' && previous.revision > revision) return;
+    if (!canPublishCatalogReceipt({ current, revision, retainedRevision: previous?.revision })) return;
     snapshots.set(serverAccountScopeKeySuffix(scope), { scope, catalog: loading, data: record, revision, stale: true,
         ...(previous?.cleanup ? { cleanup: previous.cleanup } : {}) });
     for (const listener of [...listeners]) listener();
@@ -52,7 +53,7 @@ export function applyAcpCatalogSnapshot(scope: ServerAccountScope, catalog: AcpC
     if (previous?.catalog === catalog && previous.data === data && previous.stale === stale
         && JSON.stringify(previous.cleanup) === JSON.stringify(retainedCleanup)) return;
     snapshots.set(serverAccountScopeKeySuffix(scope), Object.freeze({ scope, catalog, data, stale,
-        revision: catalog.status === 'ready' ? catalog.revision : previous?.revision ?? 'absent',
+        revision: retainCatalogRevision(catalog, previous?.revision),
         ...(retainedCleanup ? { cleanup: retainedCleanup } : {}) }));
     for (const listener of [...listeners]) listener();
 }

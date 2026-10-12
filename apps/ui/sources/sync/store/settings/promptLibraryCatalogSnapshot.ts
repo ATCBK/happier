@@ -2,6 +2,7 @@ import type { PromptLibraryCatalogSnapshotV1 } from '@happier-dev/protocol/promp
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema, type PromptLibraryCatalogKeyV1, type PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { createRowInventoryReceiptOrdering } from './rowInventoryReceiptOrdering';
 
 export type PromptLibraryValueV1<K extends PromptLibraryCatalogKeyV1> = Extract<PromptLibraryRecordV1, { key: K }>['value'];
 export type PromptLibraryCatalogValueSnapshot<K extends PromptLibraryCatalogKeyV1> = Readonly<{
@@ -14,6 +15,7 @@ export type PromptLibraryCatalogProjection = Readonly<{
 type StoredSnapshot = Readonly<{ scope: ServerAccountScope; projection: PromptLibraryCatalogProjection;
     values: ReadonlyMap<PromptLibraryCatalogKeyV1, PromptLibraryCatalogValueSnapshot<PromptLibraryCatalogKeyV1>> }>;
 const snapshots = new Map<string, StoredSnapshot>();
+const receiptOrdering = createRowInventoryReceiptOrdering();
 const listeners = new Set<() => void>();
 const loading = Object.freeze({ status: 'loading', value: null, revision: 'absent', sourceSettingsVersion: null, stale: true } as const);
 export function subscribePromptLibraryCatalogSnapshots(listener: () => void): () => void {
@@ -34,12 +36,7 @@ export function applyPromptLibraryCatalogAcknowledgedRecord(scope: ServerAccount
     const previous = snapshots.get(scopeKey);
     const old = previous?.values.get(record.key);
     const catalog = previous?.projection.catalog;
-    const recordedRevision = catalog?.status === 'ready' || catalog?.status === 'partial'
-        ? catalog.rows.find(row => row.record.key === record.key)?.revision
-            ?? catalog.tombstones.find(row => row.key === record.key)?.revision
-        : undefined;
-    if ((typeof old?.revision === 'number' && old.revision > revision)
-        || (recordedRevision !== undefined && recordedRevision > revision)) return;
+    if (!receiptOrdering.admit(scope, record.key, revision)) return;
     const values = new Map(previous?.values);
     values.set(record.key, { status: old?.status ?? 'loading', value: record.value,
         revision, sourceSettingsVersion: null, stale: true, reason: 'loading' });
@@ -53,7 +50,21 @@ export function applyPromptLibraryCatalogAcknowledgedRecord(scope: ServerAccount
     for (const listener of [...listeners]) listener();
 }
 export function applyPromptLibraryCatalogSnapshot(scope: ServerAccountScope, projection: PromptLibraryCatalogProjection, current: boolean): void {
-    if (!current || (projection.catalog.status === 'unavailable' && projection.catalog.reason === 'scope-retired')) return;
+    if (!current) return;
+    if (projection.catalog.status === 'unavailable' && projection.catalog.reason === 'scope-retired') {
+        receiptOrdering.clearScope(scope);
+        return;
+    }
+    if (projection.catalog.status === 'unavailable' && ['account-mode-mismatch', 'encryption-material-unavailable',
+        'unauthorized', 'forbidden', 'account-not-found', 'account-inconsistent', 'invalid-stored-content'].includes(projection.catalog.reason)) {
+        receiptOrdering.clearScope(scope);
+    } else if (projection.catalog.status === 'ready' || projection.catalog.status === 'partial') {
+        for (const row of projection.catalog.rows) receiptOrdering.retain(scope, row.record.key, row.revision);
+        for (const row of projection.catalog.tombstones) receiptOrdering.retain(scope, row.key, row.revision);
+        for (const row of projection.catalog.diagnostics) {
+            if (typeof row.revision === 'number') receiptOrdering.retain(scope, row.key, row.revision);
+        }
+    }
     const scopeKey = serverAccountScopeKeySuffix(scope);
     const previous = snapshots.get(scopeKey);
     const values = new Map<PromptLibraryCatalogKeyV1, PromptLibraryCatalogValueSnapshot<PromptLibraryCatalogKeyV1>>();
@@ -89,4 +100,4 @@ export function beginPromptLibraryCatalogLoad(scope: ServerAccountScope): void {
 export function invalidatePromptLibraryCatalogsForServer(serverId: string): void {
     for (const snapshot of snapshots.values()) if (snapshot.scope.serverId === serverId) beginPromptLibraryCatalogLoad(snapshot.scope);
 }
-export function resetPromptLibraryCatalogSnapshotsForTests(): void { snapshots.clear(); listeners.clear(); }
+export function resetPromptLibraryCatalogSnapshotsForTests(): void { snapshots.clear(); receiptOrdering.reset(); listeners.clear(); }

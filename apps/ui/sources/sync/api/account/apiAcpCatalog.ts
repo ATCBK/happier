@@ -78,7 +78,8 @@ export async function readAcpCatalogInContext(context: AcpCatalogAccountContext,
             let capturedSource: AcpCatalogProjection['source'];
             if (row.status === 'present') {
                 const opened = openAcpCatalogContentV1({ mode, material, content: row.content });
-                catalog = opened.status === 'opened' ? { status: 'ready', record: opened.record, revision: row.revision } : opened;
+                catalog = opened.status === 'opened' ? { status: 'ready', record: opened.record, revision: row.revision }
+                    : opened.status === 'partial' ? { ...opened, revision: row.revision } : opened;
             } else if (row.status === 'absent') {
                 const { encryption } = await context.resolveAccountEncryption();
                 const baseline = await readAccountSettingsBaseline({ credentials: context.credentials, encryption, accountMode: mode,
@@ -91,7 +92,8 @@ export async function readAcpCatalogInContext(context: AcpCatalogAccountContext,
                 else {
                     const transfer = prepareAcpCatalogTransferV2({ rawSettings, sourceSettingsVersion: baseline.version, kiroStderrRules: KIRO_ACP_STDERR_RULES });
                     catalog = transfer.status === 'ready' ? { status: 'ready', record: transfer.record, revision: 'absent', source: 'predecessor', sourceSettingsVersion: transfer.sourceSettingsVersion }
-                        : transfer.status === 'partial' ? { status: 'partial', record: transfer.record, reason: transfer.reason, diagnostics: transfer.diagnostics }
+                        : transfer.status === 'partial' ? { status: 'partial', record: transfer.record, reason: transfer.reason,
+                            diagnostics: transfer.diagnostics, revision: 'absent' }
                         : transfer.status === 'unavailable' ? transfer : source;
                 }
             } else if (row.status === 'deleted') catalog = { status: 'ready', record: { v: 1, definitions: [] }, revision: row.revision };

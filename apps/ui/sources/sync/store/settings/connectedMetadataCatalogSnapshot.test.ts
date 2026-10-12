@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ConnectedMetadataCatalogV1 } from '@happier-dev/protocol/connect/connectedMetadataCatalogV1';
 import { connectedAcknowledgementSubjectKeyV1, connectedEntitySubjectKeyV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { connectedServiceProfileKey } from '@happier-dev/protocol/connect/connectedServiceProfilePreferences';
-import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contributionIdentity';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { applyConnectedMetadataCatalogSnapshot, beginConnectedMetadataCatalogLoad, getConnectedMetadataCatalog,
     subscribeConnectedMetadataCatalog } from './connectedMetadataCatalogSnapshot';
 

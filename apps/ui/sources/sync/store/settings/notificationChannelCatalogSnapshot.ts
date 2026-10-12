@@ -1,6 +1,7 @@
 import type { NotificationChannelCatalogSnapshotV1, NotificationChannelRecordV1,
     NotificationChannelCatalogDiagnosticV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
 export type NotificationChannelCatalogProjection = Readonly<{
     catalog: NotificationChannelCatalogSnapshotV1;
@@ -31,7 +32,7 @@ export function getNotificationChannelCatalogValue(scope: ServerAccountScope | n
 export function applyAcknowledgedNotificationChannelCatalog(scope: ServerAccountScope, channels: readonly NotificationChannelRecordV1[],
     revision: number, current: boolean): void {
     const old = getNotificationChannelCatalogValue(scope);
-    if (!current || typeof old.revision === 'number' && old.revision > revision) return;
+    if (!canPublishCatalogReceipt({ current, revision, retainedRevision: old.revision })) return;
     const previous = getNotificationChannelCatalogSnapshot(scope);
     snapshots.set(serverAccountScopeKeySuffix(scope), { scope, projection: { catalog: { status: 'loading' },
         rawSettings: previous?.rawSettings ?? {}, sourceSettingsVersion: previous?.sourceSettingsVersion ?? 0 },
@@ -47,14 +48,14 @@ export function applyNotificationChannelCatalogSnapshot(scope: ServerAccountScop
     if (catalog.status === 'ready' || catalog.status === 'partial') {
         const channels = old && JSON.stringify(old.channels) === JSON.stringify(catalog.channels) ? old.channels : catalog.channels;
         const diagnostics = old && JSON.stringify(old.diagnostics) === JSON.stringify(catalog.diagnostics) ? old.diagnostics : catalog.diagnostics;
-        next = { status: catalog.status, channels, diagnostics, revision: catalog.revision, stale: catalog.status !== 'ready' };
+        next = { status: catalog.status, channels, diagnostics, revision: retainCatalogRevision(catalog, old?.revision), stale: catalog.status !== 'ready' };
     } else {
         const reason = catalog.status === 'loading' ? 'loading' : catalog.reason;
         const withdraw = ['account-not-found', 'account-inconsistent', 'account-mode-mismatch', 'encryption-material-unavailable',
             'invalid-stored-content', 'unauthorized', 'forbidden'].includes(reason);
         next = { status: catalog.status, channels: withdraw ? loading.channels : old?.channels ?? loading.channels,
             diagnostics: withdraw ? loading.diagnostics : old?.diagnostics ?? loading.diagnostics,
-            revision: old?.revision ?? 'absent', stale: true, reason };
+            revision: retainCatalogRevision(catalog, old?.revision), stale: true, reason };
     }
     if (old && JSON.stringify(old) === JSON.stringify(next)) next = old;
     snapshots.set(key, { scope, projection, value: next });

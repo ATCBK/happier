@@ -5,6 +5,7 @@ import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountS
 import type { ArtifactSharingResourceV1 } from '@happier-dev/protocol/artifacts/artifactSharingV1';
 import type { AiLaunchProfile, AiLaunchProfileReadDiagnostic, LegacyProfileRecordPreparationV1 } from '@happier-dev/protocol/profiles/read';
 import type { LegacyProfileTransferResultV1, ProfileTransferSourceCleanupResultV1 } from '@happier-dev/protocol/profiles/transferLegacyProfilesV1';
+import { createRowInventoryReceiptOrdering } from './rowInventoryReceiptOrdering';
 
 export type ProfileCatalogLegacyProjection = Readonly<{
     legacyProfiles?: readonly AiLaunchProfile[];
@@ -24,8 +25,7 @@ export type ProfileCatalogSnapshot = Readonly<{
     source: 'destination' | 'legacy' | null;
 }> & ProfileCatalogLegacyProjection;
 const snapshots = new Map<string, ProfileCatalogSnapshot>();
-// Display-only receipt ordering survives row removal and inventory refresh, but not an authority refusal.
-const acknowledgedRevisionsByScope = new Map<string, Map<string, number>>();
+const receiptOrdering = createRowInventoryReceiptOrdering();
 const listeners = new Set<() => void>();
 const emptyArtifacts: ReadonlyMap<string, ArtifactSharingResourceV1> = new Map();
 const loading: ProfileCatalogSnapshotV1 = Object.freeze({ status: 'loading' });
@@ -55,12 +55,20 @@ export function beginProfileCatalogLoad(scope: ServerAccountScope): void {
 }
 export function applyProfileCatalogSnapshot(scope: ServerAccountScope, catalog: ProfileCatalogSnapshotV1, current: boolean,
     artifactsById: ReadonlyMap<string, ArtifactSharingResourceV1> = emptyArtifacts, legacy: ProfileCatalogLegacyProjection = {}): void {
-    if (!current || (catalog.status === 'unavailable' && catalog.reason === 'scope-retired')) return;
+    if (!current) return;
+    if (catalog.status === 'unavailable' && catalog.reason === 'scope-retired') {
+        receiptOrdering.clearScope(scope);
+        return;
+    }
     const previous = getProfileCatalogSnapshot(scope);
     const refused = catalog.status === 'unavailable' && ['unauthorized', 'forbidden', 'account-mode-mismatch',
         'account-not-found', 'account-inconsistent', 'encryption-material-unavailable'].includes(catalog.reason);
     if (refused || ((catalog.status === 'ready' || catalog.status === 'partial') && catalog.source !== 'destination')) {
-        acknowledgedRevisionsByScope.delete(serverAccountScopeKeySuffix(scope));
+        receiptOrdering.clearScope(scope);
+    } else if (catalog.status === 'ready' || catalog.status === 'partial') {
+        for (const row of catalog.records) receiptOrdering.retain(scope, row.record.id, row.revision);
+        for (const row of catalog.tombstones ?? []) receiptOrdering.retain(scope, row.id, row.revision);
+        for (const row of catalog.diagnostics) receiptOrdering.retain(scope, row.id, row.revision);
     }
     let data = refused ? null : previous?.data ?? null;
     if (catalog.status === 'ready' || catalog.status === 'partial') {
@@ -88,7 +96,7 @@ export function applyProfileCatalogSnapshot(scope: ServerAccountScope, catalog: 
     publish({ scope, catalog, data, dataComplete, stale: catalog.status !== 'ready',
         artifactsById: refused ? emptyArtifacts : !ready ? previousArtifacts ?? emptyArtifacts
             : sameArtifacts ? previousArtifacts : artifactsById,
-        source: ready ? catalog.source ?? null : null,
+        source: refused ? null : ready ? catalog.source ?? null : previous?.source ?? null,
         legacyProfiles: previous && JSON.stringify(previous.legacyProfiles) === JSON.stringify(legacyProfiles) ? previous.legacyProfiles : legacyProfiles,
         legacyDiagnostics: previous && JSON.stringify(previous.legacyDiagnostics) === JSON.stringify(legacyDiagnostics) ? previous.legacyDiagnostics : legacyDiagnostics,
         transfer: previous && JSON.stringify(previous.transfer) === JSON.stringify(transfer) ? previous.transfer : transfer,
@@ -101,13 +109,7 @@ export function applyAcknowledgedProfileRecord(scope: ServerAccountScope,
     const previous = getProfileCatalogSnapshot(scope);
     if (!current || !previous?.data || previous.source !== 'destination') return;
     const existing = previous.data.find(row => row.record.id === input.id);
-    const key = serverAccountScopeKeySuffix(scope);
-    const revisions = acknowledgedRevisionsByScope.get(key) ?? new Map<string, number>();
-    const acknowledgedRevision = revisions.get(input.id);
-    if ((existing && existing.revision >= input.revision)
-        || (acknowledgedRevision !== undefined && acknowledgedRevision >= input.revision)) return;
-    revisions.set(input.id, input.revision);
-    acknowledgedRevisionsByScope.set(key, revisions);
+    if (!receiptOrdering.admit(scope, input.id, input.revision)) return;
     const record = input.record;
     const data = record ? previous.data.map(row => row.record.id === input.id ? { record, revision: input.revision } : row)
         : previous.data.filter(row => row.record.id !== input.id);
@@ -128,4 +130,4 @@ export function applyAcknowledgedProfileArtifact(scope: ServerAccountScope, arti
 export function invalidateProfileCatalogsForServer(serverId: string): void {
     for (const snapshot of snapshots.values()) if (snapshot.scope.serverId === serverId) beginProfileCatalogLoad(snapshot.scope);
 }
-export function resetProfileCatalogSnapshotsForTests(): void { snapshots.clear(); acknowledgedRevisionsByScope.clear(); listeners.clear(); }
+export function resetProfileCatalogSnapshotsForTests(): void { snapshots.clear(); receiptOrdering.reset(); listeners.clear(); }

@@ -5,6 +5,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { subscribeHomeCredentialChange, type HomeCredentialMutationEvent } from '@/sync/runtime/orchestration/homeAccountChange';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { parseToken } from '@/utils/auth/parseToken';
+import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
 /** Public key evidence from a read admitted under persisted E2EE mode; never retained key bytes. */
 export type ProviderCatalogCryptoAdmission = Readonly<{ contentPublicKeyFingerprint: string }>;
@@ -62,7 +63,7 @@ export function getProviderCatalogSnapshot(scope: ServerAccountScope | null | un
 export function applyAcknowledgedProviderCatalog(scope: ServerAccountScope, data: ProviderConnectionsCatalogV1, revision: number,
     current: boolean, cryptoAdmission: ProviderCatalogCryptoAdmission | null): void {
     const previous = getProviderCatalogSnapshot(scope);
-    if (!current || typeof previous?.revision === 'number' && previous.revision > revision) return;
+    if (!canPublishCatalogReceipt({ current, revision, retainedRevision: previous?.revision })) return;
     snapshots.set(serverAccountScopeKeySuffix(scope), { scope, status: 'loading', catalog: { status: 'loading' },
         data, revision, stale: true, cryptoAdmission });
     syncCredentialSubscription();
@@ -78,7 +79,7 @@ export function applyProviderCatalogSnapshot(scope: ServerAccountScope, catalog:
     const candidate = catalog.status === 'ready' || catalog.status === 'partial' ? catalog.catalog : withdraw ? null : old?.data ?? null;
     const data = old?.data && JSON.stringify(old.data) === JSON.stringify(candidate) ? old.data : candidate;
     const next: ProviderCatalogSnapshot = { scope: old?.scope ?? scope, catalog, status: catalog.status, data,
-        revision: catalog.status === 'ready' || catalog.status === 'partial' ? catalog.revision : old?.revision ?? 'absent',
+        revision: retainCatalogRevision(catalog, old?.revision),
         stale: catalog.status !== 'ready',
         cryptoAdmission: !data ? null : catalog.status === 'ready' || catalog.status === 'partial'
             ? cryptoAdmission : old?.cryptoAdmission ?? null };

@@ -2,6 +2,34 @@ import { describe, expect, it } from 'vitest';
 import * as owner from './profileCatalogSnapshot';
 
 describe('scoped Profile publication', () => {
+    it('publishes a higher acknowledged row after transient revalidation failure without certifying the inventory', () => {
+        const scope = { serverId: 'failed-revalidation-ack', accountId: 'account' };
+        const record = { v: 1 as const, id: 'p', definition: { kind: 'artifact' as const, artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} };
+        owner.applyProfileCatalogSnapshot(scope, { status: 'ready', authority: 'inactive', source: 'destination',
+            control: null, controlRevision: 'absent', records: [{ record, revision: 10 }], diagnostics: [], referenceGuardRevision: 1 }, true);
+        owner.applyProfileCatalogSnapshot(scope, { status: 'unavailable', reason: 'unreachable' }, true);
+        owner.applyAcknowledgedProfileRecord(scope, { id: 'p', record: { ...record, enabled: false }, revision: 11 }, true);
+        expect(owner.getProfileCatalogSnapshot(scope)).toMatchObject({ source: 'destination', stale: true,
+            catalog: { status: 'loading' }, data: [{ revision: 11, record: { enabled: false } }] });
+    });
+    it('retains row evidence from a partial inventory after empty refresh and failed revalidation', () => {
+        const scope = { serverId: 'inventory-evidence', accountId: 'account' };
+        const record = { v: 1 as const, id: 'p', definition: { kind: 'artifact' as const, artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} };
+        const catalog = { status: 'partial' as const, authority: 'inactive' as const, source: 'destination' as const,
+            control: null, controlRevision: 'absent' as const, records: [{ record, revision: 10 }], diagnostics: [], referenceGuardRevision: 1 };
+        owner.applyProfileCatalogSnapshot(scope, catalog, true);
+        owner.applyProfileCatalogSnapshot(scope, { ...catalog, status: 'ready', records: [] }, true);
+        owner.applyProfileCatalogSnapshot(scope, { status: 'unavailable', reason: 'unreachable' }, true);
+        const empty = owner.getProfileCatalogSnapshot(scope);
+        owner.applyAcknowledgedProfileRecord(scope, { id: 'p', record, revision: 6 }, true);
+        expect(owner.getProfileCatalogSnapshot(scope)).toBe(empty);
+        owner.beginProfileCatalogLoad(scope);
+        owner.applyProfileCatalogSnapshot(scope, { ...catalog, status: 'ready', records: [] }, true);
+        owner.applyAcknowledgedProfileRecord(scope, { id: 'p', record, revision: 10 }, true);
+        expect(owner.getProfileCatalogSnapshot(scope)?.data).toEqual([]);
+        owner.applyAcknowledgedProfileRecord(scope, { id: 'p', record, revision: 11 }, true);
+        expect(owner.getProfileCatalogSnapshot(scope)?.data).toMatchObject([{ revision: 11 }]);
+    });
     it('retains an acknowledged Artifact body without publishing older or retired evidence', () => {
         const scope = { serverId: 'artifact-ack-home', accountId: 'account' };
         const record = { v: 1 as const, id: 'p', definition: { kind: 'artifact' as const, artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} };

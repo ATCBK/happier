@@ -5,6 +5,7 @@ import type { SavedSecretCatalogCorruptEntryV1, SavedSecretCatalogEntryV1 } from
 import {
     applySavedSecretCatalogFailure,
     applySavedSecretCatalogPage,
+    applyAcknowledgedSavedSecretCatalogEntry,
     beginSavedSecretCatalogLoad,
     getSavedSecretCatalogSnapshot,
     invalidateSavedSecretCatalog,
@@ -36,6 +37,78 @@ function sharedEntry(overrides?: Partial<SavedSecretCatalogEntryV1>): SavedSecre
 
 describe('savedSecretCatalogSnapshot', () => {
     beforeEach(() => resetSavedSecretCatalogSnapshotsForTests());
+
+    it.each(['delete', 'empty refresh', 'failed revalidation'] as const)('rejects a delayed update receipt after %s without restoring material', phase => {
+        const entry = sharedEntry({ revision: 5 });
+        applySavedSecretCatalogPage({ scope, entries: [entry], observedAt: 10 });
+        removeDeletedSavedSecretCatalogResource(scope, 'resource-a');
+        if (phase !== 'delete') applySavedSecretCatalogPage({ scope, entries: [], observedAt: 11 });
+        if (phase === 'failed revalidation') {
+            beginSavedSecretCatalogLoad(scope);
+            applySavedSecretCatalogFailure({ scope, error: { kind: 'unreachable', retryable: true } });
+        }
+        const deleted = getSavedSecretCatalogSnapshot(scope);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, { ...entry, revision: 4, name: 'Late update' }, true);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, entry, true);
+        expect(getSavedSecretCatalogSnapshot(scope)).toBe(deleted);
+        expect(getSavedSecretCatalogSnapshot(scope)?.data).toEqual([]);
+        expect(resolveSavedSecretReference(scope, [], entry.ref).secret).toBeNull();
+    });
+
+    it('retains admitted inventory evidence through an empty refresh and orders independent Account receipts', () => {
+        const entry = sharedEntry({ revision: 10 });
+        applySavedSecretCatalogPage({ scope, entries: [entry], observedAt: 10 });
+        applySavedSecretCatalogPage({ scope, entries: [], observedAt: 11 });
+        const empty = getSavedSecretCatalogSnapshot(scope);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, { ...entry, revision: 6 }, true);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, { ...entry, revision: 11 }, false);
+        expect(getSavedSecretCatalogSnapshot(scope)).toBe(empty);
+        const otherScope = { ...scope, accountId: 'other-account' };
+        applyAcknowledgedSavedSecretCatalogEntry(otherScope, { ...entry, revision: 6 }, true);
+        expect(getSavedSecretCatalogSnapshot(otherScope)?.data).toMatchObject([{ revision: 6 }]);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, { ...entry, revision: 11 }, true);
+        const acknowledged = getSavedSecretCatalogSnapshot(scope);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, { ...entry, revision: 11, name: 'Duplicate' }, true);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, entry, true);
+        expect(getSavedSecretCatalogSnapshot(scope)).toBe(acknowledged);
+        expect(acknowledged).toMatchObject({ stale: true, materializedSecrets: [], data: [{ revision: 11 }] });
+    });
+
+    it('admits authoritative recreation without allowing a late pre-delete update to publish', () => {
+        const entry = sharedEntry({ revision: 5 });
+        applySavedSecretCatalogPage({ scope, entries: [entry], observedAt: 10 });
+        removeDeletedSavedSecretCatalogResource(scope, 'resource-a');
+        const recreated = sharedEntry({ revision: 1, name: 'Recreated resource' });
+        applySavedSecretCatalogPage({ scope, entries: [recreated], observedAt: 11 });
+        const current = getSavedSecretCatalogSnapshot(scope);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, { ...entry, revision: 4 }, true);
+        expect(getSavedSecretCatalogSnapshot(scope)).toBe(current);
+        expect(current?.data).toEqual([recreated]);
+    });
+
+    it('clears ordering evidence after authoritative refusal before a replacement inventory', () => {
+        const entry = sharedEntry({ revision: 10 });
+        applySavedSecretCatalogPage({ scope, entries: [entry], observedAt: 10 });
+        applySavedSecretCatalogFailure({ scope, error: { kind: 'unauthorized', retryable: false } });
+        applySavedSecretCatalogPage({ scope, entries: [], observedAt: 11 });
+        applyAcknowledgedSavedSecretCatalogEntry(scope, { ...entry, revision: 2 }, true);
+        expect(getSavedSecretCatalogSnapshot(scope)?.data).toMatchObject([{ revision: 2 }]);
+    });
+
+    it('uses the admitted delete revision when the removed resource was not in the displayed inventory', () => {
+        applySavedSecretCatalogPage({ scope, entries: [], observedAt: 10 });
+        removeDeletedSavedSecretCatalogResource(scope, 'resource-a', 5);
+        const deleted = getSavedSecretCatalogSnapshot(scope);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, sharedEntry({ revision: 4 }), true);
+        applyAcknowledgedSavedSecretCatalogEntry(scope, sharedEntry({ revision: 5 }), true);
+        expect(getSavedSecretCatalogSnapshot(scope)).toBe(deleted);
+
+        applySavedSecretCatalogPage({ scope, entries: [sharedEntry({ revision: 6 })], observedAt: 11 });
+        const newer = getSavedSecretCatalogSnapshot(scope);
+        removeDeletedSavedSecretCatalogResource(scope, 'resource-a', 5);
+        removeDeletedSavedSecretCatalogResource(scope, 'resource-a', 6, false);
+        expect(getSavedSecretCatalogSnapshot(scope)).toBe(newer);
+    });
 
     it('resolves an extant reserved-reference personal record before shared catalog interpretation', () => {
         const ref = 'happier:shared-secret:v1:legacy-personal';

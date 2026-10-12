@@ -4,6 +4,7 @@ import { observeRemoteHostCatalog } from '@/sync/engine/settings/remoteHostCatal
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import { isAuthoritativeScopedSnapshotRefusalKind } from '@/sync/domains/scope/scopedSnapshotFacts';
+import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
 export type RemoteHostCatalogSnapshot = Readonly<{
     scope: ServerAccountScope;
@@ -18,8 +19,7 @@ const loading: RemoteHostCatalogSnapshotV1 = Object.freeze({ status: 'loading' }
 function publish(next: RemoteHostCatalogSnapshot): void {
     const key = serverAccountScopeKeySuffix(next.scope);
     const previous = snapshots.get(key);
-    next = { ...next, revision: next.revision ?? (next.catalog.status === 'ready' || next.catalog.status === 'partial'
-        ? next.catalog.revision : previous?.revision ?? 'absent') };
+    next = { ...next, revision: next.revision ?? retainCatalogRevision(next.catalog, previous?.revision) };
     if (previous?.catalog === next.catalog && previous.data === next.data && previous.stale === next.stale
         && previous.revision === next.revision) return;
     snapshots.set(key, Object.freeze(next));
@@ -35,7 +35,7 @@ export function getRemoteHostCatalogSnapshot(scope: ServerAccountScope | null | 
 export function applyAcknowledgedRemoteHostCatalog(scope: ServerAccountScope, hosts: readonly RemoteHostRecordV1[], revision: number,
     current: boolean): void {
     const previous = getRemoteHostCatalogSnapshot(scope);
-    if (!current || typeof previous?.revision === 'number' && previous.revision > revision) return;
+    if (!canPublishCatalogReceipt({ current, revision, retainedRevision: previous?.revision })) return;
     publish({ scope, catalog: loading, data: hosts, revision, stale: true });
 }
 export function beginRemoteHostCatalogLoad(scope: ServerAccountScope): void {

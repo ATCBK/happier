@@ -1,0 +1,74 @@
+import { describe, expect, it } from 'vitest';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 as providers } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { applyAcknowledgedMcpServerCatalog, applyMcpServerCatalogSnapshot, getMcpServerCatalogSnapshot } from './mcpServerCatalogSnapshot';
+import { applyAcknowledgedAcpCatalog, applyAcpCatalogSnapshot, getAcpCatalogSnapshot } from './acpCatalogSnapshot';
+import { applyAcknowledgedProviderCatalog, applyProviderCatalogSnapshot, getProviderCatalogSnapshot } from './providerCatalogSnapshot';
+import { applyAcknowledgedConnectedAccountCatalog, applyConnectedAccountCatalogSnapshot, getConnectedAccountCatalogValue } from './connectedAccountCatalogSnapshot';
+import { applyAcknowledgedConnectedMetadata, applyConnectedMetadataCatalogSnapshot, getConnectedMetadataCatalog } from './connectedMetadataCatalogSnapshot';
+import { applyAcknowledgedNotificationChannelCatalog, applyNotificationChannelCatalogSnapshot, getNotificationChannelCatalogValue } from './notificationChannelCatalogSnapshot';
+import { applyAcknowledgedRemoteHostCatalog, applyRemoteHostCatalogSnapshot, getRemoteHostCatalogSnapshot } from './remoteHostCatalogSnapshot';
+
+const mcp = { v: 1 as const, servers: [], bindings: [] };
+const acp = { v: 1 as const, definitions: [] };
+const configuration = { key: 'configurations' as const, value: { v: 1 as const, entries: [] } };
+const cases = [
+    { domain: 'MCP', seed: (scope: ServerAccountScope) => applyMcpServerCatalogSnapshot(scope,
+        { status: 'partial', authority: 'active', revision: 10, catalog: mcp, diagnostics: [] }, true),
+        fail: (scope: ServerAccountScope) => applyMcpServerCatalogSnapshot(scope, { status: 'unavailable', reason: 'unreachable' }, true),
+        ack: (scope: ServerAccountScope, revision: number, current: boolean) => applyAcknowledgedMcpServerCatalog(scope, mcp, revision, current),
+        read: getMcpServerCatalogSnapshot },
+    { domain: 'ACP', seed: (scope: ServerAccountScope) => applyAcpCatalogSnapshot(scope,
+        { status: 'partial', reason: 'incomplete-inventory', revision: 10, record: acp, diagnostics: [] }, true),
+        fail: (scope: ServerAccountScope) => applyAcpCatalogSnapshot(scope, { status: 'unavailable', reason: 'unreachable' }, true),
+        ack: (scope: ServerAccountScope, revision: number, current: boolean) => applyAcknowledgedAcpCatalog(scope, acp, revision, current),
+        read: getAcpCatalogSnapshot },
+    { domain: 'Provider', seed: (scope: ServerAccountScope) => applyProviderCatalogSnapshot(scope,
+        { status: 'partial', revision: 10, catalog: providers, diagnostics: [] }, true),
+        fail: (scope: ServerAccountScope) => applyProviderCatalogSnapshot(scope, { status: 'unavailable', reason: 'unreachable' }, true),
+        ack: (scope: ServerAccountScope, revision: number, current: boolean) => applyAcknowledgedProviderCatalog(scope, providers, revision, current, null),
+        read: getProviderCatalogSnapshot },
+    { domain: 'Connected configurations', seed: (scope: ServerAccountScope) => applyConnectedAccountCatalogSnapshot(scope, 'configurations',
+        { status: 'partial', authority: 'active', revision: 10, record: configuration, diagnostics: [] }, true),
+        fail: (scope: ServerAccountScope) => applyConnectedAccountCatalogSnapshot(scope, 'configurations', { status: 'unavailable', reason: 'unreachable' }, true),
+        ack: (scope: ServerAccountScope, revision: number, current: boolean) => applyAcknowledgedConnectedAccountCatalog(scope, configuration, revision, current),
+        read: (scope: ServerAccountScope) => getConnectedAccountCatalogValue(scope, 'configurations') },
+    { domain: 'Connected metadata', seed: (scope: ServerAccountScope) => applyConnectedMetadataCatalogSnapshot(scope,
+        { presentation: { status: 'partial', revision: 10, entries: [], diagnostics: [] }, acknowledgements: { status: 'loading' }, disclosure: [] }, true),
+        fail: (scope: ServerAccountScope) => applyConnectedMetadataCatalogSnapshot(scope,
+            { presentation: { status: 'unavailable', reason: 'unreachable' }, acknowledgements: { status: 'loading' }, disclosure: [] }, true),
+        ack: (scope: ServerAccountScope, revision: number, current: boolean) => applyAcknowledgedConnectedMetadata(scope,
+            { kind: 'presentation', record: { v: 1, entries: [] } }, revision, current),
+        read: getConnectedMetadataCatalog },
+    { domain: 'Notifications', seed: (scope: ServerAccountScope) => applyNotificationChannelCatalogSnapshot(scope,
+        { catalog: { status: 'partial', revision: 10, channels: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 0 }, true),
+        fail: (scope: ServerAccountScope) => applyNotificationChannelCatalogSnapshot(scope,
+            { catalog: { status: 'unavailable', reason: 'unreachable' }, rawSettings: {}, sourceSettingsVersion: 0 }, true),
+        ack: (scope: ServerAccountScope, revision: number, current: boolean) => applyAcknowledgedNotificationChannelCatalog(scope, [], revision, current),
+        read: getNotificationChannelCatalogValue },
+    { domain: 'Remote hosts', seed: (scope: ServerAccountScope) => applyRemoteHostCatalogSnapshot(scope,
+        { status: 'partial', revision: 10, hosts: [], diagnostics: [] }, true),
+        fail: (scope: ServerAccountScope) => applyRemoteHostCatalogSnapshot(scope, { status: 'unavailable', reason: 'unreachable' }, true),
+        ack: (scope: ServerAccountScope, revision: number, current: boolean) => applyAcknowledgedRemoteHostCatalog(scope, [], revision, current),
+        read: getRemoteHostCatalogSnapshot },
+];
+
+describe('whole-catalog receipt ordering at snapshot owners', () => {
+    it.each(cases)('$domain retains partial revision through failed revalidation, admitting only current nonolder receipts', ({ domain, seed, fail, ack, read }) => {
+        const scope = { serverId: `whole-order-${domain}`, accountId: 'owner' };
+        seed(scope);
+        fail(scope);
+        const retained = read(scope);
+        ack(scope, 6, true);
+        expect(read(scope)).toBe(retained);
+        ack(scope, 11, false);
+        expect(read(scope)).toBe(retained);
+        ack({ ...scope, accountId: 'foreign' }, 6, true);
+        expect(read(scope)).toBe(retained);
+        ack(scope, 11, true);
+        expect(read(scope)).not.toBe(retained);
+        const newer = read(scope);
+        ack(scope, 10, true);
+        expect(read(scope)).toBe(newer);
+    });
+});

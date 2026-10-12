@@ -1,6 +1,7 @@
 import type { McpServerCatalogSnapshotV1, McpServerCatalogSourceCleanupV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import type { McpServerCatalogV1, McpServerCatalogDiagnosticV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
 export type McpServerCatalogValueSnapshot = Readonly<{
     status: 'loading' | 'ready' | 'partial' | 'unavailable'; value: McpServerCatalogV1 | null;
@@ -21,7 +22,7 @@ export function getMcpServerCatalogSnapshot(scope: ServerAccountScope | null | u
 }
 export function applyAcknowledgedMcpServerCatalog(scope: ServerAccountScope, catalog: McpServerCatalogV1, revision: number, current: boolean): void {
     const previous = getMcpServerCatalogSnapshot(scope);
-    if (!current || typeof previous.revision === 'number' && previous.revision > revision) return;
+    if (!canPublishCatalogReceipt({ current, revision, retainedRevision: previous.revision })) return;
     snapshots.set(serverAccountScopeKeySuffix(scope), { scope, value: { status: 'loading', value: catalog,
         revision, authority: 'active', stale: true, diagnostics: [], reason: 'loading',
         ...(previous.cleanup ? { cleanup: previous.cleanup } : {}) } });
@@ -33,13 +34,13 @@ export function projectMcpServerCatalogSnapshot(snapshot: McpServerCatalogSnapsh
     if (snapshot.status === 'ready' || snapshot.status === 'partial') {
         const value = previous?.value && JSON.stringify(previous.value) === JSON.stringify(snapshot.catalog)
             ? previous.value : snapshot.catalog;
-        next = { status: snapshot.status, value, revision: snapshot.revision, authority: snapshot.authority,
+        next = { status: snapshot.status, value, revision: retainCatalogRevision(snapshot, previous?.revision), authority: snapshot.authority,
             stale: false, diagnostics: snapshot.diagnostics, ...(snapshot.cleanup ? { cleanup: snapshot.cleanup } : {}) };
     } else {
         const withdraw = snapshot.status === 'unavailable' && ['account-mode-mismatch', 'encryption-material-unavailable',
             'unauthorized', 'forbidden', 'account-not-found', 'account-inconsistent', 'invalid-stored-content', 'scope-retired'].includes(snapshot.reason);
         next = { status: snapshot.status, value: withdraw ? null : previous?.value ?? null,
-            revision: previous?.revision ?? 'absent', authority: previous?.authority ?? 'inactive', stale: true,
+            revision: retainCatalogRevision(snapshot, previous?.revision), authority: previous?.authority ?? 'inactive', stale: true,
             diagnostics: [], ...(snapshot.status === 'unavailable' ? { reason: snapshot.reason } : {}) };
     }
     return previous && JSON.stringify(previous) === JSON.stringify(next) ? previous : next;
