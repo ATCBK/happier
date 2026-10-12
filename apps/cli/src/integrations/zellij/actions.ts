@@ -5,6 +5,7 @@ import {
   remainingTerminalHostDeadlineMs,
 } from '../terminalHost/deadline';
 import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { acquireZellijActionSlot } from './actionLimiter';
 
 export type ZellijCommandResult = Readonly<{ exitCode: number; stdout: string; stderr: string }>;
@@ -157,23 +158,24 @@ function runZellijUnbounded(
     let settled = false;
     let timedOut = false;
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    let timeoutKillGrace: ReturnType<typeof setTimeout> | undefined;
     const timeoutError = () => new ZellijActionTimeoutError(options?.action ?? args[0] ?? 'command');
     const finish = (callback: () => void) => {
       if (settled) return;
       settled = true;
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
-      if (timeoutKillGrace !== undefined) clearTimeout(timeoutKillGrace);
       callback();
     };
     timeoutHandle = options?.timeoutMs !== undefined && options.timeoutMs > 0
       ? setTimeout(() => {
           timedOut = true;
-          terminateZellijChild(child);
-          timeoutKillGrace = setTimeout(() => {
-            finish(() => reject(timeoutError()));
-          }, ZELLIJ_TIMEOUT_KILL_GRACE_MS);
-          timeoutKillGrace.unref?.();
+          // Keep admission custody until the shared owner verifies cleanup or reports it incomplete.
+          void terminateProcessTree(child, {
+            graceMs: ZELLIJ_TIMEOUT_KILL_GRACE_MS,
+            ownedProcessGroup: detached,
+          }).then(
+            () => finish(() => reject(timeoutError())),
+            (error: unknown) => finish(() => reject(error)),
+          );
         }, options.timeoutMs)
       : undefined;
     timeoutHandle?.unref?.();
@@ -184,13 +186,12 @@ function runZellijUnbounded(
     child.stderr?.on('data', (chunk) => {
       stderr += chunk.toString();
     });
-    child.on('error', (error) => finish(() => reject(timedOut ? timeoutError() : error)));
+    child.on('error', (error) => {
+      if (!timedOut) finish(() => reject(error));
+    });
     child.on('close', (code) => {
+      if (timedOut) return;
       finish(() => {
-        if (timedOut) {
-          reject(timeoutError());
-          return;
-        }
         resolve({ exitCode: code ?? 1, stdout, stderr });
       });
     });
@@ -217,18 +218,6 @@ function runZellijForeground(
     child.on('error', (error) => finish(() => reject(error)));
     child.on('close', (code) => finish(() => resolve({ exitCode: code ?? 1, stdout: '', stderr: '' })));
   });
-}
-
-function terminateZellijChild(child: ReturnType<typeof spawn>): void {
-  if (process.platform !== 'win32' && child.pid) {
-    try {
-      process.kill(-child.pid, 'SIGTERM');
-    } catch {
-      // Fall through to direct child signaling. The process may already have exited or may not
-      // have a process group on older/embedded runtimes.
-    }
-  }
-  child.kill();
 }
 
 async function requireSuccess(result: ZellijCommandResult, action: string): Promise<void> {

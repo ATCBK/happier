@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { prepareTmuxWindowLaunch } from './windowLaunchScript';
 import { logger } from '@/ui/logger';
 import { createHerdrLaunchSpec } from '../herdr/launchSpec';
+import { getHappierTempDirOwnerPath } from '@happier-dev/cli-common/tempDirs';
 
 const writeBoundary = vi.hoisted((): { failure: Error | null; directory: string } => ({ failure: null, directory: '' }));
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -16,7 +17,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return {
     ...fs,
     writeFile: async (...args: Parameters<typeof fs.writeFile>) => {
-      if (writeBoundary.failure && /happier-(?:tmux-window|terminal-launch)-/.test(String(args[0]))) {
+      if (writeBoundary.failure && /[/\\](?:tmux-window|terminal-launch)-/.test(String(args[0]))) {
         writeBoundary.directory = dirname(String(args[0]));
         await fs.writeFile(join(writeBoundary.directory, 'unexpected'), 'retained');
         throw writeBoundary.failure;
@@ -49,6 +50,7 @@ describe('prepareTmuxWindowLaunch', () => {
       if (writeBoundary.directory) {
         await unlink(join(writeBoundary.directory, 'unexpected'));
         await rmdir(writeBoundary.directory);
+        await unlink(getHappierTempDirOwnerPath(writeBoundary.directory));
         writeBoundary.directory = '';
       }
     }
@@ -71,6 +73,7 @@ describe('prepareTmuxWindowLaunch', () => {
       await unlink(unexpected).catch(() => undefined);
       await unlink(scriptPath).catch(() => undefined);
       await rmdir(directory).catch(() => undefined);
+      await unlink(getHappierTempDirOwnerPath(directory)).catch(() => undefined);
     }
   });
 

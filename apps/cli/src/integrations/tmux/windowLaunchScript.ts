@@ -1,6 +1,6 @@
-import { mkdtemp, rmdir, unlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rmdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHappierTempDir, getHappierTempDirOwnerPath } from '@happier-dev/cli-common/tempDirs';
 
 import {
   buildPosixShellCommand,
@@ -26,7 +26,7 @@ export async function prepareTmuxWindowLaunch(input: Readonly<{
   unsetEnvKeys: readonly string[];
   readySignal: string;
 }>): Promise<PreparedTmuxWindowLaunch> {
-  const directory = await mkdtemp(join(tmpdir(), 'happier-tmux-window-'));
+  const directory = createHappierTempDir({ purpose: 'tmux-window' });
   const scriptPath = join(directory, 'launch.sh');
   const cleanup = async () => {
     try {
@@ -35,6 +35,7 @@ export async function prepareTmuxWindowLaunch(input: Readonly<{
       };
       await unlink(scriptPath).catch(ignoreMissing);
       await rmdir(directory).catch(ignoreMissing);
+      await unlink(getHappierTempDirOwnerPath(directory)).catch(ignoreMissing);
     } catch (error) {
       logger.infoFile('[tmux] Private launch cleanup incomplete (tmux_launch_cleanup_incomplete)');
       throw error;
@@ -47,6 +48,7 @@ export async function prepareTmuxWindowLaunch(input: Readonly<{
       ...(input.unsetEnvKeys.length > 0 ? [`unset ${input.unsetEnvKeys.join(' ')}`] : []),
       buildPosixShellCommand(['rm', '-f', '--', scriptPath]),
       `${buildPosixShellCommand(['rmdir', '--', directory])} 2>/dev/null || true`,
+      buildPosixShellCommand(['rm', '-f', '--', getHappierTempDirOwnerPath(directory)]),
       `${buildPosixShellCommand(['tmux', 'wait-for', '-S', input.readySignal])} || exit $?`,
       ...(assignments.length > 0 ? [`export ${assignments}`] : []),
       `exec ${buildPosixShellCommand(input.args)}`,

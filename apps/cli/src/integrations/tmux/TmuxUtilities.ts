@@ -1,4 +1,5 @@
 import { spawn, type SpawnOptions } from 'child_process';
+import { classifySpawnFailure, spawnFailureMessage, SpawnFailureError, type SpawnFailure, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 import { randomUUID } from 'node:crypto';
 import { TerminalHostCreationError, type TerminalHostCreationDisposition } from '../terminal/host/errors';
 
@@ -64,6 +65,7 @@ export interface TmuxSpawnOptions<TCommitRefusal = never> extends Omit<SpawnOpti
    * current create-window attempt and is returned verbatim to the caller.
    */
   beforeCreateWindow?: () => Promise<TCommitRefusal | null>;
+  readSpawnFailureLimits?: SpawnFailureLimitsReader;
   // Note: env is intentionally excluded from this interface.
   // It is passed separately so spawnInTmux can keep values out of tmux
   // client arguments while installing the exact window environment.
@@ -87,6 +89,7 @@ export type TmuxSpawnResult<TCommitRefusal = never> =
       creationDisposition: TmuxWindowCreationDisposition;
       cleanupIncomplete?: boolean;
       error?: string;
+      spawnFailure?: SpawnFailure;
       commitRefusal?: TCommitRefusal;
     }>;
 
@@ -184,7 +187,7 @@ export class TmuxUtilities {
     pane?: string,
     socketPath?: string,
     stdin?: string,
-    options?: Readonly<{ timeoutMs?: number }>,
+    options?: Readonly<{ timeoutMs?: number; throwSpawnFailure?: boolean; readSpawnFailureLimits?: SpawnFailureLimitsReader }>,
   ): Promise<TmuxCommandResult | null> {
     const targetSession = session || this.sessionName;
 
@@ -218,6 +221,7 @@ export class TmuxUtilities {
     const result = await this.executeCommand(fullCmd, {
       ...(stdin !== undefined ? { stdin } : {}),
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options?.throwSpawnFailure ? { throwSpawnFailure: true, readSpawnFailureLimits: options.readSpawnFailureLimits } : {}),
     });
     if (detachedCreation && result) {
       const createdWindow = /^(@\d+)\t/.exec(result.stdout);
@@ -227,7 +231,7 @@ export class TmuxUtilities {
         // Native -a scopes sizing to this window, falling back to default-size.
         // Restore inheritance immediately so later attached clients still resize it.
         const windowId = createdWindow[1];
-        const localPolicy = await this.executeCommand([...baseCmd, 'show-options', '-w', '-t', windowId, 'window-size'], options);
+        const localPolicy = await this.executeCommand([...baseCmd, 'show-options', '-w', '-t', windowId, 'window-size'], { timeoutMs: options?.timeoutMs });
         if (!localPolicy || localPolicy.returncode !== 0) {
           logTmuxWarn('[TMUX] Failed to read detached window sizing policy', { windowId, stderr: localPolicy?.stderr });
           return result;
@@ -238,7 +242,7 @@ export class TmuxUtilities {
         const sizing = await this.executeCommand([...baseCmd, 'if-shell', '-F', '-t', windowId,
           '#{&&:#{==:#{window-size},latest},#{==:#{session_attached},0}}',
           `resize-window -a -t ${windowId} ; ${restorePolicy}`,
-        ], options);
+        ], { timeoutMs: options?.timeoutMs });
         if (!sizing || sizing.returncode !== 0) {
           // Creation succeeded; do not convert this into a retryable launch error.
           logTmuxWarn('[TMUX] Failed to reconcile detached window geometry', { windowId: createdWindow[1], stderr: sizing?.stderr });
@@ -253,7 +257,7 @@ export class TmuxUtilities {
   /**
    * Execute command with subprocess and return result
    */
-  private async executeCommand(cmd: string[], options?: Readonly<{ stdin?: string; timeoutMs?: number }>): Promise<TmuxCommandResult | null> {
+  private async executeCommand(cmd: string[], options?: Readonly<{ stdin?: string; timeoutMs?: number; throwSpawnFailure?: boolean; readSpawnFailureLimits?: SpawnFailureLimitsReader }>): Promise<TmuxCommandResult | null> {
     try {
       const result = await this.runCommand(cmd, {
         ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
@@ -268,6 +272,7 @@ export class TmuxUtilities {
       };
     } catch (error) {
       logTmuxDebug('[TMUX] Command execution failed:', error);
+      if (options?.throwSpawnFailure) throw new SpawnFailureError(error, { syscall: 'spawn', limits: options.readSpawnFailureLimits?.() });
       return null;
     }
   }
@@ -448,17 +453,17 @@ export class TmuxUtilities {
   /**
    * Ensure session exists, create if needed
    */
-  async ensureSessionExists(sessionName?: string): Promise<boolean> {
+  async ensureSessionExists(sessionName?: string, spawnOptions?: Readonly<{ throwSpawnFailure?: boolean; readSpawnFailureLimits?: SpawnFailureLimitsReader }>): Promise<boolean> {
     const targetSession = sessionName || this.sessionName;
 
     // Check if session exists
-    const result = await this.executeTmuxCommand(['has-session', '-t', targetSession]);
+    const result = await this.executeTmuxCommand(['has-session', '-t', targetSession], undefined, undefined, undefined, undefined, undefined, spawnOptions);
     if (result && result.returncode === 0) {
       return true;
     }
 
     // Create session if it doesn't exist
-    const createResult = await this.executeTmuxCommand(['new-session', '-d', '-s', targetSession]);
+    const createResult = await this.executeTmuxCommand(['new-session', '-d', '-s', targetSession], undefined, undefined, undefined, undefined, undefined, spawnOptions);
     return createResult !== null && createResult.returncode === 0;
   }
 
@@ -592,9 +597,11 @@ export class TmuxUtilities {
     let nativeReadinessConfirmed = false;
     let outcome: TmuxSpawnResult<TCommitRefusal> | undefined;
     let creationDisposition: TmuxWindowCreationDisposition = 'not_created';
+    const rootSpawnOptions = { throwSpawnFailure: true, readSpawnFailureLimits: options.readSpawnFailureLimits };
+    const executeSpawnCommand = (cmd: string[]) => this.executeTmuxCommand(cmd, undefined, undefined, undefined, undefined, undefined, rootSpawnOptions);
     try {
       // Check if tmux is available
-      const tmuxCheck = await this.executeTmuxCommand(['list-sessions']);
+      const tmuxCheck = await executeSpawnCommand(['list-sessions']);
       if (!tmuxCheck) {
         throw new Error('tmux not available');
       }
@@ -606,7 +613,7 @@ export class TmuxUtilities {
       let sessionName = options.sessionName ?? this.sessionName;
 
       if (options.sessionName === '') {
-        const listResult = await this.executeTmuxCommand([
+        const listResult = await executeSpawnCommand([
           'list-sessions',
           '-F',
           '#{session_name}\t#{session_attached}\t#{session_last_attached}',
@@ -643,7 +650,7 @@ export class TmuxUtilities {
 
       const requireNewSession = options.requireNewSession === true;
       if (!requireNewSession) {
-        await this.ensureSessionExists(sessionName);
+        await this.ensureSessionExists(sessionName, rootSpawnOptions);
       }
 
       const unsetEnvKeys = normalizeUnsetEnvKeys(options.unsetEnvKeys);
@@ -710,7 +717,7 @@ export class TmuxUtilities {
       };
 
       const resolveNextWindowIndex = async (targetSessionName: string): Promise<number | null> => {
-        const listResult = await this.executeTmuxCommand(['list-windows', '-t', targetSessionName, '-F', '#{window_index}']);
+        const listResult = await executeSpawnCommand(['list-windows', '-t', targetSessionName, '-F', '#{window_index}']);
         if (!listResult || listResult.returncode !== 0) return null;
 
         const indices = listResult.stdout
@@ -754,7 +761,7 @@ export class TmuxUtilities {
           createWindowArgsForAttempt = createWindowArgs;
         }
         creationDisposition = 'created_or_uncertain';
-        createResult = await this.executeTmuxCommand(createWindowArgsForAttempt);
+        createResult = await executeSpawnCommand(createWindowArgsForAttempt);
         if (createResult && createResult.returncode === 0 && createResult.timedOut !== true) {
           // The combined command returns only after the native shell has read
           // and retired its handoff and signaled the existing readiness channel.
@@ -823,7 +830,7 @@ export class TmuxUtilities {
       if (panePid === null) {
         type ListedWindow = Readonly<{ windowId: string; windowName: string; panePid: number | null }>;
         const listCreatedWindows = async (): Promise<readonly ListedWindow[] | null> => {
-          const listed = await this.executeTmuxCommand([
+          const listed = await executeSpawnCommand([
             'list-windows',
             '-t',
             sessionName,
@@ -872,7 +879,7 @@ export class TmuxUtilities {
                 ? recoveredWindow?.windowId ?? `${sessionName}:${windowName}`
                 : null);
             if (exactKillTarget) {
-              const killResult = await this.executeTmuxCommand(['kill-window', '-t', exactKillTarget]);
+              const killResult = await executeSpawnCommand(['kill-window', '-t', exactKillTarget]);
               if (killResult?.returncode === 0 && killResult.timedOut !== true) {
                 absenceVerified = true;
               } else {
@@ -922,10 +929,12 @@ export class TmuxUtilities {
       };
     } catch (error) {
       logTmuxDebug('[TMUX] Failed to spawn in tmux:', error);
+      const spawnFailure = classifySpawnFailure(error, { syscall: 'spawn', limits: options.readSpawnFailureLimits?.() });
       return outcome = {
         success: false,
         creationDisposition,
-        error: error instanceof Error ? error.message : String(error),
+        spawnFailure,
+        error: spawnFailureMessage(spawnFailure, error instanceof Error ? error.message : String(error)),
         ...(error instanceof TerminalHostCreationError ? { cleanupIncomplete: error.cleanupIncomplete } : {}),
       };
     } finally {

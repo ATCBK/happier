@@ -1,14 +1,16 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import type { SpawnOptions } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { waitForProcessExit } from '@/testkit/process/spawn';
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
-vi.mock('node:child_process', () => ({
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
   spawn: spawnMock,
 }));
 
@@ -43,30 +45,20 @@ function mockHangingChild() {
   return child;
 }
 
-async function expectTimedOutAndKilled(
-  result: Promise<unknown>,
-  child: ReturnType<typeof mockHangingChild>,
-  advanceMs: number,
-  expectedError: new (...args: never[]) => Error,
-) {
-  let rejection: unknown;
-  const killProcessGroup = vi.spyOn(process, 'kill').mockImplementation(() => true);
-  const handled = result.catch((error: unknown) => {
-    rejection = error;
-  });
-  try {
-    await vi.advanceTimersByTimeAsync(advanceMs);
-    await Promise.resolve();
-    expect(rejection).toBeUndefined();
-    expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    child.emit('close', 0);
-    await handled;
-    expect(rejection).toBeInstanceOf(expectedError);
-  } finally {
-    await result.catch(() => undefined);
-    killProcessGroup.mockRestore();
-  }
+async function spawnResistantTree(rootExitsOnTerm = false) {
+  const native = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  const childScript = `process.on('SIGTERM', () => {}); process.send('ready'); setInterval(() => {}, 1000);`;
+  const parent = native.spawn(process.execPath, ['-e', `
+    const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    });
+    process.on('SIGTERM', () => { process.send('term'); ${rootExitsOnTerm ? 'process.exit(0);' : ''} });
+    child.once('message', () => process.send(child.pid));
+    setInterval(() => {}, 1000);
+  `], { detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const [childPid] = await once(parent, 'message');
+  if (typeof childPid !== 'number') throw new Error('Expected descendant PID');
+  return { parent, childPid };
 }
 
 describe('zellij actions', () => {
@@ -186,46 +178,36 @@ describe('zellij actions', () => {
   });
 
   it('applies one prompt-wide timeout across all write chunks', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    if (process.platform === 'win32') return; // Native POSIX signal contract; Windows owner tested separately.
+    const { parent, childPid } = await spawnResistantTree();
     const first = mockHangingChild();
-    const second = mockHangingChild();
     spawnMock
       .mockImplementationOnce(() => first)
-      .mockImplementationOnce(() => second);
-    const killProcessGroup = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      .mockImplementationOnce(() => parent);
     try {
       const { writeBytesChunked, ZellijActionTimeoutError } = await import('./actions');
-      let rejection: unknown;
+      const term = once(parent, 'message');
       const write = writeBytesChunked({
         zellijBinary: '/tools/zellij',
         paneId: 'terminal_1',
         text: 'abcd',
         chunkSize: 2,
         env: {},
-        timeoutMs: 100,
-      }).catch((error: unknown) => {
-        rejection = error;
-      });
-
-      await Promise.resolve();
-      expect(spawnMock).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(90);
+        timeoutMs: 2_000,
+      }).then(() => null, (error: unknown) => error);
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 1_800));
+      const secondStartedAt = Date.now();
       first.emit('close', 0);
-      // The machine-wide action limiter adds an admission/release microtask hop around each client
-      // spawn; flush microtasks until the second write chunk has been admitted and spawned.
-      for (let flush = 0; flush < 20 && spawnMock.mock.calls.length < 2; flush += 1) {
-        await Promise.resolve();
-      }
+      await term;
+      // Leave native census latency room while distinguishing a renewed full timeout.
+      expect(Date.now() - secondStartedAt).toBeLessThan(2_000);
       expect(spawnMock).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(11);
-      expect(killProcessGroup).toHaveBeenCalledWith(-second.pid, 'SIGTERM');
-      second.emit('close', 0);
-      await write;
-      expect(rejection).toBeInstanceOf(ZellijActionTimeoutError);
+      expect(await write).toBeInstanceOf(ZellijActionTimeoutError);
     } finally {
-      killProcessGroup.mockRestore();
-      vi.useRealTimers();
+      for (const pid of [parent.pid!, childPid]) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* fixture already ended */ }
+      }
     }
   });
 
@@ -271,70 +253,49 @@ describe('zellij actions', () => {
     );
   });
 
-  it('kills a hung list-panes action when its timeout elapses and rejects after the child exits', async () => {
-    vi.useFakeTimers();
+  it('reports cleanup incomplete when the authoritative census refuses the timed-out root', async () => {
     const child = mockHangingChild();
+    // The actual census protects its reader. A successful signal mock cannot prove cleanup.
+    child.pid = process.pid;
     spawnMock.mockImplementationOnce(() => child);
-    const { listPanes, ZellijActionTimeoutError } = await import('./actions');
-
-    const result = listPanes({ zellijBinary: '/tools/zellij', env: {}, timeoutMs: 25 });
-
-    await expectTimedOutAndKilled(result, child, 25, ZellijActionTimeoutError);
+    const { listPanes } = await import('./actions');
+    const failure = await listPanes({ zellijBinary: '/tools/zellij', env: {}, timeoutMs: 10 })
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toMatchObject({ code: 'plugin_exec_termination_incomplete' });
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it('signals the zellij action process group when a timeout elapses', async () => {
-    vi.useFakeTimers();
-    const child = mockHangingChild();
-    const killProcessGroup = vi.spyOn(process, 'kill').mockImplementation(() => true);
-    spawnMock.mockImplementationOnce(() => child);
-    const { listPanes, ZellijActionTimeoutError } = await import('./actions');
-    const result = listPanes({ zellijBinary: '/tools/zellij', env: {}, timeoutMs: 25 });
-
-    try {
-      await vi.advanceTimersByTimeAsync(25);
-      await Promise.resolve();
-      const options = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
-      expect(options).toEqual(expect.objectContaining({ detached: true, shell: false }));
-      expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
-      child.emit('close', 0);
-      await expect(result).rejects.toBeInstanceOf(ZellijActionTimeoutError);
-    } finally {
-      child.emit('close', 0);
-      await result.catch(() => undefined);
-      killProcessGroup.mockRestore();
-    }
-  });
-
-  it('rejects after a bounded kill grace when a timed-out action does not close', async () => {
-    vi.useFakeTimers();
-    const child = mockHangingChild();
-    const killProcessGroup = vi.spyOn(process, 'kill').mockImplementation(() => true);
-    spawnMock.mockImplementationOnce(() => child);
-    const { listPanes, ZellijActionTimeoutError } = await import('./actions');
-
-    let rejection: unknown;
-    const result = listPanes({ zellijBinary: '/tools/zellij', env: {}, timeoutMs: 25 });
-    result.catch((error: unknown) => {
-      rejection = error;
+  it.each([false, true])('ends the resistant descendant before releasing its slot (root exits on TERM: %s)', async (rootExitsOnTerm) => {
+    if (process.platform === 'win32') return; // Uses the real POSIX signal boundary.
+    const { parent, childPid } = await spawnResistantTree(rootExitsOnTerm);
+    process.env.HAPPIER_ZELLIJ_ACTION_MAX_CONCURRENCY = '1';
+    const nativeKill = process.kill.bind(process);
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => nativeKill(pid, signal));
+    spawnMock.mockImplementationOnce(() => parent).mockImplementationOnce(() => {
+      expect(parent.exitCode !== null || parent.signalCode !== null).toBe(true);
+      expect(kill).toHaveBeenCalledWith(childPid, 'SIGKILL');
+      return mockChild(0, '[]');
     });
-
     try {
-      await vi.advanceTimersByTimeAsync(25);
-      await Promise.resolve();
-      expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
-      expect(child.kill).toHaveBeenCalledTimes(1);
-      expect(rejection).toBeUndefined();
-
-      await vi.advanceTimersByTimeAsync(249);
-      await Promise.resolve();
-      expect(rejection).toBeUndefined();
-
-      await vi.advanceTimersByTimeAsync(1);
-      await Promise.resolve();
-      expect(rejection).toBeInstanceOf(ZellijActionTimeoutError);
-      await result.catch(() => undefined);
+      const { listPanes, ZellijActionTimeoutError } = await import('./actions');
+      const first = listPanes({ zellijBinary: '/tools/zellij', env: {}, timeoutMs: 25 })
+        .then(() => null, (error: unknown) => error);
+      const second = listPanes({ zellijBinary: '/tools/zellij', env: {} });
+      const failure = await first;
+      expect(failure).toBeInstanceOf(ZellijActionTimeoutError);
+      expect(failure instanceof Error ? failure.cause : failure).toBeUndefined();
+      await expect(second).resolves.toEqual([]);
+      expect(await waitForProcessExit(childPid)).toBe(true);
+      expect(kill).toHaveBeenCalledWith(childPid, 'SIGTERM');
+      expect(kill).toHaveBeenCalledWith(parent.pid, 'SIGTERM');
+      expect(kill).toHaveBeenCalledWith(childPid, 'SIGKILL');
+      if (!rootExitsOnTerm) expect(kill).toHaveBeenCalledWith(parent.pid, 'SIGKILL');
     } finally {
-      killProcessGroup.mockRestore();
+      kill.mockRestore();
+      delete process.env.HAPPIER_ZELLIJ_ACTION_MAX_CONCURRENCY;
+      for (const pid of [parent.pid!, childPid]) {
+        try { nativeKill(pid, 'SIGKILL'); } catch { /* fixture already ended */ }
+      }
     }
   });
 
