@@ -64,6 +64,9 @@ import { t } from '@/text';
  * (the app's standard theme hook) rather than taking a `theme` prop — keeping
  * the public surface free of an untyped `theme: any` escape hatch.
  */
+const FRAMED_PANEL_STYLE = { flex: 1, paddingHorizontal: 16, paddingVertical: 12 } as const;
+const CANVAS_PANEL_STYLE = { flex: 1 } as const;
+
 function RichMarkdownEditorPanelImpl(props: Readonly<{
     resetKey: string;
     editorRef: Readonly<React.MutableRefObject<CodeEditorHandle | null>>;
@@ -87,6 +90,8 @@ function RichMarkdownEditorPanelImpl(props: Readonly<{
      * own toolbar above the editor and stop hosting one inside the panel.
      */
     onControllerChange?: (controller: MarkdownEditorController | null) => void;
+    /** `canvas`: the document is the page — no frame and no inset of its own. Default framed. */
+    presentation?: 'framed' | 'canvas';
 }>) {
     const { theme } = useUnistyles();
     const paintColor = useHappierMaterialColorResolver();
@@ -191,7 +196,7 @@ function RichMarkdownEditorPanelImpl(props: Readonly<{
     const linkBubble = useMarkdownLinkBubble(controller);
 
     return (
-        <View style={{ flex: 1, paddingHorizontal: 16, paddingVertical: 12 }}>
+        <View style={props.presentation === 'canvas' ? CANVAS_PANEL_STYLE : FRAMED_PANEL_STYLE}>
             {frontmatter !== null ? (
                 <View
                     testID="file-details-rich-editor-frontmatter"
@@ -237,6 +242,7 @@ function RichMarkdownEditorPanelImpl(props: Readonly<{
                     readOnly={props.readOnly}
                     changeDebounceMs={props.changeDebounceMs}
                     bridgeMaxChunkBytes={props.bridgeMaxChunkBytes}
+                    presentation={props.presentation}
                     testID="file-details-rich-editor"
                 />
             </View>

@@ -55,7 +55,7 @@ export type MarkdownEditorTheme = Readonly<{
 type MarkdownEditorThemeInput = {
     dark?: boolean;
     colors: {
-        surface: { inset: string; elevated: string };
+        surface: { inset: string; elevated: string; base: string };
         text: { primary: string; secondary: string; link: string };
         border: { default: string };
         state: { active: { background: string; foreground: string } };
@@ -70,11 +70,12 @@ type MarkdownEditorThemeInput = {
  * `buildTiptapWebViewHtml({ theme })`; the web surface reads the individual tokens
  * for its `EditorContent` styling.
  */
-export function resolveMarkdownEditorTheme(theme: MarkdownEditorThemeInput): MarkdownEditorTheme {
+export function resolveMarkdownEditorTheme(theme: MarkdownEditorThemeInput, presentation: 'framed' | 'canvas' = 'framed'): MarkdownEditorTheme {
     const colors = theme.colors;
     return {
         isDark: Boolean(theme.dark),
-        backgroundColor: colors.surface.inset,
+        // A canvas editor sits on the page's own surface; a framed one on the inset well.
+        backgroundColor: presentation === 'canvas' ? colors.surface.base : colors.surface.inset,
         textColor: colors.text.primary,
         secondaryTextColor: colors.text.secondary,
         dividerColor: colors.border.default,

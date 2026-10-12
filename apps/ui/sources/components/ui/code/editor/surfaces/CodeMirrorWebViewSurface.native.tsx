@@ -22,9 +22,13 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
 ) {
     const { theme } = useUnistyles();
     const uiFontScale = useLocalSetting('uiFontScale');
+    const canvas = props.presentation === 'canvas';
     const editorTheme = React.useMemo(
-        () => resolveCodeEditorTheme(theme),
+        // A canvas editor sits on the page's own surface, a framed one on the inset well.
+        () => resolveCodeEditorTheme(theme, canvas ? { backgroundColor: theme.colors.surface.base } : {}),
         [
+            canvas,
+            theme.colors.surface.base,
             theme.dark,
             theme.colors.accent.blue,
             theme.colors.border.default,
@@ -215,7 +219,7 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
     return (
         <View
             testID={props.testID}
-            style={{ flex: 1, borderWidth: 1, borderColor: editorTheme.dividerColor, borderRadius: 10, overflow: 'hidden', backgroundColor: editorTheme.backgroundColor }}
+            style={{ flex: 1, borderWidth: canvas ? 0 : 1, borderColor: editorTheme.dividerColor, borderRadius: canvas ? 0 : 10, overflow: 'hidden', backgroundColor: editorTheme.backgroundColor }}
         >
             <WebView
                 key={props.resetKey}

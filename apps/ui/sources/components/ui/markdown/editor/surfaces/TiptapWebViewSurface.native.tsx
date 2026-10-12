@@ -301,9 +301,12 @@ export const TiptapWebViewSurface = React.forwardRef<MarkdownEditorSurfaceRef, M
         const maxChunkBytes =
             typeof props.bridgeMaxChunkBytes === 'number' ? props.bridgeMaxChunkBytes : DEFAULT_MAX_CHUNK_BYTES;
 
+        const canvas = props.presentation === 'canvas';
         const webViewTheme = React.useMemo(
-            () => resolveMarkdownEditorTheme(theme),
+            () => resolveMarkdownEditorTheme(theme, canvas ? 'canvas' : 'framed'),
             [
+                canvas,
+                theme.colors.surface.base,
                 theme.dark,
                 theme.colors.surface.inset,
                 theme.colors.surface.elevated,
@@ -716,9 +719,9 @@ export const TiptapWebViewSurface = React.forwardRef<MarkdownEditorSurfaceRef, M
                 onLayout={handleViewLayout}
                 style={{
                     flex: 1,
-                    borderWidth: 1,
+                    borderWidth: canvas ? 0 : 1,
                     borderColor: webViewTheme.dividerColor,
-                    borderRadius: 10,
+                    borderRadius: canvas ? 0 : 10,
                     overflow: 'hidden',
                     backgroundColor: webViewTheme.backgroundColor,
                 }}

@@ -45,8 +45,13 @@ export type MarkdownCodeEditorFieldProps = Readonly<{
      * behavior is preserved.
      */
     wrapLines?: boolean;
+    /** `canvas`: the document's source is the page (an Artifact), unframed on the page's surface. Default framed. */
+    presentation?: 'framed' | 'canvas';
     testID?: string;
 }>;
+
+const TOOLBAR_SLOT_STYLE = { flex: 1, minWidth: 0, overflow: 'hidden' } as const;
+const MODE_MENU_SLOT_STYLE = { flexShrink: 0 } as const;
 
 export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
     // Explicit language wins; otherwise derive from the file path (markdown for
@@ -147,28 +152,34 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                         // pinned to the right and visible at any container width.
                         justifyContent: 'flex-end',
                         gap: 8,
-                        paddingHorizontal: 12,
+                        // On the canvas the toggle keeps the text's edge; inside a section it keeps the box's inset.
+                        paddingHorizontal: props.presentation === 'canvas' ? 0 : 12,
                         paddingTop: 8,
                         paddingBottom: 4,
                     }}
                 >
                     {showInlineToolbar && richController ? (
+                        <View style={TOOLBAR_SLOT_STYLE}>
                         <MarkdownEditorToolbar
                             controller={richController}
                             variant="inline"
                             testID={props.testID ? `${props.testID}-inline-toolbar` : 'markdown-code-editor-field-inline-toolbar'}
                         />
+                        </View>
                     ) : (
                         // Empty flexible spacer keeps the dropdown right-aligned
                         // and the header height stable across mode switches.
                         <View style={{ flex: 1 }} />
                     )}
-                    <MarkdownEditModeMenu
-                        mode={markdownEditMode}
-                        onChange={(next) => { void onToggle(next); }}
-                        richEligible={richEligible}
-                        richDisabledReason={richDisabledReason}
-                    />
+                    {/* The mode menu keeps its width; the chips scroll (and clip) beside it on a narrow column. */}
+                    <View style={MODE_MENU_SLOT_STYLE}>
+                        <MarkdownEditModeMenu
+                            mode={markdownEditMode}
+                            onChange={(next) => { void onToggle(next); }}
+                            richEligible={richEligible}
+                            richDisabledReason={richDisabledReason}
+                        />
+                    </View>
                 </View>
             ) : null}
             <View style={{ flex: 1 }}>
@@ -185,6 +196,7 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                         // Inline toolbar lives in our header — suppress the
                         // panel's footer toolbar so the chrome doesn't double up.
                         hideFooterToolbar
+                        presentation={props.presentation}
                         onControllerChange={handleRichControllerChange}
                     />
                 ) : (
@@ -197,6 +209,8 @@ export function MarkdownCodeEditorField(props: MarkdownCodeEditorFieldProps) {
                         readOnly={props.readOnly}
                         wrapLines={props.wrapLines ?? true}
                         showLineNumbers={false}
+                        presentation={props.presentation}
+                        testID={props.testID ? `${props.testID}:source` : undefined}
                     />
                 )}
             </View>

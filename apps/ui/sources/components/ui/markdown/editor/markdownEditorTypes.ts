@@ -77,6 +77,8 @@ export type MarkdownEditorProps = Readonly<{
     onChange: (value: string) => void;
     /** Disables editing while still rendering the document. */
     readOnly?: boolean;
+    /** `canvas`: the document is the page (an Artifact) — no frame, on the page's surface. Default framed. */
+    presentation?: 'framed' | 'canvas';
     /** Debounce window for `onChange`/`selectionState` (defaults applied per-surface). */
     changeDebounceMs?: number;
     /** Max chunk size for the native chunked postMessage bridge. */

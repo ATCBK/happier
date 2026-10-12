@@ -208,7 +208,9 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
         () => resolveCodeEditorFontMetrics({ uiFontScale }),
         [uiFontScale],
     );
-    const backgroundColor = useGlassSurfaceColor(theme.colors.surface.inset, 'content');
+    const canvas = props.presentation === 'canvas';
+    // A canvas editor sits on the page's own surface (the page's colour), a framed one on the inset well.
+    const backgroundColor = useGlassSurfaceColor(canvas ? theme.colors.surface.base : theme.colors.surface.inset, 'content');
     const activeLineColor = useGlassSurfaceColor(theme.colors.surface.elevated, 'content', false);
     const selectionColor = useGlassSurfaceColor(theme.colors.accent.blue, 'content', false);
     const editorTheme = React.useMemo(
@@ -543,9 +545,9 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
 
     const borderStyle = {
         flex: 1,
-        borderWidth: 1,
+        borderWidth: canvas ? 0 : 1,
         borderColor: editorTheme.dividerColor,
-        borderRadius: 10,
+        borderRadius: canvas ? 0 : 10,
         overflow: 'hidden' as const,
         backgroundColor: editorTheme.backgroundColor,
     };

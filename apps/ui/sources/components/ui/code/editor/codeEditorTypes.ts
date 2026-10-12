@@ -30,6 +30,11 @@ export type CodeEditorProps = Readonly<{
     showLineNumbers?: boolean;
     changeDebounceMs?: number;
     bridgeMaxChunkBytes?: number;
+    /**
+     * `framed` (default): a bordered inset box, as an editor inside a section. `canvas`: a whole document's
+     * source that is the page itself (an Artifact's Markdown): no frame, on the page's own surface.
+     */
+    presentation?: 'framed' | 'canvas';
 }>;
 
 export type CodeEditorHandle = Readonly<{
