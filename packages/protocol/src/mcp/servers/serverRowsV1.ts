@@ -10,7 +10,8 @@ import { isAccountScopedBlobCiphertextForKind } from '../../crypto/accountScoped
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
 import { appendSavedSecretReferencePathV1, listSavedSecretReferenceCarrierPathsV1, parseSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
 import { McpServerCatalogEntryV1Schema, McpServerRuleV1Schema, McpServerConfigOverrideFieldsV1Schema, isMcpPluginItemIdV1,
-  type McpServerCatalogEntryV1, type McpServerRuleV1, type McpValueRefV1 } from './settingsV1.js';
+  type McpServerCatalogEntryV1, type McpServerRuleV1 } from './settingsV1.js';
+import type { ValueRefV1 } from '../../valueRefs/valueRefV1.js';
 import { normalizeReachRulesV1 } from '../../reach/reachRulesChangeV1.js';
 import { splitRetainedMcpServerConfigurationV1 } from './splitRetainedMcpServerConfigurationV1.js';
 
@@ -195,7 +196,7 @@ export function sealMcpServerCatalogContentV1(input: Readonly<{
 
 export function listMcpServerCatalogSavedSecretRefsV1(catalog: McpServerCatalogV1): readonly Readonly<{ path: string; secretId: string }>[] {
   const refs: Array<{ path: string; secretId: string }> = [];
-  const visit = (values: Readonly<Record<string, McpValueRefV1 | null>> | undefined, path: string) => {
+  const visit = (values: Readonly<Record<string, ValueRefV1 | null>> | undefined, path: string) => {
     for (const [key, value] of Object.entries(values ?? {})) if (value?.t === 'savedSecret') {
       refs.push({ path: appendSavedSecretReferencePathV1(path, key), secretId: value.secretId });
     }
@@ -211,9 +212,9 @@ export function listMcpServerCatalogSavedSecretRefsV1(catalog: McpServerCatalogV
 }
 
 export function remapMcpServerCatalogSavedSecretReferencesV1(catalog: McpServerCatalogV1, mapping: Readonly<Record<string, string>>): McpServerCatalogV1 {
-  const rewrite = <T extends McpValueRefV1 | null>(value: T): T | McpValueRefV1 => value?.t === 'savedSecret' && Object.hasOwn(mapping, value.secretId)
+  const rewrite = <T extends ValueRefV1 | null>(value: T): T | ValueRefV1 => value?.t === 'savedSecret' && Object.hasOwn(mapping, value.secretId)
     ? { ...value, secretId: mapping[value.secretId]! } : value;
-  const values = <T extends McpValueRefV1 | null>(input: Readonly<Record<string, T>>): Record<string, T | McpValueRefV1> =>
+  const values = <T extends ValueRefV1 | null>(input: Readonly<Record<string, T>>): Record<string, T | ValueRefV1> =>
     Object.fromEntries(Object.entries(input).map(([key, value]) => [key, rewrite(value)]));
   return McpServerCatalogV1Schema.parse({ ...catalog,
     servers: catalog.servers.map(entry => ({ ...entry, env: values(entry.env),

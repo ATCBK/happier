@@ -1,12 +1,13 @@
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { normalizeReachRulesV1 } from '../../reach/reachRulesChangeV1.js';
 import { applyMcpServerConfigOverrideV1 } from './resolveMcpServerConfigForContextV1.js';
-import type { McpServerCatalogEntryV1, McpServerRuleV1, McpServerConfigOverrideFieldsV1, McpServerConfigOverrideV1, McpValueRefV1 } from './settingsV1.js';
+import type { McpServerCatalogEntryV1, McpServerRuleV1, McpServerConfigOverrideFieldsV1, McpServerConfigOverrideV1 } from './settingsV1.js';
+import type { ValueRefV1 } from '../../valueRefs/valueRefV1.js';
 
 type RetainedRule = McpServerRuleV1 & { overrides?: McpServerConfigOverrideFieldsV1 };
 
-function valuePatch(base: Record<string, McpValueRefV1>, desired: Record<string, McpValueRefV1>): Record<string, McpValueRefV1 | null> | undefined {
-  const patch: Record<string, McpValueRefV1 | null> = {};
+function valuePatch(base: Record<string, ValueRefV1>, desired: Record<string, ValueRefV1>): Record<string, ValueRefV1 | null> | undefined {
+  const patch: Record<string, ValueRefV1 | null> = {};
   for (const key of new Set([...Object.keys(base), ...Object.keys(desired)])) {
     if (!sameStrictJsonValue(base[key] ?? null, desired[key] ?? null)) patch[key] = desired[key] ?? null;
   }

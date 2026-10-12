@@ -1,8 +1,9 @@
-import type { McpServerCatalogEntryV1, McpValueRefV1 } from './settingsV1.js';
+import type { McpServerCatalogEntryV1 } from './settingsV1.js';
+import type { ValueRefV1 } from '../../valueRefs/valueRefV1.js';
 
 export type McpServerAuthModeV1 = 'none' | 'savedSecret' | 'machineEnv' | 'plainText';
 
-function valueRefsFromServer(server: Pick<McpServerCatalogEntryV1, 'env' | 'remote'>): McpValueRefV1[] {
+function valueRefsFromServer(server: Pick<McpServerCatalogEntryV1, 'env' | 'remote'>): ValueRefV1[] {
   const refs = Object.values(server.env ?? {});
   const headerRefs = Object.values(server.remote?.headers ?? {});
   // Session facts assert origin; they are not an authentication credential.
@@ -21,7 +22,7 @@ export function inferMcpServerAuthModeV1(server: Pick<McpServerCatalogEntryV1, '
     return 'savedSecret';
   }
 
-  const literals = refs.filter((valueRef): valueRef is Extract<McpValueRefV1, { t: 'literal' }> => valueRef?.t === 'literal');
+  const literals = refs.filter((valueRef): valueRef is Extract<ValueRefV1, { t: 'literal' }> => valueRef?.t === 'literal');
   if (literals.length === refs.length && literals.every((valueRef) => isEnvironmentTemplateLiteral(valueRef.v))) {
     return 'machineEnv';
   }

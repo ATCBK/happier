@@ -1,7 +1,8 @@
-import type { McpServerCatalogEntryV1, McpServerConfigOverrideFieldsV1, McpValueRefV1 } from './settingsV1.js';
+import type { McpServerCatalogEntryV1, McpServerConfigOverrideFieldsV1 } from './settingsV1.js';
+import type { ValueRefV1 } from '../../valueRefs/valueRefV1.js';
 import { resolveReachV1, type ReachContextV1 } from '../../reach/resolveReachV1.js';
 
-function patchValues(base: Record<string, McpValueRefV1>, patch?: Record<string, McpValueRefV1 | null>): Record<string, McpValueRefV1> {
+function patchValues(base: Record<string, ValueRefV1>, patch?: Record<string, ValueRefV1 | null>): Record<string, ValueRefV1> {
   if (!patch) return base;
   const result = { ...base };
   for (const [key, value] of Object.entries(patch)) {

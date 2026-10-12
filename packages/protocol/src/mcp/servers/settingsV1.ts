@@ -5,6 +5,7 @@ import { McpRemoteUrlV1Schema } from '../remoteUrlV1.js';
 import { ReachPlaceV1Schema } from '../../reach/reachPlaceV1.js';
 import { ReachRuleV1Schema } from '../../reach/reachRuleV1.js';
 import { reachRuleKeyV1 } from '../../reach/reachRulesChangeV1.js';
+import { ValueRefV1Schema } from '../../valueRefs/valueRefV1.js';
 export { ReachPlaceV1Schema } from '../../reach/reachPlaceV1.js';
 export type { ReachPlaceV1 } from '../../reach/reachPlaceV1.js';
 
@@ -14,21 +15,13 @@ const RESERVED_SERVER_NAMES = new Set(['happier', '__proto__', 'prototype', 'con
 const ENV_KEY_REGEX = /^[A-Z_][A-Z0-9_]*$/;
 const HEADER_KEY_REGEX = /^[A-Za-z0-9-]+$/;
 
-export const McpValueRefV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('literal'), v: z.string() }).strict(),
-  z.object({ t: z.literal('savedSecret'), secretId: z.string().min(1) }).strict(),
-  z.object({ t: z.literal('sessionAttested'), field: z.enum(['externalPrincipalId', 'sourceMessageId', 'sessionId']) }).strict(),
-]));
-
-export type McpValueRefV1 = z.infer<typeof McpValueRefV1Schema>;
-
 const McpEnvVarKeyV1Schema = lazyZodSchema(() => z.string().regex(ENV_KEY_REGEX, 'Invalid environment variable name'));
 const McpHeaderKeyV1Schema = lazyZodSchema(() => z.string().regex(HEADER_KEY_REGEX, 'Invalid header name'));
 
 export const McpServerCatalogEntryTransportV1Schema = lazyZodSchema(() => z.enum(['stdio', 'http', 'sse']));
 export type McpServerCatalogEntryTransportV1 = z.infer<typeof McpServerCatalogEntryTransportV1Schema>;
 
-const McpValueRefOrNullV1Schema = lazyZodSchema(() => z.union([McpValueRefV1Schema, z.null()]));
+const McpValueRefOrNullV1Schema = lazyZodSchema(() => z.union([ValueRefV1Schema, z.null()]));
 export const McpServerConfigOverrideFieldsV1Schema = lazyZodSchema(() => z.object({
   stdio: z.object({ command: z.string().min(1).optional(), args: z.array(z.string()).optional() }).strict().optional(),
   remote: z.object({ url: McpRemoteUrlV1Schema.optional(), headersPatch: z.record(McpHeaderKeyV1Schema, McpValueRefOrNullV1Schema).optional() }).strict().optional(),
@@ -60,11 +53,11 @@ export const McpServerCatalogEntryV1Schema = lazyZodSchema(() => z
     remote: z
       .object({
         url: McpRemoteUrlV1Schema,
-        headers: z.record(McpHeaderKeyV1Schema, McpValueRefV1Schema),
+        headers: z.record(McpHeaderKeyV1Schema, ValueRefV1Schema),
         auth: z.object({ kind: z.literal('oauth') }).strict().optional(),
       }).strict()
       .optional(),
-    env: z.record(McpEnvVarKeyV1Schema, McpValueRefV1Schema),
+    env: z.record(McpEnvVarKeyV1Schema, ValueRefV1Schema),
     configOverrides: z.array(McpServerConfigOverrideV1Schema).optional(),
     createdAt: z.number(),
     updatedAt: z.number(),
