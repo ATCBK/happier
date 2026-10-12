@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { updateEffectiveHomeViewState } from '@/sync/domains/server/selection/homeViewSelectionState';
@@ -33,7 +32,9 @@ vi.doMock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
   return createTextModuleMock({ translate: (key, params) => params ? `${key}:${JSON.stringify(params)}` : key });
 });
-installDisconnectedServerSocketBoundary();
+// Install the genuine transport boundary before eager Account harness imports.
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 const initialState = storage.getState();
 afterEach(() => { standardCleanup(); resetServerFeaturesClientForTests(); storage.setState(initialState, true); });
 const { SessionVoiceSection } = await import('./SessionVoiceSection');

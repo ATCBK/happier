@@ -6,7 +6,6 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
@@ -53,7 +52,9 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOrigin
     }, { prepare: execute.prepare });
   } };
 });
-installDisconnectedServerSocketBoundary();
+// Install the genuine transport boundary before eager Account harness imports.
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 const originalState = storage.getState();
 
 afterEach(() => {

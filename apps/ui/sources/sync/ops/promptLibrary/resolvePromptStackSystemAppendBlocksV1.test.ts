@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createPromptDocInLibrary,
   createPromptBundleInLibrary,
@@ -9,6 +9,12 @@ import { PromptStackEntryV1Schema, type PromptStackEntryV1 } from '@happier-dev/
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { withUiPromptLibraryArtifactReader, withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
 import { resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSystemAppendBlocksV1';
+
+vi.mock('socket.io-client', async original =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
+// Every case uses this real lazy production graph. Load it during collection,
+// so shared-worker transformation time is not charged to an Artifact operation.
+await import('@/sync/ops/actions/actionAccountContext');
 
 let home: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 afterEach(() => { home?.dispose(); home = undefined; });
@@ -55,7 +61,7 @@ describe('UI prompt-stack input and qualified Artifact composition', () => {
     const profile = entry(ids.profile!);
     const voice = entry(ids.voice!);
     const promptStacksV1 = { v: 1, surfaces: {
-      coding: [coding, entry(ids.voice!, { id: 'disabled', enabled: false }),
+      coding: [{ ...coding, futureAnnotation: { source: 'retained' } }, entry(ids.voice!, { id: 'disabled', enabled: false }),
         entry(ids.voice!, { id: 'insert', placement: 'composer_insert' })],
       voice: [voice], profilesById: { p1: [profile] },
     } };
