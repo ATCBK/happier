@@ -50,7 +50,7 @@ export function createConnectedAccountDaemonClient(params: Readonly<{
   const execute = async (actionId: ActionId, input: unknown) => {
     executor ??= createCliActionExecutorFromCredentials({ credentials: params.credentials, machineId });
     const result = await executor.execute(actionId, input, { surface: 'cli', actionRequestId: randomUUID(),
-      ...(params.signal ? { signal: params.signal } : {}) });
+      ...(params.signal && actionId !== 'connectedServices.authentication.cancel' ? { signal: params.signal } : {}) });
     if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode, details: result.details });
     const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
     if (approval.success) throw Object.assign(new Error('Approval requested'), { code: 'approval_required', details: approval.data });
