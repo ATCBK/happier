@@ -135,11 +135,15 @@ export function installSettingsViewCommonModuleMocks(
 
     vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
         const activeOptions = settingsViewModuleState.options;
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         if (typeof activeOptions.storage === 'function') {
-            return await activeOptions.storage(importOriginal);
+            const overrides = await activeOptions.storage(importOriginal);
+            if (!overrides || typeof overrides !== 'object') {
+                throw new Error('Settings storage fixture must return module overrides');
+            }
+            return createStorageModuleStub(overrides);
         }
 
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleStub({});
     });
 
