@@ -90,10 +90,12 @@ Monitor runs through the discovered action contract: use start-and-wait or `exec
   whole (method: `.agents/skills/happier-ui-craft/references/validation.md` → "Building a designed page").
 - **UI lanes always get a live render path.** Never brief a UI lane with live rendering forbidden or
   the stack down; if no runnable stack exists, start or fix one first, or mark the UI work blocked.
-  For iterative design work, run the QA stack's UI from the dev stack's moving Expo
-  (`stack start <qa> --runtime=source --restart --ui=borrowed`) so an edit shows on a browser reload;
-  a frozen web export needs a full restart per change and starves the design loop. Final acceptance
-  still uses the loaded build the program ships.
+  Source QA borrows the dev stack's moving Expo by default
+  (`stack start <qa> --runtime=source --restart`); an edit shows on browser reload.
+  If Expo is down, server/daemon starts and reloads continue; park only UI/QA-UI until `Expo READY`.
+  Stack info shows UI waiting and detects recovery without restart; never start Metro/export as fallback.
+  Server and Account/stack URLs are runtime parameters, not bundle inputs. Use `--ui=export` only
+  for release/boundary acceptance; unchanged inputs/options reuse the completed export.
   Source-only verification of a UI lane is not a completion state. The orchestrator itself looks at the
   rendered whole pages (not only cropped elements) next to the lab at every UI boundary.
 - **Who builds and checks surfaces (user ruling 2026-10-11).** Lanes that design or change how a
@@ -107,6 +109,62 @@ Monitor runs through the discovered action contract: use start-and-wait or `exec
   Each restart can force remote daemon runtimes to rebuild behind shared locks and strands every other lane mid-row
   (ORC, 2026-10-11: repeated lane restarts kept the daemon down for hours). A UI lane that needs its edits loaded asks
   in its report; the orchestrator batches reloads at quiet points and tells the lanes when the new build is live.
+
+- **Models and effort for UI work (user ruling 2026-10-11, split confirmed 2026-10-12 after the
+  Sonnet trial).** Lanes without an effort setting inherit the session's effort, which drained Opus
+  usage fast.
+
+  | Work | Model and effort | Agent definition |
+  |---|---|---|
+  | Orchestration, program-boundary and ship reviews, final whole-page acceptance, new design-lab rounds | Opus, high | `design-review-opus` |
+  | Shared primitives and tokens, the settings shell, pages being recomposed or newly designed, motion | Opus, medium | `ui-build-opus` |
+  | About half of UI lanes: well-specified surfaces, fix lists, state and after-pair verification, copy and locale sweeps | Sonnet 5.5, high (never max) | `ui-build-sonnet` |
+  | Logic, data, tests, tooling, functional QA | Codex Sol, unchanged | — |
+
+  Trial result (2026-10-12): both models reached acceptance in 2–4 review rounds. Sonnet's
+  specified fixes held live and found real root causes with almost no usage limits; Opus medium
+  was stronger on whole-page recomposition and shared primitives at about 1 M tokens per lane.
+
+## Claude usage economy (owner, 2026-10-12)
+
+- **Sol verifies; Opus doesn't re-review Sol by default.** Boundary/challenge reviews run as two Sol reviewers with an
+  adversarial brief (re-derive each claim from current bytes, deletion test, look for the simpler design, check owner
+  stances). The orchestrator spot-checks only load-bearing claims. Opus review is reserved for ship-boundary or taste calls.
+- **Sol digests, the orchestrator reads digests.** After a wave, one Sol run reads all lane reports, reruns their focused
+  checks and writes one short digest with evidence pointers; the orchestrator reads that plus targeted lines, never whole
+  reports or long board threads.
+- **UI routing:** Sonnet high for specified fix lists and after-pair checks first; Opus medium (`ui-build-opus`) for
+  composition/recomposition; Opus high only for final whole-page acceptance. Pin effort in every agent definition (agents
+  without one inherit the session's effort). Claude limits are per account (Sonnet and Opus stop together): about 3
+  concurrent Claude UI lanes across all programs.
+- **Fewer wakes:** watchers cap at 45–60 min and fire on finished/blocked lines; batch decisions per wake. Orchestrator
+  sessions run at medium effort while monitoring and raise effort only for synthesis or rulings.
+- **Board replies ≤ 15 lines** with pointers to lane reports.
+- **Capture vs judgement (design quality is not traded away).** Sol may *capture* (seed data, sign in, take
+  same-state whole-page lab|live pairs at the required widths/themes, record motion frames, measure computed styles)
+  into a contact sheet. Only Claude UI lanes *judge and change* how a surface looks; Sol never edits render
+  composition, styling or copy hierarchy, and "Opus writes a spec, Sol builds the visuals" is not allowed. The
+  orchestrator still views the decisive whole-page pairs itself.
+- **Fresh, short Claude UI lanes per round.** Close a UI lane after its round (report holds the state) and start the next
+  round fresh from a short brief pointing at that report; don't resume 400k+ contexts. Bound each round (≈60–120 min).
+- **Never run a Claude lane on a broken prerequisite.** Launch or resume a UI lane only after the render path and the
+  fixes its pages need are confirmed (stack READY + page loads with data). Blocked Claude lanes park: write what they
+  owe, stop all background jobs, end the turn — the orchestrator records the resume trigger in its ledger and its
+  watcher wakes on that trigger.
+- **Waiting is done by watchers, never by model turns.** Any lane or orchestrator waiting on a run, a test, a reload or a
+  stack uses a background until-loop/Monitor keyed on a concrete terminal marker (report `STATUS: DONE|BLOCKED`, a
+  `READY` line, a failure string) plus a capped heartbeat (45–120 min); on every wake it checks
+  `execution_run_list status=failed` (dead Sol runs write nothing). A Claude lane waiting on its own background job
+  blocks on that job instead of ending its turn with "waiting…"; it ends its turn only at a material transition or when
+  parked. Every parked/queued item has an owner-visible resume trigger so nothing silently stops.
+- **Finish clean; references first.** Lanes stop their background jobs before their final message (no "finished but
+  still waiting" wakes). When the owner names a reference app/look, a Sol run reads its exact recipe from source first,
+  and acceptance is measured in the owner's exact setup before a Claude reviewer judges it.
+- **Images:** capture broadly, view narrowly — lanes save all pairs to disk; reviewers open the 2–4 decisive ones.
+- **Taste digest:** UI lanes load `happier-ui-craft` + DESIGN.md and a one-page digest of the taste skills; open a full
+  taste skill only for a specific question (the digest never overrides DESIGN.md/happier-ui-craft).
+- **Orchestrator sessions:** medium effort by default; keep the same session (it holds program context that ledgers
+  don't) — keep turns lean instead of starting over.
 
 ## Delegation shape (what worked)
 
