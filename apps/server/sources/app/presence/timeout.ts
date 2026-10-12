@@ -21,6 +21,7 @@ import {
 } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { expireSessionPublisherCandidates } from "./sessionPublisherPresence";
 import { emitPendingActivationHint } from "@/app/session/pending/publishPendingMutation";
+import { submitMachineRemoteAlerts } from '@/app/activity/remoteAlerts/submitMachineRemoteAlerts';
 
 export interface PresenceTimeoutConfig {
     sessionTimeoutMs: number;
@@ -179,6 +180,10 @@ export async function runPresenceTimeoutTick(timeoutConfig: PresenceTimeoutConfi
                 recipientFilter: { type: 'user-scoped-only' }
             });
         }
+        await submitMachineRemoteAlerts({
+            machines: changedMachines.map(machine => ({ machineId: machine.id, accountId: machine.accountId })),
+            phase: 'offline',
+        });
     } catch (error) {
         if (!isRetryableSqliteWriteError(error)) throw error;
         warn({ module: "presence-timeout", error }, "Transient DB error while timing out machines");
