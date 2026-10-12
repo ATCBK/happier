@@ -8,10 +8,11 @@ vi.mock('@/text', async () => {
     });
 });
 
-import { resolveExecutionRunBackendLabel } from './resolveExecutionRunBackendLabel';
+import { lightTheme } from '@/theme';
+import { resolveExecutionRunAgentMarkId, resolveExecutionRunBackendLabel } from './resolveExecutionRunBackendLabel';
 
 const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ id: 'review-bot', name: 'review-bot',
-    title: 'Account review helper', command: 'acp', args: [], createdAt: 1, updatedAt: 1 }] });
+    title: 'Account review helper', launch: { kind: 'command' as const, command: 'acp', args: [] }, createdAt: 1, updatedAt: 1 }] });
 
 describe('resolveExecutionRunBackendLabel', () => {
     it('projects a configured Run label from the ready Account row after Settings root removal', () => {
@@ -30,5 +31,13 @@ describe('resolveExecutionRunBackendLabel', () => {
         expect(resolveExecutionRunBackendLabel({ kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' },
             { status: 'partial', reason: 'incomplete-inventory', record, diagnostics: [] }))
             .toBe('review-bot');
+    });
+});
+
+describe('resolveExecutionRunAgentMarkId', () => {
+    it('names the run\u2019s Agent when it carries its own brand mark, and nothing for a configured backend or no run', () => {
+        expect(resolveExecutionRunAgentMarkId({ kind: 'backend', backendId: 'claude' }, lightTheme)).toBe('claude');
+        expect(resolveExecutionRunAgentMarkId({ kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' }, lightTheme)).toBeNull();
+        expect(resolveExecutionRunAgentMarkId(null, lightTheme)).toBeNull();
     });
 });
