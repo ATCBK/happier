@@ -69,11 +69,15 @@ export type ModelPackDownloadStream = Readonly<{
   /** Pull the next chunk; resolves `null` when the stream is exhausted. */
   read: () => Promise<Uint8Array | null>;
   /** Stop the underlying response when verification aborts before EOF. */
-  cancel?: () => void;
+  cancel?: () => void | Promise<void>;
 }>;
 
 export type ModelPackDownloadRequest = Readonly<{
   url: string;
+  /** Logical installation identity for hosts that transfer artifact bytes directly to disk. */
+  packId?: string;
+  /** Numeric transport progress before a disk-backed response is read for verification. */
+  onProgress?: (loaded: number) => void;
   /** When set, request `bytes=<rangeStart>-` to resume from this byte offset. */
   rangeStart?: number;
   signal: AbortSignal;
@@ -232,6 +236,7 @@ function throwIfAborted(signal: AbortSignal): void {
  */
 async function downloadFileResumable(opts: {
   host: ModelPackInstallerHost;
+  packId: string;
   staging: ModelPackStagingHandle;
   entry: ModelPackManifest['files'][number];
   signal: AbortSignal;
@@ -242,15 +247,17 @@ async function downloadFileResumable(opts: {
   const expectedSha = entry.sha256.trim().toLowerCase();
   const expectedSize = Math.max(0, Math.trunc(entry.sizeBytes));
 
-  const hasher = host.createHasher();
+  let hasher = host.createHasher();
   let loaded = 0;
 
   // Resume: re-hash any trustworthy partial, else reset it.
   const existing = await staging.partialByteLength(entry.path);
+  throwIfAborted(signal);
   if (existing > 0 && existing <= expectedSize) {
     let streamed = 0;
     try {
       const reported = await staging.streamPartial(entry.path, async (chunk) => {
+        throwIfAborted(signal);
         if (chunk.byteLength === 0) return;
         streamed += chunk.byteLength;
         if (streamed > expectedSize) {
@@ -258,7 +265,9 @@ async function downloadFileResumable(opts: {
         }
         hasher.update(chunk);
         opts.onFileProgress(streamed);
+        throwIfAborted(signal);
       });
+      throwIfAborted(signal);
       if (reported !== streamed || streamed !== existing) {
         await staging.resetPartial(entry.path);
         return downloadFileResumable({ ...opts, onFileProgress: opts.onFileProgress });
@@ -266,6 +275,8 @@ async function downloadFileResumable(opts: {
         loaded = streamed;
       }
     } catch (error) {
+      // Cancelling verification does not invalidate the existing resumable prefix.
+      throwIfAborted(signal);
       await staging.resetPartial(entry.path);
       if (error instanceof ModelPackInstallError) {
         throw error;
@@ -292,6 +303,8 @@ async function downloadFileResumable(opts: {
 
   const stream = await host.openDownload({
     url: entry.url,
+    packId: opts.packId,
+    onProgress: (written) => opts.onFileProgress(Math.min(expectedSize, loaded + Math.max(0, written))),
     rangeStart: loaded > 0 ? loaded : undefined,
     signal,
   });
@@ -301,23 +314,20 @@ async function downloadFileResumable(opts: {
       ...opts.urlPolicy,
       requestUrl: stream.finalUrl ?? entry.url,
     });
-  } catch (error) {
-    stream.cancel?.();
-    throw error;
-  }
 
-  // If we asked to resume but the server ignored the Range, restart cleanly so we
-  // do not append a full body onto an existing prefix.
-  if (loaded > 0 && !stream.isPartial) {
-    await staging.resetPartial(entry.path);
-    loaded = 0;
-    const fresh = host.createHasher();
+    // An ignored Range sends a full body, so reset the prefix before appending it.
+    if (loaded > 0 && !stream.isPartial) {
+      await staging.resetPartial(entry.path);
+      loaded = 0;
+      hasher = host.createHasher();
+    }
+
     await consumeStream({
       stream,
-      hasher: fresh,
+      hasher,
       staging,
       entry,
-      startOffset: 0,
+      startOffset: loaded,
       expectedSize,
       signal,
       onFileProgress: opts.onFileProgress,
@@ -326,37 +336,17 @@ async function downloadFileResumable(opts: {
           await staging.resetPartial(entry.path);
           throw new ModelPackInstallError('model_pack_size_mismatch');
         }
-        const actualSha = (await fresh.digestHex()).toLowerCase();
+        const actualSha = (await hasher.digestHex()).toLowerCase();
         if (actualSha !== expectedSha) {
           await staging.resetPartial(entry.path);
           throw new ModelPackInstallError('model_pack_sha256_mismatch');
         }
       },
     });
-    return;
+  } catch (error) {
+    await cancelDownloadAfterFailure(stream);
+    throw error;
   }
-
-  await consumeStream({
-    stream,
-    hasher,
-    staging,
-    entry,
-    startOffset: loaded,
-    expectedSize,
-    signal,
-    onFileProgress: opts.onFileProgress,
-    finalize: async (finalLoaded) => {
-      if (finalLoaded !== expectedSize) {
-        await staging.resetPartial(entry.path);
-        throw new ModelPackInstallError('model_pack_size_mismatch');
-      }
-      const actualSha = (await hasher.digestHex()).toLowerCase();
-      if (actualSha !== expectedSha) {
-        await staging.resetPartial(entry.path);
-        throw new ModelPackInstallError('model_pack_sha256_mismatch');
-      }
-    },
-  });
 }
 
 async function consumeStream(opts: {
@@ -371,26 +361,27 @@ async function consumeStream(opts: {
   finalize: (finalLoaded: number) => Promise<void>;
 }): Promise<void> {
   let loaded = opts.startOffset;
-  let completed = false;
-  try {
-    for (;;) {
-      throwIfAborted(opts.signal);
-      const chunk = await opts.stream.read();
-      if (chunk === null) break;
-      if (chunk.byteLength === 0) continue;
-      loaded += chunk.byteLength;
-      if (loaded > opts.expectedSize) {
-        await opts.staging.resetPartial(opts.entry.path);
-        throw new ModelPackInstallError('model_pack_size_mismatch');
-      }
-      opts.hasher.update(chunk);
-      await opts.staging.appendDownloadedChunk(opts.entry.path, chunk);
-      opts.onFileProgress(loaded);
+  for (;;) {
+    throwIfAborted(opts.signal);
+    const chunk = await opts.stream.read();
+    throwIfAborted(opts.signal);
+    if (chunk === null) break;
+    if (chunk.byteLength === 0) continue;
+    loaded += chunk.byteLength;
+    if (loaded > opts.expectedSize) {
+      await opts.staging.resetPartial(opts.entry.path);
+      throw new ModelPackInstallError('model_pack_size_mismatch');
     }
-    await opts.finalize(loaded);
-    completed = true;
-  } finally {
-    if (!completed) opts.stream.cancel?.();
+    opts.hasher.update(chunk);
+    await opts.staging.appendDownloadedChunk(opts.entry.path, chunk);
+    opts.onFileProgress(loaded);
+  }
+  await opts.finalize(loaded);
+}
+
+async function cancelDownloadAfterFailure(stream: ModelPackDownloadStream): Promise<void> {
+  try { await stream.cancel?.(); } catch (error) {
+    console.warn('model_pack_download_cleanup_failed', error);
   }
 }
 
@@ -458,12 +449,14 @@ export async function installModelPackWithHost(opts: {
       let loadedThisFile = 0;
       await downloadFileResumable({
         host: opts.host,
+        packId,
         staging,
         entry,
         signal: opts.signal,
         onFileProgress: (loadedForFile) => {
-          const delta = Math.max(0, loadedForFile - loadedThisFile);
-          loadedThisFile = loadedForFile;
+          const nextLoaded = Math.max(loadedThisFile, loadedForFile);
+          const delta = nextLoaded - loadedThisFile;
+          loadedThisFile = nextLoaded;
           loadedTotal += delta;
           opts.onProgress?.({ loaded: loadedTotal, total, file: entry.path });
         },

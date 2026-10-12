@@ -45,6 +45,70 @@ function runInstall(
 }
 
 describe('installModelPackWithHost (shared core)', () => {
+  it.each([0, 2])('keeps progress monotonic when transport completes before verification with prefix %i', async (prefixLength) => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const host = createMemoryModelPackInstallerHost();
+    host.serveFile('https://example.com/model.onnx', bytes, { chunks: [bytes.slice(0, 2), bytes.slice(2)] });
+    const manifest = manifestFor([
+      { path: 'model.onnx', url: 'https://example.com/model.onnx', sha256: sha256Hex(bytes), sizeBytes: bytes.length },
+    ]);
+    if (prefixLength) host.seedPartialDownload('example/model.onnx', bytes.slice(0, prefixLength), deriveModelPackStagingPlan(manifest).key);
+    const baseHost = host.host;
+    const loaded: number[] = [];
+    await installModelPackWithHost({
+      host: {
+        ...baseHost,
+        openDownload: async (request) => {
+          request.onProgress?.(bytes.length);
+          // The server ignores Range and sends a complete replacement response.
+          return baseHost.openDownload({ ...request, rangeStart: undefined });
+        },
+      },
+      packId: manifest.packId, manifest, signal: new AbortController().signal,
+      onProgress: (progress) => { loaded.push(progress.loaded); expect(progress.total).toBe(bytes.length); },
+    });
+    expect(loaded[prefixLength ? 1 : 0]).toBe(bytes.length);
+    expect(loaded.every((value, index) => value <= bytes.length && value >= (loaded[index - 1] ?? 0))).toBe(true);
+    expect(loaded.at(-1)).toBe(bytes.length);
+    expect(host.read('example/model.onnx')).toEqual(bytes);
+  });
+
+  it('stops a cancelled partial rehash without discarding its resumable prefix', async () => {
+    const bytes = new Uint8Array([10, 20, 30, 40, 50, 60, 70, 80]);
+    const host = createMemoryModelPackInstallerHost();
+    host.serveFile('https://example.com/model.onnx', bytes);
+    const manifest = manifestFor([
+      { path: 'model.onnx', url: 'https://example.com/model.onnx', sha256: sha256Hex(bytes), sizeBytes: bytes.length },
+    ]);
+    host.seedPartialDownload('example/model.onnx', bytes.slice(0, 4), deriveModelPackStagingPlan(manifest).key);
+    const baseHost = host.host;
+    let partialChunks = 0;
+    const streamingHost = {
+      ...baseHost,
+      beginStaging: async (...args: Parameters<typeof baseHost.beginStaging>) => {
+        const staging = await baseHost.beginStaging(...args);
+        return {
+          ...staging,
+          streamPartial: async (_path: string, onChunk: (chunk: Uint8Array) => void | Promise<void>) => {
+            for (const chunk of [bytes.slice(0, 2), bytes.slice(2, 4)]) {
+              partialChunks += 1;
+              await onChunk(chunk);
+            }
+            return 4;
+          },
+        };
+      },
+    };
+    const controller = new AbortController();
+    await expect(installModelPackWithHost({ host: streamingHost, packId: manifest.packId, manifest,
+      signal: controller.signal, onProgress: () => controller.abort() })).rejects.toThrow('aborted');
+    expect(partialChunks).toBe(1);
+    expect(host.requestedUrls()).toEqual([]);
+    await runInstall(host, manifest);
+    expect(host.rangeRequestsFor('https://example.com/model.onnx')).toEqual([{ start: 4 }]);
+    expect(host.read('example/model.onnx')).toEqual(bytes);
+  });
+
   it('binds resumable staging to plugin identity, version, and exact artifact binding', () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const manifest = manifestFor([
@@ -221,6 +285,50 @@ describe('installModelPackWithHost (shared core)', () => {
     })).rejects.toThrow('model_pack_size_mismatch');
     expect(cancel).toHaveBeenCalledOnce();
     expect(host.leftovers()).toEqual([]);
+  });
+
+  it('awaits opened-response cleanup when resetting an ignored Range fails', async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const host = createMemoryModelPackInstallerHost();
+    const manifest = manifestFor([
+      { path: 'model.onnx', url: 'https://example.com/model.onnx', sha256: sha256Hex(bytes), sizeBytes: bytes.length },
+    ]);
+    host.serveFile('https://example.com/model.onnx', bytes);
+    host.seedPartialDownload('example/model.onnx', bytes.slice(0, 2), deriveModelPackStagingPlan(manifest).key);
+    const baseHost = host.host;
+    let resetStarted!: () => void;
+    const resetting = new Promise<void>((resolve) => { resetStarted = resolve; });
+    let finishCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+    let cancelled = false;
+    let cleanupFinished = false;
+    const install = installModelPackWithHost({
+      host: {
+        ...baseHost,
+        beginStaging: async (...args) => ({
+          ...await baseHost.beginStaging(...args),
+          resetPartial: async () => { resetStarted(); throw new Error('disk_reset_failed'); },
+        }),
+        openDownload: async (request) => ({
+          ...await baseHost.openDownload({ ...request, rangeStart: undefined }),
+          cancel: async () => { cancelled = true; await cleanup; cleanupFinished = true; },
+        }),
+      },
+      packId: manifest.packId, manifest, signal: new AbortController().signal,
+    });
+    let settled = false;
+    const outcome = install.catch((error: unknown) => { settled = true; return error; });
+    await Promise.race([resetting, outcome]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const settledBeforeCleanup = settled;
+    finishCleanup();
+    const error = await outcome;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('disk_reset_failed');
+    expect(cancelled).toBe(true);
+    expect(settledBeforeCleanup).toBe(false);
+    expect(cleanupFinished).toBe(true);
+    expect(host.read('example/model.onnx')).toBeUndefined();
   });
 
   it('resumes a partial download via HTTP Range and completes successfully', async () => {
