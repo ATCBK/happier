@@ -80,8 +80,8 @@ function isMobilePluginTab(
     // Platform admission is a registry-owned binding fact. Do not retain a
     // side-channel `rightSidebar.mobile` flag: V2 never produces one, and a
     // project binding is intentionally not admitted on iOS/Android.
-    return scope === 'session'
-        && placement.binding.targetKind === 'session'
+    return (scope === 'session' || scope === 'app')
+        && placement.binding.targetKind === scope
         && (isPluginUiDestinationBindingAdmittedAtRuntimeV1({
             binding: placement.binding,
             platform: 'ios',

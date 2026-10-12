@@ -9,11 +9,14 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 
+/** The drawn tab square; the platform touch floor grows only its press frame. */
+const RIGHT_SIDEBAR_TAB_SIZE_PX = 32;
+
 const stylesheet = StyleSheet.create((theme) => ({
     tabList: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     marker: {
         position: 'absolute', left: 0, right: 0, bottom: -8,
@@ -57,7 +60,9 @@ export function RightSidebarIconTabBar<TTabId extends string>(props: Readonly<{
                             }
                         }}
                         variant="plain"
-                        size={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                        size={RIGHT_SIDEBAR_TAB_SIZE_PX}
+                        minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
+                        interactiveTargetGapPx={theme.space.s6}
                         selected={active}
                         selectedBackground={false}
                         accessibilityRole="tab"

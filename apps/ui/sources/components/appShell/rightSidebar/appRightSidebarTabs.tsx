@@ -10,6 +10,7 @@ import type { PluginUiProjectionModel, PluginUiSurfacePlacementProjection } from
 import { selectPluginRightSidebarTabPlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import { resolveRightSidebarTabs } from './rightSidebarTabRegistry';
 import type { PluginUiInstanceKeyV1, PluginUiLaunchInputV1 } from '@happier-dev/protocol/plugins/ui';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 /**
  * The App's own right-sidebar tabs (`rightSidebarTab × app`, design §3.3): every page's right sidebar
@@ -63,6 +64,8 @@ export const AppRightSidebarTabSurface = React.memo(function AppRightSidebarTabS
     binding?: BoundPluginSurfaceBinding;
     launchInput?: PluginUiLaunchInputV1;
     mountInstanceKey?: PluginUiInstanceKeyV1;
+    /** The containing Session's initial execution target; never a Session target binding. */
+    executionTarget?: Readonly<{ serverId: string; machineId: string }> | null;
 }>) {
     const shell = useAppShellPluginUiProjection();
     const facts = props.facts ?? {
@@ -72,6 +75,13 @@ export const AppRightSidebarTabSurface = React.memo(function AppRightSidebarTabS
         platform: shell.platform,
         interactionEnabled: shell.phase === 'current' && shell.interactionEnabled === true,
     };
+    const hasExecutionTarget = props.executionTarget !== undefined;
+    const targetServerId = props.executionTarget?.serverId;
+    const targetMachineId = props.executionTarget?.machineId;
+    const contextualTarget = React.useMemo(() => !hasExecutionTarget ? undefined
+        : targetServerId && targetMachineId ? { serverIdentityId: resolveServerProfileScopeIdForIdentifier(targetServerId),
+            machineId: targetMachineId } : null,
+    [hasExecutionTarget, targetMachineId, targetServerId]);
     return (
         <PluginSurfaceFocusEligibilityProvider active>
             <PluginSurfacePlacementHost
@@ -84,6 +94,7 @@ export const AppRightSidebarTabSurface = React.memo(function AppRightSidebarTabS
                 binding={props.binding}
                 launchInput={props.launchInput}
                 mountInstanceKey={props.mountInstanceKey}
+                contextualExecutionTarget={contextualTarget}
             />
         </PluginSurfaceFocusEligibilityProvider>
     );

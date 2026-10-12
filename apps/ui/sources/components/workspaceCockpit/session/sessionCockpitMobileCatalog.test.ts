@@ -47,6 +47,15 @@ function createMobilePluginPlacement(input: Readonly<{
 }
 
 describe('sessionCockpitMobileCatalog', () => {
+    it('includes admitted App panels in the same phone destination catalog as Session panels', () => {
+        const original = createMobilePluginPlacement({ pluginId: 'acme.triage', destinationId: 'triage', label: 'PRs & Issues' });
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId: 'acme.triage', destinationId: 'triage',
+            rendererId: 'triage-panel', container: 'rightSidebarTab', target: { kind: 'app' } });
+        if (!binding) throw new Error('App panel fixture must be admitted');
+        const placement = { ...original, binding, target: binding.target };
+        const catalog = resolveSessionCockpitMobileCatalog({ terminalTabAvailable: false, appPluginPlacements: [placement] });
+        expect(resolveSessionCockpitMobileNavigatorSurfaces({ catalog })).toContain('plugin:acme.triage:triage');
+    });
     it('uses shared placement order and hides tools from both the bar and More while reserving Chat', () => {
         const catalog = resolveSessionCockpitMobileCatalog({ terminalTabAvailable: true });
         const visibility = resolveSessionCockpitMobileTabVisibility({

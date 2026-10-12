@@ -3,6 +3,7 @@ import { resolveRightSidebarMobileProjection } from '@/components/appShell/right
 import { resolveSessionRightSidebarTabs } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import type { RightSidebarTabDefinition } from '@/components/appShell/rightSidebar/rightSidebarBuiltinTabs';
 import type { RightSidebarPluginTabRuntimeAdmission } from '@/components/appShell/rightSidebar/rightSidebarPluginTabs';
+import type { ResolveRightSidebarTabsInput } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import type { PluginUiSurfacePlacementProjection } from '@/sync/domains/plugins/ui/projection';
 import { SESSION_COCKPIT_DEFAULT_BAR_SURFACE_IDS, resolveNavigationPlacements, type NavigationPlacement, type NavigationPlacementPreferences } from '@/sync/domains/settings/mobileSurfacePinning';
 
@@ -82,7 +83,8 @@ function addCatalogEntry(
     result.push(entry);
 }
 
-export function resolveSessionCockpitMobileCatalog(input: Readonly<{
+export function resolveSessionCockpitMobileCatalog(input: Readonly<Pick<ResolveRightSidebarTabsInput,
+    'appPluginPlacements' | 'appProjectionGeneration' | 'appLocalize'> & {
     terminalTabAvailable: boolean;
     /**
      * The exact Home's `sessions.board` decision; omitted means disabled. It
@@ -98,6 +100,9 @@ export function resolveSessionCockpitMobileCatalog(input: Readonly<{
     const projectedEntries = resolveRightSidebarMobileProjection({
         scope: 'session',
         tabs: resolveSessionRightSidebarTabs({
+            appPluginPlacements: input.appPluginPlacements,
+            appProjectionGeneration: input.appProjectionGeneration,
+            appLocalize: input.appLocalize,
             presentation: 'mobile',
             terminalTabAvailable: input.terminalTabAvailable,
             boardFeatureEnabled: input.boardFeatureEnabled === true,
