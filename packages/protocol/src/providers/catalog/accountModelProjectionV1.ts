@@ -1,8 +1,11 @@
 import type { AgentProviderRequirementsV1 } from '../compatibility/v1.js';
 import type { ProviderContributionV1 } from '../contributions/v1.js';
+import type { CustomProviderTemplateV1 } from '../connections/customTemplateV1.js';
+import type { ProviderConnectionV1 } from '../connections/v1.js';
 import type { ProviderConnectionsCatalogV1 } from '../connections/catalogSchemasV1.js';
 import type { ProviderDefaultModelSelectionsByAgentTargetKeyV1 } from '../selection/v1.js';
 import type { DaemonProviderModelProjectionRequestV1, DaemonProviderModelProjectionResponseV1 } from '../../rpc/providers.js';
+import type { DaemonProviderModelsResponseV1 } from '../../rpc/providers.js';
 import { createProviderErrorV1 } from '../errors.js';
 import { resolveProviderBindingDeclarationCompatibilityV1 } from '../compatibility/resolve.js';
 import { mergeProviderCatalogV1, providerCatalogPermitsUnlistedModelIdV1 } from './merge.js';
@@ -11,6 +14,7 @@ import { projectProviderCatalogForPicker } from './pickerProjectionV1.js';
 import type { ProviderConnectionCatalog } from './pickerTypesV1.js';
 import { readOwnRecordValue } from '../ownRecordValue.js';
 import { canonicalizeProviderContributionKeyV1 } from '../contributionIdentityV1.js';
+import { serializeModelVisibilityRefV1 } from '../selection/v1.js';
 import { DaemonProviderModelProjectionGroupV1Schema } from '../../rpc/providers.js';
 
 export type AccountProviderDeclarationV1 = Readonly<{
@@ -23,6 +27,52 @@ export type AccountProviderModelProjectionInputV1 = Readonly<{
   request: Omit<DaemonProviderModelProjectionRequestV1, 'machineId' | 'forceRefresh'>;
   defaultsByAgentTargetKey?: ProviderDefaultModelSelectionsByAgentTargetKeyV1;
 }>;
+
+type AccountConnectionCatalogInputV1 = Readonly<{
+  catalog: ProviderConnectionsCatalogV1;
+  connection: ProviderConnectionV1;
+  source: ProviderContributionV1 | CustomProviderTemplateV1;
+}>;
+
+function mergeAccountConnectionCatalog(input: AccountConnectionCatalogInputV1) {
+  return mergeProviderCatalogV1({
+    staticModels: 'staticModels' in input.source.catalog ? input.source.catalog.staticModels : [],
+    manualModels: readOwnRecordValue(input.catalog.manualModelsByConnectionId, input.connection.id) ?? [],
+    probeState: { snapshot: null, staleProbeModels: [] },
+    ...('membershipPolicy' in input.source.catalog ? { membershipPolicy: input.source.catalog.membershipPolicy } : {}),
+  });
+}
+
+/** Account management rows; machine probes and runtime availability are separate observations. */
+export function projectAccountProviderConnectionModelsV1(input: AccountConnectionCatalogInputV1):
+  Extract<DaemonProviderModelsResponseV1, { status: 'success' }>['models'] {
+  return mergeAccountConnectionCatalog(input).rows.map(row => ({
+    id: row.descriptor.id, name: row.descriptor.name, source: row.sources.manual ? 'manual' : 'static',
+    stale: false, loadState: 'unknown',
+    visibility: readOwnRecordValue(input.catalog.modelVisibilityByRef, serializeModelVisibilityRefV1({
+      scope: 'allAgents', providerConnectionId: input.connection.id, modelId: row.descriptor.id,
+    })) === 'hidden' ? 'hidden_all_agents' : 'visible',
+  }));
+}
+
+export type AccountProviderCatalogCountV1 = Readonly<{ shown: number; total: number }>;
+
+/** One batched summary projection from the admitted Account catalog, without per-connection reads. */
+export function projectAccountProviderCatalogCountsV1(input: Readonly<{
+  catalog: ProviderConnectionsCatalogV1;
+  definitions: readonly AccountProviderDeclarationV1[];
+}>): Readonly<Record<string, AccountProviderCatalogCountV1>> {
+  const declarations = new Map(input.definitions.map(row => [canonicalizeProviderContributionKeyV1(row.contributionKey), row.definition]));
+  const counts: Record<string, AccountProviderCatalogCountV1> = {};
+  for (const connection of input.catalog.connections) {
+    const source = connection.source.kind === 'custom' ? connection.source.template
+      : declarations.get(canonicalizeProviderContributionKeyV1(connection.source.contributionKey));
+    if (!source) continue;
+    const rows = projectAccountProviderConnectionModelsV1({ catalog: input.catalog, connection, source });
+    counts[connection.id] = { shown: rows.filter(row => row.visibility !== 'hidden_all_agents').length, total: rows.length };
+  }
+  return counts;
+}
 
 export function projectAccountProviderModelsV1(input: AccountProviderModelProjectionInputV1): DaemonProviderModelProjectionResponseV1 {
   const agent = input.agent;
@@ -40,12 +90,7 @@ export function projectAccountProviderModelsV1(input: AccountProviderModelProjec
       ? declarations.get(canonicalizeProviderContributionKeyV1(connection.source.contributionKey)) : undefined;
     const source = connection.source.kind === 'custom' ? connection.source.template : declaration?.definition;
     if (!source) continue;
-    const merged = mergeProviderCatalogV1({
-      staticModels: 'staticModels' in source.catalog ? source.catalog.staticModels : [],
-      manualModels: readOwnRecordValue(input.catalog.manualModelsByConnectionId, connection.id) ?? [],
-      probeState: { snapshot: null, staleProbeModels: [] },
-      ...('membershipPolicy' in source.catalog ? { membershipPolicy: source.catalog.membershipPolicy } : {}),
-    });
+    const merged = mergeAccountConnectionCatalog({ catalog: input.catalog, connection, source });
     const endpoints = source.endpointTemplates.map(endpoint => {
       const override = connection.endpointOverrides?.find(candidate => candidate.endpointTemplateId === endpoint.id);
       return override ? { ...endpoint, baseUrl: override.baseUrl, localUrlCandidates: undefined } : endpoint;

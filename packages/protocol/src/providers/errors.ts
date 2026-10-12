@@ -14,7 +14,7 @@ export const ProviderErrorCodeV1Schema = lazyZodSchema(() => z.enum([
   'provider_machine_unavailable',
   'machine_offline', 'agent_unavailable', 'agent_timeout', 'agent_error',
   'provider_probe_capacity_exhausted',
-  'provider_rpc_response_invalid', 'provider_rpc_mutation_outcome_unknown',
+  'provider_catalog_unavailable', 'provider_rpc_response_invalid', 'provider_rpc_mutation_outcome_unknown',
   'provider_endpoint_rate_limited', 'provider_endpoint_auth_required', 'provider_endpoint_unauthorized',
   'provider_probe_response_invalid', 'provider_model_not_found', 'provider_model_unloaded',
   'provider_authorization_changed', 'provider_binding_changed', 'provider_switch_unsupported',
@@ -62,6 +62,7 @@ const ERROR_DEFAULTS = {
   // Host-side probe admission was full, so no endpoint request was attempted.
   // Reporting an endpoint outage here would send users to check a healthy service.
   provider_probe_capacity_exhausted: [true, 'retry'],
+  provider_catalog_unavailable: [true, 'retry'],
   provider_rpc_response_invalid: [true, 'retry'],
   provider_rpc_mutation_outcome_unknown: [false, 'review_current_state'],
   provider_endpoint_rate_limited: [true, 'retry'],
@@ -141,6 +142,9 @@ export function providerErrorFromRpcFailure(
     : undefined;
   const message = caught instanceof Error ? caught.message : undefined;
 
+  if (transportCode === 'provider_catalog_unavailable') {
+    return createProviderErrorV1('provider_catalog_unavailable', context);
+  }
   if (transportCode === 'provider_catalog_outcome_unknown') {
     return createProviderErrorV1('provider_rpc_mutation_outcome_unknown', context);
   }
@@ -171,6 +175,8 @@ export function providerErrorFromRpcFailure(
     || transportCode === 'ECONNRESET'
     || transportCode === 'ERR_NETWORK'
     || transportCode === 'OFFLINE'
+    || message === 'offline'
+    || message === 'machine_offline'
     || message === 'Socket not connected'
     || message?.includes('Machine encryption not found')) {
     return createProviderErrorV1('machine_offline', context);

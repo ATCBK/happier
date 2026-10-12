@@ -5,6 +5,7 @@ import { QualifiedConnectedServiceUsageSourceV4Schema, QualifiedProviderAccountU
 import { ProviderAccountUsagePaceV1Schema, ProviderAccountUsageUnusedCapacityV1Schema } from './deriveProviderAccountUsagePace.js';
 import { UsagePacingTargetsV1Schema } from '../account/settings/usagePacingPreferencesV1.js';
 import { PendingResetStartReadinessV1Schema } from '../sessions/pending/pendingResetStartReadinessV1.js';
+import { PendingResetStartsReadResultV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
 
 // New operation envelopes and their nested range/cursor identities are closed.
 // pageSize is caller-selected paging, with no retention horizon or invented cap.
@@ -34,7 +35,7 @@ export const ConnectedServiceQuotaGetInputV1Schema = lazyZodSchema(() => z.objec
   history: ProviderAccountUsageHistoryRequestV1Schema.optional(),
 }).strict());
 export const ProviderAccountUsageWaitingWorkV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-  z.object({ status: z.literal('available'), entries: z.array(z.object({ sessionId: z.string().min(1), localId: z.string().min(1), recordId: ProviderAccountUsageRecordIdSchema, meterId: z.string().min(1), readiness: PendingResetStartReadinessV1Schema }).strict()) }).strict(),
+  z.object({ status: z.literal('available'), entries: z.array(z.object({ sessionId: z.string().min(1), localId: z.string().min(1), recordId: ProviderAccountUsageRecordIdSchema, meterId: z.string().min(1), readiness: PendingResetStartReadinessV1Schema }).strict()), unboundEntries: PendingResetStartsReadResultV1Schema.shape.unboundEntries }).strict(),
   z.object({ status: z.literal('unavailable'), reason: z.enum(['unsupported', 'authority_unavailable', 'read_failed']) }).strict(),
 ]));
 export const ConnectedServiceQuotaGetResultV1Schema = lazyZodSchema(() => z.object({

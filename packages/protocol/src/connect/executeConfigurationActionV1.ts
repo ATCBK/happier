@@ -133,6 +133,7 @@ export async function executeConnectedServiceConfigurationActionV1(
     host.assertCurrent();
     return response;
   }
+  try {
   switch (actionId) {
     case 'connectedServices.authentication.pending.list': {
       const args = inputs[actionId].parse(input);
@@ -269,6 +270,12 @@ export async function executeConnectedServiceConfigurationActionV1(
       const result = outputs[actionId].parse(value);
       if ('group' in result && !sameQualifiedConnectedAccountGroupRef(result.group, args.group)) {
         throw Object.assign(new Error('qualified_connected_accounts_inconsistent_peer'), { code: 'qualified_connected_accounts_inconsistent_peer' });
+      }
+      if ('group' in result && args.hypothetical && (!result.hypothetical
+          || result.hypothetical.strategy !== result.selection.decisionTrace.strategy
+          || (args.hypothetical.strategy !== undefined && result.hypothetical.strategy !== args.hypothetical.strategy)
+          || (args.hypothetical.atMs !== undefined && result.hypothetical.atMs !== args.hypothetical.atMs))) {
+        return { ok: false, errorCode: 'connected_account_daemon_response_invalid', error: 'connected_account_daemon_response_invalid' };
       }
       return result;
     }
@@ -498,4 +505,10 @@ export async function executeConnectedServiceConfigurationActionV1(
   }
   host.assertCurrent();
   return { applied: true };
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'qualified_connected_accounts_inconsistent_peer') {
+      return { ok: false, errorCode: error.code, error: error.code };
+    }
+    throw error;
+  }
 }

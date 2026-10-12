@@ -110,7 +110,7 @@ function parseLegacyRecoveryCredits(
     value: unknown,
 ): ConnectedServiceQuotaRecoveryCreditsV1 {
     const legacy =
-        BuiltInLegacyConnectedServiceRecoveryCreditsV1Schema.safeParse(value);
+        createStoredReadSchema(BuiltInLegacyConnectedServiceRecoveryCreditsV1Schema).safeParse(value);
     if (!legacy.success) {
         throw new BuiltInLegacyConnectedServiceCompatibilityError(
             'connected_service_recovery_credits_invalid',
@@ -243,6 +243,16 @@ function replaceRecoveryCredits(
         ...object,
         recoveryCredits: translate(object.recoveryCredits),
     };
+}
+
+function translateRecognizedStoredLegacyRecoveryCredits(value: unknown): unknown {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const credits = Reflect.get(value, 'recoveryCredits');
+    // The predecessor's discriminator selects its known providerCreditId
+    // translation before a tolerant current read could discard those fields.
+    return credits && typeof credits === 'object' && !Array.isArray(credits)
+        && Reflect.get(credits, 'kind') === 'usage_limit_resets'
+        ? replaceRecoveryCredits(value, parseLegacyRecoveryCredits) : value;
 }
 
 export function parseBuiltInLegacyConnectedServiceCredentialRecordV1(
@@ -684,9 +694,11 @@ export function parseQualifiedConnectedAccountCredentialPlaintextV1(params: Read
 export function parseBuiltInLegacyConnectedServiceQuotaSnapshotV1(
     value: unknown,
 ): ConnectedServiceQuotaSnapshotV1 {
-    const canonical = ConnectedServiceQuotaSnapshotV1Schema.safeParse(value);
+    const canonical = createStoredReadSchema(ConnectedServiceQuotaSnapshotV1Schema).safeParse(
+        translateRecognizedStoredLegacyRecoveryCredits(value),
+    );
     if (canonical.success) return canonical.data;
-    const translated = ConnectedServiceQuotaSnapshotV1Schema.safeParse(
+    const translated = createStoredReadSchema(ConnectedServiceQuotaSnapshotV1Schema).safeParse(
         replaceRecoveryCredits(value, parseLegacyRecoveryCredits),
     );
     if (!translated.success) {
@@ -707,9 +719,11 @@ export function projectBuiltInLegacyConnectedServiceQuotaSnapshotV1(
 export function parseBuiltInLegacyProviderAccountUsageSnapshotV1(
     value: unknown,
 ): ProviderAccountUsageSnapshotV1 {
-    const canonical = ProviderAccountUsageSnapshotV1Schema.safeParse(value);
+    const canonical = createStoredReadSchema(ProviderAccountUsageSnapshotV1Schema).safeParse(
+        translateRecognizedStoredLegacyRecoveryCredits(value),
+    );
     if (canonical.success) return canonical.data;
-    const translated = ProviderAccountUsageSnapshotV1Schema.safeParse(
+    const translated = createStoredReadSchema(ProviderAccountUsageSnapshotV1Schema).safeParse(
         replaceRecoveryCredits(value, parseLegacyRecoveryCredits),
     );
     if (!translated.success) {

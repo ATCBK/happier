@@ -1,5 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from './legacyConnectedServiceCompatibility.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import {
     openAccountScopedBlobCiphertext,
@@ -12,6 +14,7 @@ import {
     ConnectedServiceQuotaConfidenceV1Schema,
     ConnectedServiceQuotaMeterV1Schema,
     ConnectedServiceQuotaRecoveryCreditsV1Schema,
+    ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema,
     ConnectedServiceQuotaSourceV1Schema,
     ConnectedServiceUsageSourceV1Schema,
     type ConnectedServiceQuotaConfidenceV1,
@@ -40,10 +43,13 @@ import {
 
 export * from './providerAccountUsagePrimitives.js';
 
+export const SealedProviderAccountUsageRecoveryCreditDetailsV1Schema = lazyZodSchema(() => z.object({ ciphertext: z.string().min(1) }).strict());
+
 export const SealedProviderAccountUsageSnapshotV1Schema = lazyZodSchema(() => z.object({
     format: ConnectedServiceCredentialFormatSchema,
     ciphertext: z.string().min(1),
     subscription: SealedProviderAccountSubscriptionV1Schema.optional(),
+    recoveryCreditDetails: SealedProviderAccountUsageRecoveryCreditDetailsV1Schema.optional(),
 }));
 export type SealedProviderAccountUsageSnapshotV1 = z.infer<typeof SealedProviderAccountUsageSnapshotV1Schema>;
 
@@ -170,6 +176,7 @@ export function projectProviderAccountUsageSnapshotToQuotaFieldsV1(
         source: mapUsageSourceToQuotaSource(parsed.source),
         confidence: mapUsageConfidenceToQuotaConfidence(parsed.confidence),
         ...(parsed.recoveryCredits ? { recoveryCredits: parsed.recoveryCredits satisfies ConnectedServiceQuotaRecoveryCreditsV1 } : {}),
+        ...(parsed.recoveryCreditDetails ? { recoveryCreditDetails: parsed.recoveryCreditDetails } : {}),
         ...(parsed.subscription ? { subscription: parsed.subscription } : {}),
         meters: parsed.meters,
         ...(parsed.diagnostics ? { diagnostics: parsed.diagnostics } : {}),
@@ -229,13 +236,17 @@ const ProviderAccountUsageSubscriptionFacetV1Schema = lazyZodSchema(() => z.obje
     recordId: ProviderAccountUsageRecordIdSchema,
     subscription: ProviderAccountSubscriptionV1Schema,
 }).strict());
+const ProviderAccountUsageRecoveryCreditDetailsFacetV1Schema = lazyZodSchema(() => z.object({
+    v: z.literal(1), recordId: ProviderAccountUsageRecordIdSchema,
+    fetchedAtMs: z.number().int().nonnegative(), recoveryCreditDetails: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema,
+}).strict());
 
 export function sealProviderAccountUsageSnapshot(params: Readonly<{
     material: AccountScopedCryptoMaterial;
     snapshot: ProviderAccountUsageSnapshotV1;
     randomBytes: (length: number) => Uint8Array;
 }>): SealedProviderAccountUsageSnapshotV1 {
-    const { subscription, ...snapshot } = ProviderAccountUsageSnapshotV1Schema.parse(params.snapshot);
+    const { subscription, recoveryCreditDetails, ...snapshot } = ProviderAccountUsageSnapshotV1Schema.parse(params.snapshot);
     return {
         format: 'account_scoped_v1',
         ciphertext: sealProviderAccountUsageSnapshotCiphertext({ ...params, payload: snapshot }),
@@ -248,32 +259,59 @@ export function sealProviderAccountUsageSnapshot(params: Readonly<{
                 }),
             },
         } : {}),
+        ...(recoveryCreditDetails ? {
+            recoveryCreditDetails: { ciphertext: sealProviderAccountUsageSnapshotCiphertext({ ...params,
+                payload: { v: 1, recordId: snapshot.recordId, fetchedAtMs: snapshot.fetchedAtMs, recoveryCreditDetails },
+            }) },
+        } : {}),
     };
+}
+
+/** Open the V4 encrypted transport through the same supplemental-envelope owner. */
+export function openProviderAccountUsageEncryptedContentV4(params: Readonly<{
+    material: AccountScopedCryptoMaterial;
+    content: Readonly<{ t: 'encrypted'; c: string }> & Omit<SealedProviderAccountUsageSnapshotV1, 'format' | 'ciphertext'>;
+}>): ProviderAccountUsageSnapshotV1 | null {
+    return openSealedProviderAccountUsageSnapshot({
+        material: params.material,
+        sealed: { ...params.content, format: 'account_scoped_v1', ciphertext: params.content.c },
+    });
 }
 
 export function openSealedProviderAccountUsageSnapshot(params: Readonly<{
     material: AccountScopedCryptoMaterial;
     sealed: SealedProviderAccountUsageSnapshotV1;
 }>): ProviderAccountUsageSnapshotV1 | null {
-    const sealed = SealedProviderAccountUsageSnapshotV1Schema.safeParse(params.sealed);
+    const sealed = createStoredReadSchema(SealedProviderAccountUsageSnapshotV1Schema).safeParse(params.sealed);
     if (!sealed.success) return null;
     const opened = openProviderAccountUsageSnapshotCiphertext({
         material: params.material,
         ciphertext: sealed.data.ciphertext,
     });
-    const snapshot = ProviderAccountUsageSnapshotV1Schema.safeParse(opened?.value);
-    if (!snapshot.success) return null;
-    if (!sealed.data.subscription) return snapshot.data;
+    let snapshot: ProviderAccountUsageSnapshotV1;
+    try {
+        snapshot = parseBuiltInLegacyProviderAccountUsageSnapshotV1(opened?.value);
+    } catch {
+        return null;
+    }
+    const result = { ...snapshot };
+    if (sealed.data.recoveryCreditDetails) {
+        const facet = openProviderAccountUsageSnapshotCiphertext({ material: params.material, ciphertext: sealed.data.recoveryCreditDetails.ciphertext });
+        const parsedFacet = createStoredReadSchema(ProviderAccountUsageRecoveryCreditDetailsFacetV1Schema).safeParse(facet?.value);
+        if (!parsedFacet.success || parsedFacet.data.recordId !== snapshot.recordId || parsedFacet.data.fetchedAtMs !== snapshot.fetchedAtMs) return null;
+        result.recoveryCreditDetails = parsedFacet.data.recoveryCreditDetails;
+    }
+    if (!sealed.data.subscription) return result;
     const facet = openProviderAccountUsageSnapshotCiphertext({
         material: params.material,
         ciphertext: sealed.data.subscription.ciphertext,
     });
-    const parsedFacet = ProviderAccountUsageSubscriptionFacetV1Schema.safeParse(facet?.value);
-    if (!parsedFacet.success || parsedFacet.data.recordId !== snapshot.data.recordId) return null;
+    const parsedFacet = createStoredReadSchema(ProviderAccountUsageSubscriptionFacetV1Schema).safeParse(facet?.value);
+    if (!parsedFacet.success || parsedFacet.data.recordId !== snapshot.recordId) return null;
     const subscription = parsedFacet.data.subscription;
     if (
         Math.max(subscription.observedAtMs, subscription.lastRefreshError?.observedAtMs ?? 0)
         !== sealed.data.subscription.observedAtMs
     ) return null;
-    return { ...snapshot.data, subscription };
+    return { ...result, subscription };
 }

@@ -5,6 +5,21 @@ import { createProviderErrorV1, ProviderErrorV1Schema, providerErrorFromRpcFailu
 import { ProfileRecordIdV1Schema } from '../profiles/v2/profileId.js';
 
 describe('provider stable errors and compatibility envelopes', () => {
+  it('keeps an unavailable Account catalog retryable without treating it as an Agent failure', () => {
+    const failure = Object.assign(new Error('provider_catalog_unavailable'), {
+      code: 'provider_catalog_unavailable', details: { status: 'unavailable', reason: 'unreachable' },
+    });
+    expect(providerErrorFromRpcFailure(failure, { connectionId: 'pc_a' })).toMatchObject({
+      code: 'provider_catalog_unavailable', connectionId: 'pc_a', retryable: true, action: 'retry',
+    });
+  });
+  it('classifies unwrapped machine transport failures without hiding unknown causes', () => {
+    for (const failure of [new Error('offline'), new Error('machine_offline')]) {
+      expect(providerErrorFromRpcFailure(failure)).toMatchObject({ code: 'machine_offline', retryable: true, action: 'retry' });
+    }
+    expect(providerErrorFromRpcFailure(new Error('unexpected projection failure')))
+      .toMatchObject({ code: 'agent_error', retryable: false, action: 'review_connection' });
+  });
   it('distinguishes direct Run inheritance refusal from an unsupported credential format', () => {
     expect(ProviderErrorV1Schema.safeParse({
       v: 1, code: 'provider_run_credential_selection_required',

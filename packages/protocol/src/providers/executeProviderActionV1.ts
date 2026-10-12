@@ -3,7 +3,7 @@ import type { ActionExecutorContext, ActionExecutorDeps } from '../actions/execu
 import { RPC_METHODS } from '../rpc/methods.js';
 import { readRecord } from '../inputs/inputRecords.js';
 import { createProviderErrorV1, ProviderErrorV1Schema, providerErrorFromRpcFailure } from './errors.js';
-import { PROVIDER_ACTION_OUTPUT_SCHEMAS_V1, isProviderActionMachineRequiredV1, type ProviderActionRequestV1 } from './providerActionsV1.js';
+import { PROVIDER_ACTION_OUTPUT_SCHEMAS_V1, resolveProviderActionOwnerV1, type ProviderActionRequestV1 } from './providerActionsV1.js';
 import type { ProviderActionIdV1 } from './providerActionIdsV1.js';
 import type { ProviderDefaultModelSelectionMutationV1 } from './selection/v1.js';
 import type { AccountSettingsMutationResult } from '../account/settings/accountSettingMutationV1.js';
@@ -82,7 +82,7 @@ export function createProviderActionExecuteV1(host: Readonly<{
 }>): NonNullable<ActionExecutorDeps['providerActionExecute']> {
   return async (request, context): Promise<ActionExecuteResult> => {
     host.assertCurrent(context);
-    if (request.actionId !== 'providers.defaults.set' && !isProviderActionMachineRequiredV1(request) && host.account) {
+    if (resolveProviderActionOwnerV1(request) === 'accountCatalog' && host.account) {
       return host.account(request, context);
     }
     if (request.actionId === 'providers.models.source_visibility.set') {
@@ -98,7 +98,7 @@ export function createProviderActionExecuteV1(host: Readonly<{
         : `account_settings_mutation_${outcome.status}`;
       return { ok: false, errorCode, error: errorCode, details: outcome };
     }
-    if (!isProviderActionMachineRequiredV1(request)) {
+    if (resolveProviderActionOwnerV1(request) !== 'machine') {
       return { ok: false, errorCode: 'provider_account_action_unavailable', error: 'provider_account_action_unavailable' };
     }
     const { method, mutation } = rpcRoute(request.actionId);

@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { sha256 } from '@noble/hashes/sha2';
 import { z } from 'zod';
 import { ProviderAccountSubscriptionV1Schema } from './accountSubscription.js';
@@ -10,6 +11,7 @@ import {
 import {
   ConnectedServiceQuotaMeterV1Schema,
   ConnectedServiceQuotaRecoveryCreditsV1Schema,
+  ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema,
 } from './connectedServiceSchemas.js';
 import { ProviderAccountUsageDiagnosticV1Schema } from './providerAccountUsageDiagnostic.js';
 export type { ProviderAccountUsageDiagnosticV1 } from './providerAccountUsageDiagnostic.js';
@@ -133,6 +135,7 @@ export const ProviderAccountUsageSnapshotV1Schema = lazyZodSchema(() => z.object
   accountLabel: z.string().trim().min(1).max(256).nullable().optional(),
   subscription: ProviderAccountSubscriptionV1Schema.optional(),
   recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1Schema.optional(),
+  recoveryCreditDetails: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema.optional(),
   meters: z.array(ConnectedServiceQuotaMeterV1Schema),
   diagnostics: z.array(ProviderAccountUsageDiagnosticV1Schema).optional(),
 }).strict().superRefine((snapshot, ctx) => {
@@ -159,6 +162,8 @@ export const ProviderAccountUsageSnapshotV1Schema = lazyZodSchema(() => z.object
   }
 }));
 export type ProviderAccountUsageSnapshotV1 = z.infer<typeof ProviderAccountUsageSnapshotV1Schema>;
+/** Typed projection after retained Account content has been opened. */
+export const ProviderAccountUsageSnapshotV1StoredSchema = createStoredReadSchema(ProviderAccountUsageSnapshotV1Schema);
 
 /** One material projection for daemon fingerprinting and accepted plain-history coalescing. */
 export function serializeProviderAccountUsageSnapshotMaterialV1(snapshot: ProviderAccountUsageSnapshotV1): string {
@@ -169,6 +174,7 @@ export function serializeProviderAccountUsageSnapshotMaterialV1(snapshot: Provid
     source: snapshot.source, confidence: snapshot.confidence, state: snapshot.state,
     planLabel: snapshot.planLabel ?? null, accountLabel: snapshot.accountLabel ?? null,
     recoveryCredits: snapshot.recoveryCredits ?? null,
+    recoveryCreditDetails: snapshot.recoveryCreditDetails ?? null,
     subscription: subscription ? { ...subscription, observedAtMs: undefined,
       ...(subscription.lastRefreshError ? { lastRefreshError: { ...subscription.lastRefreshError, observedAtMs: undefined } } : {}) } : null,
     refreshDiagnostics: snapshot.diagnostics?.filter(entry => entry.kind === 'provider_http') ?? [],

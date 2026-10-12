@@ -1,10 +1,11 @@
 import type { AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema, composeProviderSettingsV1, splitProviderSettingsV1,
   listProviderConnectionsCatalogSavedSecretRefsV1, openProviderConnectionsContentV1, readRetainedProviderConnectionsCatalogV1,
-  ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema, type ProviderConnectionsCatalogV1, type ProviderConnectionsCatalogSnapshotV1,
+  type ProviderConnectionsCatalogV1, type ProviderConnectionsCatalogSnapshotV1,
   type ProviderConnectionsCatalogRowReadResultV1, type ProviderConnectionsRowMutationResponseV1Schema,
 } from './connectionRowsV1.js';
 import type { ProviderConnectionV1 } from './v1.js';
+import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '../selection/v1.js';
 import type { ProviderManualModelV1, SavedSecretSlotBindingsV1 } from '../settings/v1.js';
 import { addProviderConnectionV1, addOrUpdateProviderManualModelV1, bindProviderConnectionSecretV1 } from '../settings/operationsV1.js';
 import { readOwnRecordValue } from '../ownRecordValue.js';
@@ -116,7 +117,7 @@ export function removeTransferredProviderConnectionsSourceV1(raw: Readonly<Recor
   const next = { ...raw };
   const hasPreference = Object.hasOwn(next, 'providerDefaultModelSelectionsByAgentTargetKeyV1');
   if (hasPreference) {
-    if (!ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema.safeParse(next.providerDefaultModelSelectionsByAgentTargetKeyV1).success) {
+    if (!ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema.safeParse(next.providerDefaultModelSelectionsByAgentTargetKeyV1).success) {
       return { status: 'unavailable', reason: 'invalid-stored-content' };
     }
   } else next.providerDefaultModelSelectionsByAgentTargetKeyV1 = retained.defaults;

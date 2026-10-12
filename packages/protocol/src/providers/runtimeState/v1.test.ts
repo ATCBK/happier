@@ -65,6 +65,18 @@ function validFile() {
 }
 
 describe('provider endpoint runtime state', () => {
+  it('retains stored observations with retired annotations while keeping authored files strict', () => {
+    const expected = validFile();
+    const row = expected.endpointHealth[0];
+    const retained = { ...expected, retired: true, endpointHealth: [{ ...row, retired: true,
+      key: { ...row.key, retired: true }, state: { ...row.state, retired: true } }] };
+    expect(parseProviderRuntimeStateFileV1(retained, { expectedMachineId: 'machine_a' }))
+      .toEqual({ ok: true, state: expected });
+    expect(ProviderRuntimeStateFileV1Schema.safeParse(retained).success).toBe(false);
+    expect(parseProviderRuntimeStateFileV1({ ...retained, endpointHealth: [{ ...row,
+      state: { ...row.state, staleAt: 0 } }] }, { expectedMachineId: 'machine_a' }))
+      .toMatchObject({ ok: false });
+  });
   it('accepts only the exact error and timing shape owned by each settled status', () => {
     const valid = [
       { status: 'not_checked', activity: 'idle' },

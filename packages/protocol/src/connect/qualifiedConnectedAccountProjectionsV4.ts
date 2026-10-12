@@ -7,6 +7,7 @@ import {
 } from '../plugins/contributionIdentity.js';
 import { StoredJsonContentEnvelopeSchema } from '../storage/storedJsonContentEnvelope.js';
 import { SealedProviderAccountSubscriptionV1Schema } from './accountSubscription.js';
+import { SealedProviderAccountUsageRecoveryCreditDetailsV1Schema } from './accountUsage.js';
 import {
   ConnectedServiceAuthGroupIdSchema,
   ConnectedServiceAuthGroupMemberStateV1Schema,
@@ -68,7 +69,7 @@ export const QualifiedConnectedServiceUsageSourceV4Schema = lazyZodSchema(() => 
   z.object({ ref: asProtocolZod(QualifiedConnectedAccountRefSchema), bindingKind: z.literal('account') }).strict(),
   z.object({ ref: asProtocolZod(QualifiedConnectedAccountRefSchema), bindingKind: z.literal('group_member'), groupId: ConnectedServiceAuthGroupIdSchema, groupGeneration: z.number().int().nonnegative().optional() }).strict(),
 ]));
-export const ProviderAccountUsageEncryptedContentV4Schema = lazyZodSchema(() => z.object({ t: z.literal('encrypted'), c: z.string().min(1), subscription: SealedProviderAccountSubscriptionV1Schema.optional() }).strict());
+export const ProviderAccountUsageEncryptedContentV4Schema = lazyZodSchema(() => z.object({ t: z.literal('encrypted'), c: z.string().min(1), subscription: SealedProviderAccountSubscriptionV1Schema.optional(), recoveryCreditDetails: SealedProviderAccountUsageRecoveryCreditDetailsV1Schema.optional() }).strict());
 export const QualifiedProviderAccountUsageRecordResponseV4Schema = lazyZodSchema(() => z.object({
   content: z.discriminatedUnion('t', [StoredJsonContentEnvelopeSchema.options[0], ProviderAccountUsageEncryptedContentV4Schema]),
   metadata: z.object({ fetchedAt: z.number().int().nonnegative(), staleAfterMs: z.number().int().nonnegative(), status: z.enum(['ok', 'unavailable', 'estimated', 'error']), refreshRequestedAt: z.number().int().nonnegative().optional() }).strict(),

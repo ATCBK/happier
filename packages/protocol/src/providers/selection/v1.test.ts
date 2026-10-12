@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyProviderDefaultModelSelectionV1,
   ProviderBoundModelRefSchema,
   SessionActiveModelSelectionV1Schema,
   SessionAppliedModelV1Schema,
@@ -25,6 +26,22 @@ import { readExactSessionActiveModelSelectionV1 } from './activeSelectionValidat
 import { createProviderBindingSecurityFingerprintV1 } from '../securityFingerprintsV1.js';
 
 describe('provider model selection contracts', () => {
+  it('reads retained canonical model intent without letting retired keys select the legacy fallback', () => {
+    const intent = { v: 1, selection: { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_one', modelId: 'model/a' }, updatedAt: 1 };
+    const annotated = { ...intent, retired: true, selection: { ...intent.selection, retired: true } };
+    expect(readSessionModelSelectionIntentSourceV1({ canonical: annotated, legacy: undefined }))
+      .toEqual({ status: 'canonical', intent });
+    expect(readSessionModelSelectionIntentSourceV1({ canonical: { ...annotated, updatedAt: -1 }, legacy: undefined }))
+      .toEqual({ status: 'invalid' });
+    expect(SessionModelSelectionIntentV1Schema.safeParse(annotated).success).toBe(false);
+  });
+  it('edits one default while projecting retired fields in the retained selections', () => {
+    const selection = { v: 1, ref: { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_one', modelId: 'model/a' }, updatedAt: 1 };
+    const raw = { providerDefaultModelSelectionsByAgentTargetKeyV1: { 'agent:codex': { ...selection, retired: true,
+      ref: { ...selection.ref, retired: true } } } };
+    expect(applyProviderDefaultModelSelectionV1(raw, { agentTargetKey: 'agent:claude', selection: null }))
+      .toEqual({ providerDefaultModelSelectionsByAgentTargetKeyV1: { 'agent:codex': selection } });
+  });
   it('joins active model proof to the exact current runner and rejects fallback or mismatched binding facts', () => {
     const runtime = {
       v: 1,

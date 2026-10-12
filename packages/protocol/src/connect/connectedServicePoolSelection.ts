@@ -59,6 +59,11 @@ export const ConnectedServicePoolSelectionGetRequestV1Schema = lazyZodSchema(() 
   machineId: z.string().trim().min(1),
   group: QualifiedConnectedAccountGroupRefSchema,
   providerLimitId: z.string().trim().min(1).optional(),
+  /** Evaluates retained facts only; it neither switches accounts nor predicts a refreshed quota. */
+  hypothetical: z.object({
+    strategy: ConnectedServiceAuthGroupPolicyV1Schema.shape.strategy.optional(),
+    atMs: z.number().finite().nonnegative().optional(),
+  }).strict().optional(),
 }).strict());
 
 export const ConnectedServicePoolSelectionGetResponseV1Schema = lazyZodSchema(() => z.union([
@@ -66,6 +71,10 @@ export const ConnectedServicePoolSelectionGetResponseV1Schema = lazyZodSchema(()
     group: QualifiedConnectedAccountGroupRefSchema,
     observedAtMs: FiniteNumberSchema,
     selection: ConnectedServicePoolSelectionV1Schema,
+    hypothetical: z.object({
+      strategy: ConnectedServiceAuthGroupPolicyV1Schema.shape.strategy,
+      atMs: z.number().finite().nonnegative(),
+    }).strict().optional(),
   }).strict(),
   z.object({ status: z.literal('unavailable'), code: z.enum([
     'connected_account_daemon_owner_unavailable', 'connected_account_daemon_runtime_unavailable',

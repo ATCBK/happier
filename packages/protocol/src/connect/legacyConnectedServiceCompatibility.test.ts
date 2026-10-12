@@ -170,10 +170,8 @@ describe('legacy recovery-credit schema characterization', () => {
         expect(trimmed.recoveryCredits?.credits[0]).toMatchObject({ id: 'credit_123', description: 'detail' });
     });
 
-    it('retains closed objects and the aggregate count refinement', () => {
+    it('retains the stored aggregate count refinement', () => {
         for (const recoveryCredits of [
-            { ...remoteRecoveryCredits, extra: true },
-            { ...remoteRecoveryCredits, credits: [{ ...remoteRecoveryCredits.credits[0], extra: true }] },
             { ...remoteRecoveryCredits, totalCount: 0 },
             { ...remoteRecoveryCredits, availableCount: 1.5 },
         ]) {

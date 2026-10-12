@@ -1,13 +1,13 @@
 import type { ActionExecuteResult } from '../../actions/actionExecutionResult.js';
 import type { ActionExecutorContext } from '../../actions/executor/types.js';
 import type { AgentProviderRequirementsV1 } from '../compatibility/v1.js';
-import { projectAccountProviderModelsV1, type AccountProviderDeclarationV1 } from '../catalog/accountModelProjectionV1.js';
+import { projectAccountProviderConnectionModelsV1, projectAccountProviderModelsV1, type AccountProviderDeclarationV1 } from '../catalog/accountModelProjectionV1.js';
 export type { AccountProviderDeclarationV1 } from '../catalog/accountModelProjectionV1.js';
 import { resolveProviderManagedRuntimeDeclarationV1, resolveManagedPurposeBindingIntentsV1 } from '../contributions/v1.js';
 import { areProviderContributionKeysEqualV1, canonicalizeProviderContributionKeyV1, parseProviderContributionIdentityV1 } from '../contributionIdentityV1.js';
 import { createProviderErrorV1, ProviderErrorV1Schema, type ProviderErrorCodeV1 } from '../errors.js';
-import { createProviderFingerprintV1 } from '../fingerprints.js';
-import { PROVIDER_ACTION_OUTPUT_SCHEMAS_V1, isProviderActionMachineRequiredV1, type ProviderActionRequestV1 } from '../providerActionsV1.js';
+import { canonicalizeFingerprintValue, createProviderFingerprintV1 } from '../fingerprints.js';
+import { PROVIDER_ACTION_OUTPUT_SCHEMAS_V1, resolveProviderActionOwnerV1, type ProviderActionRequestV1, type ProviderActionInputByIdV1 } from '../providerActionsV1.js';
 import { createProviderConnectionSecurityFingerprintV1, PROVIDER_CONNECTION_SECURITY_CONTRACT_VERSION_V1 } from '../securityFingerprintsV1.js';
 import { addProviderConnectionV1, bindProviderConnectionSecretV1,
   addOrUpdateProviderManualModelsV1, removeProviderManualModelV1, deleteProviderConnectionV1,
@@ -18,11 +18,9 @@ import { ProviderConnectionV1Schema, type ProviderConnectionV1 } from './v1.js';
 import { prepareProviderConnectionCreationV1 } from './creationV1.js';
 import { composeProviderSettingsV1, splitProviderSettingsV1, type ProviderConnectionsCatalogV1,
   type ProviderConnectionsCatalogSnapshotV1 } from './connectionRowsV1.js';
-import { DaemonProviderConnectionViewV1Schema, type DaemonProviderConnectionViewV1, type DaemonProviderModelsResponseV1 } from '../../rpc/providers.js';
-import { readProviderConnectionSourceFactsV1 } from './sourceFactsV1.js';
+import { DaemonProviderConnectionViewV1Schema, type DaemonProviderConnectionViewV1 } from '../../rpc/providers.js';
+import { readProviderConnectionSourceFactsV1, projectAvailableProviderContributionsV1 } from './sourceFactsV1.js';
 import { normalizeProviderEndpointUrlSyntax } from '../safety/url.js';
-import { mergeProviderCatalogV1 } from '../catalog/merge.js';
-import { serializeModelVisibilityRefV1 } from '../selection/v1.js';
 import { createProviderCustomCopyTemplateV1 } from './customCopyV1.js';
 import { compareProviderCanonicalStringsV1 } from '../canonicalOrderV1.js';
 
@@ -132,7 +130,7 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
 }>): (request: ProviderActionRequestV1, context: ActionExecutorContext) => Promise<ActionExecuteResult> {
   return async (request, context) => {
     context.signal?.throwIfAborted(); host.assertCurrent();
-    if (isProviderActionMachineRequiredV1(request) || request.actionId === 'providers.defaults.set') {
+    if (resolveProviderActionOwnerV1(request) !== 'accountCatalog') {
       return { ok: false, errorCode: 'provider_account_action_unavailable', error: 'provider_account_action_unavailable' };
     }
     const captured = await host.readCatalog();
@@ -161,6 +159,47 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
       settings = { ...settings, accountGrants: enabled ? [...remaining, { v: 1, connectionId: connection.id,
         connectionSecurityFingerprint: securityFingerprint(connection, requireSource(connection)), confirmedAt: now }] : remaining };
     };
+    const updateConnection = (input: ProviderActionInputByIdV1['providers.connections.update']) => {
+      const previous = find(input.connectionId); requireRevision(previous, input.expectedRevision);
+      if (input.template && previous.source.kind !== 'custom') refuse('provider_connection_invalid', previous.id);
+      const source = sourceFor(previous, definitions); const deployment = input.deployment ?? previous.deployment;
+      if (deployment.kind === 'external' && (input.gatewayPlacement != null || input.claudeHelperModels != null)) refuse('provider_connection_invalid', previous.id);
+      const changedMode = deployment.kind !== previous.deployment.kind;
+      const candidate = { ...previous, ...(input.template ? { source: { kind: 'custom' as const, template: input.template } } : {}),
+        ...(input.displayName ? { displayName: input.displayName, displayNameMode: 'custom' as const } : {}),
+        ...(input.displayNameMode ? { displayNameMode: input.displayNameMode, ...(input.displayNameMode === 'automatic' ? { displayName: source?.definition.name ?? previous.displayName } : {}) } : {}),
+        deployment: { kind: deployment.kind }, revision: previous.revision + 1, updatedAt: now };
+      if (deployment.kind === 'managedLocal') {
+        if (input.deployment?.kind === 'managedLocal' && (!source || !('managedRuntime' in source.definition) || !source.definition.managedRuntime)) refuse('provider_connection_invalid', previous.id);
+        delete candidate.endpointOverrides; delete candidate.endpointOverridesByMachineId;
+        if (input.deployment?.kind === 'managedLocal') candidate.purposeBindingDefaults = input.deployment.purposeBindingDefaults;
+        if (input.gatewayPlacement !== undefined) { if (input.gatewayPlacement === null) delete candidate.gatewayPlacement; else candidate.gatewayPlacement = input.gatewayPlacement; }
+        if (input.claudeHelperModels !== undefined) { if (input.claudeHelperModels === null) delete candidate.claudeHelperModels; else candidate.claudeHelperModels = input.claudeHelperModels; }
+      } else { delete candidate.purposeBindingDefaults; delete candidate.gatewayPlacement; delete candidate.claudeHelperModels; }
+      if (input.template) {
+        const declared = new Set(input.template.endpointTemplates.map(endpoint => endpoint.id));
+        if (candidate.endpointOverrides) candidate.endpointOverrides = candidate.endpointOverrides.filter(override => declared.has(override.endpointTemplateId));
+        if (candidate.endpointOverridesByMachineId) candidate.endpointOverridesByMachineId = Object.fromEntries(
+          Object.entries(candidate.endpointOverridesByMachineId).map(([id, overrides]) => [id, overrides.filter(override => declared.has(override.endpointTemplateId))]));
+      }
+      const connection = ProviderConnectionV1Schema.parse(candidate); replace(connection);
+      if (input.template && source) {
+        const nextSource = requireSource(connection);
+        const securityChanged = (machineId?: string) => securityFingerprint(previous, source, machineId) !== securityFingerprint(connection, nextSource, machineId);
+        settings = { ...settings,
+          accountGrants: securityChanged() ? settings.accountGrants.filter(grant => grant.connectionId !== connection.id) : settings.accountGrants,
+          machineGrants: settings.machineGrants.filter(grant => grant.connectionId !== connection.id || !securityChanged(grant.machineId)) };
+      }
+      if (input.deployment?.kind === 'managedLocal' && source && 'managedRuntime' in source.definition && source.definition.managedRuntime) {
+        const identity = previous.source.kind === 'contribution' ? parseProviderContributionIdentityV1(previous.source.contributionKey)?.identity : null;
+        if (!identity || resolveManagedPurposeBindingIntentsV1(connection, { implementationIdentity: identity,
+          managedRuntime: resolveProviderManagedRuntimeDeclarationV1({ implementationIdentity: identity, managedRuntime: source.definition.managedRuntime }) }) === null) refuse('provider_connection_invalid', previous.id);
+      }
+      if (changedMode) { const bindings = { ...settings.secretBindingsByConnectionId }; delete bindings[connection.id];
+        settings = { ...settings, secretBindingsByConnectionId: bindings, accountGrants: settings.accountGrants.filter(grant => grant.connectionId !== connection.id),
+          machineGrants: settings.machineGrants.filter(grant => grant.connectionId !== connection.id) }; }
+      return connection;
+    };
     let output: unknown;
     let mutation = true;
     try {
@@ -170,11 +209,7 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
           const input = request.input;
           output = { status: 'success', connections: settings.connections.filter(connection => !input.connectionId || connection.id === input.connectionId)
             .map(connection => describeAccountProviderConnectionV1(settings, connection, definitions)),
-            available: definitions.map(({ contributionKey, definition, provenance }) => ({ contributionKey, name: definition.name,
-              kind: definition.kind, provenance, icon: definition.icon ?? null, ...(definition.websiteUrl ? { websiteUrl: definition.websiteUrl } : {}),
-              credential: definition.credential ? { required: definition.credential.required,
-                ...(definition.credential.keyUrl ? { keyUrl: definition.credential.keyUrl } : {}) } : null,
-              endpointTemplates: definition.endpointTemplates.map(({ id, protocol }) => ({ id, protocol })) })),
+            available: projectAvailableProviderContributionsV1({ connections: settings.connections, definitions }),
             discoveryCandidates: [], localInstallations: [], diagnosticsTruncated: false, diagnostics: [], availableTruncated: false };
           if (input.authoringPreview) {
             const preview = input.authoringPreview;
@@ -201,15 +236,7 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
         case 'providers.models.list': {
           mutation = false;
           const connection = find(request.input.connectionId); const source = requireSource(connection);
-          const manual = settings.manualModelsByConnectionId[connection.id] ?? [];
-          const staticModels = 'staticModels' in source.definition.catalog ? source.definition.catalog.staticModels : [];
-          const merged = mergeProviderCatalogV1({ staticModels, manualModels: manual, probeState: { snapshot: null, staleProbeModels: [] },
-            ...('membershipPolicy' in source.definition.catalog ? { membershipPolicy: source.definition.catalog.membershipPolicy } : {}) });
-          const listed: Extract<DaemonProviderModelsResponseV1, { status: 'success' }>['models'] = merged.rows.map(row => ({
-            id: row.descriptor.id, name: row.descriptor.name, source: row.sources.manual ? 'manual' : 'static', stale: false, loadState: 'unknown',
-            visibility: settings.modelVisibilityByRef[serializeModelVisibilityRefV1({ scope: 'allAgents', providerConnectionId: connection.id,
-              modelId: row.descriptor.id })] === 'hidden' ? 'hidden_all_agents' : 'visible',
-          }));
+          const listed = projectAccountProviderConnectionModelsV1({ catalog: captured.catalog, connection, source: source.definition });
           output = { status: 'success', connectionId: connection.id, connectionRevision: connection.revision,
             manualModelPolicy: source.definition.catalog.manualModelPolicy, modelLoadAction: 'machine_required', models: listed };
           break;
@@ -223,7 +250,37 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
         case 'providers.connections.create_contribution':
         case 'providers.connections.create_custom': {
           const input = request.input;
-          const prepared = input.action === 'createContribution'
+          const managedCreate = input.action === 'createContribution' && input.deployment?.kind === 'managedLocal';
+          let retained: ProviderConnectionV1 | undefined;
+          if (managedCreate && input.action === 'createContribution') {
+            // Complete only an untouched interrupted authoring row; configured external sources
+            // keep their identity. The captured catalog CAS owns recovery and concurrent creation.
+            if (input.savedSecretId !== null || input.authoringReview) refuse('provider_connection_invalid', input.connectionId);
+            const matchesSource = (connection: ProviderConnectionV1) => connection.source.kind === 'contribution'
+              && areProviderContributionKeysEqualV1(connection.source.contributionKey, input.contributionKey)
+              && connection.displayName === input.displayName;
+            const untouched = (connection: ProviderConnectionV1) => matchesSource(connection)
+              && connection.role === 'named' && connection.deployment.kind === 'external' && connection.revision === 0
+              && !connection.endpointOverrides?.length && !Object.keys(connection.endpointOverridesByMachineId ?? {}).length
+              && !Object.keys(connection.modelSettings ?? {}).length
+              && !settings.secretBindingsByConnectionId[connection.id]
+              && !settings.manualModelsByConnectionId[connection.id]?.length
+              && !settings.accountGrants.some(grant => grant.connectionId === connection.id)
+              && !settings.machineGrants.some(grant => grant.connectionId === connection.id);
+            const exact = settings.connections.find(connection => connection.id === input.connectionId);
+            if (exact) {
+              const sameSlots = exact.deployment.kind === 'managedLocal' && matchesSource(exact)
+                && JSON.stringify(canonicalizeFingerprintValue(exact.purposeBindingDefaults ?? {}))
+                  === JSON.stringify(canonicalizeFingerprintValue(input.deployment?.kind === 'managedLocal' ? input.deployment.purposeBindingDefaults : {}));
+              if (!untouched(exact) && !sameSlots) refuse('provider_connection_changed', exact.id);
+              retained = exact;
+            } else {
+              const interrupted = settings.connections.filter(untouched);
+              if (interrupted.length > 1) refuse('provider_connection_changed', input.connectionId);
+              retained = interrupted[0];
+            }
+          }
+          const prepared = retained ? { settings, connection: retained, created: false } : input.action === 'createContribution'
             ? prepareProviderConnectionCreationV1({ settings, connectionId: input.connectionId, savedSecretId: input.savedSecretId, now,
                 source: { kind: 'contribution', contributionKey: input.contributionKey, displayName: input.displayName,
                   definition: (definitions.find(row => areProviderContributionKeysEqualV1(row.contributionKey, input.contributionKey)) ?? refuse('provider_contribution_unavailable')).definition },
@@ -231,8 +288,10 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
             : prepareProviderConnectionCreationV1({ settings, connectionId: input.connectionId, savedSecretId: input.savedSecretId, now,
                 source: { kind: 'custom', template: input.template }, manualModels: input.manualModels });
           settings = prepared.settings;
-          const { connection, created } = prepared;
-          if (!created) {
+          let { connection } = prepared;
+          const { created } = prepared;
+          if (managedCreate && !created && !retained) refuse('provider_connection_changed', connection.id);
+          if (!created && !managedCreate) {
             mutation = false;
             output = { status: 'success', action: input.action, connection: describeAccountProviderConnectionV1(settings, connection, definitions), created };
             break;
@@ -242,50 +301,17 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
               contributionKey: input.contributionKey, revision: connection.revision, security: securityFingerprint(connection, requireSource(connection)) });
             if (input.authoringReview.fingerprint !== fingerprint || input.authoringReview.revision !== connection.revision) refuse('provider_authorization_changed', connection.id);
           }
+          if (managedCreate && input.action === 'createContribution' && connection.deployment.kind !== 'managedLocal') {
+            connection = updateConnection({ action: 'update', connectionId: connection.id,
+              expectedRevision: connection.revision, deployment: input.deployment });
+          }
           if (input.enable) enable(connection, true);
           output = { status: 'success', action: input.action, connection: describeAccountProviderConnectionV1(settings, connection, definitions), created };
           break;
         }
         case 'providers.connections.update': {
-          const input = request.input; const previous = find(input.connectionId); requireRevision(previous, input.expectedRevision);
-          if (input.template && previous.source.kind !== 'custom') refuse('provider_connection_invalid', previous.id);
-          const source = sourceFor(previous, definitions); const deployment = input.deployment ?? previous.deployment;
-          if (deployment.kind === 'external' && (input.gatewayPlacement != null || input.claudeHelperModels != null)) refuse('provider_connection_invalid', previous.id);
-          const changedMode = deployment.kind !== previous.deployment.kind;
-          const candidate = { ...previous, ...(input.template ? { source: { kind: 'custom' as const, template: input.template } } : {}),
-            ...(input.displayName ? { displayName: input.displayName, displayNameMode: 'custom' as const } : {}),
-            ...(input.displayNameMode ? { displayNameMode: input.displayNameMode, ...(input.displayNameMode === 'automatic' ? { displayName: source?.definition.name ?? previous.displayName } : {}) } : {}),
-            deployment: { kind: deployment.kind }, revision: previous.revision + 1, updatedAt: now };
-          if (deployment.kind === 'managedLocal') {
-            if (input.deployment?.kind === 'managedLocal' && (!source || !('managedRuntime' in source.definition) || !source.definition.managedRuntime)) refuse('provider_connection_invalid', previous.id);
-            delete candidate.endpointOverrides; delete candidate.endpointOverridesByMachineId;
-            if (input.deployment?.kind === 'managedLocal') candidate.purposeBindingDefaults = input.deployment.purposeBindingDefaults;
-            if (input.gatewayPlacement !== undefined) { if (input.gatewayPlacement === null) delete candidate.gatewayPlacement; else candidate.gatewayPlacement = input.gatewayPlacement; }
-            if (input.claudeHelperModels !== undefined) { if (input.claudeHelperModels === null) delete candidate.claudeHelperModels; else candidate.claudeHelperModels = input.claudeHelperModels; }
-          } else { delete candidate.purposeBindingDefaults; delete candidate.gatewayPlacement; delete candidate.claudeHelperModels; }
-          if (input.template) {
-            const declared = new Set(input.template.endpointTemplates.map(endpoint => endpoint.id));
-            if (candidate.endpointOverrides) candidate.endpointOverrides = candidate.endpointOverrides.filter(override => declared.has(override.endpointTemplateId));
-            if (candidate.endpointOverridesByMachineId) candidate.endpointOverridesByMachineId = Object.fromEntries(
-              Object.entries(candidate.endpointOverridesByMachineId).map(([id, overrides]) => [id, overrides.filter(override => declared.has(override.endpointTemplateId))]));
-          }
-          const connection = ProviderConnectionV1Schema.parse(candidate); replace(connection);
-          if (input.template && source) {
-            const nextSource = requireSource(connection);
-            const securityChanged = (machineId?: string) => securityFingerprint(previous, source, machineId) !== securityFingerprint(connection, nextSource, machineId);
-            settings = { ...settings,
-              accountGrants: securityChanged() ? settings.accountGrants.filter(grant => grant.connectionId !== connection.id) : settings.accountGrants,
-              machineGrants: settings.machineGrants.filter(grant => grant.connectionId !== connection.id || !securityChanged(grant.machineId)) };
-          }
-          if (input.deployment?.kind === 'managedLocal' && source && 'managedRuntime' in source.definition && source.definition.managedRuntime) {
-            const identity = previous.source.kind === 'contribution' ? parseProviderContributionIdentityV1(previous.source.contributionKey)?.identity : null;
-            if (!identity || resolveManagedPurposeBindingIntentsV1(connection, { implementationIdentity: identity,
-              managedRuntime: resolveProviderManagedRuntimeDeclarationV1({ implementationIdentity: identity, managedRuntime: source.definition.managedRuntime }) }) === null) refuse('provider_connection_invalid', previous.id);
-          }
-          if (changedMode) { const bindings = { ...settings.secretBindingsByConnectionId }; delete bindings[connection.id];
-            settings = { ...settings, secretBindingsByConnectionId: bindings, accountGrants: settings.accountGrants.filter(grant => grant.connectionId !== connection.id),
-              machineGrants: settings.machineGrants.filter(grant => grant.connectionId !== connection.id) }; }
-          output = { status: 'success', action: input.action, connection: describeAccountProviderConnectionV1(settings, connection, definitions) }; break;
+          const connection = updateConnection(request.input);
+          output = { status: 'success', action: request.input.action, connection: describeAccountProviderConnectionV1(settings, connection, definitions) }; break;
         }
         case 'providers.connections.endpoint.set': {
           const input = request.input; const previous = find(input.connectionId); requireRevision(previous, input.expectedRevision);
@@ -336,7 +362,9 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
             : removeProviderManualModelV1(settings, { connectionId: connection.id, modelId: input.modelId });
           output = { status: 'success', action: input.action }; break;
         }
-        case 'providers.models.source_visibility.set': settings = setProviderModelPickerVisibilityV1(settings, request.input); output = { status: 'updated' }; break;
+        case 'providers.models.source_visibility.set':
+          find(request.input.connectionId);
+          settings = setProviderModelPickerVisibilityV1(settings, request.input); output = { status: 'updated' }; break;
         case 'providers.models.visibility.set': settings = setProviderModelVisibilityV1(settings, request.input); output = { status: 'success', action: request.input.action }; break;
         case 'providers.models.visibility.reset': settings = resetProviderModelVisibilityV1(settings, request.input); output = { status: 'success', action: request.input.action }; break;
         case 'providers.models.visibility.bulk':
@@ -344,7 +372,10 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
           output = { status: 'success', action: request.input.action }; break;
         case 'providers.models.experimental.confirm': {
           const input = request.input; requireRevision(find(input.connectionId), input.expectedConnectionRevision);
-          settings = setProviderExperimentalConfirmationV1(settings, { ...input, confirmedAt: now });
+          settings = setProviderExperimentalConfirmationV1(settings, {
+            connectionId: input.connectionId, agentTargetKey: input.agentTargetKey, modelId: input.modelId,
+            compatibilityFingerprint: input.compatibilityFingerprint, confirmedAt: now,
+          });
           output = { status: 'success', action: input.action }; break;
         }
         default: return { ok: false, errorCode: 'provider_account_action_unavailable', error: 'provider_account_action_unavailable' };

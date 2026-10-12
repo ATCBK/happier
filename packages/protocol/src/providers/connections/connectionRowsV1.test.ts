@@ -24,6 +24,12 @@ const catalog = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [conn
   manualModelsByConnectionId: { pc_one: [{ id: 'model/a', addedAt: 1 }] } };
 
 describe('Provider connection catalog row owner', () => {
+  it('projects retired fields from retained default selections without losing selected intent', () => {
+    const selection = { v: 1, ref: { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_one', modelId: 'model/a' }, updatedAt: 1 };
+    const retained = { ...selection, retired: true, ref: { ...selection.ref, retired: true } };
+    expect(readRetainedProviderConnectionsCatalogV1({ providerSettingsV1: { ...catalog,
+      defaultsByAgentTargetKey: { 'agent:codex': retained } } })).toMatchObject({ status: 'ready', defaults: { 'agent:codex': selection } });
+  });
   it('normalizes retained envelopes before domain admission without disclosing invalid JSON', () => {
     for (const schema of [StoredProviderConnectionsContentV1Schema, ProviderConnectionsMigrationContentV1Schema]) {
       const original = { t: 'plain', v: { ...catalog, futureMetadata: { label: 'retained' } } };

@@ -118,6 +118,36 @@ function createSnapshot(overrides: Partial<ProviderAccountUsageSnapshotV1> = {})
 }
 
 describe('provider account usage protocol', () => {
+    it('opens the moving 0.2 saved-reset envelope through the canonical legacy adapter', () => {
+        // Synthetic bytes emitted by ../0.2 connect/accountUsage.ts after the
+        // validated recoveryCreditDetails batch on 2026-10-11; no live credentials.
+        const sealed = {
+            format: 'account_scoped_v1' as const,
+            ciphertext: 'oQYDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwNlFDmk9LhiPwDfC4S0iOoyxMmWzW+vAB4sVxDFOGfI8gYVECahlfFIKEEbB6ycRRLOR/JJNfXzgZk25Deo8LbSHZuY3NKfT/3w1Yb8LkQizU2RhXPRU1GTbz2c8o0y+tLxIqObFkVtmlhCoKMiHOBHsxxwNdKeP8Mfd/aEIpY7whegiMUWMeoMoNL3Xv3QBPOouk5j93wXyAC1JR2Fg3EwsqLfugI8+nqboDjEASlJCIoslml3w5ildp94rM0JJVm/i4Dt0T5Si9TYtzu2aaJmv0trj4fe+fkpWIZ2FrlgCiySvzuSLSRe//NjMKSmIyL/BjXQlRr3PPL6VTmXyFgoRAWZ8PQXGSUCDiPCLDBdHu5VotncAwyPJAFpzqpEJVdZkWUIkAl+9vf+aKDMRk1eVNgGFBL7TBNsrPt/79iTtHjJF7+VyhuJsou15Mgya+RoJ4HpZLa6Sc1eaD68elqkK77Yn//nzK3q2NFlj2ThDL88ekp4nCPFh5PgGEXbLNC6JZoSGq6CSyAh1Ta6Oi+E99CsWT0mEdoektjt1YHAShfK8Sb7V5TJA95KnRmssloXwAnz8REMRpcsfNL8+cMDmukgvmW6poUV/Wmx1+eBS+SrSERTgeidDBpMlpca72cW9e9JNG+GI5sy3Qo+pcd+jwg+zyWu7ubzHxZErwqp3AjOjDNa30SVk9fzZKDffjLFuXUWG7o0VZOE7Nj0qXNgnPp8Ze86B5aOrDHriicUD4KBGuAo6Jm7+8kIIUTRh/EhuoUUpT8ZCTZrlqHH4RUgGjdh2mun22VQk3dMNnAoGR9t8t/GaLo9thBkRkZq6P6hln5CZHzKtgCgqU8=',
+            recoveryCreditDetails: { ciphertext: 'oQYDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwPoOmKpg9G4SAgPBtIuCeUoxMmWzW+vAB4sVxDFOGfI8gYVECahlfFIKEEbB6ycRRLOR/JJNfXzgZk25Deo8LbSHZuY3NKfT/3w1Yb8LkQizU2RhXPRU1GTbymc5YEo+/3VL8zST10s2AcE5eU1C8pM50MgL/2NL8MTIZ7DN5QxwRHsxu1BNPIIrdKcAKTIVOW8tVNl+2YZ6EKhKArIzC1osu+NuRs39WysuyPfADsCVs0/uWN134KYMMB45+NEN1GajbD122kai5mZpzG1YrgbpgYw3aidreUjXIJeG/c7SiObjCuXO2kc/6giMKS8ITLDBDmYjQT+' },
+        };
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const opened = accountUsageModule.openSealedProviderAccountUsageSnapshot({ material, sealed });
+        expect(opened).toMatchObject({
+            recordId: "paug_v1_1nLSRL00NpDb2m4QwlBgJqaFUh7oDWVPpyhvyBtJazE",
+            recoveryCredits: { availableCount: 0, totalCount: 3, credits: [{ id: 'grant', kind: 'usage_limit_reset', status: 'unknown' }] },
+            recoveryCreditDetails: {"grant":{"remainingCount":2,"appliesToProviderLimitIds":["five_hour","seven_day"],"unavailableReason":"cooldown"}},
+        });
+    });
+    it('keeps reset display facts in the sealed observation and quota material', () => {
+        const base = accountUsageModule.ProviderAccountUsageSnapshotV1Schema.parse(createSnapshot());
+        const recoveryCreditDetails = { grant: { remainingCount: 2, appliesToProviderLimitIds: ['five_hour', 'seven_day'], unavailableReason: 'cooldown' } };
+        const snapshot = accountUsageModule.ProviderAccountUsageSnapshotV1Schema.parse({ ...base, recoveryCreditDetails });
+        const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const sealed = accountUsageModule.sealProviderAccountUsageSnapshot({ material, snapshot, randomBytes: length => new Uint8Array(length).fill(3) });
+        expect(accountUsageModule.openProviderAccountUsageSnapshotCiphertext({ material, ciphertext: sealed.ciphertext })?.value).toEqual(base);
+        expect(accountUsageModule.openSealedProviderAccountUsageSnapshot({ material, sealed })).toEqual(snapshot);
+        const newer = accountUsageModule.sealProviderAccountUsageSnapshot({ material, snapshot: { ...base, fetchedAtMs: base.fetchedAtMs + 1 }, randomBytes: length => new Uint8Array(length).fill(4) });
+        expect(accountUsageModule.openSealedProviderAccountUsageSnapshot({ material, sealed: { ...newer, recoveryCreditDetails: sealed.recoveryCreditDetails } })).toBeNull();
+        expect(accountUsageModule.serializeProviderAccountUsageSnapshotMaterialV1(snapshot)).not.toEqual(accountUsageModule.serializeProviderAccountUsageSnapshotMaterialV1(base));
+        const quota = projectProviderAccountUsageSnapshotToQualifiedConnectedAccountQuotaSnapshotV4({ snapshot, ref: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'work' } });
+        expect(quota).toHaveProperty('recoveryCreditDetails', recoveryCreditDetails);
+    });
     it('preserves quota refresh failure timing through plain and sealed qualified quota reads', () => {
         const diagnostics = [{ kind: 'provider_http', code: 'provider_backoff', status: 429,
             observedAtMs: 1_700_000_000_000, retryAtMs: 1_700_000_120_000 }];

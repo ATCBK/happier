@@ -4,7 +4,8 @@ import { ProviderContributionV1Schema } from '../contributions/v1.js';
 import { ProviderConnectionV1Schema } from '../connections/v1.js';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '../connections/connectionRowsV1.js';
 import type { AgentProviderRequirementsV1 } from '../compatibility/v1.js';
-import { projectAccountProviderModelsV1 } from './accountModelProjectionV1.js';
+import { projectAccountProviderCatalogCountsV1, projectAccountProviderConnectionModelsV1, projectAccountProviderModelsV1 } from './accountModelProjectionV1.js';
+import { serializeModelVisibilityRefV1 } from '../selection/v1.js';
 import { DaemonProviderModelProjectionResponseV1Schema } from '../../rpc/providers.js';
 import { resolveProviderBindingCompatibilityWithFingerprintV1 } from '../compatibility/resolve.js';
 
@@ -26,6 +27,27 @@ const catalog = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [conn
 const request = { agentTargetKey, mode: 'management' as const };
 
 describe('Account Provider model projection', () => {
+  it('summarizes the same static/manual membership and per-model visibility as Account management', () => {
+    const sourceCatalog = definitions[0]!.definition.catalog;
+    const duplicateStaticId = ('staticModels' in sourceCatalog ? sourceCatalog.staticModels : [])[0]!.id;
+    const hiddenRef = serializeModelVisibilityRefV1({ scope: 'allAgents', providerConnectionId: connection.id, modelId: duplicateStaticId });
+    const countedCatalog = { ...catalog,
+      connections: [connection, { ...connection, id: 'pc_missing', source: { kind: 'contribution' as const, contributionKey: 'missing.provider/source' } }],
+      manualModelsByConnectionId: { [connection.id]: [
+        { id: duplicateStaticId, name: 'Manual override', addedAt: 2 }, { id: 'private-model', name: 'Private', addedAt: 2 },
+      ] }, modelVisibilityByRef: { [hiddenRef]: 'hidden' as const },
+      modelPickerVisibilityByConnectionId: { [connection.id]: false },
+    };
+    const rows = projectAccountProviderConnectionModelsV1({ catalog: countedCatalog, connection, source: definitions[0]!.definition });
+    expect(rows).toHaveLength(3);
+    expect(rows.find(row => row.id === duplicateStaticId)).toMatchObject({ source: 'manual', visibility: 'hidden_all_agents' });
+    expect(projectAccountProviderCatalogCountsV1({ catalog: countedCatalog, definitions })).toEqual({
+      [connection.id]: { shown: 2, total: 3 },
+    });
+    expect(projectAccountProviderCatalogCountsV1({ catalog: countedCatalog, definitions: [] })).toEqual({});
+    expect(projectAccountProviderCatalogCountsV1({ catalog: { ...countedCatalog, manualModelsByConnectionId: {}, modelVisibilityByRef: {} }, definitions }))
+      .toEqual({ [connection.id]: { shown: 2, total: 2 } });
+  });
   it('shows real compatible static/manual models without machine, grant, probe, or runtime confirmation', () => {
     const result = projectAccountProviderModelsV1({ catalog, definitions, agent, request });
     expect(result.status).toBe('success');

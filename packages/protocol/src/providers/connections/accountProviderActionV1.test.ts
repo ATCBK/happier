@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { DEEPSEEK_PROVIDER_CONTRIBUTION } from '../../../../plugins/deepseek/src/provider/contribution.js';
 import { OLLAMA_PROVIDER_CONTRIBUTION } from '../../../../plugins/ollama/src/provider/contribution.js';
+import { CLIPROXYAPI_PROVIDER_CONTRIBUTION } from '../../../../plugins/cliproxyapi/src/provider/contribution.js';
 import { ProviderContributionV1Schema } from '../contributions/v1.js';
-import { parseProviderActionRequestV1 } from '../providerActionsV1.js';
+import { PROVIDER_ACTION_INPUT_SCHEMAS_V1, parseProviderActionRequestV1 } from '../providerActionsV1.js';
 import { ProviderConnectionV1Schema } from './v1.js';
 import { CustomProviderTemplateV1Schema } from './customTemplateV1.js';
 import { createAccountProviderActionExecuteV1, type AccountProviderDeclarationV1 } from './accountProviderActionV1.js';
@@ -14,6 +15,7 @@ function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CON
   let revision = 1;
   let writes = 0;
   let outcome: 'updated' | 'conflict' | 'outcome_unknown' = 'updated';
+  let beforeWrite: (() => void) | null = null;
   let definitions: readonly AccountProviderDeclarationV1[] = [{ contributionKey: 'happier.provider.deepseek/deepseek',
     definition: ProviderContributionV1Schema.parse(DEEPSEEK_PROVIDER_CONTRIBUTION), provenance: 'first_party' as const }];
   const execute = createAccountProviderActionExecuteV1({ assertCurrent() {}, now: () => 10,
@@ -21,6 +23,9 @@ function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CON
     readDefinitions: async () => definitions,
     writeCatalog: async input => {
       expect(input.expectedRevision).toBe(revision);
+      const callback = beforeWrite;
+      beforeWrite = null;
+      callback?.();
       writes++;
       if (outcome === 'conflict') return { status: outcome };
       current = input.catalog; revision++;
@@ -29,11 +34,106 @@ function accountRow(catalog: ProviderConnectionsCatalogV1 = DEFAULT_PROVIDER_CON
     },
   });
   return { execute, get catalog() { return current; }, get writes() { return writes; },
+    beforeNextWrite(callback: () => void) { beforeWrite = callback; },
     setOutcome(value: typeof outcome) { outcome = value; }, clearDefinitions() { definitions = []; },
     setDefinitions(value: readonly AccountProviderDeclarationV1[]) { definitions = value; } };
 }
 
 describe('shared Provider Account Action producer', () => {
+  it('captures declaration facts when enabling Account access without machine observation', async () => {
+    const row = accountRow();
+    expect(await row.execute(parseProviderActionRequestV1('providers.connections.create_contribution', {
+      action: 'createContribution', connectionId: 'pc_enable', contributionKey: 'happier.provider.deepseek/deepseek',
+      displayName: null, savedSecretId: 'ss_api', enable: false,
+    }), {})).toMatchObject({ ok: true });
+    row.beforeNextWrite(() => row.setDefinitions([{ contributionKey: 'happier.provider.deepseek/deepseek',
+      definition: ProviderContributionV1Schema.parse({ ...DEEPSEEK_PROVIDER_CONTRIBUTION, name: 'Replacement DeepSeek' }),
+      provenance: 'first_party' }]));
+    expect(await row.execute(parseProviderActionRequestV1('providers.connections.enabled.set', {
+      action: 'setEnabled', connectionId: 'pc_enable', enabled: true, scope: 'account',
+    }), {})).toMatchObject({ ok: true, result: { status: 'success', connection: { providerName: 'DeepSeek' } } });
+    expect(row.catalog.accountGrants).toEqual([expect.objectContaining({ connectionId: 'pc_enable' })]);
+    expect(await row.execute(parseProviderActionRequestV1('providers.connections.describe', {}), {}))
+      .toMatchObject({ ok: true, result: { connections: [expect.objectContaining({ providerName: 'Replacement DeepSeek' })] } });
+  });
+  it('persists only the confirmation record from a revision-checked experimental Action', async () => {
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_experimental',
+      source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
+      role: 'named', displayName: 'DeepSeek', displayNameMode: 'custom', revision: 3, createdAt: 1, updatedAt: 1 });
+    const row = accountRow({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [connection] });
+    const input = { action: 'confirmExperimental', connectionId: connection.id, expectedConnectionRevision: 3,
+      machineId: 'machine-a', agentTargetKey: 'agent:happier.agent.claude/claude', modelId: 'deepseek-v4-flash',
+      compatibilityFingerprint: 'compatibility:v1:experimental' };
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', {
+      ...input, expectedConnectionRevision: 2,
+    }), {})).toMatchObject({ ok: false, errorCode: 'provider_connection_changed' });
+    expect(row.writes).toBe(0);
+    expect(await row.execute(parseProviderActionRequestV1('providers.models.experimental.confirm', input), {}))
+      .toMatchObject({ ok: true, result: { status: 'success', action: 'confirmExperimental' } });
+    expect(row.catalog.experimentalBindingConfirmations).toEqual([{ v: 1, connectionId: connection.id,
+      agentTargetKey: input.agentTargetKey, modelId: input.modelId, compatibilityFingerprint: input.compatibilityFingerprint,
+      confirmedAt: 10 }]);
+    expect(row.writes).toBe(1);
+    expect(row.catalog.connections).toEqual([connection]);
+  });
+  it('creates and enables a gateway with its unavailable pool in one catalog mutation and repairs an interrupted create', async () => {
+    const half = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_half', source: { kind: 'contribution',
+      contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' }, role: 'named', displayName: 'Main gateway',
+      displayNameMode: 'custom', revision: 0, createdAt: 1, updatedAt: 1 });
+    const pool = { kind: 'group', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'missing-pool' };
+    for (const connections of [[], [half]]) {
+      const row = accountRow({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections });
+      row.setDefinitions([{ contributionKey: half.source.kind === 'contribution' ? half.source.contributionKey : '',
+        definition: ProviderContributionV1Schema.parse(CLIPROXYAPI_PROVIDER_CONTRIBUTION), provenance: 'first_party' }]);
+      const input = { action: 'createContribution', connectionId: 'pc_new', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
+        displayName: 'Main gateway', savedSecretId: null, enable: true,
+        deployment: { kind: 'managedLocal', purposeBindingDefaults: { 'openai-upstream': pool } } };
+      expect(PROVIDER_ACTION_INPUT_SCHEMAS_V1['providers.connections.create_contribution'].safeParse(input).success).toBe(true);
+      const result = await row.execute(parseProviderActionRequestV1('providers.connections.create_contribution', input), {});
+      expect(result).toMatchObject({ ok: true, result: { connection: { deployment: { kind: 'managedLocal' }, grants: { accountEnabled: true } } } });
+      expect(row.writes).toBe(1);
+      expect(row.catalog.connections).toEqual([expect.objectContaining({ id: connections.length ? half.id : 'pc_new',
+        deployment: { kind: 'managedLocal' }, purposeBindingDefaults: { 'openai-upstream': pool } })]);
+      expect(row.catalog.accountGrants.map(grant => grant.connectionId)).toEqual([row.catalog.connections[0]!.id]);
+      const retry = { ...input, connectionId: row.catalog.connections[0]!.id };
+      expect(await row.execute(parseProviderActionRequestV1('providers.connections.create_contribution', retry), {})).toMatchObject({ ok: true });
+      expect(row.catalog.connections).toHaveLength(1);
+    }
+  });
+  it('does not convert an existing default external connection during managed creation', async () => {
+    const existing = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_default', source: { kind: 'contribution',
+      contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' }, role: 'default', displayName: 'CLIProxyAPI',
+      displayNameMode: 'automatic', revision: 0, createdAt: 1, updatedAt: 1 });
+    const row = accountRow({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [existing] });
+    row.setDefinitions([{ contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
+      definition: ProviderContributionV1Schema.parse(CLIPROXYAPI_PROVIDER_CONTRIBUTION), provenance: 'first_party' }]);
+    const result = await row.execute(parseProviderActionRequestV1('providers.connections.create_contribution', {
+      action: 'createContribution', connectionId: 'pc_new', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
+      displayName: null, savedSecretId: null, enable: true, deployment: { kind: 'managedLocal', purposeBindingDefaults: {} },
+    }), {});
+    expect(result).toMatchObject({ ok: false, errorCode: 'provider_connection_changed' });
+    expect(row.writes).toBe(0);
+    expect(row.catalog.connections).toEqual([existing]);
+  });
+  it('never persists a partial gateway when slot admission or the catalog CAS refuses creation', async () => {
+    for (const conflict of [false, true]) {
+      const row = accountRow();
+      row.setDefinitions([{ contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
+        definition: ProviderContributionV1Schema.parse(CLIPROXYAPI_PROVIDER_CONTRIBUTION), provenance: 'first_party' }]);
+      if (conflict) row.setOutcome('conflict');
+      const result = await row.execute(parseProviderActionRequestV1('providers.connections.create_contribution', {
+        action: 'createContribution', connectionId: 'pc_new', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
+        displayName: 'Main gateway', savedSecretId: null, enable: true,
+        deployment: { kind: 'managedLocal', purposeBindingDefaults: conflict ? {} : {
+          'undeclared-slot': { kind: 'group', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'pool' },
+        } },
+      }), {});
+      expect(result).toMatchObject({ ok: false, errorCode: conflict ? 'provider_catalog_conflict' : 'provider_connection_invalid' });
+      expect(row.writes).toBe(conflict ? 1 : 0);
+      expect(row.catalog.connections).toEqual([]);
+      expect(row.catalog.accountGrants).toEqual([]);
+    }
+  });
   const customTemplate = CustomProviderTemplateV1Schema.parse({ v: 1, name: 'Custom',
     endpointTemplates: [{ id: 'chat', protocol: 'openai-chat', baseUrl: 'https://custom.example/v1',
       capabilities: { streaming: 'unknown', toolRoundTrips: 'unknown', statefulResponses: 'unknown', reasoningControls: 'unknown' } }],
@@ -120,6 +220,8 @@ describe('shared Provider Account Action producer', () => {
   });
   it('saves a built-in connection, reloads its Account description and static/manual models without a machine', async () => {
     const row = accountRow();
+    expect(await row.execute(parseProviderActionRequestV1('providers.connections.describe', {}), {}))
+      .toMatchObject({ ok: true, result: { status: 'success', available: [{ kind: 'frontier' }], connections: [] } });
     const created = await row.execute(parseProviderActionRequestV1('providers.connections.create_contribution', {
       action: 'createContribution', connectionId: 'pc_work', contributionKey: 'happier.provider.deepseek/deepseek',
       displayName: 'Work', savedSecretId: null, enable: true,
@@ -127,7 +229,7 @@ describe('shared Provider Account Action producer', () => {
     expect(created).toMatchObject({ ok: true, result: { status: 'success', action: 'createContribution',
       connection: { grants: { accountEnabled: true }, authorized: false, runtime: { health: 'not_checked' } } } });
     expect(await row.execute(parseProviderActionRequestV1('providers.connections.describe', {}), {}))
-      .toMatchObject({ ok: true, result: { status: 'success', available: [{ kind: 'frontier' }], connections: [{ displayName: 'Work' }] } });
+      .toMatchObject({ ok: true, result: { status: 'success', available: [], connections: [{ displayName: 'Work' }] } });
     expect(await row.execute(parseProviderActionRequestV1('providers.models.list', { connectionId: 'pc_work' }), {}))
       .toMatchObject({ ok: true, result: { status: 'success', connectionRevision: 0, modelLoadAction: 'machine_required',
         models: [{ source: 'static' }, { source: 'static' }] } });

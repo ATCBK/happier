@@ -12,7 +12,7 @@ import type { ProviderConnectionsMigrationContentV1 } from './catalogSchemasV1.j
 
 import { isAccountScopedBlobCiphertextForKind } from '../../crypto/accountScopedCipherEnvelope.js';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext, type AccountScopedCryptoMaterial } from '../../crypto/accountScopedCipher.js';
-import { ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema, type ProviderDefaultModelSelectionsByAgentTargetKeyV1 } from '../selection/v1.js';
+import { ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema, ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema, type ProviderDefaultModelSelectionsByAgentTargetKeyV1 } from '../selection/v1.js';
 import { DEFAULT_PROVIDER_SETTINGS_V1, parseProviderSettingsV1Narrow, type ProviderSettingsParseDiagnosticV1 } from '../settings/v1.js';
 import { appendSavedSecretReferencePathV1, listSavedSecretReferenceCarrierPathsV1, parseSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
 
@@ -157,7 +157,7 @@ export function readRetainedProviderConnectionsCatalogV1(raw: Readonly<Record<st
     .filter(([key]) => key !== 'defaultsByAgentTargetKey'));
   const opened = readStoredProviderConnectionsCatalogV1(body, true);
   if (opened.status === 'unavailable') return opened;
-  const defaults = ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema.safeParse(defaultsByAgentTargetKey ?? {});
+  const defaults = ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema.safeParse(defaultsByAgentTargetKey ?? {});
   const diagnostics = [...(opened.status === 'partial' ? opened.diagnostics : []),
     ...(defaults.success ? [] : [{ path: 'defaultsByAgentTargetKey', reason: 'invalid_record' }])];
   return diagnostics.length > 0 ? { status: 'partial' as const, catalog: opened.catalog, defaults: defaults.success ? defaults.data : {}, diagnostics }

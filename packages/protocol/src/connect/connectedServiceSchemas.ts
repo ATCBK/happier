@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 import {
     ConnectedServiceAuthGroupIdSchema,
@@ -448,6 +449,16 @@ export const ConnectedServiceQuotaRecoveryCreditsV1Schema = lazyZodSchema(() => 
     }));
 export type ConnectedServiceQuotaRecoveryCreditsV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditsV1Schema>;
 
+/** Presentation facts only; credit status and availableCount own usability. */
+export const ConnectedServiceQuotaRecoveryCreditDetailsV1Schema = lazyZodSchema(() => z.object({
+    remainingCount: z.number().int().nonnegative(),
+    appliesToProviderLimitIds: z.array(z.string().trim().min(1)).default([]),
+    unavailableReason: z.enum(['paused', 'cooldown', 'ineligible', 'not_selected', 'provider_unavailable', 'not_started', 'expired', 'consumed', 'unknown']).optional(),
+}).strict());
+export type ConnectedServiceQuotaRecoveryCreditDetailsV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditDetailsV1Schema>;
+export const ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema = lazyZodSchema(() => z.record(z.string().trim().min(1), ConnectedServiceQuotaRecoveryCreditDetailsV1Schema));
+export type ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema>;
+
 export const ConnectedServiceQuotaMeterV1Schema = lazyZodSchema(() => z.object({
     meterId: z.string().min(1),
     label: z.string().min(1),
@@ -524,12 +535,14 @@ export const ConnectedServiceQuotaSnapshotV1Schema = lazyZodSchema(() => z.objec
     confidence: ConnectedServiceQuotaConfidenceV1Schema.optional(),
     evidence: ConnectedServiceQuotaEvidenceV1Schema.optional(),
     recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1Schema.optional(),
+    recoveryCreditDetails: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema.optional(),
     subscription: ProviderAccountSubscriptionV1Schema.optional(),
     meters: z.array(ConnectedServiceQuotaMeterV1Schema),
     diagnostics: z.array(ProviderAccountUsageDiagnosticV1Schema).optional(),
 }));
 
 export type ConnectedServiceQuotaSnapshotV1 = z.infer<typeof ConnectedServiceQuotaSnapshotV1Schema>;
+export const ConnectedServiceQuotaSnapshotV1StoredSchema = createStoredReadSchema(ConnectedServiceQuotaSnapshotV1Schema);
 
 export const SealedConnectedServiceQuotaSnapshotV1Schema = lazyZodSchema(() => z.object({
     format: ConnectedServiceCredentialFormatSchema,

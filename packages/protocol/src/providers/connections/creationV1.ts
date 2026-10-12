@@ -8,6 +8,17 @@ import { addProviderConnectionV1, ensureDefaultProviderConnectionV1, bindProvide
 import { ProviderConnectionV1Schema, type ProviderConnectionV1, type ProviderEndpointOverrideV1 } from './v1.js';
 import { CustomProviderTemplateV1Schema, type CustomProviderTemplateV1 } from './customTemplateV1.js';
 
+/** Only exact candidate review and unresolved local choices need machine observation. */
+export function isProviderContributionAuthoringMachineRequiredV1(input: Readonly<{
+  definition?: ProviderContributionV1 | null;
+  selectedCandidateId?: string | null;
+  endpointOverrides?: readonly ProviderEndpointOverrideV1[];
+}>): boolean {
+  return input.selectedCandidateId != null || (!input.endpointOverrides?.length
+    && input.definition?.endpointTemplates.some(endpoint =>
+      'localUrlCandidates' in endpoint && endpoint.localUrlCandidates && endpoint.localUrlCandidates.length > 1) === true);
+}
+
 /** Shared creation semantics; runtime observations and grant evidence stay with their callers. */
 export function prepareProviderConnectionCreationV1(input: Readonly<{
   settings: ProviderSettingsV1;

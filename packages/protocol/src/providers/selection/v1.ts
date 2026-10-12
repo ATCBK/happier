@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
 import {
@@ -41,6 +42,7 @@ export const ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema = lazyZodSch
   }
 }));
 export type ProviderDefaultModelSelectionsByAgentTargetKeyV1 = z.infer<typeof ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema>;
+export const ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema = createStoredReadSchema(ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema);
 
 export const ProviderDefaultModelSelectionMutationV1Schema = lazyZodSchema(() => z.object({
   agentTargetKey: ProviderAgentTargetKeySchema,
@@ -58,7 +60,7 @@ export function applyProviderDefaultModelSelectionV1(
 ): Record<string, unknown> {
   const { agentTargetKey, selection } = ProviderDefaultModelSelectionMutationV1Schema.parse(input);
   const key = 'providerDefaultModelSelectionsByAgentTargetKeyV1';
-  const defaults = ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema.parse(raw[key] === undefined ? {} : raw[key]);
+  const defaults = ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema.parse(raw[key] === undefined ? {} : raw[key]);
   const next = { ...defaults };
   if (selection === null) delete next[agentTargetKey];
   else next[agentTargetKey] = selection;
@@ -320,7 +322,7 @@ export function readSessionModelSelectionIntentSourceV1(input: Readonly<{
   // whose validity the schema decides.
   const canonicalPresent = input.canonical !== undefined;
   const canonicalParse = canonicalPresent
-    ? SessionModelSelectionIntentV1Schema.safeParse(input.canonical)
+    ? createStoredReadSchema(SessionModelSelectionIntentV1Schema).safeParse(input.canonical)
     : null;
   if (canonicalParse && !canonicalParse.success) return { status: 'invalid' };
   const canonical = canonicalParse?.success ? canonicalParse.data : null;

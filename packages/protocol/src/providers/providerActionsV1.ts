@@ -29,8 +29,10 @@ function connectionInput<A extends ConnectionAction>(action: A): ConnectionOptio
 }
 type AccountOperand<T> = { [K in keyof (Omit<T, 'machineId'> & { machineId?: string })]: (Omit<T, 'machineId'> & { machineId?: string })[K] };
 type AccountCreationOperand<T extends { authoringReview: unknown }> = {
-  [K in keyof (Omit<AccountOperand<T>, 'authoringReview'> & { authoringReview?: T['authoringReview'] })]:
-    (Omit<AccountOperand<T>, 'authoringReview'> & { authoringReview?: T['authoringReview'] })[K]
+  [K in keyof (Omit<AccountOperand<T>, 'authoringReview'> & { authoringReview?: T['authoringReview'];
+    deployment?: z.output<ConnectionOption<'update'>>['deployment'] })]:
+    (Omit<AccountOperand<T>, 'authoringReview'> & { authoringReview?: T['authoringReview'];
+      deployment?: z.output<ConnectionOption<'update'>>['deployment'] })[K]
 };
 function accountInput<S extends z.ZodObject>(schema: S): z.ZodType<AccountOperand<z.output<S>>, AccountOperand<z.input<S>>> {
   // Zod's public safeExtend retains refinements at runtime; its subtype-only typing
@@ -79,9 +81,10 @@ export const PROVIDER_ACTION_INPUT_SCHEMAS_V1 = {
   'providers.connections.create_contribution': lazyZodSchema(() => {
     const input = connectionInput('createContribution');
     const extend = input.safeExtend.bind(input) as unknown as (shape: { machineId: z.ZodOptional<typeof ProviderMachineIdSchema>;
-      authoringReview: z.ZodOptional<typeof input.shape.authoringReview> }) =>
+      authoringReview: z.ZodOptional<typeof input.shape.authoringReview>; deployment: ConnectionOption<'update'>['shape']['deployment'] }) =>
         z.ZodType<AccountCreationOperand<z.output<typeof input>>, AccountCreationOperand<z.input<typeof input>>>;
-    return extend({ machineId: ProviderMachineIdSchema.optional(), authoringReview: input.shape.authoringReview.optional() });
+    return extend({ machineId: ProviderMachineIdSchema.optional(), authoringReview: input.shape.authoringReview.optional(),
+      deployment: connectionInput('update').shape.deployment });
   }),
   'providers.connections.create_custom': lazyZodSchema(() => accountInput(connectionInput('createCustom'))),
   'providers.connections.enable_detected': connectionInput('enableDetected'),
@@ -146,17 +149,18 @@ export const PROVIDER_ACTION_OUTPUT_SCHEMAS_V1 = {
 export type ProviderActionInputByIdV1 = { readonly [Id in ProviderActionIdV1]: z.output<(typeof PROVIDER_ACTION_INPUT_SCHEMAS_V1)[Id]> };
 export type ProviderActionRequestV1 = { [Id in ProviderActionIdV1]: Readonly<{ actionId: Id; input: ProviderActionInputByIdV1[Id] }> }[ProviderActionIdV1];
 /** Omitted input describes default placement; admitted input selects its exact variant. */
-export function isProviderActionMachineRequiredV1(
+function resolveProviderActionOwnershipV1(
   request: ProviderActionRequestV1 | Readonly<{ actionId: ProviderActionIdV1; input?: never }>,
-): boolean {
+): Readonly<{ owner: 'machine' | 'accountCatalog' | 'accountSettings'; placements: readonly ('machine' | 'account')[] }> {
   switch (request.actionId) {
+    case 'providers.defaults.set': return { owner: 'accountSettings', placements: ['account'] };
     case 'providers.connections.describe':
     case 'providers.models.list':
-    case 'providers.models.projection': return request.input?.machineId !== undefined;
-    case 'providers.connections.create_contribution': return request.input?.authoringReview?.candidateId != null;
+    case 'providers.models.projection': return { owner: request.input?.machineId !== undefined ? 'machine' : 'accountCatalog', placements: ['account', 'machine'] };
+    case 'providers.connections.create_contribution': return { owner: request.input?.authoringReview?.candidateId != null ? 'machine' : 'accountCatalog', placements: ['account', 'machine'] };
     case 'providers.connections.endpoint.set':
     case 'providers.connections.enabled.set':
-    case 'providers.connections.secrets.bind': return request.input?.scope === 'machine';
+    case 'providers.connections.secrets.bind': return { owner: request.input?.scope === 'machine' ? 'machine' : 'accountCatalog', placements: ['account', 'machine'] };
     case 'providers.connections.enable_detected':
     case 'providers.connections.start_local':
     case 'providers.models.refresh':
@@ -164,9 +168,25 @@ export function isProviderActionMachineRequiredV1(
     case 'providers.models.cancel_load':
     case 'providers.probe':
     case 'providers.binding.status':
-    case 'providers.legacy.prepare': return true;
-    default: return false;
+    case 'providers.legacy.prepare': return { owner: 'machine', placements: ['machine'] };
+    default: return { owner: 'accountCatalog', placements: ['account'] };
   }
+}
+
+export function resolveProviderActionOwnerV1(
+  request: ProviderActionRequestV1 | Readonly<{ actionId: ProviderActionIdV1; input?: never }>,
+): 'machine' | 'accountCatalog' | 'accountSettings' {
+  return resolveProviderActionOwnershipV1(request).owner;
+}
+
+/** The same domain decision supplies ingress with variants before encrypted input is opened. */
+export function resolveProviderActionExecutionPlacementsV1(actionId: ProviderActionIdV1): readonly ('machine' | 'account')[] {
+  return resolveProviderActionOwnershipV1({ actionId }).placements;
+}
+export function isProviderActionMachineRequiredV1(
+  request: ProviderActionRequestV1 | Readonly<{ actionId: ProviderActionIdV1; input?: never }>,
+): boolean {
+  return resolveProviderActionOwnerV1(request) === 'machine';
 }
 export function parseProviderActionRequestV1(actionId: ProviderActionIdV1, input: unknown): ProviderActionRequestV1 {
   // Keep the ID and its parsed operand correlated without widening either contract.

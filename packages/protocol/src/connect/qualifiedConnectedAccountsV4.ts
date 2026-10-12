@@ -21,7 +21,7 @@ import {
   ProviderAccountUsageRecordWriteFieldsV1Schema,
   ProviderAccountUsageRecordWriteV1Schema,
   ProviderAccountUsageSnapshotV1Schema,
-  openSealedProviderAccountUsageSnapshot,
+  openProviderAccountUsageEncryptedContentV4,
   projectProviderAccountUsageSnapshotToQuotaFieldsV1,
   type ProviderAccountUsageSnapshotV1,
 } from './accountUsage.js';
@@ -413,15 +413,9 @@ export function openQualifiedConnectedAccountQuotaResponseV4(
     return response.data.content.v;
   }
   if (!params.material) return null;
-  const snapshot = openSealedProviderAccountUsageSnapshot({
+  const snapshot = openProviderAccountUsageEncryptedContentV4({
     material: params.material,
-    sealed: {
-      format: 'account_scoped_v1',
-      ciphertext: response.data.content.c,
-      ...(response.data.content.subscription
-        ? { subscription: response.data.content.subscription }
-        : {}),
-    },
+    content: response.data.content,
   });
   if (
     !snapshot

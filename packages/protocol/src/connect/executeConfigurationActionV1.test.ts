@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { executeConnectedServiceConfigurationActionV1, type ConnectedServiceConfigurationActionHostV1 } from './executeConfigurationActionV1.js';
-import { CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1, reorderConnectedServicePoolMembersV1 } from './configurationActionsV1.js';
+import { CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1, CONNECTED_SERVICE_CONFIGURATION_ACTION_OUTPUT_SCHEMAS_V1, reorderConnectedServicePoolMembersV1 } from './configurationActionsV1.js';
 import { buildAgentDefaultChoices } from './agentDefaultChoices.js';
 import { accountSettingsParse } from '../account/settings/accountSettings.js';
 import { QualifiedConnectedAccountGroupV4Schema, QualifiedConnectedAccountGroupMemberDeleteV4Schema, QualifiedConnectedAccountGroupMemberMutationV4Schema, QualifiedConnectedAccountGroupRefSchema } from './qualifiedConnectedAccountsV4.js';
@@ -61,14 +61,16 @@ describe('connected-service configuration Action owner', () => {
             outcomeReconciliation: 'none', fields: [], configuration: { scope: 'account', changeBehavior: 'reconnect',
                 fields: [{ id: 'endpoint', title: 'Endpoint', schema: { type: 'string' }, secret: false }] } });
         const commands: unknown[] = [];
+        let peerMatches = true;
         const host: ConnectedServiceConfigurationActionHostV1 = { assertCurrent() {},
             async request() { throw new Error('unexpected_http'); }, async mutatePurposeBindings() {},
             async resolveAgent() { return null; }, async resetQuota() {},
             async controlCommand(machineId, command) {
                 commands.push({ machineId, command });
-                return { status: 'configurationCommitted',
-                    target: kind === 'account' ? { ...exactTarget, modeId: 'manual' }
-                        : { ...exactTarget, service, modeId: 'manual' },
+                return { status: command.operation === 'readConfiguration' ? 'configuration' : 'configurationCommitted',
+                    target: kind === 'account' ? { ...exactTarget,
+                        ...(!peerMatches ? { account: { service, accountId: 'other' } } : {}), modeId: 'manual' }
+                        : { ...exactTarget, ...(!peerMatches ? { attemptId: 'other' } : {}), service, modeId: 'manual' },
                     mode, occurrenceId: 'occurrence-1', sourceCustody: { kind: 'managed', immutableGenerationId: 'artifact-1', installSource: 'archive' },
                     configuration: { status: 'ready', revision: 'revision-2', values: {}, configuredSecretFieldIds: [], missingFieldIds: [] } };
             },
@@ -93,6 +95,16 @@ describe('connected-service configuration Action owner', () => {
         expect(commands).toEqual([{ machineId: 'machine-1', command: { operation: 'replaceConfiguration',
             target: exactTarget, expectedRevision: 'revision-1', values: {}, secretValues: {} } }]);
         expect(getActionSpec('connectedServices.configuration.replace').executionPlacementForInput?.(input)).toBe('machine');
+        const readInput = { machineId: 'machine-1', target: exactTarget };
+        expect(await executor.execute('connectedServices.configuration.get', readInput, { surface: 'cli' }))
+            .toMatchObject({ ok: true, result: { target: exactTarget, configuration: { revision: 'revision-2' } } });
+        peerMatches = false;
+        expect(await executor.execute('connectedServices.configuration.get', readInput, { surface: 'cli' }))
+            .toMatchObject({ ok: false, errorCode: 'qualified_connected_accounts_inconsistent_peer' });
+        expect(CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1['connectedServices.configuration.get']
+            .safeParse({ target: exactTarget }).success).toBe(false);
+        expect(CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1['connectedServices.configuration.replace']
+            .safeParse({ ...input, unreviewed: true }).success).toBe(false);
     });
     it('admits an exact Resource purpose choice before its canonical catalog CAS and rejects retired declaration authority', async () => {
         const catalog = purposeCatalogBoundary(() => ({}), () => {});
@@ -192,9 +204,14 @@ describe('connected-service configuration Action owner', () => {
                 approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject' as const, request }),
                 approvalsUpdate: async () => ({ ok: true as const }),
             } satisfies Pick<ActionExecutorDeps, 'approvalsCreate' | 'approvalsWaitForDecision' | 'approvalsUpdate'>;
+            // The installed-plugin hook boundary enables the incumbent observation path.
+            const hookBoundary = {
+                interceptActionExecution: async ({ input }) => ({ status: 'continue' as const, input }),
+            } satisfies Pick<ActionExecutorDeps, 'interceptActionExecution'>;
             const executor = createActionExecutor({ isActionApprovalRequired: (action, context, admitted) =>
                 isApprovalRequiredByActionsSettings(action, settings, context, undefined, undefined, admitted),
                 ...approvalBoundary,
+                ...hookBoundary,
                 connectedServiceAction: ({ actionId, input }) => executeConnectedServiceConfigurationActionV1(host, actionId, input),
                 observeActionExecution: async observation => { observations.push(observation); },
             } as unknown as ActionExecutorDeps);
@@ -296,7 +313,7 @@ describe('connected-service configuration Action owner', () => {
         expect(applied).toBeNull();
     });
     it('reads and replaces service configuration through Account catalog CAS without a machine', async () => {
-        const mode = PluginConnectedAccountAuthenticationModeV2Schema.parse({ id: 'oauth', kind: 'oauthAuthorizationCode' as const, pkce: 'required' as const,
+        const mode = PluginConnectedAccountAuthenticationModeV2Schema.parse({ id: 'oauth', kind: 'oauthAuthorizationCode' as const, callbackUrl: 'https://provider.example/oauth/callback', pkce: 'required' as const,
             outcomeReconciliation: 'none' as const, configuration: { scope: 'service' as const, changeBehavior: 'reconnect' as const,
                 fields: [{ id: 'origin', title: 'Origin', schema: { type: 'string' as const, minLength: 1 }, required: true, semantic: 'connectedAccountOrigin' as const },
                     { id: 'token', title: 'Token', secret: true, schema: { type: 'string', minLength: 10 } }] } });
@@ -391,7 +408,7 @@ describe('connected-service configuration Action owner', () => {
         const account = { service, accountId: 'default' };
         const described = { status: 'described', service, occurrenceId: 'runtime', sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: 'cli-1' } },
             descriptor: { id: service.localId, title: 'ChatGPT', billingUrl: 'https://provider.test/billing',
-                authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none' }] } },
+                authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https://provider.example/oauth/callback', pkce: 'required', outcomeReconciliation: 'none' }] } },
             accounts: [{ ref: account, status: 'connected', authenticationModeId: 'oauth', configurationReady: true,
                 configurationRevision: null, scopes: [], revisionSemantics: 'legacy_unfenced', credentialRevision: null }] };
         const host: ConnectedServiceConfigurationActionHostV1 = {
@@ -447,7 +464,7 @@ describe('connected-service configuration Action owner', () => {
             } }; },
         };
         await expect(executeConnectedServiceConfigurationActionV1(host, 'connectedServices.pools.selection.get', { machineId: 'machine', group: { service, groupId: 'work' } }))
-            .rejects.toMatchObject({ code: 'qualified_connected_accounts_inconsistent_peer' });
+            .resolves.toMatchObject({ ok: false, errorCode: 'qualified_connected_accounts_inconsistent_peer' });
     });
     it('admits quota and selector reads as safe public reads without account-switch authority', async () => {
         const executor = createActionExecutor({ isActionApprovalRequired: () => false } as ActionExecutorDeps);
@@ -468,6 +485,27 @@ describe('connected-service configuration Action owner', () => {
             expect(spec.inputSchema.safeParse({ ...input, credentials: 'caller-token' }).success).toBe(false);
             expect(await executor.execute(parsed.data, input, { surface: 'mcp', serverId: 'home' }))
                 .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+        }
+    });
+    it('requires the selector to acknowledge the hypothetical strategy and clock before showing a comparison', async () => {
+        const input = { machineId: 'machine', group: { service, groupId: 'work' }, hypothetical: { strategy: 'manual', atMs: 20 } };
+        const output = { group: input.group, observedAtMs: 10, selection: {
+            selected: null, reason: 'manual_strategy', excluded: [], decisionTrace: { activeProfileId: null,
+                reason: 'manual_strategy', strategy: 'manual', selectionBasis: 'manual_strategy', sticky: false,
+                orderedEligibleCandidates: [], candidates: [] },
+        } };
+        let hypothetical: unknown = { strategy: 'manual', atMs: 20 };
+        const host: ConnectedServiceConfigurationActionHostV1 = {
+            assertCurrent() {}, async request() { throw new Error('read_must_not_write'); }, async mutatePurposeBindings() {},
+            async resolveAgent() { return null; }, async resetQuota() { throw new Error('read_must_not_reset'); },
+            async readPoolSelection() { return { ...output, ...(hypothetical ? { hypothetical } : {}) }; },
+        };
+        expect(await executeConnectedServiceConfigurationActionV1(host, 'connectedServices.pools.selection.get', input))
+            .toEqual({ ...output, hypothetical });
+        for (const mismatch of [undefined, { strategy: 'priority', atMs: 20 }, { strategy: 'manual', atMs: 10 }]) {
+            hypothetical = mismatch;
+            await expect(executeConnectedServiceConfigurationActionV1(host, 'connectedServices.pools.selection.get', input))
+                .resolves.toMatchObject({ ok: false, errorCode: 'connected_account_daemon_response_invalid' });
         }
     });
     it('captures legacy metadata before revocation and keeps the definite effect when metadata cleanup fails', async () => {
@@ -784,7 +822,7 @@ describe('connected-service configuration Action owner', () => {
         const requests: unknown[] = [];
         let response: unknown = { success: true };
         const describedAdmission = { status: 'described', service,
-            descriptor: { id: 'openai-codex', title: 'Codex', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none' }] } },
+            descriptor: { id: 'openai-codex', title: 'Codex', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'https://provider.example/oauth/callback', pkce: 'required', outcomeReconciliation: 'none' }] } },
             occurrenceId: 'occurrence-1', sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: 'cli-1' } },
             accounts: [], operationTransport: { kind: 'v4' },
         };
@@ -835,7 +873,7 @@ describe('connected-service configuration Action owner', () => {
         };
         await expect(executeConnectedServiceConfigurationActionV1(host, 'connectedServices.pools.switchNow', {
             group: { service, groupId: 'work' }, connectedAccountId: 'personal', expectedGeneration: 1,
-        })).rejects.toMatchObject({ code: 'qualified_connected_accounts_inconsistent_peer' });
+        })).resolves.toMatchObject({ ok: false, errorCode: 'qualified_connected_accounts_inconsistent_peer' });
     });
     it('keeps defaults and local privacy usable when the presentation writer is unavailable', async () => {
         let settings: Record<string, unknown> = { other: { retained: true }, connectedServicesProfileLabelByKey: { 'openai-codex/personal': 'Old' } };

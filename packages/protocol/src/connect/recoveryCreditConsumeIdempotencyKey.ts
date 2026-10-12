@@ -20,7 +20,9 @@ export function buildRecoveryCreditConsumeIdempotencyKey(input: Readonly<{
         ? Math.max(0, Math.trunc(input.sourceSnapshotFetchedAtMs))
         : null;
     const selector = providerCreditId.length > 0
-        ? `credit:${providerCreditId}`
+        ? snapshotFetchedAtMs === null
+            ? `credit:${providerCreditId}`
+            : `credit-observation:${JSON.stringify([providerCreditId, snapshotFetchedAtMs])}`
         : `aggregate:${snapshotFetchedAtMs ?? 'unknown'}`;
     const key = `connected-service-quota-recovery-credit:v1:${input.serviceId}:${input.profileId}:${selector}`;
     // This is the existing consume request's wire limit, not an inventory cap.

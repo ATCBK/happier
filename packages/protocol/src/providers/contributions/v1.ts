@@ -127,7 +127,7 @@ export const ProviderManagedRuntimeDeclarationV1Schema = lazyZodSchema(() => z.o
   sharing: z.literal('connectionMachine').optional(),
   dependencies: z.array(asProtocolZod(PluginContributionLocalIdSchema)).max(16).optional(),
   connectedAccounts: z.array(ConnectedAccountPurposeDeclarationV1Schema.extend({
-    /** Exact managed endpoints that use this purpose; absent means no broker route. */
+    /** Exact managed endpoints supported by this upstream purpose; absent means no broker route. */
     endpointTemplateIds: z.array(ProviderLocalIdSchema).min(1).optional(),
   })).superRefine((declarations, context) => {
     const checked = ConnectedAccountPurposeDeclarationsV1Schema.safeParse(
@@ -164,13 +164,13 @@ export const ProviderManagedRuntimeDeclarationV1Schema = lazyZodSchema(() => z.o
       declaration,
     ]),
   );
-  const purposeByEndpoint = new Set<string>();
   for (const [index, declaration] of (value.connectedAccounts ?? []).entries()) {
+    const purposeEndpoints = new Set<string>();
     for (const endpointTemplateId of declaration.endpointTemplateIds ?? []) {
-      if (!value.endpointTemplateIds.includes(endpointTemplateId) || purposeByEndpoint.has(endpointTemplateId)) {
-        context.addIssue({ code: 'custom', path: ['connectedAccounts', index, 'endpointTemplateIds'], message: 'Managed purpose endpoints must be declared and select exactly one purpose' });
+      if (!value.endpointTemplateIds.includes(endpointTemplateId) || purposeEndpoints.has(endpointTemplateId)) {
+        context.addIssue({ code: 'custom', path: ['connectedAccounts', index, 'endpointTemplateIds'], message: 'Managed purpose endpoints must be declared and unique within the purpose' });
       }
-      purposeByEndpoint.add(endpointTemplateId);
+      purposeEndpoints.add(endpointTemplateId);
     }
   }
   for (const [index, use] of (value.requestAuthUses ?? []).entries()) {

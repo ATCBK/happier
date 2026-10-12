@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
   ProviderCatalogProbeModelV1Schema,
@@ -449,7 +450,7 @@ export function parseProviderRuntimeStateFileV1(
     if (candidate.length > limit) return invalidRuntimeState(expectedMachineId, 'limit_exceeded');
   }
 
-  const parsed = ProviderRuntimeStateFileShapeV1Schema.safeParse(input);
+  const parsed = createStoredReadSchema(ProviderRuntimeStateFileShapeV1Schema).safeParse(input);
   if (!parsed.success) return invalidRuntimeState(expectedMachineId, 'malformed');
   const semanticIssue = validateRuntimeStateSemantics(parsed.data);
   if (semanticIssue) return invalidRuntimeState(expectedMachineId, semanticIssue.reason);
