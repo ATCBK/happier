@@ -87,6 +87,43 @@ describe('createClaudeLocalLifecycleTracker', () => {
     lifecycle.dispose();
   });
 
+  it('keeps provider tasks through transcript observation loss and abandons them when the process exits', async () => {
+    const lifecycle = createLocalTurnLifecycleController({ completionQuiescenceMs: 0 });
+    const handle = {
+      report: vi.fn(async () => {}),
+      markUnknown: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    } satisfies SessionRuntimeActivityContributionHandle;
+    const providerActivityLedger = createClaudeProviderActivityLedger();
+    const runtimeActivityAdapter = createClaudeProviderRuntimeActivityAdapter({
+      contributionHandle: handle,
+      providerActivityLedger,
+    });
+    await runtimeActivityAdapter.activateObservation('test-observer-installed');
+    const tracker = createClaudeLocalLifecycleTracker({
+      lifecycle,
+      runtimeActivityAdapter,
+      providerActivityLedger,
+    });
+    tracker.observeLiveProviderActivityRow({
+      type: 'system',
+      subtype: 'task_started',
+      session_id: 'provider-session',
+      task_id: 'background-task',
+      task_type: 'local_bash',
+    } as unknown as RawJSONLines, 'provider-session');
+    await vi.waitFor(() => expect(providerActivityLedger.hasActiveProviderTasks()).toBe(true));
+
+    // Losing the transcript feed does not stop the Claude process, so its task may still run.
+    tracker.handleProviderActivityObservationLoss('jsonl_observation_lost');
+    await vi.waitFor(() => expect(handle.markUnknown).toHaveBeenCalledOnce());
+    expect(providerActivityLedger.hasActiveProviderTasks()).toBe(true);
+
+    tracker.observeProcessExit();
+    await vi.waitFor(() => expect(providerActivityLedger.hasActiveProviderTasks()).toBe(false));
+    lifecycle.dispose();
+  });
+
   it('routes authenticated Agent hook evidence through the one provider ledger', async () => {
     const lifecycle = createLocalTurnLifecycleController({ completionQuiescenceMs: 0 });
     const reports: SessionRuntimeActivityContribution[] = [];

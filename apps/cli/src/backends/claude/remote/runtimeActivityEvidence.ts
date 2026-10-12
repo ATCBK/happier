@@ -109,12 +109,15 @@ export function observeClaudeProviderTaskRuntimeActivityHook(
 
 export function handleClaudeRuntimeActivityLoss(params: RuntimeActivityEffectParams & Readonly<{
     reason: string;
+    providerStopped?: boolean;
 }>): void {
     if (!params.runtimeActivityAdapter) return;
     runRuntimeActivityEffect({
         ...params,
         label: 'runtime-loss',
-        effect: () => params.runtimeActivityAdapter?.handleRuntimeLoss(params.reason),
+        effect: () => params.providerStopped === true
+            ? params.runtimeActivityAdapter?.handleRuntimeLoss(params.reason, { providerStopped: true })
+            : params.runtimeActivityAdapter?.handleRuntimeLoss(params.reason),
     });
 }
 

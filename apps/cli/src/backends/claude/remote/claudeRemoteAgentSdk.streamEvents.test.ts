@@ -521,7 +521,7 @@ describe('claudeRemoteAgentSdk stream events', () => {
         } as any)).rejects.toThrow('stream failed before result');
 
         expect(runtimeActivityAdapter.publishCurrent).not.toHaveBeenCalled();
-        expect(runtimeActivityAdapter.handleRuntimeLoss).toHaveBeenCalledWith('claude_agent_sdk_stream_finalized');
+        expect(runtimeActivityAdapter.handleRuntimeLoss).toHaveBeenCalledWith('claude_agent_sdk_stream_finalized', { providerStopped: true });
     });
 
     it('keeps Runtime Activity fail-closed when terminal-result reconciliation fails', async () => {
@@ -571,7 +571,7 @@ describe('claudeRemoteAgentSdk stream events', () => {
             createQuery,
         } as any)).rejects.toThrow('runtime activity publish failed');
 
-        expect(runtimeActivityAdapter.handleRuntimeLoss).toHaveBeenCalledWith('claude_agent_sdk_stream_finalized');
+        expect(runtimeActivityAdapter.handleRuntimeLoss).toHaveBeenCalledWith('claude_agent_sdk_stream_finalized', { providerStopped: true });
     });
 
     it('streams Agent SDK stream_event text deltas through StreamedTranscriptWriter (no synthetic partial messages)', async () => {

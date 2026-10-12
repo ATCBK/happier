@@ -85,7 +85,7 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
 
         // A model/mode change relaunches the provider; Claude Code reports the previous process's
         // background agents as orphaned, so no terminal event for them can ever arrive.
-        await adapter.handleRuntimeLoss('claude_agent_sdk_stream_finalized');
+        await adapter.handleRuntimeLoss('claude_agent_sdk_stream_finalized', { providerStopped: true });
         expect(markUnknown).toHaveBeenLastCalledWith('claude_agent_sdk_stream_finalized');
         await adapter.publishBeforeRuntimeStart('claude-remote-provider-not-started');
         await adapter.activateObservation('claude-agent-sdk-provider-observer-installed');
@@ -259,13 +259,26 @@ describe('createClaudeProviderRuntimeActivityAdapter', () => {
         });
         expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 2 });
 
-        await adapter.handleRuntimeLoss('claude_agent_sdk_stream_finalized');
+        await adapter.handleRuntimeLoss('claude_agent_sdk_stream_finalized', { providerStopped: true });
 
         // The query that owned those tasks is gone: they can never settle, so the ledger drops them
         // and the session projects unknown rather than staying active forever.
         expect(markUnknown).toHaveBeenLastCalledWith('claude_agent_sdk_stream_finalized');
         expect(reports.at(-1)).toEqual({ state: 'active', activeCount: 2 });
         expect(ledger.hasActiveProviderTasks()).toBe(false);
+    });
+
+    it('keeps provider tasks when only observation is lost and the provider may still run them', async () => {
+        const { adapter, ledger, markUnknown } = harness();
+        await adapter.activateObservation('observer-installed');
+        await adapter.observeActivity({
+            activity: { type: 'started', sessionId: 's1', taskId: 'still-running' }, evidence: 'live',
+        });
+
+        await adapter.handleRuntimeLoss('claude_legacy_required_hook_failed');
+
+        expect(markUnknown).toHaveBeenLastCalledWith('claude_legacy_required_hook_failed');
+        expect(ledger.hasActiveProviderTasks()).toBe(true);
     });
 
     it('does not republish a projection after an in-flight observation loss already marked unknown', async () => {

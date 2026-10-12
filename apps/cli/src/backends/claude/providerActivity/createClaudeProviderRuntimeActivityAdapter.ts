@@ -103,13 +103,19 @@ export function createClaudeProviderRuntimeActivityAdapter(params: Readonly<{
             if (!isCurrentRuntime() || observationState !== 'active') return;
             await enqueueProjection(currentProjection(), reasonCode);
         },
-        async handleRuntimeLoss(reasonCode: string): Promise<void> {
+        async handleRuntimeLoss(
+            reasonCode: string,
+            options?: Readonly<{ providerStopped?: boolean }>,
+        ): Promise<void> {
             if (!isCurrentRuntime()) return;
             observationComplete = false;
-            // Tasks left in flight when the observer dies are not evidence of liveness — they are
-            // exactly the tasks whose outcome we can no longer observe. Kept in the ledger, the next
-            // turn-end publish would project them as `active` again for the rest of the process.
-            const abandoned = params.providerActivityLedger.abandonActiveProviderTasks();
+            // A stopped provider process orphans its background tasks: no terminal event for them
+            // can arrive, and kept in the ledger the next turn-end publish would project them as
+            // `active` again for the rest of the process. A lost observer alone proves nothing about
+            // the process, so its tasks stay until their own evidence or the process exit settles them.
+            const abandoned = options?.providerStopped === true
+                ? params.providerActivityLedger.abandonActiveProviderTasks()
+                : [];
             if (abandoned.length > 0) {
                 logger.infoFile('[claudeProviderRuntimeActivity] Abandoned provider tasks after observation loss', {
                     reasonCode,

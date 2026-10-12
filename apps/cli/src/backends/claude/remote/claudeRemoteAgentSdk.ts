@@ -489,9 +489,11 @@ export async function claudeRemoteAgentSdk(opts: {
         logPrefix: '[claudeRemoteAgentSdk]',
         runtimeActivityAdapter: opts.runtimeActivityAdapter,
     };
+    // Only called once the query is finalized, which ends its Claude process.
     handleClaudeRuntimeActivityLossForCurrentQuery = (reason: string) => handleClaudeRuntimeActivityLoss({
         ...runtimeActivityEffectParams,
         reason,
+        providerStopped: true,
     });
     const runtimeExecutable = await ensureClaudeJsRuntimeExecutable(opts.jsRuntime);
 
