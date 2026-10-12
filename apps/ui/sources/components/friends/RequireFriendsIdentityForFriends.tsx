@@ -8,7 +8,6 @@ import { useAuth } from '@/auth/context/AuthContext';
 import { getAuthProvider } from '@/auth/providers/registry';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { setAccountUsername } from '@/sync/api/account/apiUsername';
-import { storage } from '@/sync/domains/state/storageStore';
 import { HappyError } from '@/utils/errors/errors';
 import { Modal } from '@/modal';
 import { useUnistyles } from 'react-native-unistyles';
@@ -16,6 +15,10 @@ import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityRe
 import { isSafeExternalAuthUrl } from '@/auth/providers/externalAuthUrl';
 import { Text, TextInput } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 
 function translateUsernameHint(hint: FriendsUsernameHint): string {
@@ -40,6 +43,8 @@ export function RequireFriendsIdentityForFriendsBase(props: {
     unavailableReason?: string;
     onSaveUsername?: (username: string) => void;
     savingUsername?: boolean;
+    saveUsernameDisabled?: boolean;
+    approvalNotice?: React.ReactNode;
     children: React.ReactNode;
 }) {
     const { theme } = useUnistyles();
@@ -86,6 +91,7 @@ export function RequireFriendsIdentityForFriendsBase(props: {
         } as const);
     return (
         <FriendsGateCentered title={t('friends.username.required')}>
+            {props.approvalNotice}
             {props.usernameHint ? (
                 <Text style={{ textAlign: 'center', opacity: 0.7, marginBottom: 12 }}>
                     {props.usernameHint}
@@ -118,7 +124,7 @@ export function RequireFriendsIdentityForFriendsBase(props: {
                 accessibilityRole="button"
                 accessibilityLabel={t('common.save')}
                 onPress={() => props.onSaveUsername?.(username)}
-                disabled={props.savingUsername === true}
+                disabled={props.savingUsername === true || props.saveUsernameDisabled === true}
                 style={{
                     paddingHorizontal: 16,
                     paddingVertical: 12,
@@ -156,7 +162,9 @@ export function RequireFriendsIdentityForFriendsBase(props: {
 
 export function RequireFriendsIdentityForFriends(props: { children: React.ReactNode }) {
     const auth = useAuth();
-    const applyProfile = storage((state) => state.applyProfile);
+    const activeServer = useActiveServerSnapshot();
+    const profileExecution = useMountedActionExecution(activeServer.serverId);
+    const router = useRouter();
     const friendsIdentityReadiness = useFriendsIdentityReadiness();
     const requiredProviderId = friendsIdentityReadiness.requiredProviderId;
     const oauthSupported = useOAuthProviderConfigured(requiredProviderId ?? "__none__");
@@ -213,9 +221,7 @@ export function RequireFriendsIdentityForFriends(props: { children: React.ReactN
         if (!trimmed) return;
         if (isMountedRef.current) setSavingUsername(true);
         try {
-            const res = await setAccountUsername(auth.credentials, trimmed);
-            const currentProfile = storage.getState().profile;
-            applyProfile({ ...currentProfile, username: res.username });
+            await setAccountUsername(auth.credentials, trimmed, profileExecution);
         } catch (e) {
             if (e instanceof HappyError) {
                 const msg =
@@ -223,15 +229,15 @@ export function RequireFriendsIdentityForFriends(props: { children: React.ReactN
                         : e.message === 'invalid-username' ? t('friends.username.invalid')
                             : e.message === 'username-disabled' ? t('friends.username.disabled')
                                 : e.message === 'friends-disabled' ? t('friends.disabled')
-                                    : e.message;
+                                    : t('errors.operationFailed');
                 await Modal.alert(t('common.error'), msg);
             } else {
-                await Modal.alert(t('common.error'), e instanceof Error ? e.message : String(e));
+                await Modal.alert(t('common.error'), t('errors.operationFailed'));
             }
         } finally {
             if (isMountedRef.current) setSavingUsername(false);
         }
-    }, [applyProfile, auth.credentials]);
+    }, [auth.credentials, profileExecution.execute]);
 
     return (
         <RequireFriendsIdentityForFriendsBase
@@ -254,7 +260,16 @@ export function RequireFriendsIdentityForFriends(props: { children: React.ReactN
                     : undefined
             }
             onSaveUsername={(u) => void onSaveUsername(u)}
-            savingUsername={savingUsername}
+            savingUsername={savingUsername && !profileExecution.approval.approvalPending}
+            saveUsernameDisabled={savingUsername || !profileExecution.ready}
+            approvalNotice={profileExecution.approval.approvalPending && profileExecution.approval.approvalId && profileExecution.binding ? (
+                <ActionApprovalPendingNotice
+                    testID="friends-username-approval-pending"
+                    message={t('approvals.waitingForYou')}
+                    summary={profileExecution.approval.approvalSummary}
+                    onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(profileExecution.approval.approvalId!)}?serverId=${encodeURIComponent(profileExecution.binding!.scope.serverId)}`)}
+                />
+            ) : null}
         >
             {props.children}
         </RequireFriendsIdentityForFriendsBase>

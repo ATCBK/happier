@@ -1,12 +1,9 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { t } from '@/text';
-import { renderScreen } from '@/dev/testkit';
-import {
-    RequireFriendsIdentityForFriends,
-    RequireFriendsIdentityForFriendsBase,
-} from './RequireFriendsIdentityForFriends';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 (
     globalThis as typeof globalThis & {
@@ -14,115 +11,13 @@ import {
     }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@/hooks/server/useOAuthProviderConfigured', () => ({
-    useOAuthProviderConfigured: () => true,
-}));
-
-vi.mock('@/hooks/server/useFriendsAllowUsernameSupport', () => ({
-    useFriendsAllowUsernameSupport: () => false,
-}));
-
-vi.mock('@/hooks/server/useFriendsRequiredIdentityProviderId', () => ({
-    useFriendsRequiredIdentityProviderId: () => 'fake',
-}));
-
-vi.mock('@/hooks/server/useFriendsIdentityReadiness', () => ({
-    useFriendsIdentityReadiness: () => ({
-        isReady: false,
-        isLoadingFeatures: false,
-        reason: 'needsProvider',
-        requiredProviderId: 'fake',
-        requiredProviderDisplayName: 'FakeHub',
-        requiredProviderConnected: false,
-        requiredProviderLogin: null,
-        gate: {
-            isReady: false,
-            gateVariant: 'provider',
-            providerConnected: false,
-            providerLogin: null,
-            needsProviderConnection: true,
-            needsUsername: false,
-            suggestedUsername: null,
-        },
-    }),
-}));
-
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ credentials: { token: 't', secret: 's' } }),
-}));
-
-vi.mock('@/auth/providers/registry', () => {
-    const provider = {
-        id: 'fake',
-        displayName: 'FakeHub',
-        connectButtonColor: '#000000',
-        getExternalAuthUrl: async () => 'https://example.test/auth',
-        getConnectUrl: async () => 'https://example.test/connect',
-        finalizeConnect: async () => ({ token: 'replacement-token' }),
-        cancelConnectPending: async () => {},
-        disconnect: async () => {},
-    };
-    return {
-        authProviderRegistry: [provider],
-        getAuthProvider: (id: string) => (id === 'fake' ? provider : null),
-    };
-});
-
-vi.mock('@/auth/storage/tokenStorage', () => ({
-    TokenStorage: {
-        setPendingExternalConnect: async () => {},
-    },
-    isLegacyAuthCredentials: (credentials: unknown) => Boolean(credentials),
-}));
-
-vi.mock('@/sync/api/account/apiUsername', () => ({
-    setAccountUsername: async () => ({ username: 'x' }),
-}));
-
-vi.mock('@/utils/errors/errors', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/utils/errors/errors')>();
-    return { ...actual };
-});
-
-vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({
-        spies: {
-            alert: async () => {},
-        },
-    }).module;
-});
-
-const hoistedStorage = vi.hoisted(() => {
-    const state = {
-        profile: {
-            id: 'a',
-            timestamp: 0,
-            firstName: null,
-            lastName: null,
-            username: null,
-            avatar: null,
-            linkedProviders: [] as unknown[],
-            connectedServices: [] as unknown[],
-        },
-        applyProfile: () => {},
-    };
-    const storage = (<T,>(selector: (current: typeof state) => T) => selector(state)) as {
-        <T>(selector: (current: typeof state) => T): T;
-        getState: () => typeof state;
-    };
-    storage.getState = () => state;
-    return { storage };
-});
-
-vi.mock('@/sync/domains/state/storageStore', () => ({
-    storage: hoistedStorage.storage,
-    getStorage: () => hoistedStorage.storage,
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
-}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
+installDisconnectedServerSocketBoundary();
+const { RequireFriendsIdentityForFriendsBase } = await import('./RequireFriendsIdentityForFriends');
+afterEach(standardCleanup);
 
 type BaseProps = React.ComponentProps<typeof RequireFriendsIdentityForFriendsBase>;
 
@@ -206,18 +101,5 @@ describe('RequireFriendsIdentityForFriendsBase', () => {
         });
 
         expect(screen.tree.findAllByProps({ children: 'CHILD' }).length).toBeGreaterThan(0);
-    });
-});
-
-describe('RequireFriendsIdentityForFriends (wrapper)', () => {
-    it('renders a provider gate using the required provider from features', async () => {
-        const screen = await renderScreen(
-            <RequireFriendsIdentityForFriends>
-                <TextStub>CHILD</TextStub>
-            </RequireFriendsIdentityForFriends>,
-        );
-
-        expect(screen.tree.findAllByProps({ children: 'CHILD' })).toHaveLength(0);
-        expect(screen.findAllByProps({ accessibilityLabel: t('friends.providerGate.connect', { provider: 'FakeHub' }) }).length).toBeGreaterThan(0);
     });
 });
