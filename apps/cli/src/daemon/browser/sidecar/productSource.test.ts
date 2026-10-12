@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BrowserOpenViewCommandV1Schema } from '@happier-dev/protocol/browser/control/v1';
+import { installLocalServiceCensusFixture } from '../../local/services/inventory/platform/censusFixture.testkit';
+import { createBrowserAutomationOwnerRegistry } from '../automation/owners';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
@@ -7,6 +10,13 @@ import { createBrowserSidecarLaunchOwnerControlAdapterFactory } from './launchOw
 import { createBrowserProfileStore } from '../profiles/store';
 import { createBrowserStoragePartitionOwner } from '../storage/partitions';
 import * as productSource from './productSource';
+
+// The native process census reads the OS filesystem; lifecycle and ownership projection stay real.
+vi.mock('node:fs/promises', async importOriginal => {
+    const actual = await importOriginal<typeof import('node:fs/promises')>();
+    return { ...actual, readFile: vi.fn(actual.readFile), readdir: vi.fn(actual.readdir), readlink: vi.fn(actual.readlink) };
+});
+beforeEach(() => installLocalServiceCensusFixture([{ pid: 42, ppid: process.pid, command: ['chromium'] }]));
 
 const MANAGED_PROVENANCE = {
     origin: 'managed_package' as const,
@@ -58,7 +68,9 @@ describe('browser sidecar product source owner', () => {
                 } }),
             }),
         });
-        const runtime = await factory({ machineId: 'machine' });
+        const automation = createBrowserAutomationOwnerRegistry();
+        const runtime = await factory({ machineId: 'machine', resolveInputControl: automation.getInputControl,
+            readSessionIdle: automation.readSessionIdle });
         expect(runtime.ok).toBe(true);
         if (!runtime.ok) return;
         const view = { browserSessionId: 'session', viewId: 'view' };
@@ -72,6 +84,26 @@ describe('browser sidecar product source owner', () => {
             expect(runtime.contextCapture?.resolveNativeObservation?.(view)).toBe('not_observable');
             expect(runtime.contextCapture?.resolveNativeObservation?.({ ...view, viewId: 'unowned' })).toBeUndefined();
             expect(runtime.contextCapture?.resolveNativeObservation?.({ ...view, browserSessionId: 'other' })).toBeUndefined();
+            const [target] = runtime.readResourceTargets!();
+            expect(target).toMatchObject({ ownerRef: 'session', idle: true,
+                root: { owner: { kind: 'browser_sidecar' }, pid: 42, live: true, start: { startTimeMs: 123_450 } } });
+            expect(runtime.readProcessRoots!()[0]?.start).toEqual(target?.root.start);
+            const reopen = target?.wayBack?.[0];
+            expect(reopen).toMatchObject({ label: 'reopen', actionId: 'browser.view.open',
+                input: { ...view, target: { kind: 'externalUrl', url: 'https://example.test' } } });
+            const reopenCommand = BrowserOpenViewCommandV1Schema.parse(reopen?.input);
+            expect(reopenCommand.commandId).not.toBe('open');
+            automation.takeOver(view);
+            expect(runtime.readResourceTargets!()[0]?.idle).toBe(false);
+            automation.handBack(view);
+            await target?.root.stop?.();
+            expect(runtime.readResourceTargets!()).toEqual([]);
+            expect(await runtime.adapter.dispatchCommand(reopenCommand)).toMatchObject({ status: 'dispatched' });
+            await expect(target?.root.stop?.()).rejects.toThrow();
+            await automation.acquireConfidentiality(view);
+            expect(runtime.readResourceTargets!()[0]?.idle).toBe(false);
+            await runtime.readResourceTargets!()[0]?.root.stop?.();
+            expect(runtime.readResourceTargets!()).toEqual([]);
         } finally { await runtime.dispose?.(); }
         expect(runtime.contextCapture?.resolveNativeObservation?.(view)).toBeUndefined();
     });

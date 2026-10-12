@@ -6,6 +6,26 @@ const view = { browserSessionId: 'browser_session_1', viewId: 'view_1' } as cons
 const otherView = { browserSessionId: 'browser_session_1', viewId: 'view_2' } as const;
 
 describe('browser automation owner registry', () => {
+  it('proves session idle only after input settles and no controller or observation hold remains', async () => {
+    let now = 100;
+    const registry = createBrowserAutomationOwnerRegistry({ now: () => now });
+    const control = registry.getInputControl(view);
+    expect(registry.readSessionIdle(view.browserSessionId)).toEqual({ idle: true, settledAt: 100 });
+    let finish: () => void = () => undefined;
+    const pending = control.execute({ requestedBy: 'agent', effect: () => new Promise<void>(resolve => { finish = resolve; }),
+      classifyCompletion: () => 'known' });
+    expect(registry.readSessionIdle(view.browserSessionId).idle).toBe(false);
+    now = 200;
+    finish(); await pending;
+    expect(registry.readSessionIdle(view.browserSessionId)).toEqual({ idle: true, settledAt: 200 });
+    registry.takeOver(otherView);
+    expect(registry.readSessionIdle(view.browserSessionId).idle).toBe(false);
+    registry.handBack(otherView);
+    await registry.acquireConfidentiality(otherView);
+    expect(registry.readSessionIdle(view.browserSessionId).idle).toBe(false);
+    registry.closeView(otherView);
+    expect(registry.readSessionIdle(view.browserSessionId).idle).toBe(false);
+  });
   it('projects the confidential hold until the source is authoritatively destroyed', async () => {
     const registry = createBrowserAutomationOwnerRegistry();
     expect(registry.getControllerState(view).confidentialityHeld).toBeUndefined();

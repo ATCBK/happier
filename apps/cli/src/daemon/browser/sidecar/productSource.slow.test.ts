@@ -31,6 +31,7 @@ import { resolveManagedBrowserSidecarCandidate } from './source';
 import { createBrowserContextRoutes } from '../context/routes';
 import { createSidecarCdpBrowserContextSource } from '../context/cdp/productSource';
 import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
+import { createMachineResourcesPolicyRuntime } from '@/daemon/resources/machineResourcesPolicy';
 
 describe('managed browser live Session execution', () => {
     it('installs the real pinned browser archive and resolves its executable', async () => {
@@ -63,8 +64,18 @@ describe('managed browser live Session execution', () => {
             partitionOwner: createBrowserStoragePartitionOwner({ storageRootDirectory: profileRoot }) });
         let runtime: Awaited<ReturnType<ReturnType<typeof createProductBrowserSidecarControlAdapterFactory>>> | undefined;
         const browserStderr: string[] = [];
+        let metadata: Record<string, unknown> = { resourcesPolicyV1: { v: 1, processes: { browserMaxConcurrent: 1 } } };
+        let metadataVersion = 1;
+        const resourcesPolicy = createMachineResourcesPolicyRuntime({ port: {
+            read: async () => ({ status: 'ready', metadata, metadataVersion }),
+            compareAndSwap: async input => {
+                metadata = input.metadata;
+                return { status: 'applied', metadata, metadataVersion: ++metadataVersion };
+            },
+        } });
         try {
-            const featureGate = createBrowserDaemonFeatureGate({ env: {},
+            await resourcesPolicy.reload();
+            const featureGate = createBrowserDaemonFeatureGate({ env: { NODE_ENV: 'test' },
                 resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
                     features: { browser: { enabled: true, viewTargets: { enabled: true }, internal: { enabled: true },
                         sidecar: { enabled: true }, diagnostics: { enabled: true }, context: { enabled: true },
@@ -76,6 +87,7 @@ describe('managed browser live Session execution', () => {
             // First explicit browser use exercises the real digest-verified installer if missing.
             runtime = await createProductBrowserSidecarControlAdapterFactory({ featureEnabled: featureGate.isEnabled('browser.sidecar'),
                 profileStore: profiles,
+                readMachineResourcesPolicy: resourcesPolicy.read,
                 installManagedBrowserChromium: async params => {
                     const installed = await getBrowserChromiumArchiveDownloadInstallableAdapter().installOrUpgrade(params);
                     expect(installed.ok, JSON.stringify(installed)).toBe(true);
@@ -119,10 +131,17 @@ describe('managed browser live Session execution', () => {
                 featureGate,
             });
             for (const browserSessionId of ['live_session_a', 'live_session_b']) {
-                const opened = await execute({ actionId: 'browser.view.open', context: {}, input: {
+                const openArgs = { actionId: 'browser.view.open', context: {}, input: {
                     kind: 'openView', commandId: `open_${browserSessionId}`, browserSessionId, viewId: 'view',
                     platform: 'web', target: { kind: 'externalUrl', targetId: 'fixture', url },
-                } });
+                } } satisfies Parameters<typeof execute>[0];
+                if (browserSessionId === 'live_session_b') {
+                    expect(await execute(openArgs)).toMatchObject({ status: 'failed', completion: 'known', error: { code: 'waiting_for_memory', retryable: true } });
+                    expect(profiles.listProfiles()).toHaveLength(1);
+                    expect(await resourcesPolicy.set({ expectedRevision: metadataVersion, patch: { processes: { browserMaxConcurrent: 2 } } }))
+                        .toMatchObject({ status: 'applied' });
+                }
+                const opened = await execute(openArgs);
                 expect(opened, `${JSON.stringify(opened)}\n${browserStderr.join('')}`).toMatchObject({ status: 'dispatched' });
             }
             const view = { browserSessionId: 'live_session_a', viewId: 'view' };
@@ -139,7 +158,7 @@ describe('managed browser live Session execution', () => {
             expect(await action('type', { selector: '#name', text: 'Source-driven browser' })).toMatchObject({ status: 'succeeded' });
             expect(await action('click', { selector: '#submit' })).toMatchObject({ status: 'succeeded' });
             expect(await action('snapshot', {})).toMatchObject({ status: 'succeeded', resultSummary: {
-                text: expect.stringContaining('Source-driven browser'),
+                visibleText: expect.stringContaining('Source-driven browser'),
             } });
             async function evaluate(browserSessionId: string, expression: string) {
                 const handle = capture.resolvePageHandle({ browserSessionId, viewId: 'view' });
@@ -169,10 +188,22 @@ describe('managed browser live Session execution', () => {
             await expect(readdir(profileDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
             expect(capture.resolvePageHandle(view)).toBeNull();
             expect(await evaluate('live_session_b', 'document.title')).toMatchObject({ result: { value: 'Live browser' } });
+            expect(await resourcesPolicy.set({ expectedRevision: metadataVersion, patch: { processes: { browserMaxConcurrent: 1 } } }))
+                .toMatchObject({ status: 'applied' });
+            const retryArgs = { actionId: 'browser.view.open', context: {}, input: {
+                kind: 'openView', commandId: 'open_live_session_c', browserSessionId: 'live_session_c', viewId: 'view',
+                platform: 'web', target: { kind: 'externalUrl', targetId: 'fixture', url },
+            } } satisfies Parameters<typeof execute>[0];
+            expect(await execute(retryArgs)).toMatchObject({ error: { code: 'waiting_for_memory' } });
+            expect(await execute({ actionId: 'browser.view.close', context: {}, input: {
+                kind: 'closeView', commandId: 'close_live_session_b', browserSessionId: 'live_session_b', viewId: 'view',
+            } })).toMatchObject({ status: 'dispatched' });
+            expect(await execute(retryArgs)).toMatchObject({ status: 'dispatched' });
             await runtime.dispose?.();
             runtime = undefined;
             expect(profiles.listProfiles()).toEqual([]);
         } finally {
+            resourcesPolicy.stop();
             try { if (runtime?.ok) await runtime.dispose?.(); }
             finally {
                 await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

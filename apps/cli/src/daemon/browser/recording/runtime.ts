@@ -5,9 +5,6 @@ import type { BrowserRecordingCapabilities } from '@happier-dev/protocol';
 import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
 import type { TransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
 
-import {
-  BrowserRecordingRetentionCleanupScheduler,
-} from './retentionScheduler';
 import { createFfmpegBrowserRecordingStreamFrameEncoderFactory } from './adapters/ffmpegStreamEncoder';
 import {
   createBrowserRecordingStreamFrameCaptureAdapter,
@@ -88,8 +85,6 @@ export type BrowserRecordingDaemonRuntimeOptions = Readonly<{
     transport: BrowserRecordingCdpScreencastTransport;
   }>;
   now?: () => number;
-  retentionCleanupIntervalMs?: number;
-  onRetentionCleanupError?: (error: unknown) => void;
 }>;
 
 function createUnavailableMediaWriter(): BrowserRecordingMediaWriter {
@@ -250,19 +245,9 @@ export function createBrowserRecordingDaemonRuntime(
       return result;
     },
   };
-  const retentionScheduler = new BrowserRecordingRetentionCleanupScheduler({
-    cleanupExpiredRecordings: routes.cleanupExpiredRecordings,
-    nowMs: options.now,
-    intervalMs: options.retentionCleanupIntervalMs,
-    onCleanupError: options.onRetentionCleanupError,
-  });
-  retentionScheduler.start();
-
   return {
     service,
     routes,
-    stop: () => {
-      retentionScheduler.stop();
-    },
+    stop: () => {},
   };
 }

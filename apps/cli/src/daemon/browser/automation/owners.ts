@@ -22,6 +22,7 @@ export type BrowserAutomationControlFacts = Readonly<{
  * Consent remains the action-approval danger floor; no action lease or parallel admission state.
  */
 export type BrowserAutomationOwnerRegistry = Readonly<{
+  readSessionIdle(browserSessionId: string): Readonly<{ idle: boolean; settledAt?: number }>;
   getControllerState(
     view: BrowserAutomationViewRef,
     facts?: BrowserAutomationControlFacts,
@@ -37,19 +38,31 @@ export type BrowserAutomationOwnerRegistry = Readonly<{
   closeView(view: BrowserAutomationViewRef, facts?: Readonly<{ sourceDestroyed?: boolean }>): void;
 }>;
 
-export function createBrowserAutomationOwnerRegistry(): BrowserAutomationOwnerRegistry {
-  const entries = new Map<string, { control: SurfaceInputControl; safetyCheck?: () => Promise<boolean> }>();
+export function createBrowserAutomationOwnerRegistry(options: Readonly<{ now?: () => number }> = {}): BrowserAutomationOwnerRegistry {
+  const now = options.now ?? Date.now;
+  const entries = new Map<string, { browserSessionId: string; control: SurfaceInputControl; lastUsedAt: number; safetyCheck?: () => Promise<boolean> }>();
 
   function entryFor(view: BrowserAutomationViewRef): SurfaceInputControl {
     const key = browserViewKey(view);
     const existing = entries.get(key);
     if (existing) return existing.control;
-    const created = createSurfaceInputControl();
-    entries.set(key, { control: created });
+    const created = createSurfaceInputControl({ onStatusChange: () => {
+      const entry = entries.get(key);
+      if (entry) entry.lastUsedAt = now();
+    } });
+    entries.set(key, { browserSessionId: view.browserSessionId, control: created, lastUsedAt: now() });
     return created;
   }
 
   return {
+    readSessionIdle(browserSessionId) {
+      const sessionEntries = [...entries.values()].filter(entry => entry.browserSessionId === browserSessionId);
+      const idle = sessionEntries.every(({ control }) => {
+        const status = control.getStatus();
+        return status.controller === 'idle' && !status.stopping && !status.uncertain && !control.isObservationHeld();
+      });
+      return { idle, ...(sessionEntries.length ? { settledAt: Math.max(...sessionEntries.map(entry => entry.lastUsedAt)) } : {}) };
+    },
     getControllerState(view, facts) {
       const control = entryFor(view);
       const state = control.getStatus();

@@ -4,6 +4,9 @@ import { BrowserHttpUrlV1Schema } from '@happier-dev/protocol/browser/url';
 import type { BrowserEventV1, BrowserCommandDispatchResultV1, BrowserCommandErrorCodeV1, BrowserCommandV1, BrowserSidecarErrorCodeV1, BrowserProfileV1, BrowserViewTargetV1, BrowserPlatformV1 } from '@happier-dev/protocol';
 import type { SurfaceInputControl } from '../../surfaces/inputControl';
 import { isBrowserSidecarCdpCommandNotDispatched } from './cdpTransport';
+import type { HappierProcessRoot } from '@/daemon/processes/ownership/types';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
+import type { MachineGuardActivityEntryV1 } from '@happier-dev/protocol/machines/guard/activityV1';
 
 import {
     browserCommandDispatchFailure,
@@ -73,6 +76,16 @@ export type BrowserSidecarViewLifecycleSubscriber = (event: BrowserSidecarViewLi
 export type BrowserSidecarControlAdapterFactoryInput = Readonly<{
     machineId: string;
     resolveInputControl?: (view: Readonly<{ browserSessionId: string; viewId: string }>) => SurfaceInputControl | undefined;
+    readSessionIdle?: (browserSessionId: string) => Readonly<{ idle: boolean; settledAt?: number }>;
+}>;
+
+export type BrowserSidecarResourceTarget = Readonly<{
+    root: HappierProcessRoot;
+    ownerRef: string;
+    idle: boolean | null;
+    settledAt?: number;
+    label: string;
+    wayBack?: MachineGuardActivityEntryV1['wayBack'];
 }>;
 
 /**
@@ -111,6 +124,10 @@ export type BrowserSidecarControlAdapterFactoryResult =
         adapter: BrowserDaemonControlAdapter;
         dispose?: () => void | Promise<void>;
         contextCapture?: BrowserSidecarContextCaptureSurface;
+        readProcessRoots?: () => readonly HappierProcessRootSource[];
+        readResourceTargets?: () => readonly BrowserSidecarResourceTarget[];
+        /** Actual child liveness, independent of whether native start identity was readable. */
+        isProcessAlive?: () => boolean;
     }>
     | Readonly<{
         ok: false;

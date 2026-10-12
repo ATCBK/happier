@@ -65,7 +65,7 @@ export function createBrowserRecordingSessionMediaWriter(
   const sourceAccessPolicy = options.sourceAccessPolicy ?? { kind: 'osUser' as const };
   const workspacePathByRecordingId = new Map<string, Readonly<{ path: string; workingDirectory: string; attached: boolean }>>();
 
-  async function discardWorkspaceDraft(recordingId: string): Promise<void> {
+  async function discardWorkspaceDraft(recordingId: string, beforeEffect?: () => Promise<void>): Promise<void> {
     const workspacePath = workspacePathByRecordingId.get(recordingId);
     if (!workspacePath) throw new Error('Browser recording media path is unavailable for discard.');
     // Transcript custody has admitted this attachment; draft cleanup must not break it.
@@ -76,12 +76,24 @@ export function createBrowserRecordingSessionMediaWriter(
         accessPolicy,
       });
       if (!authorized.valid) throw new Error(authorized.error);
+      await beforeEffect?.();
       await rm(authorized.resolvedPath, { force: true });
     }
     workspacePathByRecordingId.delete(recordingId);
   }
 
   return {
+    getRecordingStorage(recordingId) {
+      const storage = workspacePathByRecordingId.get(recordingId);
+      if (!storage) return null;
+      const authorized = authorizeFilesystemPath({
+        targetPath: storage.path,
+        defaultDirectory: storage.workingDirectory,
+        accessPolicy,
+      });
+      return authorized.valid ? { path: authorized.resolvedPath, attached: storage.attached } : null;
+    },
+
     async persistRecording({ recording, artifact }) {
       const control = options.resolveInputControl?.(recording);
       const confidential = () => new Error('Browser recording is held for confidential input.');
@@ -132,9 +144,9 @@ export function createBrowserRecordingSessionMediaWriter(
       return mediaRef;
     },
 
-    async discardRecording({ recording }) {
+    async discardRecording({ recording, beforeEffect }) {
       if (!recording.mediaRef) return;
-      await discardWorkspaceDraft(recording.recordingId);
+      await discardWorkspaceDraft(recording.recordingId, beforeEffect);
     },
   };
 }

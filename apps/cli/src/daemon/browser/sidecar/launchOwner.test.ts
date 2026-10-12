@@ -1,7 +1,17 @@
 import type { BrowserCommandV1 } from '@happier-dev/protocol';
+import * as childProcess from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { parseHappierLinuxScopeName } from '@/daemon/platform/linux/systemdUserResourceGovernor';
 
 import * as launchOwner from './launchOwner';
+
+// Native spawn is an OS boundary; retain the actual controller beneath it.
+vi.mock('node:child_process', async (importOriginal) => ({
+    ...await importOriginal<typeof import('node:child_process')>(), spawn: vi.fn(),
+}));
 
 type ExitListener = (code: number | null, signal: NodeJS.Signals | null) => void;
 type ErrorListener = (error: Error) => void;
@@ -73,6 +83,42 @@ function openViewCommand(): Extract<BrowserCommandV1, { kind: 'openView' }> {
 }
 
 describe('browser sidecar launch owner', () => {
+    it('launches its Linux singleton through the canonical owned scope', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'happier-browser-scope-fixture-'));
+        const platform = process.platform;
+        const fake = createFakeProcess();
+        // ChildProcess is a genuine OS boundary; controller and scope composition stay real.
+        const spawn = vi.mocked(childProcess.spawn).mockReturnValue(fake.process as unknown as childProcess.ChildProcess);
+        try {
+            Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+            vi.stubEnv('PATH', directory);
+            vi.stubEnv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/test/browser-bus');
+            await writeFile(join(directory, 'systemctl'), '#!/bin/sh\nprintf "LoadState=loaded\\nCPUWeight=50\\nIOWeight=50\\nMemoryHigh=1073741824\\n"\n', { mode: 0o700 });
+            await writeFile(join(directory, 'systemd-run'), '#!/bin/sh\nprintf -- "--expand-environment=\\n"\n', { mode: 0o700 });
+            const factory = launchOwner.createBrowserSidecarLaunchOwnerControlAdapterFactory({
+                browserSessionId: 'browser_session_scope', sidecarId: 'sidecar_scope',
+                featureEnabled: true, allowPersistentProfiles: false,
+                profile: { profileId: 'profile_scope', storageMode: 'ephemeral',
+                    owner: { kind: 'session', id: 'browser_session_scope' }, cleanupOnSessionClose: true },
+                profileDirectory: directory,
+                binaryResolution: { ok: true, source: 'managedBrowserPackage', executablePath: '/managed/chrome',
+                    discoveryKind: 'managedRuntime', diagnostics: [] },
+                cleanupProfileDirectory: async () => {},
+            });
+            const result = factory({ machineId: 'machine_scope' });
+            await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+            const unit = spawn.mock.calls[0]?.[1]?.find(argument => argument.startsWith('--unit='))?.slice('--unit='.length);
+            fake.emitExit(1);
+            await expect(result).resolves.toMatchObject({ ok: false, errorCode: 'cdp_unavailable' });
+            expect(parseHappierLinuxScopeName(unit ?? '')?.owner).toEqual({ kind: 'browser_sidecar' });
+        } finally {
+            spawn.mockReset();
+            vi.unstubAllEnvs();
+            Object.defineProperty(process, 'platform', { configurable: true, value: platform });
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
     it('fails closed without spawning when the launch plan is unavailable', async () => {
         const mod = launchOwner;
 

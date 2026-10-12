@@ -276,6 +276,7 @@ export function createSidecarProcessController(params: Readonly<{
         getStatus() {
             return status;
         },
+        getPid: () => active?.process.pid ?? null,
         async waitForDevToolsEndpointSource(input) {
             if (input.signal?.aborted) return cdpUnavailable();
             const current = active;
@@ -318,6 +319,8 @@ export type SidecarProcessController = Readonly<{
     stop: () => SidecarProcessResult;
     stopAndWait: () => Promise<void>;
     getStatus: () => BrowserSidecarRuntimeStatusV1;
+    /** Private actual-child fact; it remains retained until the exit is observed. */
+    getPid?: () => number | null;
     waitForDevToolsEndpointSource: (input: Readonly<{
         sidecarId: string;
         timeoutMs?: number;

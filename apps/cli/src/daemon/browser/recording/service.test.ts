@@ -1,3 +1,7 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type {
   BrowserEvidenceSessionMediaReferenceV1,
   BrowserRecordingCapabilities,
@@ -7,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createSurfaceInputControl } from '../../surfaces/inputControl';
 import type { BrowserRecordingRuntimeStartInput } from './service';
 import { createDeferred } from '@/testkit/async/deferred';
+import { createTransferPathAllowanceRegistry } from '@/transfers/targets/createTransferPathAllowanceRegistry';
 
 const recordingCapabilities = {
   enabled: true,
@@ -72,6 +77,85 @@ describe('browser recording daemon service', () => {
     retentionClass: 'preSend',
     captureSource: streamCaptureSource,
   } satisfies BrowserRecordingRuntimeStartInput;
+
+  it.each([false, true])('projects retained recording paths and expiry with transcript custody=%s', async (attached) => {
+    const { createBrowserRecordingDaemonService } = await import('./service');
+    const { createBrowserRecordingSessionMediaWriter } = await import('./sessionMediaWriter');
+    const workspace = await mkdtemp(join(tmpdir(), 'happier-recording-storage-'));
+    const bytes = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x42, 0x86, 0x81, 0x01]), Buffer.from('recording fixture')]);
+    try {
+      const sourcePath = join(workspace, 'capture.webm');
+      await writeFile(sourcePath, bytes);
+      // Capture is the external encoder boundary; persistence and recording lifecycle stay real.
+      const service = createBrowserRecordingDaemonService({
+        now: () => 10_000,
+        captureAdapters: [{
+          captureKind: 'streamFrameCapture',
+          start: async () => ({ status: 'started' }),
+          stop: async () => ({ durationMs: 2_000, byteSize: bytes.length, frameCount: 24, fps: 12, mimeType: 'video/webm', source: { kind: 'local-file', path: sourcePath, fileNameHint: 'capture.webm' } }),
+          discard: async () => {},
+        }],
+        mediaWriter: createBrowserRecordingSessionMediaWriter({
+          workingDirectory: workspace,
+          pathAllowanceRegistry: createTransferPathAllowanceRegistry(),
+          resolveSessionMediaTarget: (recording) => ({ sessionId: `session_${recording.viewId}`, messageLocalId: recording.recordingId }),
+          // Transcript admission is the process/network boundary.
+          commitAttachment: attached ? async () => {} : undefined,
+        }),
+      });
+      const changes: unknown[] = [];
+      const release = service.subscribeStorageChanges(() => changes.push(service.listStorageRecordings()));
+      expect(service.listStorageRecordings()).toEqual([]);
+      for (const [viewId, expiresAtMs] of [['view_a', 20_000], ['view_b', 30_000]] as const) {
+        const recordingId = `recording_${viewId}`;
+        expect((await service.startRecording({ ...confidentialStartInput, recordingId, viewId })).status).toBe('started');
+        expect((await service.stopRecording({ recordingId, navigationGenerationEnd: 8, stoppedAtMs: 12_000, expiresAtMs })).status).toBe('finalized');
+      }
+      const stored = service.listStorageRecordings();
+      expect(service.nextExpiryAtMs()).toBe(20_000);
+      if (attached) {
+        expect(stored).toEqual([]);
+        const recording = service.getRecordingStatus('recording_view_a');
+        expect(recording?.mediaRef).toBeTruthy();
+        const attachedPath = join(workspace, '.happier', 'uploads', 'artifacts', 'session_view_a', 'recording_view_a', `${recording?.mediaRef?.mediaId.slice(0, 12)}-capture.webm`);
+        expect(await readFile(attachedPath)).toEqual(bytes);
+        await expect(service.discardStorageRecording({ recordingId: 'recording_view_a' })).rejects.toMatchObject({ code: 'browser_recording_missing' });
+        await service.cancelRecording({ recordingId: 'recording_view_a', reason: 'user_discarded' });
+        expect(await readFile(attachedPath)).toEqual(bytes);
+        release();
+        return;
+      }
+      expect(stored).toHaveLength(2);
+      expect(stored).toEqual([
+        expect.objectContaining({ recordingId: 'recording_view_a', expiresAtMs: 20_000, active: false }),
+        expect.objectContaining({ recordingId: 'recording_view_b', expiresAtMs: 30_000, active: false }),
+      ]);
+      for (const item of stored) {
+        expect(item.path).toContain(join('.happier', 'uploads', 'artifacts', `session_${item.recordingId.slice('recording_'.length)}`, item.recordingId));
+        expect(await readFile(item.path)).toEqual(bytes);
+      }
+      expect(changes).toContainEqual(stored);
+      expect(await service.cleanupExpiredRecordings({ nowMs: 20_000 })).toEqual({ discardedRecordingIds: ['recording_view_a'], failedRecordingIds: [] });
+      expect(service.listStorageRecordings()).toEqual([stored[1]]);
+      expect(service.nextExpiryAtMs()).toBe(30_000);
+      expect(changes.at(-1)).toEqual([stored[1]]);
+      await expect(readFile(stored[0].path)).rejects.toThrow();
+      release();
+      const beforeCancel = changes.length;
+      const denied = Object.assign(new Error('approval changed'), { code: 'changed_since_review' });
+      await expect(service.discardStorageRecording({ recordingId: 'recording_view_b', beforeEffect: async () => { throw denied; } })).rejects.toBe(denied);
+      expect(service.listStorageRecordings()).toEqual([stored[1]]);
+      expect(await readFile(stored[1].path)).toEqual(bytes);
+      await service.discardStorageRecording({ recordingId: 'recording_view_b' });
+      expect(service.getRecordingStatus('recording_view_b')).toMatchObject({ status: 'discarded', outcomeReason: 'user_discarded' });
+      await expect(readFile(stored[1].path)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(service.listStorageRecordings()).toEqual([]);
+      expect(service.nextExpiryAtMs()).toBeNull();
+      expect(changes).toHaveLength(beforeCancel);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 
   it('refuses recording a held view before starting capture', async () => {
     const { createBrowserRecordingDaemonService } = await import('./service');

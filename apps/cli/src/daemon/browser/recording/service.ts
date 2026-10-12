@@ -54,12 +54,14 @@ export type BrowserRecordingCaptureAdapter = Readonly<{
 }>;
 
 export type BrowserRecordingMediaWriter = Readonly<{
+  getRecordingStorage?: (recordingId: string) => Readonly<{ path: string; attached: boolean }> | null;
   persistRecording(input: Readonly<{
     recording: BrowserRecordingSessionV1;
     artifact: BrowserRecordingCapturedArtifact;
   }>): Promise<BrowserEvidenceSessionMediaReferenceV1>;
   discardRecording(input: Readonly<{
     recording: BrowserRecordingSessionV1;
+    beforeEffect?: () => Promise<void>;
     reason: Extract<
       BrowserRecordingOutcomeReasonV1,
       'retention_limit' | 'expired' | 'user_discarded' | 'session_closed' | 'logout'
@@ -67,18 +69,36 @@ export type BrowserRecordingMediaWriter = Readonly<{
   }>): Promise<void>;
 }>;
 
+export type BrowserRecordingStorageRecord = Readonly<{
+  recordingId: string;
+  path: string;
+  title?: string;
+  expiresAtMs?: number;
+  active: boolean;
+}>;
+
 export type BrowserRecordingDaemonService = Readonly<{
   startRecording(input: BrowserRecordingRuntimeStartInput): Promise<BrowserRecordingRuntimeStartResult>;
   stopRecording(input: BrowserRecordingRuntimeStopInput): Promise<BrowserRecordingRuntimeStopResult>;
   cancelRecording(input: BrowserRecordingRuntimeCancelInput): Promise<BrowserRecordingRuntimeTerminalResult>;
   applyLifecycleOutcome(input: BrowserRecordingRuntimeLifecycleInput): Promise<BrowserRecordingRuntimeTerminalResult>;
-  cleanupExpiredRecordings(input: Readonly<{ nowMs: number }>): Promise<Readonly<{
+  cleanupExpiredRecordings(input: Readonly<{ nowMs: number; beforeEffect?: () => Promise<void> }>): Promise<Readonly<{
     discardedRecordingIds: readonly string[];
     failedRecordingIds: readonly string[];
   }>>;
   getRecordingStatus(recordingId: string): BrowserRecordingSessionV1 | null;
   listRecordingsForView(input: Readonly<{ viewId: string }>): readonly BrowserRecordingSessionV1[];
+  listStorageRecordings(): readonly BrowserRecordingStorageRecord[];
+  discardStorageRecording(input: Readonly<{ recordingId: string; beforeEffect?: () => Promise<void> }>): Promise<void>;
+  subscribeStorageChanges(listener: () => void): () => void;
+  nextExpiryAtMs(): number | null;
 }>;
+export class BrowserRecordingStorageError extends Error {
+  constructor(readonly code: 'browser_recording_missing' | 'browser_recording_not_active' | 'browser_recording_media_discard_failed') {
+    super(code);
+    this.name = 'BrowserRecordingStorageError';
+  }
+}
 
 export type BrowserRecordingRuntimeStartInput = Readonly<{
   browserRecordingEnabled: boolean;
@@ -299,6 +319,7 @@ export function createBrowserRecordingDaemonService(input: Readonly<{
     input.captureAdapters.map((adapter) => [adapter.captureKind, adapter]),
   );
   const sessionsById = new Map<string, BrowserRecordingSessionV1>();
+  const storageChangeListeners = new Set<() => void>();
   const sessionOrder: string[] = [];
   const activeRecordingIdByViewId = new Map<string, string>();
   const activeAdapterByRecordingId = new Map<string, {
@@ -319,13 +340,14 @@ export function createBrowserRecordingDaemonService(input: Readonly<{
     sessionsById.set(recording.recordingId, recording);
     if (activeForView) {
       activeRecordingIdByViewId.set(recording.viewId, recording.recordingId);
-      return;
+    } else {
+      if (activeRecordingIdByViewId.get(recording.viewId) === recording.recordingId) {
+        activeRecordingIdByViewId.delete(recording.viewId);
+      }
+      activeAdapterByRecordingId.get(recording.recordingId)?.unregisterConfidentialityDrain?.();
+      activeAdapterByRecordingId.delete(recording.recordingId);
     }
-    if (activeRecordingIdByViewId.get(recording.viewId) === recording.recordingId) {
-      activeRecordingIdByViewId.delete(recording.viewId);
-    }
-    activeAdapterByRecordingId.get(recording.recordingId)?.unregisterConfidentialityDrain?.();
-    activeAdapterByRecordingId.delete(recording.recordingId);
+    for (const listener of storageChangeListeners) listener();
   }
 
   function readRecording(recordingId: string): BrowserRecordingSessionV1 | null {
@@ -369,10 +391,16 @@ export function createBrowserRecordingDaemonService(input: Readonly<{
     recording: BrowserRecordingSessionV1,
     reason: Extract<BrowserRecordingOutcomeReasonV1, 'user_discarded' | 'session_closed' | 'logout'>,
     atMs: number,
+    beforeEffect?: () => Promise<void>,
   ): Promise<BrowserRecordingRuntimeTerminalResult> {
+    let effectAdmitted = beforeEffect === undefined;
     try {
-      await input.mediaWriter.discardRecording({ recording, reason });
-    } catch {
+      await input.mediaWriter.discardRecording({ recording, reason, ...(beforeEffect ? { beforeEffect: async () => {
+        await beforeEffect();
+        effectAdmitted = true;
+      } } : {}) });
+    } catch (error) {
+      if (!effectAdmitted) throw error;
       return {
         status: 'unavailable',
         reason: createUnavailable(
@@ -394,6 +422,23 @@ export function createBrowserRecordingDaemonService(input: Readonly<{
   }
 
   return {
+    nextExpiryAtMs() {
+      let earliest: number | null = null;
+      for (const recording of sessionsById.values()) {
+        if ((recording.status === 'completed' || recording.status === 'finalized') && recording.expiresAtMs !== undefined) {
+          earliest = Math.min(earliest ?? Infinity, recording.expiresAtMs);
+        }
+      }
+      return earliest;
+    },
+    async discardStorageRecording({ recordingId, beforeEffect }) {
+      const recording = readRecording(recordingId);
+      const storage = input.mediaWriter.getRecordingStorage?.(recordingId);
+      if (!recording || !storage || storage.attached) throw new BrowserRecordingStorageError('browser_recording_missing');
+      if (recording.status !== 'completed' && recording.status !== 'finalized') throw new BrowserRecordingStorageError('browser_recording_not_active');
+      const result = await discardFinalizedStoredMedia(recording, 'user_discarded', now(), beforeEffect);
+      if (result.status === 'unavailable') throw new BrowserRecordingStorageError('browser_recording_media_discard_failed');
+    },
     async startRecording(startInput) {
       const control = input.resolveInputControl?.(startInput);
       if (control?.isObservationHeld()) return confidentialityUnavailable();
@@ -649,12 +694,13 @@ export function createBrowserRecordingDaemonService(input: Readonly<{
       const failedRecordingIds: string[] = [];
       for (const recordingId of [...sessionOrder]) {
         const recording = readRecording(recordingId);
-        if (!recording?.expiresAtMs || recording.expiresAtMs > cleanupInput.nowMs) continue;
+        if (!recording || recording.expiresAtMs === undefined || recording.expiresAtMs > cleanupInput.nowMs) continue;
         if (recording.status !== 'completed' && recording.status !== 'finalized') continue;
         try {
           await input.mediaWriter.discardRecording({
             recording,
             reason: 'retention_limit',
+            beforeEffect: cleanupInput.beforeEffect,
           });
         } catch {
           failedRecordingIds.push(recordingId);
@@ -681,6 +727,25 @@ export function createBrowserRecordingDaemonService(input: Readonly<{
       return sessionOrder
         .map((recordingId) => readRecording(recordingId))
         .filter((recording): recording is BrowserRecordingSessionV1 => recording?.viewId === viewInput.viewId);
+    },
+
+    listStorageRecordings() {
+      return [...sessionsById.values()].flatMap((recording): BrowserRecordingStorageRecord[] => {
+        const storage = input.mediaWriter.getRecordingStorage?.(recording.recordingId);
+        // Transcript custody owns attached uploads; they are sized as session folders.
+        if (!storage || storage.attached) return [];
+        return [{
+          recordingId: recording.recordingId,
+          path: storage.path,
+          expiresAtMs: recording.expiresAtMs,
+          active: isActiveStatus(recording.status),
+        }];
+      });
+    },
+
+    subscribeStorageChanges(listener) {
+      storageChangeListeners.add(listener);
+      return () => { storageChangeListeners.delete(listener); };
     },
   };
 }

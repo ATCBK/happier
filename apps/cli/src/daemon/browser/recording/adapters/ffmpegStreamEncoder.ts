@@ -1,4 +1,5 @@
 import { spawn as spawnProcess, type SpawnOptions } from 'node:child_process';
+import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -259,6 +260,7 @@ export function createFfmpegBrowserRecordingStreamFrameEncoderFactory(
       outputPath,
     });
     const child = spawnFfmpeg(ffmpegBinaryPath, args, {
+      env: withProcessOwnerEnvironment(process.env, { kind: 'happier', component: 'recording_encoder' }),
       stdio: ['pipe', 'ignore', 'ignore'],
       windowsHide: true,
     });

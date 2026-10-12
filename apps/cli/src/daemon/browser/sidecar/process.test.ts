@@ -62,6 +62,17 @@ function privateLaunchPlan(overrides: Partial<SidecarPrivateLaunchPlan> = {}): S
 }
 
 describe('daemon browser sidecar process lifecycle', () => {
+    it('exposes only its current actual child identity and retires it on confirmed exit', () => {
+        const fake = createFakeProcess();
+        const controller = sidecarProcess.createSidecarProcessController({ nowMs: () => 100, spawnProcess: () => fake.process });
+        expect(controller.getPid?.()).toBeNull();
+        controller.launch(privateLaunchPlan());
+        expect(controller.getPid?.()).toBe(42);
+        controller.stop();
+        expect(controller.getPid?.()).toBe(42);
+        fake.emitExit(0, 'SIGTERM');
+        expect(controller.getPid?.()).toBeNull();
+    });
     it('waits for a healthy process endpoint beyond five seconds and settles on owner cancellation', async () => {
         vi.useFakeTimers();
         try {

@@ -1,6 +1,12 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
+import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
+import { buildCgroupProcessLaunchSpec, prepareCgroupProcessLaunchScope, type LinuxProcessLaunchScope } from '../../platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
+import { createHappierLinuxScopeName } from '../../platform/linux/systemdUserResourceGovernor';
 import { BROWSER_SANDBOX_NEXT_ACTION, isAppArmorUserNamespaceRestriction } from './sandbox';
+import { readProcessCensus } from '@/processes/census/processCensus';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 
 import type {
     BrowserProfileV1,
@@ -15,6 +21,7 @@ import {
 import type {
     BrowserSidecarControlAdapterFactory,
     BrowserSidecarControlAdapterFactoryResult,
+    BrowserSidecarResourceTarget,
 } from './controlAdapter';
 import {
     createSidecarProcessController,
@@ -54,8 +61,14 @@ function unavailable(
     };
 }
 
-function defaultSpawnSidecarProcess(executablePath: string, args: readonly string[]) {
-    return spawn(executablePath, [...args], {
+function defaultSpawnSidecarProcess(executablePath: string, args: readonly string[], scope: LinuxProcessLaunchScope | null) {
+    const environment = withProcessOwnerEnvironment(process.env, { kind: 'browser_sidecar' });
+    const launchSpec = { filePath: executablePath, args: [...args],
+        env: Object.fromEntries(Object.entries(environment).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) };
+    const launch = scope ? buildCgroupProcessLaunchSpec({ launchSpec, scope,
+        unit: createHappierLinuxScopeName(environment.HAPPIER_PROCESS_OWNER) }) : launchSpec;
+    return spawn(launch.filePath, launch.args, {
+        env: launch.env,
         stdio: ['ignore', 'ignore', 'pipe'],
     });
 }
@@ -73,18 +86,19 @@ async function cleanupPrivateProfile(
     await cleanup(privateLaunch.profileDirectory);
 }
 
-function createProcessController(input: BrowserSidecarLaunchOwnerControlAdapterFactoryInput): SidecarProcessController {
+function createProcessController(input: BrowserSidecarLaunchOwnerControlAdapterFactoryInput, scope: () => LinuxProcessLaunchScope | null): SidecarProcessController {
     if (input.processController) return input.processController;
     return createSidecarProcessController({
         nowMs: input.nowMs ?? Date.now,
-        spawnProcess: input.spawnProcess ?? defaultSpawnSidecarProcess,
+        spawnProcess: input.spawnProcess ?? ((executablePath, args) => defaultSpawnSidecarProcess(executablePath, args, scope())),
     });
 }
 
 export function createBrowserSidecarLaunchOwnerControlAdapterFactory(
     input: BrowserSidecarLaunchOwnerControlAdapterFactoryInput,
 ): BrowserSidecarControlAdapterFactory {
-    const processController = createProcessController(input);
+    let scope: LinuxProcessLaunchScope | null = null;
+    const processController = createProcessController(input, () => scope);
 
     return async (factoryInput) => {
         if (input.binaryResolution.ok && input.binaryResolution.source === 'systemChrome') {
@@ -115,6 +129,13 @@ export function createBrowserSidecarLaunchOwnerControlAdapterFactory(
         }
 
         const privateLaunch = launchPlan.privateLaunch;
+        if (process.platform === 'linux' && !input.processController && !input.spawnProcess) {
+            scope = await prepareCgroupProcessLaunchScope();
+        }
+        if (input.signal?.aborted) {
+            await cleanupPrivateProfile(input, privateLaunch);
+            return unavailable('launch_failed', 'Browser sidecar launch was cancelled.');
+        }
         const processLaunch = processController.launch(privateLaunch);
         if (!processLaunch.ok) {
             await cleanupPrivateProfile(input, privateLaunch);
@@ -148,10 +169,53 @@ export function createBrowserSidecarLaunchOwnerControlAdapterFactory(
             return adapterResult;
         }
 
+        const pid = processController.getPid?.();
+        const native = pid ? await readProcessCensus({ freshness: 'shared', pids: [pid], fields: [] }) : null;
+        const identity = native?.status === 'ok' ? native.rows.find(row => row.pid === pid)?.start : undefined;
         let disposal: Promise<void> | null = null;
+        let activeCommands = 0;
+        const ownerCreatedAtMs = input.nowMs?.() ?? Date.now();
+        let lastUsedAt = ownerCreatedAtMs;
+        let wayBack: BrowserSidecarResourceTarget['wayBack'];
+        const dispose = () => {
+            disposal ??= (async () => {
+                try {
+                    await adapterResult.dispose?.();
+                } finally {
+                    await processController.stopAndWait();
+                    await cleanupPrivateProfile(input, privateLaunch);
+                }
+            })();
+            return disposal;
+        };
+        const readResourceTargets = (): readonly BrowserSidecarResourceTarget[] => {
+            if (!pid || !identity || processController.getPid?.() !== pid || disposal) return [];
+            const idle = factoryInput.readSessionIdle?.(input.browserSessionId);
+            return [{ root: { owner: { kind: 'browser_sidecar' }, pid, start: identity,
+                live: processController.getStatus().state === 'running', ownerCreatedAtMs, stop: dispose },
+                ownerRef: input.browserSessionId,
+                idle: activeCommands || processController.getStatus().state !== 'running' ? false : idle?.idle ?? null,
+                settledAt: Math.max(lastUsedAt, idle?.settledAt ?? lastUsedAt), label: 'Browser',
+                ...(wayBack ? { wayBack } : {}) }];
+        };
         return {
             ok: true,
-            adapter: adapterResult.adapter,
+            isProcessAlive: () => processController.getPid ? processController.getPid() !== null : processController.getStatus().state === 'running',
+            adapter: { ...adapterResult.adapter, async dispatchCommand(command, scope) {
+                activeCommands += 1;
+                try {
+                    const result = await adapterResult.adapter.dispatchCommand(command, scope);
+                    if (command.kind === 'openView' && result.status === 'dispatched' && !wayBack) {
+                        // Re-admit the original open Action with a fresh command receipt identity.
+                        wayBack = [{ label: 'reopen', actionId: 'browser.view.open',
+                            input: projectNativeJsonValueForTransport({ ...command, commandId: randomUUID() }) }];
+                    }
+                    return result;
+                }
+                finally { activeCommands -= 1; lastUsedAt = input.nowMs?.() ?? Date.now(); }
+            } },
+            readResourceTargets,
+            readProcessRoots: () => readResourceTargets().map(target => target.root),
             ...(adapterResult.contextCapture ? { contextCapture: {
                 ...adapterResult.contextCapture,
                 // This exact transport was connected to the private endpoint discovered from
@@ -159,17 +223,7 @@ export function createBrowserSidecarLaunchOwnerControlAdapterFactory(
                 resolveNativeObservation: (view) => !disposal && adapterResult.contextCapture?.resolvePageHandle(view)
                     ? 'not_observable' as const : undefined,
             } } : {}),
-            dispose: () => {
-                disposal ??= (async () => {
-                    try {
-                        await adapterResult.dispose?.();
-                    } finally {
-                        await processController.stopAndWait();
-                        await cleanupPrivateProfile(input, privateLaunch);
-                    }
-                })();
-                return disposal;
-            },
+            dispose,
         };
     };
 }

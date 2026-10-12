@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { totalmem } from 'node:os';
 
 import type {
     BrowserCommandV1,
@@ -7,6 +8,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import { configuration } from '@/configuration';
+import type { MachineResourcesPolicyReader } from '@/processes/toolIdleTimeouts';
 import { browserCommandDispatchFailure } from '../control/types';
 import { createBrowserProfileStore, type BrowserProfileStore } from '../profiles/store';
 import { createBrowserStoragePartitionOwner } from '../storage/partitions';
@@ -130,6 +132,7 @@ export function createProductBrowserSidecarControlAdapterFactory(params: Readonl
     autoInstallWhenMissing?: boolean;
     installManagedBrowserChromium?: InstallManagedBrowserChromiumFn;
     profileStore?: BrowserProfileStore;
+    readMachineResourcesPolicy?: MachineResourcesPolicyReader;
 }>): BrowserSidecarControlAdapterFactory {
     const resolveCandidate = params.resolveManagedCandidate ?? resolveManagedBrowserSidecarCandidate;
     const createLaunchOwner = params.createLaunchOwnerFactory
@@ -180,7 +183,7 @@ export function createProductBrowserSidecarControlAdapterFactory(params: Readonl
             partitionOwner: createBrowserStoragePartitionOwner({ storageRootDirectory: configuration.happyHomeDir }),
         });
         type Launched = Extract<BrowserSidecarControlAdapterFactoryResult, { ok: true }>;
-        type SessionLaunch = { promise: Promise<BrowserSidecarControlAdapterFactoryResult>; result?: Launched; closing: boolean };
+        type SessionLaunch = { promise: Promise<BrowserSidecarControlAdapterFactoryResult>; result?: Launched; closing: boolean; pendingCommands: number };
         const sessions = new Map<string, SessionLaunch>();
         const eventListeners = new Set<BrowserSidecarCdpEventSubscriber>();
         const viewListeners = new Set<BrowserSidecarViewLifecycleSubscriber>();
@@ -226,7 +229,14 @@ export function createProductBrowserSidecarControlAdapterFactory(params: Readonl
                     session.closing = true;
                     cancellation.abort();
                     const result = await session.promise;
-                    if (result.ok) await result.dispose?.();
+                    try {
+                        if (result.ok) await result.dispose?.();
+                    } catch (error) {
+                        // A failed CDP cleanup keeps the profile unusable, but an
+                        // observed child exit must still release its memory slot.
+                        if (result.ok && result.isProcessAlive?.() === false) sessions.delete(sessionId);
+                        throw error;
+                    }
                     sessions.delete(sessionId);
                 },
             });
@@ -258,15 +268,27 @@ export function createProductBrowserSidecarControlAdapterFactory(params: Readonl
                 }
                 return result;
             }).finally(() => scope?.signal?.removeEventListener('abort', cancelLaunch));
-            session = { promise, closing: false };
+            session = { promise, closing: false, pendingCommands: 0 };
             sessions.set(sessionId, session);
             return promise;
         }
         function failed(command: BrowserCommandV1, message: string, code: 'adapter_unavailable' | 'sandbox_unavailable' = 'adapter_unavailable') {
             return browserCommandDispatchFailure({ commandId: command.commandId, adapterKind: 'chromiumSidecar', code, message });
         }
+        const readResourceTargets = () => [...sessions.entries()].flatMap(([sessionId, session]) => {
+                if (session.closing || disposal) return [];
+                return (session.result?.readResourceTargets?.() ?? []).map(target => ({ ...target,
+                    root: { ...target.root, stop: async () => {
+                        if (sessions.get(sessionId) !== session || session.closing) throw new Error('Browser session is no longer current.');
+                        const outcome = await profileStore.purgeForRuntimeStopped({ profileIds: [profileIdForSession(sessionId)] });
+                        if (outcome.failedProfileIds.length) throw new Error('Browser session profile purge failed.');
+                    } },
+                }));
+            });
         return {
             ok: true,
+            readResourceTargets,
+            readProcessRoots: () => readResourceTargets().map(target => target.root),
             adapter: {
                 adapterKind: 'chromiumSidecar',
                 listViews: (browserSessionId) => {
@@ -280,23 +302,73 @@ export function createProductBrowserSidecarControlAdapterFactory(params: Readonl
                 },
                 dispatchCommand: async (command, scope) => {
                     if (disposal) return failed(command, 'Browser runtime is closing.');
+                    if (command.kind === 'openView') {
+                        // Retire exited engines through their profile lifecycle, not a second
+                        // counter. A starting or stopping engine still occupies its slot.
+                        for (const [sessionId, current] of sessions) {
+                            if (!current.closing && current.result?.isProcessAlive?.() === false) {
+                                await profileStore.purgeForRuntimeStopped({ profileIds: [profileIdForSession(sessionId)] });
+                            }
+                        }
+                        if (disposal) return failed(command, 'Browser runtime is closing.');
+                        if (!sessions.has(command.browserSessionId)) {
+                            const policy = params.readMachineResourcesPolicy?.();
+                            if (policy && policy.status !== 'ready') {
+                                return browserCommandDispatchFailure({ commandId: command.commandId, adapterKind: 'chromiumSidecar',
+                                    code: 'policy_unavailable', message: 'Browser resource settings are unavailable.', completion: 'known', retryable: true });
+                            }
+                            // Live Linux observation, 2026-10-12T13:24:11Z: among eleven
+                            // Chromium trees, peak main + descendants RSS was 2340.7 MiB
+                            // (/proc stat RSS * getconf PAGESIZE). Round up to the next
+                            // binary GiB budget, 4 GiB per engine. RSS can double-count
+                            // shared pages; this is a sizing proxy, not a memory ceiling.
+                            // R47 Auto admits 1 below 8 GiB, 2 at 8, 3 at 12, 4 at 16+;
+                            // smaller hosts retain one usable engine. Users may override.
+                            const ram = totalmem();
+                            const automatic = Math.min(4, Math.max(1, Number.isFinite(ram) ? Math.floor(ram / (4 * 1024 ** 3)) : 1));
+                            const limit = policy?.status === 'ready' ? policy.policy.processes.browserMaxConcurrent ?? automatic : automatic;
+                            if (sessions.size >= limit) {
+                                return browserCommandDispatchFailure({ commandId: command.commandId, adapterKind: 'chromiumSidecar',
+                                    code: 'waiting_for_memory', completion: 'known', retryable: true,
+                                    message: `Waiting for memory: ${sessions.size} of ${limit} browser sidecars are in use. Close a browser or raise the browser limit in resource settings, then retry.` });
+                            }
+                            // launchSession reserves synchronously before its first awaited
+                            // launch, so concurrent opens cannot pass the same vacant slot.
+                        }
+                    }
                     const session = sessions.get(command.browserSessionId);
-                    let result: BrowserSidecarControlAdapterFactoryResult | undefined;
+                    // Reserve command use before awaiting launch too: a failed first page
+                    // must not retire the engine underneath a sibling still opening a view.
+                    const pendingResult = command.kind === 'openView'
+                        ? launchSession(command.browserSessionId, scope)
+                        : session?.promise;
+                    const commandSession = sessions.get(command.browserSessionId);
+                    if (commandSession) commandSession.pendingCommands++;
                     try {
-                        result = command.kind === 'openView'
-                            ? await launchSession(command.browserSessionId, scope)
-                            : await session?.promise;
-                    } catch {
-                        await profileStore.purgeForRuntimeStopped({ profileIds: [profileIdForSession(command.browserSessionId)] });
-                        return failed(command, 'Browser session launch failed.');
+                        let result: BrowserSidecarControlAdapterFactoryResult | undefined;
+                        try {
+                            result = await pendingResult;
+                        } catch {
+                            await profileStore.purgeForRuntimeStopped({ profileIds: [profileIdForSession(command.browserSessionId)] });
+                            return failed(command, 'Browser session launch failed.');
+                        }
+                        if (!result?.ok) {
+                            if (result) await profileStore.purgeForRuntimeStopped({ profileIds: [profileIdForSession(command.browserSessionId)] });
+                            return failed(command, result?.disabledReason ?? 'Browser session is unavailable.',
+                                result?.errorCode === 'sandbox_unavailable' ? 'sandbox_unavailable' : 'adapter_unavailable');
+                        }
+                        if (sessions.get(command.browserSessionId)?.closing || disposal) return failed(command, 'Browser session is closing.');
+                        const dispatched = await result.adapter.dispatchCommand(command, scope);
+                        if (commandSession?.pendingCommands === 1
+                            && result.adapter.listViews?.(command.browserSessionId).length === 0) {
+                            // Also retire when the final in-flight command drains after
+                            // another command closed the last view. No ghost slot remains.
+                            await profileStore.purgeForRuntimeStopped({ profileIds: [profileIdForSession(command.browserSessionId)] });
+                        }
+                        return dispatched;
+                    } finally {
+                        if (commandSession) commandSession.pendingCommands--;
                     }
-                    if (!result?.ok) {
-                        if (result) await profileStore.purgeForRuntimeStopped({ profileIds: [profileIdForSession(command.browserSessionId)] });
-                        return failed(command, result?.disabledReason ?? 'Browser session is unavailable.',
-                            result?.errorCode === 'sandbox_unavailable' ? 'sandbox_unavailable' : 'adapter_unavailable');
-                    }
-                    if (sessions.get(command.browserSessionId)?.closing || disposal) return failed(command, 'Browser session is closing.');
-                    return result.adapter.dispatchCommand(command, scope);
                 },
             },
             contextCapture: {
