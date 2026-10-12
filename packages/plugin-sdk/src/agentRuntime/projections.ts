@@ -233,6 +233,7 @@ export type {
   AgentConnectedAccountNativeAuthCodecInspectInputV1,
   AgentConnectedAccountNativeAuthCodecMaterializeInputV1,
   AgentConnectedAccountNativeAuthCodecV1,
+  AgentConnectedAccountSharedStateFileMergeV1,
   AgentConnectedAccountProviderOutcomeInputV1,
   AgentConnectedAccountProviderOutcomeSelectionV1,
   AgentConnectedAccountProviderOutcomeTargetV1,

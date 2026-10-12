@@ -141,6 +141,7 @@ export type { AgentConnectedAccountRuntimeAuthVerificationInputV1 } from '../../
 export type { AgentConnectedAccountNativeAuthCodecInspectInputV1 } from '../../agentRuntime/projections.js';
 export type { AgentConnectedAccountNativeAuthCodecMaterializeInputV1 } from '../../agentRuntime/projections.js';
 export type { AgentConnectedAccountNativeAuthCodecV1 } from '../../agentRuntime/projections.js';
+export type { AgentConnectedAccountSharedStateFileMergeV1 } from '../../agentRuntime/projections.js';
 export type { AgentConnectedAccountRuntimeLimitCategoryV1 } from '../../agentRuntime/projections.js';
 export type { AgentConnectedAccountRuntimeFailureClassificationV1 } from '../../agentRuntime/projections.js';
 export type { AgentConnectedAccountRuntimeFailureInputV1 } from '../../agentRuntime/projections.js';

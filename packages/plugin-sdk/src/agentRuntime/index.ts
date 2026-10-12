@@ -172,6 +172,7 @@ export type {
   AgentConnectedAccountResumeFileLookupV1,
   AgentConnectedAccountResumeReachabilityInputV1,
   AgentConnectedAccountResumeReachabilityResultV1,
+  AgentConnectedAccountSharedStateFileMergeV1,
   AgentConnectedAccountRuntimeAuthAdapterResultV1,
   AgentConnectedAccountRuntimeAuthAdapterV1,
   AgentConnectedAccountRuntimeAuthFailureKind,
