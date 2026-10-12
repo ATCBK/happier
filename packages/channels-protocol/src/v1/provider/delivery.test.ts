@@ -56,6 +56,11 @@ describe('Channels V1 provider delivery results', () => {
 
         expect(ConversationDeliveryInputV1Schema.parse(delivery)).toEqual(delivery);
         expect(ConversationDeliveryReconcileInputV1Schema.parse(reconciliation)).toEqual(reconciliation);
+        const nextChunk = { ...delivery, chunkIndex: 1 };
+        expect(ConversationDeliveryInputV1Schema.parse(nextChunk)).toEqual(nextChunk);
+        for (const chunkIndex of [-1, 0.5]) {
+            expect(ConversationDeliveryInputV1Schema.safeParse({ ...delivery, chunkIndex }).success).toBe(false);
+        }
         expect(ConversationDeliveryInputV1Schema.safeParse({
             ...delivery,
             mentionPolicy: 'allow',

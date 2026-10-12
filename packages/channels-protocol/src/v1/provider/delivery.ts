@@ -90,6 +90,12 @@ export const ConversationDeliveryInputV1ProtocolSchema = defineProtocolObject({
     content: ConversationDeliveryContentV1Schema,
     newThread: ConversationDeliveryNewThreadV1Schema.optional(),
     deliveryKey: conversationDeliveryKeyV1,
+    // Ephemeral core split ordinal: absent/zero is the first provider message.
+    chunkIndex: defineProtocolNumber({
+        integer: true,
+        minimum: 0,
+        maximum: Number.MAX_SAFE_INTEGER,
+    }).optional(),
     replyContext: ConversationDeliveryReplyContextV1ProtocolSchema.optional(),
     mentionPolicy: mentionPolicyV1,
     linkPreviewPolicy: linkPreviewPolicyV1,

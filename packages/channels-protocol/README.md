@@ -74,6 +74,7 @@ complete socket provider declaration uses only public packages:
 ```ts
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import {
+  ConversationProviderMessageDeliverInputV1Schema,
   ConversationProviderSetupResultV1Schema,
   ConversationProvidersContributionProtocolV1,
 } from
@@ -132,7 +133,12 @@ export const { manifest, activate } = definePlugin({
       resultSchema: roles.messageDeliver.declaration.resultSchema.jsonSchema,
       surfaces: roles.messageDeliver.declaration.surfaces,
       dangerLevel: roles.messageDeliver.declaration.dangerLevel,
-      run: async () => ({ kind: 'delivered', providerMessageIds: [] }),
+      run: async (input) => {
+        const request = ConversationProviderMessageDeliverInputV1Schema.parse(input);
+        return request.newThread === undefined
+          ? { kind: 'delivered', providerMessageIds: [] }
+          : { kind: 'notReady', reason: 'unsupported' };
+      },
     },
     [actionIds.connectionStop]: {
       title: 'Stop Acme Chat socket',
@@ -181,6 +187,11 @@ publication availability is established only by the authorized release workflow
 and is not a feature-completion gate.
 
 `ConversationProviderSetupResultV1Schema` is the Channels result validator.
+In 0.3 development source, `outboundTextLimit` is optional. Declare it only
+when the provider has a real native text ceiling; omission means no native
+text ceiling, not a guessed default. Preparation and retained connection facts
+preserve that distinction. The finite ceiling in the example above remains valid.
+
 The `setup` Action's input is contributor-defined; all other role inputs and
 all role results use the final Channels role contract. Setup returns either
 that result or the bounded Channels `requiresRemediation` outcome. Setup input is
@@ -200,16 +211,79 @@ correspondence evidence for the generic Webhook endpoint owner, not a
 another plugin, or claims durable push without the required reference is
 invalid before endpoint creation or persistence.
 
-The current V1 connection create and transfer contracts can select only
-`checkpointedPull` or `socket`; Account-endpoint `durablePush` creation remains
-held at the generic Webhook ensure/correspondence boundary. `connection/prepare-v1`
-therefore projects only those selectable transports and rejects a
-durable-push-only setup result before a later create-input parse could fail.
+The development V1 connection prepare, create and transfer contracts support
+`checkpointedPull`, `socket` and Account-endpoint `durablePush`. Durable-push
+creation uses the existing generic Webhook endpoint-ensure continuation and
+host-derived correspondence check before saving a connection. Shared GitHub App
+`providerInstallation` production is excluded from Preview completion; the
+first-party GitHub Channels provider currently selects checkpointed polling.
+
+## Thread routing and conversation starts (development)
+
+The unreleased 0.3 core supports a `threadRouter` binding target. Its
+`principalGroups` supply the sender allowlist and the audiences for new
+conversations. Ordered routes match a group (or `any`) and forwarded provenance
+(true, false, or `any`); each route uses the existing Session spawn recipe and
+Session policy. The core matches a new thread through its endpoint's `parentId`,
+then creates an ordinary child binding for the Session and its verified
+originating sender, using the Session owner's persisted birth identity even on
+rejoin. Children inherit the router's common input and delivery policy at birth.
+Unmatched routes produce a content-free `routeNotMatched`
+record. Disabling the router stops child admission, projection and new outward
+effects through the shared live parent-policy reader; it does not undo provider
+I/O already in flight. All Session
+bindings restore an archived target through `session.unarchive` before sending
+new input to the same Session.
+
+The core Action `happier.channels/actions/conversation/start-v1` accepts a router
+binding, an `audienceGroupId`, a subject, `content: { text, html? }`, and the
+Session that will receive replies. That Session must be owner-confirmed to have
+no attested sender; unavailable identity facts do not authorize a start. It
+obtains recipients from the configured
+group and enters ordinary delivery custody. A successful delivery creates an
+ordinary child binding whose allowlist is that audience. Ambiguous outcomes use
+the existing delivery resolution flow; they do not authorize a blind resend.
+Agents request the Action through normal approval, and a Workflow `action` leaf
+uses the same qualified Action reference. Router and binding editing use the
+existing binding management Actions; their editor composition is owned by the
+Channels UI.
+
+Provider `messageDeliver` inputs now carry `content: { text, html? }`. A reply
+continues to use `replyContext`. An optional `newThread: { recipients, subject }`
+asks the provider to start a thread; `recipients` are core-resolved principal
+ids, not model-selected addresses. Successful starts return the created thread
+`endpoint` with their normal delivery outcome. Providers that cannot start
+threads return the existing typed unsupported failure. Telegram, Discord and
+GitHub currently ignore the HTML alternative and refuse starts.
+
+These contracts are development source, not a claim of published package or
+loaded mailbox availability. The router editor and composed live mailbox journey
+are integrated separately from this protocol boundary.
 
 ## V1 role contract
 
 Every role is an ordinary Action. The contribution protocol owns the role map;
 Actions do not carry copied role metadata or a second protocol id.
+
+In development V1, inbound messages may carry `message.attachments` as file
+descriptors (`attachmentId`, `name`, `mediaType`, optional `byteLength`). An
+attachment-only message uses empty `text` and a nonempty descriptor list.
+Observations never contain file bytes or filesystem paths. Providers offering
+files bind the optional safe `attachmentFetch` role. Its input carries the
+current connection fields plus `messageId` and `attachmentId`; success is
+`{ kind: 'fetched', path }`, naming a provider-owned local file, or the existing
+`notReady` failure. Apply `assertConversationChannelsCoreCallerV1` before I/O,
+as with every other role. The provider owns the fetched file's lifecycle.
+V1 places files in the Session only when its machine matches the connection's
+captured provider origin. The Channels input owner extracts text and PDF
+text-layer content on the connection machine and includes it once in the
+ordinary message text before `session.send`, independently of Session placement.
+For a Session on another machine, the attachment resolver reports
+`data.file: { kind: 'unavailable', reason: 'attachmentNotAvailableOnThisMachine' }`
+through the existing ready attachment result. The context also tells the Agent
+that the attachment is not available on this machine; a provider-local pathname
+is never presented as a remote Session file. This keeps the message dispatchable
+without promising cross-machine file delivery or storing bytes in Collections.
 
 | Role | Cardinality | Input | Result | Action facts |
 | --- | --- | --- | --- | --- |
@@ -219,6 +293,7 @@ Actions do not carry copied role metadata or a second protocol id.
 | `endpointResolve` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `principalResolve` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `observationsPoll` | optional; required when setup selects `checkpointedPull` | Channels | Channels | `surface: plugin`, `danger: safe` |
+| `attachmentFetch` | optional | Channels connection + message/file ids | local file or typed failure | `surface: plugin`, `danger: safe` |
 | `messageDeliver` | required | Channels | Channels | `surface: plugin`, `danger: writesRemote` |
 | `deliveryReconcile` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `connectionStop` | optional; required when setup selects `socket` | Channels | Channels | `surface: plugin`, `danger: writesRemote` |
@@ -261,27 +336,24 @@ ids; the contribution role map is their only meaning.
 Each bound provider role must reject a direct invocation or a caller other than
 the Channels core before it parses input, reads credentials, opens a network
 connection, or performs remote I/O. The caller is host-stamped, never an
-Action-input field. A minimal guard uses only the public SDK:
+Action-input field. Use the shared provider helper from this protocol:
 
 ```ts
-import { PluginError, type PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import { assertConversationChannelsCoreCallerV1 } from '@happier-dev/channels-protocol/v1';
 
-function requireChannelsCoreCaller(context: PluginInvocationContext): void {
-  if (
-    context.surface !== 'plugin'
-    || context.caller?.kind !== 'plugin'
-    || context.caller.pluginId !== 'happier.channels'
-  ) {
-    throw new PluginError({
-      code: 'channels_core_caller_required',
-      message: 'This Channel provider Action must be invoked by the Channels core.',
-    });
-  }
-}
+assertConversationChannelsCoreCallerV1(context);
 ```
 
 Call this at the start of every bound role handler, including `setup`, delivery,
-and stop. A background service has the opposite direction: it calls the core
+and stop. Before provider I/O, use
+`classifyConversationProviderMaterializationFailureV1(error, context.signal)`
+for Connected Account materialization failures: unavailable services and
+retryable failures yield `notReady/network`, definite credential denial yields
+`credentialInvalid`, and cancellation or generation retirement propagates.
+Provider HTTP responses and failures after an outward effect starts remain
+provider-owned; never classify an uncertain send as a safe materialization retry.
+Use `context.signal.throwIfAborted()` at cancellation fences.
+A background service has the opposite direction: it calls the core
 Actions above with the host-provided Action service, and never invents a caller
 or a second reconciliation authority.
 
@@ -296,6 +368,39 @@ addressing evidence, and timestamp facts; Channels applies allowlists,
 addressing, freshness, command, target, and permission policy. Providers do
 not infer addressing from text and do not supply `pluginId`, Account,
 binding, Session, or permission authority.
+
+In current 0.3 development source, setup may return
+`recommendedMaximumObservationAgeMs`. Preparation preserves it and the setup
+form seeds that value; a provider without a recommendation uses the supported
+freshness range's maximum. Telegram recommends 24 hours because of its
+[update retention](https://core.telegram.org/bots/api#getting-updates).
+GitHub and Discord recommend 30 days as provider-owned policy, not a retention
+promise: GitHub exposes [comment history with `since`](https://docs.github.com/en/rest/issues/comments#list-issue-comments-for-a-repository),
+whereas Discord's [Gateway replay is session-bound](https://docs.discord.com/developers/events/gateway#resuming).
+
+The c0.69 limit ruling supersedes the historical Packet 01 §1.4 count/text/
+retry/debounce caps. Channels imposes no per-Account connection or binding
+count, generic ingress/delivery text ceiling, chunk-count ceiling, five-attempt
+delivery budget, or debounce upper policy limit. Enumerators exhaust paged
+Collection queries. Collection request, encoded-row and transport envelopes,
+safe-integer representation, and verified provider-native bounds still apply.
+Channels core owns native message splitting at each provider's declared
+`outboundTextLimit`, preserving grapheme boundaries and complete custody text.
+It does not multiply a native message size into a whole-answer limit. Providers
+receive one chunk per `messageDeliver` invocation; optional `chunkIndex` is the
+ephemeral split ordinal (absent or zero means first), so Telegram attaches the
+reply reference only to the first chunk while keeping thread addressing on all
+chunks. Discord keeps its native reply reference on every chunk. GitHub declares
+65,536 Unicode code points per comment and suppresses mentions with the
+one-code-point `＠`, without a guessed local byte ceiling or truncation.
+
+Known-no-effect delivery failures retain `retryDue` custody and attention,
+with growing exponential backoff; a positive provider `retryAfterMs` takes
+precedence, while a zero wait uses the growing fallback rather than hot retry.
+Accepted, partial, or unknown effects never auto-resend. A correlated Session
+reply freezes its exact external message/thread relation in existing outward
+custody; unrelated mirror output has no reply relation. Mirror mode suppresses
+only its own user input, not the final assistant answer to it.
 
 In 0.3 development source, an observation actor may carry
 `repositoryWriteAccess: true | false | null` as authenticated evidence for
@@ -314,11 +419,22 @@ owner, while an originless operation creates no Session link.
 
 `resolveSessionPullRequestLinksV1` projects distinct links in binding creation
 order as `{ sessionId, pullRequestLinks: [{ provider: 'github', repository,
-number }] }`. Disabled retained bindings are included; bindings being deleted
-are excluded. `session.trigger.list` returns the requested Session's projection.
+number, url }] }`. The canonical projector supplies the GitHub PR URL from the
+retained repository and number. Disabled retained bindings are included;
+bindings being deleted are excluded. `session.trigger.list` returns the requested
+Session's projection.
 Account readers use the existing `channel-state` Collection query and change
 hints, decode all pages with the Account's plain/E2EE codec, and apply this same
-projector. SCM continues to own PR publication and status.
+projector. In 0.3 development source, the existing SCM GitHub observation poll
+also refreshes retained PR endpoints, including links whose message delivery is
+disabled. The exact repository/number observation carries `state` (open,
+merged, closed or unknown) and `observedAt` into the Session link projection.
+An empty open-PR list is never merge evidence. Inbox and `inbox.get` consume
+that same projection. When every retained PR for a Session is merged or closed,
+Channels settles through the existing read-state and attention-standing Actions;
+an open or unknown PR keeps the Session standing. Failed settlement remains
+retryable by that poll. SCM continues to own PR publication and native state
+interpretation; Channels owns the retained binding and its refresh lifecycle.
 
 Scoped conversation admission accepts only explicit repository write access
 with matching binding, sender, Session, trigger kind and revision. It returns
