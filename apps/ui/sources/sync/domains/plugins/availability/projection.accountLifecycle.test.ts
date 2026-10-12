@@ -6,7 +6,7 @@ import { installPluginArtifactCacheBoundary } from '@/dev/testkit/harness/plugin
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { computePluginUiArtifactFileSetSha256DigestV1, computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui';
+import { computePluginUiArtifactFileSetSha256DigestV1, computePluginUiArtifactSha256DigestV1, PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
 
 const persistence = installPluginArtifactCacheBoundary();
 afterAll(() => persistence.dispose());
@@ -20,6 +20,7 @@ const { createBrowserPluginUiPersistentArtifactStore } = await import('@/sync/do
 const physicalStore = createBrowserPluginUiPersistentArtifactStore(persistence.caches);
 
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { PluginAccountAvailabilityIntentReadResponseV1Schema } from '@happier-dev/protocol/plugins/availability';
 
 import { prepareWarmCacheEncryptionKey } from '@/sync/domains/state/warmCacheEncryptionKey';
 import {
@@ -30,11 +31,12 @@ import {
 const {
     clearPluginAccountAvailabilityProjection,
     forgetPluginAccountAvailabilityArtifacts,
+    readPluginAccountAvailability,
     replacePluginAccountAvailabilityProjection,
 } = await import('./projection');
 import type { PluginAccountAvailabilitySnapshot } from './reader';
 
-const scope: ServerAccountScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
+let scope: ServerAccountScope = Object.freeze({ serverId: 'server-a', accountId: 'account-a' });
 
 const emptySnapshot: PluginAccountAvailabilitySnapshot = Object.freeze({
     availabilityCursor: 1,
@@ -56,10 +58,13 @@ describe('Account artifact-byte lifecycle', () => {
         persistence.reset();
         await harness.reset();
         await loadSyncSingletonForTests();
-        await harness.addHome({ name: 'Account artifact custody', serverUrl: 'https://artifact-lifecycle.test', serverIdentityId: scope.serverId, accountId: scope.accountId });
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://artifact-lifecycle.test', accountId: scope.accountId });
+        const serverId = await harness.addHome({ name: 'Account artifact custody', serverUrl: 'https://artifact-lifecycle.test', serverIdentityId: 'server-a', accountId: 'account-a' });
+        harness.answer(serverId, '/health', { body: {} });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://artifact-lifecycle.test', accountId: 'account-a', request: harness.request });
+        scope = Object.freeze({ serverId: connection.home.id, accountId: 'account-a' });
         const { storage } = await import('@/sync/domains/state/storage');
         const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+        await waitForHomeGovernance(() => expect(storage.getState().endpointStatus).toBe('online'));
         storage.setState({ profileScope: scope, settingsScope: scope, profile: { ...profileDefaults, id: scope.accountId }, isDataReady: true });
         replacePluginAccountAvailabilityProjection({ scope, snapshot: emptySnapshot });
     });
@@ -75,7 +80,75 @@ describe('Account artifact-byte lifecycle', () => {
         storage.setState(storage.getInitialState(), true);
     });
 
+    it.each(['cancel', 'publish'] as const)('settles a restored Account native module waiting for initial Availability on %s without retiring the Account', async (settlement) => {
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { createPluginUiReactNativeInstalledArtifactLoad } = await import('@/sync/domains/plugins/ui/artifactAdoption');
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Restored Account lifetime missing');
+        clearPluginAccountAvailabilityProjection();
+        const bytes = new TextEncoder().encode('exports.renderSurface = () => null;');
+        const entry = 'react-native/panel/entry.cjs.bundle';
+        const artifactDigest = computePluginUiArtifactFileSetSha256DigestV1([{ relativePath: entry, bytes }]);
+        const artifactGraph = PluginUiArtifactsManifestEntryV2Schema.parse({
+            artifactId: 'panel', tier: 'reactNative', entry,
+            files: [{ relativePath: entry, digest: computePluginUiArtifactSha256DigestV1(bytes), byteSize: bytes.byteLength }],
+            digest: artifactDigest, builtWith: { bundler: 'esbuild', version: '0.27.2' },
+            executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0',
+        });
+        await cache.writePersistentArtifact({
+            persistentIdentity: { accountScope: scope, artifactDigest }, bytes, entryRelativePath: entry,
+            files: [{ relativePath: entry, digest: computePluginUiArtifactSha256DigestV1(bytes), byteSize: bytes.byteLength, bytes }],
+        });
+        const mount = new AbortController();
+        let outcome: unknown = null;
+        const pending = createPluginUiReactNativeInstalledArtifactLoad({
+            reader: readPluginAccountAvailability(scope), accountLifetime: lifetime, artifactGraph,
+            identity: { pluginId: 'fixture.pending', contributionId: 'panel', artifactId: 'panel', platform: 'web', artifactDigest },
+            moduleReference: undefined, hostPlatform: 'web', isCurrent: () => !mount.signal.aborted,
+        })(mount.signal).then(() => { outcome = 'loaded'; }, (error: unknown) => {
+            outcome = error instanceof Error && 'code' in error ? error.code : error;
+        });
+        try {
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(outcome).toBeNull();
+            if (settlement === 'cancel') {
+                mount.abort();
+                // Abort retirement is synchronous; its promise continuations must
+                // settle before the next event-loop turn, without a new projection.
+                await new Promise<void>((resolve) => setImmediate(resolve));
+                expect(outcome).toBe('artifact_lease_revoked');
+            } else {
+                const pluginId = 'fixture.pending';
+                const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+                    availabilityCursor: 2, packageAssets: [], uiArtifacts: [],
+                    hostingCapability: { enabled: false },
+                    intent: { pluginId, desiredVersion: '1.2.3', enabled: true, offlineUiHosting: 'disabled', writableCollections: [], revision: 'intent-1' },
+                    release: {
+                        ref: { pluginId, version: '1.2.3' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                        normalizedManifest: { schemaVersion: 2, id: pluginId, version: '1.2.3', displayName: 'Pending fixture',
+                            engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 }, contributes: {} },
+                        collectionContracts: [],
+                        uiSlots: [{ contributionId: 'panel', artifactId: 'panel', tier: 'reactNative', platform: 'web', artifactDigest, hostUiApiRange: '^1.0.0' }],
+                        packageAssetArchive: { archiveDigestSha256: `sha256:${'d'.repeat(64)}`, resources: [] },
+                    },
+                });
+                replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                    availabilityCursor: 2, intentReads: [{ pluginId, response }], materializations: [], snapshots: [],
+                } });
+                await pending;
+                expect(outcome).toBe('loaded');
+            }
+            expect(lifetime.isCurrent()).toBe(true);
+        } finally {
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: emptySnapshot });
+            await pending;
+        }
+    });
+
     it('retires an Account switch without deleting its bytes and deletes them only when the Account is forgotten', async () => {
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        expect(captureActiveServerAccountScopeLifetime()?.scope).toEqual(scope);
         const artifact = await seedArtifact();
         expect(cache.isAccountCurrent(scope)).toBe(true);
 

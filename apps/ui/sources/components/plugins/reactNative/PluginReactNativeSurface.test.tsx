@@ -657,6 +657,34 @@ describe('PluginReactNativeSurface', () => {
     });
 
 
+    it('adopts a successor mount after a pending load is retired without quarantining healthy bytes', async () => {
+        const { PluginReactNativeSurface } = await import('./PluginReactNativeSurface');
+        const retiredLoad = createDeferred<PluginReactNativeSurfaceModule>();
+        const retired = new AbortController();
+        const successor = new AbortController();
+        const watchdog = createPluginReactNativeWatchdog();
+        const artifactDigest = `sha256:${'8'.repeat(64)}` as const;
+        const healthy = { renderSurface: () => React.createElement('View', { testID: 'successor-native-module' }) };
+        const element = (signal: AbortSignal, load: () => Promise<PluginReactNativeSurfaceModule>) => (
+            <PluginReactNativeSurface surfaceId="retired-load-surface" cacheKey="retired-load-artifact"
+                renderContext={Object.freeze({ ...defaultRenderContext, signal })}
+                decision={{ state: 'load', reason: 'compatible', diagnostics: [] }}
+                load={load} loadPolicy={{ source: 'installedArtifact' }} watchdog={watchdog}
+                loadedRuntimeIdentity={{ pluginId: 'acme.preview', occurrenceId: 'occurrence-a', artifactDigest }} />
+        );
+        const screen = await renderScreen(element(retired.signal, () => retiredLoad.promise));
+        await act(async () => {
+            retired.abort();
+            retiredLoad.reject(new Error('artifact_lease_revoked'));
+        });
+        expect(watchdog.isContained({ artifactDigest })).toBe(false);
+        await screen.update(element(successor.signal, async () => healthy));
+        await flushHookEffects();
+        expect(screen.findByTestId('successor-native-module')).toBeTruthy();
+        expect(screen.findByTestId('plugin-rn-ui-unavailable')).toBeNull();
+        await screen.unmount();
+    });
+
     it('retries a rejected cached loader with a fresh mount and pending feedback', async () => {
         vi.useFakeTimers();
         let rejectFirstLoad!: (error: Error) => void;

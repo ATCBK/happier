@@ -199,6 +199,45 @@ function daemonResponse(record: ReturnType<typeof fixture>) {
 }
 
 describe('Artifact selected handle lease', () => {
+    it('keeps initial Account Availability pending until its admitted snapshot supplies the selected Artifact', async () => {
+        const current = fixture(true);
+        const store = createPluginAccountAvailabilityReaderStore();
+        const retained = persistentCustody(current);
+        const cancellation = new AbortController();
+        const result = acquirePluginSelectedArtifactLease({
+            reader: store.bind(scope), accountLifetime: createLifetime(), signal: cancellation.signal,
+            slot, artifactGraph: current.graph, sources: [retained.source],
+        });
+        let settled = false;
+        void result.then(() => { settled = true; });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        expect(retained.read).not.toHaveBeenCalled();
+        store.replace({ scope, snapshot: current.snapshot });
+        const acquired = await result;
+        expect(acquired.kind).toBe('available');
+        if (acquired.kind === 'available') {
+            expect(acquired.lease.isCurrent()).toBe(true);
+            acquired.lease.dispose();
+        }
+    });
+
+    it('cancels pending Account Availability without disclosing retained bytes', async () => {
+        const current = fixture(true);
+        const store = createPluginAccountAvailabilityReaderStore();
+        const retained = persistentCustody(current);
+        const cancellation = new AbortController();
+        const result = acquirePluginSelectedArtifactLease({
+            reader: store.bind(scope), accountLifetime: createLifetime(), signal: cancellation.signal,
+            slot, artifactGraph: current.graph, sources: [retained.source],
+        });
+        cancellation.abort();
+        await expect(result).resolves.toEqual({ kind: 'unavailable', code: 'artifact_lease_revoked' });
+        store.replace({ scope, snapshot: current.snapshot });
+        expect(retained.read).not.toHaveBeenCalled();
+    });
+
     it('awaits platform integrity work and refuses an Account retired while hashing', async () => {
         const current = fixture(true);
         const store = createPluginAccountAvailabilityReaderStore();
@@ -819,6 +858,22 @@ describe('Artifact selected handle lease', () => {
             sources: [{ kind: 'appExact', fetch: readFile }],
         })).resolves.toEqual({ kind: 'unavailable', code: 'artifact_source_integrity_invalid' });
         expect(readFile).toHaveBeenCalledTimes(1);
+
+        // Failure belongs to that acquisition, not the Account or mount. A
+        // refreshed authoritative graph must still acquire its verified bytes.
+        const refreshed = fixture(true, 43, null, undefined, slot.pluginId, '<p>New projection</p>');
+        store.replace({ scope, snapshot: refreshed.snapshot });
+        const recovered = await acquirePluginSelectedArtifactLease({
+            reader: store.bind(scope), slot, artifactGraph: refreshed.graph,
+            sources: [{ kind: 'appExact', fetch: async () => refreshed.bytesByPath }],
+        });
+        expect(recovered.kind).toBe('available');
+        if (recovered.kind !== 'available') throw new Error('Expected refreshed Artifact lease');
+        expect(recovered.lease.artifact.digest).toBe(refreshed.graph.digest);
+        await expect(recovered.lease.readFile(refreshed.graph.entry)).resolves.toMatchObject({
+            kind: 'available', bytes: refreshed.bytesByPath.get(refreshed.graph.entry),
+        });
+        recovered.lease.dispose();
     });
 
     it('keeps an exact Artifact lease current across an unrelated Availability cursor advance', async () => {

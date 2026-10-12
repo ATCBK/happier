@@ -855,7 +855,40 @@ export async function acquirePluginSelectedArtifactLease(input: Readonly<{
     artifactGraph: unknown;
     sources: readonly PluginArtifactSourceCandidate[];
 }>): Promise<PluginSelectedArtifactLeaseAcquireResult> {
-    const admission = readSelectedArtifactAdmission(input);
+    type Admission = PluginSelectedArtifactAdmission | Readonly<{ kind: 'unavailable'; code: 'artifact_lease_revoked' }>;
+    let admission: Admission = readSelectedArtifactAdmission(input);
+    // An initial/restored Account projection is asynchronous readiness, not an
+    // executable Artifact failure. Wait through the existing projection and
+    // Account lifetime; no bytes are admitted until selection is established.
+    if (admission.kind === 'unavailable' && admission.code === 'account_availability_not_loaded'
+        && (input.accountLifetime || input.signal)) {
+        admission = await new Promise<Admission>((resolve) => {
+            let settled = false;
+            let unsubscribe: (() => void) | undefined;
+            let retirement: Readonly<{ dispose(): void }> | undefined;
+            const cleanup = () => {
+                unsubscribe?.();
+                retirement?.dispose();
+                input.signal?.removeEventListener('abort', observe);
+            };
+            const observe = () => {
+                if (settled) return;
+                const current = input.signal?.aborted || input.accountLifetime?.isCurrent() === false
+                    ? Object.freeze({ kind: 'unavailable' as const, code: 'artifact_lease_revoked' as const })
+                    : readSelectedArtifactAdmission(input);
+                if (current.kind === 'unavailable' && current.code === 'account_availability_not_loaded') return;
+                settled = true;
+                cleanup();
+                resolve(current);
+            };
+            unsubscribe = input.reader.subscribe(observe);
+            retirement = input.accountLifetime?.onRetire(observe);
+            input.signal?.addEventListener('abort', observe, { once: true });
+            observe();
+            // onRetire may synchronously observe an already-retired lifetime.
+            if (settled) cleanup();
+        });
+    }
     if (admission.kind !== 'available') {
         return Object.freeze({ kind: 'unavailable', code: admission.code });
     }

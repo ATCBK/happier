@@ -103,7 +103,7 @@ export type PluginUiHostedWebArtifactTechnicalAdmission = Readonly<{
 
 export type PluginUiHostedWebNativeArtifactAdoptionInput = Omit<
     PluginHostedWebArtifactAvailabilityInput,
-    'daemon' | 'isCurrent'
+    'daemon' | 'isCurrent' | 'signal'
 > & Readonly<{
     daemon?: PluginUiArtifactDaemonSource;
     daemonProjectionSelection?: PluginArtifactDaemonProjectionSelectionInput;
@@ -111,7 +111,7 @@ export type PluginUiHostedWebNativeArtifactAdoptionInput = Omit<
 
 export type PluginUiReactNativeArtifactAdoptionInput = Omit<
     PluginReactNativeArtifactAvailabilityInput,
-    'daemon' | 'isCurrent'
+    'daemon' | 'isCurrent' | 'signal'
 > & Readonly<{
     daemon?: PluginUiArtifactDaemonSource;
 }>;
@@ -156,6 +156,7 @@ export class PluginUiArtifactAdoptionOwner {
     public retire(reason: PluginUiArtifactRetirementReason): void {
         if (this.disposed) return;
         this.disposed = true;
+        this.pendingAdoption?.dispose?.();
         this.pendingAdoption = null;
         for (const disposeConsumer of [...this.disposeConsumers]) {
             disposeConsumer();
@@ -174,13 +175,14 @@ export class PluginUiArtifactAdoptionOwner {
     >(input: Readonly<{
         kind: Kind;
         desiredArtifactKey?: string;
-        acquire: () => Promise<PluginUiArtifactAvailabilityResult<Handle>>;
+        acquire: (signal: AbortSignal) => Promise<PluginUiArtifactAvailabilityResult<Handle>>;
     }>): Promise<PluginUiArtifactAdoptionResult<Kind, Handle>> {
         if (!this.isActive()) return unavailableBecauseRetired();
 
         const desiredArtifactKey = input.desiredArtifactKey ?? input.kind;
         this.pendingAdoption?.dispose?.();
-        const pendingAdoption: { desiredArtifactKey: string; dispose?: () => void } = { desiredArtifactKey };
+        const cancellation = new AbortController();
+        const pendingAdoption = { desiredArtifactKey, dispose: () => cancellation.abort() };
         this.pendingAdoption = pendingAdoption;
         const incumbent = this.currentConsumer;
         this.disposition = incumbent
@@ -191,7 +193,7 @@ export class PluginUiArtifactAdoptionOwner {
             })
             : Object.freeze({ kind: 'preparing', desiredArtifactKey });
 
-        const acquired = await input.acquire();
+        const acquired = await input.acquire(cancellation.signal);
         if (pendingAdoption !== this.pendingAdoption) {
             if (acquired.kind === 'available') acquired.handle.dispose();
             return unavailableBecauseRetired();
@@ -220,6 +222,7 @@ export class PluginUiArtifactAdoptionOwner {
         const disposeConsumer = () => {
             if (consumerDisposed) return;
             consumerDisposed = true;
+            cancellation.abort();
             this.disposeConsumers.delete(disposeConsumer);
             if (this.currentConsumer?.dispose === disposeConsumer) {
                 this.currentConsumer = null;
@@ -286,14 +289,15 @@ export class PluginUiArtifactAdoptionOwner {
         return await this.adopt({
             kind: 'hostedWebNative' as const,
             desiredArtifactKey: input.cacheIdentity.artifactDigest,
-            acquire: () => acquirePluginHostedWebArtifactAvailability({
+            acquire: (signal) => acquirePluginHostedWebArtifactAvailability({
                 ...availabilityInput,
                 ...(daemon
                     ? {
                         daemon,
                     }
                     : {}),
-                isCurrent: () => this.isActive(),
+                signal,
+                isCurrent: () => !signal.aborted && this.isActive(),
             }),
         });
     }
@@ -305,7 +309,7 @@ export class PluginUiArtifactAdoptionOwner {
         return await this.adopt({
             kind: 'reactNative' as const,
             desiredArtifactKey: input.cacheIdentity.artifactDigest,
-            acquire: async () => {
+            acquire: async (signal) => {
                 const acquired = await acquirePluginReactNativeArtifactAvailability({
                     ...availabilityInput,
                     ...(daemon
@@ -605,23 +609,26 @@ function throwReactNativeArtifactLoadFailure(
  */
 export function createPluginUiReactNativeInstalledArtifactLoad(
     input: PluginUiReactNativeInstalledArtifactLoadInput,
-): () => Promise<PluginReactNativeSurfaceModule> {
-    return async () => {
+): (signal?: AbortSignal) => Promise<PluginReactNativeSurfaceModule> {
+    return async (signal) => {
         const owner = new PluginUiArtifactAdoptionOwner({ isCurrent: input.isCurrent });
-        const acquired = await owner.adoptReactNative({
-            reader: input.reader,
-            artifactGraph: input.artifactGraph,
-            cacheIdentity: input.identity,
-            accountLifetime: input.accountLifetime,
-            ...(input.daemon ? { daemon: input.daemon } : {}),
-            ...(input.daemonProjectionSelection
-                ? { daemonProjectionSelection: input.daemonProjectionSelection }
-                : {}),
-        });
-        if (acquired.kind !== 'available') {
-            return throwReactNativeArtifactLoadFailure(acquired.code);
-        }
+        const retire = () => owner.dispose();
+        signal?.addEventListener('abort', retire, { once: true });
+        if (signal?.aborted) retire();
         try {
+            const acquired = await owner.adoptReactNative({
+                reader: input.reader,
+                artifactGraph: input.artifactGraph,
+                cacheIdentity: input.identity,
+                accountLifetime: input.accountLifetime,
+                ...(input.daemon ? { daemon: input.daemon } : {}),
+                ...(input.daemonProjectionSelection
+                    ? { daemonProjectionSelection: input.daemonProjectionSelection }
+                    : {}),
+            });
+            if (acquired.kind !== 'available') {
+                return throwReactNativeArtifactLoadFailure(acquired.code);
+            }
             // The module loader cannot be cancelled. Artifact and the bound
             // surface must therefore still be current on both sides of it.
             if (!acquired.adoption.isCurrent()) {
@@ -646,6 +653,7 @@ export function createPluginUiReactNativeInstalledArtifactLoad(
             acquired.adoption.fail(result.code);
             return throwReactNativeArtifactLoadFailure(result.code, result.diagnostics);
         } finally {
+            signal?.removeEventListener('abort', retire);
             owner.dispose();
         }
     };

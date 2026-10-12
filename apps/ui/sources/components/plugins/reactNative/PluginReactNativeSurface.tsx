@@ -118,7 +118,7 @@ type PluginReactNativeSurfaceProps = Readonly<{
     snapshotTitle?: string;
     decision: PluginReactNativeCompatibilityDecision;
     module?: PluginReactNativeSurfaceModule | null;
-    load?: () => PluginReactNativeSurfaceModule | Promise<PluginReactNativeSurfaceModule>;
+    load?: (signal: AbortSignal) => PluginReactNativeSurfaceModule | Promise<PluginReactNativeSurfaceModule>;
     loadPolicy?: PluginReactNativeLoaderPolicyInput;
     cacheKey?: string;
     renderContext: RenderContext;
@@ -399,19 +399,22 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
         watchdogCacheKey,
     ]);
     const resetMountAttemptIdRef = React.useRef(mountAttemptId);
+    const resetMountSignalRef = React.useRef(props.renderContext.signal);
     const pendingQuarantine = artifactDigest
         ? watchdog.isContained({ artifactDigest })
         : false;
 
     React.useLayoutEffect(() => {
-        const changedMountAttempt = resetMountAttemptIdRef.current !== mountAttemptId;
+        const changedMountAttempt = resetMountAttemptIdRef.current !== mountAttemptId
+            || resetMountSignalRef.current !== props.renderContext.signal;
         resetMountAttemptIdRef.current = mountAttemptId;
+        resetMountSignalRef.current = props.renderContext.signal;
         if (changedMountAttempt) {
             setLoadFailed(false);
             setTargetedFallbackMountAttemptId(null);
             setLoadFailureDiagnostics([]);
         }
-    }, [mountAttemptId]);
+    }, [mountAttemptId, props.renderContext.signal]);
 
     React.useLayoutEffect(() => {
         // An externally supplied mount or artifact replacement is a new
@@ -454,11 +457,13 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
             || pendingModuleState?.cacheKey === props.cacheKey
             || loadFailed
             || pendingQuarantine
+            || props.renderContext.signal.aborted
         ) {
             return undefined;
         }
 
         let cancelled = false;
+        const signal = props.renderContext.signal;
         // Acquisition belongs to this Artifact/mount attempt. Fresh host
         // closures and presentation contexts do not replace that lifecycle.
         const load = loadRef.current;
@@ -469,9 +474,9 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
         // Its async phases do not share the byte RPC's start time: another
         // renderer timer could discard a valid result while that owner is live.
         Promise.resolve()
-            .then(() => load?.())
+            .then(() => !signal.aborted ? load?.(signal) : undefined)
             .then((nextModule) => {
-                if (!cancelled && isPluginReactNativeSurfaceModule(nextModule)) {
+                if (!cancelled && !signal.aborted && isPluginReactNativeSurfaceModule(nextModule)) {
                     setLoadFailureDiagnostics([]);
                     setLoadFailed(false);
                     setPendingModuleState({
@@ -480,7 +485,7 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
                         writeFence: moduleWriteFence,
                     });
                     setRetrying(false);
-                } else if (!cancelled) {
+                } else if (!cancelled && !signal.aborted) {
                     recordLocalFailure('invalid_surface_module');
                     setLoadFailureDiagnostics(['invalid_surface_module']);
                     setLoadFailed(true);
@@ -488,7 +493,7 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
                 }
             })
             .catch((error: unknown) => {
-                if (!cancelled) {
+                if (!cancelled && !signal.aborted) {
                     recordLocalFailure('load_error', error);
                     setLoadFailureDiagnostics(readLoaderErrorDiagnostics(error));
                     setLoadFailed(true);
@@ -508,6 +513,7 @@ export function PluginReactNativeSurface(props: PluginReactNativeSurfaceProps): 
         props.decision.state,
         hasLoader,
         props.module,
+        props.renderContext.signal,
         recordLocalFailure,
         pendingQuarantine,
         pendingModuleState?.cacheKey,
