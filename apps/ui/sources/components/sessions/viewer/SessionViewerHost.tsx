@@ -32,6 +32,7 @@ import {
   useSessionCockpitVoicePresenceRect,
 } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import type { RetainedPresentationGeometryTransition } from '@/components/ui/presentation/retainedPresentationSlots';
 import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import { t } from '@/text';
 
@@ -420,7 +421,7 @@ export function SessionViewerBody(
     machineId?: string | null;
     pluginProjection?: PluginUiProjectionCurrentness;
     windowGeometry?: FrameRect | null;
-    transition?: Readonly<{ durationMs: number; easingCss: string }> | null;
+    transition?: RetainedPresentationGeometryTransition | null;
     /** The watched picture lets the pointer reach the frame beneath it. */
     inputPassthrough?: boolean;
   }>,
