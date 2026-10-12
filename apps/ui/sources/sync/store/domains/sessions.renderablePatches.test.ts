@@ -526,6 +526,25 @@ describe('sessions domain: renderable patches', () => {
 
             expect(renderables.s_archived_elsewhere).toBeTruthy();
         });
+
+        it('retains cached rows for an empty partial replacement but evicts them for a complete empty list', async () => {
+            mockSessionsDomainBoundaries();
+            const { createSessionsDomain } = await import('./sessions');
+            const { get, domain } = createHarness(createSessionsDomain);
+            domain.replaceSessionListRenderables([makeRenderable({ id: 'retained' })]);
+            const previousRenderables = get().sessionListRenderables;
+            const previousList = get().sessionListViewData;
+
+            domain.replaceSessionListRenderables([], { coversWholeList: false });
+
+            expect(get().sessionListRenderables).toBe(previousRenderables);
+            expect(get().sessionListViewData).toBe(previousList);
+
+            domain.replaceSessionListRenderables([], { coversWholeList: true });
+
+            expect(get().sessionListRenderables).toEqual({});
+            expect(get().sessionListViewData?.filter((item: SessionListViewItem) => item.type === 'session')).toEqual([]);
+        });
     });
 
     it('updates non-warm-cache replacement fields without rebuilding list data', async () => {

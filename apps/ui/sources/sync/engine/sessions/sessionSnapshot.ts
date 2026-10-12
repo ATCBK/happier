@@ -1336,11 +1336,11 @@ export async function fetchAndApplySessions(params: {
     let fetchedPages = 0;
     let nextCursorForMore: string | null = cursor;
     let hasNextForMore = false;
-    // Whether the server said rows exist beyond the last fetched page, independent of whether
-    // this client can page to them. Whole-list coverage also requires starting at the list
+    // Whether the server explicitly reported the end of the last fetched page. Missing or
+    // malformed pagination metadata proves no coverage. Whole-list coverage also requires starting at the list
     // head and a v2 source: the `/v1/sessions` fallback is capped server-side yet reports no
     // further page. Anything unproven fails closed and retains omitted rows.
-    let serverReportedMoreRows = false;
+    let serverReportedListEnd = false;
     let source: 'v2' | 'v1' = 'v2';
     const buildFetchResult = (): SessionListFetchResult => ({
         sessionIds: sessions.map((session) => session.id),
@@ -1412,7 +1412,7 @@ export async function fetchAndApplySessions(params: {
                 nextCursor = page.nextCursor;
                 nextCursorForMore = page.nextCursor;
                 hasNextForMore = page.hasNext === true && typeof page.nextCursor === 'string' && page.source === 'v2';
-                serverReportedMoreRows = page.hasNext === true;
+                serverReportedListEnd = page.hasNext === false;
             },
         );
 
@@ -1531,7 +1531,7 @@ export async function fetchAndApplySessions(params: {
             },
             () => params.applySessionListRenderables!(renderables, {
                 replace: true,
-                coversWholeList: startedFromListHead && source === 'v2' && !serverReportedMoreRows,
+                coversWholeList: startedFromListHead && source === 'v2' && serverReportedListEnd,
             }),
         );
         recordFirstUsableListTelemetry({

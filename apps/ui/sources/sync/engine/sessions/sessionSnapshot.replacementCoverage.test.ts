@@ -65,7 +65,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 async function snapshotCoverage(input: Readonly<{
-    page?: { hasNext: boolean; nextCursor: string | null };
+    page?: { hasNext?: unknown; nextCursor: string | null };
     request?: (path: string) => Promise<Response>;
     sessionListCursor?: string | null;
 }>): Promise<boolean | undefined> {
@@ -99,6 +99,10 @@ describe('session-list snapshot replacement coverage', () => {
 
     it('declares the replacement partial when the server has a further page', async () => {
         await expect(snapshotCoverage({ page: { hasNext: true, nextCursor: 'cursor_2' } })).resolves.toBe(false);
+    });
+
+    it.each([undefined, 0])('keeps coverage partial without an explicit end-of-list signal (%s)', async (hasNext) => {
+        await expect(snapshotCoverage({ page: { hasNext, nextCursor: null } })).resolves.toBe(false);
     });
 
     it('keeps the replacement partial when the server reports a further page it cannot page to', async () => {

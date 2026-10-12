@@ -188,6 +188,11 @@ export function planSessionListRenderableReplacementCommit(input: Readonly<{
     incomingRenderables: ReadonlyArray<SessionListRenderableSession>;
     coversWholeList?: boolean;
 }>): SessionListRenderableStoreUpdatePlan {
+    // An empty partial response covers no ordered range. Reuse the merge planner so
+    // retained rows survive; only proven whole-list coverage can evict every row.
+    if (input.coversWholeList !== true && input.incomingRenderables.length === 0) {
+        return planSessionListRenderableMergeCommit(input);
+    }
     return planSessionListRenderableReplacement({
         previousRenderables: input.state.sessionListRenderables ?? {},
         incomingRenderables: input.incomingRenderables,
