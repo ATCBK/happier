@@ -1,5 +1,5 @@
 import { realpath } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, basename, join } from 'node:path';
 
 type PhysicalAncestor = Readonly<{
   /** Symlink-free path of the deepest ancestor that currently exists. */
@@ -74,4 +74,11 @@ export async function realpathNearestExistingAncestor(targetPath: string): Promi
 export async function realpathWithAbsentSuffix(targetPath: string): Promise<string> {
   const found = await findPhysicalAncestor(targetPath);
   return found ? `${found.physicalAncestor}${found.absentSuffix}` : targetPath;
+}
+
+/** Resolve the entire parent chain; removing a symlink/junction leaf removes that leaf, not its target. */
+export async function physicalPathWithoutFollowingLeaf(targetPath: string): Promise<string> {
+  const parent = dirname(targetPath);
+  if (parent === targetPath) return await realpathWithAbsentSuffix(targetPath);
+  return join(await realpathWithAbsentSuffix(parent), basename(targetPath));
 }
