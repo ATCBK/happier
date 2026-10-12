@@ -1,6 +1,15 @@
-import { mkdtemp, rm, readFile, chmod } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, chmod, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { resolveAgentCliManagedCommandPathForRuntime } from '@happier-dev/cli-common/agents';
+import { AcpCatalogRecordV1Schema, type AcpCatalogRecordV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { createAgentInstallJobOwner } from '@/capabilities/installJobs/agentInstallJobOwner';
+import { registerMachineAgentInstallJobRpcHandlers } from '@/api/machine/rpcHandlers.agentInstallJobs';
+import { DaemonAgentInstallStartResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import type { RpcHandler } from '@/api/rpc/types';
+import { getAcpNpmRuntimeSpec } from '@/agent/acp/catalog/configured/resolveAcpLaunch';
+import { resolveAccountConfiguredAcpLaunch } from '@/agent/runtime/registry/engineRegistry/accountConfiguredAcp';
 import fastify, { type FastifyInstance } from 'fastify';
 import tweetnacl from 'tweetnacl';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +51,10 @@ import { encryptSecretStringV1, decryptSecretStringWithKeysV1 } from '@happier-d
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 import { createSpawnNewSessionLifecycleActionHandler } from '@/session/actions/lifecycle/createSpawnNewSessionLifecycleActionHandler';
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import { listHappierProcessRoots } from '../processes/roots/listHappierProcessRoots';
+import { resolveProcessOwnership } from '../processes/ownership/resolveProcessOwnership';
+import { resolveProcessOwnerRequester } from '../processes/ownership/resolveProcessOwnerRequester';
+import { projectMachineProcesses } from '../processes/view/projectMachineProcesses';
 import * as requesterCredentialOwner from './requesterSessionCredentials';
 import {
   admitRequesterSessionBootstrap, prepareRequesterSessionBootstrap, createRequesterSessionCredentialCustody,
@@ -67,10 +80,12 @@ afterEach(async () => {
   await app?.close(); app = undefined;
   if (directory) await rm(directory, { recursive: true, force: true });
   directory = undefined;
+  vi.unstubAllEnvs();
 });
 
-async function home(options: Readonly<{ sessionId?: string; creationMachineId?: string; bot?: boolean }> = {}) {
+async function home(options: Readonly<{ sessionId?: string; creationMachineId?: string; bot?: boolean; custodianAccountId?: string }> = {}) {
   const sessionId = options.sessionId ?? 'session';
+  const custodianAccountId = options.custodianAccountId ?? 'alice';
   directory = await mkdtemp(join(tmpdir(), 'requester-custody-'));
   app = fastify();
   const keyPair = tweetnacl.sign.keyPair();
@@ -80,15 +95,17 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
   let accountMode: 'plain' | 'e2ee' = 'plain';
   let sessionRole: 'owner' | 'view' = 'owner';
   let loseDuringVerification = false;
+  let acpCatalog: AcpCatalogRecordV1 = { v: 1, definitions: [] };
   const requests: Array<{ path: string; bearer: string | undefined }> = [];
   app.addHook('onRequest', async request => { requests.push({ path: request.url, bearer: request.headers.authorization }); });
   app.get('/v1/account/profile', async () => ({ id: accountId }));
   app.get('/v1/account/encryption/currentness', async () => ({ mode: accountMode, version: 1,
     signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
   app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
+  app.get('/v1/account/entity-rows/acp', async () => ({ status: 'present', revision: 1, content: { t: 'plain', v: acpCatalog } }));
   app.get('/v1/machines/machine/access', async (_request, reply) => access ? {
-    machineId: 'machine', custodian: { accountId: 'alice', displayName: 'Alice' },
-    access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'plain', accessState: 'ready' },
+    machineId: 'machine', custodian: { accountId: custodianAccountId, displayName: 'Custodian' },
+    access: { custodian: { accountId: custodianAccountId, displayName: 'Custodian' }, role: 'use', resourceMode: 'plain', accessState: 'ready' },
     canManage: false, grants: [], ownDirectGrant: true, ownAccessSources: [],
   } : reply.code(403).send({ kind: 'refused', code: 'access_denied' }));
   app.post('/v1/machines/machine/admission/verify', async (request, reply) => {
@@ -100,7 +117,7 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
     if (body.method !== undefined || body.purpose?.kind !== 'requester_session_currentness'
       || body.purpose.sessionId !== sessionId) return reply.code(403).send({ error: 'wrong_currentness_purpose' });
     const valid = verifyMachineInstallationProof({ publicKey: keyPair.publicKey, proof: body.proof,
-      payload: { version: 1, accountId: 'alice', machineId: 'machine', installationId: 'installation',
+      payload: { version: 1, accountId: custodianAccountId, machineId: 'machine', installationId: 'installation',
         rpcAdmission: { context: body.context, purpose: body.purpose } } });
     expect(body.context.actorAccountId).toBe('bob');
     if (loseDuringVerification) installationId = 'replacement';
@@ -111,7 +128,7 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
       organization: { folderId: null, tagIds: [] }, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
       modelSelection: null, profileId: null, requestedPermissionMode: null, agentModeId: null,
       ...(options.bot ? { identity: { bot: { kind: 'bot' }, createdAsBot: true } } : {}),
-      configuration: null, connectedServices: null, mcpSelection: null, transcriptStorage: null,
+      configuration: null, connectedServices: null, capabilitySelection: null, transcriptStorage: null,
       terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null } });
   app.get(`/v2/sessions/${sessionId}`, async () => ({ session: createSessionRecordFixture({ id: sessionId,
     encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/workspace', codexSessionId: 'same-native-session',
@@ -125,12 +142,60 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
   const boundary: RequesterSessionMachineAdmissionBoundary = { machineId: 'machine', daemonToken: 'alice-daemon',
     isHomeCurrent: () => true, readInstallation: () => ({ installationId, privateKey: keyPair.secretKey }) };
   return { boundary, requests, correspondence, keyPair, setAccess: (value: boolean) => { access = value; },
+    setAcpCatalog: (record: AcpCatalogRecordV1) => { acpCatalog = record; },
     setAccountId: (value: string) => { accountId = value; }, setAccountMode: (value: 'plain' | 'e2ee') => { accountMode = value; },
     setSessionRole: (value: 'owner' | 'view') => { sessionRole = value; },
     replaceDuringVerification: () => { loseDuringVerification = true; } };
 }
 
 describe('requester Session lifecycle custody', () => {
+  it.skipIf(process.platform === 'win32').each(['bob', 'alice'])('carries authenticated Account admission into managed ACP first use (custodian %s)', async custodianAccountId => {
+    const host = await home({ custodianAccountId });
+    vi.stubEnv('HAPPIER_HOME_DIR', directory!);
+    const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session', serverHttpBaseUrl: origin, boundary: host.boundary });
+    const prepared = await admitRequesterSessionBootstrap({
+      bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: encodeStoredCredentials({ ...credentials }) },
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId, machineId: 'machine', installationId: 'installation', role: 'use', encryptionMode: 'plain' }, verifyMachineAdmissionCurrent: current },
+    });
+    if (!prepared) throw new Error('Missing admitted custody');
+    const context = prepared.admitted.savedSecretOperationContext;
+    const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ id: 'custodian-managed', name: 'custodian-managed', title: 'Managed', createdAt: 1, updatedAt: 1,
+      launch: { kind: 'npm', package: '@fixture/agent', version: '1.2.3', args: ['--acp'] }, env: { HAPPIER_HOME_DIR: { t: 'literal', v: join(directory!, 'authored-home') } },
+    }] });
+    expect(await context.commitAcpCatalog({ catalog: { status: 'ready', record, revision: 1 } })).toBe(true);
+    host.setAcpCatalog(record);
+    const command = resolveAgentCliManagedCommandPathForRuntime(getAcpNpmRuntimeSpec(record.definitions[0]!, 'bob')!, { processEnv: process.env });
+    await mkdir(dirname(command), { recursive: true }); await writeFile(command, '#!/bin/sh\nexit 0\n'); await chmod(command, 0o755);
+    const workspace = join(dirname(dirname(command)), 'workspace');
+    await mkdir(join(workspace, 'node_modules', '@fixture', 'agent'), { recursive: true });
+    await writeFile(join(workspace, 'node_modules', '@fixture', 'agent', 'package.json'), JSON.stringify({ name: '@fixture/agent', version: '1.2.3', bin: { actual: 'agent.js' } }));
+    await mkdir(join(workspace, 'node_modules', '.bin'), { recursive: true });
+    await writeFile(join(workspace, 'node_modules', '.bin', 'actual'), '#!/bin/sh\nexit 0\n'); await chmod(join(workspace, 'node_modules', '.bin', 'actual'), 0o755);
+    const launch = await resolveAccountConfiguredAcpLaunch('custodian-managed', context);
+    await expect(launch.resolveHostLaunch({ cwd: directory! })).resolves.toMatchObject({ command, args: ['--acp'], env: { HAPPIER_HOME_DIR: join(directory!, 'authored-home') } });
+    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+    const owner = createAgentInstallJobOwner({ accountId: custodianAccountId, readTrackedSessions: () => [], readAcpCatalog: () => undefined,
+      readRegistry: () => ({ agents: [{ id: 'custom-acp', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1,
+        pluginId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId }] }) });
+    try {
+      registerMachineAgentInstallJobRpcHandlers({ owner, rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } } });
+      if (custodianAccountId !== 'bob') {
+        const ingress = { signal: new AbortController().signal, requesterSessionBootstrap: prepared.admitted,
+          machineAdmission: { actorAccountId: 'bob', custodianAccountId, machineId: 'machine', installationId: 'installation', role: 'use' as const, encryptionMode: 'plain' as const },
+          verifyMachineAdmissionCurrent: current };
+        const installed = DaemonAgentInstallStartResponseSchema.parse(await handlers.get(RPC_METHODS.DAEMON_AGENTS_INSTALL_START)!(
+          { agentId: 'custom-acp', definitionId: record.definitions[0]!.id, intent: 'install', consent: { vendorRecipe: false } }, ingress));
+        expect(installed.ok).toBe(true); if (!installed.ok) throw new Error('Foreign install was not admitted');
+        await vi.waitFor(() => expect(owner.read({ jobId: installed.jobId, cursor: 0 }, 'bob')).toMatchObject({ done: true, outcome: { kind: 'succeeded' } }));
+        expect(owner.list(custodianAccountId).jobs).toEqual([]);
+        expect(host.requests.filter(request => request.path === '/v1/account/entity-rows/acp').every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
+        expect(await handlers.get(RPC_METHODS.DAEMON_AGENTS_INSTALL_READ)!({ jobId: installed.jobId, cursor: 0 }, { ...ingress,
+          machineAdmission: { ...ingress.machineAdmission, actorAccountId: custodianAccountId } })).toMatchObject({ ok: false, errorCode: 'job_not_found' });
+      }
+    } finally { await owner.shutdown(); }
+    await prepared.cleanupOnFailure();
+  });
   it('hydrates a sealed handoff preflight for an ephemeral requester read without retaining transfer custody', async () => {
     const host = await home({ creationMachineId: 'source-machine' });
     const hydrate = sessionLifecycleRpc.withSessionHandoffRequesterBootstrap;
@@ -585,6 +650,47 @@ describe('requester Session lifecycle custody', () => {
     expect(await recover(input)).toBeNull();
     recovered?.savedSecretOperationContext.withdrawCatalog();
   });
+
+  it('recovers unstamped legacy Session ownership from authenticated owner evidence, without writing requester custody', async () => {
+    const host = await home();
+    const recover = requesterCredentialOwner.resolveRequesterSessionBootstrapFromCustody;
+    const recovered = await recover({ happyHomeDir: directory!, serverId: attribution.serverId, sessionId: 'session',
+      serverHttpBaseUrl: origin, machineAdmissionBoundary: host.boundary, legacyOwnerCredentials: { ...credentials } });
+    expect(recovered?.getBoundSessionId()).toBe('session');
+    expect(recovered?.attribution).toEqual(attribution);
+    expect(await recovered?.isCurrent()).toBe(true);
+    const snapshot = { status: 'ok' as const, capturedAtMs: 1000, logicalCpus: 4, rows: [10, 20].map(pid => ({
+      pid, ppid: pid === 10 ? 1 : 10, start: { startTimeMs: pid }, principal: { kind: 'uid' as const, value: '1000' },
+      name: 'happier', memory: null, cpuTimeUs: null })) };
+    const roots = listHappierProcessRoots({ snapshot, selfPid: 10, platform: 'darwin', daemonScopeKey: '123456789abc',
+      trackedSessions: [{ pid: 20, happySessionId: 'session', processStartTimeMs: 20,
+        requesterWorkAttributionV1: recovered?.attribution }] });
+    const rows = resolveProcessOwnership({ snapshot, roots, daemonPrincipal: snapshot.rows[0]!.principal,
+      daemonScopeKey: '123456789abc', platform: 'darwin' });
+    expect(projectMachineProcesses({ status: 'ok', snapshot, roots, rows },
+      { machineId: 'machine', scope: 'happier', view: 'tree' }, { accountId: 'bob', custodianAccountId: 'bob' },
+      { platform: 'darwin', selfPid: 10, allProcessesVisible: false, confirmed: [],
+        requesterForOwner: (owner, roots) => resolveProcessOwnerRequester(owner, roots,
+          { target: attribution, custodianAccountId: 'bob' }) })).toMatchObject({ state: 'live', totals: { happier: { processCount: 2 } } });
+    expect(await listRequesterSessionCredentialBindings({ happyHomeDir: directory!, serverId: attribution.serverId,
+      machineId: attribution.machineId, installationId: attribution.installationId })).toEqual({ status: 'ready', bindings: [] });
+    recovered?.savedSecretOperationContext.withdrawCatalog();
+  });
+
+  it.each(['shared Session', 'changed installation', 'lost access', 'foreign custody', 'malformed custody'] as const)(
+    'does not infer legacy Session ownership after %s', async failure => {
+      const host = await home();
+      if (failure === 'shared Session') host.setSessionRole('view');
+      if (failure === 'changed installation') host.replaceDuringVerification();
+      if (failure === 'lost access') host.setAccess(false);
+      if (failure === 'foreign custody') await createRequesterSessionCredentialCustody({ happyHomeDir: directory!,
+        sessionId: 'session', attribution: { ...attribution, installationId: 'old-installation' }, credentials });
+      if (failure === 'malformed custody') await writePrivateOwnerFile({
+        path: requesterSessionCredentialPath({ happyHomeDir: directory!, sessionId: 'session', attribution }), contents: '{}' });
+      expect(await requesterCredentialOwner.resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: directory!,
+        serverId: attribution.serverId, sessionId: 'session', serverHttpBaseUrl: origin,
+        machineAdmissionBoundary: host.boundary, legacyOwnerCredentials: { ...credentials } })).toBeNull();
+    });
 
   it('discovers only this Home and installed Machine from existing protected custody, and reports malformed or unsafe state unavailable', async () => {
     await home();

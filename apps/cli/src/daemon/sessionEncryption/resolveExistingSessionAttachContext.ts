@@ -277,6 +277,7 @@ async function buildExistingSessionAttachContext(params: Readonly<{
   const backendTarget = resolveExistingSessionBackendTarget(authorityMetadataRecord);
   const linkedSessionResolution = resolveLinkedExternalSessionMetadataV1(
     authorityMetadataRecord,
+    'stored',
   );
   if (
     !linkedSessionResolution.ok

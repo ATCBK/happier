@@ -194,9 +194,9 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     savedSecrets.withdrawCatalog();
     providerAccountUsagePersistence.dispose();
     listeners.clear();
-    coordinators?.connectedServiceRefreshLoopHandle?.stop();
     coordinators?.connectedServiceQuotasCoordinator?.disposeInBandQuotaPersistence();
     const results = await Promise.allSettled([
+      Promise.resolve(coordinators?.connectedServiceRefreshLoopHandle?.stop()),
       Promise.resolve(coordinators?.connectedServiceQuotasLoopHandle?.stop()), daemonSessionMutationCustody.close(),
     ]);
     const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
@@ -211,6 +211,11 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     connectedAccountsOwner: purposes.owner,
     providerAccountUsageStore, connectedServiceRuntimeQuotaSnapshots, daemonSessionMutationCustody,
     qualifiedConnectedAccountEstablishedRuntimeOwner: established, listScheduledQualifiedConnectedAccounts: purposes.listCoordinatorAccounts,
+    subscribeConnectedAccountInvalidations: listener => {
+      const releasePurpose = purposes.subscribeInvalidations(listener);
+      const settingsSubscription = store.subscribe(listener);
+      return () => { releasePurpose(); settingsSubscription.dispose(); };
+    },
     listQualifiedConnectedAccountGroupQuotaTargets: purposes.listGroupQuotaTargets, onQualifiedConnectedAccountCredentialUpdated: purposes.invalidate,
     }));
   } catch (error) {

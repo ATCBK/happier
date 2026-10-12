@@ -132,12 +132,14 @@ export async function admitRequesterSessionBootstrap(input: Readonly<{
     accountId: admission.actorAccountId, machineId: admission.machineId, installationId: admission.installationId });
   const preparedSessionId = 'sessionId' in input.bootstrap ? input.bootstrap.sessionId : undefined;
   return await prepareRequesterSessionBootstrap({ credentials, attribution, boundary: input.boundary,
+    machineAdmission: admission,
     verifyMachineAdmissionCurrent: verify, signal: input.context.signal,
     ...(input.existingSessionId ? { preparedSessionId: input.existingSessionId, boundSessionId: input.existingSessionId } : {}),
     ...(preparedSessionId ? { preparedSessionId } : {}) });
 }
 
 export async function prepareRequesterSessionBootstrap(input: Readonly<{
+  machineAdmission?: SavedSecretOperationContextV1['machineAdmission'];
   credentials: StoredCredentials;
   attribution: RequesterWorkAttributionV1;
   boundary: Readonly<{ serverId: string; serverHttpBaseUrl: string; happyHomeDir: string }>;
@@ -147,6 +149,9 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
   boundSessionId?: string;
 }>): Promise<Readonly<{ admitted: AdmittedRequesterSessionBootstrap; cleanupOnFailure(): Promise<void> }> | null> {
   const { credentials, attribution, preparedSessionId } = input;
+  const machineAdmission = input.machineAdmission ? Object.freeze({
+    actorAccountId: input.machineAdmission.actorAccountId, custodianAccountId: input.machineAdmission.custodianAccountId,
+  }) : undefined;
   const verify = input.verifyMachineAdmissionCurrent;
   let bound: Readonly<{ sessionId: string; sessionCreationTag?: string }> | null = input.boundSessionId
     ? { sessionId: input.boundSessionId } : null;
@@ -180,6 +185,7 @@ export async function prepareRequesterSessionBootstrap(input: Readonly<{
       shouldCommit: () => !input.signal?.aborted }));
   if (accountSettingsContext.source !== 'network' || !await isCurrent()) return null;
   const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials,
+    machineAdmission,
     snapshot: accountSettingsContext, serverHttpBaseUrl: input.boundary.serverHttpBaseUrl, isCurrent });
   const persistVerifiedCustody = async (binding: Parameters<typeof verifyRequesterSessionCredentialBinding>[0]) => {
     if (!await verifyRequesterSessionCredentialBinding(binding)) return null;
@@ -309,10 +315,11 @@ export async function resolveRequesterSessionBootstrap(input: RequesterSessionCr
   } catch { return null; }
 }
 
-/** Cold handoff recovery selects only an existing exact local Session reference. */
+/** Cold recovery uses exact protected custody, or fresh authenticated ownership of an unstamped legacy Session. */
 export async function resolveRequesterSessionBootstrapFromCustody(input: Readonly<{
   happyHomeDir: string; serverId: string; sessionId: string; serverHttpBaseUrl: string;
   machineAdmissionBoundary: RequesterSessionMachineAdmissionBoundary;
+  legacyOwnerCredentials?: StoredCredentials;
 }>): Promise<AdmittedRequesterSessionBootstrap | null> {
   const boundary = input.machineAdmissionBoundary;
   const installation = boundary.readInstallation();
@@ -322,7 +329,26 @@ export async function resolveRequesterSessionBootstrapFromCustody(input: Readonl
   if (existing.status !== 'ready' || !boundary.isHomeCurrent()
     || boundary.readInstallation()?.installationId !== installation.installationId) return null;
   const binding = existing.bindings.find(candidate => candidate.sessionId === input.sessionId);
-  return binding ? await resolveRequesterSessionBootstrap({ ...input, attribution: binding.attribution }) : null;
+  if (binding) return await resolveRequesterSessionBootstrap({ ...input, attribution: binding.attribution });
+  if (!input.legacyOwnerCredentials) return null;
+  try {
+    const credentials = { ...input.legacyOwnerCredentials };
+    const profile = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl,
+      () => fetchAccountProfile({ token: credentials.token }));
+    const attribution = { serverId: input.serverId, accountId: profile.id,
+      machineId: boundary.machineId, installationId: installation.installationId };
+    // An existing foreign/stale reference is not absence and cannot be replaced by
+    // the daemon's credentials. Only a genuinely missing legacy reference qualifies.
+    const path = requesterSessionCredentialPath({ ...input, attribution });
+    try { await readPrivateOwnerFile(path); return null; }
+    catch (error) { if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') return null; }
+    const verifyMachineAdmissionCurrent = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials,
+      sessionId: input.sessionId, attribution, serverHttpBaseUrl: input.serverHttpBaseUrl, boundary });
+    const prepared = await prepareRequesterSessionBootstrap({ credentials, attribution,
+      boundary: { serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl, happyHomeDir: input.happyHomeDir },
+      boundSessionId: input.sessionId, verifyMachineAdmissionCurrent });
+    return prepared?.admitted ?? null;
+  } catch { return null; }
 }
 
 export async function isAdmittedRequesterSessionBootstrapCurrent(context: Pick<RpcHandlerContext,
