@@ -17,7 +17,6 @@ import { normalizeSpawnSessionNonceResolution, settleSpawnSessionNonce } from '@
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import { RPC_ERROR_CODES, RPC_METHODS, isRpcMethodNotFoundResult } from '@happier-dev/protocol/rpc';
 
-import { apiSocket } from '../api/session/apiSocket';
 import type { MachineMetadata } from '../domains/state/storageTypes';
 import {
     buildSpawnHappySessionRpcParams,
@@ -1043,15 +1042,15 @@ export async function machineGetBugReportLogTail(
     options?: { timeoutMs?: number },
 ): Promise<BugReportLogTailResult> {
     try {
-        return await apiSocket.machineRPC<BugReportLogTailResult, { path?: string; maxBytes?: number }>(
+        return await machineRpcWithServerScope<BugReportLogTailResult, { path?: string; maxBytes?: number }>({
             machineId,
-            RPC_METHODS.BUGREPORT_GET_LOG_TAIL,
-            {
+            method: RPC_METHODS.BUGREPORT_GET_LOG_TAIL,
+            payload: {
                 path: params?.path,
                 maxBytes: params?.maxBytes,
             },
-            options,
-        );
+            timeoutMs: options?.timeoutMs,
+        });
     } catch (error) {
         return {
             ok: false,
@@ -1070,15 +1069,15 @@ export async function machineReadSessionLogTail(
     options?: { timeoutMs?: number },
 ): Promise<MachineReadSessionLogTailResult> {
     try {
-        return await apiSocket.machineRPC<MachineReadSessionLogTailResult, { path: string; maxBytes?: number }>(
+        return await machineRpcWithServerScope<MachineReadSessionLogTailResult, { path: string; maxBytes?: number }>({
             machineId,
-            RPC_METHODS.DAEMON_SESSION_LOG_TAIL,
-            {
+            method: RPC_METHODS.DAEMON_SESSION_LOG_TAIL,
+            payload: {
                 path: params.path,
                 maxBytes: params.maxBytes,
             },
-            options,
-        );
+            timeoutMs: options?.timeoutMs,
+        });
     } catch (error) {
         return {
             success: false,

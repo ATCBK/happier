@@ -21,6 +21,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import {
     clearMachineRequestReachabilityForTest,
     readMachineRequestReachabilityObservation,
+    recordMachineRequestFailed,
 } from '@/sync/domains/machines/reachability/machineReachability';
 
 let machineContextOwner: Encryption;
@@ -259,7 +260,7 @@ describe('machineRpcWithServerScope', () => {
         clearMachineRequestReachabilityForTest();
     });
 
-    it('attempts the peer mediation direct route before server RPC for direct-eligible same-machine methods', async () => {
+    it('records a successful filesystem read after a request failure at the shared machine RPC choke point', async () => {
         getActiveServerSnapshotSpy.mockReturnValue({
             serverId: 'server-a',
             serverUrl: 'https://server-a.example.test',
@@ -267,19 +268,20 @@ describe('machineRpcWithServerScope', () => {
             generation: 1,
         });
         machineRpcWithPeerMediationRouteSpy.mockResolvedValueOnce({ direct: true });
+        recordMachineRequestFailed({ serverId: 'server-a', machineId: 'machine-1' });
 
         const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
         const result = await machineRpcWithServerScope({
             machineId: 'machine-1',
-            method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-            payload: { includeWorkers: true },
+            method: RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY,
+            payload: { rootPath: '/repo', path: '/repo' },
         });
 
         expect(result).toEqual({ direct: true });
         expect(machineRpcWithPeerMediationRouteSpy).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-1',
-            method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-            payload: { includeWorkers: true },
+            method: RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY,
+            payload: { rootPath: '/repo', path: '/repo' },
             resolveDirectRoute: expect.any(Function),
             postDirect: expect.any(Function),
             serverFallback: expect.any(Function),

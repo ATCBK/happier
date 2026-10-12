@@ -5,9 +5,12 @@ import { renderHook, standardCleanup } from '@/dev/testkit';
 import { useMachinePresenceCounts } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 afterEach(() => {
+    clearMachineRequestReachabilityForTest();
     standardCleanup();
 });
 
@@ -40,6 +43,34 @@ function setHomeMachines(machines: readonly Machine[]) {
 }
 
 describe('useMachinePresenceCounts', () => {
+    it('moves a machine offline on a failed request and does not recover on a subsequent heartbeat', async () => {
+        const previousState = storage.getState();
+        const previousApplied = getAppliedActiveServerSnapshot();
+        const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        const serverId = String(getActiveServerSnapshot().serverId ?? '').trim() || 'server-active';
+        const now = Date.now();
+        try {
+            publishAppliedActiveServerSnapshot({ ...getActiveServerSnapshot(), serverId });
+            storage.setState({ profileScope: { serverId, accountId: 'account' } });
+            setHomeMachines([machine('laptop', { activeAt: now })]);
+            const hook = await renderHook(() => useMachinePresenceCounts(), { flushOptions: { cycles: 1, turns: 4 } });
+            expect(hook.getCurrent()).toEqual({ online: 1, offline: 0 });
+
+            await act(async () => {
+                recordMachineRequestFailed({ serverId, machineId: 'laptop', observedAtMs: now + 1 });
+            });
+            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
+            await act(async () => {
+                setHomeMachines([machine('laptop', { activeAt: now + 2 })]);
+            });
+            expect(hook.getCurrent()).toEqual({ online: 0, offline: 1 });
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+            publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+        }
+    });
+
     it('counts the Home machines online and offline, leaving out revoked and replaced identities', async () => {
         const previousState = storage.getState();
         try {

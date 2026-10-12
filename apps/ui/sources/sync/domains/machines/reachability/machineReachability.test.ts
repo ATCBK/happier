@@ -46,4 +46,11 @@ describe('machine reachability', () => {
         expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' })).toBe(false);
         expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' })).toBe(false);
     });
+
+    it('reads a missing host method as the daemon not answering, and a missing plugin method as a capability gap', () => {
+        expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' },
+            'daemon.filesystem.listDirectory')).toBe(true);
+        expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' },
+            'plugin.example.readThing')).toBe(false);
+    });
 });

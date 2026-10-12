@@ -1,4 +1,5 @@
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { isMachineReplaced } from '@happier-dev/protocol/machines/identity/canonicalMachineId';
 
@@ -108,10 +109,19 @@ export function countMachineReachability(
     return { online, offline };
 }
 
-/** Only failures that say the target could not be reached may override pushed presence. */
-export function isMachineRequestReachabilityFailure(error: unknown): boolean {
+const HOST_RPC_METHODS: ReadonlySet<string> = new Set(Object.values(RPC_METHODS));
+
+/**
+ * Only failures that say the target could not be reached may override pushed presence. The Home answers
+ * `RPC_METHOD_NOT_AVAILABLE` when no daemon takes the method: for a host-catalog method, which every
+ * daemon registers, that means the daemon is not answering; for any other (a plugin's) it is a capability gap.
+ */
+export function isMachineRequestReachabilityFailure(error: unknown, method?: string): boolean {
     const rpcErrorCode = readRpcErrorCode(error);
     if (rpcErrorCode === 'target_unavailable' || rpcErrorCode === 'machine_unavailable' || rpcErrorCode === 'machine_offline') {
+        return true;
+    }
+    if (rpcErrorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE && method !== undefined && HOST_RPC_METHODS.has(method)) {
         return true;
     }
     if (!error || typeof error !== 'object') return false;

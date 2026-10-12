@@ -594,7 +594,7 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
         }
         return result;
     } catch (error) {
-        if (effectiveParams.serverId && isMachineRequestReachabilityFailure(error)
+        if (effectiveParams.serverId && isMachineRequestReachabilityFailure(error, effectiveParams.method)
             && (!isMachineRpcTimeoutError(error) || requestDispatched)) {
             recordMachineRequestFailed({
                 serverId: effectiveParams.serverId,
