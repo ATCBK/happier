@@ -45,6 +45,12 @@ const BASE_CREDENTIAL_SEGMENT_SEQUENCES: readonly (readonly string[])[] = [
   ['api', 'key'],
   ['client', 'secret'],
   ['private', 'key'],
+  ['recovery', 'secret'],
+  ['recovery', 'key'],
+  ['machine', 'key'],
+  ['secret', 'key'],
+  ['claim', 'secret'],
+  ['pairing', 'secret'],
 ];
 
 const BASE_CREDENTIAL_COMPACT_KEYS = new Set(

@@ -17,6 +17,12 @@ describe('base diagnostic credential-key classifier', () => {
     'cookie',
     'jwt',
     'privateKey',
+    'recoverySecret',
+    'recovery_key',
+    'machineKey',
+    'secretKey',
+    'claim-secret',
+    'pairingSecret',
     'passphrase',
   ])('classifies %s through exact segments', (key) => {
     expect(isBaseCredentialDiagnosticKey(key)).toBe(true);
