@@ -23,7 +23,7 @@ describe("stored-content public-share retained SQLite upgrade", () => {
         };
         try {
             for (const entry of await readdir(canonicalDir, { withFileTypes: true })) {
-                if (entry.isDirectory() && entry.name !== migrationName) await cp(join(canonicalDir, entry.name), join(migrationsDir, entry.name), { recursive: true });
+                if (entry.isDirectory() && entry.name < migrationName) await cp(join(canonicalDir, entry.name), join(migrationsDir, entry.name), { recursive: true });
             }
             database.exec("PRAGMA foreign_keys=ON");
             await applySqliteMigrations({ executor, migrationsDir });
@@ -46,6 +46,15 @@ describe("stored-content public-share retained SQLite upgrade", () => {
             expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
             expect(database.prepare("PRAGMA foreign_keys").get()).toMatchObject({ foreign_keys: 1 });
             expect((await applySqliteMigrations({ executor, migrationsDir })).applied).toEqual([]);
+            // Upgrade in chronological order, including subsequent schema additions.
+            for (const entry of await readdir(canonicalDir, { withFileTypes: true })) {
+                if (entry.isDirectory() && entry.name > migrationName) await cp(join(canonicalDir, entry.name), join(migrationsDir, entry.name), { recursive: true });
+            }
+            await applySqliteMigrations({ executor, migrationsDir });
+            expect(database.prepare("SELECT * FROM PublicSessionShare").all()).toEqual([expect.objectContaining(sharesAfter[0])]);
+            expect(database.prepare("SELECT * FROM PublicShareAccessLog").all()).toEqual(logsBefore);
+            expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+            expect((await applySqliteMigrations({ executor, migrationsDir })).applied).toEqual([]);
             database.prepare("DELETE FROM PublicSessionShare WHERE id=?").run("retained-share");
             expect(database.prepare("SELECT * FROM PublicShareAccessLog").all()).toEqual([]);
         } finally {
@@ -54,4 +63,3 @@ describe("stored-content public-share retained SQLite upgrade", () => {
         }
     }, 180_000);
 });
-
