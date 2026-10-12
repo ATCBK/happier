@@ -23,6 +23,7 @@ import {
     type StoredJsonContentEnvelope,
 } from "@happier-dev/protocol";
 import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx } from '@/app/machines/managed/managedRead';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { db } from "@/storage/db";
@@ -2088,6 +2089,13 @@ export async function mutateQualifiedConnectedServiceCredentialHealth(
             health: canonical.health,
         });
         if (!metadata) return { status: "unsupported_format" };
+        if (sameStrictJsonValue(metadata, current.metadata)) {
+            return {
+                status: "written",
+                credentialRevision: projection.credentialRevision,
+                configurationRevision: current.configurationRevision,
+            };
+        }
         const write = await tx.serviceAccountToken.updateMany({
             where: {
                 id: current.id,

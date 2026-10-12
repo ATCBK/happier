@@ -800,7 +800,7 @@ describe("qualified Connected Account credential repository", () => {
         );
     });
 
-    it("projects and updates additive V4 stored metadata without echoing extras or rotating revisions", async () => {
+    it("normalizes health metadata once and suppresses identical admitted health without bypassing fences", async () => {
         const account = await db.account.create({
             data: { publicKey: null, encryptionMode: "plain" },
             select: { id: true },
@@ -840,33 +840,102 @@ describe("qualified Connected Account credential repository", () => {
         const opened = await readQualifiedConnectedServiceCredential({ accountId: account.id, ref });
         expect(JSON.stringify(opened)).not.toMatch(/future|must-not-echo/);
 
-        await expect(mutateQualifiedConnectedServiceCredentialHealth({
-            accountId: account.id,
-            ref,
-            expectedCredentialRevision: created.credentialRevision,
-            expectedConfigurationRevision: created.configurationRevision,
-            health: {
-                v: 1,
-                status: "needs_reauth",
-                reconnectRequired: true,
-                providerErrorCode: "invalid_grant",
-            },
-        })).resolves.toEqual({
-            status: "written",
-            credentialRevision: created.credentialRevision,
-            configurationRevision: created.configurationRevision,
-        });
-        await expect(listQualifiedConnectedAccounts({
-            accountId: account.id,
-            service,
-        })).resolves.toEqual([
-            expect.objectContaining({
+        const app = createAuthenticatedTestApp();
+        registerQualifiedConnectedAccountCredentialRoutesV4(app);
+        await app.ready();
+        try {
+            const patch = {
                 ref,
-                status: "needs_reauth",
+                expectedCredentialRevision: created.credentialRevision,
+                expectedConfigurationRevision: created.configurationRevision,
+                health: { v: 1, status: "connected", reconnectRequired: false },
+            };
+            const submit = (payload: unknown) => app.inject({
+                method: "PATCH",
+                url: "/v4/connect/qualified/credential/health",
+                headers: { "x-test-user-id": account.id },
+                payload,
+            });
+            const readState = async () => ({
+                row: await db.serviceAccountToken.findUniqueOrThrow({
+                    where: { id: stored.id },
+                    select: { metadata: true, updatedAt: true },
+                }),
+                account: await db.account.findUniqueOrThrow({
+                    where: { id: account.id }, select: { seq: true },
+                }),
+                change: await db.accountChange.findUniqueOrThrow({
+                    where: { accountId_kind_entityId: { accountId: account.id, kind: "account", entityId: "self" } },
+                    select: { cursor: true, hint: true },
+                }),
+            });
+            const beforeNormalization = await readState();
+            const normalized = await submit(patch);
+            expect(normalized.statusCode).toBe(200);
+            expect(normalized.json()).toEqual({
+                success: true,
                 credentialRevision: created.credentialRevision,
                 configurationRevision: created.configurationRevision,
-            }),
-        ]);
+            });
+            const canonical = await readState();
+            // Equal known health must still remove additive stored fields.
+            expect(JSON.stringify(canonical.row.metadata)).not.toMatch(/future|must-not-echo/);
+            expect(canonical.row.updatedAt.getTime()).toBeGreaterThan(beforeNormalization.row.updatedAt.getTime());
+            expect(canonical.change.cursor).toBeGreaterThan(beforeNormalization.change.cursor);
+
+            const unchanged = await submit(patch);
+            expect(unchanged.statusCode).toBe(200);
+            expect(unchanged.json()).toEqual(normalized.json());
+            await expect(readState()).resolves.toEqual(canonical);
+
+            const changedHealth = {
+                ...patch,
+                health: { v: 1, status: "needs_reauth", reconnectRequired: true, providerErrorCode: "invalid_grant" },
+            };
+            const changed = await submit(changedHealth);
+            expect(changed.statusCode).toBe(200);
+            const afterChange = await readState();
+            expect(afterChange.row.updatedAt.getTime()).toBeGreaterThan(canonical.row.updatedAt.getTime());
+            expect(afterChange.change.cursor).toBeGreaterThan(canonical.change.cursor);
+            expect(afterChange.change.hint).toEqual({ connectedServices: true });
+
+            const timestampedHealth = {
+                ...changedHealth,
+                health: { ...changedHealth.health, lastRefreshAttemptAt: 1000 },
+            };
+            expect((await submit(timestampedHealth)).statusCode).toBe(200);
+            const afterTimestamp = await readState();
+            expect(afterTimestamp.change.cursor).toBeGreaterThan(afterChange.change.cursor);
+            expect(afterTimestamp.row.updatedAt.getTime()).toBeGreaterThan(afterChange.row.updatedAt.getTime());
+
+            const staleCredential = await submit({ ...timestampedHealth, expectedCredentialRevision: "csr_aaaaaaaaaaaaaaaaaaaaaa" });
+            expect(staleCredential.statusCode).toBe(409);
+            expect(staleCredential.json()).toMatchObject({ reason: "credential_revision_mismatch" });
+            const staleConfiguration = await submit({ ...timestampedHealth, expectedConfigurationRevision: null });
+            expect(staleConfiguration.statusCode).toBe(409);
+            expect(staleConfiguration.json()).toMatchObject({ reason: "configuration_revision_mismatch" });
+            await expect(readState()).resolves.toEqual(afterTimestamp);
+            await expect(listQualifiedConnectedAccounts({
+                accountId: account.id,
+                service,
+            })).resolves.toEqual([
+                expect.objectContaining({
+                    ref,
+                    status: "needs_reauth",
+                    credentialRevision: created.credentialRevision,
+                    configurationRevision: created.configurationRevision,
+                }),
+            ]);
+
+            await db.account.update({
+                where: { id: account.id },
+                data: { publicKey: "incomplete-e2ee-public-key", encryptionMode: "e2ee" },
+            });
+            expect((await submit(timestampedHealth)).statusCode).toBe(400);
+            await expect(readState()).resolves.toEqual(afterTimestamp);
+        } finally {
+            await app.close();
+        }
         const updated = await db.serviceAccountToken.findUniqueOrThrow({ where: { id: stored.id } });
         expect(JSON.stringify(updated.metadata)).not.toMatch(/future|must-not-echo/);
     });
