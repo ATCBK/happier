@@ -1,0 +1,82 @@
+import { describe, expect, it } from 'vitest';
+import type { PluginApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
+import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
+import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import * as exports from './index.js';
+import { PLUGIN_MANIFEST, ROLE_SCHEMAS, prepareStoredSchemas } from './manifest.js';
+
+async function activated() {
+  const handlers = new Map<string, ActionHandler>();
+  await exports.activate({ actions: { register(id: string, handler: ActionHandler) { handlers.set(id, handler); return { dispose() {} }; } },
+    connectedAccounts: { register() {} } } as unknown as PluginApi);
+  const requests: Array<{ url: string; method?: string; headers?: Readonly<Record<string, string>>; body?: Uint8Array }> = [];
+  const context = { invokedAtMs: 1234, signal: new AbortController().signal, services: {
+    connectedAccounts: { materialize: async () => ({ kind: 'httpHeaders', headers: { Authorization: 'Bearer captured-private' } }) },
+    http: { request: async (request: { url: string; method?: string; headers?: Readonly<Record<string, string>>; body?: Uint8Array }) => {
+      requests.push(request);
+      const path = new URL(request.url).pathname;
+      const value = path.endsWith('/named-snapshots') ? { ok: true, type: 'snapshot.named.list', snapshots: [] }
+        : path.endsWith('/sandboxes') && request.method === 'GET' ? { ok: true, type: 'sandbox.list', sandboxes: [] }
+        : path.endsWith('/limits') ? { ok: true, type: 'limits.info', sandboxPlanDollars: 100, canStart: true, activeSandboxes: 0, maxActiveSandboxes: 100, billingStatus: 'active' }
+        : path.endsWith('/sshkey') ? { ok: true, type: 'ssh_key.configured', success: true, machineIp: '203.0.113.8', sshEndpoint: '203.0.113.8:22', sshUser: 'user', hostKey: 'ssh-ed25519 AAAAboat' }
+        : path.endsWith('/sandboxes') && request.method === 'POST' ? { ok: true, type: 'sandbox.created', status: 'provisioning', ttlSeconds: null, sandbox: { id: 'bx_23456789', state: 'provisioning' } }
+        : { ok: true, type: 'sandbox.info', sandbox: { id: 'bx_23456789', state: 'ready' } };
+      return { status: request.method === 'POST' && path.endsWith('/sandboxes') ? 202 : 200, finalUrl: request.url, headers: {}, body: new TextEncoder().encode(JSON.stringify(value)) };
+    } },
+    exec: { systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'ssh-keyscan' } }) }, run: async () => ({
+      termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
+      stdout: new TextEncoder().encode('203.0.113.8 ssh-ed25519 AAAAboat\n'), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false,
+    }) },
+  } } as unknown as PluginInvocationContext;
+  return { handlers, context, requests };
+}
+
+describe('Boat machine provisioner contract', () => {
+  it('declares one strict managed-machine leaf and captured API-key account', () => {
+    const parsed = parsePluginManifest(PLUGIN_MANIFEST);
+    expect(parsed, parsed.ok ? undefined : JSON.stringify(parsed.diagnostics)).toMatchObject({ ok: true });
+    expect(PLUGIN_MANIFEST.id).toBe('happier.machine.boat');
+    expect(PLUGIN_MANIFEST.contributes.machineProvisioners).toMatchObject([{ id: 'boat', resourceIdPath: 'sandboxId' }]);
+    expect(PLUGIN_MANIFEST.contributes.connectedAccountDescriptors).toMatchObject([{ id: 'boat-account' }]);
+    expect(JSON.stringify(PLUGIN_MANIFEST)).not.toContain('apiKey');
+  });
+
+  it('keeps role admission strict while stored readers discard additive historical fields', async () => {
+    const launch = { size: 'small', source: { kind: 'blank' } };
+    expect(() => ROLE_SCHEMAS.acquireInput.parse({ managedId: 'm1', launch: { ...launch, future: true } })).toThrow();
+    const readers = await prepareStoredSchemas();
+    expect(readers.launchStored.parse({ ...launch, future: true })).toEqual(launch);
+    expect(readers.resourceStored.parse({ sandboxId: 'bx_23456789', future: true })).toEqual({ sandboxId: 'bx_23456789' });
+  });
+
+  it('projects entitlement-gated choices through the shared options contract', async () => {
+    const runtime = await activated();
+    const result = await runtime.handlers.get('options')!({}, runtime.context);
+    const choices = (result as { choices: Array<Record<string, unknown>> }).choices;
+    expect(choices.find(value => (value.launch as { size?: string }).size === 'small')).toMatchObject({
+      launch: { size: 'small', source: { kind: 'blank' } }, nativeFacts: { location: { id: 'eu', title: 'EU only' } },
+    });
+    expect(choices.find(value => (value.launch as { size?: string }).size === 'xlarge')).toMatchObject({
+      launch: { size: 'xlarge', source: { kind: 'blank' } }, prices: [{ amount: '0.200', unit: 'hour' }],
+    });
+    expect(PLUGIN_MANIFEST.contributes.machineProvisioners[0]?.description).toMatchObject({ fallback: expect.stringContaining('$20/month') });
+  });
+
+  it('retains acquire custody, reconciles readiness, and uses the shared SSH bootstrap helper', async () => {
+    const runtime = await activated();
+    const acquire = await runtime.handlers.get('acquire')!({ managedId: 'managed-1', launch: { size: 'default', source: { kind: 'blank' } } }, runtime.context);
+    expect(acquire).toMatchObject({ kind: 'pending', nativeOperationRef: { value: { kind: 'acquire', idempotencyKey: 'managed-1', sandboxId: 'bx_23456789' } } });
+    const operation = (acquire as { nativeOperationRef: { value: unknown } }).nativeOperationRef.value;
+    expect(await runtime.handlers.get('reconcile')!({ nativeOperation: operation }, runtime.context)).toMatchObject({
+      kind: 'bound', resource: { value: { sandboxId: 'bx_23456789' } },
+    });
+    expect(await runtime.handlers.get('bootstrap')!({ resource: { sandboxId: 'bx_23456789' }, bootstrapPublicKey: 'ssh-ed25519 AAAApublic',
+      credentialRef: { kind: 'shared_resource', resourceId: 'bootstrap-key' } }, runtime.context)).toMatchObject({
+      kind: 'ssh', address: '203.0.113.8', user: 'user', hostKeyEvidence: { hostKey: '203.0.113.8 ssh-ed25519 AAAAboat' },
+    });
+    expect(runtime.requests.map(request => new URL(request.url).pathname)).toEqual(expect.arrayContaining([
+      '/api/v1/sandboxes', '/api/v1/sandboxes/bx_23456789', '/api/v1/sandboxes/bx_23456789/sshkey',
+    ]));
+    expect(JSON.stringify(acquire)).not.toContain('captured-private');
+  });
+});
