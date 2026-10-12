@@ -54,6 +54,7 @@ export function HostedPluginTarget(props: Readonly<{
     bridge?: (PluginHostedWebNativeBridgeConfig & Partial<BrowserFrameHostMessageAttachment>) | null;
     diagnostics?: BrowserDiagnosticsEngineBridgeConfig;
     networkOrigins?: readonly UiSurfaceNetworkOriginV1[];
+    network?: 'none' | 'open';
     externalHttpLinks?: boolean;
 }> & (Readonly<{ bundle: ArtifactHtmlBundleV1; url?: never }> | Readonly<{ url: string; bundle?: never }>)): React.ReactElement {
     const sandbox = props.sandbox ?? DEFAULT_HOSTED_PLUGIN_SANDBOX;
@@ -74,6 +75,7 @@ export function HostedPluginTarget(props: Readonly<{
             title={props.title}
             bundle={props.bundle}
             networkOrigins={props.networkOrigins}
+            network={props.network}
             bootstrapConfig={props.bootstrapConfig}
             allowedNavigationOrigins={security.allowedNavigationOrigins}
             bridge={props.bridge}

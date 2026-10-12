@@ -269,10 +269,10 @@ describe('WebIframeEngine diagnostics wiring', () => {
         const screen = await renderScreen(
             <WebIframeEngine
                 title="Inline"
-                html="<p>Inline</p>"
+                {...(retirement === 'navigation' ? { url: 'https://artifact.example.test/inline' } : { html: '<p>Inline</p>' })}
                 sandbox="allow-scripts"
                 testID="inline-frame"
-                revokeOnUnexpectedNavigation
+                revokeOnUnexpectedNavigation={retirement === 'navigation'}
                 webMessageBridge={webMessageBridge}
             />,
             { createNodeMock: (element) => element.type === 'iframe' ? { contentWindow: iframeSource } : null },
@@ -283,7 +283,7 @@ describe('WebIframeEngine diagnostics wiring', () => {
         if (retirement === 'unmount') {
             await screen.unmount();
         } else if (retirement === 'source replacement') {
-            await screen.update(<WebIframeEngine title="Inline" html="<p>Replacement</p>" sandbox="allow-scripts" testID="inline-frame" revokeOnUnexpectedNavigation webMessageBridge={webMessageBridge} />);
+            await screen.update(<WebIframeEngine title="Inline" html="<p>Replacement</p>" sandbox="allow-scripts" testID="inline-frame" webMessageBridge={webMessageBridge} />);
         } else {
             const iframe = screen.findByType('iframe');
             await act(async () => {

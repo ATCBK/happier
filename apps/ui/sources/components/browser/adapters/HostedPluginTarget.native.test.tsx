@@ -11,6 +11,8 @@ const nativeFrame = vi.hoisted(() => ({
     View: vi.fn((_props: Readonly<Record<string, unknown>>) => null),
 }));
 vi.mock('expo-modules-core', () => ({
+    // Optional native SDK modules are absent in this renderer-only boundary.
+    requireOptionalNativeModule: (_moduleName: string) => null,
     requireNativeModule: () => nativeFrame,
     requireNativeViewManager: () => nativeFrame.View,
 }));

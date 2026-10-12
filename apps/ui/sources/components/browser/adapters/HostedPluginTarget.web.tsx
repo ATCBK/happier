@@ -17,7 +17,8 @@ import {
     type PluginHostedWebSandboxPolicy,
 } from '@/components/plugins/hostedWeb/sandbox';
 import { validatePluginHostedWebBridgeMessage } from '@/components/plugins/hostedWeb/bridge';
-import { buildHostedHtmlDocument } from '@/components/plugins/hostedWeb/buildHostedHtmlDocument';
+import { useHostedHtmlDocument } from '@/components/plugins/hostedWeb/useHostedHtmlDocument';
+import { BrowserFrameLoading } from '../frame/BrowserFrameLoading';
 
 import { BrowserViewFrame } from '../frame/BrowserViewFrame.web';
 import {
@@ -84,17 +85,24 @@ export function HostedPluginTarget(props: Readonly<{
     onError?: () => void;
     diagnostics?: BrowserDiagnosticsEngineBridgeConfig;
     networkOrigins?: readonly UiSurfaceNetworkOriginV1[];
+    network?: 'none' | 'open';
     externalHttpLinks?: boolean;
 }> & (Readonly<{ bundle: ArtifactHtmlBundleV1; url?: never }> | Readonly<{ url: string; bundle?: never }>)): React.ReactElement {
     const sandbox = props.sandbox ?? DEFAULT_HOSTED_PLUGIN_SANDBOX;
     const security = props.security ?? DEFAULT_HOSTED_PLUGIN_SECURITY;
     const opaqueArtifactFrame = props.opaqueArtifactFrame === true || props.bundle !== undefined;
-    const source = React.useMemo<WebIframeSource>(() => props.bundle === undefined
+    const document = useHostedHtmlDocument(props.bundle ?? null, props.bootstrapConfig, {
+        networkOrigins: props.networkOrigins, network: props.network, externalHttpLinks: props.externalHttpLinks,
+    });
+    const onErrorRef = React.useRef(props.onError);
+    onErrorRef.current = props.onError;
+    React.useEffect(() => {
+        if (document.kind === 'error') onErrorRef.current?.();
+    }, [document]);
+    const source = React.useMemo<WebIframeSource | null>(() => props.bundle === undefined
         ? { url: props.url }
-        : { html: buildHostedHtmlDocument(props.bundle, props.bootstrapConfig, {
-            networkOrigins: props.networkOrigins,
-            externalHttpLinks: props.externalHttpLinks,
-        }) }, [props.url, props.bundle, props.bootstrapConfig, props.externalHttpLinks, props.networkOrigins]);
+        : document.kind === 'ready' ? { html: document.document } : null,
+    [props.url, props.bundle, document]);
     const [artifactFrameRevoked, setArtifactFrameRevoked] = React.useState(false);
     React.useEffect(() => {
         setArtifactFrameRevoked(false);
@@ -132,21 +140,24 @@ export function HostedPluginTarget(props: Readonly<{
         props.onUnexpectedNavigation?.();
     }, [opaqueArtifactFrame, props.onUnexpectedNavigation]);
 
-    if (artifactFrameRevoked || (props.bundle === undefined && !canLoadHostedPluginTargetUrl({ security, url: props.url }))) {
+    if (document.kind === 'error' || artifactFrameRevoked || (props.bundle === undefined && !canLoadHostedPluginTargetUrl({ security, url: props.url }))) {
         return (
             <BrowserViewFrame
                 engine={{
                     kind: 'unavailable',
-                    reasonCode: 'hosted_plugin_security_policy_blocked',
+                    reasonCode: document.kind === 'error' ? 'hosted_html_document_load_failed' : 'hosted_plugin_security_policy_blocked',
                     testID: props.testID,
                 }}
             />
         );
     }
 
+    if (source === null) return <BrowserFrameLoading testID={props.testID} host={props.title} />;
+
     // Frame-level CSP: defense-in-depth on generic host-rendered plugin frames.
-    // Artifact frames instead rely on the canonical Protocol CSP emitted by
-    // their selected route. Chromium treats an iframe `csp` attribute as an
+    // Artifact URLs rely on the canonical Protocol CSP emitted by their route;
+    // bundle guests also have the shared engine's enclosing navigation shell.
+    // Chromium treats an iframe `csp` attribute as an
     // independently opted-in embedder policy, so duplicating it there rejects
     // an otherwise policy-compliant opaque Artifact response.
     //
@@ -174,7 +185,9 @@ export function HostedPluginTarget(props: Readonly<{
                 // The selected Artifact route is deliberately opaque even
                 // though its URL shares the host's app origin. This removes
                 // guest storage/cookie access and prevents a same-origin
-                // escape; direct external navigation is retired below.
+                // escape. Bundle self-navigation is blocked by the engine's
+                // enclosing shell policy before egress; load retirement also
+                // withdraws the bridge after any unexpected document change.
                 sandbox: resolvePluginHostedWebIframeSandbox(opaqueArtifactFrame
                     ? {
                         ...resolvedSandbox,

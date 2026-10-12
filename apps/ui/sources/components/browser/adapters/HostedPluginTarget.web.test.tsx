@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 
 import { HostedPluginTarget } from './HostedPluginTarget.web';
+import { WebIframeEngine } from '../frame/engines/WebIframeEngine';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -37,26 +38,74 @@ function createHostedPluginSecurityPolicy(
 }
 
 describe('HostedPluginTarget web', () => {
-    it('keeps inline HTML opaque and retires it after an unexpected document load', async () => {
-        const onUnexpectedNavigation = vi.fn();
+    it('retains prepared document bytes across equivalent inputs and replaces real bootstrap, policy, and body changes', async () => {
+        // Resolve the real lazy SDK support before the render-readiness assertion;
+        // source transformation belongs to the test setup, not a guest deadline.
+        await import('@happier-dev/plugin-sdk/host/ui');
+        const render = (nonce: string, origin: string, body: string) => (
+            <HostedPluginTarget
+                title="Inline plugin"
+                bundle={artifactHtmlBundleFromBodyV1(body)}
+                bootstrapConfig={{
+                    identity: { instanceId: 'inline-instance', mountNonce: nonce },
+                    frameOrigin: 'null',
+                    hostOrigin: 'https://host.happier.test',
+                }}
+                networkOrigins={[origin]}
+                testID="inline-plugin"
+            />
+        );
+        const screen = await renderScreen(render('nonce-a', 'https://api.example.test', '<p>Original</p>'));
+        await vi.waitFor(() => expect(screen.findAllByType('iframe')).toHaveLength(1));
+        const iframe = screen.findByType(WebIframeEngine);
+        const originalDocument = iframe.props.html;
+
+        // Callers legitimately reconstruct immutable graphs during host renders.
+        // Equal facts keep the same prepared source and transport container.
+        await screen.update(render('nonce-a', 'https://api.example.test', '<p>Original</p>'));
+        expect(Object.is(screen.findByType(WebIframeEngine), iframe)).toBe(true);
+        expect(screen.findByType(WebIframeEngine).props.html).toBe(originalDocument);
+
+        await screen.update(render('nonce-b', 'https://api.example.test', '<p>Original</p>'));
+        await vi.waitFor(() => {
+            const document = String(screen.findByType(WebIframeEngine).props.html);
+            expect(document).toContain('nonce-b');
+            expect(document).not.toContain('nonce-a');
+        });
+
+        await screen.update(render('nonce-b', 'https://other.example.test', '<p>Original</p>'));
+        await vi.waitFor(() => {
+            const document = String(screen.findByType(WebIframeEngine).props.html);
+            expect(document).toContain('connect-src data: https://other.example.test');
+            expect(document).not.toContain('https://api.example.test');
+        });
+
+        await screen.update(render('nonce-b', 'https://other.example.test', '<p>Replacement</p>'));
+        await vi.waitFor(() => {
+            const document = String(screen.findByType(WebIframeEngine).props.html);
+            expect(document).toContain('nonce-b');
+            expect(document).not.toContain('nonce-a');
+            expect(document).toContain('connect-src data: https://other.example.test');
+            expect(document).not.toContain('https://api.example.test');
+            expect(document).toContain('<p>Replacement</p>');
+            expect(document).not.toContain('<p>Original</p>');
+        });
+    });
+
+    it('keeps authored content out of the trusted navigation shell', async () => {
         const screen = await renderScreen(
             <HostedPluginTarget
                 title="Inline plugin"
                 bundle={artifactHtmlBundleFromBodyV1('<!doctype html><button>Inline</button>')}
                 testID="inline-plugin"
-                onUnexpectedNavigation={onUnexpectedNavigation}
             />,
         );
 
         const iframe = screen.findByType('iframe');
-        expect(iframe.props.srcDoc).toContain('<button>Inline</button>');
-        expect(iframe.props.srcDoc.indexOf('Content-Security-Policy')).toBeLessThan(iframe.props.srcDoc.indexOf('<button>'));
+        expect(iframe.props.srcDoc).not.toContain('<button>Inline</button>');
+        expect(iframe.props.srcDoc).toContain("frame-src 'none'");
         expect(iframe.props.src).toBeUndefined();
-        expect(iframe.props.sandbox).toBe('allow-scripts');
-        await act(async () => iframe.props.onLoad());
-        expect(onUnexpectedNavigation).not.toHaveBeenCalled();
-        await act(async () => iframe.props.onLoad());
-        expect(screen.findByTestId('inline-plugin-unavailable')).toBeTruthy();
+        expect(screen.findByType(WebIframeEngine).props.sandbox).toBe('allow-scripts');
     });
 
     it('renders through the shared iframe engine with hosted-plugin sandbox policy', async () => {

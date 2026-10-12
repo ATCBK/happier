@@ -1,5 +1,7 @@
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { View } from 'react-native';
+import { ARTIFACT_HTML_SHELL_CSP_V1 } from '@happier-dev/protocol/artifacts/artifactHtmlDocumentV1';
 
 import { browserFrameStyles } from '../styles';
 import type {
@@ -79,7 +81,7 @@ function applyWebIframeNavigationCommand(
     }
 }
 
-export function WebIframeEngine(props: Readonly<{
+type WebIframeEngineProps = Readonly<{
     title: string;
     sandbox: string;
     testID: string;
@@ -94,7 +96,32 @@ export function WebIframeEngine(props: Readonly<{
     diagnostics?: BrowserDiagnosticsEngineBridgeConfig;
     automation?: BrowserAutomationEngineBridgeConfig;
     webMessageBridge?: BrowserWebFrameMessageBridgeConfig;
-}> & WebIframeSource): React.ReactElement {
+}> & WebIframeSource;
+
+// The shell contains only trusted markup; authored HTML is assigned to its
+// opaque guest's srcdoc, never executed in the shell. Its frame-src policy
+// prevents the opaque guest's own navigation before a request can leave; a
+// policy inside the guest or an iframe csp attribute cannot do that.
+const navigationShellDocument = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_HTML_SHELL_CSP_V1.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}"><style>html,body,body>div{height:100%;margin:0;overflow:hidden}</style></head><body></body></html>`;
+
+export function WebIframeEngine(props: WebIframeEngineProps): React.ReactElement {
+    return props.html !== undefined && props.revokeOnUnexpectedNavigation
+        ? <NavigationContainedIframe key={props.navigationKey} {...props} />
+        : <WebIframeGuest {...props} />;
+}
+
+function NavigationContainedIframe(props: WebIframeEngineProps): React.ReactElement {
+    const [shellDocument, setShellDocument] = React.useState<Document | null>(null);
+    return <View testID={`${props.testID}-shell-container`} style={browserFrameStyles.root}>
+        <iframe title={props.title} data-testid={`${props.testID}-navigation-shell`}
+            srcDoc={navigationShellDocument} referrerPolicy="no-referrer" style={iframeStyle}
+            onError={props.onError}
+            onLoad={event => setShellDocument(event.currentTarget.contentDocument)} />
+        {shellDocument?.body ? createPortal(<WebIframeGuest {...props} />, shellDocument.body) : null}
+    </View>;
+}
+
+function WebIframeGuest(props: WebIframeEngineProps): React.ReactElement {
     const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
     const hasLoadedCurrentNavigationRef = React.useRef(false);
     const [loadedDocumentRevision, setLoadedDocumentRevision] = React.useState(0);
@@ -568,7 +595,7 @@ export function WebIframeEngine(props: Readonly<{
                 && typeof userActivation === 'object'
                 && Reflect.get(userActivation, 'isActive') === true,
             );
-            const hostDocument = Reflect.get(globalThis, 'document');
+            const hostDocument = iframe?.ownerDocument ?? Reflect.get(globalThis, 'document');
             const exactFrameFocused = Boolean(
                 iframe
                 && hostDocument
@@ -632,13 +659,17 @@ export function WebIframeEngine(props: Readonly<{
             dispatch(event.data, event.origin, expectedSource);
         };
 
-        window.addEventListener('message', listener);
+        // A contained guest addresses its trusted transport shell as parent.
+        // Subscribe there directly, preserving the browser's real source and
+        // origin instead of relaying messages through another authority.
+        const messageWindow = iframeRef.current?.ownerDocument?.defaultView ?? window;
+        messageWindow.addEventListener('message', listener);
         return () => {
             active = false;
             if (bridgeSendRef.current === send) bridgeSendRef.current = null;
             documentPort?.close();
             documentPort = null;
-            window.removeEventListener('message', listener);
+            messageWindow.removeEventListener('message', listener);
         };
     }, [
         bridgeAllowsWildcardTargetOrigin,
