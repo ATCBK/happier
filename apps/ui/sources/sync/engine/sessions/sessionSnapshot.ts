@@ -1267,7 +1267,10 @@ export async function fetchAndApplySessions(params: {
     request?: (path: string, init: RequestInit) => Promise<Response>;
     applySessions: (sessions: HydratedSession[]) => void;
     onSnapshotFetched?: (sessionIds: string[]) => void;
-    applySessionListRenderables?: (sessions: SessionListRenderableSession[], options?: { replace?: boolean }) => void;
+    applySessionListRenderables?: (
+        sessions: SessionListRenderableSession[],
+        options?: { replace?: boolean; coversWholeList?: boolean },
+    ) => void;
     cachedSessionListEntries?: Record<string, SessionListCacheEntryV1>;
     getCurrentSessionListRenderable?: CurrentSessionListRenderableLookup;
     applySessionListRenderablePatches?: (patches: readonly SessionListRenderablePatch[]) => void;
@@ -1332,6 +1335,10 @@ export async function fetchAndApplySessions(params: {
     let fetchedPages = 0;
     let nextCursorForMore: string | null = cursor;
     let hasNextForMore = false;
+    // Whether the server said rows exist beyond the last fetched page, independent of whether
+    // this client can page to them: only a response that reports no further rows covers the
+    // whole list, so an unpageable `hasNext` still fails closed and retains omitted rows.
+    let serverReportedMoreRows = false;
     let source: 'v2' | 'v1' = 'v2';
     const buildFetchResult = (): SessionListFetchResult => ({
         sessionIds: sessions.map((session) => session.id),
@@ -1403,6 +1410,7 @@ export async function fetchAndApplySessions(params: {
                 nextCursor = page.nextCursor;
                 nextCursorForMore = page.nextCursor;
                 hasNextForMore = page.hasNext === true && typeof page.nextCursor === 'string' && page.source === 'v2';
+                serverReportedMoreRows = page.hasNext === true;
             },
         );
 
@@ -1519,7 +1527,7 @@ export async function fetchAndApplySessions(params: {
                 requiredRows: requiredSnapshotRows,
                 backgroundRows: countBackgroundRows(renderables.length, requiredSnapshotRows),
             },
-            () => params.applySessionListRenderables!(renderables, { replace: true }),
+            () => params.applySessionListRenderables!(renderables, { replace: true, coversWholeList: !serverReportedMoreRows }),
         );
         recordFirstUsableListTelemetry({
             snapshotStartedAtMs,

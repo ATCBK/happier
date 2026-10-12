@@ -496,6 +496,38 @@ describe('sessions domain: renderable patches', () => {
         expect(warmCacheEvent?.fields.renderables).toBe(1);
     });
 
+    describe('omitted rows older than the response floor', () => {
+        // The list endpoint never returns archived rows, so a session archived on another
+        // device is simply absent from the response. Seed it as the stale ACTIVE row the
+        // client last saw, older than every row the response still carries.
+        async function replaceOverStaleArchivedRow(options?: { coversWholeList?: boolean }) {
+            mockSessionsDomainBoundaries();
+            const { createSessionsDomain } = await import('./sessions');
+            const { get, domain } = createHarness(createSessionsDomain);
+
+            const remaining = makeRenderable({ id: 's_remaining', createdAt: 200 });
+            const archivedElsewhere = makeRenderable({ id: 's_archived_elsewhere', createdAt: 100, active: true });
+            domain.replaceSessionListRenderables([remaining, archivedElsewhere]);
+            expect(get().sessionListRenderables.s_archived_elsewhere).toBeTruthy();
+
+            domain.replaceSessionListRenderables([remaining], options);
+            return get().sessionListRenderables;
+        }
+
+        it('evicts them when the response covers the whole list', async () => {
+            const renderables = await replaceOverStaleArchivedRow({ coversWholeList: true });
+
+            expect(renderables.s_archived_elsewhere).toBeUndefined();
+            expect(renderables.s_remaining).toBeTruthy();
+        });
+
+        it('retains them when more pages exist below the response', async () => {
+            const renderables = await replaceOverStaleArchivedRow({ coversWholeList: false });
+
+            expect(renderables.s_archived_elsewhere).toBeTruthy();
+        });
+    });
+
     it('updates non-warm-cache replacement fields without rebuilding list data', async () => {
         mockSessionsDomainBoundaries();
 
