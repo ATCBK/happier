@@ -8,7 +8,10 @@ import { CLAUDE_NATIVE_PERMISSION_MODES } from './permissionModes.js';
 const { providerId: _providerId, ...stateSharing } = claudeAuthStateSharingDescriptor;
 export const AGENT_STATE_SHARING_DESCRIPTOR = {
   ...stateSharing,
-  nativeHome: { environmentKey: 'CLAUDE_CONFIG_DIR', defaultRelativePath: '.claude' },
+  nativeHome: {
+    environmentKey: 'CLAUDE_CONFIG_DIR', defaultRelativePath: '.claude',
+    materializedDirectoryName: 'claude-config',
+  },
 } as const;
 
 function defineAgentWithPublicModelConfig<TDefinition extends Readonly<Record<string, unknown>>>(

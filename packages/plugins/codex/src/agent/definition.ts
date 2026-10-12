@@ -1,10 +1,14 @@
 import { codexStateSharingDescriptor } from './auth/services/state/sharing/descriptor.js';
-import { CODEX_NATIVE_HOME } from '@happier-dev/plugin-sdk/first-party/connected-accounts';
+import { CODEX_NATIVE_HOME, CODEX_CONNECTED_SERVICE_HOME_DIRECTORY_NAME } from '@happier-dev/plugin-sdk/first-party/connected-accounts';
 
 const { providerId: _providerId, ...stateSharing } = codexStateSharingDescriptor;
 export const AGENT_STATE_SHARING_DESCRIPTOR = {
   ...stateSharing,
-  nativeHome: CODEX_NATIVE_HOME,
+  nativeHome: {
+    ...CODEX_NATIVE_HOME,
+    materializedDirectoryName: CODEX_CONNECTED_SERVICE_HOME_DIRECTORY_NAME,
+    runtimeDescriptorHome: { pathField: 'homePath', scopeField: 'home', scopeValue: 'connectedService' },
+  },
 } as const;
 
 // IMPORTANT: this must stay JSON-serializable (data-only).
