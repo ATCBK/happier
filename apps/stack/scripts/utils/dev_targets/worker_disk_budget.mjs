@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { reapHistoricalTempRoots } from './historical_temp_roots.mjs';
 import { pruneWorkerYarnCache } from '../proc/package_manager_cache.mjs';
+import { getHappierTempRootForUid, prepareHappierTempDirOwnerCleanup, readHappierTempDirOwnerForDirectory,
+  readHappierTempDirOwnerLiveness } from '../../../../../packages/cli-common/tempDirOwnership.mjs';
 
 const classes = ['validation', 'dependency-install', 'package-dist', 'runtime-build', 'source-bundle', 'compilation'];
 
@@ -70,11 +72,31 @@ function reapRetiredRuntimeBuildRoots(cacheBaseDir, procRoot, ownerUid) {
   return result;
 }
 
+async function reapRuntimeBuildStaging(cacheBaseDir, scratchRoot, procRoot, ownerUid) {
+  const result = reapRetiredRuntimeBuildRoots(cacheBaseDir, procRoot, ownerUid);
+  const namespace = getHappierTempRootForUid(scratchRoot, ownerUid);
+  if (!directory(namespace) || lstatSync(namespace).uid !== ownerUid) return result;
+  const candidates = readdirSync(namespace).filter(name => {
+    const path = join(namespace, name);
+    if (!directory(path)) return false;
+    const owner = readHappierTempDirOwnerForDirectory(path, ownerUid);
+    return owner?.purpose === 'runtime-build' && readHappierTempDirOwnerLiveness(owner) === 'gone';
+  });
+  const cleanups = candidates.map(name => prepareHappierTempDirOwnerCleanup(join(namespace, name), ownerUid));
+  const sweep = reapHistoricalTempRoots(namespace, procRoot, { ownerUid, candidateNames: candidates });
+  // The SDK removes only the captured unchanged sidecar after its directory
+  // is absent; directory eligibility and removal remain the canonical reaper's.
+  for (const cleanup of cleanups) await cleanup();
+  for (const key of ['reclaimedBytes', 'reclaimedRoots', 'retainedRoots']) result[key] += sweep[key];
+  result.observationUnavailable ??= sweep.observationUnavailable;
+  return result;
+}
+
 // Refuse already-exhausted write filesystems. Resident dependencies, caches
 // and other jobs' existing outputs do not establish this operation's future
 // writes. No additional-write peak is measured, so do not invent a reservation.
 export async function inspectWorkerDiskBudget({ repoDir, cacheBaseDir, commandClass = 'runtime-build', scratchRoot = tmpdir(), observeFilesystem = observeWorkerFilesystem }) {
-  if (['targeted-validation', 'full-validation'].includes(commandClass)) commandClass = 'validation';
+  if (['targeted-validation', 'full-validation', 'native-source-test'].includes(commandClass)) commandClass = 'validation';
   if (['compilation-ui', 'compilation-cli', 'compilation-server'].includes(commandClass)) commandClass = 'compilation';
   if (!classes.includes(commandClass)) throw new Error(`unknown worker disk class: ${commandClass}`);
   const observations = new Map();
@@ -102,12 +124,12 @@ export async function admitWorkerDiskBudget({ repoDir, cacheBaseDir, commandClas
   // spends time reclaiming when the measured containing filesystem is short.
   if ((!initial.admitted || maintenance) && process.platform === 'linux') {
     const steps = [
-      ['runtime-build', () => reapRetiredRuntimeBuildRoots(cacheBaseDir, procRoot, ownerUid)],
+      ['runtime-build', () => reapRuntimeBuildStaging(cacheBaseDir, scratchRoot, procRoot, ownerUid)],
       ['packages', () => pruneWorkerYarnCache({ cacheBaseDir, repositoryDirectories: protectedRepositories(repoDir), procRoot, ownerUid })],
       ['scratch', () => directory(scratchRoot) ? reapHistoricalTempRoots(scratchRoot, procRoot, { ownerUid }) : { reclaimedBytes: 0, reclaimedRoots: 0 }],
     ];
     for (const [kind, run] of steps) {
-      reclamation.push({ kind, ...run() });
+      reclamation.push({ kind, ...await run() });
       // Reobserve the same write filesystems after custody-safe reclamation.
       current = { ...initial, filesystems: initial.filesystems.map(fs => ({ ...fs, ...observeFilesystem(fs.path) })) };
       current.admitted = current.filesystems.every(fs => fs.availableBytes > 0);

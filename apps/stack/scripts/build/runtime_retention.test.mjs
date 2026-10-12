@@ -78,6 +78,7 @@ test('worker artifact retention uses the canonical count but preserves live desc
   const { symlink, access } = await import('node:fs/promises');
   await symlink(stackBaseDir, join(procRoot, '42', 'cwd'));
   await writeFile(join(procRoot, '42', 'maps'), '');
+  await writeFile(join(procRoot, '42', 'environ'), '');
   const held = await writeArtifact(stackBaseDir, 'server', 'held', '2026-10-01T00:00:00Z');
   const obsolete = await writeArtifact(stackBaseDir, 'server', 'obsolete', '2026-10-02T00:00:00Z');
   await writeArtifact(stackBaseDir, 'server', 'latest', '2026-10-03T00:00:00Z');

@@ -1,7 +1,8 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { isHappierTempRootForUid, readHappierTempDirOwnerForDirectory, readHappierTempDirOwnerLiveness } from '../../../../../packages/cli-common/tempDirOwnership.mjs';
 
 // Approved historical sweep: legitimate builds run <=3h and watchers <=2h.
 // A full day is the explicit margin, not an admission or execution deadline.
@@ -9,23 +10,29 @@ const historicalAgeMs = 24 * 60 * 60 * 1000;
 const knownRoot = /^(?:happier-|hstack-|docs-check-|yarn--)/;
 const identity = info => `${info.dev}:${info.ino}`;
 
-function inspectTree(path, countedInodes = new Set()) {
+function inspectTree(path, countedInodes = new Set(), ownerUid = process.getuid()) {
   const info = lstatSync(path);
   let newestMtimeMs = info.mtimeMs;
   const key = identity(info);
   let bytes = countedInodes.has(key) ? 0 : info.blocks * 512;
   countedInodes.add(key);
   const identities = new Set([key]);
+  let ownedRootActive = false;
   if (info.isDirectory()) {
+    if (isHappierTempRootForUid(dirname(path), ownerUid)) {
+      const owner = readHappierTempDirOwnerForDirectory(path, ownerUid);
+      ownedRootActive = !owner || readHappierTempDirOwnerLiveness(owner) !== 'gone';
+    }
     for (const name of readdirSync(path)) {
-      const child = inspectTree(join(path, name), countedInodes);
+      const child = inspectTree(join(path, name), countedInodes, ownerUid);
       newestMtimeMs = Math.max(newestMtimeMs, child.newestMtimeMs);
       bytes += child.bytes;
       for (const key of child.identities) identities.add(key);
+      ownedRootActive ||= child.ownedRootActive;
     }
   }
   // lstat avoids traversing symlinks outside the reclaimable root.
-  return { info, newestMtimeMs, bytes, identities };
+  return { info, newestMtimeMs, bytes, identities, ownedRootActive };
 }
 
 function collectProcessReferences(procRoot, ownerUid) {
@@ -132,9 +139,13 @@ export function reapHistoricalTempRoots(tempParent, procRoot = '/proc', {
   for (const name of names) {
     const directory = join(parent, name);
     try {
+      // A shared SDK namespace is never a historical job root. Its creators'
+      // markers own lifetime, including live JS-only publication references.
+      if (isHappierTempRootForUid(directory, ownerUid)) { result.retainedRoots++; continue; }
       const info = lstatSync(directory);
       if (!info.isDirectory() || info.uid !== ownerUid || info.mtimeMs >= cutoff) continue;
-      const tree = inspectTree(directory);
+      const tree = inspectTree(directory, new Set(), ownerUid);
+      if (tree.ownedRootActive) { result.retainedRoots++; continue; }
       if (tree.newestMtimeMs < cutoff) candidates.push({ directory, tree });
     } catch (error) {
       if (error.code === 'ENOENT') continue;
@@ -156,8 +167,8 @@ export function reapHistoricalTempRoots(tempParent, procRoot = '/proc', {
       if (hasUser(directory, tree, references)) { result.retainedRoots++; continue; }
       // Recheck both mutation and live use immediately before deletion. A
       // replacement inode never inherits this candidate's deletion authority.
-      const current = inspectTree(directory);
-      if (identity(current.info) !== identity(tree.info) || current.newestMtimeMs >= cutoff
+      const current = inspectTree(directory, new Set(), ownerUid);
+      if (identity(current.info) !== identity(tree.info) || current.newestMtimeMs >= cutoff || current.ownedRootActive
         || hasUser(directory, current, processReferences(procRoot, ownerUid))) {
         result.retainedRoots++;
         continue;

@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildRuntimeArtifactComponentsAtPlacement, withAdmittedRuntimeBuildPlacement } from './remote_runtime_build.mjs';
 import { installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
 import { renderNativeExecutionProjection } from '../utils/dev_targets/native_execution_projection.mjs';
+import { readHappierTempDirOwner } from '@happier-dev/cli-common/tempDirs';
+import { reapHistoricalTempRoots } from '../utils/dev_targets/historical_temp_roots.mjs';
 
 async function initializeRepo(repo) {
   for (const app of ['cli', 'ui', 'server']) {
@@ -76,6 +78,29 @@ test('final artifacts import only on publication and private transfer staging is
       selection: { components: { server: true } }, env: { ...process.env, HAPPIER_STACK_REPO_DIR: root },
       run: async execution => {
         const result = await execution.buildComponents({ selection: { components: { server: true } } });
+        if (local) {
+          const request = JSON.parse(await readFile(requestPath, 'utf8'));
+          assert.deepEqual(readHappierTempDirOwner(request.outputDir), {
+            v: 1, purpose: 'runtime-build', pid: process.pid,
+            processInstanceFingerprint: (await import('../../../../packages/cli-common/processInstance.mjs')).readProcessInstanceFingerprintSync(process.pid),
+          });
+          // Publication may wait with only a JS reference to its private store.
+          // Age cannot retire the SDK's shared namespace or its live creator.
+          const namespace = dirname(request.outputDir);
+          const old = new Date(Date.now() - 48 * 3600000);
+          const age = async directory => {
+            for (const name of await readdir(directory)) {
+              const path = join(directory, name);
+              const info = await lstat(path);
+              if (info.isDirectory()) await age(path);
+              else if (!info.isSymbolicLink()) await utimes(path, old, old);
+            }
+            await utimes(directory, old, old);
+          };
+          await age(namespace);
+          reapHistoricalTempRoots(dirname(namespace));
+          await stat(request.outputDir);
+        }
         await assert.rejects(stat(join(stackBaseDir, 'artifacts/server/server-code')), { code: 'ENOENT' });
         const artifacts = await result.publishArtifacts();
         assert.deepEqual(Object.keys(artifacts), ['server']);

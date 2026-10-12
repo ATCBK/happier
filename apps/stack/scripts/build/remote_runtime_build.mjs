@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, posix, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getCliBinaryArtifactSupportTargetUnavailableReason, getComponentArtifactBuildTargetUnavailableReason } from '../../../../packages/cli-common/componentArtifactTarget.mjs';
 import { WORKSPACE_BUILD_MODE_ENV } from '../../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
 import { writeRuntimeAdmissionPhase } from '../utils/proc/service_memory.mjs';
+import { createHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 
 const WORKER_ENTRY = 'apps/stack/scripts/build/remote_runtime_build.mjs';
 const BUILD_ENV_KEYS = ['HAPPIER_CLI_BUN_EXTERNALS', 'HAPPIER_SERVER_BUN_EXTERNALS', 'HAPPIER_BUILD_DB_PROVIDERS', 'HAPPY_BUILD_DB_PROVIDERS', 'HAPPIER_SERVER_REQUIRE_IROH_NATIVE', 'HAPPIER_STACK_EXPO_CLEAR_CACHE'];
@@ -76,7 +76,7 @@ export async function withAdmittedRuntimeBuildPlacement({
         commandProbe: () => admitted.supportTargetAdmitted === true,
       });
       if (reason) throw new Error(reason);
-      directory = await mkdtemp(join(tmpdir(), 'happier-runtime-build-'));
+      directory = createHappierTempDir({ purpose: 'runtime-build' });
       const request = { selection: options.selection, target,
         env: { ...Object.fromEntries(BUILD_ENV_KEYS.filter(key => env[key] != null).map(key => [key, env[key]])),
           [WORKSPACE_BUILD_MODE_ENV]: 'qa-runtime' },
@@ -90,7 +90,8 @@ export async function withAdmittedRuntimeBuildPlacement({
         remoteCleanup = async () => {
           const result = await (transport.runCommand ?? runDevTargetCommand)({
             target: worker, stackBaseDir,
-            commandArgs: ['node', '-e', 'require("node:fs").rmSync(process.argv[1],{recursive:true,force:true})', workerResult.workspaceDir],
+            commandArgs: ['node', '--conditions=happier-source', '--import', './packages/cli-common/registerSourceRuntime.mjs',
+              '--input-type=module', '-e', 'import {removeHappierTempDirAsync} from "@happier-dev/cli-common/tempDirs"; await removeHappierTempDirAsync(process.argv[1]);', workerResult.workspaceDir],
             syncAlreadyVerified: true, dependencyAdmission: 'skip', workspacePreparation: 'skip', provenance: 'skip', env,
           });
           if (result.code !== 0) throw new Error('exit ' + result.code);
@@ -126,7 +127,7 @@ export async function withAdmittedRuntimeBuildPlacement({
     await completion;
     stdout.close();
     await remoteCleanup?.().catch(error => process.stderr.write('[build] final artifact staging cleanup failed: ' + error.message + '.\n'));
-    if (directory) await rm(directory, { recursive: true, force: true });
+    if (directory) await removeHappierTempDirAsync(directory);
   }
 }
 
@@ -143,7 +144,7 @@ async function executeWorkerRequest(request) {
   });
   if (reason) throw new Error(reason);
   const repoDir = process.cwd();
-  const workspaceDir = request.outputDir ?? await mkdtemp(join(tmpdir(), 'happier-runtime-build-'));
+  const workspaceDir = request.outputDir ?? createHappierTempDir({ purpose: 'runtime-build' });
   const store = join(workspaceDir, 'store');
   let succeeded = false;
   try {
@@ -163,7 +164,7 @@ async function executeWorkerRequest(request) {
     succeeded = true;
   } finally {
     // Successful final staging belongs to the controller until import finishes.
-    if (!succeeded) await rm(workspaceDir, { recursive: true, force: true });
+    if (!succeeded) await removeHappierTempDirAsync(workspaceDir);
   }
 }
 

@@ -5,6 +5,18 @@ import { join } from 'node:path';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHappierTempDir, getHappierTempDirOwnerPath } from '@happier-dev/cli-common/tempDirs';
+
+test('native source tests retain validation disk admission including exhausted filesystems', async () => {
+  const { inspectWorkerDiskBudget } = await import('./worker_disk_budget.mjs');
+  for (const availableBytes of [1, 0]) {
+    const options = { repoDir: '/fixture/repo', cacheBaseDir: '/fixture/cache',
+      observeFilesystem: path => ({ device: path, availableBytes, totalBytes: 100 }) };
+    const expected = await inspectWorkerDiskBudget({ ...options, commandClass: 'validation' });
+    assert.deepEqual(await inspectWorkerDiskBudget({ ...options, commandClass: 'native-source-test' }), expected);
+    assert.equal(expected.admitted, availableBytes > 0);
+  }
+});
 
 test('package-specific compiler classes inspect the same write filesystems', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-disk-compiler-' });
@@ -97,6 +109,38 @@ test('runtime build disk admission observes the mirror, cache and final scratch 
     observeFilesystem: path => ({ device: path, availableBytes: actualWrites.includes(path) ? 1 : 0, totalBytes: 2e9 }) });
   assert.equal(result.admitted, true, 'a retired source tree is not a write resource for a mirror build');
   assert.deepEqual(result.filesystems.map(filesystem => filesystem.path).sort(), actualWrites.sort());
+});
+
+test('runtime staging retention preserves SDK creators and unknown ownership, and retires only departed runtime builders', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-sdk-runtime-retention-' });
+  const repoDir = join(root, 'repo'), cacheBaseDir = join(root, 'cli/cache'), scratchRoot = join(root, 'tmp'), procRoot = join(root, 'proc');
+  await mkdir(repoDir); await mkdir(scratchRoot); await mkdir(procRoot);
+  const live = createHappierTempDir({ purpose: 'runtime-build', root: scratchRoot });
+  const unknown = createHappierTempDir({ purpose: 'runtime-build', root: scratchRoot });
+  const ownerPath = getHappierTempDirOwnerPath(unknown);
+  const owner = JSON.parse(await readFile(ownerPath, 'utf8'));
+  await writeFile(ownerPath, JSON.stringify({ ...owner, processInstanceFingerprint: null }));
+  const createDeparted = purpose => {
+    const child = spawnSync(process.execPath, ['--conditions=happier-source', '--import', './packages/cli-common/registerSourceRuntime.mjs',
+      '--input-type=module', '-e', 'import{createHappierTempDir}from"@happier-dev/cli-common/tempDirs";console.log(createHappierTempDir({root:process.argv[1],purpose:process.argv[2]}));', scratchRoot, purpose], {
+      cwd: fileURLToPath(new URL('../../../../../', import.meta.url)), encoding: 'utf8',
+    });
+    assert.equal(child.status, 0, child.stderr);
+    return child.stdout.trim();
+  };
+  const orphan = createDeparted('runtime-build'), other = createDeparted('unrelated');
+  const old = new Date(Date.now() - 48 * 3600000);
+  for (const directory of [live, unknown, orphan, other]) {
+    await utimes(directory, old, old);
+    await utimes(getHappierTempDirOwnerPath(directory), old, old);
+  }
+  const { admitWorkerDiskBudget } = await import('./worker_disk_budget.mjs');
+  const result = await admitWorkerDiskBudget({ repoDir, cacheBaseDir, scratchRoot, procRoot, commandClass: 'runtime-build', maintenance: true,
+    observeFilesystem: () => ({ device: 'fixture', availableBytes: 1e9, totalBytes: 2e9 }) });
+  assert.equal(result.reclamation.find(step => step.kind === 'runtime-build').reclaimedRoots, 1);
+  await assert.rejects(access(orphan), { code: 'ENOENT' });
+  await assert.rejects(access(getHappierTempDirOwnerPath(orphan)), { code: 'ENOENT' });
+  for (const directory of [live, unknown, other]) await access(directory);
 });
 
 test('unknown same-user visibility retains scratch, but other-user processes do not block reclamation or bypass holders', async t => {
