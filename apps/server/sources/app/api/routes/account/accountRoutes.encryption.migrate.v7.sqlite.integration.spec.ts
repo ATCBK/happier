@@ -880,7 +880,7 @@ describe("account encryption migration .7 SQLite matrix", () => {
                 servers: [{ id: 'stdio', name: 'stdio', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 }],
                 bindings: [{ id: 'binding', serverId: 'stdio', enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }] } },
             { field: 'acpCatalog', key: '@happier/account/acp/v1/catalog', kind: 'account_acp_catalog', value: { v: 1,
-                definitions: [{ id: 'retained-acp', name: 'retained-acp', title: 'Retained ACP', command: 'acp-tool', args: [], env: {},
+                definitions: [{ id: 'retained-acp', name: 'retained-acp', title: 'Retained ACP', launch: { kind: 'command', command: 'acp-tool', args: [] }, env: {},
                     capabilities: { supportsLoadSession: true, supportsModes: 'unknown', supportsModels: 'unknown', supportsConfigOptions: 'unknown', promptImageSupport: 'unknown' },
                     createdAt: 1, updatedAt: 2 }] } },
         ] as const;
