@@ -49,6 +49,18 @@ afterEach(() => {
 });
 
 describe('MachineCliGlyphs', () => {
+    it('stays quiet while no installed Agent is known: no placeholder mark and no control', async () => {
+        const server = await upsertServerProfile({ serverUrl: 'https://glyph-empty.example.test' });
+        const scope = { serverId: server.id, accountId: 'glyph-account' };
+        const machine = createMachineFixture({ id: 'glyph-empty', active: false, activeAt: 0, daemonStateVersion: 1 });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        const tree = await renderScreen(React.createElement(MachineCliGlyphs, {
+            machineId: machine.id, serverId: server.id, isOnline: false, autoDetect: false,
+        }));
+        expect(tree.findAllByTestId('machine-agent-glyphs')).toHaveLength(0);
+        expect(tree.findAllByType('Text')).toHaveLength(0);
+    });
+
     it('renders installed inventory facts without probing a cache-only machine row', async () => {
         const server = await upsertServerProfile({ serverUrl: 'https://glyph-inventory.example.test' });
         const scope = { serverId: server.id, accountId: 'glyph-account' };

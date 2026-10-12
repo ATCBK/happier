@@ -1,12 +1,10 @@
 import * as React from 'react';
 import { Pressable } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { Typography } from '@/constants/Typography';
 import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { machineCollectionHref } from '@/components/settings/machines/collection/machineCollectionModel';
-import { Text } from '@/components/ui/text/Text';
 import { MachineCliLogoRow } from './MachineCliLogoRow';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { t } from '@/text';
@@ -23,18 +21,13 @@ type Props = {
     autoDetect?: boolean;
 };
 
-const stylesheet = StyleSheet.create((theme) => ({
+const stylesheet = StyleSheet.create(() => ({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 4,
         paddingVertical: 2,
         borderRadius: 6,
-    },
-    placeholder: {
-        color: theme.colors.text.secondary,
-        opacity: 0.35,
-        ...Typography.default(),
     },
 }));
 
@@ -57,6 +50,10 @@ export const MachineCliGlyphs = React.memo(({ machineId, isOnline, serverId, aut
         .filter((agent) => agent.installed)
         .map((agent) => agent.agentId), [inventory.agents]);
 
+    // Healthy and unknown states stay quiet (no placeholder mark, no control): the row's presence
+    // line already says whether the machine is reachable.
+    if (availableAgentIds.length === 0) return null;
+
     return (
         <Pressable
             testID="machine-agent-glyphs"
@@ -68,11 +65,7 @@ export const MachineCliGlyphs = React.memo(({ machineId, isOnline, serverId, aut
                 { opacity: !isOnline ? 0.5 : (pressed ? motionTokens.press.opacity : 1) },
             ]}
         >
-            {availableAgentIds.length === 0 ? (
-                <Text style={styles.placeholder}>•</Text>
-            ) : (
-                <MachineCliLogoRow agentIds={availableAgentIds} />
-            )}
+            <MachineCliLogoRow agentIds={availableAgentIds} />
         </Pressable>
     );
 });
