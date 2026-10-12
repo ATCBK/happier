@@ -49,6 +49,7 @@ export type TerminalProcessRegistry = Readonly<{
     registerTerminalProcesses(input: RegisterTerminalProcessesInput): void;
     unregister(input: UnregisterTerminalInput): void;
     lookupByPid(pid: number): TerminalProcessRegistration | null;
+    listProcesses(): readonly Readonly<TerminalProcessRegistration & { pid: number }>[];
 }>;
 
 function normalizePids(pids: readonly number[]): Set<number> {
@@ -74,6 +75,12 @@ export function createTerminalProcessRegistry(): TerminalProcessRegistry {
     };
 
     return {
+        listProcesses() {
+            return [...recordsByKey.values()].flatMap(record => [...record.pids].map(pid => ({
+                pid, terminalId: record.terminalId, workspacePath: record.workspacePath,
+                ...(record.sessionId ? { sessionId: record.sessionId } : {}),
+            })));
+        },
         registerTerminalProcesses(input) {
             const existing = recordsByKey.get(input.terminalKey);
             // Replace-by-terminalKey: drop the prior pid set before indexing the new one.

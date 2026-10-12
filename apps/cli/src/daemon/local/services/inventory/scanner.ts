@@ -1,11 +1,11 @@
-import { classifyLocalServiceProcess } from './classification';
+import { classifyProcessRole as classifyLocalServiceProcess } from '@/processes/classification/classifyProcessRole';
+import type { ProcessRoleCatalog } from '@/processes/classification/processRoleCatalog';
+import { createProcessLineageProjector } from '@/processes/classification/projectProcessLineage';
+import { resolveLocalServiceOwnership } from '@/daemon/processes/ownership/resolveLocalServiceOwnership';
+import { processOwnerKey, type ResolvedProcessOwnership } from '@/daemon/processes/ownership/types';
 import type { LocalServiceInventoryStoredLabel } from './labels';
-import type { LocalServiceProcessOwnership } from './platform/processOwnership';
 import {
-    LOCAL_SERVICE_PROCESS_LINEAGE_MAX_DEPTH,
-    matchTerminalRegistration,
     matchWorkspaceAssociation,
-    recoverProcessLineageFacts,
     type LocalServiceProcessFact,
     type LocalServiceWorkspaceFact,
 } from './provenance';
@@ -24,6 +24,8 @@ export type LocalServiceListenerFact = Readonly<{
     port: number;
     protocol: 'tcp';
     pid?: number;
+    /** Missing socket observation is unknown, never zero visitors. */
+    establishedConnections?: number | null;
 }>;
 
 export type NormalizedLocalServiceInventoryEntry = Readonly<{
@@ -38,6 +40,7 @@ export type NormalizedLocalServiceInventoryEntry = Readonly<{
     port: number;
     protocol: 'tcp';
     detectedAt: number;
+    establishedConnections?: number | null;
     lastSeenAt: number;
     state: 'listening' | 'stale' | 'gone' | 'unknown';
     source: 'detected';
@@ -58,7 +61,7 @@ export type NormalizedLocalServiceInventoryEntry = Readonly<{
             association: 'cwd_containment' | 'process_tree';
         }>;
     }>;
-    classification?: ReturnType<typeof classifyLocalServiceProcess>;
+    classification?: Pick<ReturnType<typeof classifyLocalServiceProcess>, 'kind' | 'displayName' | 'confidence' | 'lowSignal' | 'signals'>;
     presentation?: Readonly<{
         pageTitle?: string;
         pageTitleSource?: 'application_name' | 'og_title' | 'twitter_title' | 'html_title';
@@ -81,33 +84,6 @@ export type NormalizedLocalServiceInventorySnapshot = Readonly<{
     entries: readonly NormalizedLocalServiceInventoryEntry[];
     diagnostics: readonly LocalServiceInventoryDiagnostic[];
 }>;
-
-/**
- * `processOwnershipConfidence` is the only input to the `terminate_detected` eligibility gate,
- * and it used to be `listener.pid ? 'medium' : 'low'`. Because provenance exists only when the
- * listener has a pid, that made the whole ladder a restatement of "the listener has a pid": the
- * gate could not refuse anything, and on Windows it left a system service terminable.
- *
- * `high` now means the daemon can actually attribute the process to itself:
- *  - a **terminal-registry match** on the listener or a lineage pid — the daemon spawned the
- *    terminal this process descends from, which is deterministic provenance; or
- *  - the platform established that the process runs under the daemon's own OS identity
- *    (`platform/processOwnership.ts`).
- *
- * `medium` means "a pid, but we could not establish who owns it" — unproven, and the gate
- * refuses it. `low` is no pid at all, or a process owned by a *different* OS user.
- */
-export function resolveProcessOwnershipConfidence(input: Readonly<{
-    hasListenerPid: boolean;
-    terminalRegistryMatched: boolean;
-    processOwnership: LocalServiceProcessOwnership | undefined;
-}>): 'high' | 'medium' | 'low' {
-    if (!input.hasListenerPid) return 'low';
-    if (input.terminalRegistryMatched) return 'high';
-    if (input.processOwnership === 'self') return 'high';
-    if (input.processOwnership === 'other') return 'low';
-    return 'medium';
-}
 
 function classifyAddress(host: string): NormalizedLocalServiceInventoryEntry['address'] {
     const normalized = host.toLowerCase();
@@ -151,7 +127,7 @@ function buildInventoryId(input: Readonly<{
 }
 
 function addressLabel(address: NormalizedLocalServiceInventoryEntry['address'], port: number): string {
-    if (address.kind === 'loopback') return `localhost:${port}`;
+    if (address.kind === 'loopback' || address.kind === 'wildcard') return `localhost:${port}`;
     return `${address.host}:${port}`;
 }
 
@@ -169,6 +145,10 @@ export function normalizeLocalServiceScan(input: Readonly<{
     processes: ReadonlyMap<number, LocalServiceProcessFact>;
     workspaces: readonly LocalServiceWorkspaceFact[];
     terminalRegistry?: TerminalProcessRegistry;
+    ownership?: readonly ResolvedProcessOwnership[];
+    /** Private native FD failures, not an ownership claim or public inventory field. */
+    socketOwnerReadFailures?: readonly number[];
+    processRoleCatalog?: ProcessRoleCatalog;
     staleAfterMs?: number;
     /** Exact owned listener processes, never their arbitrary descendants. */
     internalProcessPids?: readonly number[];
@@ -176,6 +156,11 @@ export function normalizeLocalServiceScan(input: Readonly<{
     internalEndpointUrls?: readonly string[];
 }>): NormalizedLocalServiceInventorySnapshot {
     const entries = new Map<string, NormalizedLocalServiceInventoryEntry>();
+    const ownershipByPid = new Map((input.ownership ?? resolveLocalServiceOwnership(input)).map(item => [item.pid, item]));
+    const incompleteSocketOwners = new Set((input.socketOwnerReadFailures ?? []).flatMap(pid => {
+        const owner = ownershipByPid.get(pid)?.owner;
+        return owner ? [processOwnerKey(owner)] : [];
+    }));
     const internalEndpoints = (input.internalEndpointUrls ?? []).flatMap((value) => {
         try {
             const url = new URL(value);
@@ -188,32 +173,21 @@ export function normalizeLocalServiceScan(input: Readonly<{
     const staleAfterMs = input.staleAfterMs === undefined
         ? Number.POSITIVE_INFINITY
         : Math.max(1, Math.trunc(input.staleAfterMs));
+    const projectProcessLineage = createProcessLineageProjector(input.processes);
 
     for (const listener of input.listeners) {
         const address = classifyAddress(listener.address);
         const recovered = listener.pid
-            ? recoverProcessLineageFacts({
-                listenerPid: listener.pid,
-                maxDepth: LOCAL_SERVICE_PROCESS_LINEAGE_MAX_DEPTH,
-                processes: input.processes,
-            })
+            ? projectProcessLineage(listener.pid)
             : undefined;
-        // Deterministic terminal->port registration wins over probabilistic cwd
-        // containment (E2 §P7): it carries the workspace + originating session even
-        // when the listener's own cwd does not resolve. cwd-containment stays the fallback.
-        const terminalMatch = matchTerminalRegistration({
-            listenerPid: listener.pid,
-            lineagePids: recovered?.lineagePids ?? [],
-            registry: input.terminalRegistry,
-        });
-        const cwdMatch = matchWorkspaceAssociation({
-            cwd: recovered?.cwd,
-            workspaces: input.workspaces,
-        });
-        const workspaceMatch = terminalMatch.workspace
-            ? terminalMatch
+        const owned = listener.pid === undefined ? undefined : ownershipByPid.get(listener.pid);
+        const cwdMatch = matchWorkspaceAssociation({ cwd: recovered?.cwd, workspaces: input.workspaces });
+        const workspaceMatch = owned?.workspacePath
+            ? { workspace: { path: owned.workspacePath, association: 'process_tree' as const }, workspaceAssociationConfidence: 'high' as const }
             : cwdMatch;
-        const sessionAttribution = terminalMatch.workspace ? terminalMatch.session : undefined;
+        const ownerSessionId = owned?.owner?.kind === 'session' ? owned.owner.sessionId
+            : owned?.owner && 'sessionId' in owned.owner ? owned.owner.sessionId : undefined;
+        const sessionAttribution = ownerSessionId ? { id: ownerSessionId } : undefined;
         const listenerProcess = listener.pid ? input.processes.get(listener.pid) : undefined;
         const classificationCommand = [listenerProcess?.command, recovered?.command].filter(Boolean).join(' ');
         const internal = (listener.pid !== undefined && input.internalProcessPids?.includes(listener.pid))
@@ -228,10 +202,10 @@ export function normalizeLocalServiceScan(input: Readonly<{
                     || (address.family === 'ipv4' && !endpoint.host.includes(':'))
                     || (address.family === 'ipv6' && endpoint.host.includes(':'));
             });
-        const classification = internal
+        const classification: ReturnType<typeof classifyLocalServiceProcess> | undefined = internal
             ? { kind: 'happier', displayName: 'Happier', confidence: 'high' as const, signals: ['owner:happier'] }
             : classificationCommand
-            ? classifyLocalServiceProcess({ command: classificationCommand, cwd: recovered?.cwd })
+            ? classifyLocalServiceProcess({ command: classificationCommand, cwd: recovered?.cwd, ...input.processRoleCatalog })
             : undefined;
         const id = buildInventoryId({
             machineId: input.machineId,
@@ -251,6 +225,8 @@ export function normalizeLocalServiceScan(input: Readonly<{
             address,
             port: listener.port,
             protocol: listener.protocol,
+            establishedConnections: owned?.owner && incompleteSocketOwners.has(processOwnerKey(owned.owner))
+                ? null : listener.establishedConnections ?? null,
             detectedAt: input.previous?.entries.find((entry) => entry.id === id)?.detectedAt ?? now,
             lastSeenAt: now,
             state: 'listening',
@@ -264,15 +240,15 @@ export function normalizeLocalServiceScan(input: Readonly<{
                     },
                 }
                 : {}),
-            ...(classification ? { classification } : {}),
+            ...(classification ? { classification: {
+                kind: classification.kind, displayName: classification.displayName,
+                confidence: classification.confidence, lowSignal: classification.lowSignal, signals: classification.signals,
+            } } : {}),
             presentation,
             labels: [],
             confidence: listener.pid ? 'high' : 'medium',
-            processOwnershipConfidence: resolveProcessOwnershipConfidence({
-                hasListenerPid: Boolean(listener.pid),
-                terminalRegistryMatched: Boolean(terminalMatch.workspace),
-                processOwnership: listenerProcess?.processOwnership,
-            }),
+            processOwnershipConfidence: owned?.level === 'proven' || owned?.level === 'likely' ? 'high'
+                : !listener.pid || owned?.level === 'not_happier' ? 'low' : 'medium',
             workspaceAssociationConfidence: workspaceMatch.workspaceAssociationConfidence,
             diagnostics: [],
         });

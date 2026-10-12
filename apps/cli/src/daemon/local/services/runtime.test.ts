@@ -15,6 +15,7 @@ import {
 } from './preview/registry';
 import type { NormalizedLocalServiceInventorySnapshot } from './inventory/scanner';
 import { createLocalServiceEndpointEnricher } from './inventory/endpoint';
+import { createLocalPageTitleEnricher } from './inventory/pageTitle';
 import { LocalServicePreviewResourceV1Schema } from '@happier-dev/protocol/local/services/preview/v1';
 
 function previewServerBoundary() {
@@ -539,6 +540,113 @@ describe('createLocalServicesDaemonRuntime', () => {
         // coalesces overlapping callers, it does not cache forever).
         await runtime.refreshInventoryNow();
         expect(scan).toHaveBeenCalledTimes(2);
+    });
+
+    it('shares pending native facts before HTTP presentation but never reuses them for a later Guard read', async () => {
+        let releaseWorkspace!: () => void;
+        let enterHttp!: () => void;
+        let releaseHttp!: () => void;
+        const workspaceRead = new Promise<void>(resolve => { releaseWorkspace = resolve; });
+        const httpEntered = new Promise<void>(resolve => { enterHttp = resolve; });
+        const httpRead = new Promise<void>(resolve => { releaseHttp = resolve; });
+        let visitors = 0;
+        let scans = 0;
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', startLoop: false,
+            inventoryEnabled: () => true, workspaceFacts: async () => { await workspaceRead; return []; },
+            scan: async () => { scans += 1; return {
+                listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', pid: 400, establishedConnections: visitors }],
+                processes: new Map([[400, { pid: 400, command: 'node server.js' }]]), workspaces: [], diagnostics: [],
+            }; },
+            endpointEnricher: createLocalServiceEndpointEnricher({ now: () => 2_000, timeoutMs: 250, concurrency: 1,
+                successTtlMs: 30_000, failureTtlMs: 5_000, probe: async ({ scheme }) => scheme === 'http' }),
+            pageTitleEnricher: createLocalPageTitleEnricher({ timeoutMs: 10_000, maxBodyBytes: 1_024, concurrency: 1,
+                successTtlMs: 30_000, failureTtlMs: 5_000, fetch: async () => {
+                    enterHttp(); await httpRead;
+                    return new Response('<title>Service</title>', { headers: { 'content-type': 'text/html' } });
+                } }),
+        });
+        let fullSettled = false;
+        let nativeSnapshot: NormalizedLocalServiceInventorySnapshot | undefined;
+        const full = runtime.refreshInventoryNow().then(snapshot => { fullSettled = true; return snapshot; });
+        try {
+            const native = runtime.refreshInventoryNow({ stage: 'native' }).then(snapshot => { nativeSnapshot = snapshot; return snapshot; });
+            visitors = 1;
+            releaseWorkspace();
+            await httpEntered;
+            expect(nativeSnapshot?.entries[0]?.establishedConnections).toBe(1);
+            expect(fullSettled).toBe(false);
+            expect(runtime.inventoryRegistry.getSnapshot().entries).toHaveLength(0);
+            expect(scans).toBe(1);
+            visitors = 2;
+            const later = runtime.refreshInventoryNow({ stage: 'native' });
+            releaseHttp();
+            expect((await full).entries[0]).toMatchObject({ establishedConnections: 1, presentation: { pageTitle: 'Service' } });
+            expect((await native).entries[0]?.establishedConnections).toBe(1);
+            expect((await later).entries[0]?.establishedConnections).toBe(2);
+            expect(scans).toBe(2);
+        } finally {
+            releaseWorkspace(); releaseHttp();
+            await full;
+            await runtime.stop();
+        }
+    });
+
+    it('rejects a failed native refresh and admits a later fresh owner read', async () => {
+        let fail = true;
+        const errors: unknown[] = [];
+        const unavailable = new Error('Native socket scan unavailable');
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', startLoop: false,
+            inventoryEnabled: () => true, onError: error => { errors.push(error); },
+            scan: async () => {
+                if (fail) throw unavailable;
+                return { listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', establishedConnections: 1 }],
+                    processes: new Map(), workspaces: [], diagnostics: [] };
+            },
+        });
+        try {
+            const full = runtime.refreshInventoryNow();
+            void full.catch(() => undefined);
+            const native = runtime.refreshInventoryNow({ stage: 'native' });
+            await expect(native).rejects.toBe(unavailable);
+            await expect(full).rejects.toBe(unavailable);
+            fail = false;
+            expect((await runtime.refreshInventoryNow({ stage: 'native' })).entries[0]?.establishedConnections).toBe(1);
+            expect(errors).toContain(unavailable);
+        } finally { await runtime.stop(); }
+    });
+
+    it('admits a fresh native successor after the prior presentation probe aborts', async () => {
+        const cancellation = new AbortController();
+        const errors: unknown[] = [];
+        let enterProbe!: () => void;
+        let releaseProbe!: () => void;
+        const probeEntered = new Promise<void>(resolve => { enterProbe = resolve; });
+        const probeRead = new Promise<void>(resolve => { releaseProbe = resolve; });
+        let visitors = 0;
+        const runtime = createLocalServicesDaemonRuntime({ machineId: 'machine-a', startLoop: false,
+            inventoryEnabled: () => true, onError: error => { errors.push(error); },
+            scan: async () => ({ listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', establishedConnections: visitors }],
+                processes: new Map(), workspaces: [], diagnostics: [] }),
+            endpointEnricher: createLocalServiceEndpointEnricher({ now: () => 2_000, timeoutMs: 250, concurrency: 1,
+                successTtlMs: 30_000, failureTtlMs: 5_000, signal: cancellation.signal, probe: async ({ signal }) => {
+                    enterProbe(); await probeRead; signal?.throwIfAborted(); return true;
+                } }),
+        });
+        try {
+            const native = runtime.refreshInventoryNow({ stage: 'native' });
+            const full = runtime.refreshInventoryNow();
+            void full.catch(() => undefined);
+            expect((await native).entries[0]?.establishedConnections).toBe(0);
+            await probeEntered;
+            visitors = 1;
+            const successor = runtime.refreshInventoryNow({ stage: 'native' });
+            const aborted = new Error('HTTP presentation aborted');
+            cancellation.abort(aborted);
+            releaseProbe();
+            await expect(full).rejects.toBe(aborted);
+            expect((await successor).entries[0]?.establishedConnections).toBe(1);
+            expect(errors).toContain(aborted);
+        } finally { releaseProbe(); await runtime.stop(); }
     });
 
     it('preserves accepted workspace identity over scanner context while normalizing provenance', async () => {

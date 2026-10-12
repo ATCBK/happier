@@ -1,4 +1,7 @@
 import axios from 'axios';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
@@ -8,6 +11,8 @@ import {
     resolveLocalServiceWorkspaceFactsFromSessionMarkers,
 } from './workspaces';
 import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import * as persistence from '@/persistence';
+import { createLocalServicesDaemonRuntime } from '../runtime';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -92,6 +97,68 @@ describe('readLocalServiceWorkspaceFacts', () => {
         })).toEqual({
             facts: [{ id: acceptedRef.id, path: '/repo/app' }, { path: '/repo/session-only' }], acceptedWorkspaceRefs: [acceptedRef], diagnostics: [],
         });
+    });
+
+    it('qualifies accepted portable Home roots through the saved daemon profile binding', async () => {
+        // Saved profile reads are a persistence boundary; Home admission and row
+        // opening remain real, as they are in the daemon startup path.
+        const portableRef = { ...acceptedRef, serverId: 'srv_selected_home' };
+        const profile = {
+            id: 'saved-home', name: 'Selected Home', serverUrl: input.serverBaseUrl,
+            webappUrl: input.serverBaseUrl, createdAt: 1, updatedAt: 1, lastUsedAt: 1,
+        };
+        const readSettings = vi.spyOn(persistence, 'readSettings').mockResolvedValue({
+            schemaVersion: 6, onboardingCompleted: true,
+            servers: { [profile.id]: { ...profile, homeConnectionDescriptor: {
+                v: 1, homeServerIdentityId: portableRef.serverId,
+                canonicalServerUrl: input.serverBaseUrl, revision: 1,
+                endpoints: [{ kind: 'https', url: input.serverBaseUrl }],
+            } } },
+        });
+        networkRows([
+            portableRef,
+            { ...portableRef, id: 'foreign-home', serverId: 'srv_other_home', rootPath: '/repo/foreign' },
+            { ...portableRef, id: 'foreign-machine', machineId: 'machine-b', rootPath: '/repo/foreign-machine' },
+        ]);
+
+        expect(await readLocalServiceWorkspaceFacts({ ...input, serverId: profile.id })).toEqual({
+            facts: [{ id: acceptedRef.id, path: '/repo/app' }],
+            acceptedWorkspaceRefs: [portableRef], diagnostics: [],
+        });
+
+        readSettings.mockResolvedValue({ schemaVersion: 6, onboardingCompleted: true, servers: { [profile.id]: profile } });
+        expect(await readLocalServiceWorkspaceFacts({ ...input, serverId: profile.id })).toEqual({
+            facts: [], acceptedWorkspaceRefs: [], diagnostics: [],
+        });
+    });
+
+    it('feeds all six manifest declarations from a portable Home acceptance with no Session markers', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-accepted-services-'));
+        const portableRef = { ...acceptedRef, rootPath: root, serverId: 'srv_selected_home' };
+        const profile = { id: 'saved-home', name: 'Selected Home', serverUrl: input.serverBaseUrl,
+            webappUrl: input.serverBaseUrl, createdAt: 1, updatedAt: 1, lastUsedAt: 1 };
+        vi.spyOn(persistence, 'readSettings').mockResolvedValue({ schemaVersion: 6, onboardingCompleted: true,
+            servers: { [profile.id]: { ...profile, homeConnectionDescriptor: { v: 1,
+                homeServerIdentityId: portableRef.serverId, canonicalServerUrl: input.serverBaseUrl,
+                revision: 1, endpoints: [{ kind: 'https', url: input.serverBaseUrl }] } } } });
+        networkRows([portableRef]);
+        const names = ['web', 'api', 'jobs', 'approval-digest-notifications', 'storybook', 'db'];
+        await mkdir(join(root, '.happier'));
+        await writeFile(join(root, '.happier/project.json'), JSON.stringify({ version: 1,
+            services: Object.fromEntries(names.map(name => [name, { source: { kind: 'command', command: `run-${name}` } }])) }));
+        const runtime = createLocalServicesDaemonRuntime({ machineId: portableRef.machineId, startLoop: false,
+            inventoryEnabled: () => true,
+            workspaceFacts: () => readLocalServiceWorkspaceFacts({ ...input, serverId: profile.id }),
+            scan: async () => ({ listeners: [], processes: new Map(), workspaces: [], diagnostics: [] }),
+        });
+        try {
+            const snapshot = await runtime.launcherRoutes.getSnapshot({ scope: 'workspace', workspaceRoot: root });
+            expect(snapshot.targets.map(target => target.declaration?.selection)).toEqual(expect.arrayContaining(
+                names.map(name => ({ kind: 'manifest', name }))));
+            expect(snapshot.targets).toHaveLength(6);
+            expect(snapshot.targets.every(target => target.workspace?.serverId === portableRef.serverId)).toBe(true);
+            expect(snapshot).not.toHaveProperty('sessionId');
+        } finally { await runtime.stop(); await rm(root, { recursive: true, force: true }); }
     });
 
     it('reports a failed accepted-row read without reusing previously opened Project roots', async () => {

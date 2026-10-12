@@ -8,6 +8,9 @@ import { DEFAULT_LOCAL_SERVICE_CAPABILITIES } from '@happier-dev/protocol/featur
 import type { FeatureDecision } from '@happier-dev/protocol';
 import { isLocalServiceActionConfirmationNonceV1 } from '@happier-dev/protocol/local/services/actions/v1';
 import type { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import type { createProcessOwnershipRuntime } from '@/daemon/processes/ownership/processOwnershipRuntime';
+import { localServiceFactsSnapshot } from '@/daemon/processes/ownership/resolveLocalServiceOwnership';
+import { waitForChangeOrDeadline } from '@/daemon/lifecycle/waitForChangeOrDeadline';
 
 import { createLocalServiceInventoryAnnotationsFileStore } from './inventory/annotationsFile';
 import {
@@ -94,9 +97,11 @@ export type LocalServicesDaemonRuntime = Readonly<{
     launcherRoutes: LocalServiceLauncherRoutes;
     previewRoutes: LocalServicePreviewRoutes;
     actionRoutes: LocalServiceActionRoutes;
+    /** Existing native listener execution, after the containing Action's approval. */
+    terminateDetectedService: ReturnType<typeof createTerminateDetectedService>;
     /** Actual starter installation only; host-port currentness and feature admission remain with the host. */
     hasProjectServiceStarter(): boolean;
-    refreshInventoryNow(): Promise<NormalizedLocalServiceInventorySnapshot>;
+    refreshInventoryNow(request?: Readonly<{ stage: 'native'; signal?: AbortSignal } | { stage: 'presentation' }>): Promise<NormalizedLocalServiceInventorySnapshot>;
     getSummary(): LocalServiceMachineSummaryV1;
     subscribeSummary(subscriber: (summary: LocalServiceMachineSummaryV1) => void): () => void;
     syncHostedWebStaticAssets(
@@ -229,6 +234,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     onError?: (error: unknown) => void;
     workspaceFacts?: LocalServiceWorkspaceFactsProvider;
     terminalRegistry?: TerminalProcessRegistry;
+    processOwnershipRuntime?: ReturnType<typeof createProcessOwnershipRuntime>;
     internalProcessPids?: () => readonly number[];
     internalEndpointUrls?: () => readonly string[];
     runTargets?: () => Promise<readonly LocalServiceLauncherRunTarget[]> | readonly LocalServiceLauncherRunTarget[];
@@ -359,12 +365,12 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         })
         : null;
 
-    const runInventoryRefresh = async (): Promise<NormalizedLocalServiceInventorySnapshot> => {
+    const runInventoryRefresh = async (onNative: (snapshot: NormalizedLocalServiceInventorySnapshot) => void): Promise<NormalizedLocalServiceInventorySnapshot> => {
         const previous = inventoryRegistry.getSnapshot();
         // Refresh the server-features snapshot before resolving the gate so a server that toggled
         // the bit takes effect on the next tick (the refresh loop keeps it current).
         await refreshServerFeaturesSnapshot();
-        const generatedAt = now();
+        let generatedAt = now();
         const decision = resolveDecision();
         if (!isInventoryEnabled()) {
             const diagnostic = inventoryGateDiagnostic(decision);
@@ -388,22 +394,12 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                     now: generatedAt,
                     diagnostic,
                 });
+            onNative(snapshot);
             inventoryRegistry.replaceSnapshot(snapshot);
             return snapshot;
         }
 
-        const result = await scan();
-        if (!hasAuthoritativeListenerFacts(result)) {
-            const snapshot = nonAuthoritativeInventorySnapshot({
-                previous,
-                machineId: params.machineId,
-                now: generatedAt,
-                diagnostics: result.diagnostics,
-            });
-            inventoryRegistry.replaceSnapshot(snapshot);
-            return snapshot;
-        }
-
+        // Finish Account/workspace transports before measuring native sockets.
         const workspaceDiagnostics: LocalServiceInventoryDiagnostic[] = [];
         let daemonWorkspaces: readonly LocalServiceWorkspaceFact[] = [];
         if (workspaceFacts) {
@@ -419,14 +415,42 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                 });
             }
         }
+        const result = await scan();
+        generatedAt = now();
+        if (!hasAuthoritativeListenerFacts(result)) {
+            const snapshot = nonAuthoritativeInventorySnapshot({
+                previous,
+                machineId: params.machineId,
+                now: generatedAt,
+                diagnostics: [...result.diagnostics, ...workspaceDiagnostics],
+            });
+            onNative(snapshot);
+            inventoryRegistry.replaceSnapshot(snapshot);
+            return snapshot;
+        }
+        const ownership = params.processOwnershipRuntime
+            ? await params.processOwnershipRuntime.resolveSnapshot(localServiceFactsSnapshot(result.processes, generatedAt), result.listeners)
+            : undefined;
+        if (ownership?.status === 'unavailable') {
+            const snapshot = nonAuthoritativeInventorySnapshot({ previous, machineId: params.machineId, now: generatedAt,
+                diagnostics: [...result.diagnostics, ...workspaceDiagnostics, {
+                    code: 'local_services_process_ownership_unavailable', severity: 'warning', message: ownership.reason,
+                }] });
+            onNative(snapshot);
+            inventoryRegistry.replaceSnapshot(snapshot);
+            return snapshot;
+        }
         const snapshot = normalizeLocalServiceScan({
             machineId: params.machineId,
             now: generatedAt,
             previous,
             listeners: result.listeners,
             processes: result.processes,
+            processRoleCatalog: readProcessRoleCatalog(),
+            socketOwnerReadFailures: result.socketOwnerReadFailures,
             workspaces: mergeLocalServiceWorkspaceFacts(daemonWorkspaces, result.workspaces),
             terminalRegistry,
+            ...(ownership ? { ownership: ownership.rows } : {}),
             staleAfterMs,
             internalProcessPids: params.internalProcessPids?.() ?? [process.pid],
             internalEndpointUrls: params.internalEndpointUrls?.(),
@@ -435,6 +459,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
             ...snapshot,
             diagnostics: [...result.diagnostics, ...workspaceDiagnostics],
         };
+        onNative(snapshotWithDiagnostics);
         if (endpointEnricher) {
             snapshotWithDiagnostics = await endpointEnricher.enrich(snapshotWithDiagnostics);
         }
@@ -453,15 +478,51 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
     // callers await the same machine-wide
     // `lsof`/`/proc`/`netstat` scan and resolve to the same snapshot instead of stacking a
     // second scan on a busy daemon. Mirrors the `runTargetsInFlight` coalescing pattern below.
-    let currentRefresh: Promise<NormalizedLocalServiceInventorySnapshot> | null = null;
-    const refreshInventoryNow = (): Promise<NormalizedLocalServiceInventorySnapshot> => {
-        if (currentRefresh) {
-            return currentRefresh;
+    type InventoryRefreshFlight = {
+        nativePending: boolean;
+        native: Promise<NormalizedLocalServiceInventorySnapshot>;
+        full: Promise<NormalizedLocalServiceInventorySnapshot>;
+    };
+    let currentRefresh: InventoryRefreshFlight | null = null;
+    const observeNative = async (pending: Promise<NormalizedLocalServiceInventorySnapshot>, signal?: AbortSignal) => {
+        if (signal) {
+            await waitForChangeOrDeadline({ signal, waitForChange: () => pending.then(() => undefined) });
+            signal.throwIfAborted();
         }
-        currentRefresh = (async () => {
+        return await pending;
+    };
+    const refreshInventoryNow: LocalServicesDaemonRuntime['refreshInventoryNow'] = (request) => {
+        const signal = request?.stage === 'native' ? request.signal : undefined;
+        if (signal?.aborted) return Promise.reject(signal.reason);
+        if (currentRefresh) {
+            if (request?.stage !== 'native') return currentRefresh.full;
+            if (currentRefresh.nativePending) return observeNative(currentRefresh.native, signal);
+            // HTTP presentation is not a fresh socket observation for a later Guard caller.
+            // Wait for the existing publisher, then enter its ordinary successor scan.
+            const successor = () => {
+                signal?.throwIfAborted();
+                return refreshInventoryNow({ stage: 'native' });
+            };
+            return observeNative(currentRefresh.full.then(successor, successor), signal);
+        }
+        let resolveNative!: (snapshot: NormalizedLocalServiceInventorySnapshot) => void;
+        let rejectNative!: (error: unknown) => void;
+        const native = new Promise<NormalizedLocalServiceInventorySnapshot>((resolve, reject) => {
+            resolveNative = resolve; rejectNative = reject;
+        });
+        // Ordinary inventory callers need not subscribe to the intermediate native stage.
+        void native.catch(() => undefined);
+        const flight: InventoryRefreshFlight = { nativePending: true, native, full: Promise.resolve().then(async () => {
             try {
-                return await runInventoryRefresh();
+                return await runInventoryRefresh(snapshot => {
+                    flight.nativePending = false;
+                    resolveNative(snapshot);
+                });
             } catch (error) {
+                if (flight.nativePending) {
+                    flight.nativePending = false;
+                    rejectNative(error);
+                }
                 inventoryRegistry.replaceSnapshot(nonAuthoritativeInventorySnapshot({
                     previous: inventoryRegistry.getSnapshot(),
                     machineId: params.machineId,
@@ -470,10 +531,14 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
                 }));
                 throw error;
             } finally {
-                currentRefresh = null;
+                if (currentRefresh === flight) currentRefresh = null;
             }
-        })();
-        return currentRefresh;
+        }) };
+        currentRefresh = flight;
+        // A native-only reader returns before presentation; its remaining full phase still
+        // publishes through the existing owner and reports failures through the existing port.
+        void flight.full.catch(params.onError ?? ((error) => logger.debug('[DAEMON RUN] Local-service inventory refresh failed', error)));
+        return request?.stage === 'native' ? observeNative(flight.native, signal) : flight.full;
     };
 
     const scanIntervalMs = params.refreshIntervalMs ?? DEFAULT_LOCAL_SERVICE_CAPABILITIES.inventory.refreshIntervalMs;
@@ -627,6 +692,7 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         launcherRoutes,
         previewRoutes,
         actionRoutes,
+        terminateDetectedService,
         hasProjectServiceStarter: () => declarationStarter !== undefined && !endpointCancellation.signal.aborted,
         refreshInventoryNow,
         getSummary: () => summary,
@@ -662,3 +728,4 @@ export function createLocalServicesDaemonRuntime(params: Readonly<{
         },
     };
 }
+import { readProcessRoleCatalog } from '@/processes/classification/processRoleCatalog';

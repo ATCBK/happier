@@ -44,17 +44,7 @@ function deniedDecision(kind: LocalServiceActionKindV1, reasonCode: string, inpu
     };
 }
 
-/**
- * `terminate_detected` is the only affordance that signals a process the daemon did not spawn,
- * so it requires established ownership, not merely a resolvable pid.
- *
- * The scanner (`inventory/scanner.ts#resolveProcessOwnershipConfidence`) is the single owner of
- * that judgement: `high` means a terminal-registry match or the daemon's own OS identity. The
- * previous `>= medium || workspaceAssociationConfidence >= high` disjunction was two
- * decision-makers for one question and both were satisfiable by "the listener has a pid"; the
- * workspace clause is also redundant now, because a workspace-associated listener is either
- * terminal-registered or same-user, and both already resolve to `high`.
- */
+/** Services eligibility projects the canonical ownership level (proven, or same-principal likely). */
 function hasCurrentOwnedProcess(entry: NormalizedLocalServiceInventoryEntry): boolean {
     if (!entry.provenance?.process) return false;
     return entry.processOwnershipConfidence === 'high';

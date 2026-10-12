@@ -1,10 +1,6 @@
-import { parseLinuxProcStartTimeMs } from '@happier-dev/cli-common/processInstance';
-
-import { LOCAL_SERVICE_PROCESS_LINEAGE_MAX_DEPTH, type LocalServiceProcessFact } from '../provenance';
-import type { LocalServiceListenerFact } from '../scanner';
-import type { LocalServiceInventoryDiagnostic } from '../scanner';
-import { collectLocalServiceProcessLineageFacts } from './processLineage';
-import { classifyProcessOwnershipByIdentity, resolveDaemonPosixUserId } from './processOwnership';
+import type { LocalServiceProcessFact } from '../provenance';
+import type { LocalServiceListenerFact, LocalServiceInventoryDiagnostic } from '../scanner';
+import { projectLocalServiceProcessFacts } from '@/processes/census/projectLocalServiceProcessFacts';
 
 type ProcNetInput = Readonly<{
     tcp4: string;
@@ -17,25 +13,24 @@ export type LinuxProcfsBoundary = Readonly<{
     readFile(path: string, encoding: 'utf8'): Promise<string | Buffer>;
     readdir(path: string): Promise<readonly string[]>;
     readlink(path: string): Promise<string>;
-    /** Clock for the scan deadline; injected in tests. */
+    /** Clock for a caller-supplied scan deadline; injected in tests. */
     now?: () => number;
     /**
-     * Wall-clock budget for the `/proc` fd walk. macOS and Windows already bound their scans at
-     * two seconds; Linux had none, so a machine with many processes could hold the inventory
-     * loop open indefinitely. On expiry the scan returns what it resolved plus a warning
-     * diagnostic rather than an empty result.
+     * Optional wall-clock budget owned by the containing caller. Native procfs observation has
+     * no default cutoff: a subprocess probe's timeout is not a budget for walking a busy host.
+     * On expiry the scan returns resolved facts plus an explicit incomplete-scan diagnostic.
      */
     deadlineMs?: number;
-    daemonUserId?: string;
 }>;
 
 export type LinuxLocalServiceScanResult = Readonly<{
     listeners: readonly LocalServiceListenerFact[];
     processes: ReadonlyMap<number, LocalServiceProcessFact>;
     diagnostics: readonly LocalServiceInventoryDiagnostic[];
+    /** Actual unreadable FD owners while kernel listening inodes remain unattributed. */
+    socketOwnerReadFailures: readonly number[];
 }>;
 
-const DEFAULT_LINUX_SCAN_DEADLINE_MS = 2_000;
 const PROC_FD_SCAN_CHUNK = 32;
 
 function parseHexPort(value: string): number | null {
@@ -93,7 +88,7 @@ function compressIpv6Hextets(hextets: readonly string[]): string {
     return `${before}::${after}`;
 }
 
-type LinuxListeningSocketRow = Readonly<{ address: string; port: number; inode: string }>;
+type LinuxListeningSocketRow = Readonly<{ address: string; port: number; inode: string; state: string }>;
 
 function parseProcNetTcpRows(content: string, family: 'ipv4' | 'ipv6'): LinuxListeningSocketRow[] {
     const rows: LinuxListeningSocketRow[] = [];
@@ -105,7 +100,7 @@ function parseProcNetTcpRows(content: string, family: 'ipv4' | 'ipv6'): LinuxLis
         const localAddress = columns[1];
         const state = columns[3];
         const inode = columns[9];
-        if (!localAddress || state !== '0A' || !inode) continue;
+        if (!localAddress || !state || !inode) continue;
 
         const [addressHex, portHex] = localAddress.split(':');
         if (!addressHex || !portHex) continue;
@@ -114,7 +109,7 @@ function parseProcNetTcpRows(content: string, family: 'ipv4' | 'ipv6'): LinuxLis
         const address = family === 'ipv4' ? parseIpv4Hex(addressHex) : parseIpv6Hex(addressHex);
         if (port == null || !address) continue;
 
-        rows.push({ address, port, inode });
+        rows.push({ address, port, inode, state });
     }
 
     return rows;
@@ -123,13 +118,30 @@ function parseProcNetTcpRows(content: string, family: 'ipv4' | 'ipv6'): LinuxLis
 function attachListenerPids(
     rows: readonly LinuxListeningSocketRow[],
     inodeToPid: ReadonlyMap<string, number>,
+    complete: boolean = true,
 ): LocalServiceListenerFact[] {
-    return rows.map((row) => {
+    const establishedByPort = new Map<number, { total: number; byAddress: Map<string, number> }>();
+    if (complete) {
+        for (const row of rows) {
+            if (row.state !== '01') continue;
+            let counts = establishedByPort.get(row.port);
+            if (!counts) {
+                counts = { total: 0, byAddress: new Map() };
+                establishedByPort.set(row.port, counts);
+            }
+            counts.total++;
+            counts.byAddress.set(row.address, (counts.byAddress.get(row.address) ?? 0) + 1);
+        }
+    }
+    return rows.filter(row => row.state === '0A').map((row) => {
         const pid = inodeToPid.get(row.inode);
+        const counts = establishedByPort.get(row.port);
         return {
             address: row.address,
             port: row.port,
             protocol: 'tcp' as const,
+            establishedConnections: complete ? (row.address === '0.0.0.0' || row.address === '::'
+                ? counts?.total : counts?.byAddress.get(row.address)) ?? 0 : null,
             ...(pid ? { pid } : {}),
         };
     });
@@ -142,6 +154,7 @@ export function parseLinuxProcNetTcpListeners(input: ProcNetInput): LocalService
             ...parseProcNetTcpRows(input.tcp6, 'ipv6'),
         ],
         input.inodeToPid,
+        input.tcp4.includes('local_address') && input.tcp6.includes('local_address'),
     );
 }
 
@@ -155,111 +168,26 @@ function parseNumericPid(raw: string): number | null {
     return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
-function parseProcStatFacts(content: string): Readonly<{ ppid?: number; processStartTimeMs?: number }> {
-    const trimmed = content.trim();
-    const commandEnd = trimmed.lastIndexOf(')');
-    const afterCommand = commandEnd >= 0 ? trimmed.slice(commandEnd + 1).trim() : '';
-    const fields = afterCommand.split(/\s+/u);
-    const ppid = Number(fields[1]);
-    const processStartTimeMs = parseLinuxProcStartTimeMs(content);
-    return {
-        ...(Number.isInteger(ppid) && ppid > 0 ? { ppid } : {}),
-        ...(processStartTimeMs !== null ? { processStartTimeMs } : {}),
-    };
-}
-
-/** `/proc/<pid>/status` exposes `Uid: <real> <effective> <saved> <fs>`; the real uid is the owner. */
-export function parseProcStatusRealUserId(content: string): string | undefined {
-    return /^Uid:\s+(\d+)/mu.exec(content)?.[1];
-}
-
-function parseProcCmdline(content: string): string {
-    // `/proc/<pid>/cmdline` separates argv entries with NUL bytes.
-    return content
-        .split('\0')
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .join(' ')
-        .slice(0, 1_000);
-}
-
-async function readOptionalLink(boundary: LinuxProcfsBoundary, path: string): Promise<string | undefined> {
-    try {
-        return await boundary.readlink(path);
-    } catch {
-        return undefined;
-    }
-}
-
-async function readProcessFact(
-    boundary: LinuxProcfsBoundary,
-    procRoot: string,
-    pid: number,
-    daemonUserId: string | undefined,
-): Promise<LocalServiceProcessFact | null> {
-    try {
-        const base = joinProcPath(procRoot, String(pid));
-        const [stat, cmdline, status] = await Promise.all([
-            boundary.readFile(joinProcPath(base, 'stat'), 'utf8'),
-            boundary.readFile(joinProcPath(base, 'cmdline'), 'utf8').catch(() => ''),
-            boundary.readFile(joinProcPath(base, 'status'), 'utf8').catch(() => ''),
-        ]);
-        const command = parseProcCmdline(String(cmdline));
-        const statFacts = parseProcStatFacts(String(stat));
-        const cwd = await readOptionalLink(boundary, joinProcPath(base, 'cwd'));
-        const processOwnership = classifyProcessOwnershipByIdentity(
-            parseProcStatusRealUserId(String(status)),
-            daemonUserId,
-        );
-        return {
-            pid,
-            ...(statFacts.ppid ? { ppid: statFacts.ppid } : {}),
-            ...(typeof statFacts.processStartTimeMs === 'number' ? { processStartTimeMs: statFacts.processStartTimeMs } : {}),
-            command: command || 'unknown',
-            ...(cwd ? { cwd } : {}),
-            ...(processOwnership ? { processOwnership } : {}),
-        };
-    } catch {
-        return null;
-    }
-}
-
-export async function readLinuxProcessFacts(
-    boundary: LinuxProcfsBoundary,
-    pids: readonly number[],
-): Promise<ReadonlyMap<number, LocalServiceProcessFact>> {
-    const procRoot = boundary.procRoot ?? '/proc';
-    const daemonUserId = boundary.daemonUserId ?? resolveDaemonPosixUserId();
-    const processes = new Map<number, LocalServiceProcessFact>();
-    await Promise.all([...new Set(pids)].map(async (pid) => {
-        if (!Number.isInteger(pid) || pid <= 0) return;
-        const processFact = await readProcessFact(boundary, procRoot, pid, daemonUserId);
-        if (processFact) {
-            processes.set(pid, processFact);
-        }
-    }));
-    return processes;
-}
-
 async function readSocketInodesForPid(
     boundary: LinuxProcfsBoundary,
     procRoot: string,
     pid: number,
-): Promise<readonly string[]> {
+): Promise<Readonly<{ inodes: readonly string[]; readFailed: boolean }>> {
     try {
         const fdDir = joinProcPath(procRoot, String(pid), 'fd');
         const fds = await boundary.readdir(fdDir);
         const inodes: string[] = [];
+        let readFailed = false;
         await Promise.all(fds.map(async (fd) => {
-            const target = await readOptionalLink(boundary, joinProcPath(fdDir, fd));
-            const inode = /^socket:\[(\d+)\]$/u.exec(target ?? '')?.[1];
-            if (inode) {
-                inodes.push(inode);
-            }
+            try {
+                const target = await boundary.readlink(joinProcPath(fdDir, fd));
+                const inode = /^socket:\[(\d+)\]$/u.exec(target)?.[1];
+                if (inode) inodes.push(inode);
+            } catch { readFailed = true; }
         }));
-        return inodes;
+        return { inodes, readFailed };
     } catch {
-        return [];
+        return { inodes: [], readFailed: true };
     }
 }
 
@@ -269,8 +197,8 @@ async function readSocketInodesForPid(
  * The previous shape read full process facts (stat + cmdline + two readlinks) for every pid on
  * the machine before it knew which ones mattered, with no deadline — O(all pids x all fds) on a
  * loop that runs every ten seconds. Here the fd walk stops as soon as every wanted inode is
- * attributed, and process facts are read only for the listener pids and their lineage, which is
- * what darwin and Windows already do.
+ * attributed. Process enrichment then projects the listener pids and their lineage from the
+ * canonical census, which is shared by all three platforms.
  */
 async function resolveListeningSocketOwners(input: Readonly<{
     boundary: LinuxProcfsBoundary;
@@ -279,35 +207,37 @@ async function resolveListeningSocketOwners(input: Readonly<{
     wantedInodes: ReadonlySet<string>;
     deadlineAt: number;
     now: () => number;
-}>): Promise<Readonly<{ inodeToPid: ReadonlyMap<string, number>; deadlineExceeded: boolean }>> {
+}>): Promise<Readonly<{ inodeToPid: ReadonlyMap<string, number>; deadlineExceeded: boolean; unreadablePids: readonly number[] }>> {
     const inodeToPid = new Map<string, number>();
+    const unreadablePids: number[] = [];
     if (input.wantedInodes.size === 0) {
-        return { inodeToPid, deadlineExceeded: false };
+        return { inodeToPid, deadlineExceeded: false, unreadablePids: [] };
     }
     for (let offset = 0; offset < input.pids.length; offset += PROC_FD_SCAN_CHUNK) {
         if (input.now() >= input.deadlineAt) {
-            return { inodeToPid, deadlineExceeded: true };
+            return { inodeToPid, deadlineExceeded: true, unreadablePids: [] };
         }
         const chunk = input.pids.slice(offset, offset + PROC_FD_SCAN_CHUNK);
         await Promise.all(chunk.map(async (pid) => {
-            for (const inode of await readSocketInodesForPid(input.boundary, input.procRoot, pid)) {
+            const sockets = await readSocketInodesForPid(input.boundary, input.procRoot, pid);
+            if (sockets.readFailed) unreadablePids.push(pid);
+            for (const inode of sockets.inodes) {
                 if (input.wantedInodes.has(inode)) {
                     inodeToPid.set(inode, pid);
                 }
             }
         }));
         if (inodeToPid.size >= input.wantedInodes.size) {
-            return { inodeToPid, deadlineExceeded: false };
+            return { inodeToPid, deadlineExceeded: false, unreadablePids: [] };
         }
     }
-    return { inodeToPid, deadlineExceeded: false };
+    return { inodeToPid, deadlineExceeded: false, unreadablePids };
 }
 
 export async function readLinuxLocalServiceListeners(boundary: LinuxProcfsBoundary): Promise<LinuxLocalServiceScanResult> {
     const procRoot = boundary.procRoot ?? '/proc';
     const now = boundary.now ?? (() => Date.now());
-    const deadlineAt = now() + (boundary.deadlineMs ?? DEFAULT_LINUX_SCAN_DEADLINE_MS);
-    const daemonUserId = boundary.daemonUserId ?? resolveDaemonPosixUserId();
+    const deadlineAt = boundary.deadlineMs === undefined ? Number.POSITIVE_INFINITY : now() + boundary.deadlineMs;
     try {
         const [tcp4, tcp6, procEntries] = await Promise.all([
             boundary.readFile(joinProcPath(procRoot, 'net', 'tcp'), 'utf8').catch(() => ''),
@@ -325,11 +255,12 @@ export async function readLinuxLocalServiceListeners(boundary: LinuxProcfsBounda
             boundary,
             procRoot,
             pids,
-            wantedInodes: new Set(rows.map((row) => row.inode)),
+            wantedInodes: new Set(rows.filter(row => row.state === '0A').map((row) => row.inode)),
             deadlineAt,
             now,
         });
-        const listeners = attachListenerPids(rows, owners.inodeToPid);
+        const listeners = attachListenerPids(rows, owners.inodeToPid, !owners.deadlineExceeded
+            && String(tcp4).includes('local_address') && String(tcp6).includes('local_address'));
 
         const diagnostics: LocalServiceInventoryDiagnostic[] = owners.deadlineExceeded
             ? [{
@@ -338,17 +269,12 @@ export async function readLinuxLocalServiceListeners(boundary: LinuxProcfsBounda
                 message: 'Linux /proc scan exceeded its deadline; listener attribution may be incomplete.',
             }]
             : [];
-        const listenerPids = [...new Set(listeners
+        const listenerPids = [...new Set([...listeners
             .map((listener) => listener.pid)
-            .filter((pid): pid is number => typeof pid === 'number'))];
+            .filter((pid): pid is number => typeof pid === 'number'), ...owners.unreadablePids])];
         const processes = listenerPids.length > 0
-            ? await collectLocalServiceProcessLineageFacts({
+            ? await projectLocalServiceProcessFacts({
                 seedPids: listenerPids,
-                maxDepth: LOCAL_SERVICE_PROCESS_LINEAGE_MAX_DEPTH,
-                readProcessFacts: async (factPids) => await readLinuxProcessFacts(
-                    { ...boundary, ...(daemonUserId ? { daemonUserId } : {}) },
-                    factPids,
-                ),
                 onReadFailure: () => {
                     diagnostics.push({
                         code: 'linux_process_fact_scan_failed',
@@ -359,11 +285,12 @@ export async function readLinuxLocalServiceListeners(boundary: LinuxProcfsBounda
             })
             : new Map<number, LocalServiceProcessFact>();
 
-        return { listeners, processes, diagnostics };
+        return { listeners, processes, diagnostics, socketOwnerReadFailures: owners.unreadablePids };
     } catch (error) {
         return {
             listeners: [],
             processes: new Map(),
+            socketOwnerReadFailures: [],
             diagnostics: [{
                 code: 'linux_procfs_scan_failed',
                 severity: 'warning',

@@ -5,9 +5,9 @@ import { DEFAULT_LOCAL_SERVICE_CAPABILITIES } from '@happier-dev/protocol';
 import {
     isWorkspacePathWithin,
     matchWorkspaceAssociation,
-    recoverProcessLineageFacts,
-    redactProcessCommand,
 } from './provenance';
+import { createProcessLineageProjector } from '@/processes/classification/projectProcessLineage';
+import { redactProcessCommand } from '@/processes/redaction/redactProcessCommand';
 
 describe('isWorkspacePathWithin', () => {
     it('treats a path as within its own root and nested children', () => {
@@ -100,17 +100,13 @@ describe('redactProcessCommand', () => {
     });
 });
 
-describe('recoverProcessLineageFacts', () => {
+describe('createProcessLineageProjector', () => {
     it('recovers meaningful ancestor command and cwd for generic listener children', () => {
-        const result = recoverProcessLineageFacts({
-            listenerPid: 400,
-            maxDepth: 4,
-            processes: new Map([
+        const result = createProcessLineageProjector(new Map([
                 [400, { pid: 400, ppid: 300, command: 'node /tmp/vite/bin/vite.js', cwd: '/repo/app/node_modules/vite' }],
                 [300, { pid: 300, ppid: 200, command: 'npm run dev -- --token secret-token', cwd: '/repo/app' }],
                 [200, { pid: 200, ppid: 1, command: 'zsh', cwd: '/repo/app' }],
-            ]),
-        });
+            ]))(400);
 
         expect(result.command).toBe('npm run dev -- --token [REDACTED]');
         expect(result.pid).toBe(400);
@@ -121,10 +117,7 @@ describe('recoverProcessLineageFacts', () => {
     });
 
     it('keeps a generic listener command when ancestors are unrelated shells or supervisors', () => {
-        const result = recoverProcessLineageFacts({
-            listenerPid: 62376,
-            maxDepth: 4,
-            processes: new Map([
+        const result = createProcessLineageProjector(new Map([
                 [62376, {
                     pid: 62376,
                     ppid: 300,
@@ -134,22 +127,17 @@ describe('recoverProcessLineageFacts', () => {
                 [300, { pid: 300, ppid: 200, command: 'zsh', cwd: '/repo/app' }],
                 [200, { pid: 200, ppid: 1, command: 'codex app-server --listen stdio://', cwd: '/repo/app' }],
                 [1, { pid: 1, command: '/sbin/launchd' }],
-            ]),
-        });
+            ]))(62376);
 
         expect(result.command).toBe('python3 -m http.server 62376 --bind 127.0.0.1');
         expect(result.cwd).toBe('/repo/app');
     });
 
-    it('stops bounded lineage walking on cycles', () => {
-        const result = recoverProcessLineageFacts({
-            listenerPid: 10,
-            maxDepth: 8,
-            processes: new Map([
+    it('stops lineage walking on cycles', () => {
+        const result = createProcessLineageProjector(new Map([
                 [10, { pid: 10, ppid: 11, command: 'node server.js', cwd: '/repo' }],
                 [11, { pid: 11, ppid: 10, command: 'npm run dev', cwd: '/repo' }],
-            ]),
-        });
+            ]))(10);
 
         expect(result.command).toBe('npm run dev');
     });

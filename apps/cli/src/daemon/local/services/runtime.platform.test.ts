@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChildProcess } from 'node:child_process';
+import { installLocalServiceCensusFixture } from './inventory/platform/censusFixture.testkit';
+import { createLocalServicesDaemonRuntime } from './runtime';
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
@@ -9,6 +11,10 @@ vi.mock('node:child_process', async (importOriginal) => {
         ...actual,
         execFile: execFileMock,
     };
+});
+vi.mock('node:fs/promises', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:fs/promises')>();
+    return { ...actual, readFile: vi.fn(actual.readFile), readdir: vi.fn(actual.readdir), readlink: vi.fn(actual.readlink) };
 });
 
 function mockProcessPlatform(platform: NodeJS.Platform): () => void {
@@ -31,6 +37,9 @@ describe('createLocalServicesDaemonRuntime platform scanner dispatch', () => {
     });
 
     it('uses the Windows platform scanner for win32 default inventory refreshes', async () => {
+        // The Windows socket adapter consumes the one census rather than its retired
+        // PowerShell seed walker; procfs is the genuine process-table boundary fixture.
+        installLocalServiceCensusFixture([{ pid: 1234, ppid: 100, command: ['npm', 'run', 'dev'] }, { pid: 100 }]);
         const restorePlatform = mockProcessPlatform('win32');
         execFileMock.mockImplementation((
             command: string,
@@ -56,19 +65,10 @@ describe('createLocalServicesDaemonRuntime platform scanner dispatch', () => {
                     '  TCP    127.0.0.1:5173         0.0.0.0:0              LISTENING       1234',
                 ].join('\r\n'));
             }
-            if (command === 'powershell.exe') {
-                return complete(null, JSON.stringify([{
-                    ProcessId: 1234,
-                    ParentProcessId: 100,
-                    CommandLine: 'npm run dev',
-                    ExecutablePath: 'C:\\Program Files\\nodejs\\node.exe',
-                }]));
-            }
             return complete(new Error(`unexpected command ${command}`), '');
         });
 
         try {
-            const { createLocalServicesDaemonRuntime } = await import('./runtime');
             const runtime = createLocalServicesDaemonRuntime({
                 machineId: 'machine-win',
                 inventoryEnabled: () => true,
@@ -81,7 +81,7 @@ describe('createLocalServicesDaemonRuntime platform scanner dispatch', () => {
 
             expect(snapshot.diagnostics).toEqual([]);
             expect(snapshot.entries[0]).toMatchObject({
-                id: 'machine-win:tcp:loopback:127.0.0.1:5173:pid-1234:start-unknown',
+                id: 'machine-win:tcp:loopback:127.0.0.1:5173:pid-1234:start-123450',
                 state: 'listening',
                 provenance: {
                     process: {
@@ -95,9 +95,10 @@ describe('createLocalServicesDaemonRuntime platform scanner dispatch', () => {
             // No `timeout` is handed to Node: its timeout kill destroys the child's stdout from the
             // timers phase and still reports success, so a scan cut short by a stalled event loop
             // would arrive as an authoritative empty listing. The scan boundary owns the deadline.
-            expect(execFileMock).toHaveBeenCalledWith('netstat.exe', ['-ano', '-p', 'tcp'], {
+            expect(execFileMock).toHaveBeenCalledWith('netstat.exe', ['-ano', '-p', 'tcp'], expect.objectContaining({
                 maxBuffer: 1024 * 1024,
-            }, expect.any(Function));
+            }), expect.any(Function));
+            expect(execFileMock.mock.calls[0]?.[2]).not.toHaveProperty('timeout');
         } finally {
             restorePlatform();
         }

@@ -5,6 +5,9 @@ import {
     normalizeLocalServiceScan,
     type NormalizedLocalServiceInventoryEntry,
 } from '../inventory/scanner';
+import { createTerminalProcessRegistry } from '../inventory/terminalRegistry';
+import { formatProcessOwnerTag } from '@/processes/ownerTag';
+import { configuration } from '@/configuration';
 
 function entry(overrides: Partial<NormalizedLocalServiceInventoryEntry> = {}): NormalizedLocalServiceInventoryEntry {
     return {
@@ -42,6 +45,25 @@ function entry(overrides: Partial<NormalizedLocalServiceInventoryEntry> = {}): N
 }
 
 describe('resolveLocalServiceActionEligibility', () => {
+    it('allows a confirmed detected listener held by the session own shell through the real scanner', () => {
+        const terminalRegistry = createTerminalProcessRegistry();
+        terminalRegistry.registerTerminalProcesses({ terminalKey: 'shell', terminalId: 'terminal-a',
+            sessionId: 'session-a', workspacePath: '/repo', pids: [400] });
+        const shell = normalizeLocalServiceScan({ machineId: 'machine-a', now: 1000, previous: null,
+            listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', pid: 400 }],
+            processes: new Map([[process.pid, { pid: process.pid, command: 'daemon', processOwnership: 'self' as const,
+                processStartTimeMs: 50 }], [400, { pid: 400, command: '/bin/bash', cwd: '/repo',
+                processOwnership: 'self' as const, processStartTimeMs: 100,
+                censusRow: { pid: 400, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: 'daemon' },
+                    name: 'bash', memory: null, cpuTimeUs: null, ownerTag: formatProcessOwnerTag({
+                        happierHomeDir: configuration.happyHomeDir, owner: { kind: 'terminal', terminalId: 'terminal-a' } }) } }]]),
+            workspaces: [{ path: '/repo' }], terminalRegistry }).entries[0]!;
+        expect(shell.provenance?.session?.id).toBe('session-a');
+        expect(resolveLocalServiceActionEligibility({ action: 'terminate_detected',
+            target: { kind: 'inventory_entry', entry: shell }, terminateEnabled: true })).toMatchObject({
+            enabled: true, requiresConfirmation: true, requiresSecondConfirmation: true,
+        });
+    });
     it('allows safe actions without enabling dangerous terminate policy', () => {
         expect(resolveLocalServiceActionEligibility({
             action: 'copy_url',
@@ -89,8 +111,11 @@ describe('resolveLocalServiceActionEligibility', () => {
             now: 1_000,
             previous: null,
             listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', pid: 400 }],
-            processes: new Map([[400, {
+            processes: new Map([[process.pid, { pid: process.pid, command: 'daemon', processStartTimeMs: 50,
+                processOwnership: 'self' as const }], [400, {
                 pid: 400,
+                ppid: process.pid,
+                processStartTimeMs: 100,
                 command: 'node ./node_modules/vite/bin/vite.js',
                 cwd: '/repo/web',
                 ...(processOwnership ? { processOwnership } : {}),
@@ -105,7 +130,7 @@ describe('resolveLocalServiceActionEligibility', () => {
                 terminateEnabled: true,
             });
 
-        // Same OS user: the daemon owns it and may terminate it.
+        // A same-principal child of the real daemon root is proven; principal alone is not ownership.
         expect(decisionFor('self')).toMatchObject({ enabled: true });
         // Another user's process (the cross-user case Linux/Windows machine-wide scans expose).
         expect(decisionFor('other')).toMatchObject({

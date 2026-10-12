@@ -1,8 +1,97 @@
 import { describe, expect, it } from 'vitest';
 
 import { normalizeLocalServiceScan } from './scanner';
+import { createTerminalProcessRegistry } from './terminalRegistry';
+import { LocalServiceInventoryClassificationV1Schema, LocalServiceInventoryProcessProvenanceV1Schema } from '@happier-dev/protocol';
+import { formatProcessOwnerTag } from '@/processes/ownerTag';
+import { configuration } from '@/configuration';
+import type { LocalServiceProcessFact } from './provenance';
 
 describe('normalizeLocalServiceScan', () => {
+    it('keeps unreadable or empty process commands valid at the strict inventory provenance boundary', () => {
+        const snapshot = normalizeLocalServiceScan({ machineId: 'machine-a', now: 1, previous: null,
+            workspaces: [], listeners: [{ address: '127.0.0.1', port: 3005, protocol: 'tcp', pid: 10 }],
+            processes: new Map([[10, { pid: 10, ppid: 1, command: '  ',
+                censusRow: { pid: 10, ppid: 1, start: { startTimeMs: 1 }, principal: null,
+                    name: '', argv: [], memory: null, cpuTimeUs: null } }]]),
+        });
+        expect(LocalServiceInventoryProcessProvenanceV1Schema.parse(snapshot.entries[0]?.provenance?.process))
+            .toMatchObject({ pid: 10, command: 'unknown', redacted: true });
+    });
+    it('presents wildcard listeners at their machine-local address without changing the bind fact', () => {
+        const snapshot = normalizeLocalServiceScan({ machineId: 'machine-a', now: 1, previous: null,
+            processes: new Map(), workspaces: [], listeners: [
+                { address: '::', port: 3005, protocol: 'tcp' },
+                { address: '0.0.0.0', port: 5173, protocol: 'tcp' },
+                { address: '*', port: 6006, protocol: 'tcp' },
+            ] });
+        expect(snapshot.entries.map(entry => entry.presentation?.addressLabel))
+            .toEqual(['localhost:3005', 'localhost:5173', 'localhost:6006']);
+        expect(snapshot.entries.map(entry => entry.address.host)).toEqual(['::', '0.0.0.0', '*']);
+    });
+    it('indexes current process facts once for all listener labels and rebuilds them on the next scan', () => {
+        // Measure full-table work on real input data; internal lineage/label logic stays real.
+        class MeasuredProcessFacts extends Map<number, LocalServiceProcessFact> {
+            enumerations = 0;
+            override values() {
+                this.enumerations += 1;
+                return super.values();
+            }
+        }
+        const processes = new MeasuredProcessFacts([
+            [300, { pid: 300, ppid: 1, command: 'npm run dev -- --token test-secret', cwd: '/repo/first' }],
+            [400, { pid: 400, ppid: 300, command: 'node server.js', cwd: '/repo/first/child' }],
+            [500, { pid: 500, ppid: 300, command: 'node other.js', cwd: '/repo/first/child' }],
+        ]);
+        const listeners = Array.from({ length: 20 }, (_, index) => ({
+            address: '127.0.0.1', port: 5000 + index, protocol: 'tcp' as const,
+            pid: index % 2 === 0 ? 400 : 500,
+        }));
+        const scan = (now: number) => normalizeLocalServiceScan({ machineId: 'machine-a', now,
+            previous: null, processes, listeners, workspaces: [], ownership: [] });
+
+        const first = scan(1000);
+        expect(first.entries.map(entry => entry.provenance?.process?.lineagePids))
+            .toEqual(listeners.map(listener => [listener.pid, 300]));
+        expect(first.entries.every(entry => entry.provenance?.process?.command === 'npm run dev -- --token [REDACTED]'))
+            .toBe(true);
+        expect(first.entries.every(entry => entry.provenance?.process?.cwd === '/repo/first')).toBe(true);
+        expect(processes.enumerations).toBe(1);
+
+        processes.set(300, { pid: 300, ppid: 1, command: 'npm run start', cwd: '/repo/second' });
+        const second = scan(2000);
+        expect(second.entries.every(entry => entry.provenance?.process?.command === 'npm run start')).toBe(true);
+        expect(second.entries.every(entry => entry.provenance?.process?.cwd === '/repo/second')).toBe(true);
+        expect(processes.enumerations).toBe(2);
+    });
+    it('preserves unreadable census fields through Services instead of lending port-only action authority', () => {
+        const terminalRegistry = createTerminalProcessRegistry();
+        terminalRegistry.registerTerminalProcesses({ terminalKey: 'shell', terminalId: 'terminal-a', workspacePath: '/repo', pids: [10] });
+        const snapshot = normalizeLocalServiceScan({ machineId: 'machine-a', now: 1000, previous: null,
+            listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', pid: 20 }],
+            processes: new Map([[10, { pid: 10, ppid: 1, command: 'sh', processOwnership: 'self' as const }],
+                [20, { pid: 20, ppid: 1, command: 'vite', cwd: '/repo', processOwnership: 'self' as const, censusMissing: ['environ'] }]]),
+            workspaces: [], terminalRegistry });
+        expect(snapshot.entries[0]?.processOwnershipConfidence).toBe('medium');
+    });
+    it('attributes a listener beyond four parent links to its terminal and session', () => {
+        const terminalRegistry = createTerminalProcessRegistry();
+        terminalRegistry.registerTerminalProcesses({ terminalKey: 'shell', terminalId: 'terminal-a',
+            sessionId: 'session-a', workspacePath: '/repo', pids: [100] });
+        const snapshot = normalizeLocalServiceScan({ machineId: 'machine-a', now: 1000, previous: null,
+            listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', pid: 106 }],
+            processes: new Map<number, LocalServiceProcessFact>([[process.pid, { pid: process.pid, command: 'daemon', processOwnership: 'self' }], ...Array.from({ length: 7 }, (_, offset): [number, LocalServiceProcessFact] => [100 + offset, {
+                pid: 100 + offset, ppid: offset ? 99 + offset : 1, command: offset === 6 ? 'vite' : 'sh',
+                processStartTimeMs: 100 + offset, processOwnership: 'self' as const,
+                censusRow: { pid: 100 + offset, ppid: offset ? 99 + offset : 1, start: { startTimeMs: 100 + offset },
+                    principal: { kind: 'uid' as const, value: 'daemon' }, name: 'sh', memory: null, cpuTimeUs: null,
+                    ...(offset === 0 ? { ownerTag: formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir,
+                        owner: { kind: 'terminal' as const, terminalId: 'terminal-a' } }) } : {}) },
+            }])]), workspaces: [], terminalRegistry });
+        expect(snapshot.entries[0]?.provenance?.session?.id).toBe('session-a');
+        expect(snapshot.entries[0]?.provenance?.process?.lineagePids).toContain(100);
+        expect(LocalServiceInventoryClassificationV1Schema.safeParse(snapshot.entries[0]?.classification).success).toBe(true);
+    });
     it('marks only listeners owned by exact Happier process or endpoint evidence', () => {
         const snapshot = normalizeLocalServiceScan({
             machineId: 'machine-a', now: 1_000, previous: null, workspaces: [],

@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createLocalServiceActionConfirmationNonceV1 } from '@happier-dev/protocol/local/services/actions/v1';
 
 import { REDACTED_LOCAL_SERVICE_PUBLIC_PREVIEW_URL } from '@happier-dev/protocol';
 import type {
@@ -771,39 +775,61 @@ describe('daemon local-services runtime action executor', () => {
         expect(publicPreviewRoutes.revokeExposure).toHaveBeenCalledOnce();
     });
 
-    // UX-5: a non-UI/agent caller must NOT be able to expose a service without consent. The daemon
-    // rejects a create request that lacks the acknowledged confirmation, even when routes are present.
-    it('rejects publicPreview.create without an acknowledged confirmation token', async () => {
+    it('honours public-preview Action approval policy without a second acknowledgement floor', async () => {
         const mod = await import('./runtimeActionExecutor');
-        const publicPreviewRoutes = {
-            getStatus: vi.fn(async () => publicPreviewSnapshot),
-            createExposure: vi.fn(async () => ({
-                protocolVersion: 1 as const,
-                exposure: publicExposure,
-                snapshot: publicPreviewSnapshot,
-            })),
-            revokeExposure: vi.fn(),
-            copyUrl: vi.fn(),
-        };
+        const requests: Array<Readonly<{ url: string; body: unknown }>> = [];
+        const publicPreviewRoutes = createLocalServicePublicPreviewServerRoutes({ token: 'daemon-token',
+            serverBaseUrl: 'https://home.example.test', http: {
+                async post(url, body) { requests.push({ url, body }); return { data: url.endsWith('/status')
+                    ? { protocolVersion: 1, snapshot: publicPreviewSnapshot } : { exposure: publicExposure } }; },
+                async delete() { return { data: { ok: true } }; },
+            } });
         const execute = mod.createLocalServicesDaemonRuntimeActionExecutor({
             featureGate: allowAllFeatureGate,
-            routes: { publicPreviewRoutes } as never,
+            routes: { publicPreviewRoutes },
         });
-
-        await expect(execute(runtimeArgs({
-            actionId: 'localServices.publicPreview.create',
-            input: {
+        let settings = normalizeActionsSettingsV1({ v: 1 });
+        const executor = createActionExecutor({ runtimeActionExecute: execute,
+            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context) });
+        const request = {
                 machineId: 'machine_1',
                 sessionId: 'session_1',
                 previewId: 'preview_1',
                 mode: 'secret_link' as const,
                 ttlMs: 600_000,
-            },
-        }))).resolves.toMatchObject({
-            ok: false,
-            error: 'runtime_action_disabled:localServices:local_services_public_preview_confirmation_required',
-        });
-        expect(publicPreviewRoutes.createExposure).not.toHaveBeenCalled();
+        };
+        const context = { surface: 'cli' as const, authority: 'account_automation' as const };
+        expect((await executor.execute('localServices.publicPreview.create', request, context)).ok).toBe(false);
+        expect(requests).toEqual([]);
+        settings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'localServices.publicPreview.create': ['cli'] } });
+        const created = await executor.execute('localServices.publicPreview.create', request, context);
+        expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { protocolVersion: 1 } });
+        expect(requests.filter(request => !request.url.endsWith('/status'))).toEqual([
+            expect.objectContaining({ body: expect.objectContaining({ confirmation: { acknowledged: true } }) }),
+        ]);
+    });
+
+    it('honours a process-control waiver without requiring a caller-authored confirmation nonce', async () => {
+        const { createLocalServicesDaemonRuntimeActionExecutor } = await import('./runtimeActionExecutor');
+        const { registry } = createObservedActionRoutes();
+        const snapshot = registry.getSnapshot();
+        registry.replaceSnapshot({ ...snapshot, entries: snapshot.entries.map(entry => ({ ...entry,
+            provenance: { process: { pid: 4321, lineagePids: [4321], command: 'owned service', redacted: true } },
+        })) });
+        const execute = createLocalServicesDaemonRuntimeActionExecutor({ featureGate: allowAllFeatureGate,
+            routes: { actionRoutes: createLocalServiceActionRoutes({ machineId: 'machine_1', inventoryRegistry: registry,
+                terminateEnabled: () => true,
+                verifyConfirmationNonce: request => request.confirmationNonce === createLocalServiceActionConfirmationNonceV1(request),
+            }) } });
+        const settings = normalizeActionsSettingsV1({ v: 1,
+            approvalWaivedSurfaces: { 'localServices.actions.terminateDetected': ['cli'] } });
+        const executor = createActionExecutor({ runtimeActionExecute: execute,
+            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context) });
+        const result = await executor.execute('localServices.actions.terminateDetected', {
+            requestId: 'waived-process-control', action: 'terminate_detected', force: false,
+            target: { kind: 'inventory_entry', inventoryEntryId: 'entry_1', machineId: 'machine_1' },
+        }, { surface: 'cli', authority: 'account_automation' });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'denied', reasonCode: 'terminate_detected_executor_unavailable' } });
     });
 
     // Execution-boundary fail-closed gate. A server that disables a local-service feature must

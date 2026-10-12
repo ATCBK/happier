@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyLocalServiceProcess } from './classification';
+import { classifyProcessRole as classifyLocalServiceProcess } from '@/processes/classification/classifyProcessRole';
 
 describe('classifyLocalServiceProcess', () => {
     it('recognizes common dev server commands', () => {

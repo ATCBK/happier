@@ -1,12 +1,6 @@
-import { LOCAL_SERVICE_PROCESS_LINEAGE_MAX_DEPTH, type LocalServiceProcessFact } from '../provenance';
+import type { LocalServiceProcessFact } from '../provenance';
 import type { LocalServiceInventoryDiagnostic, LocalServiceListenerFact } from '../scanner';
-import { collectLocalServiceProcessLineageFacts } from './processLineage';
-import { classifyProcessOwnershipByIdentity } from './processOwnership';
-import {
-    parseWindowsProcessInventoryJson,
-    readWindowsProcessInventory,
-    type WindowsProcessInventoryFact,
-} from '../../../../platform/windows/windowsProcessInventory';
+import { projectLocalServiceProcessFacts } from '@/processes/census/projectLocalServiceProcessFacts';
 
 export type WindowsExecFileBoundary = (
     command: string,
@@ -82,6 +76,7 @@ function isNetstatListeningRow(state: string | undefined, foreignAddress: string
 
 export function parseWindowsNetstatTcpListeners(output: string): LocalServiceListenerFact[] {
     const listeners: LocalServiceListenerFact[] = [];
+    const sockets: { address: string; port: number; state: string }[] = [];
     for (const line of output.split(/\r?\n/u)) {
         const columns = line.trim().split(/\s+/u);
         if (columns.length < 5 || columns[0]?.toUpperCase() !== 'TCP') continue;
@@ -89,6 +84,8 @@ export function parseWindowsNetstatTcpListeners(output: string): LocalServiceLis
         const foreignAddress = columns[2];
         const state = columns[3];
         const rawPid = columns[4];
+        const local = localAddress ? parseWindowsLocalAddress(localAddress) : null;
+        if (local && state) sockets.push({ ...local, state: state.toUpperCase() });
         if (!localAddress || !isNetstatListeningRow(state, foreignAddress)) continue;
         const parsedAddress = parseWindowsLocalAddress(localAddress);
         if (!parsedAddress) continue;
@@ -100,56 +97,13 @@ export function parseWindowsNetstatTcpListeners(output: string): LocalServiceLis
             ...(pid ? { pid } : {}),
         });
     }
-    return listeners;
-}
-
-export function parseWindowsProcessFactsJson(output: string): ReadonlyMap<number, LocalServiceProcessFact> {
-    return projectWindowsProcessFacts(
-        parseWindowsProcessInventoryJson(output),
-    );
-}
-
-function projectWindowsProcessFacts(
-    raw: ReadonlyMap<number, WindowsProcessInventoryFact>,
-): ReadonlyMap<number, LocalServiceProcessFact> {
-    const processes = new Map<number, LocalServiceProcessFact>();
-    for (const fact of raw.values()) {
-        // Ownership rides on the same row as the rest of the fact: the SID projection is only
-        // requested for listener pids, so ancestors simply carry no owner and stay `undefined`,
-        // which the scanner grades `medium` and the terminate gate refuses.
-        const processOwnership = classifyProcessOwnershipByIdentity(
-            fact.ownerSid,
-            fact.currentUserSid,
-        );
-        processes.set(fact.pid, {
-            pid: fact.pid,
-            ...(fact.ppid ? { ppid: fact.ppid } : {}),
-            ...(typeof fact.processStartTimeMs === 'number'
-                ? { processStartTimeMs: fact.processStartTimeMs }
-                : {}),
-            command:
-                fact.command?.slice(0, 1_000)
-                || fact.executablePath?.slice(0, 1_000)
-                || 'unknown',
-            ...(processOwnership ? { processOwnership } : {}),
-        });
-    }
-    return processes;
-}
-
-export async function readWindowsProcessFacts(input: Readonly<{
-    execFile: WindowsExecFileBoundary;
-    pids: readonly number[];
-    /** Listener pids: the only ones whose owning principal the terminate gate needs. */
-    ownerSidPids?: readonly number[];
-}>): Promise<ReadonlyMap<number, LocalServiceProcessFact>> {
-    const pids = [...new Set(input.pids.filter((pid) => Number.isInteger(pid) && pid > 0))];
-    if (pids.length === 0) return new Map();
-    return projectWindowsProcessFacts(await readWindowsProcessInventory({
-        execFile: input.execFile,
-        pids,
-        ...(input.ownerSidPids ? { ownerSidPids: input.ownerSidPids } : {}),
-    }));
+    return listeners.map(listener => {
+        // Accepted sockets can move to workers; zero must cover the entire listening endpoint.
+        const matching = sockets.filter(socket => socket.port === listener.port
+            && (listener.address === '0.0.0.0' || listener.address === '::' || socket.address === listener.address));
+        return { ...listener, establishedConnections: listener.pid === undefined || matching.some(socket => !WINDOWS_NETSTAT_TCP_STATES.has(socket.state))
+            ? null : matching.filter(socket => socket.state === 'ESTABLISHED').length };
+    });
 }
 
 function stdoutToString(stdout: string | Buffer): string {
@@ -190,17 +144,8 @@ export async function readWindowsLocalServiceListeners(input: Readonly<{
     }
 
     const diagnostics: LocalServiceInventoryDiagnostic[] = [];
-    const processes = await collectLocalServiceProcessLineageFacts({
+    const processes = await projectLocalServiceProcessFacts({
         seedPids: pids,
-        maxDepth: LOCAL_SERVICE_PROCESS_LINEAGE_MAX_DEPTH,
-        readProcessFacts: async (queryPids) => await readWindowsProcessFacts({
-            execFile: input.execFile,
-            pids: queryPids,
-            // Owner SIDs only for the listener pids in this batch — order-independent, so it
-            // does not matter which lineage depth a pid is read at, and ancestors never pay for
-            // a WMI method call whose answer nothing reads.
-            ownerSidPids: queryPids.filter((pid) => pids.includes(pid)),
-        }),
         onReadFailure: () => {
             diagnostics.push({
                 code: 'windows_process_fact_scan_failed',

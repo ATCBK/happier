@@ -4,6 +4,7 @@ import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceR
 
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { StoredCredentials } from '@/persistence';
+import { resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 
 import type { LocalServiceWorkspaceFact } from './provenance';
 
@@ -119,8 +120,10 @@ export async function readLocalServiceWorkspaceFacts(input: Readonly<{
             ...(input.signal ? { signal: input.signal } : {}),
         }));
         input.signal?.throwIfAborted();
+        const homeServerId = await resolveServerProfileHomeIdentityId(input.serverId) ?? input.serverId;
+        input.signal?.throwIfAborted();
         acceptedWorkspaceRefs = snapshot.workspaceRefs.filter(ref => (
-            ref.serverId === input.serverId && ref.machineId === input.machineId
+            ref.serverId === homeServerId && ref.machineId === input.machineId
         ));
     } catch (error) {
         input.signal?.throwIfAborted();

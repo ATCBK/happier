@@ -122,6 +122,24 @@ describe('createLocalServiceInventoryRoutes', () => {
         expect(routes.watcherCount()).toBe(0);
     });
 
+    it('does not miss a snapshot produced while demand starts before subscription', async () => {
+        vi.useFakeTimers();
+        const registry = createLocalServiceInventoryRegistry();
+        registry.replaceSnapshot(snapshotAt(1_000));
+        const routes = createLocalServiceInventoryRoutes({
+            registry,
+            onWatcherCountChanged(count) {
+                if (count === 1) registry.replaceSnapshot(snapshotAt(2_000, 'entry-new'));
+            },
+        });
+
+        const pending = routes.watchSnapshot({ sinceGeneratedAt: 1_000 });
+        await vi.advanceTimersByTimeAsync(25_000);
+
+        expect(await pending).toEqual({ changed: true, snapshot: registry.getSnapshot() });
+        expect(routes.watcherCount()).toBe(0);
+    });
+
     it('releases its watcher slot when the caller aborts', async () => {
         const registry = createLocalServiceInventoryRegistry();
         registry.replaceSnapshot(snapshotAt(1_000));

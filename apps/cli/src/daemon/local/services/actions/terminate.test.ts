@@ -1,493 +1,167 @@
 import { describe, expect, it, vi } from 'vitest';
-
-import {
-    createTerminateDetectedService,
-    type TerminateDescendantResolution,
-    type TerminateListenerProbeResult,
-    type TerminateProcessControl,
-    type TerminateProcessIdentity,
-    type TerminateProcessSignalOutcome,
-} from './terminate';
 import type { LocalServiceActionRequestV1 } from '@happier-dev/protocol';
+
+import { createProcessTreeTerminator } from '@/processes/terminate/terminateProcessTree';
+import { readLinuxCensus } from '@/processes/census/linux';
 import type { NormalizedLocalServiceInventoryEntry } from '../inventory/scanner';
+import { localServiceProcfsFixture } from '../inventory/platform/censusFixture.testkit';
+import { createTerminateDetectedService, type TerminateListenerProbeResult } from './terminate';
 
-function entry(overrides: Partial<NormalizedLocalServiceInventoryEntry> = {}): NormalizedLocalServiceInventoryEntry {
+const PID = 4321;
+const CHILD = 4322;
+const free = { status: 'free' } as const;
+
+function entry(startTime?: number): NormalizedLocalServiceInventoryEntry {
     return {
-        id: 'entry-a',
-        machineId: 'machine-a',
+        id: 'entry-a', machineId: 'machine-a',
         address: { kind: 'loopback', host: '127.0.0.1', family: 'ipv4' },
-        port: 5173,
-        protocol: 'tcp',
-        detectedAt: 1_000,
-        lastSeenAt: 2_000,
-        state: 'listening',
-        source: 'detected',
-        labels: [],
-        confidence: 'high',
-        processOwnershipConfidence: 'high',
-        workspaceAssociationConfidence: 'high',
-        diagnostics: [],
-        provenance: {
-            process: {
-                pid: 4_321,
-                ppid: 300,
-                processStartTimeMs: 1_717_171_717_000,
-                lineagePids: [4_321, 300],
-                command: 'npm run dev',
-                cwd: '/repo/web',
-                redacted: true,
-            },
-            workspace: { path: '/repo', association: 'cwd_containment' },
-        },
-        ...overrides,
+        port: 5173, protocol: 'tcp', detectedAt: 1000, lastSeenAt: 2000,
+        state: 'listening', source: 'detected', labels: [], confidence: 'high',
+        processOwnershipConfidence: 'high', workspaceAssociationConfidence: 'high', diagnostics: [],
+        provenance: { process: {
+            pid: PID, lineagePids: [PID], command: 'npm run dev', cwd: '/repo/web', redacted: true,
+            ...(startTime === undefined ? {} : { processStartTimeMs: startTime }),
+        } },
     };
 }
-
-function request(): LocalServiceActionRequestV1 {
-    return {
-        requestId: 'req-1',
-        action: 'terminate_detected',
-        target: { kind: 'inventory_entry', machineId: 'machine-a', inventoryEntryId: 'entry-a' },
-        confirmationNonce: 'nonce',
-        force: false,
-    };
-}
-
-type ControlOverrides = Partial<TerminateProcessControl> & {
-    /** Sequence of probe results returned in order; last value repeats. */
-    probeResults?: readonly TerminateListenerProbeResult[];
-    aliveResults?: readonly boolean[];
-    signalResults?: readonly TerminateProcessSignalOutcome[];
-    descendantPids?: readonly number[];
-    /** Descendant resolutions returned per `resolveDescendantPids` call, in order. */
-    descendantRounds?: ReadonlyArray<TerminateDescendantResolution>;
+const request: LocalServiceActionRequestV1 = {
+    requestId: 'req', action: 'terminate_detected', force: false,
+    target: { kind: 'inventory_entry', machineId: 'machine-a', inventoryEntryId: 'entry-a' },
 };
 
-function held(identity: TerminateProcessIdentity): TerminateListenerProbeResult {
-    return { status: 'held', identity };
-}
-
-function fakeControl(overrides: ControlOverrides = {}): TerminateProcessControl & {
-    resolveDescendantPids: ReturnType<typeof vi.fn>;
-    signal: ReturnType<typeof vi.fn>;
-    terminateWindowsTree: ReturnType<typeof vi.fn>;
-} {
-    const probeResults = overrides.probeResults ?? [
-        held({ pid: 4_321, startTime: 1_717_171_717_000 }),
-        { status: 'free' },
-    ];
-    let probeIndex = 0;
-    const aliveResults = overrides.aliveResults ?? [false];
-    let aliveIndex = 0;
-    const signalResults = overrides.signalResults ?? [{ status: 'delivered', deliveredPids: [4_321] }];
-    let signalIndex = 0;
-
-    const descendantRounds = overrides.descendantRounds;
-    let descendantRound = 0;
-    const resolveDescendantPids = vi.fn(async (): Promise<TerminateDescendantResolution> => {
-        if (descendantRounds) {
-            const value = descendantRounds[Math.min(descendantRound, descendantRounds.length - 1)];
-            descendantRound += 1;
-            return value ?? { status: 'resolved', pids: [] };
-        }
-        return { status: 'resolved', pids: overrides.descendantPids ?? [4_322, 4_323] };
-    });
-    const signal = vi.fn(async () => {
-        const value = signalResults[Math.min(signalIndex, signalResults.length - 1)];
-        signalIndex += 1;
-        return value;
-    });
-    const terminateWindowsTree = vi.fn(async () => {});
-
-    return {
-        platform: overrides.platform ?? 'posix',
-        probeListener: overrides.probeListener ?? (async () => {
-            const value = probeResults[Math.min(probeIndex, probeResults.length - 1)];
-            probeIndex += 1;
-            return value;
-        }),
-        isProcessAlive: overrides.isProcessAlive ?? (async () => {
-            const value = aliveResults[Math.min(aliveIndex, aliveResults.length - 1)];
-            aliveIndex += 1;
-            return value;
-        }),
-        readProcessIdentity: overrides.readProcessIdentity ?? (async (pid) => ({ pid, startTime: 1_717_171_717_000 })),
-        resolveDescendantPids,
-        signal,
-        terminateWindowsTree,
-        wait: overrides.wait ?? (async () => {}),
+async function harness(input: Readonly<{ resistantChild?: boolean; survive?: boolean; signalError?: string; readFailure?: boolean; finalVerificationFailure?: boolean; absentRoot?: boolean }> = {}) {
+    const live = new Set(input.absentRoot ? [] : [PID, CHILD]);
+    let emptyReads = 0;
+    const fixture = () => localServiceProcfsFixture([...live].map(pid => ({ pid, ppid: pid === CHILD && live.has(PID) ? PID : 1 })));
+    const boundary = {
+        readdir: async (path: string) => {
+            if (input.readFailure) throw new Error('procfs unavailable');
+            if (input.finalVerificationFailure && live.size === 0 && ++emptyReads > 1) throw new Error('final procfs verification unavailable');
+            return fixture().readdir(path);
+        },
+        readFile: async (path: string) => fixture().readFile(path),
+        readlink: async (path: string) => fixture().readlink(path),
     };
+    const initial = await readLinuxCensus({ boundary: localServiceProcfsFixture([{ pid: PID }]), selfPid: process.pid, capturedAtMs: 0, logicalCpus: 4 });
+    if (initial.status !== 'ok') throw new Error('fixture census unavailable');
+    const start = initial.rows.find(row => row.pid === PID)?.start.startTimeMs;
+    if (start === undefined) throw new Error('fixture identity unavailable');
+    const held: TerminateListenerProbeResult = { status: 'held', identity: { pid: PID, startTime: start } };
+    let index = 0;
+    const probeListener = vi.fn(async (): Promise<TerminateListenerProbeResult> => index++ === 0 ? held : free);
+    const kill = vi.fn((pid: number, signal: NodeJS.Signals) => {
+        if (input.signalError) throw Object.assign(new Error(input.signalError), { code: input.signalError });
+        if (!input.survive && (signal === 'SIGKILL' || !input.resistantChild || pid !== CHILD)) live.delete(pid);
+    });
+    const control = {
+        probeListener,
+        terminateTree: createProcessTreeTerminator({ platform: 'linux', kill, censusDependencies: { platform: 'linux', linuxBoundary: boundary } }),
+        wait: async () => {},
+    };
+    const run = (target = entry(start)) => createTerminateDetectedService(control, { graceMs: 1, verifyPollMs: 0, verifyAttempts: 2 })({ request, entry: target, now: 3000 });
+    return { run, probeListener, kill, live, start, held };
 }
 
 describe('createTerminateDetectedService', () => {
-    it('passes its grace budget to both Windows tool invocations', async () => {
-        const control = fakeControl({ platform: 'windows', aliveResults: [true, false] });
-        const terminate = createTerminateDetectedService(control, { graceMs: 730 });
-        await expect(terminate({ entry: entry(), request: request(), now: 3_000 })).resolves.toMatchObject({ status: 'succeeded' });
-        expect(control.terminateWindowsTree).toHaveBeenNthCalledWith(1, { pid: 4_321, force: false, timeoutMs: 730 });
-        expect(control.terminateWindowsTree).toHaveBeenNthCalledWith(2, { pid: 4_321, force: true, timeoutMs: 730 });
+    it('interrupts the tree and forces its resistant child before confirming port release', async () => {
+        const h = await harness({ resistantChild: true });
+        await expect(h.run()).resolves.toEqual({ status: 'succeeded' });
+        expect(h.live.size).toBe(0);
+        expect(h.kill.mock.calls).toContainEqual([CHILD, 'SIGINT']);
+        expect(h.kill.mock.calls).toContainEqual([CHILD, 'SIGKILL']);
+        expect(h.kill.mock.calls).toContainEqual([PID, 'SIGINT']);
     });
-
-    it.each([4_321, 4_322])('never follows or kills a captured pid reused during the grace window (%s)', async (reusedPid) => {
-        let reused = false;
-        const control = fakeControl({
-            descendantPids: [4_322],
-            isProcessAlive: async (pid) => pid === reusedPid,
-            readProcessIdentity: async (pid) => ({ pid, startTime: pid === reusedPid && reused ? 1_717_171_718_000 : 1_717_171_717_000 }),
-            wait: async () => { reused = true; },
-        });
-        const result = await createTerminateDetectedService(control, { graceMs: 0 })({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'denied', reasonCode: 'identity_changed' });
-        expect(control.signal.mock.calls.map(([input]) => input.signal)).toEqual(['SIGTERM']);
-        expect(control.resolveDescendantPids).toHaveBeenCalledTimes(1);
+    it('requires a listener observation generated after the action request', async () => {
+        const h = await harness();
+        await h.run();
+        expect(h.probeListener).toHaveBeenNthCalledWith(1, { host: '127.0.0.1', port: 5173, notBefore: 3000 });
     });
-
-    it('refuses escalation when a surviving orphan identity cannot be verified', async () => {
-        let afterGrace = false;
-        const control = fakeControl({
-            descendantPids: [4_322],
-            isProcessAlive: async (pid) => pid === 4_322,
-            readProcessIdentity: async (pid) => afterGrace ? null : { pid, startTime: 1_717_171_717_000 },
-            wait: async () => { afterGrace = true; },
-        });
-        const result = await createTerminateDetectedService(control, { graceMs: 0 })({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'failed', reasonCode: 'process_tree_unresolved' });
-        expect(control.signal.mock.calls.map(([input]) => input.signal)).toEqual(['SIGTERM']);
+    it.each([0, 1, -1])('refuses unsafe listener pid %s', async pid => {
+        const h = await harness();
+        const target = entry(h.start);
+        await expect(h.run({ ...target, provenance: { process: { ...target.provenance!.process!, pid } } }))
+            .resolves.toEqual({ status: 'denied', reasonCode: 'unsafe_pid' });
+        expect(h.kill).not.toHaveBeenCalled();
     });
-
-    it('revalidates captured identities again when a pid is reused during descendant discovery', async () => {
-        let reused = false;
-        const control = fakeControl({
-            descendantPids: [4_322],
-            isProcessAlive: async (pid) => pid === 4_322,
-            readProcessIdentity: async (pid) => ({ pid, startTime: pid === 4_322 && reused ? 1_717_171_718_000 : 1_717_171_717_000 }),
-        });
-        control.resolveDescendantPids.mockImplementation(async (roots: number | readonly number[]) => {
-            if (Array.isArray(roots)) reused = true;
-            return { status: 'resolved', pids: [4_322] };
-        });
-        const result = await createTerminateDetectedService(control, { graceMs: 0 })({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'denied', reasonCode: 'identity_changed' });
-        expect(control.signal.mock.calls.map(([input]) => input.signal)).toEqual(['SIGTERM']);
+    it('refuses a missing process identity', async () => {
+        const h = await harness();
+        await expect(h.run({ ...entry(), provenance: {} })).resolves.toEqual({ status: 'denied', reasonCode: 'process_identity_unavailable' });
+        expect(h.kill).not.toHaveBeenCalled();
     });
-
-    it('refuses an unsafe pid (never signals pid 0/1)', async () => {
-        const control = fakeControl();
-        const terminate = createTerminateDetectedService(control);
-
-        const result = await terminate({
-            request: request(),
-            entry: entry({
-                provenance: {
-                    process: { pid: 1, lineagePids: [1], command: 'init', redacted: true },
-                },
-            }),
-            now: 0,
-        });
-
-        expect(result).toEqual({ status: 'denied', reasonCode: 'unsafe_pid' });
-        expect(control.signal).not.toHaveBeenCalled();
+    it.each([{ pid: 9999 }, { pid: PID, startTime: 9999 }, { pid: PID }])('refuses changed or unverifiable listener identity %j', async identity => {
+        const h = await harness();
+        h.probeListener.mockResolvedValue({ status: 'held', identity });
+        await expect(h.run()).resolves.toEqual({ status: 'denied', reasonCode: 'identity_changed' });
+        expect(h.kill).not.toHaveBeenCalled();
     });
-
-    it('refuses to signal when the port was rebound by a DIFFERENT pid (TOCTOU)', async () => {
-        const control = fakeControl({ probeResults: [held({ pid: 9_999 })] });
-        const terminate = createTerminateDetectedService(control);
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'denied', reasonCode: 'identity_changed' });
-        expect(control.signal).not.toHaveBeenCalled();
+    it('refuses changed command provenance despite equal pid/start', async () => {
+        const h = await harness();
+        h.probeListener.mockResolvedValue({ status: 'held', identity: { pid: PID, startTime: h.start, command: 'other-server' } });
+        await expect(h.run()).resolves.toEqual({ status: 'denied', reasonCode: 'identity_changed' });
+        expect(h.kill).not.toHaveBeenCalled();
     });
-
-    it('refuses to signal when the same pid was reused with a different process start time', async () => {
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_999_000 })],
-        });
-        const terminate = createTerminateDetectedService(control);
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'denied', reasonCode: 'identity_changed' });
-        expect(control.signal).not.toHaveBeenCalled();
+    it('does not signal an already released listener', async () => {
+        const h = await harness();
+        h.probeListener.mockResolvedValue(free);
+        await expect(h.run()).resolves.toEqual({ status: 'succeeded' });
+        expect(h.kill).not.toHaveBeenCalled();
     });
-
-    it('refuses to signal a full-identity row when the action-time probe cannot reverify start time', async () => {
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321 })],
-        });
-        const terminate = createTerminateDetectedService(control);
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'denied', reasonCode: 'identity_changed' });
-        expect(control.signal).not.toHaveBeenCalled();
+    it('refuses an indeterminate listener observation', async () => {
+        const h = await harness();
+        h.probeListener.mockResolvedValue({ status: 'indeterminate' });
+        await expect(h.run()).resolves.toEqual({ status: 'failed', reasonCode: 'listener_state_unverifiable' });
+        expect(h.kill).not.toHaveBeenCalled();
     });
-
-    it('refuses to signal when the same pid/start time resolves to different process provenance', async () => {
-        const control = fakeControl({
-            probeResults: [held({
-                pid: 4_321,
-                startTime: 1_717_171_717_000,
-                command: 'node other-server.js',
-                cwd: '/repo/web',
-            })],
-        });
-        const terminate = createTerminateDetectedService(control);
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'denied', reasonCode: 'identity_changed' });
-        expect(control.signal).not.toHaveBeenCalled();
+    it('refuses changed generation found by the shared terminator after the listener probe', async () => {
+        const h = await harness();
+        h.probeListener.mockResolvedValue({ status: 'held', identity: { pid: PID, startTime: h.start + 1000 } });
+        await expect(h.run(entry())).resolves.toEqual({ status: 'denied', reasonCode: 'identity_changed' });
+        expect(h.kill).not.toHaveBeenCalled();
     });
-
-    it('treats an already-gone listener as idempotent success', async () => {
-        const control = fakeControl({ probeResults: [{ status: 'free' }] });
-        const terminate = createTerminateDetectedService(control);
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'succeeded' });
-        expect(control.signal).not.toHaveBeenCalled();
+    it('does not report success for a freed port while a tree member survives', async () => {
+        const h = await harness({ survive: true });
+        await expect(h.run()).resolves.toEqual({ status: 'failed', reasonCode: 'terminate_signal_failed' });
+        expect(h.live.size).toBe(2);
     });
-
-    it('refuses to signal when listener identity cannot be authoritatively revalidated', async () => {
-        const control = fakeControl({ probeResults: [{ status: 'indeterminate' }] });
-        const terminate = createTerminateDetectedService(control);
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'failed', reasonCode: 'listener_state_unverifiable' });
-        expect(control.resolveDescendantPids).not.toHaveBeenCalled();
-        expect(control.signal).not.toHaveBeenCalled();
+    it('maps a shared census failure without signalling the listener alone', async () => {
+        const h = await harness({ readFailure: true });
+        await expect(h.run()).resolves.toEqual({ status: 'failed', reasonCode: 'process_tree_unresolved' });
+        expect(h.kill).not.toHaveBeenCalled();
     });
-
-    it('resolves descendants once and sends SIGTERM to the captured process tree', async () => {
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_717_000 }), { status: 'free' }],
-            aliveResults: [false],
-            descendantPids: [4_322, 4_323],
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1 });
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'succeeded' });
-        expect(control.resolveDescendantPids).toHaveBeenCalledOnce();
-        expect(control.resolveDescendantPids).toHaveBeenCalledWith(4_321);
-        expect(control.signal).toHaveBeenCalledTimes(1);
-        expect(control.signal).toHaveBeenCalledWith({
-            pid: 4_321,
-            signal: 'SIGTERM',
-            descendantPids: [4_322, 4_323],
-        });
+    it('refuses success when the final fresh tree verification fails after the members ended', async () => {
+        const h = await harness({ finalVerificationFailure: true });
+        await expect(h.run()).resolves.toEqual({ status: 'failed', reasonCode: 'process_tree_unresolved' });
+        expect(h.live.size).toBe(0);
     });
-
-    it('escalates to SIGKILL when the process is still alive after grace', async () => {
-        let treeAlive = true;
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_717_000 }), { status: 'free' }],
-            isProcessAlive: async () => treeAlive,
-            descendantPids: [4_322],
-        });
-        control.signal.mockImplementation(async ({ pid, signal, descendantPids }) => {
-            if (signal === 'SIGKILL') treeAlive = false;
-            return { status: 'delivered', deliveredPids: [pid, ...descendantPids] };
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1 });
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'succeeded' });
-        expect(control.signal).toHaveBeenNthCalledWith(1, {
-            pid: 4_321,
-            signal: 'SIGTERM',
-            descendantPids: [4_322],
-        });
-        expect(control.signal).toHaveBeenNthCalledWith(2, {
-            pid: 4_321,
-            signal: 'SIGKILL',
-            descendantPids: [4_322],
-        });
+    it('maps a genuine OS permission refusal', async () => {
+        const h = await harness({ signalError: 'EPERM' });
+        await expect(h.run()).resolves.toEqual({ status: 'failed', reasonCode: 'terminate_permission_denied' });
     });
-
-    it('escalates a surviving descendant after the listener exits and verifies it is gone', async () => {
-        let childAlive = true;
-        const control = fakeControl({
-            descendantPids: [4_322],
-            isProcessAlive: async (pid) => pid === 4_322 && childAlive,
-        });
-        control.signal.mockImplementation(async ({ signal }) => {
-            if (signal === 'SIGKILL') childAlive = false;
-            return { status: 'delivered', deliveredPids: signal === 'SIGKILL' ? [4_322] : [4_321, 4_322] };
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1, verifyPollMs: 0, verifyAttempts: 1 });
-
-        await expect(terminate({ request: request(), entry: entry(), now: 0 })).resolves.toEqual({ status: 'succeeded' });
-        expect(childAlive).toBe(false);
+    it('reports the port still held after the shared terminator observed the tree end', async () => {
+        const h = await harness();
+        h.probeListener.mockResolvedValue(h.held);
+        await expect(h.run()).resolves.toEqual({ status: 'failed', reasonCode: 'port_not_released' });
+        expect(h.live.size).toBe(0);
     });
-
-    it('refuses success when the port is released but a descendant remains present', async () => {
-        const control = fakeControl({
-            descendantPids: [4_322],
-            isProcessAlive: async (pid) => pid === 4_322,
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1, verifyPollMs: 0, verifyAttempts: 1 });
-
-        await expect(terminate({ request: request(), entry: entry(), now: 0 }))
-            .resolves.toMatchObject({ status: 'failed' });
+    it('reports unverifiable port release after shared termination', async () => {
+        const h = await harness();
+        h.probeListener.mockResolvedValue({ status: 'indeterminate' }).mockResolvedValueOnce(h.held);
+        await expect(h.run()).resolves.toEqual({ status: 'failed', reasonCode: 'port_release_unverified' });
     });
-
-    it('discovers workers spawned by a surviving orphan during the grace window', async () => {
-        const alive = new Set([4_322, 4_323]);
-        const control = fakeControl({
-            isProcessAlive: async (pid) => alive.has(pid),
-            descendantRounds: [
-                { status: 'resolved', pids: [4_322] },
-                { status: 'resolved', pids: [4_323] },
-            ],
-        });
-        control.signal.mockImplementation(async ({ pid, signal, descendantPids }) => {
-            if (signal === 'SIGKILL') {
-                for (const target of [pid, ...descendantPids]) alive.delete(target);
-            }
-            return { status: 'delivered', deliveredPids: [pid, ...descendantPids] };
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1, verifyPollMs: 0, verifyAttempts: 1 });
-
-        await expect(terminate({ request: request(), entry: entry(), now: 0 })).resolves.toEqual({ status: 'succeeded' });
-        expect(alive.size).toBe(0);
+    it('accepts release when a different pid has rebound the port', async () => {
+        const h = await harness();
+        h.probeListener.mockResolvedValue({ status: 'held', identity: { pid: 9999 } }).mockResolvedValueOnce(h.held);
+        await expect(h.run()).resolves.toEqual({ status: 'succeeded' });
     });
-
-
-    it('unions descendants spawned during the grace window into the SIGKILL round', async () => {
-        // Surviving SIGTERM is exactly when a dev server may fork a replacement worker; the
-        // first round's pids stay in the set because they may since have been orphaned onto init.
-        let treeAlive = true;
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_717_000 }), { status: 'free' }],
-            isProcessAlive: async () => treeAlive,
-            descendantRounds: [
-                { status: 'resolved', pids: [4_322] },
-                { status: 'resolved', pids: [4_323] },
-            ],
-        });
-        control.signal.mockImplementation(async ({ pid, signal, descendantPids }) => {
-            if (signal === 'SIGKILL') treeAlive = false;
-            return { status: 'delivered', deliveredPids: [pid, ...descendantPids] };
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1 });
-
-        await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(control.resolveDescendantPids).toHaveBeenCalledTimes(2);
-        expect(control.signal).toHaveBeenNthCalledWith(2, {
-            pid: 4_321,
-            signal: 'SIGKILL',
-            descendantPids: [4_322, 4_323],
-        });
+    it('accepts release when the pid was reused by a new listener generation', async () => {
+        const h = await harness();
+        h.probeListener.mockResolvedValue({ status: 'held', identity: { pid: PID, startTime: h.start + 1000 } }).mockResolvedValueOnce(h.held);
+        await expect(h.run()).resolves.toEqual({ status: 'succeeded' });
     });
-
-    it('refuses to signal anything when the process table cannot be read', async () => {
-        // The regression this pins: an unreadable process table used to resolve to "no
-        // descendants", so terminate signalled the listener alone. Killing the listener frees
-        // the port, so verification passed and the destructive action reported success while
-        // the user's children kept running.
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_717_000 }), { status: 'free' }],
-            descendantRounds: [{ status: 'unavailable' }],
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1 });
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'failed', reasonCode: 'process_tree_unresolved' });
-        expect(control.signal).not.toHaveBeenCalled();
-    });
-
-    it('refuses to escalate to SIGKILL when the re-read of the process table fails', async () => {
-        // Half a tree kill is still a partial kill: SIGTERM went out, the listener survived it,
-        // and we can no longer establish what else has to die. Report it instead of forcing a
-        // SIGKILL at a set we know is stale.
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_717_000 }), { status: 'free' }],
-            aliveResults: [true],
-            descendantRounds: [{ status: 'resolved', pids: [4_322] }, { status: 'unavailable' }],
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1 });
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'failed', reasonCode: 'process_tree_unresolved' });
-        expect(control.signal).toHaveBeenCalledOnce();
-        expect(control.signal).toHaveBeenCalledWith({
-            pid: 4_321,
-            signal: 'SIGTERM',
-            descendantPids: [4_322],
-        });
-    });
-
-    it('reports port_not_released when our pid still holds the port after the kill', async () => {
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_717_000 })],
-            aliveResults: [false],
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1, verifyPollMs: 0, verifyAttempts: 3 });
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'failed', reasonCode: 'port_not_released' });
-    });
-
-    it('reports when no addressed process received a signal', async () => {
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_717_000 })],
-            aliveResults: [false],
-            signalResults: [{ status: 'no_process_signaled' }],
-        });
-        const terminate = createTerminateDetectedService(control, {
-            graceMs: 1,
-            verifyPollMs: 0,
-            verifyAttempts: 1,
-        });
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'failed', reasonCode: 'terminate_no_process_signaled' });
-    });
-
-    it('maps a refused POSIX signal to terminate_permission_denied', async () => {
-        const control = fakeControl({
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_717_000 })],
-            signalResults: [{ status: 'permission_denied' }],
-        });
-        const terminate = createTerminateDetectedService(control);
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'failed', reasonCode: 'terminate_permission_denied' });
-    });
-
-    it('uses taskkill /T then /F on Windows', async () => {
-        let treeAlive = true;
-        const control = fakeControl({
-            platform: 'windows',
-            probeResults: [held({ pid: 4_321, startTime: 1_717_171_717_000 }), { status: 'free' }],
-            isProcessAlive: async () => treeAlive,
-        });
-        control.terminateWindowsTree.mockImplementation(async ({ force }) => {
-            if (force) treeAlive = false;
-        });
-        const terminate = createTerminateDetectedService(control, { graceMs: 1 });
-
-        const result = await terminate({ request: request(), entry: entry(), now: 0 });
-
-        expect(result).toEqual({ status: 'succeeded' });
-        expect(control.terminateWindowsTree).toHaveBeenNthCalledWith(1, { pid: 4_321, force: false, timeoutMs: 1 });
-        expect(control.terminateWindowsTree).toHaveBeenNthCalledWith(2, { pid: 4_321, force: true, timeoutMs: 1 });
-        expect(control.resolveDescendantPids).not.toHaveBeenCalled();
-        expect(control.signal).not.toHaveBeenCalled();
+    it('names a stale listener observation when the process was gone before shared termination', async () => {
+        const h = await harness({ absentRoot: true });
+        h.probeListener.mockResolvedValue(h.held);
+        await expect(h.run()).resolves.toEqual({ status: 'failed', reasonCode: 'terminate_no_process_signaled' });
+        expect(h.kill).not.toHaveBeenCalled();
     });
 });

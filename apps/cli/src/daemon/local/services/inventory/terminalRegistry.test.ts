@@ -125,7 +125,7 @@ describe('normalizeLocalServiceScan + terminalRegistry', () => {
             previous: null,
             listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', pid: 400 }],
             // Listener's own cwd does NOT resolve to a workspace: registry path must still win.
-            processes: new Map([[400, { pid: 400, ppid: 1, command: 'node vite', cwd: '/tmp/elsewhere' }]]),
+            processes: terminalFacts([{ pid: 400, ppid: 1, command: 'node vite', cwd: '/tmp/elsewhere', processOwnership: 'self' }], 400, 'term-a'),
             workspaces: [{ id: 'workspace-a', path: '/repo' }],
             terminalRegistry: registry,
         });
@@ -155,10 +155,10 @@ describe('normalizeLocalServiceScan + terminalRegistry', () => {
             now: 3_000,
             previous: null,
             listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp', pid: 400 }],
-            processes: new Map([
-                [400, { pid: 400, ppid: 300, command: 'node vite', cwd: '/tmp/elsewhere' }],
-                [300, { pid: 300, ppid: 1, command: 'npm run dev', cwd: '/repo/web' }],
-            ]),
+            processes: terminalFacts([
+                { pid: 400, ppid: 300, command: 'node vite', cwd: '/tmp/elsewhere', processOwnership: 'self' },
+                { pid: 300, ppid: 1, command: 'npm run dev', cwd: '/repo/web', processOwnership: 'self' },
+            ], 300, 'term-a'),
             workspaces: [],
             terminalRegistry: registry,
         });
@@ -209,7 +209,7 @@ describe('normalizeLocalServiceScan + terminalRegistry', () => {
             now: 3_000,
             previous: null,
             listeners: [{ address: '127.0.0.1', port: 8000, protocol: 'tcp', pid: 600 }],
-            processes: new Map([[600, { pid: 600, ppid: 1, command: 'python app', cwd: '/tmp/elsewhere' }]]),
+            processes: terminalFacts([{ pid: 600, ppid: 1, command: 'python app', cwd: '/tmp/elsewhere', processOwnership: 'self' }], 600, 'term-c'),
             workspaces: [],
             terminalRegistry: registry,
         });
@@ -220,3 +220,15 @@ describe('normalizeLocalServiceScan + terminalRegistry', () => {
         expect(entry?.provenance?.session).toBeUndefined();
     });
 });
+import { formatProcessOwnerTag } from '@/processes/ownerTag';
+import { configuration } from '@/configuration';
+import type { LocalServiceProcessFact } from './provenance';
+
+function terminalFacts(rows: readonly LocalServiceProcessFact[], pid: number, terminalId: string): ReadonlyMap<number, LocalServiceProcessFact> {
+    return new Map<number, LocalServiceProcessFact>([[process.pid, { pid: process.pid, command: 'daemon', processOwnership: 'self' }], ...rows.map((fact): [number, LocalServiceProcessFact] => [fact.pid, {
+        ...fact, censusRow: { pid: fact.pid, ppid: fact.ppid ?? null, start: { startTimeMs: fact.processStartTimeMs ?? 100 },
+            principal: { kind: 'uid' as const, value: 'daemon' }, name: 'node', memory: null, cpuTimeUs: null,
+            ...(fact.pid === pid ? { ownerTag: formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir,
+                owner: { kind: 'terminal', terminalId } }) } : {}) },
+    }])]);
+}

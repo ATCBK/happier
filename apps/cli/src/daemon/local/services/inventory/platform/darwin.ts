@@ -1,8 +1,7 @@
 import type { LocalServiceListenerFact } from '../scanner';
 import type { LocalServiceInventoryDiagnostic } from '../scanner';
-import { LOCAL_SERVICE_PROCESS_LINEAGE_MAX_DEPTH, type LocalServiceProcessFact } from '../provenance';
-import { collectLocalServiceProcessLineageFacts } from './processLineage';
-import { classifyProcessOwnershipByIdentity, resolveDaemonPosixUserId } from './processOwnership';
+import type { LocalServiceProcessFact } from '../provenance';
+import { projectLocalServiceProcessFacts } from '@/processes/census/projectLocalServiceProcessFacts';
 
 export type DarwinExecFileBoundary = (
     command: string,
@@ -17,7 +16,7 @@ export type DarwinLocalServiceScanResult = Readonly<{
 }>;
 
 function parseLsofNameField(value: string): Readonly<{ address: string; port: number }> | null {
-    const withoutPrefix = value.trim().replace(/\s+\(LISTEN\).*$/i, '').replace(/^TCP\s+/i, '').trim();
+    const withoutPrefix = value.trim().replace(/\s+\(LISTEN\).*$/i, '').replace(/^TCP\s+/i, '').split('->')[0]!.trim();
     const portMatch = /:(\d+)$/.exec(withoutPrefix);
     if (!portMatch) return null;
     const port = Number(portMatch[1]);
@@ -27,150 +26,49 @@ function parseLsofNameField(value: string): Readonly<{ address: string; port: nu
     return { address, port };
 }
 
-type DarwinLsofTcpListenFacts = Readonly<{
-    listeners: readonly LocalServiceListenerFact[];
-    processes: ReadonlyMap<number, LocalServiceProcessFact>;
-}>;
-
-function parseDarwinLsofTcpListenFacts(output: string): DarwinLsofTcpListenFacts {
-    const listeners: LocalServiceListenerFact[] = [];
-    const processes = new Map<number, LocalServiceProcessFact>();
+function parseDarwinSocketFields(output: string) {
+    const sockets: { pid?: number; name?: string; state?: string }[] = [];
     let pid: number | undefined;
-    let ppid: number | undefined;
-    let command = '';
-    for (const line of output.split(/\r?\n/)) {
-        if (!line) continue;
-        const tag = line[0];
-        const value = line.slice(1);
-        if (tag === 'p') {
-            const parsedPid = Number(value);
-            pid = Number.isInteger(parsedPid) && parsedPid > 0 ? parsedPid : undefined;
-            ppid = undefined;
-            command = '';
-            continue;
+    let socket: typeof sockets[number] | undefined;
+    for (const line of output.split(/\r?\n/u)) {
+        if (line.startsWith('p')) {
+            const parsed = Number(line.slice(1));
+            pid = Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+            socket = undefined;
         }
-        if (tag === 'R') {
-            const parsedPpid = Number(value);
-            ppid = Number.isInteger(parsedPpid) && parsedPpid > 0 ? parsedPpid : undefined;
-            continue;
+        if (line.startsWith('f')) { socket = { pid }; sockets.push(socket); }
+        if (line.startsWith('n')) {
+            if (!socket) { socket = { pid }; sockets.push(socket); }
+            socket.name = line.slice(1);
         }
-        if (tag === 'c') {
-            command = value.trim();
-            if (pid && command) {
-                processes.set(pid, {
-                    pid,
-                    ...(ppid ? { ppid } : {}),
-                    command,
-                });
-            }
-            continue;
-        }
-        if (tag !== 'n') continue;
-        const parsed = parseLsofNameField(value);
-        if (!parsed) continue;
-        listeners.push({
-            address: parsed.address,
-            port: parsed.port,
-            protocol: 'tcp',
-            ...(pid ? { pid } : {}),
-        });
-        if (pid && !processes.has(pid)) {
-            processes.set(pid, {
-                pid,
-                ...(ppid ? { ppid } : {}),
-                command: command || 'unknown',
-            });
-        }
+        if (line.startsWith('TST=') && socket) socket.state = line.slice(4);
     }
-    return { listeners, processes };
+    return sockets;
 }
 
 export function parseDarwinLsofTcpListenOutput(output: string): LocalServiceListenerFact[] {
-    return [...parseDarwinLsofTcpListenFacts(output).listeners];
+    return parseDarwinSocketFields(output).flatMap(socket => {
+        const parsed = socket.name && !socket.name.includes('->') && (!socket.state || socket.state === 'LISTEN')
+            ? parseLsofNameField(socket.name) : null;
+        return parsed ? [{ ...parsed, protocol: 'tcp' as const, ...(socket.pid ? { pid: socket.pid } : {}) }] : [];
+    });
 }
 
-function parseDarwinLstartDate(value: string): number | undefined {
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : undefined;
-}
-
-/**
- * `ps -o pid=,ppid=,uid=,lstart=,command=`. The uid column rides along on the call the scan
- * already makes, so process ownership costs nothing extra on darwin.
- *
- * `lstart` is rendered through the caller's time locale, and only the C layout
- * (`weekday month day hh:mm:ss year`) is parsed here. A daemon that inherited a German or French
- * locale gets `Mo. 24 Aug. 23:26:49 2026` / `lun. 24 aout 23:26:49 2026`, whose date falls into the
- * command field and leaves `processStartTimeMs` absent — which every generation check downstream
- * reads as "this pid has no identity". `readDarwinProcessFacts` therefore pins `LC_ALL=C` for this
- * one command instead of teaching the parser every locale.
- */
-function parseDarwinPsProcessOutput(
-    output: string,
-    daemonUserId: string | undefined,
-): ReadonlyMap<number, LocalServiceProcessFact> {
-    const processes = new Map<number, LocalServiceProcessFact>();
-    for (const line of output.split(/\r?\n/u)) {
-        const withLstart = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})(?:\s+(.*?))?\s*$/u.exec(line);
-        const legacy = withLstart ? null : /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/u.exec(line);
-        const pidRaw = withLstart?.[1] ?? legacy?.[1];
-        const ppidRaw = withLstart?.[2] ?? legacy?.[2];
-        const uidRaw = withLstart?.[3] ?? legacy?.[3];
-        const processStartTimeMs = withLstart?.[4] ? parseDarwinLstartDate(withLstart[4]) : undefined;
-        const command = withLstart ? (withLstart[5] ?? '').trim() : legacy?.[4] ?? '';
-        if (!pidRaw || (!withLstart && !command)) continue;
-        const pid = Number(pidRaw);
-        const ppid = Number(ppidRaw);
-        if (!Number.isInteger(pid) || pid <= 0) continue;
-        const processOwnership = classifyProcessOwnershipByIdentity(uidRaw, daemonUserId);
-        processes.set(pid, {
-            pid,
-            ...(Number.isInteger(ppid) && ppid > 0 ? { ppid } : {}),
-            ...(typeof processStartTimeMs === 'number' ? { processStartTimeMs } : {}),
-            command: command.slice(0, 1_000),
-            ...(processOwnership ? { processOwnership } : {}),
+function measureDarwinConnections(output: string, listeners: readonly LocalServiceListenerFact[], degraded: boolean): LocalServiceListenerFact[] {
+    // lsof -F's f record delimits one socket and TST carries its native TCP state.
+    const sockets = parseDarwinSocketFields(output);
+    const knownStates = new Set(['CLOSED', 'LISTEN', 'SYN_SENT', 'SYN_RCVD', 'ESTABLISHED', 'CLOSE_WAIT',
+        'FIN_WAIT_1', 'CLOSING', 'LAST_ACK', 'FIN_WAIT_2', 'TIME_WAIT']);
+    return listeners.map(listener => {
+        const matching = sockets.filter(socket => {
+            const endpoint = socket.name ? parseLsofNameField(socket.name) : null;
+            // Accepted sockets can move to workers; PID equality would invent a false zero.
+            return endpoint?.port === listener.port
+                && (listener.address === '0.0.0.0' || listener.address === '::' || endpoint.address === listener.address);
         });
-    }
-    return processes;
-}
-
-export async function readDarwinProcessFacts(input: Readonly<{
-    execFile: DarwinExecFileBoundary;
-    pids: readonly number[];
-    daemonUserId?: string;
-}>): Promise<ReadonlyMap<number, LocalServiceProcessFact>> {
-    const pids = [...new Set(input.pids.filter((pid) => Number.isInteger(pid) && pid > 0))];
-    if (pids.length === 0) return new Map();
-    const result = await input.execFile(
-        'ps',
-        ['-o', 'pid=,ppid=,uid=,lstart=,command=', '-p', pids.join(',')],
-        { timeout: 2_000, maxBuffer: 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } },
-    );
-    return parseDarwinPsProcessOutput(
-        stdoutTextFromExecFileResult(result),
-        input.daemonUserId ?? resolveDaemonPosixUserId(),
-    );
-}
-
-function parseDarwinLsofCwdOutput(output: string): ReadonlyMap<number, string> {
-    const cwdByPid = new Map<number, string>();
-    let pid: number | undefined;
-    for (const line of output.split(/\r?\n/u)) {
-        if (!line) continue;
-        const tag = line[0];
-        const value = line.slice(1);
-        if (tag === 'p') {
-            const parsedPid = Number(value);
-            pid = Number.isInteger(parsedPid) && parsedPid > 0 ? parsedPid : undefined;
-            continue;
-        }
-        if (tag !== 'n' || !pid) continue;
-        const cwd = value.trim();
-        if (cwd) {
-            cwdByPid.set(pid, cwd);
-        }
-    }
-    return cwdByPid;
+        return { ...listener, establishedConnections: degraded || listener.pid === undefined
+            || matching.some(socket => !socket.state || !knownStates.has(socket.state)) ? null : matching.filter(socket => socket.state === 'ESTABLISHED').length };
+    });
 }
 
 function stdoutTextFromExecFileResult(result: Readonly<{ stdout: string | Buffer }>): string {
@@ -184,55 +82,6 @@ function stdoutTextFromExecFileError(error: unknown): string {
     return '';
 }
 
-function mergeDarwinCwdFacts(input: Readonly<{
-    processes: ReadonlyMap<number, LocalServiceProcessFact>;
-    cwdByPid: ReadonlyMap<number, string>;
-}>): ReadonlyMap<number, LocalServiceProcessFact> {
-    const processes = new Map(input.processes);
-    for (const [pid, cwd] of input.cwdByPid) {
-        const process = processes.get(pid);
-        if (!process && !cwd) continue;
-        processes.set(pid, {
-            pid,
-            ...(process?.ppid ? { ppid: process.ppid } : {}),
-            ...(typeof process?.processStartTimeMs === 'number'
-                ? { processStartTimeMs: process.processStartTimeMs }
-                : {}),
-            command: process?.command ?? 'unknown',
-            ...(cwd ? { cwd } : process?.cwd ? { cwd: process.cwd } : {}),
-            ...(process?.processOwnership ? { processOwnership: process.processOwnership } : {}),
-        });
-    }
-    return processes;
-}
-
-function mergeDarwinProcessFacts(input: Readonly<{
-    pids: readonly number[];
-    processes: ReadonlyMap<number, LocalServiceProcessFact>;
-    cwdByPid: ReadonlyMap<number, string>;
-}>): ReadonlyMap<number, LocalServiceProcessFact> {
-    const withCwd = mergeDarwinCwdFacts({
-        processes: input.processes,
-        cwdByPid: input.cwdByPid,
-    });
-    const processes = new Map<number, LocalServiceProcessFact>();
-    for (const pid of input.pids) {
-        const process = withCwd.get(pid);
-        const cwd = input.cwdByPid.get(pid);
-        processes.set(pid, {
-            pid,
-            ...(process?.ppid ? { ppid: process.ppid } : {}),
-            ...(typeof process?.processStartTimeMs === 'number'
-                ? { processStartTimeMs: process.processStartTimeMs }
-                : {}),
-            command: process?.command ?? 'unknown',
-            ...(cwd ? { cwd } : process?.cwd ? { cwd: process.cwd } : {}),
-            ...(process?.processOwnership ? { processOwnership: process.processOwnership } : {}),
-        });
-    }
-    return processes;
-}
-
 /**
  * `lsof` exits non-zero whenever *any* file could not be accessed while still printing every
  * listener it did resolve. Discarding that stdout turned a degraded scan into a successful
@@ -243,7 +92,7 @@ async function readDarwinTcpListenOutput(
     execFile: DarwinExecFileBoundary,
 ): Promise<Readonly<{ output: string; degraded: boolean }>> {
     try {
-        const result = await execFile('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-F', 'pcn'], {
+        const result = await execFile('lsof', ['-nP', '-iTCP', '-F', 'pcfnT'], {
             timeout: 2_000,
             maxBuffer: 1024 * 1024,
         });
@@ -255,11 +104,10 @@ async function readDarwinTcpListenOutput(
 
 export async function readDarwinLocalServiceListeners(input: Readonly<{
     execFile: DarwinExecFileBoundary;
-    daemonUserId?: string;
 }>): Promise<DarwinLocalServiceScanResult> {
-    const daemonUserId = input.daemonUserId ?? resolveDaemonPosixUserId();
     const listenOutput = await readDarwinTcpListenOutput(input.execFile);
-    const parsed = parseDarwinLsofTcpListenFacts(listenOutput.output);
+    const parsed = { listeners: measureDarwinConnections(listenOutput.output,
+        parseDarwinLsofTcpListenOutput(listenOutput.output), listenOutput.degraded) };
     if (parsed.listeners.length === 0 && listenOutput.degraded) {
         return {
             listeners: [],
@@ -282,53 +130,19 @@ export async function readDarwinLocalServiceListeners(input: Readonly<{
     const listenerPids = [...new Set(parsed.listeners
         .map((listener) => listener.pid)
         .filter((pid): pid is number => typeof pid === 'number' && Number.isInteger(pid) && pid > 0))];
-    let processes: ReadonlyMap<number, LocalServiceProcessFact> = parsed.processes;
-    let cwdByPid: ReadonlyMap<number, string> = new Map();
-    let processPids = listenerPids;
-    if (listenerPids.length > 0) {
-        processes = await collectLocalServiceProcessLineageFacts({
+    const processes = listenerPids.length > 0
+        ? await projectLocalServiceProcessFacts({
             seedPids: listenerPids,
-            seedProcesses: parsed.processes,
-            maxDepth: LOCAL_SERVICE_PROCESS_LINEAGE_MAX_DEPTH,
-            readProcessFacts: async (pids) => await readDarwinProcessFacts({
-                execFile: input.execFile,
-                pids,
-                ...(daemonUserId ? { daemonUserId } : {}),
+            onReadFailure: () => diagnostics.push({
+                code: 'darwin_process_fact_scan_failed',
+                severity: 'warning',
+                message: 'Darwin process fact scan failed.',
             }),
-            onReadFailure: () => {
-                diagnostics.push({
-                    code: 'darwin_process_fact_scan_failed',
-                    severity: 'warning',
-                    message: 'Darwin process fact scan failed.',
-                });
-            },
-        });
-        processPids = [...new Set([...listenerPids, ...processes.keys()])];
-        try {
-            const cwdResult = await input.execFile('lsof', ['-nP', '-a', '-d', 'cwd', '-p', processPids.join(','), '-F', 'pn'], {
-                timeout: 2_000,
-                maxBuffer: 1024 * 1024,
-            });
-            cwdByPid = parseDarwinLsofCwdOutput(stdoutTextFromExecFileResult(cwdResult));
-        } catch (error) {
-            const partialStdout = stdoutTextFromExecFileError(error);
-            cwdByPid = partialStdout ? parseDarwinLsofCwdOutput(partialStdout) : new Map();
-            if (cwdByPid.size === 0) {
-                diagnostics.push({
-                    code: 'darwin_cwd_fact_scan_failed',
-                    severity: 'warning',
-                    message: 'Darwin cwd fact scan failed.',
-                });
-            }
-        }
-    }
+        })
+        : new Map<number, LocalServiceProcessFact>();
     return {
         listeners: parsed.listeners,
-        processes: mergeDarwinProcessFacts({
-            pids: processPids,
-            processes,
-            cwdByPid,
-        }),
+        processes,
         diagnostics,
     };
 }

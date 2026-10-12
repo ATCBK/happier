@@ -15,7 +15,7 @@ import { resolveProjectNativeCommand } from '@/workspaces/projectSetup/projectNa
 import { readProjectDefinitionFileBytes } from '@/workspaces/projectSetup/nativeDefinitionFiles';
 import { resolveProjectServiceStartChoice } from '@/workspaces/execution/projectServicePlacement';
 import { validatePath } from '@/rpc/handlers/pathSecurity';
-import type { ProjectManagedServiceSupervisionInput, createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import { buildProjectManagedServiceStartRequest, type ProjectManagedServiceSupervisionInput, type createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { discoverLocalServiceRunTargets } from './runTargets';
 import type { LocalServiceLauncherStartExecutionOutcome, LocalServiceLauncherStartResolution } from './start';
 import { DaemonLocalServiceLauncherStartResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
@@ -201,6 +201,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         }
         const secretEnvironment = await resolveProjectRequesterSecretEnvironment(runtime, undefined, signal);
         const preparation: ProjectSetupPreparationInput = { workspace: association.workspace, projectAssociation: association,
+            approvalContext: context,
             requester: { ...projectRuntimeAccountRowsInput(runtime, 'localServices.launcher.start'), serverHttpBaseUrl: runtime.serverHttpBaseUrl }, purpose: 'setup',
             platform: platformFor(runtime),
             nativeIo: runtime.nativeIo, signal,
@@ -558,10 +559,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
     const restartManagedService: RestartProjectManagedService = async (request, handle, execution) => {
         if (!execution.prepareStartAction) return { status: 'denied', reasonCode: 'managed_service_restart_admission_required' };
         const start: DaemonLocalServiceLauncherStartRequestV1 = {
-            machineId: handle.workspace.machineId, targetId: handle.serviceId,
-            workspace: { serverId: handle.workspace.serverId, machineId: handle.workspace.machineId,
-                workspaceId: handle.workspace.id, rootPath: handle.workspace.rootPath },
-            declaration: handle.declaration,
+            ...buildProjectManagedServiceStartRequest(handle),
             ...(request.expectedEffectDigest ? { expectedEffectDigest: request.expectedEffectDigest } : {}),
             ...(request.choice ? { choice: request.choice } : {}),
         };

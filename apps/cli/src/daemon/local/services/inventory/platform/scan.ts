@@ -19,12 +19,14 @@ export type LocalServicesScanResult = Readonly<{
     processes: ReadonlyMap<number, LocalServiceProcessFact>;
     workspaces: readonly LocalServiceWorkspaceFact[];
     diagnostics: readonly LocalServiceInventoryDiagnostic[];
+    /** Private OS coverage facts consumed by the canonical ownership normalizer. */
+    socketOwnerReadFailures?: readonly number[];
 }>;
 
 /**
  * The single platform boundary used by inventory and managed endpoint detection.
  *
- * darwin (`lsof`/`ps`) and windows (`netstat`/`powershell`) run through `execFileWithDeadline`
+ * darwin (`lsof`) and windows (`netstat`) socket probes run through `execFileWithDeadline`
  * rather than a `child_process` `timeout`, which reports a killed scan as a SUCCESS with empty
  * stdout on a stalled loop — indistinguishable from "nothing is listening". Linux reads `/proc`
  * and spawns nothing, so it has never been exposed to it.
@@ -64,5 +66,6 @@ export async function scanPlatformLocalServices(): Promise<LocalServicesScanResu
         processes: result.processes,
         workspaces: [],
         diagnostics: result.diagnostics,
+        socketOwnerReadFailures: result.socketOwnerReadFailures,
     };
 }

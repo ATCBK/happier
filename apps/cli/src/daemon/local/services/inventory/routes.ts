@@ -1,4 +1,6 @@
-import { LOCAL_SERVICE_INVENTORY_WATCH_WINDOW_MS } from '@happier-dev/protocol/local/services/inventory/v1';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
+
+import { createParkWatch, type ParkWatchResult } from '@/daemon/lifecycle/parkWatch';
 
 import type { LocalServiceInventoryLabelSource } from './labels';
 import type {
@@ -6,11 +8,11 @@ import type {
 } from './registry';
 import type { NormalizedLocalServiceInventorySnapshot } from './scanner';
 
-export type LocalServiceInventoryWatchResult =
-    | Readonly<{ changed: true; snapshot: NormalizedLocalServiceInventorySnapshot }>
-    | Readonly<{ changed: false }>;
+export type LocalServiceInventoryWatchResult = ParkWatchResult<NormalizedLocalServiceInventorySnapshot>;
 
 export type LocalServiceInventoryRoutes = Readonly<{
+    /** Latest published observation, without waiting for a scan or HTTP presentation. */
+    readCurrentSnapshot(): NormalizedLocalServiceInventorySnapshot;
     getSnapshot(): Promise<NormalizedLocalServiceInventorySnapshot>;
     refreshSnapshot(): Promise<NormalizedLocalServiceInventorySnapshot>;
     /**
@@ -50,15 +52,11 @@ export function createLocalServiceInventoryRoutes(input: Readonly<{
     /** Fired whenever the parked-watcher count changes, so the runtime can follow demand. */
     onWatcherCountChanged?: (count: number) => void;
 }>): LocalServiceInventoryRoutes {
-    const watchWindowMs = input.watchWindowMs ?? LOCAL_SERVICE_INVENTORY_WATCH_WINDOW_MS;
-    let watchers = 0;
-
-    const setWatchers = (next: number): void => {
-        watchers = next;
-        input.onWatcherCountChanged?.(watchers);
-    };
+    const watchWindowMs = input.watchWindowMs ?? MACHINE_WATCH_WINDOW_MS;
+    const watches = createParkWatch({ onWatcherCountChanged: input.onWatcherCountChanged });
 
     return {
+        readCurrentSnapshot: input.registry.getSnapshot,
         async getSnapshot() {
             await input.ensureFreshSnapshot?.();
             return input.registry.getSnapshot();
@@ -67,44 +65,17 @@ export function createLocalServiceInventoryRoutes(input: Readonly<{
             return input.refreshSnapshot ? await input.refreshSnapshot() : input.registry.getSnapshot();
         },
         async watchSnapshot(request = {}) {
-            if (request.signal?.aborted) {
-                return { changed: false };
-            }
-            const current = input.registry.getSnapshot();
-            if (typeof request.sinceGeneratedAt === 'number' && current.generatedAt > request.sinceGeneratedAt) {
-                return { changed: true, snapshot: current };
-            }
-
-            return await new Promise<LocalServiceInventoryWatchResult>((resolve) => {
-                const teardown: Array<() => void> = [];
-                let settled = false;
-                const settle = (result: LocalServiceInventoryWatchResult): void => {
-                    if (settled) return;
-                    settled = true;
-                    for (const run of teardown.splice(0)) run();
-                    setWatchers(watchers - 1);
-                    resolve(result);
-                };
-
-                setWatchers(watchers + 1);
-                teardown.push(input.registry.subscribe(() => {
-                    settle({ changed: true, snapshot: input.registry.getSnapshot() });
-                }));
-
-                const timer = setTimeout(() => settle({ changed: false }), watchWindowMs);
-                timer.unref?.();
-                teardown.push(() => clearTimeout(timer));
-
-                const signal = request.signal;
-                if (signal) {
-                    const onAbort = (): void => settle({ changed: false });
-                    signal.addEventListener('abort', onAbort, { once: true });
-                    teardown.push(() => signal.removeEventListener('abort', onAbort));
-                }
+            return await watches.parkWatch({
+                isNewer: () => typeof request.sinceGeneratedAt === 'number'
+                    && input.registry.getSnapshot().generatedAt > request.sinceGeneratedAt,
+                subscribe: input.registry.subscribe,
+                read: input.registry.getSnapshot,
+                signal: request.signal,
+                windowMs: watchWindowMs,
             });
         },
         watcherCount() {
-            return watchers;
+            return watches.watcherCount();
         },
         async patchLabel(patch) {
             return input.registry.applyLabelPatch({

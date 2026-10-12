@@ -48,6 +48,10 @@ import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorizatio
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonLocalServiceLauncherSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { createDefaultWorkspaceExecutionSettingsV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
+import { createProcessActionOwnerAdapters } from '@/daemon/processes/actions/processActionOwnerAdapters';
+import { MachineProcessesStartAgainResultV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
+import { readProcessCensus } from '@/processes/census/processCensus';
+import { listHappierProcessRoots } from '@/daemon/processes/roots/listHappierProcessRoots';
 import type { ProjectServicePlacementV1 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
 import type { MachinePoolViewV1 } from '@happier-dev/protocol/machines/pools/v1';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
@@ -66,11 +70,12 @@ import { createPluginInvocationLifetime } from '@/plugins/runtime/invocation/lif
 import { createProductionPluginInvocationServiceOwners } from '@/plugins/runtime/invocation/services/production';
 import { resolveManifestHostAccessRequestsForQualifiedContribution } from '@/plugins/runtime/hostAccess/manifestRequests';
 import { pixiPlugin, pixiRuntime, pixiAdapter, importedPixiEnvironment } from '../../../../../../../packages/plugin-sdk/fixtures/external-targeted-packages/project-native-source';
-import * as processTreeBoundary from '@/agent/runtime/process/killProcessTree';
+import * as processTreeBoundary from '@/processes/terminate/terminateProcessTree';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { reloadConfiguration } from '@/configuration';
 import { updateSettings } from '@/persistence';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 
 class ObservedSetupPty implements PtyProcess {
     readonly pid = 3456;
@@ -149,7 +154,7 @@ describe('accepted Project Service declaration starter', () => {
             const pty = new ObservedSetupPty(); setupProcesses.push({ params, pty }); return pty;
         // This fake OS process has no descendants after its supplied exit.
         } }, stopProcessTree: async () => {}, probeProcessGroup: () => 'absent',
-            config: { maxSessions: 10, idleTimeoutMs: 60_000, bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
+            config: { bufferMaxBytes: 1_000_000, bufferMaxEvents: 1000,
                 bufferRetentionMs: 600_000, urlParseBufferLimit: 32_768, maxWriteChunkBytes: 16_384, defaultCols: 80, defaultRows: 24 }, env: {}, platform: 'linux' });
         const operationRuntime = createHostActionOperationRuntime({ machineId: targetWorkspace.machineId,
             custodyBinding: { serverId: homeId, installationId: 'installation' }, resolveAccountId: async () => 'owner',
@@ -228,6 +233,67 @@ describe('accepted Project Service declaration starter', () => {
             trustSetupDigest(value: string) { trustedSetupDigest = value; },
             retireRegistryProjection() { projectionLifetime.abort(); } };
     }
+
+    it.each(['ordinary', 'long_unicode'] as const)('emits registered launcher/Start/Stop outputs from real declaration discovery and supervision (%s)', async kind => {
+        const script = `setInterval(() => {}, 1000); /* ${kind === 'long_unicode' ? '界🚀'.repeat(700) : 'service'} */`;
+        const f = await fixture(false, { kind: 'command', command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}` });
+        const snapshot = await f.routes.getSnapshot();
+        assertActionOutputContract('localServices.launcher.snapshot', snapshot);
+        expect(snapshot.targets).toHaveLength(1);
+        const review = await f.routes.startTarget!(f.request, f.ingress, f.context);
+        assertActionOutputContract('localServices.launcher.start', review);
+        expect(review).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_review_required' });
+        if (!review.reviewedEffectDigest) throw new Error('Service review has no effect digest');
+        const started = await f.routes.startTarget!({ ...f.request, expectedEffectDigest: review.reviewedEffectDigest }, f.ingress, f.context);
+        assertActionOutputContract('localServices.launcher.start', started);
+        expect(started.status).toBe('succeeded');
+        if (!started.currentTarget) throw new Error('Service Start has no actual target');
+        const routes = createLocalServiceActionRoutes({ machineId: 'machine',
+            inventoryRegistry: createLocalServiceInventoryRegistry(), projectManagedServices: f.owner,
+            verifyConfirmationNonce: request => request.confirmationNonce === createLocalServiceActionConfirmationNonceV1(request) });
+        const stop = { requestId: 'contract-stop', action: 'stop_managed' as const, target: started.currentTarget, force: false };
+        const stopped = await routes.execute({ ...stop, confirmationNonce: createLocalServiceActionConfirmationNonceV1(stop) });
+        assertActionOutputContract('localServices.actions.stopManaged', stopped);
+        expect(stopped.status).toBe('succeeded');
+        assertActionOutputContract('localServices.launcher.snapshot', await f.routes.getSnapshot());
+    });
+
+    it.each([false, true])('reuses the original reviewed service Start after Stop, with changed definition=%s', async changed => {
+        const f = await fixture();
+        const review = await f.routes.startTarget!(f.request, f.ingress, f.context);
+        expect(review).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_review_required' });
+        if (!review.reviewedEffectDigest) throw new Error('Original Start review did not produce a digest');
+        const original = { ...f.request, expectedEffectDigest: review.reviewedEffectDigest };
+        expect(await f.routes.startTarget!(original, f.ingress, f.context)).toMatchObject({ status: 'succeeded' });
+        const target = f.owner.readResourceTargets()[0];
+        if (!target) throw new Error('Started service root is unavailable');
+        const adapters = createProcessActionOwnerAdapters({ readServiceTargets: () => f.owner.readResourceTargets(),
+            startService: f.routes.startTarget });
+        const census = await readProcessCensus({ freshness: 'fresh', pids: [target.root.pid] });
+        if (census.status !== 'ok') throw new Error('Native service identity unavailable');
+        const native = census.rows.find(row => row.pid === target.root.pid);
+        if (!native) throw new Error('Native service root unavailable');
+        const root = listHappierProcessRoots({ snapshot: census,
+            managedServices: [{ ...adapters.captureServiceRoot(target), start: native.start }] })
+            .find(root => root.owner.kind === 'service');
+        if (!root) throw new Error('Service root did not join its native generation');
+        await adapters.stopOwner(root, {});
+        expect(f.owner.readResourceTargets()).toEqual([]);
+        if (changed) await writeFile(join(f.root, '.happier/project.json'), JSON.stringify({ ...f.manifest,
+            services: { worker: { source: { kind: 'command', command: `${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 2000)"` } } },
+        }));
+        const result = await adapters.startOwner(root, {
+            rpcContext: { ...f.ingress, transportRequestId: 'process-start-again' },
+            actionContext: { ...f.context, actionRequestId: 'process-start-again' },
+        });
+        if (changed) expect(result).toMatchObject({ status: 'refused', reasonCode: 'project_service_effect_changed',
+            serviceStart: { request: original, response: { protocolVersion: 1, machineId: original.machineId, targetId: original.targetId,
+                status: 'denied', reasonCode: 'project_service_effect_changed', reviewedEffect: expect.anything(), reviewedEffectDigest: expect.any(String) } },
+        });
+        else expect(result).toEqual({ status: 'started' });
+        expect(MachineProcessesStartAgainResultV1Schema.safeParse(result).success).toBe(true);
+        expect(f.owner.listProjectServices()).toHaveLength(changed ? 0 : 1);
+    });
 
     it('reviews portable Home worker Services through the real source/preparation ports without widening binding or custody', async () => {
         const home = await mkdtemp(join(tmpdir(), 'service-portable-home-'));
@@ -570,8 +636,8 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
         expect(environmentObservation.signal).toBeUndefined();
         if (!review.reviewedEffectDigest) throw new Error('Expected actual Service environment review');
         let preFinalTerminationAttempts = 0;
-        const originalTerminate = processTreeBoundary.killProcessTree;
-        const preFinalTermination = preFinalHelper ? vi.spyOn(processTreeBoundary, 'killProcessTree').mockImplementation(async (...args) => {
+        const originalTerminate = processTreeBoundary.terminateProcessTree;
+        const preFinalTermination = preFinalHelper ? vi.spyOn(processTreeBoundary, 'terminateProcessTree').mockImplementation(async (...args) => {
             preFinalTerminationAttempts++;
             if (preFinalTerminationAttempts === 1) throw new Error('OS could not prove pre-final native helper settlement');
             await originalTerminate(...args);
@@ -681,9 +747,9 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             let rejectHelper!: (error: Error) => void;
             let helperStopStarted = false;
             let stopFinished = false;
-            const originalTerminate = processTreeBoundary.killProcessTree;
+            const originalTerminate = processTreeBoundary.terminateProcessTree;
             const heldTermination = new Promise<void>((resolve, reject) => { releaseHelper = resolve; rejectHelper = reject; });
-            const terminate = vi.spyOn(processTreeBoundary, 'killProcessTree').mockImplementation(async (...args) => {
+            const terminate = vi.spyOn(processTreeBoundary, 'terminateProcessTree').mockImplementation(async (...args) => {
                 if (args[0].pid === helperPid && !helperStopStarted) {
                     helperStopStarted = true;
                     await heldTermination;
@@ -712,7 +778,7 @@ server.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portPath)}
             expect(environmentObservation.signal?.aborted).toBe(true);
             return;
         }
-        const terminate = vi.spyOn(processTreeBoundary, 'killProcessTree').mockRejectedValue(new Error('OS tree termination could not be observed'));
+        const terminate = vi.spyOn(processTreeBoundary, 'terminateProcessTree').mockRejectedValue(new Error('OS tree termination could not be observed'));
         try {
             if (exitedRoot) {
                 await expect.poll(async () => {
