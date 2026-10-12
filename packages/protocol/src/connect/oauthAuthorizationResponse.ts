@@ -1,8 +1,10 @@
+import { isLoopbackHostname } from '../server/urls/loopbackHostname.js';
+
 export type OauthAuthorizationResponse =
   | Readonly<{ kind: 'invalid' }>
   | Readonly<{ kind: 'rawAuthorizationCode'; code: string }>
   | Readonly<{ kind: 'codeState'; code: string; state: string }>
-  | Readonly<{ kind: 'callback'; code?: string; state?: string; error?: string }>;
+  | Readonly<{ kind: 'callback'; code?: string; state?: string; iss?: string; error?: string }>;
 
 function parseUrl(value: string, base?: URL): URL | null {
   try { return base ? new URL(value, base) : new URL(value); } catch { return null; }
@@ -10,12 +12,6 @@ function parseUrl(value: string, base?: URL): URL | null {
 
 function isOpaqueAuthorizationCode(value: string): boolean {
   return !/^[\/\\]/.test(value) && !/[\s?#&=:]/.test(value);
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  const raw = hostname.toLowerCase();
-  const host = raw.startsWith('[') && raw.endsWith(']') ? raw.slice(1, -1) : raw;
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0:0:0:0:0:0:0:1';
 }
 
 function callbackMatches(url: URL, redirect: URL): boolean {
@@ -71,5 +67,8 @@ export function parseOauthAuthorizationResponse(params: Readonly<{
   const code = url.searchParams.get('code') || hash.get('code') || undefined;
   const state = url.searchParams.get('state') || hash.get('state') || undefined;
   const error = url.searchParams.get('error') || hash.get('error') || undefined;
-  return { kind: 'callback', ...(code ? { code } : {}), ...(state ? { state } : {}), ...(error ? { error } : {}) };
+  // Presence matters: an empty issuer must not be accepted as an omitted issuer.
+  const iss = url.searchParams.get('iss') ?? hash.get('iss') ?? undefined;
+  return { kind: 'callback', ...(code ? { code } : {}), ...(state ? { state } : {}),
+    ...(iss === undefined ? {} : { iss }), ...(error ? { error } : {}) };
 }

@@ -1,7 +1,7 @@
 import { parseOauthAuthorizationResponse } from '@happier-dev/protocol';
 
 export type ParseOauthRedirectPasteResult =
-  | Readonly<{ ok: true; code: string; state: string; rawAuthorizationCode?: false }>
+  | Readonly<{ ok: true; code: string; state: string; iss?: string; rawAuthorizationCode?: false }>
   | Readonly<{ ok: true; code: string; state?: never; rawAuthorizationCode: true }>
   | Readonly<{ ok: false; error: 'invalid_url' | 'missing_code' | 'missing_state' }>;
 
@@ -24,5 +24,6 @@ export function parseOauthRedirectPaste(params: Readonly<{
   }
   if (!parsed.code) return { ok: false, error: 'missing_code' };
   if (!parsed.state) return { ok: false, error: 'missing_state' };
-  return { ok: true, code: parsed.code, state: parsed.state };
+  return { ok: true, code: parsed.code, state: parsed.state,
+    ...(parsed.kind === 'callback' && parsed.iss !== undefined ? { iss: parsed.iss } : {}) };
 }
