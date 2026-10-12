@@ -674,6 +674,10 @@ function SetupRow(
       }}
     />
   );
+  // After a run the row opens into that run's output; a pending review (or no run yet) opens the review.
+  const showsOutput = !reviewing && Boolean(props.operation) && !props.compact;
+  // While the review is on screen it owns Run: the row keeps only its disclosure caret, never a second Run.
+  const inReview = reviewing || (expanded && !showsOutput && !presentation.live);
   const header = (headerProps?: Readonly<Record<string, unknown>>) => (
     <Item
       {...headerProps}
@@ -697,7 +701,7 @@ function SetupRow(
       rightElementOutsidePressable
       accessoryLayout="inline"
       rightElement={
-        reviewing ? (
+        inReview ? (
           <Icon name={expanded ? 'caret-up' : 'caret-down'} size={14} color={theme.colors.text.tertiary} />
         ) : (
           <View style={styles.setupTail}>
@@ -708,8 +712,6 @@ function SetupRow(
       }
     />
   );
-  // After a run the row opens into that run's output; a pending review (or no run yet) opens the review.
-  const showsOutput = !reviewing && Boolean(props.operation) && !props.compact;
   return (
     <>
       <ExpandableItem

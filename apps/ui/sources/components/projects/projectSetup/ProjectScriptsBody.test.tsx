@@ -1147,6 +1147,21 @@ describe('ProjectScriptsBody setup row', () => {
       .toMatchObject({ operationId: 'setup-1' }));
   });
 
+  it('keeps Stop on a compact setup row that is running when its disclosure is opened', async () => {
+    shared.inspection = { definition: presentDefinition(withSetup), detection, importCandidates: [] };
+    const screen = await render('widget', 'scripts.setup');
+    await act(async () => {
+      actionOperationStore.mergeSnapshots({ serverId: workspace.serverId, snapshots: [setupOperation('running') as never] });
+    });
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.setup.stop')).toBeTruthy());
+    await act(async () => { await screen.pressByTestIdAsync('scripts.setup'); });
+    await vi.waitFor(() => expect(screen.findByTestId('scripts.setup.review')).toBeTruthy());
+    expect(screen.findByTestId('scripts.setup.stop')).toBeTruthy();
+    await act(async () => { await screen.pressByTestIdAsync('scripts.setup.stop'); });
+    await vi.waitFor(() => expect(shared.calls.find((call) => call.actionId === 'action.operations.cancel')?.input)
+      .toMatchObject({ operationId: 'setup-1' }));
+  });
+
   it('opens the same setup review from a compact host and prepares from it', async () => {
     shared.inspection = { definition: presentDefinition(withSetup), detection, importCandidates: [] };
     const screen = await render('widget', 'scripts.setup');
