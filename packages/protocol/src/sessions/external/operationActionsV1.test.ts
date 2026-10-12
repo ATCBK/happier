@@ -1006,6 +1006,7 @@ describe('external-session operation machine-socket contract', () => {
       publisherPrecondition: {
         machineId: 'machine-1',
         committedFenceMs: 1_234,
+        publisherGeneration: '1',
       },
       expectedSessionMetadataVersion: 11,
       metadataPatch: {
@@ -1063,6 +1064,7 @@ describe('external-session operation machine-socket contract', () => {
       publisherPrecondition: {
         machineId: 'machine-1',
         committedFenceMs: 1_234,
+        publisherGeneration: '1',
       },
       expectedSessionMetadataVersion: 11,
       expectedSessionSeq: 19,

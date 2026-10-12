@@ -1,6 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { NonBlankOpaqueIdentifierSchema, readNonBlankOpaqueIdentifier } from '../../strings/opaqueIdentifier.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { PluginContributionIdentityV1Schema } from '../../plugins/contributionIdentity.js';
 import { PluginAgentExternalSessionLinkDataSchema } from '../../plugins/contributions/agentExternalSessions.js';
@@ -141,7 +142,11 @@ function normalizeReleasedCodexRuntimeMode(value: unknown): string {
 
 function normalizeReleasedLinkedExternalSessionRuntime(value: unknown): unknown {
   const record = asRecord(value);
-  if (!record || !Object.hasOwn(record, 'codexBackendMode')) return value;
+  if (!record) return value;
+  // Check known forbidden aliases before the stored projection drops extras.
+  // Released envelopes consume these fields at their existing identity seam.
+  if (Object.hasOwn(record, 'providerId') || Object.hasOwn(record, 'agentRuntimeDescriptorV1')) return undefined;
+  if (!Object.hasOwn(record, 'codexBackendMode')) return value;
   const mode = normalizeReleasedCodexRuntimeMode(record.codexBackendMode);
   if (record.agentId !== 'codex' || !mode) return undefined;
   const existingDescriptor = RuntimeDescriptorV1Schema.safeParse(record.runtimeDescriptorV1);
@@ -267,12 +272,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 export function resolveExternalHistoryImportV1FromMetadata(
   metadata: unknown,
+  purpose: 'input' | 'stored' = 'input',
 ): ExternalHistoryImportMetadataResolutionV1 {
   const record = asRecord(metadata);
   if (!record || !Object.hasOwn(record, 'externalHistoryImportV1')) {
     return { state: 'absent' };
   }
-  const parsed = ExternalHistoryImportV1Schema.safeParse(
+  const parsed = (purpose === 'stored' ? createStoredReadSchema(ExternalHistoryImportV1Schema) : ExternalHistoryImportV1Schema).safeParse(
     normalizeReleasedExternalHistoryImportIdentity(record.externalHistoryImportV1),
   );
   return parsed.success
@@ -283,7 +289,7 @@ export function resolveExternalHistoryImportV1FromMetadata(
 export function readExternalHistoryImportV1FromMetadata(
   metadata: unknown,
 ): ExternalHistoryImportV1 | null {
-  const resolution = resolveExternalHistoryImportV1FromMetadata(metadata);
+  const resolution = resolveExternalHistoryImportV1FromMetadata(metadata, 'stored');
   return resolution.state === 'valid' ? resolution.historyImport : null;
 }
 
@@ -317,13 +323,13 @@ function projectReleasedProjectIdLinkData(
   };
 }
 
-function readCanonicalLinkedExternalSessionV1(value: unknown): LinkedExternalSessionV1 | null {
-  const parsed = CompatibleLinkedExternalSessionV1Schema.safeParse(value);
+function readCanonicalLinkedExternalSessionV1(value: unknown, purpose: 'input' | 'stored'): LinkedExternalSessionV1 | null {
+  const parsed = (purpose === 'stored' ? createStoredReadSchema(CompatibleLinkedExternalSessionV1Schema) : CompatibleLinkedExternalSessionV1Schema).safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 
-function readReleasedLinkedExternalSessionV1(value: unknown): LinkedExternalSessionV1 | null {
-  const parsed = ReleasedLinkedExternalSessionV1Schema.safeParse(value);
+function readReleasedLinkedExternalSessionV1(value: unknown, purpose: 'input' | 'stored'): LinkedExternalSessionV1 | null {
+  const parsed = (purpose === 'stored' ? createStoredReadSchema(ReleasedLinkedExternalSessionV1Schema) : ReleasedLinkedExternalSessionV1Schema).safeParse(value);
   return parsed.success ? projectReleasedProjectIdLinkData(parsed.data) : null;
 }
 
@@ -413,6 +419,7 @@ function reconciliationRequired(
  */
 export function resolveLinkedExternalSessionMetadataV1(
   metadata: unknown,
+  purpose: 'input' | 'stored' = 'input',
 ): LinkedExternalSessionMetadataResolutionV1 {
   const record = asRecord(metadata);
   if (!record) {
@@ -426,7 +433,7 @@ export function resolveLinkedExternalSessionMetadataV1(
   const hasCanonical = Object.hasOwn(record, 'externalSessionV1');
   const hasLegacy = Object.hasOwn(record, LEGACY_LINKED_SESSION_METADATA_KEY);
   const canonical = hasCanonical
-    ? readCanonicalLinkedExternalSessionV1(record.externalSessionV1)
+    ? readCanonicalLinkedExternalSessionV1(record.externalSessionV1, purpose)
     : null;
   if (hasCanonical && !canonical) {
     return {
@@ -437,7 +444,7 @@ export function resolveLinkedExternalSessionMetadataV1(
   }
   if (!canonical) {
     const legacy = hasLegacy
-      ? readReleasedLinkedExternalSessionV1(record[LEGACY_LINKED_SESSION_METADATA_KEY])
+      ? readReleasedLinkedExternalSessionV1(record[LEGACY_LINKED_SESSION_METADATA_KEY], purpose)
       : null;
     return legacy
       ? { ok: true, source: 'released', linkedSession: legacy }
@@ -453,6 +460,7 @@ export function resolveLinkedExternalSessionMetadataV1(
 
   const legacy = readReleasedLinkedExternalSessionV1(
     record[LEGACY_LINKED_SESSION_METADATA_KEY],
+    purpose,
   );
   if (!legacy) return reconciliationRequired('legacy_invalid');
 
@@ -560,7 +568,7 @@ export type LinkedExternalSessionAuthorityV1 =
 export function resolveLinkedExternalSessionAuthorityV1(
   metadata: unknown,
 ): LinkedExternalSessionAuthorityV1 {
-  const resolved = resolveLinkedExternalSessionMetadataV1(metadata);
+  const resolved = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
   if (resolved.ok) {
     return { ok: true, transcriptStorage: 'direct', linkedSession: resolved.linkedSession };
   }
@@ -584,15 +592,15 @@ export function resolveLinkedExternalSessionAuthorityV1(
 export function readNonAuthoritativeLinkedExternalSessionV1FromMetadata(
   metadata: unknown,
 ): LinkedExternalSessionV1 | null {
-  const resolved = resolveLinkedExternalSessionMetadataV1(metadata);
+  const resolved = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
   return resolved.ok ? resolved.linkedSession : null;
 }
 
-export function normalizeLinkedExternalSessionMetadataV1(metadata: unknown): Record<string, unknown> | null {
+export function normalizeLinkedExternalSessionMetadataV1(metadata: unknown, purpose: 'input' | 'stored' = 'input'): Record<string, unknown> | null {
   const record = asRecord(metadata);
   if (!record) return null;
 
-  const resolved = resolveLinkedExternalSessionMetadataV1(record);
+  const resolved = resolveLinkedExternalSessionMetadataV1(record, purpose);
   return resolved.ok
     ? buildLinkedExternalSessionMetadataV1(record, resolved.linkedSession)
     : record;
@@ -625,8 +633,8 @@ function compareProgressTokens(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
-export function readExternalSessionFollowPolicyV1(value: unknown): ExternalSessionFollowPolicyV1 | null {
-  const parsed = ExternalSessionFollowPolicyV1Schema.safeParse(value);
+export function readExternalSessionFollowPolicyV1(value: unknown, purpose: 'input' | 'stored' = 'input'): ExternalSessionFollowPolicyV1 | null {
+  const parsed = (purpose === 'stored' ? createStoredReadSchema(ExternalSessionFollowPolicyV1Schema) : ExternalSessionFollowPolicyV1Schema).safeParse(value);
   if (!parsed.success) return null;
   return {
     v: 1,
@@ -639,8 +647,9 @@ export function readExternalSessionFollowPolicyV1(value: unknown): ExternalSessi
 
 export function readExternalSessionFollowStatusV1(
   value: unknown,
+  purpose: 'input' | 'stored' = 'input',
 ): ExternalSessionFollowStatusV1 | null {
-  const parsed = ExternalSessionFollowStatusV1Schema.safeParse(value);
+  const parsed = (purpose === 'stored' ? createStoredReadSchema(ExternalSessionFollowStatusV1Schema) : ExternalSessionFollowStatusV1Schema).safeParse(value);
   if (!parsed.success) return null;
   return {
     v: 1,
@@ -652,8 +661,9 @@ export function readExternalSessionFollowStatusV1(
 
 export function readExternalSessionFollowIssueV1(
   value: unknown,
+  purpose: 'input' | 'stored' = 'input',
 ): ExternalSessionFollowIssueV1 | null {
-  const parsed = ExternalSessionFollowIssueV1Schema.safeParse(value);
+  const parsed = (purpose === 'stored' ? createStoredReadSchema(ExternalSessionFollowIssueV1Schema) : ExternalSessionFollowIssueV1Schema).safeParse(value);
   if (!parsed.success) return null;
   return {
     v: 1,

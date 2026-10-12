@@ -8,6 +8,7 @@ export const AgentExternalSessionAccountingChangedNativeSessionIdsSchema = lazyZ
 
 /** Accounting observes a whole source; Session-specific watcher cardinality limits do not apply. */
 export const AgentExternalSessionAccountingSourceSchema = lazyZodSchema(() => z.object({
+    accountingSources: z.array(z.string().trim().min(1)).optional(),
     rootPath: z.string().refine(isCanonicalAbsoluteObservationTopologyDirectoryPath).optional(),
     rootField: z.string().min(1).optional(),
     resourceKey: ExternalAgentObservationResourceKeyV1Schema,

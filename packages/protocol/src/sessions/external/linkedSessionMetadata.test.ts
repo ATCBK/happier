@@ -68,14 +68,6 @@ describe('direct session linked metadata helpers', () => {
       importedAtMs: 100,
       source: { kind: 'codexHome', home: 'user' },
     }],
-    ['released shape with an extra field', {
-      v: 1,
-      providerId: 'codex',
-      remoteSessionId: 'remote-1',
-      importedAtMs: 100,
-      source: { kind: 'codexHome', home: 'user' },
-      extra: true,
-    }],
     ['conflicting released and canonical identities', {
       v: 1,
       providerId: 'claude',
