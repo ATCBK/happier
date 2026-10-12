@@ -14,9 +14,15 @@ function isServerStartupReadyHealthPayload(payload) {
   return payload?.status === 'ok';
 }
 
-export function getServerComponentName({ kv } = {}) {
-  const fromArgRaw = kv?.get('--server')?.trim() ? kv.get('--server').trim() : '';
-  const fromEnvRaw = process.env.HAPPIER_STACK_SERVER_COMPONENT?.trim() ? process.env.HAPPIER_STACK_SERVER_COMPONENT.trim() : '';
+export function getServerComponentName({ kv, env = process.env } = {}) {
+  let fromArgRaw = kv?.get('--server')?.trim() ? kv.get('--server').trim() : '';
+  const flavor = String(kv?.get('--server-flavor') ?? '').trim().toLowerCase();
+  if (!fromArgRaw && flavor) {
+    if (flavor === 'light') fromArgRaw = 'happier-server-light';
+    else if (flavor === 'full') fromArgRaw = 'happier-server';
+    else throw new Error(`[stack] invalid --server-flavor=${flavor} (expected: light|full)`);
+  }
+  const fromEnvRaw = env.HAPPIER_STACK_SERVER_COMPONENT?.trim() ? env.HAPPIER_STACK_SERVER_COMPONENT.trim() : '';
   const raw = fromArgRaw || fromEnvRaw || 'happier-server-light';
   const v = raw.toLowerCase();
   if (v === 'light' || v === 'server-light' || v === 'happier-server-light' || v === 'happy-server-light') {

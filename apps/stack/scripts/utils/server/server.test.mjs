@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import {
   createServerReadinessDeadline,
   fetchHappierHealth,
+  getServerComponentName,
   isHappierServerRunning,
   resolveServerMigrationTimeoutMs,
   resolveServerReadyTimeoutMs,
@@ -13,6 +14,13 @@ import {
   waitForServerReady,
   waitForHttpOk,
 } from './server.mjs';
+
+test('start, dev and source reload share server flavor and component normalization', () => {
+  assert.equal(getServerComponentName({ kv: new Map([['--server-flavor', 'full']]), env: {} }), 'happier-server');
+  assert.equal(getServerComponentName({ kv: new Map([['--server', 'light'], ['--server-flavor', 'full']]), env: {} }), 'happier-server-light');
+  assert.equal(getServerComponentName({ kv: new Map(), env: { HAPPIER_STACK_SERVER_COMPONENT: 'happy-server-light' } }), 'happier-server-light');
+  assert.throws(() => getServerComponentName({ kv: new Map([['--server-flavor', 'unknown']]), env: {} }));
+});
 
 async function listenServer(handler) {
   const server = createServer(handler);
