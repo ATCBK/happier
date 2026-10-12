@@ -6,6 +6,7 @@ import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presenta
 
 import { FileActionToolbar, type FileDisplayMode } from '@/components/workspaces/files/file/FileActionToolbar';
 import { FileBinaryState, FileErrorState, FileLoadingState } from '@/components/workspaces/files/file/FileScreenState';
+import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { FileContentPanel } from '@/components/workspaces/files/file/FileContentPanel';
 import { FileViewerFindSurface } from './FileViewerFindSurface';
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
@@ -139,6 +140,8 @@ export type WorkspaceFileDetailsViewProps = Readonly<{
     onFindSeedConsumed?: () => void;
     sessionIdForAugmentation?: string | null;
     presentation?: 'screen' | 'panel';
+    /** The host already names the file above the reader (the Code page's breadcrumb): the header doesn't repeat it. */
+    hostNamesFile?: boolean;
     onStartEditingFile?: () => void;
     onRevealInFilesTree?: (path: string) => void;
     onOpenChanges?: () => void;
@@ -508,6 +511,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     const paintColor = useHappierMaterialColorResolver();
     const mountedRef = useMountedRef();
     const presentation = props.presentation ?? 'screen';
+    const checkoutReachability = useCheckoutReachability(props.scope);
     const constrainWidth = presentation === 'screen';
     const pane = useAppPaneScope(props.scopeId);
     const editorAccountScope = useActiveServerAccountScope(props.scope?.serverId ?? null);
@@ -1008,6 +1012,9 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
     }
 
     if (isLoading) {
+        // The machine isn't answering and nothing of this file is known yet: say what it waits for
+        // (once, when the page above already does) instead of an "Opening…" that never ends.
+        if (checkoutReachability.unreachable) return <CheckoutUnreachableState reachability={checkoutReachability} testID="file-details-unreachable" />;
         return <FileLoadingState filePath={filePath} />;
     }
 
@@ -1081,6 +1088,7 @@ export function WorkspaceFileDetailsView(props: WorkspaceFileDetailsViewProps) {
                     theme={theme}
                     fileName={fileName}
                     filePathDir={filePathDir}
+                    hostNamesFile={props.hostNamesFile}
                     rightElement={fileHeaderRightElement}
                     contentActions={{
                         onRaw: exportRawFile,

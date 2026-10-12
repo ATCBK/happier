@@ -109,7 +109,7 @@ describe('ScmChangeRow', () => {
       return String(value);
     });
     expect(textContent.join(' ')).toContain('+3');
-    expect(textContent.join(' ')).toContain('-1');
+    expect(textContent.join(' ')).toContain('−1');
 
     const clickable = tree.findAllByType('View' as any).find((node) => node.props.accessibilityRole === 'button')!;
     act(() => {
@@ -386,5 +386,14 @@ describe('ScmChangeRow', () => {
     const stackedStyle = flattenStyle(stacked.findByTestId('scm-change-row-container:src_a.ts')?.props.style);
     expect(stackedStyle.minHeight).toBeUndefined();
     expect(stackedStyle.paddingVertical).toBeGreaterThan(0);
+  });
+  it('gives the folder the room when a compact row has no line counts to show', async () => {
+    const { ScmChangeRow } = await import('./ScmChangeRow');
+    // A new empty file: nothing added or removed. Its folder must not lose width to an empty stats column.
+    const file = { fileName: 'getting-started.md', filePath: 'docs', fullPath: 'docs/getting-started.md', status: 'untracked', isIncluded: false, linesAdded: 0, linesRemoved: 0 } as any;
+    const empty = await renderScreen(<ScmChangeRow theme={createScmChangeRowTheme()} file={file} onPress={() => {}} layout="compact" />);
+    expect(empty.findByTestId('scm-change-row-stats-column')).toBeNull();
+    const changed = await renderScreen(<ScmChangeRow theme={createScmChangeRowTheme()} file={{ ...file, linesAdded: 3 }} onPress={() => {}} layout="compact" />);
+    expect(changed.findByTestId('scm-change-row-stats-column')).toBeTruthy();
   });
 });

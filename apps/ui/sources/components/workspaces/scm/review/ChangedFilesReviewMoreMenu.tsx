@@ -24,15 +24,20 @@ export type ChangedFilesReviewMoreMenuProps = Readonly<{
  * unified or split) live here so the bar keeps only the scope and its actions. The same settings the
  * Review toolbar buttons write.
  */
-export const ChangedFilesReviewMoreMenu = React.memo(function ChangedFilesReviewMoreMenu(props: ChangedFilesReviewMoreMenuProps) {
-    const [open, setOpen] = React.useState(false);
+/**
+ * Review's display choices as menu rows, for whichever menu shows them: the wide bar's own `⋯`, or the
+ * phone comparison menu's Display section.
+ */
+export function useChangedFilesReviewDisplayMenu(props: Omit<ChangedFilesReviewMoreMenuProps, 'testID'>): Readonly<{
+    items: DropdownMenuItem[];
+    select: (id: string) => void;
+}> {
     const [wrapLinesSetting, setWrapLines] = useSettingMutable('wrapLinesInDiffs');
     const [styleSetting, setStyleSetting] = useSettingMutable('filesDiffPresentationStyle');
     const splitFits = useDiffSplitFits();
     const phone = useSurfaceStateSize() === 'phone';
     const wrapLines = useEffectiveDiffWrapLines(wrapLinesSetting !== false) === true;
     const presentation = splitFits === false ? 'unified' : normalizeDiffPresentationPreference(styleSetting);
-    const testID = props.testID ?? 'scm-comparison-more';
 
     const items = React.useMemo<DropdownMenuItem[]>(() => {
         const out: DropdownMenuItem[] = [];
@@ -68,6 +73,13 @@ export const ChangedFilesReviewMoreMenu = React.memo(function ChangedFilesReview
         }
         if (id === 'style:unified' || id === 'style:split') setStyleSetting(id === 'style:split' ? 'split' : 'unified');
     }, [onDiffArea, phone, setStyleSetting, setWrapLines, wrapLines]);
+    return { items, select };
+}
+
+export const ChangedFilesReviewMoreMenu = React.memo(function ChangedFilesReviewMoreMenu(props: ChangedFilesReviewMoreMenuProps) {
+    const [open, setOpen] = React.useState(false);
+    const { items, select } = useChangedFilesReviewDisplayMenu(props);
+    const testID = props.testID ?? 'scm-comparison-more';
 
     return (
         <DropdownMenu

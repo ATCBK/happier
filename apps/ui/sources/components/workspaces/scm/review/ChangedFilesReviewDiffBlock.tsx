@@ -1,6 +1,6 @@
 import type { CodeLinesExternalScrollView } from '@/components/ui/code/view/CodeLinesViewCore';
 import * as React from 'react';
-import { Image, Platform, View, useWindowDimensions } from 'react-native';
+import { Image, Platform, StyleSheet, View, useWindowDimensions } from 'react-native';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -30,6 +30,8 @@ export type ReviewDiffState = Readonly<{
     status: 'idle' | 'loading' | 'loaded' | 'error';
     diff: string;
     error: string | null;
+    /** Loaded: a new file with no bytes. */
+    emptyFile?: boolean;
 }>;
 
 export type ChangedFilesReviewDiffBlockProps = Readonly<{
@@ -109,6 +111,71 @@ function areChangedFilesReviewDiffBlockPropsEqual(
         === buildDiffDraftsSignature(next.filePath, next.reviewCommentDrafts);
 }
 
+/** Space between two Explain notes that would otherwise touch in the column. */
+const HUNK_NOTE_STACK_GAP_PX = 8;
+
+/**
+ * Where a hunk starts, for the Explain column (lab WT8-F2). A zero-height marker after the hunk's first
+ * content line, measured against the block frame. The notes themselves never render inside the diff
+ * renderer: the web renderer paints only inside its own code box (`contain: content`), so anything
+ * placed beside the code from in there is clipped away.
+ */
+function HunkNoteAnchor(props: Readonly<{
+    hunkIndex: number;
+    frameRef: React.RefObject<View | null>;
+    generation: number;
+    onMeasure: (hunkIndex: number, y: number) => void;
+}>) {
+    const ref = React.useRef<View>(null);
+    const { frameRef, hunkIndex, onMeasure } = props;
+    const measure = React.useCallback(() => {
+        const node = ref.current;
+        const frame = frameRef.current;
+        if (!node || !frame) return;
+        node.measureLayout(frame, (_x, y) => onMeasure(hunkIndex, y), () => {});
+    }, [frameRef, hunkIndex, onMeasure]);
+    React.useEffect(() => { measure(); }, [measure, props.generation]);
+    return <View ref={ref} collapsable={false} onLayout={measure} style={{ height: 0 }} />;
+}
+
+/**
+ * The Explain column beside a file's code: each hunk's notes top-aligned with the hunk's first line,
+ * pushed down only when the note above is taller than the code between them. Returns the column and
+ * the height it needs, so the block never lets a note run into the next file.
+ */
+function useHunkNotesColumn(input: Readonly<{
+    filePath: string;
+    hunkNotes: NonNullable<ChangedFilesReviewDiffBlockProps['hunkNotes']>;
+    tops: ReadonlyMap<number, number>;
+    borderColor: string;
+}>): Readonly<{ column: React.ReactNode; minHeight: number }> {
+    const [heights, setHeights] = React.useState<ReadonlyMap<number, number>>(() => new Map());
+    const onNoteLayout = React.useCallback((hunkIndex: number, height: number) => {
+        setHeights((current) => current.get(hunkIndex) === height ? current : new Map(current).set(hunkIndex, height));
+    }, []);
+    let cursor = 0;
+    const notes: React.ReactNode[] = [];
+    for (const [hunkIndex, anchorY] of [...input.tops.entries()].sort((a, b) => a[0] - b[0])) {
+        const node = input.hunkNotes.render(input.filePath, hunkIndex, 'column');
+        if (!node) continue;
+        const top = Math.max(anchorY - CODE_LINE_BASE_HEIGHT, cursor);
+        cursor = top + (heights.get(hunkIndex) ?? 0) + HUNK_NOTE_STACK_GAP_PX;
+        notes.push(
+            <View key={hunkIndex} style={{ position: 'absolute', top, left: 0, right: 0 }}
+                onLayout={(event) => onNoteLayout(hunkIndex, event.nativeEvent.layout.height)}>
+                {node}
+            </View>,
+        );
+    }
+    const column = (
+        <View pointerEvents="box-none" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: input.hunkNotes.columnWidth,
+            borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: input.borderColor }}>
+            {notes}
+        </View>
+    );
+    return { column, minHeight: cursor };
+}
+
 export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReviewDiffBlockProps) => {
     const { theme, sessionId, filePath, snapshotSignature } = props;
     const findRangesByLineId = React.useSyncExternalStore(
@@ -127,17 +194,25 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     const diffLoaded = state.status === 'loaded';
     const noteAnchors = React.useMemo(() => props.hunkNotes
         ? diffHunkNoteAnchors(state.diff, props.hunkNotes.placement) : null, [state.diff, props.hunkNotes]);
+    const columnNotes = props.hunkNotes?.placement === 'column' ? props.hunkNotes : null;
+    const frameRef = React.useRef<View>(null);
+    const [noteTops, setNoteTops] = React.useState<ReadonlyMap<number, number>>(() => new Map());
+    const [measureGeneration, setMeasureGeneration] = React.useState(0);
+    const onAnchorMeasure = React.useCallback((hunkIndex: number, y: number) => {
+        setNoteTops((current) => current.get(hunkIndex) === y ? current : new Map(current).set(hunkIndex, y));
+    }, []);
+    const onFrameLayout = React.useCallback(() => setMeasureGeneration((value) => value + 1), []);
     const renderAfterLine = React.useCallback((line: CodeLine) => {
         const hunkIndex = noteAnchors?.get(line.id);
         if (hunkIndex === undefined || !props.hunkNotes) return null;
-        const notes = props.hunkNotes.render(filePath, hunkIndex, props.hunkNotes.placement);
-        if (!notes || props.hunkNotes.placement === 'inline') return notes;
-        return <View style={{ height: 0, overflow: 'visible' }}>
-            <View style={{ position: 'absolute', left: '100%', top: -CODE_LINE_BASE_HEIGHT, width: props.hunkNotes.columnWidth }}>{notes}</View>
-        </View>;
-    }, [filePath, noteAnchors, props.hunkNotes]);
-    const noteColumnStyle = props.hunkNotes?.placement === 'column'
-        ? { paddingRight: props.hunkNotes.columnWidth, overflow: 'visible' as const } : null;
+        if (props.hunkNotes.placement === 'column') {
+            return <HunkNoteAnchor hunkIndex={hunkIndex} frameRef={frameRef} generation={measureGeneration} onMeasure={onAnchorMeasure} />;
+        }
+        return props.hunkNotes.render(filePath, hunkIndex, props.hunkNotes.placement);
+    }, [filePath, measureGeneration, noteAnchors, onAnchorMeasure, props.hunkNotes]);
+    const notesColumn = useHunkNotesColumn({ filePath, hunkNotes: columnNotes ?? EMPTY_COLUMN_NOTES, tops: columnNotes ? noteTops : EMPTY_NOTE_TOPS,
+        borderColor: theme.colors.border.default });
+    const noteColumnStyle = columnNotes ? { paddingRight: columnNotes.columnWidth, minHeight: notesColumn.minHeight } : null;
     const hasDiff = diffLoaded && Boolean(state.diff);
     const fileIsBinary = isKnownBinaryPath(filePath);
     const fileIsImage = isKnownImagePath(filePath);
@@ -284,7 +359,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
         return (
             <View testID={blockTestId} style={[{ paddingHorizontal: 16, paddingVertical: 12 }, noOverflowAnchor]}>
                 <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
-                    {t('files.noChanges')}
+                    {state.emptyFile ? t('files.emptyFile') : t('files.noChanges')}
                 </Text>
             </View>
         );
@@ -292,7 +367,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
 
     if (props.reviewCommentsEnabled) {
         return (
-            <View testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: 16, paddingVertical: 8 }, noOverflowAnchor, noteColumnStyle]}>
+            <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: 16, paddingVertical: 8 }, noOverflowAnchor, noteColumnStyle]}>
                 <DiffReviewCommentsViewer
                     findActive={props.findActive}
                     findRangesByLineId={findRangesByLineId}
@@ -311,13 +386,14 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                     onDeleteReviewCommentDraft={props.onDeleteReviewCommentDraft}
                     onReviewCommentError={props.onReviewCommentError}
                 />
+                {columnNotes ? notesColumn.column : null}
             </View>
         );
     }
 
     return (
-            <View testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: 16, paddingVertical: 8 }, noOverflowAnchor, noteColumnStyle]}>
-            <View style={[props.flat ? FLAT_DIFF_FRAME_STYLE : { borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.border.default }, diffContainerStyle, props.hunkNotes?.placement === 'column' ? { overflow: 'visible' } : null]}>
+            <View ref={frameRef} collapsable={false} onLayout={columnNotes ? onFrameLayout : undefined} testID={blockTestId} style={[props.flat ? FLAT_BLOCK_STYLE : { paddingHorizontal: 16, paddingVertical: 8 }, noOverflowAnchor, noteColumnStyle]}>
+            <View style={[props.flat ? FLAT_DIFF_FRAME_STYLE : { borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: theme.colors.border.default }, diffContainerStyle]}>
                 <DiffViewer
                     findActive={props.findActive}
                     findRangesByLineId={findRangesByLineId}
@@ -334,6 +410,10 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
                     virtualized={virtualized}
                 />
             </View>
+            {columnNotes ? notesColumn.column : null}
         </View>
     );
 }, areChangedFilesReviewDiffBlockPropsEqual);
+
+const EMPTY_NOTE_TOPS: ReadonlyMap<number, number> = new Map();
+const EMPTY_COLUMN_NOTES: NonNullable<ChangedFilesReviewDiffBlockProps['hunkNotes']> = { placement: 'column', columnWidth: 0, render: () => null };

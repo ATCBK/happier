@@ -15,7 +15,8 @@ import { ScmChangeMark } from './ScmChangeMark';
 import { resolveScmChangeRowDisplayText } from './scmChangeRowDisplayText';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 import { FindHighlightedText } from '@/components/ui/text/FindHighlightedText';
-const PATH_SEPARATOR = '/';
+import { formatHappierDiffStat } from '@happier-dev/plugin-ui/presentation';
+import { DiffStat } from '../DiffStat';
 const CHANGE_STATS_MIN_COLUMN_WIDTH = 38;
 const CHANGE_STATS_CHARACTER_WIDTH = 7;
 const CHANGE_STATS_COLUMN_EXTRA_WIDTH = 4;
@@ -77,18 +78,11 @@ type ScmChangeStatsLike = Readonly<{
     linesRemoved?: number | null;
 }>;
 
-function normalizeLineCount(value: unknown): string {
-    return typeof value === 'number' && Number.isFinite(value)
-        ? String(Math.max(0, Math.trunc(value)))
-        : '0';
-}
-
 export function resolveScmChangeStatsColumnWidth(files: readonly ScmChangeStatsLike[]): number {
     let maxLabelLength = 0;
     for (const file of files) {
-        const added = normalizeLineCount(file.linesAdded);
-        const removed = normalizeLineCount(file.linesRemoved);
-        maxLabelLength = Math.max(maxLabelLength, `+${added}${PATH_SEPARATOR}-${removed}`.length);
+        const counts = formatHappierDiffStat(file.linesAdded ?? 0, file.linesRemoved ?? 0);
+        maxLabelLength = Math.max(maxLabelLength, [counts.added, counts.removed].filter(Boolean).join(' ').length);
     }
     return Math.max(
         CHANGE_STATS_MIN_COLUMN_WIDTH,
@@ -324,7 +318,9 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
                 </View>
             ) : null}
 
-            {statsShown ? (
+            {/* A compact row's counts sit after its folder; with no counts to show (a new empty file) the
+                folder keeps that room instead of an empty reserved column. */}
+            {statsShown && (!nameFirst || file.isComplete === false || file.linesAdded > 0 || file.linesRemoved > 0) ? (
             <View
                 testID="scm-change-row-stats-column"
                 style={{
@@ -339,32 +335,8 @@ export const ScmChangeRow = React.memo((props: ScmChangeRowProps) => {
             >
                 {file.isComplete === false ? (
                     <Text accessibilityLabel={t('common.unavailable')} style={{ color: theme.colors.text.secondary }}>{findText(displayText.unavailable ?? '', props.findRanges?.unavailable)}</Text>
-                ) : nameFirst ? (
-                    <>
-                        {displayText.added !== null ? (
-                            <Text style={{ fontSize: 12, fontVariant: ['tabular-nums'], color: theme.colors.state.success.foreground ?? theme.colors.text.secondary, ...Typography.default('semiBold') }}>
-                                {findText(displayText.added, props.findRanges?.added)}
-                            </Text>
-                        ) : null}
-                        {displayText.removed !== null ? (
-                            <Text style={{ fontSize: 12, fontVariant: ['tabular-nums'], color: theme.colors.state.danger.foreground ?? theme.colors.text.secondary, ...Typography.default('semiBold') }}>
-                                {findText(displayText.removed, props.findRanges?.removed)}
-                            </Text>
-                        ) : null}
-                    </>
-                ) : (
-                    <>
-                        <Text style={{ fontSize: 11, fontVariant: ['tabular-nums'], color: theme.colors.state.success.foreground ?? theme.colors.text.secondary, ...Typography.default('semiBold') }}>
-                            {findText(displayText.added ?? '', props.findRanges?.added)}
-                        </Text>
-                        <Text style={{ fontSize: 11, fontVariant: ['tabular-nums'], color: theme.colors.text.secondary, ...Typography.default() }}>
-                            {PATH_SEPARATOR}
-                        </Text>
-                        <Text style={{ fontSize: 11, fontVariant: ['tabular-nums'], color: theme.colors.state.danger.foreground ?? theme.colors.text.secondary, ...Typography.default('semiBold') }}>
-                            {findText(displayText.removed ?? '', props.findRanges?.removed)}
-                        </Text>
-                    </>
-                )}
+                ) : <DiffStat added={file.linesAdded} removed={file.linesRemoved}
+                    renderCount={(kind, text, style) => <Text style={style}>{findText(text, props.findRanges?.[kind])}</Text>} />}
             </View>
             ) : null}
         </>

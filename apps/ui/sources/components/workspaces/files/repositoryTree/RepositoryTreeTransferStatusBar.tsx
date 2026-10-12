@@ -6,7 +6,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import type { WorkspaceDownloadState, WorkspaceUploadState } from '@/hooks/workspaces/transfers/useWorkspaceFileTransfers';
 import { Icon } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
@@ -97,8 +97,8 @@ function UploadRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { stat
             : t('files.transfers.uploading', {
                 completed: completedFiles,
                 total: totalFiles,
-                uploaded: formatByteSize(props.state.uploadedBytes),
-                totalBytes: formatByteSize(props.state.totalBytes),
+                uploaded: formatHappierDataBytes(props.state.uploadedBytes, { kind: 'storage' }),
+                totalBytes: formatHappierDataBytes(props.state.totalBytes, { kind: 'storage' }),
             });
 
     const progress = resolveProgress(props.state.uploadedBytes, props.state.totalBytes);
@@ -130,8 +130,8 @@ function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { 
     const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
     const label = t('files.transfers.downloading', {
         name: props.state.name,
-        downloaded: formatByteSize(props.state.downloadedBytes),
-        totalBytes: formatByteSize(props.state.totalBytes),
+        downloaded: formatHappierDataBytes(props.state.downloadedBytes, { kind: 'storage' }),
+        totalBytes: formatHappierDataBytes(props.state.totalBytes, { kind: 'storage' }),
     });
     const progress = resolveProgress(props.state.downloadedBytes, props.state.totalBytes);
 

@@ -5,7 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { WorkspaceRepositoryTreeList } from '@/components/projects/files/WorkspaceRepositoryTreeList';
 import { ChangedFilesLayoutSwitch, useGitDisplaySettings } from '@/components/sessions/panes/git/display/GitDisplayMenu';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { KeyHint } from '@/components/ui/keyboard/KeyHint';
+import { SCM_COMPARISON_RAIL_INSET_PX, ScmComparisonRailCaption, ScmComparisonRailKeys } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { useActiveReviewFilePath } from '@/components/workspaces/scm/review/activeReviewFile';
 import { resolveScmChangePathTag } from '@/scm/scmChangePathTag';
 import { projectChangedFilesAsScmSnapshot } from '@/scm/scmStatusFiles';
@@ -34,6 +34,8 @@ type ChangedFilesReviewIndexProps = Readonly<{
     activeReviewFileKey?: string | null;
     /** The commit checkbox for a file (the Review owner's commit selection control). */
     renderCommitToggle?: ((file: ScmFileStatus) => React.ReactNode) | null;
+    /** Beside a file's name (the comparison's Explain: the stops that explain it). */
+    renderRowAccessory?: ((path: string) => React.ReactNode) | null;
     onLayout?: (event: LayoutChangeEvent) => void;
     /**
      * `stream` (default): the list heads the review stream. `rail`: the comparison view's left rail
@@ -100,6 +102,7 @@ function ChangedFilesReviewRows(props: ChangedFilesReviewIndexProps & Readonly<{
                         activeReviewFileKey={props.activeReviewFileKey ?? null}
                         onPress={() => props.onFocusPath(file.fullPath)}
                         leadingElement={props.renderCommitToggle ? props.renderCommitToggle(file) : null}
+                        pathAccessory={props.renderRowAccessory?.(file.fullPath) ?? null}
                         trailingElement={<View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                             <ChangedFilesReviewFindCount model={props.findModel} path={file.fullPath} />
                             {comments > 0 ? (
@@ -154,12 +157,8 @@ const ChangedFilesReviewRail = React.memo(function ChangedFilesReviewRail(props:
     }
     return (
         <View testID="scm-review-index" style={styles.rail}>
-            <View style={styles.railCaption}>
-                <Text style={styles.captionTitle}>{t('detailsSurface.review.changedFiles')}</Text>
-                <Text style={styles.captionCount}>{String(props.files.length)}</Text>
-                <View style={styles.grow} />
-                <ChangedFilesLayoutSwitch testIDPrefix="scm-review-index-layout" />
-            </View>
+            <ScmComparisonRailCaption title={t('detailsSurface.review.changedFiles')} count={String(props.files.length)} countPlacement="leading"
+                trailing={<ChangedFilesLayoutSwitch testIDPrefix="scm-review-index-layout" />} />
             {display.changesLayout === 'tree' ? (
                 <ChangedFilesReviewRailTree
                     files={props.files}
@@ -174,10 +173,10 @@ const ChangedFilesReviewRail = React.memo(function ChangedFilesReviewRail(props:
             )}
             {Platform.OS === 'web' ? (
                 // The keys `ChangedFilesReviewKeyboardShortcuts` binds for this view (web only).
-                <View testID="scm-review-index-keys" style={styles.railKeys}>
-                    <View style={styles.railKey}><KeyHint label="J" /><KeyHint label="K" /><Text style={styles.captionCount}>{t('scmComparison.keys.nextFile')}</Text></View>
-                    <View style={styles.railKey}><KeyHint label="N" /><Text style={styles.captionCount}>{t('scmComparison.keys.nextChange')}</Text></View>
-                </View>
+                <ScmComparisonRailKeys testID="scm-review-index-keys" keys={[
+                    { keys: ['J', 'K'], label: t('scmComparison.keys.nextFile') },
+                    { keys: ['N'], label: t('scmComparison.keys.nextChange') },
+                ]} />
             ) : null}
         </View>
     );
@@ -259,16 +258,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     rail: {
         flex: 1,
         minHeight: 0,
-        paddingHorizontal: 8,
-        paddingTop: 10,
-    },
-    railCaption: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        paddingLeft: 12,
-        paddingRight: 4,
-        paddingBottom: 6,
+        paddingHorizontal: SCM_COMPARISON_RAIL_INSET_PX,
+        paddingTop: 12,
     },
     railScroll: {
         flex: 1,
@@ -276,20 +267,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     railRows: {
         paddingBottom: 12,
-    },
-    railKeys: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        columnGap: 14,
-        rowGap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 12,
-    },
-    railKey: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
     },
     comments: {
         flexDirection: 'row',

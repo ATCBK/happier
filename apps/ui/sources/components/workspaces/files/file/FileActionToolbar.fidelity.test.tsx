@@ -53,4 +53,26 @@ describe('file Details controls', () => {
         await act(async () => { await vi.waitFor(() => expect(display).toHaveBeenCalledWith('file')); });
         expect(edit).toHaveBeenCalledOnce();
     });
+    it('keeps only the facts and actions when the host already names the file', async () => {
+        const { FileActionToolbar } = await import('./FileActionToolbar');
+        function Harness(props: Readonly<{ hostNamesFile: boolean }>) {
+            const { theme } = useUnistyles();
+            return <FileActionToolbar
+                theme={theme} fileName="SettingsModal.tsx" filePathDir="apps/ui/settings" hostNamesFile={props.hostNamesFile}
+                summaryFacts={['14 lines']} displayMode="file" onDisplayMode={() => {}}
+                diffMode="pending" onDiffMode={() => {}} hasPendingDelta={false} hasIncludedDelta={false}
+                scmWriteEnabled={false} includeExcludeEnabled={false} virtualSelectionEnabled={false}
+                isSelectedForCommit={false} lineSelectionEnabled={false} selectedLineCount={0}
+                isApplyingStage={false} inFlightScmOperation={null} onStageFile={() => {}}
+                onUnstageFile={() => {}} onApplySelectedLines={() => {}} onClearSelection={() => {}}
+            />;
+        }
+        const named = await renderScreen(<OverlayPortalProvider><Harness hostNamesFile={false} /><OverlayPortalHost /></OverlayPortalProvider>);
+        expect(named.findHostByTestId('file-details-header.title')).toBeTruthy();
+        // The Code page's breadcrumb ends on the file: the reader's band doesn't name it, or its folder, a second time.
+        const hosted = await renderScreen(<OverlayPortalProvider><Harness hostNamesFile /><OverlayPortalHost /></OverlayPortalProvider>);
+        expect(hosted.findHostByTestId('file-details-header.title')).toBeNull();
+        expect(hosted.findHostByTestId('file-details-dir')).toBeNull();
+        expect(hosted.findHostByTestId('file-details-header.subtitle')).toBeTruthy();
+    });
 });

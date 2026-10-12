@@ -275,4 +275,45 @@ describe('ChangedFilesReviewDiffBlock', () => {
 
         expect(diffReviewCommentsViewerMock.renderCount).toBe(2);
     });
+
+    it('draws Explain notes beside the code, never inside the diff renderer, which clips its own box', async () => {
+        const diff = '@@ -1,2 +1,2 @@\n ctx\n-old\n+new';
+        const loadedState = { status: 'loaded', diff, error: null } as const;
+        const diffStateSource = { getDiffState: () => loadedState, subscribe: () => () => {}, reset: () => {}, prune: () => {},
+            setDiffState: () => {}, updateDiffState: () => {} } as any;
+        const theme = { colors: { border: { default: '#333' }, surface: { base: '#000', inset: '#111' }, text: { secondary: '#999' } } } as any;
+        const render = vi.fn((_path: string, hunkIndex: number) => React.createElement('View', { testID: `note-${hunkIndex}` }));
+        const screen = await renderScreen(<ChangedFilesReviewDiffBlock theme={theme} sessionId="s1" snapshotSignature="sig" filePath="src/a.ts"
+            diffStateSource={diffStateSource} reviewCommentsEnabled={false} reviewCommentDrafts={[]}
+            hunkNotes={{ placement: 'column', columnWidth: 320, render }} />);
+        const viewer = screen.findAll((node) => String(node.type) === 'DiffViewer')[0]!;
+        const { buildCodeLinesFromUnifiedDiff } = await import('@/components/ui/code/model/buildCodeLinesFromUnifiedDiff');
+        const firstLine = buildCodeLinesFromUnifiedDiff({ unifiedDiff: diff, hideFilePrelude: true }).find((line) => !line.id.startsWith('h:'))!;
+        const drawnInside = viewer.props.renderAfterLine(firstLine) as React.ReactElement<any> | null;
+        const containsNote = (node: unknown): boolean => {
+            if (!React.isValidElement(node)) return Array.isArray(node) && node.some(containsNote);
+            const props = node.props as { testID?: string; children?: unknown };
+            return props.testID === 'note-0' || containsNote(props.children);
+        };
+        // What the renderer paints inside its own box carries no note.
+        expect(containsNote(drawnInside)).toBe(false);
+        // Once the platform reports where the hunk starts, the note stands in the block's own column.
+        await renderer.act(async () => { drawnInside!.props.onMeasure(0, 40); });
+        const note = screen.findAll((node) => node.props?.testID === 'note-0' && typeof node.type === 'string')[0];
+        expect(note).toBeTruthy();
+        let insideViewer = false;
+        for (let parent = note!.parent; parent; parent = parent.parent) if (String(parent.type) === 'DiffViewer') insideViewer = true;
+        expect(insideViewer).toBe(false);
+    });
+    it('names a new empty file as empty, not as unchanged', async () => {
+        const state = { status: 'loaded', diff: '', error: null, emptyFile: true } as const;
+        const diffStateSource = { getDiffState: () => state, subscribe: () => () => {}, reset: () => {}, prune: () => {},
+            setDiffState: () => {}, updateDiffState: () => {} } as any;
+        const theme = { colors: { border: { default: '#333' }, surface: { base: '#000', inset: '#111' }, text: { secondary: '#999' } } } as any;
+        const screen = await renderScreen(<ChangedFilesReviewDiffBlock theme={theme} sessionId="s1" snapshotSignature="sig"
+            filePath="docs/getting-started.md" estimatedChangedLines={0} diffStateSource={diffStateSource}
+            reviewCommentsEnabled={false} reviewCommentDrafts={[]} />);
+        expect(screen.getTextContent()).toContain('Empty file');
+        expect(screen.getTextContent()).not.toContain('No changes to display');
+    });
 });

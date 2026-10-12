@@ -1,11 +1,10 @@
 import * as React from 'react';
-import { useUnistyles } from 'react-native-unistyles';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { t } from '@/text';
 import { RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
 import { SCM_OPERATION_ERROR_CODES, type ScmOperationErrorCode } from '@happier-dev/protocol/scm/operationError';
-import { Icon } from '@/components/ui/icons/Icon';
+import { CheckoutUnreachableState, useAnnouncedCheckoutMachine, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 
 function sanitizeDetails(details: string | null): string | null {
     if (!details) return null;
@@ -53,20 +52,23 @@ export function SourceControlUnavailableState(props: {
      */
     testID?: string;
 }): React.ReactElement {
-    const { theme } = useUnistyles();
+    // Under a checkout whose machine isn't answering, source control waits with it: one state, said by the page.
+    const reachability = useCheckoutReachability(useAnnouncedCheckoutMachine());
     const trimmedDetails = typeof props.details === 'string' ? props.details.trim() : '';
     const errorCode = typeof props.errorCode === 'string' && props.errorCode.length > 0 ? props.errorCode : undefined;
     const bodyKey = resolveBodyKey(errorCode, trimmedDetails);
     const details = sanitizeDetails(props.details ?? null);
 
+    if (reachability.unreachable) {
+        return <CheckoutUnreachableState reachability={reachability} testID={`${props.testID ?? 'source-control-unavailable'}-unreachable`} />;
+    }
     return (
         <SurfaceStateCard
             testID={props.testID ?? 'source-control-unavailable'}
             kind="error"
-            title={t('common.error')}
+            title={t('errors.sourceControlUnavailableTitle')}
             reason={t(bodyKey)}
             detail={details ?? undefined}
-            icon={<Icon name="warning" size={42} color={theme.colors.text.secondary} />}
             action={props.onRetry ? { label: t('common.retry'), onPress: props.onRetry } : undefined}
         />
     );

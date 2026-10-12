@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform, TextInput, View } from 'react-native';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
 import { FindBar } from '@/components/ui/find/FindBar';
-import { FindBarPlacement } from '@/components/ui/find/FindBarPlacement';
+import { FindBarPlacement, useFindBarPresence } from '@/components/ui/find/FindBarPlacement';
 import { useFindSurfaceFocusReturn } from '@/components/ui/find/useFindSurfaceFocusReturn';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Text } from '@/components/ui/text/Text';
@@ -67,12 +67,14 @@ export function ChangedFilesReviewFindSurface(props: Readonly<{
             const root = props.surfaceRef.current as unknown as HTMLElement | null;
             return !!root && typeof document !== 'undefined' && root.contains(document.activeElement);
         } } : null);
-    if (!snapshot.open || !eligible) return null;
-    return <FindBarPlacement testID="scm-review-find-bar">{(presentation) => <FindBar testID="scm-review-find-field" autoFocus surfaceLabel={t('find.surface.changes')} query={snapshot.query} options={snapshot.options}
+    const shown = snapshot.open && eligible;
+    const presence = useFindBarPresence(shown);
+    if (!presence.present) return null;
+    return <FindBarPlacement testID="scm-review-find-bar" visible={shown}>{(presentation) => <FindBar testID="scm-review-find-field" autoFocus surfaceLabel={t('find.surface.changes')} query={snapshot.query} options={snapshot.options}
         status={snapshot.status} capabilities={model.capabilities} onQueryChange={model.setQuery} onOptionsChange={model.setOptions}
         onStep={model.step} onClose={close} onStop={model.stop} inputRef={input}
         onInputFocus={() => setInputFocused(true)} onInputBlur={() => setInputFocused(false)}
-        note={snapshot.status.kind === 'searching' ? { icon: 'history', text: t('common.loading') }
+        note={snapshot.status.kind === 'searching' ? { icon: 'history', text: t('find.note.searchingChanges') }
             : snapshot.status.kind === 'results' && snapshot.status.coverage === 'partialErrors'
                 ? { icon: 'info', text: t('transcriptFind.partialErrors') } : undefined}
         presentation={presentation} />}</FindBarPlacement>;

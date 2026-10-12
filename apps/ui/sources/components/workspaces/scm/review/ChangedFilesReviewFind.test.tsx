@@ -92,12 +92,14 @@ describe('mounted review Find', () => {
             await act(async () => { inputSetter.call(input, 'needle'); input!.dispatchEvent(new Event('input', { bubbles: true })); });
             expect(container.querySelector('[data-testid="find-match-current"]')?.textContent).toBe('needle');
             expect(container.querySelector('[data-testid="scm-review-find-count:a.ts"]')?.textContent).toBe('3');
+            // A closing bar may still be settling out, but inert: hidden from assistive tech and never focused.
+            const liveInput = () => Array.from(container.querySelectorAll('input')).find((element) => !element.closest('[aria-hidden="true"]')) ?? null;
             await key(input!, 'Escape', 'Escape');
-            expect(container.querySelector('input')).toBeNull();
+            expect(liveInput()).toBeNull();
             expect(document.activeElement).toBe(toolbar);
             await act(async () => { toolbar.click(); });
             await act(async () => { root.render(render(false)); });
-            expect(container.querySelector('input')).toBeNull();
+            expect(liveInput()).toBeNull();
             await act(async () => { model.close(); });
             await act(async () => { container.querySelector<HTMLButtonElement>('[data-testid="open-addressed-find"]')!.click(); });
             expect(model.getSnapshot().open).toBe(false);

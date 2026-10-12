@@ -16,6 +16,8 @@ type DiffState = {
     status: 'idle' | 'loading' | 'loaded' | 'error';
     diff: string;
     error: string | null;
+    /** Loaded: a new file with no bytes (nothing to diff, and nothing changed inside it). */
+    emptyFile?: boolean;
 };
 
 function resolveReviewDiffPathsToEnsure(input: Readonly<{
@@ -253,7 +255,8 @@ export function useChangedFilesReviewDiffLoading(input: {
                     return;
                 }
 
-                diffStateSource.setDiffState(path, { status: 'loaded', diff: response.diff ?? '', error: null });
+                diffStateSource.setDiffState(path, { status: 'loaded', diff: response.diff ?? '', error: null,
+                    ...('emptyFile' in response && response.emptyFile ? { emptyFile: true } : {}) });
 
             } catch (err) {
                 if (cancelled) return;

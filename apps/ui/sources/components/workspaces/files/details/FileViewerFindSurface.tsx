@@ -3,7 +3,7 @@ import { Platform, TextInput, View } from 'react-native';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
 import type { FileFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
 import { FindBar } from '@/components/ui/find/FindBar';
-import { FindBarPlacement } from '@/components/ui/find/FindBarPlacement';
+import { FindBarPlacement, useFindBarPresence } from '@/components/ui/find/FindBarPlacement';
 import { useFindSurfaceFocusReturn } from '@/components/ui/find/useFindSurfaceFocusReturn';
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useFindSurfaceRegistration } from '@/keyboard/KeyboardShortcutProvider';
@@ -50,7 +50,9 @@ export function FileViewerFindSurface(props: Readonly<{
         captureFocus();
         if (model.applySeed(props.findSeed)) props.onFindSeedConsumed?.();
     }, [model, props.active, props.content.mode, props.content.text, props.findSeed, props.onFindSeedConsumed]);
-    const bar = snapshot.open && props.active ? <FindBarPlacement>{(presentation) => <FindBar
+    const shown = snapshot.open && props.active;
+    const presence = useFindBarPresence(shown);
+    const bar = presence.present ? <FindBarPlacement visible={shown}>{(presentation) => <FindBar
         query={snapshot.query} options={snapshot.options} status={snapshot.status} capabilities={model.capabilities}
         surfaceLabel={t('find.surface.file')} presentation={presentation} autoFocus inputRef={input}
         onInputFocus={() => setInputFocused(true)} onInputBlur={() => setInputFocused(false)}

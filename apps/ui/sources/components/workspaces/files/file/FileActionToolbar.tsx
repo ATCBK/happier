@@ -44,6 +44,8 @@ type FileActionToolbarProps = {
     notice?: React.ReactNode;
     fileName?: string;
     filePathDir?: string;
+    /** The host already names the file (the Code page's breadcrumb ends on it): the header keeps its facts and actions only. */
+    hostNamesFile?: boolean;
     rightElement?: React.ReactNode;
     contentActions?: Readonly<{
         onRaw: () => void | Promise<void>;
@@ -355,7 +357,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
     const isDiffDisplay = displayMode === 'diff';
 
     const viewActionsElement = (
-        <View testID="file-details-view-actions" style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+        <View testID="file-details-view-actions" style={{ flexDirection: 'row', flexWrap: 'wrap', flexShrink: 1, justifyContent: 'flex-end', alignItems: 'center', gap: 2 }}>
             {Platform.OS === 'web' && isDiffDisplay ? <DiffPresentationStyleToggleButton size={iconSize} /> : null}
             {reviewCommentsEnabled === true && onToggleCommentMode ? (
                 <IconButton
@@ -569,7 +571,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
     ) : null;
 
     const meta: DetailsTabHeaderMetaFact[] = [];
-    if (pathDir) meta.push({ key: 'dir', text: `${pathDir}/`, tone: 'muted', shrink: true, testID: 'file-details-dir' });
+    if (pathDir && !props.hostNamesFile) meta.push({ key: 'dir', text: `${pathDir}/`, tone: 'muted', shrink: true, testID: 'file-details-dir' });
     if (showFileEditorActions && isEditingFile) {
         meta.push({ key: 'editing', text: fileEditorDirty ? t('detailsSurface.file.editingUnsaved') : t('detailsSurface.file.editing') });
     } else {
@@ -588,8 +590,8 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         <View testID="file-action-toolbar" onLayout={onToolbarLayout}>
             <DetailsTabHeader
                 testID="file-details-header"
-                title={pathName || pathDir || ''}
-                leading={<FileIcon fileName={pathName} size={18} appearance="line" />}
+                title={props.hostNamesFile ? '' : pathName || pathDir || ''}
+                leading={props.hostNamesFile ? undefined : <FileIcon fileName={pathName} size={18} appearance="line" />}
                 meta={meta}
                 actions={viewActionsElement}
                 buttons={buttons}

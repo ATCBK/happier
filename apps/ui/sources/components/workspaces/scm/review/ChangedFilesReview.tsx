@@ -59,8 +59,11 @@ import { preserveWebScrollAnchorAfterToggle } from './preserveWebScrollAnchorAft
 import { ChangedFilesReviewIndex } from './ChangedFilesReviewIndex';
 import { ChangedFilesReviewPhoneFileControl } from './ChangedFilesReviewPhoneFileControl';
 import { ChangedFilesReviewKeyboardShortcuts } from './ChangedFilesReviewKeyboardShortcuts';
-import { ChangedFilesReviewMoreMenu } from './ChangedFilesReviewMoreMenu';
+import { ChangedFilesReviewMoreMenu, useChangedFilesReviewDisplayMenu } from './ChangedFilesReviewMoreMenu';
+import type { ScmComparisonMenuSection } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
+import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
 import { DiffFileActionsMenu } from '@/components/ui/code/diff/DiffFileActionsMenu';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { FileIcon } from '@/components/ui/media/FileIcon';
 import { resolveScmChangePathTag } from '@/scm/scmChangePathTag';
 import { publishActiveReviewFile, useActiveReviewFileRequest } from './activeReviewFile';
@@ -122,7 +125,7 @@ type ChangedFilesReviewProps = {
         renderBarLeading: (coverage: ChangedFilesReviewCoverage) => React.ReactNode;
         barTrailing?: React.ReactNode;
         /** Narrow screens recompose the same toolbar into their standard navigation header. */
-        renderBar?: (coverage: ChangedFilesReviewCoverage, displayActions: React.ReactNode) => React.ReactNode;
+        renderBar?: (coverage: ChangedFilesReviewCoverage, displayActions: React.ReactNode, sections?: readonly ScmComparisonMenuSection[]) => React.ReactNode;
         renderHeader: (coverage: ChangedFilesReviewCoverage) => React.ReactNode;
         indexPlacement: 'rail' | 'stream' | 'phone';
         /** Where the files live, for the rail's tree (no listing is read). */
@@ -135,6 +138,8 @@ type ChangedFilesReviewProps = {
         /** Hunk-anchored Explain notes. File notes remain for evidence-availability notices. */
         renderHunkNotes?: ((path: string, hunkIndex: number, placement: 'column' | 'inline') => React.ReactNode) | null;
         hunkNotesColumnWidth?: number;
+        /** Beside a file's name in the file list (Explain: the stops that explain it). */
+        renderIndexAccessory?: ((path: string) => React.ReactNode) | null;
     }> | null;
     /**
      * The shared active-file scope (`activeReviewFile`): while `presented`, Review reports the file it
@@ -1092,6 +1097,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                 {phoneFileControl ? <><View onLayout={onPhoneHeaderLayout}>{streamHeader}</View><Animated.View style={phoneHeaderSpaceStyle} /></> : streamHeader}
                 {showIndex && !indexInRail && !phoneFileControl ? (
                     <ChangedFilesReviewIndex
+                        renderRowAccessory={comparisonChrome?.renderIndexAccessory ?? null}
                         findModel={reviewFind}
                         files={indexFiles}
                         activePath={null}
@@ -1104,11 +1110,9 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                     />
                 ) : null}
                 {reviewFiles.length === 0 && !(changedFilesViewMode === 'turn_checkpoint' && turnCheckpointMetadata?.contentConfidence === 'unavailable') && (
-                    <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 }}>
-                        <Text style={{ fontSize: 12, color: theme.colors.text.secondary, ...Typography.default() }}>
-                            {t(resolveChangedFilesEmptyStateTranslationKey(changedFilesViewMode))}
-                        </Text>
-                    </View>
+                    // Nothing to review is one calm state, like the pane's other empty states, not a caption under a header.
+                    <SurfaceStateCard testID="changed-files-review-empty" kind="empty" iconName="git-diff"
+                        title={t(resolveChangedFilesEmptyStateTranslationKey(changedFilesViewMode))} />
                 )}
 
                 {(changedFilesViewMode === 'turn' || changedFilesViewMode === 'turn_checkpoint') && turnCheckpointMetadata && (
@@ -1417,8 +1421,18 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
         diffAreaLabels={diffAreaLabels} onDiffArea={setDiffArea} /></>;
     const comparisonKeyboardShortcuts = <ChangedFilesReviewKeyboardShortcuts enabled={props.activeReviewFile?.presented !== false}
         paths={navigationPaths} activePath={activeReviewPath} onFocusPath={focusFile} diffStateSource={diffStateSource} onFocusLine={focusLine} />;
+    // A phone has one comparison menu: Find and the display choices are rows of it, not a row of buttons in it.
+    const findRuntime = useFindSurfaceRuntime();
+    const displayMenu = useChangedFilesReviewDisplayMenu({ diffArea, availableDiffAreas: diffConfig.availableModes,
+        diffAreaLabels, onDiffArea: setDiffArea });
+    const comparisonMenuSections: readonly ScmComparisonMenuSection[] = [
+        { id: 'find', items: [{ id: 'open', testID: 'scm-review-find', title: t('find.surface.changes'),
+            icon: <Icon name="magnifying-glass" size={16} color={theme.colors.text.secondary} /> }],
+            onSelect: () => { findRuntime.open(findSurfaceId); } },
+        { id: 'display', title: t('settingsAppearance.display'), items: displayMenu.items, onSelect: displayMenu.select },
+    ];
     const detailsHeaderElement = comparisonChrome?.renderBar ? <>
-        {comparisonChrome.renderBar(coverage, comparisonDisplayActions)}
+        {comparisonChrome.renderBar(coverage, null, comparisonMenuSections)}
         {comparisonKeyboardShortcuts}
     </> : comparisonChrome ? (
         <ScmComparisonBar
@@ -1483,6 +1497,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
             {indexInRail && showIndex ? (
                 <View testID="scm-comparison-rail" style={chromeStyles.rail}>
                     <ChangedFilesReviewIndex
+                        renderRowAccessory={comparisonChrome?.renderIndexAccessory ?? null}
                         findModel={reviewFind}
                         files={indexFiles}
                         activePath={null}
@@ -1528,9 +1543,10 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                         commentCountByPath={commentCountByPath} onFocusPath={focusFile} />
                 </Animated.View> : null}
             </View>
-            </View>
+            {/* Find floats over the review body, under the comparison header (Find lab F1d), never behind it. */}
             <ChangedFilesReviewFindSurface model={reviewFind} surfaceId={findSurfaceId} surfaceRef={findSurfaceRef}
                 presented={props.activeReviewFile?.presented !== false} />
+            </View>
         </View>
     );
 }

@@ -33,6 +33,16 @@ export type RepositoryTreeToolbarProps = Readonly<{
     /** A host that has no pane header (the projects pane) keeps its + menu here. */
     trailing?: React.ReactNode;
     onRequestClose?: () => void;
+    /**
+     * `inline`: only the View menu and trailing controls, without the row's insets, for a host that
+     * places them in its own bar (the Code page puts them beside Go to file).
+     */
+    layout?: 'row' | 'inline';
+    /**
+     * Ignored files as a View menu choice instead of the separate Project | All files control, for a
+     * host whose page has no room for a second row of controls (the Code page).
+     */
+    visibility?: Readonly<{ mode: 'project' | 'all'; available?: boolean; onChange: (mode: 'project' | 'all') => void }> | null;
 }>;
 
 /**
@@ -45,16 +55,28 @@ export const RepositoryTreeToolbar = React.memo(function RepositoryTreeToolbar(p
     const [viewMenuOpen, setViewMenuOpen] = React.useState(false);
     const iconColor = theme.colors.text.secondary;
     const prefix = props.testIDPrefix;
-    const { onChangedOnlyChange, onDetailsModeChange, onCollapseAll, onRefresh, detailsMode } = props;
+    const { onChangedOnlyChange, onDetailsModeChange, onCollapseAll, onRefresh, detailsMode, visibility } = props;
+    const showAllFiles = visibility ? visibility.available !== true || visibility.mode === 'all' : false;
 
     const viewItems = React.useMemo((): readonly DropdownMenuItem[] => {
-        const items: DropdownMenuItem[] = [{
+        const items: DropdownMenuItem[] = [];
+        // Without ignore rules there is nothing to hide: the choice only exists when it can change the list.
+        if (visibility && visibility.available === true) {
+            items.push({
+                id: `${prefix}-all-files`,
+                testID: `${prefix}-all-files`,
+                title: t('files.toolbar.allFiles'),
+                icon: <Icon name="eye" size={16} color={iconColor} />,
+                checked: showAllFiles,
+            });
+        }
+        items.push({
             id: `${prefix}-toggle-details`,
             testID: `${prefix}-toggle-details`,
             title: t('files.pane.sizeAndDate'),
             icon: <Icon name="list" size={16} color={iconColor} />,
             checked: detailsMode,
-        }];
+        });
         if (onCollapseAll) {
             items.push({
                 id: `${prefix}-collapse-all`,
@@ -70,14 +92,15 @@ export const RepositoryTreeToolbar = React.memo(function RepositoryTreeToolbar(p
             icon: <Icon name="arrows-clockwise" size={16} color={iconColor} />,
         });
         return items;
-    }, [detailsMode, iconColor, onCollapseAll, prefix]);
+    }, [detailsMode, iconColor, onCollapseAll, prefix, showAllFiles, visibility]);
 
     const selectViewItem = React.useCallback((itemId: string) => {
         setViewMenuOpen(false);
-        if (itemId === `${prefix}-toggle-details`) onDetailsModeChange(!detailsMode);
+        if (itemId === `${prefix}-all-files`) visibility?.onChange(showAllFiles ? 'project' : 'all');
+        else if (itemId === `${prefix}-toggle-details`) onDetailsModeChange(!detailsMode);
         else if (itemId === `${prefix}-collapse-all`) onCollapseAll?.();
         else if (itemId === `${prefix}-refresh`) onRefresh();
-    }, [detailsMode, onCollapseAll, onDetailsModeChange, onRefresh, prefix]);
+    }, [detailsMode, onCollapseAll, onDetailsModeChange, onRefresh, prefix, showAllFiles, visibility]);
 
     const viewMenu = (
         <DropdownMenu
@@ -132,9 +155,9 @@ export const RepositoryTreeToolbar = React.memo(function RepositoryTreeToolbar(p
 
     if (props.changedOnly || props.showSearch === false) {
         return (
-            <View testID={`${prefix}-toolbar`} style={styles.row}>
+            <View testID={`${prefix}-toolbar`} style={props.layout === 'inline' ? styles.inline : styles.row}>
                 {props.changedOnly ? <SelectionListFilterChip filter={changedOnlyChip} /> : null}
-                <View style={styles.spacer} />
+                {props.layout === 'inline' ? null : <View style={styles.spacer} />}
                 {viewMenu}
                 {props.trailing}
                 {close}
@@ -180,7 +203,7 @@ export const RepositoryTreeToolbar = React.memo(function RepositoryTreeToolbar(p
     );
 });
 
-const stylesheet = StyleSheet.create(() => ({
+const stylesheet = StyleSheet.create((theme) => ({
     // The toolbar sits on the pane without a rule under it; the segmented row or the tree follows.
     searchRow: {
         borderBottomWidth: 0,
@@ -194,6 +217,11 @@ const stylesheet = StyleSheet.create(() => ({
         paddingHorizontal: 12,
         paddingTop: 10,
         paddingBottom: 6,
+    },
+    inline: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.margins.xs,
     },
     spacer: {
         flex: 1,
