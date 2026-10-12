@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FeaturesResponseSchema, UsageEventIngestRequestSchema, ingestPluginManifestV2 } from '@happier-dev/protocol';
-import { UsageSourceResultV1Schema, UsageSourcesListV1Schema } from '@happier-dev/protocol/usage/usageSources';
+import { UsageSourceResultV1Schema, UsageSourcesListV1Schema, parseUsageSourceActionResult } from '@happier-dev/protocol/usage/usageSources';
 import { PLUGIN_MANIFEST } from '@happier-dev/plugins-pi/manifest';
 import { createPiExternalSessionsContribution } from '../../../../../packages/plugins/pi/src/agent/externalSessions/contribution';
 import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
@@ -20,7 +20,7 @@ import type { RpcHandler, RpcHandlerContext, RpcHandlerRegistrar } from '../rpc/
 import { registerMachineUsageSourceRpcHandlers } from './rpcHandlers.usageSources';
 
 describe('native source Machine RPC with real capture custody', () => {
-  it('admits exact personal scope and delegates consent, stop, root replacement and scoped deletion without a Session', async () => {
+  it('admits caller-local Home labels for private sources and delegates consent, stop, root replacement and scoped deletion without a Session', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-source-rpc-'));
     const lifetime = new AbortController();
     let collector: ReturnType<typeof createNativeUsageCollector> | undefined;
@@ -103,13 +103,17 @@ describe('native source Machine RPC with real capture custody', () => {
         // Authentication is an external boundary: retire the actor after actual durable consent admission.
         verifyMachineAdmissionCurrent: async () => current && !(retireWhenConsented
           && (await store.load()).sources.some(row => row.sourceId === retireWhenConsented && row.consented)) };
-      const target = { serverId: 'home', machineId: 'machine' };
+      const target = { serverId: 'browser-home', machineId: 'machine' };
       const call = async (method: string, input: unknown, ctx = context) => {
         const handler = handlers.get(method);
         if (!handler) throw new Error(`Missing source RPC: ${method}`);
         return await handler(input, ctx);
       };
-      const discovered = UsageSourcesListV1Schema.parse(await call('usage.sources.discover', target)).sources[0]!;
+      const discoveredResponse = await call('usage.sources.discover', target);
+      expect(discoveredResponse).toMatchObject({ sources: expect.any(Array) });
+      expect(parseUsageSourceActionResult('usage.sources.discover', target, discoveredResponse)).not.toBeNull();
+      const discovered = UsageSourcesListV1Schema.parse(discoveredResponse).sources[0]!;
+      expect(discovered.serverId).toBe(target.serverId);
       expect(discovered).toMatchObject({ root: { path: join(agentDir, 'sessions') }, consent: 'disabled', pendingCount: 0 });
       expect((await store.load()).sources[0]).toMatchObject({ pending: [] });
       expect(published).toEqual([]);
@@ -117,8 +121,19 @@ describe('native source Machine RPC with real capture custody', () => {
       expect(await call('usage.sources.consent.set', { ...selected, enabled: true }, { ...context,
         machineAdmission: { ...context.machineAdmission!, actorAccountId: 'other' } })).toMatchObject({ ok: false, errorCode: 'access_denied' });
       expect(await call('usage.sources.get', { ...selected, machineId: 'other' })).toMatchObject({ ok: false, errorCode: 'access_denied' });
-      expect(UsageSourceResultV1Schema.parse(await call('usage.sources.consent.set', { ...selected, enabled: true })).source)
+      expect(await call('usage.sources.get', selected, { ...context,
+        machineAdmission: { ...context.machineAdmission!, installationId: 'replaced' } })).toMatchObject({ ok: false, errorCode: 'access_denied' });
+      current = false;
+      expect(await call('usage.sources.get', selected)).toMatchObject({ ok: false, errorCode: 'access_denied' });
+      current = true;
+      const consentInput = { ...selected, enabled: true };
+      const consentResponse = await call('usage.sources.consent.set', consentInput);
+      expect(parseUsageSourceActionResult('usage.sources.consent.set', consentInput, consentResponse)).not.toBeNull();
+      expect(UsageSourceResultV1Schema.parse(consentResponse).source)
         .toMatchObject({ consent: 'enabled' });
+      // Serving a caller's routing label must never rebind durable capture custody.
+      expect((await store.load()).authority).toEqual(authority);
+      expect((await collector.get(discovered.sourceId))[0]?.serverId).toBe(authority.serverId);
       await collector.flushPending();
       expect(UsageSourcesListV1Schema.parse(await call('usage.sources.get', selected)).sources[0]?.pendingCount).toBe(1);
       expect(UsageSourceResultV1Schema.parse(await call('usage.sources.stop', selected)).source)
