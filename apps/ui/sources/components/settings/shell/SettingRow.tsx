@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Animated, Platform, View } from 'react-native';
-import { useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
+import { useIsFocused, useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
 import { useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -71,13 +71,16 @@ function useRegisterRequestedAnchor(anchor: string, isTarget: boolean) {
  * under reduced motion it marks it briefly without animation.
  */
 function useSettingReveal(active: boolean, delayMs: number) {
+    const focused = useIsFocused();
     const reducedMotion = useReducedMotionPreference();
     const scrollSourceRef = usePopoverScrollSourceRef();
     const hostRef = React.useRef<View>(null);
     const highlight = React.useRef(new Animated.Value(0)).current;
 
     React.useEffect(() => {
-        if (!active) return;
+        // A retained page still owns its query while hidden. Reveal when search presents it,
+        // rather than spending the scroll/pulse on its off-screen mounted tree.
+        if (!active || !focused) return;
         const timer = setTimeout(() => {
             const node = hostRef.current as unknown as {
                 scrollIntoView?: (options: Readonly<{ block: 'center'; behavior: 'auto' | 'smooth' }>) => void;
@@ -103,8 +106,12 @@ function useSettingReveal(active: boolean, delayMs: number) {
                 Animated.timing(highlight, { toValue: 0, duration: REVEAL_PULSE_MS, useNativeDriver: false }),
             ]).start();
         }, delayMs);
-        return () => clearTimeout(timer);
-    }, [active, delayMs, highlight, reducedMotion, scrollSourceRef]);
+        return () => {
+            clearTimeout(timer);
+            highlight.stopAnimation();
+            highlight.setValue(0);
+        };
+    }, [active, focused, delayMs, highlight, reducedMotion, scrollSourceRef]);
 
     return { hostRef, highlight };
 }

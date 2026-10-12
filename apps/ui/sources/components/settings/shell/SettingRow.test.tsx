@@ -8,8 +8,6 @@ import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { SettingAnchor, SettingSection, SettingRow, useSettingRevealRequested } from './SettingRow';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
 const paramsState = vi.hoisted(() => ({ value: {} as Record<string, string> }));
 
 vi.mock('react-native', async () => {
@@ -20,11 +18,6 @@ vi.mock('react-native', async () => {
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ params: () => paramsState.value }).module;
-});
-
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key) => key });
 });
 
 vi.mock('react-native-unistyles', async () => {
@@ -70,6 +63,38 @@ describe('SettingSection', () => {
     afterEach(() => {
         vi.useRealTimers();
         paramsState.value = {};
+    });
+
+    it('reveals a retained request only when its destination is presented, including a return to the same request', async () => {
+        vi.useFakeTimers();
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        // The browser scroll adapter records which anchor is actually brought into the viewport.
+        let visibleAnchor: string | null = null;
+        const anchor = PAGE.settings.indexMode.anchor;
+        const render = (presented: boolean) => <DestinationInstanceHost
+            tabId="retained-settings" ref={{ kind: 'settings', params: { setting: anchor } }}
+            pathname="/settings/memory" focused={presented} visible={presented}>
+            <SettingRow setting={PAGE.settings.indexMode} />
+        </DestinationInstanceHost>;
+        const screen = await renderScreen(render(false), {
+            createNodeMock: (element) => element.props.nativeID === `setting-${anchor}`
+                ? { scrollIntoView: () => { visibleAnchor = anchor; } }
+                : null,
+        });
+        await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+        expect(visibleAnchor).toBeNull();
+
+        await screen.update(render(true));
+        await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+        expect(visibleAnchor).toBe(anchor);
+
+        await screen.update(render(false));
+        visibleAnchor = null;
+        await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+        expect(visibleAnchor).toBeNull();
+        await screen.update(render(true));
+        await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+        expect(visibleAnchor).toBe(anchor);
     });
 
     it('reveals only the matching group and opens again for a different setting request in that group', async () => {
