@@ -412,7 +412,7 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
     const favoriteSelections = React.useMemo(() => favorites.map(getFavoriteModelRef)
         .filter(ref => ref.agentTargetKey === providerTargetKey), [favorites, providerTargetKey]);
     const models = useProviderModelProjection({
-        enabled: summarizeModels || Boolean(providersEnabled && defaultSelection && accountSettingsAvailable),
+        enabled: summarizeModels,
         machineId: null,
         serverId: accountScope?.serverId ?? null,
         agentTargetKey: providerTargetKey,
@@ -428,14 +428,50 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
         ...(defaultSelection ? { currentSelection: defaultSelection.ref } : {}),
         favoriteSelections,
     });
-    const defaultGroup = defaultSelection?.ref.providerConnectionId
-        ? models.data?.groups.find(group => group.connectionId === defaultSelection.ref.providerConnectionId)
-        : undefined;
-    const defaultModel = defaultGroup?.rows.find(row => row.ref.modelId === defaultSelection?.ref.modelId);
     const nativeAgentId = resolveBundledAgentIdFromContributionIdentity(projection.identity);
-    const nativeModel = defaultSelection?.ref.providerConnectionId === null && nativeAgentId
-        ? getModelOptionsForAgentType(nativeAgentId).find(option => option.value === defaultSelection.ref.modelId)
-        : undefined;
+    // D22: the Account default model, model only (no Account-level effort default exists). Written
+    // through `providers.defaults.set`; it needs no computer.
+    const accountServerId = accountScope?.serverId ?? null;
+    const defaultModelTitle = t('agentInput.model.title');
+    const defaultModelChoice = useExactModelChoice({
+        agentTargetKey: providerTargetKey,
+        agentId: nativeAgentId,
+        machineId: null,
+        serverId: accountServerId,
+        selected: defaultSelection?.ref ?? null,
+        title: defaultModelTitle,
+        fallbackLabel: t('settingsAgents.detailPage.defaultModelAgentDefault'),
+        enabled: Boolean(providersEnabled && accountSettingsAvailable && providerTargetKey),
+    });
+    const { setProviderDefaultModelSelection } = useProviderActionClient(accountServerId);
+    const [defaultModelError, setDefaultModelError] = React.useState<Readonly<{ error: ProviderErrorV1; retry: () => Promise<void> }> | null>(null);
+    const writeDefaultModel = React.useCallback(async (ref: ProviderBoundModelRef | null): Promise<void> => {
+        if (!providerTargetKey || !accountSettingsAvailable) return;
+        try {
+            await setProviderDefaultModelSelection({
+                serverId: accountServerId,
+                agentTargetKey: providerTargetKey,
+                selection: ref ? { v: 1, ref, updatedAt: Date.now() } : null,
+            });
+            setDefaultModelError(null);
+        } catch (caught) {
+            setDefaultModelError({ error: providerErrorFromRpcFailure(caught), retry: () => writeDefaultModel(ref) });
+        }
+    }, [accountServerId, accountSettingsAvailable, providerTargetKey, setProviderDefaultModelSelection]);
+    const openDefaultModel = defaultModelChoice.open;
+    const chooseDefaultModel = React.useCallback(() => openDefaultModel((ref) => { void writeDefaultModel(ref); }),
+        [openDefaultModel, writeDefaultModel]);
+    const { theme } = useUnistyles();
+    const defaultModelField = renderDropdownItemTriggerRightElement({
+        detail: defaultSelection ? defaultModelChoice.presentation.subtitle ?? null : null,
+        open: false,
+        detailColor: theme.colors.text.primary,
+        chevronColor: theme.colors.text.secondary,
+        field: resolveFieldBoxColors(theme),
+        placeholder: t('settingsAgents.detailPage.defaultModelAgentDefault'),
+        secondary: defaultSelection ? defaultModelChoice.presentation.detail ?? null : null,
+        secondaryColor: theme.colors.text.secondary,
+    });
     const nativeModels = React.useMemo(() => providerTargetKey ? resolveAgentNativeModels({
         runtimeAgentId: nativeAgentId,
         agentTargetKey: providerTargetKey,
@@ -448,10 +484,6 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
             managementGroups: models.data.groups,
         })
         : null;
-    const modelSummary = defaultSelection
-        ? [defaultModel?.descriptor.name ?? nativeModel?.label ?? defaultSelection.ref.modelId,
-            ...(defaultGroup ? [t('agentInput.model.viaSource', { source: providerModelConnectionTitle(defaultGroup) })] : [])].join(' ')
-        : undefined;
     const permissionModeOptions = getPermissionModeOptionsForAgentType(projection.agentId, 'settings');
     const permissionPreference = providerTargetKey
         ? [providerTargetKey, ...compatibilityTargetKeys]
@@ -521,10 +553,25 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
                 accountSettingsAvailable={accountSettingsAvailable}
                 machineId={props.machineId}
             />
+            {providersEnabled && providerTargetKey ? (
+                <Item
+                    testID="settings.agents.detail.defaultModel"
+                    title={defaultModelTitle}
+                    accessibilityLabel={defaultSelection ? defaultModelChoice.presentation.accessibilityLabel : undefined}
+                    accessoryLayout="adaptive"
+                    showChevron={false}
+                    rightElement={defaultModelField}
+                    loading={Boolean(defaultSelection) && defaultModelChoice.loading}
+                    disabled={!accountSettingsAvailable}
+                    onPress={chooseDefaultModel}
+                />
+            ) : null}
+            {defaultModelError ? (
+                <ProviderErrorItems error={defaultModelError.error} retry={defaultModelError.retry} />
+            ) : null}
             {props.onOpenModels ? (
                 <SettingRow setting={AGENT_SETTINGS.settings.models}
                     testID="settings.agents.detail.models"
-                    subtitle={modelSummary}
                     detail={visibilitySummary
                         ? t('settingsAgents.detailPage.modelsVisibilitySummary', visibilitySummary)
                         : undefined}

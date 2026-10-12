@@ -15,6 +15,16 @@ function options(commandId: KeyboardCommandId, platform: KeyboardPlatform, surfa
 }
 
 describe('workspace tab shortcuts', () => {
+    it.each(['macos', 'windows', 'linux'] as const)('closes all tabs with Mod+Shift+W on %s, even in an editor', (platform) => {
+        const { value, handler } = options('workspace.tab.closeAll', platform, 'native');
+        const event: NormalizedKeyboardEvent = { key: 'W', code: 'KeyW', altKey: false, shiftKey: true,
+            metaKey: platform === 'macos', ctrlKey: platform !== 'macos', repeat: false, isComposing: false };
+        expect(createKeyboardShortcutDispatcher(value)(event)).toBe(true);
+        expect(handler).toHaveBeenCalledOnce();
+        expect(createKeyboardShortcutDispatcher({ ...value, disabledCommandIds: ['workspace.tab.closeAll'] })(event)).toBe(false);
+        expect(createKeyboardShortcutDispatcher(value)({ ...event, isComposing: true })).toBe(false);
+    });
+
     it('dispatches reopen while editing using the same customizable native command owner', () => {
         const { value, handler } = options('workspace.tab.reopen', 'macos', 'native');
         const event: NormalizedKeyboardEvent = { key: 'T', code: 'KeyT', altKey: false, shiftKey: true, metaKey: true, ctrlKey: false, repeat: false, isComposing: false };

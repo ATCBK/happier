@@ -11,6 +11,34 @@ const tab = (id: string, kind = 'session', preview = false): WorkspaceTab => {
 };
 
 describe('workspace state', () => {
+    it('bulk closes unpinned members once, keeps the surviving MRU active and preserves original reopen positions', () => {
+        let state = createWorkspaceState({ ...tab('pinned'), pinned: true });
+        for (const id of ['left', 'active', 'right', 'survivor']) {
+            state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: { ...tab(id), pinned: false } });
+        }
+        state = reduceWorkspaceState(state, { type: 'activateTab', groupId: 'group:1', tabId: 'survivor' });
+        state = reduceWorkspaceState(state, { type: 'activateTab', groupId: 'group:1', tabId: 'active' });
+        const closed = reduceWorkspaceState(state, { type: 'closeTabs', groupId: 'group:1', tabIds: ['right', 'active', 'left', 'pinned', 'missing'], newTab: { ...tab('blank', 'newTab'), pinned: false } });
+        expect(closed.groups['group:1']).toMatchObject({ tabIds: ['pinned', 'survivor'], activeTabId: 'survivor', mru: ['survivor', 'pinned'] });
+        expect(closed.tabs.pinned).toBe(state.tabs.pinned);
+        expect(closed.recentlyClosed.map(entry => [entry.tab.id, entry.index])).toEqual([['right', 3], ['active', 2], ['left', 1]]);
+        expect(reduceWorkspaceState(closed, { type: 'closeTabs', groupId: 'group:1', tabIds: ['pinned', 'missing'], newTab: tab('unused', 'newTab') })).toBe(closed);
+    });
+
+    it('bulk closing the final pane leaves one empty tab and closing a split pane restores focus to its sibling', () => {
+        let state = createWorkspaceState({ ...tab('a'), pinned: false });
+        state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: { ...tab('b'), pinned: false } });
+        const empty = { ...tab('blank', 'newTab'), pinned: false };
+        const closed = reduceWorkspaceState(state, { type: 'closeTabs', groupId: 'group:1', tabIds: ['b', 'a', 'b'], newTab: empty });
+        expect(closed.groups['group:1']).toMatchObject({ tabIds: ['blank'], activeTabId: 'blank' });
+        expect(Object.keys(closed.tabs)).toEqual(['blank']);
+        state = reduceWorkspaceState(state, { type: 'splitTab', tabId: 'b', sourceGroupId: 'group:1', targetGroupId: 'group:1', newGroupId: 'group:2', axis: 'row', placement: 'after', availableSizePx: 1200, minimumFirstSizePx: 320, minimumSecondSizePx: 320 });
+        const sibling = reduceWorkspaceState(state, { type: 'closeTabs', groupId: 'group:2', tabIds: ['b'], newTab: empty });
+        expect(Object.keys(sibling.groups)).toEqual(['group:1']);
+        expect(sibling.focusedGroupId).toBe('group:1');
+        expect(sibling.groups['group:1'].activeTabId).toBe('a');
+    });
+
     it('opens a destination edge in one transition and leaves all state untouched if measured admission fails', () => {
         const state = createWorkspaceState(tab('current', 'session', true));
         const action = { type: 'openSplitTab' as const, groupId: 'group:1', tab: tab('incoming'),

@@ -32,6 +32,26 @@ function harness(pages: Parameters<typeof resolveCompactAppDestinations>[0]['pag
 }
 
 describe('workspace navigation adapter', () => {
+    it('publishes bulk closure as one layout and one navigation commit while keeping pinned tabs', () => {
+        const h = harness();
+        h.adapter.openHref('/projects', { mode: 'newTab' });
+        const pinnedId = h.active().id;
+        h.adapter.dispatch({ type: 'setPinned', tabId: pinnedId, pinned: true });
+        h.adapter.openHref('/settings/account', { mode: 'newTab' });
+        const closingId = h.active().id;
+        const beforePublications = h.publications.length;
+        const beforeCommits = h.commits.length;
+        h.adapter.closeTabs('group:1', ['A', closingId, pinnedId, closingId]);
+        expect(h.publications.slice(beforePublications)).toHaveLength(1);
+        expect(h.commits.slice(beforeCommits)).toHaveLength(1);
+        expect(h.state().groups['group:1'].tabIds).toEqual([pinnedId]);
+        expect(h.active().id).toBe(pinnedId);
+        const survivingState = h.state();
+        h.adapter.closeTabs('group:1', [pinnedId, 'missing']);
+        expect(h.state()).toBe(survivingState);
+        expect(h.commits.slice(beforeCommits)).toHaveLength(1);
+    });
+
     it('hands a pane destination off only after its main tab is admitted', () => {
         const h = harness();
         let sidebar = applyOpenDetailsTab(createEmptyPaneDetailsState(), {
