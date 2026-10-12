@@ -259,17 +259,23 @@ function findProfilesByHomeServerIdentityId(
 export async function isServerProfileHomeIdentity(profileId: string, homeServerIdentityId: string): Promise<boolean> {
   // Preserve the existing local-profile target contract for in-process callers.
   if (profileId === homeServerIdentityId) return profileId.length > 0;
+  return await resolveServerProfileHomeIdentityId(profileId) === homeServerIdentityId;
+}
+
+/** Canonical portable identity of one exactly admitted saved Home profile. */
+export async function resolveServerProfileHomeIdentityId(profileId: string): Promise<string | null> {
   try {
     const settings = await readSettings();
     const servers = settings.servers ?? {};
     const profile = coerceProfile(servers[profileId]);
-    return profile?.id === profileId
+    const homeServerIdentityId = profile?.homeConnectionDescriptor?.homeServerIdentityId;
+    return homeServerIdentityId && profile?.id === profileId
       && profile.homeConnectionDescriptorAuthority === 'exact'
-      && profile.homeConnectionDescriptor?.homeServerIdentityId === homeServerIdentityId
       && findProfilesByHomeServerIdentityId(servers, homeServerIdentityId).length === 1
-      && findProfileIdByIdentifier(servers, homeServerIdentityId) === profileId;
+      && findProfileIdByIdentifier(servers, homeServerIdentityId) === profileId
+      ? homeServerIdentityId : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

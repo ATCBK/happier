@@ -13,6 +13,40 @@ describe('server profiles', () => {
   const envKeys = ['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL'] as const;
   let envScope = createEnvKeyScope(envKeys);
 
+  it('binds portable visual acknowledgements through an established Home and publishes portable transcript correspondence', async () => {
+    await withTempDir('happier-cli-visual-home-', async homeDir => {
+      envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: undefined,
+        HAPPIER_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
+      reloadConfiguration();
+      const { addServerProfile, adoptServerProfileHomeConnectionDescriptor } = await import('./serverProfiles');
+      const { prepareCommittedAgentMessageViaPort } = await import('@/api/session/client/transcript/commitMessages');
+      const profile = await addServerProfile({ name: 'visual-daemon', serverUrl: 'https://visual.example.test', webappUrl: 'https://visual.example.test' });
+      const port: import('@/api/session/client/transcript/sendMessages').SessionClientTranscriptSendPort = {
+        sessionId: 'session', serverId: profile.id, socket: { connected: true, emit: () => {} },
+        outboundShapeLogger: { log: () => {} }, debug: () => {}, debugLargeJson: () => {}, getMetadataSnapshot: () => null,
+        buildOutboundSessionMessagePayload: content => ({ t: 'plain', v: content }),
+        toolCallCanonicalNameByProviderAndId: new Map(), permissionToolCallRawInputByProviderAndId: new Map(), toolCallInputByProviderAndId: new Map(),
+      };
+      const input = { itemId: 'visual', expectedItemRevision: null, destination: 'transcript',
+        item: { v: 1, title: 'Visual', frame: 'frameless', height: { mode: 'auto', fallback: 'regular' },
+          source: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'Visual' } } } } };
+      const output = { v: 1, serverId: 'srv_visual_home', sessionId: 'session', destination: null, itemDestination: 'transcript',
+        result: { operation: 'upsert_item', itemId: 'visual', outcome: 'created', itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' } };
+      const commit = async (serverId = output.serverId) => {
+        await prepareCommittedAgentMessageViaPort(port, 'codex', { type: 'tool-call', callId: 'visual-call', id: 'call',
+          name: 'session_board_item_upsert', input }, { localId: 'call' });
+        return prepareCommittedAgentMessageViaPort(port, 'codex', { type: 'tool-result', callId: 'visual-call', id: 'result',
+          output: { ...output, serverId } }, { localId: 'result' });
+      };
+      expect(await commit()).not.toHaveProperty('surfaceItemReference');
+      await adoptServerProfileHomeConnectionDescriptor({ expectedProfileId: profile.id, observation: 'exact',
+        descriptor: { v: 1, homeServerIdentityId: 'srv_visual_home', canonicalServerUrl: profile.serverUrl,
+          revision: 1, endpoints: [{ kind: 'https', url: profile.serverUrl }] } });
+      expect(await commit()).toHaveProperty('surfaceItemReference.references.0.sourceAddress', { serverId: 'srv_visual_home', sessionId: 'session' });
+      expect(await commit('srv_another_home')).not.toHaveProperty('surfaceItemReference');
+    });
+  });
+
   function deriveLegacyEnvServerIdFromUrl(url: string): string {
     const raw = String(url ?? '').trim().replace(/\/+$/, '');
     if (!raw) return 'env_0';
@@ -93,7 +127,7 @@ describe('server profiles', () => {
       });
     });
 
-  it.each(['refresh', 'alias', 'other-home', 'stale', 'public', 'unsafe-http'] as const)('reconciles a changed descriptor endpoint through authenticated Home publication: %s', async (scenario) => {
+  it.each(['refresh', 'alias', 'other-home', 'stale', 'conflict', 'public', 'unsafe-http'] as const)('reconciles a changed descriptor endpoint through authenticated Home publication: %s', async (scenario) => {
     await withTempDir('happier-cli-profile-port-', async (homeDir) => {
       envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: undefined,
         HAPPIER_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
@@ -105,7 +139,7 @@ describe('server profiles', () => {
       const requestedOrigin = scenario === 'alias' ? 'http://localhost:3012' : newOrigin;
       await setServerProfileEndpointsById({ id, serverUrl: oldOrigin, webappUrl: oldOrigin, use: true });
       const oldDescriptor = { v: 1 as const, homeServerIdentityId: 'srv_port_home', canonicalServerUrl: oldOrigin,
-        revision: 1, endpoints: [{ kind: 'https' as const, url: oldOrigin }] };
+        revision: 32, endpoints: [{ kind: 'https' as const, url: oldOrigin }] };
       await adoptServerProfileHomeConnectionDescriptor({ descriptor: oldDescriptor, expectedProfileId: id, observation: 'exact' });
       await writeCredentialsTokenOnlyForServerId(id, { token: 'fixture-port-token' });
       if (scenario === 'refresh') {
@@ -118,7 +152,8 @@ describe('server profiles', () => {
       }
       const published = { ...oldDescriptor, canonicalServerUrl: newOrigin,
         homeServerIdentityId: scenario === 'other-home' ? 'srv_other_home' : oldDescriptor.homeServerIdentityId,
-        revision: scenario === 'stale' ? 1 : 2, endpoints: [{ kind: 'https' as const, url: newOrigin }] };
+        revision: scenario === 'stale' ? 31 : scenario === 'conflict' ? 32 : 33,
+        endpoints: [{ kind: 'https' as const, url: newOrigin }] };
       // Only the network boundary is mocked; schema parsing, credential lookup,
       // identity verification, revision admission and profile persistence are real.
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url, init) => {
