@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { usePathname } from '@/components/appShell/workspace/destinationRoute';
 
 import type {
@@ -14,6 +16,14 @@ import {
   type SelectionListStep,
 } from '@/components/ui/selectionList';
 import { Item } from '@/components/ui/lists/Item';
+import { useListPresentation } from '@/components/ui/lists/listPresentation';
+import { resolveFieldBoxColors } from '@/components/ui/forms/fieldBox';
+import { renderDropdownItemTriggerRightElement } from '@/components/ui/forms/dropdown/renderDropdownItemTriggerRightElement';
+import { Icon } from '@/components/ui/icons/Icon';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { Modal } from '@/modal';
 import {
   useProjectedConnectedServicesRegistry,
@@ -39,11 +49,24 @@ const EMPTY_ACCOUNTS = Object.freeze([]);
 const EMPTY_GROUPS = Object.freeze([]);
 const EMPTY_TEAM_RESOURCES: HomeTeamCredentialModelCatalog['resources'] = Object.freeze([]);
 
+/**
+ * Re-reading the targets is a recovery for "my account is not in this list", so it lives where that
+ * list is read: one quiet line under the choices, never a row on the page.
+ */
+type PurposeTargetPickerRefresh = Readonly<{
+  /** The owner's current status (for example the Provider's), said next to the action. */
+  status?: string;
+  refreshing: boolean;
+  onRefresh: () => void;
+}>;
+
 type ConnectedAccountPurposeTargetPickerModalContentProps = Readonly<{
   rootStep: SelectionListStep;
   selectedOptionId: string | null;
   accessibilityLabel: string;
   onSelect: (optionId: string) => void;
+  refresh: PurposeTargetPickerRefresh | null;
+  testID: string;
   onClose: () => void;
 }>;
 
@@ -51,22 +74,57 @@ function ConnectedAccountPurposeTargetPickerModalContent(
   props: ConnectedAccountPurposeTargetPickerModalContentProps,
 ) {
   return (
-    <SelectionList
-      testID="connected-account-purpose-target-picker"
-      rootStep={props.rootStep}
-      selectedOptionId={props.selectedOptionId}
-      listAccessibilityLabel={props.accessibilityLabel}
-      maxHeight={PURPOSE_TARGET_PICKER_MAX_HEIGHT}
-      heightBehavior={resolvePopoverSelectionListHeightBehavior()}
-      keyboardHintsEnabled
-      onRequestClose={props.onClose}
-      onSelect={(optionId) => {
-        props.onClose();
-        props.onSelect(optionId);
-      }}
-    />
+    <>
+      <SelectionList
+        testID="connected-account-purpose-target-picker"
+        rootStep={props.rootStep}
+        selectedOptionId={props.selectedOptionId}
+        listAccessibilityLabel={props.accessibilityLabel}
+        maxHeight={PURPOSE_TARGET_PICKER_MAX_HEIGHT}
+        heightBehavior={resolvePopoverSelectionListHeightBehavior()}
+        keyboardHintsEnabled
+        onRequestClose={props.onClose}
+        onSelect={(optionId) => {
+          props.onClose();
+          props.onSelect(optionId);
+        }}
+      />
+      {props.refresh ? (
+        <View style={styles.refresh}>
+          <Text style={styles.refreshStatus} numberOfLines={2}>{props.refresh.status ?? ''}</Text>
+          <RoundButton
+            testID={`${props.testID}:reload`}
+            size="small"
+            display="inverted"
+            title={t('common.refresh')}
+            loading={props.refresh.refreshing}
+            disabled={props.refresh.refreshing}
+            onPress={props.refresh.onRefresh}
+          />
+        </View>
+      ) : null}
+    </>
   );
 }
+
+const styles = StyleSheet.create((theme) => ({
+  refresh: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s12,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border.subtle,
+  },
+  refreshStatus: {
+    ...Typography.default(),
+    ...happierPageTextMetrics('rowDescription'),
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.text.secondary,
+  },
+}));
 
 export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
   testID: string;
@@ -96,8 +154,14 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
   icon?: React.ReactNode;
   /** What the current choice means here, said when the row has no state of its own to report. */
   description?: string;
+  /**
+   * What an optional purpose with no target means on this surface (an Agent's own sign-in, an
+   * unused gateway slot). Defaults to "Not set"; never a dash.
+   */
+  noneLabel?: string;
+  /** Re-read the targets. Offered once, inside the picker sheet, not as a page row. */
   onReload?: () => Promise<void> | void;
-  /** Provider's current status, presented by the provider status owner. */
+  /** The owner's current status (for example the Provider's), shown next to Refresh in the sheet. */
   reloadSubtitle?: string;
   /**
    * The viewer's entitled Team catalog for the active Home. Supplied only by a
@@ -132,6 +196,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     : accountTransport;
   const pickerModalIdRef = React.useRef<string | null>(null);
   const [reloading, setReloading] = React.useState(false);
+  const reloadingRef = React.useRef(false);
   const accounts = effectiveAccountTransport === 'advertised-v4'
     ? profile.connectedAccountsV4 ?? EMPTY_ACCOUNTS
     : EMPTY_ACCOUNTS;
@@ -154,6 +219,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     declaration: { ...props.declaration, required: props.declaration.required === true },
     selectedTarget: props.value,
     selectedTeamResource: props.teamResourceValue ?? null,
+    ...(props.noneLabel ? { noneLabel: props.noneLabel } : {}),
     accounts,
     groups,
     labelsByKey,
@@ -174,6 +240,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     props.declaration,
     props.value,
     props.teamResourceValue,
+    props.noneLabel,
     serviceTitle,
     labelsByKey,
     // The registry is the descriptor/currentness owner for authentication.
@@ -199,6 +266,7 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     : null;
   const triggerStatus = props.disabledReason
     ?? unresolvedSourceLabel
+    ?? selected?.presentation.unavailableReason
     ?? (selectedTargetAccessibilityLabel ? null : requiredUnsetLabel ?? t('common.unavailable'));
   const triggerDetail = unreadSelectionReason
     ?? selected?.presentation.primaryLabel
@@ -207,13 +275,14 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     ?? t('common.unavailable');
   const triggerAccessibilityLabel = [
     purposeTitle,
-    selectedTargetAccessibilityLabel,
-    triggerStatus,
+    selected?.presentation.unavailableReason ? selected.presentation.accessibilityLabel : selectedTargetAccessibilityLabel,
+    selected?.presentation.unavailableReason ? null : triggerStatus,
   ].filter((label): label is string => label !== null).join(' · ');
 
   const rootStep = React.useMemo<SelectionListStep>(() => ({
     id: 'connected-account-purpose-targets',
-    inputPlaceholder: t('modelPickerOverlay.searchPlaceholder'),
+    // It chooses accounts and pools, not models.
+    inputPlaceholder: t('common.search'),
     emptyStateLabel: t('common.unavailable'),
     sections: [{
       kind: 'static',
@@ -235,20 +304,51 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     Modal.hide(pickerModalIdRef.current);
     pickerModalIdRef.current = null;
   }, []);
+  const onReload = props.onReload;
+  const reload = React.useCallback(async () => {
+    if (!onReload || reloadingRef.current) return;
+    reloadingRef.current = true;
+    setReloading(true);
+    try {
+      await onReload();
+    } finally {
+      reloadingRef.current = false;
+      setReloading(false);
+    }
+  }, [onReload]);
+  // Consumers pass inline handlers; the open sheet updates only when what it shows changes.
+  const onChangeRef = React.useRef(props.onChange);
+  onChangeRef.current = props.onChange;
+  // The open sheet reads the same choices as the row: a reload (or any upstream change) refreshes it
+  // in place instead of leaving a stale list on screen.
+  const pickerProps = React.useMemo((): Omit<ConnectedAccountPurposeTargetPickerModalContentProps, 'onClose'> => ({
+    rootStep,
+    selectedOptionId: selected?.selectable ? selected.id : null,
+    accessibilityLabel: purposeTitle,
+    testID: props.testID,
+    refresh: onReload
+      ? {
+          ...(props.reloadSubtitle ? { status: props.reloadSubtitle } : {}),
+          refreshing: reloading,
+          onRefresh: () => void reload(),
+        }
+      : null,
+    onSelect: (id) => {
+      // The sheet closed itself before selecting; it no longer takes updates.
+      pickerModalIdRef.current = null;
+      const choice = choices.find((candidate) => candidate.id === id);
+      if (choice?.selectable) onChangeRef.current(choice.target, choice.teamResource);
+    },
+  }), [choices, onReload, props.reloadSubtitle, props.testID, purposeTitle, reload, reloading, rootStep, selected]);
+  React.useEffect(() => {
+    if (pickerModalIdRef.current) Modal.update(pickerModalIdRef.current, pickerProps);
+  }, [pickerProps]);
   const openPicker = React.useCallback(() => {
     if (props.disabled) return;
     closePicker();
     pickerModalIdRef.current = Modal.show({
       component: ConnectedAccountPurposeTargetPickerModalContent,
-      props: {
-        rootStep,
-        selectedOptionId: selected?.selectable ? selected.id : null,
-        accessibilityLabel: purposeTitle,
-        onSelect: (id) => {
-          const choice = choices.find((candidate) => candidate.id === id);
-          if (choice?.selectable) props.onChange(choice.target, choice.teamResource);
-        },
-      },
+      props: pickerProps,
       chrome: {
         kind: 'card',
         title: purposeTitle,
@@ -257,8 +357,9 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
         bodyScroll: 'none',
       },
       closeOnBackdrop: true,
+      onRequestClose: () => { pickerModalIdRef.current = null; },
     });
-  }, [choices, closePicker, props.disabled, props.onChange, props.testID, purposeTitle, rootStep, selected]);
+  }, [closePicker, pickerProps, props.disabled, props.testID, purposeTitle]);
 
   // This screen can stay mounted behind another Settings route while its picker
   // remains portaled. Route ownership and unmount both close it.
@@ -267,38 +368,43 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     return closePicker;
   }, [closePicker, pathname]);
 
-  const reload = React.useCallback(async () => {
-    if (!props.onReload || reloading) return;
-    setReloading(true);
-    try {
-      await props.onReload();
-    } finally {
-      setReloading(false);
-    }
-  }, [props.onReload, reloading]);
-
-  return <>
+  // On a configuration page a choice from a list is the shared bordered field select (the same one
+  // DropdownMenu draws), holding the value and a pool's mark; grouped surfaces keep the value row.
+  const { theme } = useUnistyles();
+  const pageField = useListPresentation() === 'page';
+  const fieldColors = React.useMemo(
+    () => (pageField ? resolveFieldBoxColors(theme, selected?.presentation.unavailableReason ? 'invalid' : 'idle') : undefined),
+    [pageField, selected?.presentation.unavailableReason, theme],
+  );
+  const subtitle = triggerStatus ?? selected?.presentation.summaryLabel ?? props.description;
+  // What repairs a saved target that cannot serve (D14) reads as needing the user.
+  const subtitleNeedsYou = Boolean(selected?.presentation.unavailableReason) && subtitle === triggerStatus;
+  return (
     <Item
       testID={props.testID}
       icon={props.icon}
       title={purposeTitle}
-      subtitle={triggerStatus ?? props.description}
-      subtitleLines={props.description ? 0 : undefined}
-      detail={triggerDetail}
+      subtitle={subtitle}
+      subtitleLines={props.description || subtitleNeedsYou ? 0 : undefined}
+      subtitleStyle={subtitleNeedsYou ? { color: theme.colors.state.warning.foreground } : undefined}
+      detail={fieldColors ? undefined : triggerDetail}
+      rightElement={fieldColors ? renderDropdownItemTriggerRightElement({
+        detail: triggerDetail,
+        open: false,
+        detailColor: theme.colors.text.secondary,
+        chevronColor: theme.colors.text.secondary,
+        field: fieldColors,
+        fieldSpan: 'column',
+        leading: selected?.kind === 'group'
+          ? <Icon name="stack" size={14} color={theme.colors.text.secondary} />
+          : undefined,
+      }) : undefined}
+      accessoryLayout={fieldColors ? 'adaptive' : undefined}
+      fieldAccessory={fieldColors ? true : undefined}
       accessibilityLabel={triggerAccessibilityLabel}
-      showChevron
+      showChevron={!fieldColors}
       disabled={props.disabled}
       onPress={props.disabled ? undefined : openPicker}
     />
-    {props.onReload ? (
-      <Item
-        testID={`${props.testID}:reload`}
-        title={t('common.refresh')}
-        subtitle={props.reloadSubtitle}
-        loading={reloading}
-        disabled={reloading}
-        onPress={() => void reload()}
-      />
-    ) : null}
-  </>;
+  );
 }
