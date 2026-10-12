@@ -7,7 +7,6 @@ import { createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/stora
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const setDefaultPermissionByAgent = vi.fn();
 const setPermissionModeApplyTiming = vi.fn();
 const setPermissionPromptSurface = vi.fn();
 const setDefaultPersistenceMode = vi.fn();
@@ -31,7 +30,6 @@ installSessionSettingsCommonModuleMocks({
             importOriginal,
             overrides: {
                 useSettingMutable: createUseSettingMutableMockFromReader((name) => {
-                    if (name === 'sessionDefaultPermissionModeByTargetKey') return [{}, setDefaultPermissionByAgent];
                     if (name === 'sessionPermissionModeApplyTiming') return ['immediate', setPermissionModeApplyTiming];
                     if (name === 'permissionPromptSurface') return ['composer', setPermissionPromptSurface];
                     if (name === 'newSessionDefaultPersistenceModeV1') return ['persisted', setDefaultPersistenceMode];

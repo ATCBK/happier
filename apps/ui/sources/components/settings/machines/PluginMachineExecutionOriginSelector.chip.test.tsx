@@ -84,6 +84,7 @@ describe('PluginMachineExecutionOriginSelector header chip', () => {
         await screen.pressByTestIdAsync('plugin.execution.chip');
         expect(screen.getTextContent()).toContain('settingsOverview.machineOnline');
         expect(screen.getTextContent()).not.toContain('settingsOverview.machineOffline');
+        expect(screen.getTextContent()).toContain('common.version 1.0.0');
     }));
 
     it('keeps plugin rejection separate from live Machine presence', () => withPopoverWebGlobals(async () => {

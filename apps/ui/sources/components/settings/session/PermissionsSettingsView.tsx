@@ -6,7 +6,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { t } from '@/text';
-import { useSettingMutable, useSettingsSelector } from '@/sync/domains/state/storage';
+import { useSetting, useSettingMutable, useSettingsSelector } from '@/sync/domains/state/storage';
 import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
 import { getAgentCore, type AgentId } from '@/agents/catalog/catalog';
 import { getPermissionModeOptionsForAgentType } from '@/sync/domains/permissions/permissionModeOptions';
@@ -23,6 +23,7 @@ import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHead
 import { SettingAnchor, SettingSection } from '@/components/settings/shell/SettingRow';
 import { Item } from '@/components/ui/lists/Item';
 import { PERMISSIONS_SETTINGS } from '@/components/settings/session/permissionsSettings';
+import { useAgentPreferenceWriter } from '@/components/settings/agents/useAgentPreferenceWriter';
 
 type PermissionApplyTiming = 'immediate' | 'next_prompt';
 type PermissionPromptSurfaceMenuOption = 'composer' | 'transcript';
@@ -44,7 +45,8 @@ export const PermissionsSettingsView = React.memo(function PermissionsSettingsVi
         opencodeBackendMode: (settings as Record<string, unknown>).opencodeBackendMode,
     }), [settings]);
 
-    const [defaultPermissionByTargetKey, setDefaultPermissionByTargetKey] = useSettingMutable('sessionDefaultPermissionModeByTargetKey');
+    const defaultPermissionByTargetKey = useSetting('sessionDefaultPermissionModeByTargetKey');
+    const writeAgentPreference = useAgentPreferenceWriter();
     const [permissionModeApplyTiming, setPermissionModeApplyTiming] = useSettingMutable('sessionPermissionModeApplyTiming');
     const [permissionPromptSurface, setPermissionPromptSurface] = useSettingMutable('permissionPromptSurface');
     const [defaultTranscriptStorageMode, setDefaultTranscriptStorageMode] = useSettingMutable('newSessionDefaultPersistenceModeV1');
@@ -52,17 +54,13 @@ export const PermissionsSettingsView = React.memo(function PermissionsSettingsVi
 
     const getDefaultPermission = React.useCallback((agent: AgentId): PermissionMode => {
         const targetKey = resolveBackendTargetKeyV2({ kind: 'backend', backendId: agent });
-        const raw = (defaultPermissionByTargetKey as any)?.[targetKey] as PermissionMode | undefined;
-        return (raw ?? 'default') as PermissionMode;
+        return defaultPermissionByTargetKey[targetKey] ?? 'default';
     }, [defaultPermissionByTargetKey]);
 
     const setDefaultPermission = React.useCallback((agent: AgentId, mode: PermissionMode) => {
         const targetKey = resolveBackendTargetKeyV2({ kind: 'backend', backendId: agent });
-        setDefaultPermissionByTargetKey({
-            ...(defaultPermissionByTargetKey ?? {}),
-            [targetKey]: mode,
-        } as any);
-    }, [defaultPermissionByTargetKey, setDefaultPermissionByTargetKey]);
+        void writeAgentPreference('defaultPermission', targetKey, mode);
+    }, [writeAgentPreference]);
 
     const supportedDirectAgentIds = React.useMemo(() => {
         return enabledAgentIds.filter((agentId) => supportsDirectTranscriptStorageForNewSession({
