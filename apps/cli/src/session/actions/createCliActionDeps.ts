@@ -2682,6 +2682,17 @@ export function createCliActionDeps(params: Readonly<{
       resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.transcript.get', request),
       ...(context.signal ? { signal: context.signal } : {}),
     }) : undefined;
+    const authorizeReviewSession = async (sessionId: string) => {
+      // An ingress proof is the caller's ceiling; never widen it with the
+      // runtime owner's credentials. Ordinary CLI callers prove access at Home.
+      if (context.rpcSessionAuthorization) return context.rpcSessionAuthorization.sessionId === sessionId;
+      const snapshot = await fetchSessionById({ token: params.token, sessionId,
+        ...(params.serverHttpBaseUrl ? { serverUrl: params.serverHttpBaseUrl } : {}),
+        resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, actionId, request),
+        ...(context.signal ? { signal: context.signal } : {}),
+      }).catch(() => null);
+      return snapshot?.id === sessionId;
+    };
     const readPullRequestComparisonPage: ReadPullRequestComparisonPage = async ({ sourceAction, continuation }) => {
       const input = sourceAction.input;
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Pull-request source Action requires object input');
@@ -2718,7 +2729,7 @@ export function createCliActionDeps(params: Readonly<{
           return executeScmActionOperation({ actionId, input: inputRecord, workingDirectory: cwd ?? process.cwd(),
             accessPolicy: params.scmFilesystemAccessPolicy ?? resolveFilesystemAccessPolicy(),
             ...(readComparisonTranscriptPage ? { readComparisonTranscriptPage } : {}), readPullRequestComparisonPage,
-            authorizeSession: async sessionId => context.rpcSessionAuthorization?.sessionId === sessionId,
+            authorizeSession: authorizeReviewSession,
             executeCanonicalAction, actionContext: localReviewContext, ...accountMarksDeps, ...(context.signal ? { signal: context.signal } : {}),
             executeDiffSummary: async ({ request }) => await executeScmDiffSummaryAction({
               request: request as ScmDiffSummaryGenerateInput, machineId,
@@ -2853,14 +2864,7 @@ export function createCliActionDeps(params: Readonly<{
       ...(readComparisonTranscriptPage ? { readComparisonTranscriptPage } : {}),
       readPullRequestComparisonPage,
       sessionId: transport.sessionId,
-      authorizeSession: async selectedSessionId => {
-        const snapshot = await fetchSessionById({ token: params.token, sessionId: selectedSessionId,
-          ...(params.serverHttpBaseUrl ? { serverUrl: params.serverHttpBaseUrl } : {}),
-          resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, actionId, request),
-          ...(context.signal ? { signal: context.signal } : {}),
-        }).catch(() => null);
-        return snapshot?.id === selectedSessionId;
-      },
+      authorizeSession: authorizeReviewSession,
       executeCanonicalAction,
       actionContext: localReviewContext,
       ...accountMarksDeps,

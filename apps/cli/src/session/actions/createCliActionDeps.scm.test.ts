@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, createScmCapabilities, sealEncryptedDataKeyEnvelopeV1, sealSessionOwnerMetadataEnvelopeV1, V2SessionByIdResponseSchema } from '@happier-dev/protocol';
@@ -15,6 +17,7 @@ import { configuration, reloadConfiguration } from '@/configuration';
 import { updateSettings } from '@/persistence';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -125,6 +128,43 @@ describe('Session-backed SCM owner workspace', () => {
 });
 
 describe('exact-machine SCM Action targeting', () => {
+  it.each(['accessible', 'denied', 'foreignProof'] as const)('checks authenticated Session access for local machine comparison capture (%s)', async access => {
+    await withTempDir('scm-machine-session-home-', async home => {
+      const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+      const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-machine-session-' });
+      const sessionId = 'c111111111111111111111111';
+      try {
+        env.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: 'session-review-home' });
+        reloadConfiguration();
+        await updateSettings(settings => ({ ...settings, machineIdByServerId: { 'session-review-home': 'machine' } }));
+        await writeFile(join(fixture.rootPath, fixture.trackedPath), 'Session-bound pending change\n');
+        // The HTTP boundary supplies current access; Action qualification, Git capture
+        // and retained comparison storage run unchanged beneath it.
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+          if (!String(url).includes(`/sessions/${sessionId}`)) throw new Error('Unexpected Session access request');
+          if (access === 'denied') throw Object.assign(new Error('Forbidden'), { response: { status: 403 } });
+          return { status: 200, data: { session: createSessionRecordFixture({ id: sessionId,
+            encryptionMode: 'plain', machineId: 'machine', metadata: JSON.stringify({ path: fixture.rootPath }), share: null }) } };
+        });
+        const token = 'session-review-requester';
+        const executor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
+          sessionId: '', mode: 'plain', ctx: null,
+          scmFilesystemAccessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] } }));
+        const result = await executor.execute('scm.diffSummary.capture', { cwd: fixture.rootPath, sessionId,
+          source: { kind: 'workingTree' } }, { surface: 'cli', externalActionTarget: { kind: 'machine', machineId: 'machine' },
+          ...(access === 'foreignProof' ? { rpcSessionAuthorization: { kind: 'session.write' as const, sessionId: 'different-session' } } : {}) });
+        expect(result).toMatchObject({ ok: true, result: access === 'accessible'
+          ? { success: true, comparison: { repository: { rootPath: fixture.rootPath }, inventory: { state: 'complete',
+              files: [expect.objectContaining({ path: fixture.trackedPath, evidence: expect.objectContaining({ state: 'available',
+                unifiedDiff: expect.stringContaining('Session-bound pending change') }) })] } } }
+          : { success: false, errorCode: 'DIFF_UNAVAILABLE' } });
+      } finally {
+        env.restore(); reloadConfiguration();
+        await rm(fixture.rootPath, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('admits a portable Home for real local saved-review list and read while refusing lost or ambiguous bindings', async () => {
     await withTempDir('scm-portable-home-', async home => {
       const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
