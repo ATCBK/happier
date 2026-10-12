@@ -3,7 +3,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { UsageQuerySchema } from '../../inputs/usageQuery.js';
 import { SettingsDeclarationMutationReversalV1Schema, SettingsDeclarationValueV1Schema } from '../../actions/settingsDeclarationActionFamily.js';
 import { SessionModelMutationReversalV1Schema } from '../../sessions/control/modelTransitionV1.js';
-import { McpServerBindingEnabledReversalV1Schema } from '../../mcp/servers/catalogSchemasV1.js';
+import { McpRulesSetItemResultV1Schema } from '../../actions/specs/capabilityRules.js';
 import { UsageCoachRemedySchema } from './coachRemedy.js';
 
 const identity = lazyZodSchema(() => z.string().trim().min(1));
@@ -13,7 +13,7 @@ export const UsageCoachReversalSchema = lazyZodSchema(() => z.discriminatedUnion
     z.object({ kind: z.literal('setting'), anchor: identity, appliedValue: SettingsDeclarationValueV1Schema,
         owner: SettingsDeclarationMutationReversalV1Schema }).strict(),
     z.object({ kind: z.literal('model'), sessionId: identity, owner: SessionModelMutationReversalV1Schema }).strict(),
-    z.object({ kind: z.literal('mcp_binding'), owner: McpServerBindingEnabledReversalV1Schema }).strict(),
+    z.object({ kind: z.literal('mcp_binding'), owner: McpRulesSetItemResultV1Schema }).strict(),
 ]));
 export type UsageCoachReversal = z.infer<typeof UsageCoachReversalSchema>;
 export const UsageCoachApplyInputSchema = reference;

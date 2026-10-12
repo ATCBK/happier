@@ -5,6 +5,7 @@ import { ProviderConnectionIdSchema } from '../../providers/ids.js';
 import { SessionSpawnNewInitialInputV1Schema, SessionSpawnNewInputV2BaseSchema } from '../../sessions/creation/sessionSpawnNewInputV2.js';
 import { requireSessionInputContent } from '../../sessions/messages/sessionInputAuthoringV1.js';
 import { SessionModelMutationExpectedV1Schema } from '../../sessions/control/modelTransitionV1.js';
+import { ReachPlaceV1Schema } from '../../reach/reachPlaceV1.js';
 
 const identity = lazyZodSchema(() => z.string().trim().min(1));
 /** A Coach proposal prepares a review prompt, not an arbitrary Session birth request. */
@@ -19,7 +20,8 @@ export const UsageCoachRemedySchema = lazyZodSchema(() => z.discriminatedUnion('
     z.object({ kind: z.literal('setting'), anchor: identity, value: SettingsDeclarationValueV1Schema }).strict(),
     z.object({ kind: z.literal('model'), sessionId: identity, modelId: identity,
         providerConnectionId: ProviderConnectionIdSchema.nullable().optional(), expected: SessionModelMutationExpectedV1Schema.optional() }).strict(),
-    z.object({ kind: z.literal('mcp_binding'), bindingId: identity, enabled: z.boolean(),
+    z.object({ kind: z.literal('mcp_binding'), bindingId: identity, serverId: identity,
+        target: ReachPlaceV1Schema, agentId: identity.optional(), enabled: z.boolean(),
         expectedRevision: z.union([z.number().int().nonnegative().safe(), z.literal('absent')]) }).strict(),
     z.object({ kind: z.literal('prepared_session'), input: preparedReview }).strict(),
     z.object({ kind: z.literal('recovery'), sessionId: identity,
