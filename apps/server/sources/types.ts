@@ -9,6 +9,7 @@ import { ImageRef } from "./storage/blob/files";
 import type { LinkedProvider } from "./app/auth/providers/linkedProviders";
 
 export type AccountProfile = {
+    name: string | null;
     firstName: string | null;
     lastName: string | null;
     username: string | null;

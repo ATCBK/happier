@@ -48,8 +48,10 @@ import {
     getFilesBackendFromEnv,
     resolveDefaultFilesBackend,
     resolveDefaultSocketAdapter,
+    shouldApplyLightDefaultEnv,
 } from '@/config/backends';
 import { readSocketAdapterRuntimeConfigFromEnv } from '@/config/socketAdapter';
+import { resolveDefaultDbProvider } from '@/config/databaseProvider';
 import { createRedisStreamsRoomEmitter } from '@/app/events/createRedisStreamsRoomEmitter';
 import { registerSessionHumanPresenceAccessChangePublisher } from '@/app/session/humanPresence/sessionHumanPresenceService';
 import { eventRouter } from '@/app/events/eventRouter';
@@ -177,7 +179,7 @@ export async function startServer(flavor: ServerFlavor, options?: StartServerOpt
     process.env.HAPPY_SERVER_FLAVOR = flavor;
     process.env.HAPPIER_SERVER_FLAVOR = flavor;
     const role = getServerRoleFromEnv(process.env);
-    const dbProvider = getDbProviderFromEnv(process.env, flavor === 'light' ? 'sqlite' : 'postgres');
+    const dbProvider = getDbProviderFromEnv(process.env, resolveDefaultDbProvider(flavor));
     process.env.HAPPY_DB_PROVIDER = dbProvider;
     process.env.HAPPIER_DB_PROVIDER = dbProvider;
 
@@ -194,9 +196,7 @@ export async function startServer(flavor: ServerFlavor, options?: StartServerOpt
     // Light defaults locate the database and the local files directory before the database opens, so
     // this decision reads the deployment's files backend; the backend itself is resolved after the
     // Home settings startup overlay below.
-    const shouldApplyLocalDefaults = getFilesBackendFromEnv(process.env, resolveDefaultFilesBackend(flavor)) === 'local'
-        || dbProvider === 'pglite'
-        || dbProvider === 'sqlite';
+    const shouldApplyLocalDefaults = shouldApplyLightDefaultEnv(process.env, flavor);
     if (shouldApplyLocalDefaults) {
         applyLightDefaultEnv(process.env);
         applyPackagedLightRuntimeSqliteDefaults(process.env);
