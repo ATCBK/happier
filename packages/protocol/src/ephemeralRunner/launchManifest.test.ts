@@ -31,7 +31,7 @@ function preparedFixture() {
       transcriptStorage: 'persisted',
       profileId: null,
       environmentVariables: null,
-      mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+      capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
       connectedServices: null,
       checkoutCreationDraft: null,
       resumeSessionId: null,
@@ -189,12 +189,12 @@ describe('Runner prepared authoring commitment', () => {
     for (const changedAuthoring of [
       { ...preparedAuthoring.authoring, profileId: 'changed-profile' },
       { ...preparedAuthoring.authoring, environmentVariables: { RUNNER_PROFILE_TOKEN: 'changed-secret' } },
-      { ...preparedAuthoring.authoring, mcpSelection: {
+      { ...preparedAuthoring.authoring, capabilitySelection: { mcp: {
         v: 1 as const,
         managedServersEnabled: false,
         forceIncludeServerIds: [],
         forceExcludeServerIds: [],
-      } },
+      } } },
       { ...preparedAuthoring.authoring, connectedServices: { v: 2 as const, bindingsByServiceId: {
         'happier.service.github/github': { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
       } } },
@@ -257,7 +257,7 @@ describe('Runner prepared authoring commitment', () => {
       { ...input, authoring: { ...input.authoring, permissionMode: 'bypassPermissions' } },
       { ...input, authoring: { ...input.authoring, profileId: 'review-profile' } },
       { ...input, authoring: { ...input.authoring, environmentVariables: { RUNNER_PROFILE_TOKEN: 'reviewed-secret' } } },
-      { ...input, authoring: { ...input.authoring, mcpSelection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } } },
+      { ...input, authoring: { ...input.authoring, capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } } } },
       { ...input, authoring: { ...input.authoring, connectedServices: { v: 2, bindingsByServiceId: {
         'happier.service.github/github': { source: 'connected', selection: 'profile', profileId: 'work' },
       } } } },
@@ -281,7 +281,7 @@ describe('Runner prepared authoring commitment', () => {
       'transcriptStorage',
       'profileId',
       'environmentVariables',
-      'mcpSelection',
+      'capabilitySelection',
       'connectedServices',
       'acpSessionModeId',
       'sessionConfigOptionOverrides',

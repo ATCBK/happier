@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-import { resolveManagedSessionMcpSelectionV1 } from '../mcp/servers/resolveManagedSessionMcpSelectionV1.js';
-import type { ResolvedMcpServerV1 } from '../mcp/servers/resolveEffectiveServersV1.js';
-import { SessionMcpSelectionV1Schema, type SessionMcpSelectionV1 } from '../mcp/servers/sessionSelectionV1.js';
+import { resolveSessionCapabilitiesV1, projectMcpServerMaterializationV1, type ResolvedMcpServerV1 } from '../reach/resolveSessionCapabilitiesV1.js';
+import { SessionMcpSelectionV1Schema } from '../mcp/servers/sessionSelectionV1.js';
+import { SessionCapabilitySelectionAuthoringV1Schema, type SessionCapabilitySelectionV1 } from '../reach/sessionCapabilitySelectionV1.js';
 import {
   McpServerCatalogEntryV1Schema,
   McpServersSettingsV1Schema,
@@ -34,7 +34,7 @@ const RunnerReviewedMcpServerV1Schema = z.object({
 export const RunnerMcpMaterialV1Schema = z.object({
   v: z.literal(1),
   strictMode: z.boolean(),
-  selection: SessionMcpSelectionV1Schema,
+  capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema,
   servers: z.array(RunnerReviewedMcpServerV1Schema).max(256),
 }).strict().superRefine((value, context) => {
   const serverIds = new Set<string>();
@@ -61,10 +61,11 @@ export const RunnerMcpMaterialV1Schema = z.object({
   }
 });
 export type RunnerMcpMaterialV1 = z.infer<typeof RunnerMcpMaterialV1Schema>;
+export const EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1 = 'ephemeral-runner-unmaterialized';
 
 export type RunnerMcpMaterializationFailureV1 = Readonly<{
   ok: false;
-  reason: 'server_unavailable' | 'binding_unavailable' | 'machine_scoped' | 'saved_secret_unavailable' | 'endpoint_environment';
+  reason: 'server_unavailable' | 'binding_unavailable' | 'machine_scoped' | 'saved_secret_unavailable' | 'endpoint_environment' | 'agent_unsupported';
   serverId: string;
   valuePath: string | null;
 }>;
@@ -137,18 +138,21 @@ function materializeConfig(input: Readonly<{
  */
 export function resolveRunnerMcpSelectionV1(input: Readonly<{
   settings: McpServersSettingsV1;
-  selection?: SessionMcpSelectionV1 | null;
-}>): Readonly<{ ok: true; settings: McpServersSettingsV1; selection: SessionMcpSelectionV1;
+  agentId: string;
+  agentAcceptsUserMcp: boolean;
+  capabilitySelection?: SessionCapabilitySelectionV1 | null;
+}>): Readonly<{ ok: true; settings: McpServersSettingsV1; capabilitySelection: SessionCapabilitySelectionV1;
   selectedServers: readonly ResolvedMcpServerV1[] }> | RunnerMcpMaterializationFailureV1 {
   const settings = McpServersSettingsV1Schema.parse(input.settings);
-  const selection = SessionMcpSelectionV1Schema.parse(input.selection ?? {});
-  const resolved = resolveManagedSessionMcpSelectionV1(settings, {
-    machineId: 'ephemeral-runner-unmaterialized',
-    directory: '/',
-    selection,
-  });
+  const capabilitySelection = SessionCapabilitySelectionAuthoringV1Schema.parse(input.capabilitySelection ?? {});
+  const selection = SessionMcpSelectionV1Schema.parse(capabilitySelection.mcp ?? {});
+  const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesV1({
+    context: { machineId: EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1, directory: null, machinePlatform: null, projectKey: null, agentId: input.agentId },
+    mcp: settings, skills: null, selection: capabilitySelection, agentAcceptsUserMcp: input.agentAcceptsUserMcp,
+  }), '/');
+  const selectedServers = Object.values(resolved.serversByName).filter(server => server.enabled);
   const forced = new Set(selection.forceIncludeServerIds.filter((id) => !selection.forceExcludeServerIds.includes(id)));
-  const selectedIds = new Set(Object.values(resolved.selectedServersByName).map((item) => item.serverId));
+  const selectedIds = new Set(selectedServers.map((item) => item.serverId));
   for (const serverId of forced) {
     if (selectedIds.has(serverId)) continue;
     const server = settings.servers.find((candidate) => candidate.id === serverId);
@@ -157,23 +161,26 @@ export function resolveRunnerMcpSelectionV1(input: Readonly<{
     ));
     return {
       ok: false,
-      reason: !server ? 'server_unavailable' : hasMachineScopedBinding ? 'machine_scoped' : 'binding_unavailable',
+      reason: !server ? 'server_unavailable' : !input.agentAcceptsUserMcp ? 'agent_unsupported'
+        : hasMachineScopedBinding ? 'machine_scoped' : 'binding_unavailable',
       serverId,
       valuePath: null,
     };
   }
-  return { ok: true, settings, selection, selectedServers: Object.values(resolved.selectedServersByName) };
+  return { ok: true, settings, capabilitySelection, selectedServers };
 }
 
 /** Materializes exactly the portable selection admitted by the same selection owner. */
 export function resolveRunnerMcpMaterialV1(input: Readonly<{
   settings: McpServersSettingsV1;
-  selection?: SessionMcpSelectionV1 | null;
+  agentId: string;
+  agentAcceptsUserMcp: boolean;
+  capabilitySelection?: SessionCapabilitySelectionV1 | null;
   resolveSavedSecret: (secretId: string) => Readonly<{ value: string; revision: number }> | null;
 }>): { ok: true; material: RunnerMcpMaterialV1 } | RunnerMcpMaterializationFailureV1 {
   const selected = resolveRunnerMcpSelectionV1(input);
   if (!selected.ok) return selected;
-  const { settings, selection } = selected;
+  const { settings, capabilitySelection } = selected;
   const servers: RunnerMcpMaterialV1['servers'][number][] = [];
   for (const item of selected.selectedServers) {
     const materialized = materializeConfig({ serverId: item.serverId, config: item.config, resolveSavedSecret: input.resolveSavedSecret });
@@ -189,5 +196,5 @@ export function resolveRunnerMcpMaterialV1(input: Readonly<{
       config: materialized.config,
     });
   }
-  return { ok: true, material: RunnerMcpMaterialV1Schema.parse({ v: 1, strictMode: settings.strictMode, selection, servers }) };
+  return { ok: true, material: RunnerMcpMaterialV1Schema.parse({ v: 1, strictMode: settings.strictMode, capabilitySelection, servers }) };
 }

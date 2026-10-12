@@ -11,7 +11,7 @@ import { ComposerContentDisplayNameV1Schema } from '../runtime/input/composerCon
 import {
   SessionAuthoringValueV1Schema,
 } from '../sessions/authoring/index.js';
-import { SessionMcpSelectionV1Schema, type SessionMcpSelectionV1 } from '../mcp/servers/sessionSelectionV1.js';
+import { SessionCapabilitySelectionAuthoringV1Schema, type SessionCapabilitySelectionV1 } from '../reach/sessionCapabilitySelectionV1.js';
 import {
   ConnectedServiceBindingsV2IngressSchema,
   type ConnectedServiceBindingsV2,
@@ -78,7 +78,6 @@ const RunnerStrictAuthoringV1Schema = SessionAuthoringValueV1Schema.pick({
   transcriptStorage: true,
   profileId: true,
   environmentVariables: true,
-  mcpSelection: true,
   connectedServices: true,
   checkoutCreationDraft: true,
   resumeSessionId: true,
@@ -118,15 +117,15 @@ const RunnerStrictAuthoringV1Schema = SessionAuthoringValueV1Schema.pick({
     }
     return parsed.data;
   }),
-  mcpSelection: z.unknown().transform((value, context): SessionMcpSelectionV1 | null => {
+  capabilitySelection: z.unknown().transform((value, context): SessionCapabilitySelectionV1 | null => {
     if (value === undefined) {
       context.addIssue({ code: 'custom', message: 'Reviewed authoring field is required' });
       return z.NEVER;
     }
     if (value === null) return null;
-    const parsed = SessionMcpSelectionV1Schema.safeParse(value);
+    const parsed = SessionCapabilitySelectionAuthoringV1Schema.safeParse(value);
     if (!parsed.success) {
-      context.addIssue({ code: 'custom', message: 'Invalid reviewed MCP selection' });
+      context.addIssue({ code: 'custom', message: 'Invalid reviewed capability selection' });
       return z.NEVER;
     }
     return parsed.data;
@@ -165,7 +164,7 @@ const RunnerStrictAuthoringV1Schema = SessionAuthoringValueV1Schema.pick({
     'transcriptStorage',
     'profileId',
     'environmentVariables',
-    'mcpSelection',
+    'capabilitySelection',
     'connectedServices',
     'checkoutCreationDraft',
     'resumeSessionId',
