@@ -95,7 +95,7 @@ describe('runSessionHandoffPickerFlow', () => {
         executeSessionHandoffActionMock.mockImplementationOnce(() => new Promise((resolve) => { resolveExecution = resolve; }));
         const setAwaitingAdmission = vi.fn();
         openSessionHandoffPickerMock.mockImplementationOnce(async (input) => {
-            input.onRetained(vi.fn(), setAwaitingAdmission, () => true);
+            input.onRetained(vi.fn(), setAwaitingAdmission, () => true, vi.fn());
             return { targetMachineId: 'target', workspaceAction: { kind: 'none' } };
         });
         const { runSessionHandoffPickerFlow } = await import('./runSessionHandoffPickerFlow');
@@ -117,7 +117,7 @@ describe('runSessionHandoffPickerFlow', () => {
         executeSessionHandoffActionMock.mockImplementationOnce(() => new Promise((resolve) => { resolveExecution = resolve; }));
         let pickerOpen = true;
         openSessionHandoffPickerMock.mockImplementationOnce(async (input) => {
-            input.onRetained(() => { pickerOpen = false; }, vi.fn(), () => pickerOpen);
+            input.onRetained(() => { pickerOpen = false; }, vi.fn(), () => pickerOpen, vi.fn());
             return { targetMachineId: 'target', workspaceAction: { kind: 'none' } };
         });
         const { runSessionHandoffPickerFlow } = await import('./runSessionHandoffPickerFlow');
@@ -339,8 +339,8 @@ describe('runSessionHandoffPickerFlow', () => {
         const closePicker = vi.fn();
         const resource = { kind: 'workspaceSyncConflicts', hubWorkspaceRefId: 'workspace-a',
             workspaceRefId: 'workspace-c', controllerMachineId: 'machine-a', serverId: 'server' };
-        openSessionHandoffPickerMock.mockImplementationOnce(async (params: { onRetained: (close: () => void, setAwaiting: (awaiting: boolean) => void, isOpen: () => boolean) => void }) => {
-            params.onRetained(closePicker, vi.fn(), () => true);
+        openSessionHandoffPickerMock.mockImplementationOnce(async (params: { onRetained: (close: () => void, setAwaiting: (awaiting: boolean) => void, isOpen: () => boolean, setInlineError: (code: string | null) => void) => void }) => {
+            params.onRetained(closePicker, vi.fn(), () => true, vi.fn());
             return { targetMachineId: 'machine-b', targetPath: '/target', workspaceAction: { kind: 'linked_workspace' },
                 workspaceSyncReviewResource: resource, workspaceSyncReviewRelationshipIds: ['a-c', 'a-b'] };
         });

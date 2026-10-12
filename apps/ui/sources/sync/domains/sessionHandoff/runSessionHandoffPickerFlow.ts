@@ -45,12 +45,14 @@ export async function runSessionHandoffPickerFlow(args: Readonly<{
 }>): Promise<ExecuteSessionHandoffActionResult | null> {
     let closePicker = () => {};
     let setAwaitingAdmission = (_awaiting: boolean) => {};
+    let setInlineError = (_code: string | null) => {};
     let isPickerOpen = () => true;
     let submitting = false;
     const runSelection = async (selection: SessionHandoffPickerResult): Promise<ExecuteSessionHandoffActionResult | null> => {
-    if (submitting) return null;
+    if (submitting || !isPickerOpen()) return null;
     submitting = true;
     setAwaitingAdmission(true);
+    setInlineError(null);
     const releaseUserRequestLease = sync.acquireUserRequestLease();
     const profileScope = getStorage().getState().profileScope;
     const accountId = profileScope?.serverId === args.serverId
@@ -127,6 +129,7 @@ export async function runSessionHandoffPickerFlow(args: Readonly<{
             targetMachineId: selection.targetMachineId,
             ...(selection.targetPath ? { targetPath: selection.targetPath } : {}),
             targetSessionStorageMode: selection.targetSessionStorageMode,
+            stateTransfer: selection.stateTransfer,
             workspaceAction: selection.workspaceAction,
             context: {
                 defaultSessionId: args.sessionId,
@@ -137,6 +140,10 @@ export async function runSessionHandoffPickerFlow(args: Readonly<{
             },
         });
         setAwaitingAdmission(false);
+        if (!result.ok && selection.stateTransfer === 'existing' && result.errorCode === 'existing_session_state_unavailable') {
+            if (isPickerOpen()) setInlineError(result.errorCode);
+            return result;
+        }
         if (result.ok && 'kind' in result && result.kind === 'approval_required') {
             unsubscribeAdmission();
             if (!isPickerOpen()) return result;
@@ -176,7 +183,7 @@ export async function runSessionHandoffPickerFlow(args: Readonly<{
         sourceMachineId: args.sourceMachineId ?? null,
         serverId: args.serverId,
         retainOnSubmit: true,
-        onRetained: (close, setPending, isOpen) => { closePicker = close; setAwaitingAdmission = setPending; isPickerOpen = isOpen; },
+        onRetained: (close, setPending, isOpen, setError) => { closePicker = close; setAwaitingAdmission = setPending; isPickerOpen = isOpen; setInlineError = setError; },
         onSubmitAgain: (next) => { void runSelection(next); },
     });
     return selection ? await runSelection(selection) : null;

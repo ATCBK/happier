@@ -1,6 +1,7 @@
 import * as React from 'react';
 
-import { SessionForkRpcResultSchema, type LlmTaskRunnerConfigV1, type SessionForkPoint } from '@happier-dev/protocol';
+import { SessionForkRpcResultSchema } from '@happier-dev/protocol/sessions/fork';
+import { type LlmTaskRunnerConfigV1, type SessionForkPoint } from '@happier-dev/protocol';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
