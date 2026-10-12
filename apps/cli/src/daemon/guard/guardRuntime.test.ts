@@ -1,0 +1,538 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MachineGuardPolicyV1Schema } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
+import { createGuardRuntime, type GuardPolicyWork } from './guardRuntime';
+import { createActivityLog } from './activityLog';
+import { createMachineVitalsSampler } from '../vitals/createMachineVitalsSampler';
+import { createMinuteHistoryStore } from '../vitals/history/minuteHistoryStore';
+import { createMachineResourceSummary } from '../resources/machineResourceSummary';
+import { createManagedActivityInventory, readWorkspaceSessionIdle } from '../lifecycle/managedActivity';
+import { createSessionLiveWorkProducer } from '../lifecycle/sessionLiveWorkProducer';
+import { resolveProcessOwnership } from '../processes/ownership/resolveProcessOwnership';
+import type { ProcessCensusSnapshot } from '@/processes/census/processCensus';
+import type { HappierProcessRoot } from '../processes/ownership/types';
+import type { TrackedSession } from '../types';
+import type { SessionGuardNoticeStateV1 } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
+import { evaluateSessionEligibility } from './sessionEligibility';
+import { createBrowserAutomationOwnerRegistry } from '../browser/automation/owners';
+import { waitForChangeOrDeadline } from '../lifecycle/waitForChangeOrDeadline';
+import type { SessionDraftPresence } from '@/session/drafts/readSessionDraftPresence';
+import { createGuardSessionRestoration } from './sessionRestoration';
+import { createGuardLeftBehindFixture, guardLeftBehindAttribution } from './actuators/leftBehind.testkit';
+import { planLeftBehind } from './actuators/leftBehind';
+import { createProcessActionExecutor } from '../processes/actions/processActionExecutor';
+import { createProcessOwnershipRuntime } from '../processes/ownership/processOwnershipRuntime';
+import { parseProcessOwnerTag } from '@/processes/ownerTag';
+
+describe('memory guard episode on the incumbent minute sampler', () => {
+  let directory: string;
+  beforeEach(async () => { vi.useFakeTimers(); vi.setSystemTime(0); directory = await mkdtemp(join(tmpdir(), 'happier-memory-guard-')); });
+  afterEach(async () => { vi.useRealTimers(); await rm(directory, { recursive: true, force: true }); });
+
+  async function setup(kind: 'browser' | 'session' | 'service' = 'browser', initiallyEnabled = true, nativeLowMemorySignal?: boolean, sessionCount = 1, policyWork?: GuardPolicyWork) {
+    let level: 'calm' | 'critical' | 'not_reported' = nativeLowMemorySignal === undefined ? 'critical' : 'not_reported';
+    let lowMemorySignal = nativeLowMemorySignal;
+    const pressureSource = nativeLowMemorySignal === undefined ? 'events' as const : 'none' as const;
+    let available = 100;
+    let missing = false;
+    const sampled: number[] = [];
+    const sampler = createMachineVitalsSampler({ nowMs: Date.now, monotonicMs: Date.now,
+      historyStore: await createMinuteHistoryStore({ directory: join(directory, 'minutes'), nowMs: Date.now }),
+      // Native memory/counter adapter only. Minute bucketing and demand remain real.
+      readers: { read: async input => {
+        sampled.push(input.intervalMs);
+        if (missing) return { state: 'unavailable', reason: 'reader_failed' };
+        return { state: 'reporting', host: { logicalCores: 1, memoryTotalBytes: 1000, bootedAt: 0 },
+          sample: { v: 1, sampledAt: input.sampledAt, intervalMs: input.intervalMs,
+            cpu: { reported: false, reason: 'unavailable' }, memory: { reported: true, totalBytes: 1000,
+              availableBytes: available, usedBytes: 1000 - available, pressure: { level, source: pressureSource },
+              ...(lowMemorySignal === undefined ? {} : { lowMemorySignal }) },
+            disk: { reported: false, reason: 'unavailable' }, network: { reported: false, reason: 'unavailable' } },
+          minuteCounters: { monotonicMs: input.monotonicMs, cpu: null, network: null } };
+      } } });
+    const summary = createMachineResourceSummary({ sampler, nowMs: Date.now, readNearlyFull: () => null, onError: error => { throw error; } });
+    const activity = await createActivityLog({ activeServerDir: directory, nowMs: Date.now, resourceSummary: summary });
+    const tracked: TrackedSession = { pid: 10, happySessionId: 's', startedBy: 'daemon' };
+    const sessions: TrackedSession[] = [tracked, ...Array.from({ length: sessionCount - 1 }, (_, index) => ({
+      pid: 11 + index, happySessionId: `s${index + 2}`, startedBy: 'daemon' }))];
+    let working = false;
+    let draft: SessionDraftPresence = { status: 'absent' };
+    let footprint: number | undefined = 80;
+    let reads = 0;
+    let noticeAvailable = true;
+    const browserOwners = createBrowserAutomationOwnerRegistry({ now: Date.now });
+    const browserView = { browserSessionId: 'browser', viewId: 'view' };
+    browserOwners.getInputControl(browserView);
+    let duringActivityRead: (() => void | Promise<void>) | undefined;
+    let duringNativeRead: ((signal?: AbortSignal) => Promise<void>) | undefined;
+    const errors: unknown[] = [];
+    const background: TrackedSession = { pid: 30, happySessionId: 'background', startedBy: 'daemon', spawnOptions: { directory: '/project' } };
+    const producer = createSessionLiveWorkProducer({ readSessions: () => kind === 'session' ? sessions : [background],
+      // Session live-work RPC boundary; the canonical producer reconciles current occurrence and coverage.
+      readActivity: async () => { await duringActivityRead?.();
+        return { session: working ? 'active' : 'settled', input: 'settled', agents: 'settled', attention: 'settled', settledAt: 0 }; } });
+    const inventory = createManagedActivityInventory({ producers: [producer], now: Date.now });
+    const root: HappierProcessRoot = { owner: kind === 'session' ? { kind: 'session', sessionId: 's' }
+      : kind === 'service' ? { kind: 'service', serviceId: 'project-service' } : { kind: 'browser_sidecar' },
+      pid: 10, start: { startTimeMs: 1 }, live: true, ownerCreatedAtMs: 0, stop: async () => {} };
+    const roots = kind === 'session' ? sessions.map(session => session === tracked ? root : {
+      ...root, pid: session.pid, owner: { kind: 'session' as const, sessionId: session.happySessionId! } }) : [root];
+    let present = true;
+    let failed = false;
+    let connections: number | null = 0;
+    let stops = 0;
+    let notifications = 0;
+    const notices: SessionGuardNoticeStateV1[] = [];
+    const stoppedIds: string[] = [];
+    let onNotice: ((state: SessionGuardNoticeStateV1) => Promise<void>) | undefined;
+    let onNativeStop: (() => Promise<void>) | undefined;
+    let onStopRecorded: (() => Promise<void>) | undefined;
+    let policy = MachineGuardPolicyV1Schema.parse({ memoryGuard: { enabled: initiallyEnabled, sustainMs: 60000 } });
+    const edges = new Set<() => void>();
+    const changed = () => { for (const edge of edges) edge(); };
+    const runtime = createGuardRuntime({ vitals: sampler, readPolicy: () => policy, policyWork,
+      subscribePolicy: listener => { edges.add(listener); return () => { edges.delete(listener); }; },
+      subscribe: listener => { edges.add(listener); const release = inventory.subscribe(listener); return () => { edges.delete(listener); release(); }; },
+      readFacts: async (readSignal?: AbortSignal) => {
+        reads++;
+        await duringNativeRead?.(readSignal);
+        const browserIdle = browserOwners.readSessionIdle('browser');
+        const snapshot: Extract<ProcessCensusSnapshot, { status: 'ok' }> = { status: 'ok', capturedAtMs: Date.now(), logicalCpus: 1,
+          rows: present ? roots.map(root => ({ pid: root.pid, ppid: null, start: root.start, principal: { kind: 'uid' as const, value: '1' }, name: 'browser',
+            memory: footprint === undefined ? null : { bytes: footprint, kind: 'rss' }, cpuTimeUs: 0 })) : [] };
+        const facts = await inventory.read();
+        return { ownership: { status: 'ok', snapshot, roots: present ? roots : [], rows: resolveProcessOwnership({ snapshot,
+          roots: present ? roots : [], platform: 'darwin', daemonPrincipal: { kind: 'uid', value: '1' } }) }, inventory: facts,
+          targets: !present ? [] : kind === 'browser' ? [{ kind: 'browser', root, ownerRef: root, label: 'Browser', ...browserIdle,
+            wayBack: [{ label: 'reopen', actionId: 'browser.view.open', input: { machineId: 'm' } }] }]
+            : kind === 'service' ? [{ kind: 'service', scope: 'project', workspacePath: '/project',
+              workspaceIdle: readWorkspaceSessionIdle(facts, { workspacePath: '/project' }), root, ownerRef: root, label: 'Project server',
+              listeners: [{ establishedConnections: connections }],
+              wayBack: [{ label: 'start_again', actionId: 'localServices.launcher.start', input: { machineId: 'm', serviceId: 'project-service' } }] }]
+            : sessions.map((tracked, index) => ({ kind: 'session' as const, root: roots[index], tracked, label: 'Session',
+              wayBack: [{ label: 'resume' as const, actionId: 'session.open' as const, input: { sessionId: tracked.happySessionId!, intent: 'resume' } }],
+              eligibility: evaluateSessionEligibility({ tracked, inventory: facts,
+                draft, resume: { sessionId: tracked.happySessionId!, rawSession: { machineId: 'm', path: '/project' },
+                  metadata: { machineId: 'm', path: '/project', flavor: 'codex', codexSessionId: `native-${tracked.happySessionId}` } } }) })) };
+      },
+      // Genuine native stop boundary. Acknowledgement cannot prove process absence.
+      stop: async candidate => { stops++; if (candidate.target.kind === 'session') stoppedIds.push(candidate.target.tracked.happySessionId!);
+        await onNativeStop?.();
+        return failed ? { status: 'failed', reason: 'native_stop_failed' } : { status: 'stopped' }; },
+      onSessionStopRecorded: async () => { await onStopRecorded?.(); },
+      notice: async (_candidate, state) => { notices.push(state); await onNotice?.(state); return noticeAvailable; },
+      activity, notifyEpisode: async () => { notifications++; }, onError: error => { errors.push(error); },
+    });
+    await sampler.start();
+    const signal = new AbortController();
+    let finished = false;
+    const running = runtime.run(signal.signal).finally(() => { finished = true; });
+    const drain = async () => {
+      await sampler.start();
+      for (let i = 0; i < 4; i++) { await activity.list({ range: 'today' }); for (let turn = 0; turn < 20; turn++) await Promise.resolve(); }
+    };
+    await drain();
+    return { runtime, activity, sampled, notices, stoppedIds, drain, changed, get stops() { return stops; }, get notifications() { return notifications; }, get reads() { return reads; },
+      setPresent: (value: boolean) => { present = value; changed(); }, setFailed: (value: boolean) => { failed = value; },
+      setLevel: (value: typeof level) => { level = value; }, setAvailable: (value: number) => { available = value; },
+      setLowMemorySignal: (value: typeof lowMemorySignal) => { lowMemorySignal = value; },
+      setDraft: (value: SessionDraftPresence) => { draft = value; changed(); },
+      setFootprint: (value: number | undefined) => { footprint = value; changed(); },
+      setNoticeAvailable: (value: boolean) => { noticeAvailable = value; },
+      setMissing: (value: boolean) => { missing = value; },
+      setConnections: (value: number | null) => { connections = value; changed(); },
+      setWorking: (value: boolean) => { working = value; producer.notifyChanged(); },
+      setSessionAttribution: (value: NonNullable<TrackedSession['requesterWorkAttributionV1']>) => {
+        for (const session of sessions) session.requesterWorkAttributionV1 = value;
+        producer.notifyChanged();
+      },
+      onNotice: (value: typeof onNotice) => { onNotice = value; },
+      onNativeStop: (value: typeof onNativeStop) => { onNativeStop = value; },
+      onStopRecorded: (value: typeof onStopRecorded) => { onStopRecorded = value; },
+      duringActivityRead: (value: typeof duringActivityRead) => { duringActivityRead = value; },
+      duringNativeRead: (value: typeof duringNativeRead) => { duringNativeRead = value; },
+      abort: () => signal.abort(), finished: () => finished,
+      takeOverBrowser: () => { browserOwners.takeOver(browserView); },
+      setPolicy: (patch: Partial<typeof policy.memoryGuard>) => { policy = { ...policy, memoryGuard: { ...policy.memoryGuard, ...patch } }; changed(); },
+      setIdlePolicy: (patch: Partial<typeof policy.idleSessions>) => { policy = { ...policy, idleSessions: { ...policy.idleSessions, ...patch } }; changed(); },
+      setLeftBehindPolicy: (patch: Partial<typeof policy.leftBehind>) => { policy = { ...policy, leftBehind: { ...policy.leftBehind, ...patch } }; changed(); },
+      close: async () => { signal.abort(); await running; await sampler.stop(); inventory.dispose(); summary.stop(); expect(errors).toEqual([]); } };
+  }
+
+  it('stays quiet with both stop rules off, then independently warns and stops an idle session without pressure or RSS', async () => {
+    const fixture = await setup('session', false);
+    try {
+      await vi.advanceTimersByTimeAsync(600000); await fixture.drain();
+      expect(fixture.reads).toBe(0);
+      fixture.setMissing(true); fixture.setFootprint(undefined);
+      fixture.setIdlePolicy({ enabled: true, afterMs: 1200000 });
+      await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toMatchObject({ stopAt: 1200000 });
+      expect(fixture.notices).toContainEqual({ kind: 'stopping', stopAt: 1200000, rule: 'idle_sessions' });
+      expect(fixture.stops).toBe(0);
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+      expect(fixture.notices).toContainEqual(expect.objectContaining({ kind: 'stopped', rule: 'idle_sessions' }));
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'stopped_session', rule: 'idle_sessions', outcome: 'done' })]));
+      expect(fixture.notifications).toBe(0);
+    } finally { await fixture.close(); }
+  });
+  it.each(['shutdown', 'policy_off'] as const)('retires a whole auxiliary native-read observer on %s without cancelling the shared census or acting later', async cancellation => {
+    const native = createGuardLeftBehindFixture();
+    await native.observe(); native.advance(60000); await native.observe();
+    const nativeRead = native.censusDependencies.execFile!;
+    let finishNative!: () => void;
+    const nativePending = new Promise<void>(resolve => { finishNative = resolve; });
+    let entered = false;
+    // Hold only native helper transport; the census reader/ownership/tracker remain real.
+    const heldNativeRead: typeof nativeRead = async (...args) => { entered = true; await nativePending; return nativeRead(...args); };
+    const censusDependencies = { ...native.censusDependencies, execFile: heldNativeRead };
+    const ownership = createProcessOwnershipRuntime({ listRoots: () => native.roots,
+      daemonScopeKey: parseProcessOwnerTag(native.rows.get(300)?.ownerTag)!.daemonScopeKey,
+      selfPid: process.pid, platform: 'darwin', censusDependencies });
+    const observe = async () => {
+      const result = await ownership.readOwners({ freshness: 'fresh' });
+      if (result.status !== 'ok') throw new Error('Native fixture unavailable');
+      native.tracker.observe({ status: 'ok', capturedAtMs: result.snapshot.capturedAtMs, rows: result.rows });
+    };
+    const signals: number[] = [];
+    const nativeActions = createProcessActionExecutor({ ownership, leftBehind: native.tracker,
+      allProcessesVisible: () => false, requesterForOwner: () => guardLeftBehindAttribution, selfPid: process.pid, platform: 'darwin',
+      systemBoundary: { platform: 'darwin', censusDependencies,
+        kill(pid) { signals.push(pid); native.rows.delete(pid); }, wait: async () => undefined } });
+    const listeners = new Set<() => void>();
+    // Same owner composition as the daemon: fresh native confirmation, canonical due planner, then canonical cleanup.
+    const policyWork: GuardPolicyWork = {
+      enabled: policy => policy.leftBehind.mode !== 'off',
+      subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      async readPlan({ policy, signal }) {
+        await observe();
+        const plan = planLeftBehind({ policy: policy.leftBehind, confirmed: native.tracker.confirmed(), now: native.now() });
+        const due = plan.due[0];
+        return { nextAt: plan.nextAt, ...(due ? { run: async () => {
+          await nativeActions.cleanUp({ serverId: 'home', machineId: 'machine', refs: [...due.refs] },
+            { accountId: 'owner', isCustodian: true }, { signal });
+        } } : {}) };
+      },
+    };
+    const fixture = await setup('browser', false, undefined, 1, policyWork);
+    try {
+      fixture.setLeftBehindPolicy({ mode: 'automatic', graceMs: 0 }); await fixture.drain();
+      expect(entered).toBe(true);
+      expect(listeners.size).toBe(1);
+      if (cancellation === 'shutdown') fixture.abort();
+      else fixture.setLeftBehindPolicy({ mode: 'off' });
+      await fixture.drain();
+      if (cancellation === 'shutdown') expect(fixture.finished()).toBe(true);
+      else expect(listeners.size).toBe(0);
+      finishNative(); await observe(); await fixture.drain();
+      expect(native.tracker.confirmed()).toHaveLength(2);
+      expect(signals).toEqual([]);
+      expect(native.rows.has(300)).toBe(true);
+      expect(native.rows.has(301)).toBe(true);
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual([]);
+    } finally { finishNative(); await fixture.close(); }
+  });
+  it('waits for exact target absence, cooldown and a later minute before measuring freed memory; out-of-steps stays quiet', async () => {
+    const fixture = await setup();
+    try {
+      fixture.setPolicy({ actAt: 'elevated' });
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+      expect(fixture.runtime.readEpisode()).toMatchObject({ state: 'verifying' });
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual([]);
+      fixture.setPresent(false); await fixture.drain();
+      fixture.setAvailable(180);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      const entries = (await fixture.activity.list({ range: 'today' })).entries;
+      expect(entries).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'closed_browser', freedBytes: 80, outcome: 'done',
+        trigger: expect.objectContaining({ level: 'critical' }) }),
+        expect.objectContaining({ kind: 'out_of_steps' })]));
+      await vi.advanceTimersByTimeAsync(120000); await fixture.drain();
+      expect((await fixture.activity.list({ range: 'today' })).entries.filter(entry => entry.kind === 'out_of_steps')).toHaveLength(1);
+      expect(fixture.notifications).toBe(1);
+      expect(new Set(fixture.sampled)).toEqual(new Set([60000]));
+      fixture.setLevel('calm'); await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.runtime.readEpisode()).toBeUndefined();
+    } finally { await fixture.close(); }
+  });
+  it.each(['idle', 'memory'] as const)('folds a %s stop receipt when the native replacement is ready before the receipt is appended', async rule => {
+    const fixture = await setup('session', rule === 'memory');
+    try {
+      const attribution = { serverId: 'home', accountId: 'owner', machineId: 'm', installationId: 'installation' };
+      const restored: TrackedSession = { pid: 40, happySessionId: 's', startedBy: 'daemon', requesterWorkAttributionV1: attribution };
+      const restoration = createGuardSessionRestoration({ activity: fixture.activity, nowMs: Date.now });
+      // OS launch/stop ordering: replacement webhook settles before the outgoing stop acknowledgement.
+      fixture.onNativeStop(async () => {
+        await restoration.onSessionRunnerStarted(restored);
+        fixture.setPresent(false);
+      });
+      fixture.onStopRecorded(async () => { await restoration.onSessionRunnerStarted(restored); });
+      fixture.setSessionAttribution(attribution);
+      if (rule === 'idle') fixture.setIdlePolicy({ enabled: true, afterMs: 600000 });
+      await fixture.drain();
+      if (rule === 'idle') { await vi.advanceTimersByTimeAsync(600000); await fixture.drain(); }
+      else for (let minute = 0; minute < 8; minute++) { await vi.advanceTimersByTimeAsync(60000); await fixture.drain(); }
+      expect(fixture.stops).toBe(1);
+      const receipt = (await fixture.activity.list({ range: 'today' })).entries.find(row => row.kind === 'stopped_session');
+      expect(receipt).toBeDefined();
+      expect(receipt?.undoneAt).toBe(receipt?.at);
+    } finally { await fixture.close(); }
+  });
+  it('keeps simultaneous Session countdowns separate while sharing the earliest real deadline', async () => {
+    const fixture = await setup('session', false, undefined, 2);
+    try {
+      fixture.setIdlePolicy({ enabled: true, afterMs: 600000 }); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toEqual({ stopAt: 600000 });
+      expect(fixture.runtime.readSessionWarning('s2')).toEqual({ stopAt: 600000 });
+      expect(await fixture.runtime.keepRunning('s')).toBe('kept'); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+      expect(fixture.runtime.readSessionWarning('s2')).toEqual({ stopAt: 600000 });
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.stoppedIds).toEqual(['s2']);
+      expect(fixture.runtime.readSessionWarning('s')).toEqual({ stopAt: 900000 });
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.stoppedIds).toEqual(['s2', 's']);
+      expect((await fixture.activity.list({ range: 'today' })).entries.filter(entry => entry.kind === 'stopped_session')).toEqual([
+        expect.objectContaining({ subject: expect.objectContaining({ sessionId: 's' }), wayBack: [{ label: 'resume', actionId: 'session.open', input: { sessionId: 's', intent: 'resume' } }] }),
+        expect.objectContaining({ subject: expect.objectContaining({ sessionId: 's2' }) })]);
+    } finally { await fixture.close(); }
+  });
+  it('withdraws idle warnings on Keep running, draft edits and policy changes, anchoring the next deadline to the latest tombstone', async () => {
+    const fixture = await setup('session', false);
+    try {
+      fixture.setIdlePolicy({ enabled: true, afterMs: 600000 }); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toEqual({ stopAt: 600000 });
+      expect(await fixture.runtime.keepRunning('s')).toBe('kept'); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'kept_running', rule: 'idle_sessions' })]));
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toEqual({ stopAt: 900000 });
+      fixture.setDraft({ status: 'present', updatedAt: 600000 }); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+      fixture.setDraft({ status: 'absent', updatedAt: 600000 }); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toEqual({ stopAt: 1200000 });
+      fixture.setIdlePolicy({ afterMs: 1200000 }); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      expect(fixture.notices.filter(state => state.kind === 'clear')).toHaveLength(3);
+    } finally { await fixture.close(); }
+  });
+  it('fails closed once when an idle warning is unavailable, and does not spin on a past deadline', async () => {
+    const fixture = await setup('session', false);
+    try {
+      fixture.setNoticeAvailable(false);
+      fixture.setIdlePolicy({ enabled: true, afterMs: 600000 }); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(300000); await fixture.drain();
+      const reads = fixture.reads;
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1200000); await fixture.drain();
+      expect(fixture.reads).toBe(reads);
+      expect(fixture.notices.filter(state => state.kind === 'stopping')).toHaveLength(1);
+      expect(fixture.stops).toBe(0);
+      fixture.setNoticeAvailable(true); fixture.changed(); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+    } finally { await fixture.close(); }
+  });
+  it('re-admits idle work after the durable stop marker and leaves no stopped metadata after stop failure', async () => {
+    const fixture = await setup('session', false);
+    try {
+      fixture.setIdlePolicy({ enabled: true, afterMs: 600000 }); await fixture.drain();
+      fixture.onNotice(async state => { if (state.kind === 'stopped') fixture.setWorking(true); });
+      await vi.advanceTimersByTimeAsync(600000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+      fixture.onNotice(undefined); fixture.setWorking(false); fixture.setFailed(true); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+      expect(fixture.notices.at(-1)).toEqual({ kind: 'clear' });
+      const reads = fixture.reads;
+      await vi.advanceTimersByTimeAsync(600000); await fixture.drain();
+      expect(fixture.reads).toBe(reads);
+      expect(fixture.stops).toBe(1);
+      expect((await fixture.activity.list({ range: 'today' })).entries.filter(entry => entry.kind === 'stop_failed')).toEqual([
+        expect.objectContaining({ rule: 'idle_sessions', outcome: 'failed' })]);
+    } finally { await fixture.close(); }
+  });
+  it('uses canonical native low-memory pressure for admission, critical receipts and observed recovery', async () => {
+    const fixture = await setup('browser', true, true);
+    try {
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+      expect(fixture.runtime.readEpisode()).toMatchObject({ state: 'verifying' });
+      fixture.setPresent(false); fixture.setAvailable(180); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'closed_browser', outcome: 'done', trigger: expect.objectContaining({ level: 'critical' }) })]));
+      expect(fixture.runtime.readEpisode()).toMatchObject({ state: 'out_of_steps' });
+      fixture.setLowMemorySignal(undefined);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.runtime.readEpisode()).toMatchObject({ state: 'out_of_steps' });
+      fixture.setLowMemorySignal(false);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.runtime.readEpisode()).toBeUndefined();
+      expect(new Set(fixture.sampled)).toEqual(new Set([60000]));
+    } finally { await fixture.close(); }
+  });
+  it('does not act while paused and records a native stop failure once without retrying the same generation', async () => {
+    const fixture = await setup();
+    try {
+      fixture.setPolicy({ pausedUntil: 180000 }); fixture.setFailed(true);
+      await vi.advanceTimersByTimeAsync(120000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'stop_failed', outcome: 'failed' }), expect.objectContaining({ kind: 'out_of_steps' })]));
+      await vi.advanceTimersByTimeAsync(120000); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+    } finally { await fixture.close(); }
+  });
+  it('breaks sustain on a missing minute and still verifies a disabled rule without assuming it helped', async () => {
+    const fixture = await setup();
+    try {
+      fixture.setPolicy({ sustainMs: 120000 });
+      fixture.setMissing(true); await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      fixture.setMissing(false); await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+      fixture.setPolicy({ enabled: false }); fixture.setPresent(false); fixture.setLevel('not_reported'); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual([
+        expect.objectContaining({ kind: 'closed_browser', outcome: 'did_not_help', freedBytes: 0 })]);
+      expect(fixture.runtime.readEpisode()).toBeUndefined();
+      expect(fixture.stops).toBe(1);
+    } finally { await fixture.close(); }
+  });
+  it('publishes the Session warning, honors Keep running, and re-admits activity after an awaited stop marker', async () => {
+    const fixture = await setup('session');
+    try {
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.runtime.readSessionWarning('s')).toEqual({ stopAt: 360000 });
+      expect(await fixture.runtime.keepRunning('s')).toBe('kept'); await fixture.drain();
+      expect(fixture.runtime.readKeepRunningAnchor('s')).toBe(60000);
+      expect(fixture.notices).toContainEqual({ kind: 'clear' });
+      fixture.onNotice(async state => { if (state.kind === 'stopped') fixture.setWorking(true); });
+      for (let minute = 0; minute < 5; minute++) { await vi.advanceTimersByTimeAsync(60000); await fixture.drain(); }
+      expect(fixture.notices).toContainEqual(expect.objectContaining({ kind: 'stopped' }));
+      expect(fixture.stops).toBe(0);
+      expect(fixture.runtime.readSessionWarning('s')).toBeUndefined();
+    } finally { await fixture.close(); }
+  });
+  it('re-admits actual browser control when a human takes over during another Session RPC read', async () => {
+    const fixture = await setup();
+    try {
+      fixture.duringActivityRead(async () => { await Promise.resolve(); fixture.takeOverBrowser(); });
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      expect((await fixture.activity.list({ range: 'today' })).entries.some(entry => entry.kind === 'closed_browser')).toBe(false);
+    } finally { await fixture.close(); }
+  });
+  it('clears the shared Session stop notice when the canonical stop boundary rejects the request', async () => {
+    const fixture = await setup('session');
+    try {
+      fixture.setFailed(true);
+      for (let minute = 0; minute < 6; minute++) { await vi.advanceTimersByTimeAsync(60000); await fixture.drain(); }
+      expect(fixture.stops).toBe(1);
+      expect(fixture.notices.at(-1)).toEqual({ kind: 'clear' });
+      expect((await fixture.activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'stop_failed', outcome: 'failed' })]));
+    } finally { await fixture.close(); }
+  });
+  it('uses only the existing minute cadence for Project service connection sustain and never erases a visitor observed within a minute', async () => {
+    const fixture = await setup('service');
+    try {
+      fixture.setPolicy({ sustainMs: 60000 });
+      fixture.setConnections(1);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      fixture.setConnections(0); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      expect(fixture.runtime.readPreview()?.steps[1]?.candidates).toEqual([]);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      expect(fixture.runtime.readPreview()?.steps[1]?.candidates).toHaveLength(1);
+      fixture.setLevel('calm');
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      fixture.setLevel('critical');
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+      expect(new Set(fixture.sampled)).toEqual(new Set([60000]));
+    } finally { await fixture.close(); }
+  });
+  it('does not backdate a Project service first observed quiet just before the next minute', async () => {
+    const fixture = await setup('service', false);
+    try {
+      await vi.advanceTimersByTimeAsync(59000); await fixture.drain();
+      fixture.setPolicy({ enabled: true }); await fixture.drain();
+      expect(fixture.runtime.readPreview()?.steps[1]?.candidates).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      expect(fixture.runtime.readPreview()?.steps[1]?.candidates).toEqual([]);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.runtime.readPreview()?.steps[1]?.candidates).toHaveLength(1);
+      expect(new Set(fixture.sampled)).toEqual(new Set([60000]));
+    } finally { await fixture.close(); }
+  });
+  it.each(['preview', 'fire'] as const)('cancels the %s native observer on shutdown without cancelling its shared publisher', async phase => {
+    const fixture = await setup('service');
+    let releaseReply: () => void = () => {};
+    let entered: () => void = () => {};
+    const request = new Promise<void>(resolve => { releaseReply = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let published = false;
+    // Deferred native/network reply shared with the existing scanner publisher.
+    const publisher = request.then(() => { published = true; });
+    try {
+      fixture.duringNativeRead(async readSignal => {
+        if (phase === 'fire' && fixture.runtime.readEpisode()?.state !== 'acting') return;
+        entered();
+        await waitForChangeOrDeadline({ signal: readSignal, waitForChange: () => request });
+        readSignal?.throwIfAborted();
+      });
+      if (phase === 'fire') await vi.advanceTimersByTimeAsync(60000);
+      else fixture.changed();
+      await started;
+      fixture.abort(); await fixture.drain();
+      expect(fixture.finished()).toBe(true);
+      expect(fixture.stops).toBe(0);
+      expect(published).toBe(false);
+      releaseReply(); await publisher;
+      expect(published).toBe(true);
+    } finally { releaseReply(); await publisher; await fixture.close(); }
+  });
+  it('breaks Project service connection sustain on unknown counts and missing minutes, and honors actual workspace Session activity', async () => {
+    const fixture = await setup('service');
+    try {
+      fixture.setPolicy({ sustainMs: 120000 }); fixture.setConnections(null);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      fixture.setConnections(0);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      fixture.setMissing(true); await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      fixture.setMissing(false); fixture.setWorking(true);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(0);
+      fixture.setWorking(false); await fixture.drain();
+      expect(fixture.runtime.readPreview()?.steps[1]?.candidates).toEqual([]);
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.runtime.readPreview()?.steps[1]?.candidates).toHaveLength(1);
+      fixture.setLevel('calm'); await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      fixture.setLevel('critical');
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      await vi.advanceTimersByTimeAsync(60000); await fixture.drain();
+      expect(fixture.stops).toBe(1);
+    } finally { await fixture.close(); }
+  });
+});
