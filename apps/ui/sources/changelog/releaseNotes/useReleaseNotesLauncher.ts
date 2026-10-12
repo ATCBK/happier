@@ -12,6 +12,11 @@ import { setLastSeenReleaseId } from './storage';
 export type UseReleaseNotesLauncherResult = Readonly<{
     /** Open the release-notes modal if there is unread content for the current release. */
     open: () => boolean;
+    /**
+     * What's new, wherever it is offered: the current release's story while it is unread, otherwise
+     * the full release notes.
+     */
+    openWhatsNew: () => void;
 }>;
 
 export function useReleaseNotesLauncher(): UseReleaseNotesLauncherResult {
@@ -52,5 +57,10 @@ export function useReleaseNotesLauncher(): UseReleaseNotesLauncherResult {
         return true;
     }, [router]);
 
-    return { open };
+    const openWhatsNew = React.useCallback(() => {
+        if (open()) return;
+        router.push('/(app)/changelog');
+    }, [open, router]);
+
+    return React.useMemo(() => ({ open, openWhatsNew }), [open, openWhatsNew]);
 }

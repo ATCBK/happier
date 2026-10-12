@@ -2,8 +2,11 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { SettingsAboutSection } from '@/components/settings/SettingsAboutSection';
+import { SettingRow } from '@/components/settings/shell/SettingRow';
+import { OVERVIEW_SETTINGS } from '@/components/settings/overview/overviewSettings';
+import { useRouter as useDestinationRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { setLastSeenReleaseId } from './storage';
 
@@ -43,8 +46,11 @@ const modalState = vi.hoisted(() => ({
     hide: vi.fn(),
 }));
 
-const routerMock = createExpoRouterMock();
+const routerMock = await vi.hoisted(async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock());
 const originalEnv = { ...process.env };
+const telemetry = vi.hoisted(() => ({ whatsNew: vi.fn() }));
+// Analytics delivery is an external boundary; the Settings row and launcher stay real.
+vi.mock('@/track', () => ({ trackWhatsNewClicked: telemetry.whatsNew, trackLogout: vi.fn() }));
 
 vi.mock('expo-router', () => routerMock.module);
 
@@ -76,6 +82,7 @@ describe('useReleaseNotesLauncher', () => {
         modalState.show.mockClear();
         modalState.hide.mockClear();
         routerMock.spies.push.mockClear();
+        telemetry.whatsNew.mockClear();
     });
 
     afterEach(() => {
@@ -175,5 +182,41 @@ describe('useReleaseNotesLauncher', () => {
         expect(modalState.show).not.toHaveBeenCalled();
 
         await hook.unmount();
+    });
+
+    it("opens What's new as the unread release story, else as the full release notes", async () => {
+        const hook = await renderLauncherAndUnread();
+
+        hook.getCurrent().launcher.openWhatsNew();
+        expect(modalState.show).toHaveBeenCalledTimes(1);
+        expect(routerMock.spies.push).not.toHaveBeenCalled();
+
+        await act(async () => {
+            modalState.lastProps?.onDismiss?.();
+        });
+        await flushHookEffects({ cycles: 1, turns: 2 });
+
+        hook.getCurrent().launcher.openWhatsNew();
+        expect(modalState.show).toHaveBeenCalledTimes(1);
+        expect(routerMock.spies.push).toHaveBeenCalledWith('/(app)/changelog');
+
+        await hook.unmount();
+    });
+
+    it("opens Settings What's new through the unread-story decision and preserves click telemetry", async () => {
+        function About() {
+            const router = useDestinationRouter();
+            return <SettingsAboutSection appVersion="1.0.0" handleGitHub={() => {}}
+                handleVersionClick={() => {}} router={router} showChangelog showRateUs={false} supportUs={null} />;
+        }
+        const screen = await renderScreen(<About />);
+        const press = () => screen.findAllByType(SettingRow).find(row => row.props.setting === OVERVIEW_SETTINGS.settings.whatsNew)!.props.onPress();
+        await act(async () => { press(); });
+        expect(modalState.lastConfig).not.toBeNull();
+        expect(routerMock.spies.push).not.toHaveBeenCalled();
+        await act(async () => { modalState.lastProps?.onDismiss?.(); });
+        await act(async () => { press(); });
+        expect(routerMock.spies.push).toHaveBeenCalledWith('/(app)/changelog');
+        expect(telemetry.whatsNew).toHaveBeenCalledTimes(2);
     });
 });
