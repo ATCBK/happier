@@ -16,6 +16,8 @@ type NotificationTypesSectionProps = Readonly<{
     policy: AttentionDeliveryPolicyV1;
     builtin?: Extract<NotificationChannelRecordV1, { kind: 'expo_push' }> | null;
     pushEnabled: boolean;
+    /** The channel catalog has not answered yet, so its switches' values are unknown: draw none rather than wrong ones. */
+    pending?: boolean;
     setEventEnabled: (event: NotificationTypeEventId, enabled: boolean) => void;
     setReadyPreviewEnabled: (enabled: boolean) => void;
     setRequestPreviewEnabled: (enabled: boolean) => void;
@@ -25,6 +27,7 @@ export function NotificationTypesSection({
     policy,
     builtin,
     pushEnabled,
+    pending = false,
     setEventEnabled,
     setReadyPreviewEnabled,
     setRequestPreviewEnabled,
@@ -43,7 +46,7 @@ export function NotificationTypesSection({
         >
             <SettingRow
                 setting={NOTIFICATIONS_SETTINGS.settings.typesReady}
-                rightElement={(
+                rightElement={pending ? undefined : (
                     <Switch
                         value={readyEnabled}
                         disabled={!pushEnabled}
@@ -54,7 +57,7 @@ export function NotificationTypesSection({
             />
             <SettingRow
                 setting={NOTIFICATIONS_SETTINGS.settings.typesReadyPreview}
-                rightElement={(
+                rightElement={pending ? undefined : (
                     <Switch
                         value={readyPreviewEnabled}
                         disabled={!pushEnabled || !readyEnabled}
@@ -65,7 +68,7 @@ export function NotificationTypesSection({
             />
             <SettingRow
                 setting={NOTIFICATIONS_SETTINGS.settings.typesRequestPreview}
-                rightElement={(
+                rightElement={pending ? undefined : (
                     <Switch
                         value={requestPreviewEnabled}
                         disabled={!pushEnabled || (!permissionRequestsEnabled && !userActionsEnabled)}
@@ -76,7 +79,7 @@ export function NotificationTypesSection({
             />
             <SettingRow
                 setting={NOTIFICATIONS_SETTINGS.settings.typesPermissionRequests}
-                rightElement={(
+                rightElement={pending ? undefined : (
                     <Switch
                         value={permissionRequestsEnabled}
                         disabled={!pushEnabled}
@@ -87,7 +90,7 @@ export function NotificationTypesSection({
             />
             <SettingRow
                 setting={NOTIFICATIONS_SETTINGS.settings.typesUserActions}
-                rightElement={(
+                rightElement={pending ? undefined : (
                     <Switch
                         value={userActionsEnabled}
                         disabled={!pushEnabled}

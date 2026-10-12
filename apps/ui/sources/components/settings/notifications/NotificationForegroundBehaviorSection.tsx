@@ -4,28 +4,29 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { NOTIFICATIONS_SETTINGS } from '@/components/settings/notifications/notificationsSettings';
-import { areLocalNotificationsOff, resolveLocalNotificationForegroundDelta } from '@/components/settings/notifications/localNotificationPreferences';
+import { areLocalNotificationsOff } from '@/components/settings/notifications/localNotificationPreferences';
+import type { DeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { t } from '@/text';
 
 type NotificationForegroundBehaviorSectionProps = Readonly<{
     localSettings: LocalSettings;
-    setLocalSetting: (delta: Partial<LocalSettings>) => void;
+    setSetting: DeclaredSettingsWrite;
 }>;
 
 type ForegroundBehavior = LocalSettings['attentionDeviceOverridesV1']['foregroundBehavior'];
 
 export function NotificationForegroundBehaviorSection({
     localSettings,
-    setLocalSetting,
+    setSetting,
 }: NotificationForegroundBehaviorSectionProps): React.ReactElement {
     const deviceOverrides = localSettings.attentionDeviceOverridesV1;
     // Banners and sounds inside the app need this device's notifications; the synced default
     // stays selectable whenever this device follows the Account at all.
     const localNotificationsOff = areLocalNotificationsOff(localSettings);
     const setForegroundBehavior = React.useCallback((foregroundBehavior: ForegroundBehavior) => {
-        setLocalSetting(resolveLocalNotificationForegroundDelta(localSettings, foregroundBehavior));
-    }, [localSettings, setLocalSetting]);
+        void setSetting(NOTIFICATIONS_SETTINGS.settings.foregroundBehavior, foregroundBehavior);
+    }, [setSetting]);
 
     return (
         <ItemGroup

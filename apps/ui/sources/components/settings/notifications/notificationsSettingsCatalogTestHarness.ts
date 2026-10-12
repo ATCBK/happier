@@ -80,6 +80,9 @@ export async function restoreNotificationsSettingsCatalog(params: Readonly<{
                 && new Headers(init?.headers).get('authorization') !== accountBearer)
                 return Response.json({ error: 'unauthorized' }, { status: 401 });
             if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
+            // Approval Detail consumes the genuine Home connection projection;
+            // this Account has an authoritative empty Machine census, not a failed read.
+            if (path === '/v1/machines') return Response.json([]);
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion }));

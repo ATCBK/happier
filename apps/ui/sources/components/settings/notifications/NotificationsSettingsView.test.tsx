@@ -285,9 +285,11 @@ let storage: typeof import('@/sync/domains/state/storage').storage;
 let disposeActionBridge: (() => void) | undefined;
 let fixture: Awaited<ReturnType<typeof restoreNotificationsSettingsCatalog>> | undefined;
 let rawBeforeControl: Readonly<Record<string, unknown>> = {};
+let settingsWritesBeforeControl: readonly unknown[] = [];
 let localBeforeControl: ReturnType<typeof storage.getState>['localSettings'];
 let disposeScreen: (() => Promise<void>) | undefined;
 let declaredSettingActionsDisabled = false;
+let declaredSettingActionsApprovalRequired = false;
 const defaultLocalSettings = structuredClone(localSettingsState);
 beforeAll(async () => {
     storage = (await import('@/sync/domains/state/storage')).storage;
@@ -303,15 +305,18 @@ afterEach(async () => {
     storage.getState().clearSettingsScope();
     storage.getState().clearProfileScope();
 });
+let fixtureHomeName: string | undefined = 'Studio Home';
 async function openNotificationsScreen() {
     const source = prepareLegacyNotificationChannelCatalogV1({
         accountId: 'notification-adjacent', raw: settingsState, settingsSecretsReadKeys: [],
     });
     if (source.status !== 'ready') throw new Error('Expected the genuine unsigned predecessor source');
     fixture = await restoreNotificationsSettingsCatalog({
-        accountId: 'notification-adjacent', serverUrl: 'https://notification-adjacent.example.test', homeName: 'Studio Home',
+        accountId: 'notification-adjacent', serverUrl: 'https://notification-adjacent.example.test', homeName: fixtureHomeName,
         rawSettings: { ...settingsState, ...(declaredSettingActionsDisabled ? { actionsSettingsV1: {
             v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } },
+        } } : declaredSettingActionsApprovalRequired ? { actionsSettingsV1: {
+            v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } },
         } } : {}) }, localSettings: localSettingsState,
         catalog: { status: 'present', record: source.record },
         features: createRootLayoutFeaturesResponse({
@@ -325,6 +330,7 @@ async function openNotificationsScreen() {
     const { refreshNotificationChannelCatalog } = await import('@/sync/engine/settings/notificationChannelCatalogEngine');
     await act(async () => { await refreshNotificationChannelCatalog(fixture!.scope); });
     rawBeforeControl = structuredClone(fixture.readRaw());
+    settingsWritesBeforeControl = structuredClone(fixture.settingsWrites);
     localBeforeControl = structuredClone(storage.getState().localSettings);
     return screen;
 }
@@ -332,6 +338,7 @@ async function openNotificationsScreen() {
 describe('NotificationsSettingsView', () => {
     beforeEach(() => {
         declaredSettingActionsDisabled = false;
+        declaredSettingActionsApprovalRequired = false;
         clearActiveUnsavedChangesGuard();
         Object.assign(localSettingsState, structuredClone(defaultLocalSettings));
         settingsState.experiments = false;
@@ -408,7 +415,18 @@ describe('NotificationsSettingsView', () => {
         expect(storage.getState().settings.attentionDeliveryPolicyV1).toEqual(rawBeforeControl.attentionDeliveryPolicyV1);
         expect(storage.getState().localSettings.attentionDeviceOverridesV1).toEqual(localBeforeControl.attentionDeviceOverridesV1);
         await vi.waitFor(() => expect(modalAlertMock).toHaveBeenCalledWith(expect.any(String), 'action_disabled'));
-        expect(fixture!.settingsWrites).toEqual([]);
+        expect(fixture!.settingsWrites).toEqual(settingsWritesBeforeControl);
+    });
+
+    it('keeps configured declared-setting approval pending without a settings write', async () => {
+        declaredSettingActionsApprovalRequired = true;
+        const screen = await openNotificationsScreen();
+        const row = requireRow(screen, 'settings-notifications-mute-phone-focused-computer');
+        await act(async () => { row.props.rightElement.props.onValueChange(true); });
+        await vi.waitFor(() => expect(screen.findByTestId('settings-notifications-approval-pending')).not.toBeNull());
+        expect(storage.getState().settings.attentionDeliveryPolicyV1).toEqual(rawBeforeControl.attentionDeliveryPolicyV1);
+        expect(fixture!.settingsWrites).toEqual(settingsWritesBeforeControl);
+        expect(modalAlertMock).not.toHaveBeenCalled();
     });
 
     it('navigates to push notification troubleshooting', async () => {
@@ -455,6 +473,22 @@ describe('NotificationsSettingsView', () => {
             .find((node) => node.props.subtitle !== undefined)?.props.subtitle).toBe(
             'settingsNotifications.sounds.deviceEnabledSubtitle',
         );
+    });
+
+    it('says "this Home" for an unnamed Home instead of printing its address', async () => {
+        // A Home this device only knows by address carries the address as its profile label.
+        fixtureHomeName = 'notification-adjacent.example.test';
+        try {
+            await openNotificationsScreen();
+        } finally {
+            fixtureHomeName = 'Studio Home';
+        }
+        const homes = translateMock.mock.calls
+            .filter(([key]) => key === 'settingsNotifications.push.enabledSubtitle')
+            .map(([, params]) => (params as { home: string }).home);
+        expect(homes.length).toBeGreaterThan(0);
+        expect(homes.every((home) => !home.includes('notification-adjacent.example.test'))).toBe(true);
+        expect(homes.at(-1)).toBe('settingsAccount.thisHome');
     });
 
     it('orders the notification sections by task', async () => {
@@ -1040,6 +1074,22 @@ describe('NotificationsSettingsView', () => {
         expect(pushItem.props.rightElement.props.value).toBe(false);
     });
 
+
+    it('draws no catalog-driven switch while the channel catalog has not answered', async () => {
+        const screen = await openNotificationsScreen();
+        expect(requireRow(screen, 'settings-notifications-push-enabled').props.rightElement).toBeTruthy();
+        const { applyNotificationChannelCatalogSnapshot, beginNotificationChannelCatalogLoad } =
+            await import('@/sync/store/settings/notificationChannelCatalogSnapshot');
+        await act(async () => {
+            // A withdrawn catalog (credentials retired) then a fresh load: no channel is known yet.
+            applyNotificationChannelCatalogSnapshot(fixture!.scope, { catalog: { status: 'unavailable', reason: 'unauthorized' },
+                rawSettings: {}, sourceSettingsVersion: 0 }, true);
+            beginNotificationChannelCatalogLoad(fixture!.scope);
+        });
+        expect(requireRow(screen, 'settings-notifications-push-enabled').props.rightElement).toBeUndefined();
+        // The Account's own Follow update value is not a catalog fact: it keeps its real switch.
+        expect(requireRow(screen, 'settings-notifications-type-follow-update').props.rightElement).toBeTruthy();
+    });
 
     it('edits the canonical global Follow update event without creating per-reason settings', async () => {
         const screen = await openNotificationsScreen();

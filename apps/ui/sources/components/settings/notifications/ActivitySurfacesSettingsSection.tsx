@@ -11,6 +11,7 @@ import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
 import type { SettingRef } from '@/components/settings/catalog/settingDeclarations';
 import { NOTIFICATIONS_SETTINGS } from '@/components/settings/notifications/notificationsSettings';
+import type { DeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
 
 type ActivitySurfaceChoice<T extends string | number> = Readonly<{
     value: T;
@@ -19,7 +20,7 @@ type ActivitySurfaceChoice<T extends string | number> = Readonly<{
 
 type ActivitySurfacesSettingsSectionProps = Readonly<{
     localSettings: LocalSettings;
-    setLocalSetting: (delta: Partial<LocalSettings>) => void;
+    setSetting: DeclaredSettingsWrite;
     renderMode?: 'all' | 'shared_only';
 }>;
 
@@ -173,7 +174,7 @@ function ActivitySurfaceChoiceRow<T extends string | number>(props: Readonly<{
 
 export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfacesSettingsSection({
     localSettings,
-    setLocalSetting,
+    setSetting,
     renderMode = 'all',
 }: ActivitySurfacesSettingsSectionProps) {
     const activitySurfacesEnabled = localSettings.activitySurfacesEnabled !== false;
@@ -197,7 +198,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                     rightElement={(
                         <Switch
                             value={activitySurfacesEnabled}
-                            onValueChange={(value) => setLocalSetting({ activitySurfacesEnabled: Boolean(value) })}
+                            onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.enabled, Boolean(value)); }}
                         />
                     )}
                     showChevron={false}
@@ -215,7 +216,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                     choices={ACTIVITY_SURFACE_TAP_TARGET_OPTIONS}
                     disabled={!activitySurfacesEnabled}
                     selectedValue={localSettings.activitySurfaceTapTarget}
-                    onSelect={(value) => setLocalSetting({ activitySurfaceTapTarget: value })}
+                    onSelect={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.tapTarget, value); }}
                 />
                 <ActivitySurfaceChoiceRow
                     setting={NOTIFICATIONS_SETTINGS.settings.privacy}
@@ -224,7 +225,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                     choices={ACTIVITY_SURFACE_PRIVACY_OPTIONS}
                     disabled={!activitySurfacesEnabled}
                     selectedValue={localSettings.activitySurfacePrivacyMode}
-                    onSelect={(value) => setLocalSetting({ activitySurfacePrivacyMode: value })}
+                    onSelect={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.privacy, value); }}
                 />
             </ItemGroup>
 
@@ -241,7 +242,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                                 <Switch
                                     value={liveActivitiesEnabled}
                                     disabled={!activitySurfacesEnabled}
-                                    onValueChange={(value) => setLocalSetting({ liveActivitiesEnabled: Boolean(value) })}
+                                    onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.liveActivitiesEnabled, Boolean(value)); }}
                                 />
                             )}
                             showChevron={false}
@@ -254,7 +255,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                             choices={LIVE_ACTIVITY_STRATEGY_OPTIONS}
                             disabled={!activitySurfacesEnabled || !liveActivitiesEnabled}
                             selectedValue={localSettings.liveActivitiesStrategy}
-                            onSelect={(value) => setLocalSetting({ liveActivitiesStrategy: value })}
+                            onSelect={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.strategy, value); }}
                         />
                         <ActivitySurfaceChoiceRow
                             setting={NOTIFICATIONS_SETTINGS.settings.presentation}
@@ -264,7 +265,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                             choices={LIVE_ACTIVITY_MODE_OPTIONS}
                             disabled={!activitySurfacesEnabled || !liveActivitiesEnabled}
                             selectedValue={localSettings.liveActivitiesMode}
-                            onSelect={(value) => setLocalSetting({ liveActivitiesMode: value })}
+                            onSelect={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.presentation, value); }}
                         />
                         <ActivitySurfaceChoiceRow
                             setting={NOTIFICATIONS_SETTINGS.settings.maxConcurrent}
@@ -273,7 +274,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                             choices={LIVE_ACTIVITY_MAX_CONCURRENT_OPTIONS}
                             disabled={!liveActivitiesConcurrencyEnabled}
                             selectedValue={localSettings.liveActivitiesMaxConcurrent}
-                            onSelect={(value) => setLocalSetting({ liveActivitiesMaxConcurrent: value })}
+                            onSelect={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.maxConcurrent, value); }}
                         />
                         <SettingRow
                             setting={NOTIFICATIONS_SETTINGS.settings.previewText}
@@ -281,7 +282,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                                 <Switch
                                     value={localSettings.liveActivitiesShowPreviewText !== false}
                                     disabled={!activitySurfacesEnabled || !liveActivitiesEnabled}
-                                    onValueChange={(value) => setLocalSetting({ liveActivitiesShowPreviewText: Boolean(value) })}
+                                    onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.previewText, Boolean(value)); }}
                                 />
                             )}
                             showChevron={false}
@@ -292,7 +293,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                                 <Switch
                                     value={localSettings.liveActivitiesAllowActionButtons !== false}
                                     disabled={!activitySurfacesEnabled || !liveActivitiesEnabled}
-                                    onValueChange={(value) => setLocalSetting({ liveActivitiesAllowActionButtons: Boolean(value) })}
+                                    onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.actionButtons, Boolean(value)); }}
                                 />
                             )}
                             showChevron={false}
@@ -303,7 +304,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                                 <Switch
                                     value={localSettings.liveActivitiesIncludeReady !== false}
                                     disabled={!activitySurfacesEnabled || !liveActivitiesEnabled}
-                                    onValueChange={(value) => setLocalSetting({ liveActivitiesIncludeReady: Boolean(value) })}
+                                    onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.includeReady, Boolean(value)); }}
                                 />
                             )}
                             showChevron={false}
@@ -314,7 +315,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                                 <Switch
                                     value={localSettings.liveActivitiesIncludeThinking !== false}
                                     disabled={!activitySurfacesEnabled || !liveActivitiesEnabled}
-                                    onValueChange={(value) => setLocalSetting({ liveActivitiesIncludeThinking: Boolean(value) })}
+                                    onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.includeThinking, Boolean(value)); }}
                                 />
                             )}
                             showChevron={false}
@@ -332,7 +333,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                                 <Switch
                                     value={widgetsEnabled}
                                     disabled={!activitySurfacesEnabled}
-                                    onValueChange={(value) => setLocalSetting({ widgetsEnabled: Boolean(value) })}
+                                    onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.widgetsEnabled, Boolean(value)); }}
                                 />
                             )}
                             showChevron={false}
@@ -344,7 +345,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                             choices={HOME_SCREEN_WIDGET_MODE_OPTIONS}
                             disabled={!activitySurfacesEnabled || !widgetsEnabled}
                             selectedValue={localSettings.widgetsPresetMode}
-                            onSelect={(value) => setLocalSetting({ widgetsPresetMode: value })}
+                            onSelect={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.widgetsMode, value); }}
                         />
                         <SettingRow
                             setting={NOTIFICATIONS_SETTINGS.settings.widgetsPreviewText}
@@ -352,7 +353,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                                 <Switch
                                     value={localSettings.widgetsShowPreviewText !== false}
                                     disabled={!activitySurfacesEnabled || !widgetsEnabled}
-                                    onValueChange={(value) => setLocalSetting({ widgetsShowPreviewText: Boolean(value) })}
+                                    onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.widgetsPreviewText, Boolean(value)); }}
                                 />
                             )}
                             showChevron={false}
@@ -363,7 +364,7 @@ export const ActivitySurfacesSettingsSection = React.memo(function ActivitySurfa
                                 <Switch
                                     value={localSettings.widgetsShowMachinePath !== false}
                                     disabled={!activitySurfacesEnabled || !widgetsEnabled}
-                                    onValueChange={(value) => setLocalSetting({ widgetsShowMachinePath: Boolean(value) })}
+                                    onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.machinePath, Boolean(value)); }}
                                 />
                             )}
                             showChevron={false}

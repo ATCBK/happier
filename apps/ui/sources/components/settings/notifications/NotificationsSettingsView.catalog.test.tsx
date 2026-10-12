@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse, AttentionDeliveryPolicyV1Schema } from '@happier-dev/protocol/account/settings/accountSettings';
 import { resolveAttentionDeliveryPolicyDecision } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicyDecision';
 import { prepareLegacyNotificationChannelCatalogV1 } from '@happier-dev/protocol/account/settings/notificationChannelCatalogV1';
@@ -39,15 +39,13 @@ installSettingsViewCommonModuleMocks({
 });
 const modalAlert = vi.fn();
 const routerPush = vi.fn();
-let storage: typeof import('@/sync/domains/state/storage').storage;
-let disposeActionBridge: (() => void) | undefined;
-beforeAll(async () => {
-    // The common harness must unmock the store before any consumer binds it.
-    storage = (await import('@/sync/domains/state/storage')).storage;
-    await loadSyncSingletonForTests();
-    disposeActionBridge = (await loadNotificationsSettingsActionExecutorForTests()).dispose;
-});
-afterAll(() => { disposeActionBridge?.(); });
+// Collect the real runtime graph after boundary setup, outside behavior deadlines.
+const storage = (await import('@/sync/domains/state/storage')).storage;
+await loadSyncSingletonForTests();
+const disposeActionBridge = (await loadNotificationsSettingsActionExecutorForTests()).dispose;
+await import('./NotificationsSettingsView');
+await import('@/components/approvals/ApprovalDetailScreen');
+afterAll(() => { disposeActionBridge(); });
 
 let disposeHome: (() => Promise<void>) | undefined;
 let disposeScreen: (() => Promise<void>) | undefined;

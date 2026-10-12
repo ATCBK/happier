@@ -6,23 +6,20 @@ import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { t } from '@/text';
 import { SettingRow } from '@/components/settings/shell/SettingRow';
 import { NOTIFICATIONS_SETTINGS } from '@/components/settings/notifications/notificationsSettings';
-import { updateNotificationBadge } from './notificationPreferences';
+import type { DeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
 
 type NotificationBadgesSectionProps = Readonly<{
     localSettings: LocalSettings;
-    setLocalSetting: (delta: Partial<LocalSettings>) => void;
+    setSetting: DeclaredSettingsWrite;
 }>;
 
 export function NotificationBadgesSection({
     localSettings,
-    setLocalSetting,
+    setSetting,
 }: NotificationBadgesSectionProps): React.ReactElement {
     const deviceOverrides = localSettings.attentionDeviceOverridesV1;
     const badge = deviceOverrides.badge;
     const disabled = badge.enabled === false;
-    const setBadge = React.useCallback((next: Partial<typeof badge>) => {
-        setLocalSetting(updateNotificationBadge(localSettings, next));
-    }, [localSettings, setLocalSetting]);
 
     return (
         <ItemGroup
@@ -35,7 +32,7 @@ export function NotificationBadgesSection({
                 rightElement={(
                     <Switch
                         value={!disabled}
-                        onValueChange={(value) => setBadge({ enabled: Boolean(value) })}
+                        onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.badgesEnabled, Boolean(value)); }}
                     />
                 )}
                 showChevron={false}
@@ -46,7 +43,7 @@ export function NotificationBadgesSection({
                     <Switch
                         value={badge.includeUnread !== false}
                         disabled={disabled}
-                        onValueChange={(value) => setBadge({ includeUnread: Boolean(value) })}
+                        onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.unread, Boolean(value)); }}
                     />
                 )}
                 showChevron={false}
@@ -57,7 +54,7 @@ export function NotificationBadgesSection({
                     <Switch
                         value={badge.includePendingPermissionRequests !== false}
                         disabled={disabled}
-                        onValueChange={(value) => setBadge({ includePendingPermissionRequests: Boolean(value) })}
+                        onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.permissionRequests, Boolean(value)); }}
                     />
                 )}
                 showChevron={false}
@@ -68,7 +65,7 @@ export function NotificationBadgesSection({
                     <Switch
                         value={badge.includePendingUserActionRequests !== false}
                         disabled={disabled}
-                        onValueChange={(value) => setBadge({ includePendingUserActionRequests: Boolean(value) })}
+                        onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.userActions, Boolean(value)); }}
                     />
                 )}
                 showChevron={false}
@@ -79,7 +76,7 @@ export function NotificationBadgesSection({
                     <Switch
                         value={badge.includeQueuedUserInput !== false}
                         disabled={disabled}
-                        onValueChange={(value) => setBadge({ includeQueuedUserInput: Boolean(value) })}
+                        onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.queued, Boolean(value)); }}
                     />
                 )}
                 showChevron={false}
@@ -90,7 +87,7 @@ export function NotificationBadgesSection({
                     <Switch
                         value={badge.includeFriendRequestsInboxCount !== false}
                         disabled={disabled}
-                        onValueChange={(value) => setBadge({ includeFriendRequestsInboxCount: Boolean(value) })}
+                        onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.friendRequests, Boolean(value)); }}
                     />
                 )}
                 showChevron={false}
@@ -101,7 +98,7 @@ export function NotificationBadgesSection({
                     <Switch
                         value={badge.includeDesktopNonNumericDot !== false}
                         disabled={disabled}
-                        onValueChange={(value) => setBadge({ includeDesktopNonNumericDot: Boolean(value) })}
+                        onValueChange={(value) => { void setSetting(NOTIFICATIONS_SETTINGS.settings.desktopDot, Boolean(value)); }}
                     />
                 )}
                 showChevron={false}

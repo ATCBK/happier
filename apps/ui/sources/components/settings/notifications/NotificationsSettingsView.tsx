@@ -8,13 +8,8 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Item } from '@/components/ui/lists/Item';
 import { useFeatureDetails } from '@/hooks/server/useFeatureDetails';
-import {
-    deriveAttentionDeviceOverridesV1FromLegacyLocalSettings,
-    hasLegacyAttentionDeviceOverrideFields,
-} from '@/sync/domains/settings/attentionDeviceOverridesV1';
-import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { useLocalSettings, useSettingsSelector } from '@/sync/domains/state/storage';
-import { useAccountSettingsScope, useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 import { sync } from '@/sync/sync';
 import { schedulePushTokenReconciliation } from '@/sync/engine/account/syncAccount';
@@ -22,7 +17,6 @@ import { runPushNotificationPermissionPriming } from '@/activity/notifications/p
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
-import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { DEFAULT_LIVE_ACTIVITY_REMOTE_UPDATE_CAPABILITY_DIAGNOSTICS, type LiveActivityRemoteUpdateCapabilityDiagnostics } from '@happier-dev/protocol/activity/live/remoteUpdateCapabilities';
 import { PUSH_NOTIFICATION_SOUND_IDS, resolveExpoNotificationSoundName } from '@happier-dev/protocol/push/pushNotificationActions';
 import { BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID } from '@happier-dev/protocol/account/settings/notificationChannels';
@@ -51,12 +45,13 @@ import { NotificationWebhooksSection, type ExecuteNotificationConfigurationMutat
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { resolveHomeDisplayLabel, resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { NOTIFICATIONS_SETTINGS } from '@/components/settings/notifications/notificationsSettings';
 import { settingRendersOnHost } from '@/components/settings/catalog/settingDeclarations';
 import { SettingSection } from '@/components/settings/shell/SettingRow';
-import { updateAccountNotificationPreference, updateNotificationDeviceSounds, type AccountNotificationPreference } from './notificationPreferences';
+import { useDeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
 
 export const NotificationsSettingsView = React.memo(function NotificationsSettingsView() {
     const router = useRouter();
@@ -65,11 +60,11 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
         sessionRemoteAlertsEnabled: settings.sessionRemoteAlertsEnabled,
     }));
     const localSettings = useLocalSettings();
-    const applySettings = useApplySettings();
-    const applyLocalSettings = useApplyLocalSettings();
     const scope = useAccountSettingsScope();
     const channelCatalog = useNotificationChannelCatalog(scope);
-    const { execute: executeAction, ready: actionReady, approval } = useMountedActionExecution(scope);
+    const execution = useMountedActionExecution(scope);
+    const { execute: executeAction, ready: actionReady, approval } = execution;
+    const writeSetting = useDeclaredSettingsWrite(execution);
     const executeMutation = React.useCallback<ExecuteNotificationConfigurationMutation>(async mutation => {
         if (!actionReady) return null;
         try {
@@ -86,9 +81,11 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
     }, [actionReady, executeAction]);
     const activeServer = useActiveServerSnapshot();
     useServerProfilesGeneration();
-    const activeHomeName = getServerProfileById(activeServer.serverId)?.name.trim()
-        || activeServer.serverUrl.trim()
-        || t('settingsNotifications.push.currentHome');
+    // The canonical Home naming owner: the published or user-given name, else "this Home" in a sentence
+    // and "This Home" as a detail value — never the address.
+    const activeHomeProfile = getServerProfileById(activeServer.serverId);
+    const activeHomeName = resolveHomeDisplayLabel(activeHomeProfile, activeServer.serverId);
+    const activeHomeInSentence = resolveHomeDisplayName(activeHomeProfile) ?? t('settingsAccount.thisHome');
     const followingEnabled = useFeatureEnabled('sessions.following', {
         scopeKind: 'spawn',
         serverId: activeServer.serverId,
@@ -106,6 +103,7 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
     );
     const builtin = channelCatalog.channels.find((channel): channel is Extract<typeof channel, { kind: 'expo_push' }> =>
         channel.id === BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID && channel.kind === 'expo_push');
+    const catalogPending = channelCatalog.status === 'loading' && !builtin;
     const pushEnabled = builtin?.enabled === true && attentionPolicy.channels.expo_push.enabled !== false;
     const remoteAlerts = useRemoteAlertRegistrationStatus({
         enabled: followingEnabled,
@@ -127,20 +125,6 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
         router.push('/settings/notifications/push');
     }, [router]);
 
-    const setQuietHoursSetting = React.useCallback(async (anchor: string, value: unknown) => {
-        if (!actionReady) return;
-        try {
-            const result = await executeAction('settings.set', { anchor, value });
-            if (!result.ok) {
-                if (result.errorCode === 'action_account_scope_changed') return;
-                throw new Error(result.error);
-            }
-            SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(result.result);
-        } catch (error) {
-            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
-        }
-    }, [actionReady, executeAction]);
-
     const updateBuiltin = React.useCallback(async (patch: NotificationChannelConfigurationPatch) =>
         executeMutation({ actionId: 'notifications.expoPush.update', input: { patch } }), [executeMutation]);
 
@@ -158,15 +142,11 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
         });
     }, [updateBuiltin]);
 
-    const setNotificationPreference = React.useCallback((id: AccountNotificationPreference, value: boolean | string) => {
-        applySettings({ attentionDeliveryPolicyV1: updateAccountNotificationPreference(attentionPolicy, id, value) });
-    }, [applySettings, attentionPolicy]);
-
     const setExpoPushEventEnabled = React.useCallback(async (event: NotificationTypeEventId, enabled: boolean) => {
-        if (event === 'follow_update') { setNotificationPreference(event, enabled); return; }
+        if (event === 'follow_update') { await writeSetting(NOTIFICATIONS_SETTINGS.settings.following, enabled); return; }
         const topic = event === 'permission_request' ? 'permissionRequest' : event === 'user_action_request' ? 'userActionRequest' : 'ready';
         await updateBuiltin({ topics: { [topic]: enabled } });
-    }, [setNotificationPreference, updateBuiltin]);
+    }, [writeSetting, updateBuiltin]);
 
     const setExpoPushReadyPreviewEnabled = React.useCallback(async (enabled: boolean) => {
         await updateBuiltin({ readyIncludeMessageText: enabled });
@@ -177,29 +157,12 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
     }, [updateBuiltin]);
 
     const setAccountSoundPreset = React.useCallback((preset: 'happier' | 'system' | 'silent') => {
-        setNotificationPreference('soundPreset', preset);
-    }, [setNotificationPreference]);
-
-    const setLocalSetting = React.useCallback((delta: Partial<LocalSettings>) => {
-        const deltaRecord: Record<string, unknown> = { ...delta };
-        const canonicalDelta = (
-            delta.attentionDeviceOverridesV1 !== undefined
-            || !hasLegacyAttentionDeviceOverrideFields(deltaRecord)
-        )
-            ? delta
-            : {
-                ...delta,
-                attentionDeviceOverridesV1: deriveAttentionDeviceOverridesV1FromLegacyLocalSettings({
-                    legacy: deltaRecord,
-                    base: localSettings.attentionDeviceOverridesV1,
-                }),
-            };
-        applyLocalSettings(canonicalDelta);
-    }, [applyLocalSettings, localSettings.attentionDeviceOverridesV1]);
+        void writeSetting(NOTIFICATIONS_SETTINGS.settings.soundPreset, preset);
+    }, [writeSetting]);
 
     const setDeviceSoundsEnabled = React.useCallback((enabled: boolean) => {
-        applyLocalSettings(updateNotificationDeviceSounds(localSettings, enabled));
-    }, [applyLocalSettings, localSettings]);
+        void writeSetting(NOTIFICATIONS_SETTINGS.settings.deviceEnabled, enabled);
+    }, [writeSetting]);
 
     const previewSound = React.useCallback(() => {
         const sound = (
@@ -227,23 +190,25 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
             {approval.approvalId && scope ? (
                 <ActionApprovalPendingNotice testID="settings-notifications-approval-pending"
                     message={t('secrets.catalog.approvalPending')}
-                    onOpenApproval={() => router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} />
+                    onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} />
             ) : null}
             {isDesktopHost() ? (
                 <NotificationDesktopPermissionSection />
             ) : null}
             <NotificationPushSection
-                homeName={activeHomeName}
+                homeName={activeHomeInSentence}
                 pushEnabled={pushEnabled}
+                pending={catalogPending}
                 setPushEnabled={setPushEnabled}
                 openPushTroubleshooting={openPushTroubleshooting}
                 mutePhoneWhenComputerFocused={attentionPolicy.mutePhoneWhenComputerFocused === true}
-                setMutePhoneWhenComputerFocused={(enabled) => setNotificationPreference('mutePhoneWhenComputerFocused', enabled)}
+                setMutePhoneWhenComputerFocused={(enabled) => { void writeSetting(NOTIFICATIONS_SETTINGS.settings.mutePhoneWhenComputerFocused, enabled); }}
             />
             <NotificationTypesSection
                 policy={attentionPolicy}
                 builtin={builtin ?? null}
                 pushEnabled={pushEnabled}
+                pending={catalogPending}
                 setEventEnabled={setExpoPushEventEnabled}
                 setReadyPreviewEnabled={setExpoPushReadyPreviewEnabled}
                 setRequestPreviewEnabled={setExpoPushRequestPreviewEnabled}
@@ -259,8 +224,8 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
             <NotificationQuietHoursSection
                 policy={attentionPolicy}
                 deviceOverride={localSettings.attentionDeviceOverridesV1.quietHoursOverride}
-                setAccountQuietHours={(preset) => setQuietHoursSetting(NOTIFICATIONS_SETTINGS.settings.quietHoursAccount.anchor, preset)}
-                setDeviceQuietHoursOverride={(quietHoursOverride) => setQuietHoursSetting(NOTIFICATIONS_SETTINGS.settings.quietHoursDevice.anchor, quietHoursOverride)}
+                setAccountQuietHours={(preset) => { void writeSetting(NOTIFICATIONS_SETTINGS.settings.quietHoursAccount, preset); }}
+                setDeviceQuietHoursOverride={(quietHoursOverride) => { void writeSetting(NOTIFICATIONS_SETTINGS.settings.quietHoursDevice, quietHoursOverride); }}
             />
             <SessionAutoFollowPreferencesSection key={activeServer.serverId} serverId={activeServer.serverId} />
             <SettingSection section={NOTIFICATIONS_SETTINGS.sectionRefs.remoteAlerts}>
@@ -270,13 +235,11 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
                 deviceEnabled={localSettings.deviceRemoteAlertsEnabled}
                 nativeDevice={settingRendersOnHost(NOTIFICATIONS_SETTINGS.settings.device)}
                 registration={remoteAlerts.registration}
-                setAccountEnabled={(enabled) => {
-                    applySettings({ sessionRemoteAlertsEnabled: enabled });
-                    schedulePushTokenReconciliation();
+                setAccountEnabled={async (enabled) => {
+                    if (await writeSetting(NOTIFICATIONS_SETTINGS.settings.account, enabled)) schedulePushTokenReconciliation();
                 }}
-                setDeviceEnabled={(enabled) => {
-                    applyLocalSettings({ deviceRemoteAlertsEnabled: enabled });
-                    schedulePushTokenReconciliation();
+                setDeviceEnabled={async (enabled) => {
+                    if (await writeSetting(NOTIFICATIONS_SETTINGS.settings.device, enabled)) schedulePushTokenReconciliation();
                 }}
                 refresh={() => {
                     schedulePushTokenReconciliation();
@@ -295,21 +258,21 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
             </SettingSection>
             <NotificationLocalDeviceSection
                 localSettings={localSettings}
-                setLocalSetting={setLocalSetting}
+                setSetting={writeSetting}
             />
             <NotificationForegroundBehaviorSection
                 localSettings={localSettings}
-                setLocalSetting={setLocalSetting}
+                setSetting={writeSetting}
             />
             <NotificationBadgesSection
                 localSettings={localSettings}
-                setLocalSetting={setLocalSetting}
+                setSetting={writeSetting}
             />
             {showIosActivitySurfaceSections ? (
                 <>
                     <ActivitySurfacesSettingsSection
                         localSettings={localSettings}
-                        setLocalSetting={setLocalSetting}
+                        setSetting={writeSetting}
                     />
                     <NotificationLiveActivityRemoteUpdatesSection
                         policy={attentionPolicy}
@@ -320,7 +283,7 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
             ) : showSharedDesktopActivitySurfaceSettings ? (
                 <ActivitySurfacesSettingsSection
                     localSettings={localSettings}
-                    setLocalSetting={setLocalSetting}
+                    setSetting={writeSetting}
                     renderMode="shared_only"
                 />
             ) : null}

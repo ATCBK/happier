@@ -251,7 +251,7 @@ function AccountNotificationWebhooksSection({
                                 showChevron={false}
                                 accessoryLayout="adaptive"
                                 rightElement={(
-                                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    <View style={{ flexDirection: 'row', gap: theme.space.s8 }}>
                                         {secretConfigured ? (
                                             <RoundButton
                                                 testID={`settings-notifications-webhook-${channel.id}-clear-secret`}

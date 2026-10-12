@@ -10,6 +10,8 @@ import { Icon } from '@/components/ui/icons/Icon';
 type NotificationPushSectionProps = Readonly<{
     homeName: string;
     pushEnabled: boolean;
+    /** The channel catalog has not answered yet, so the switch's value is unknown: draw no switch rather than a wrong one. */
+    pending?: boolean;
     setPushEnabled: (enabled: boolean) => void;
     mutePhoneWhenComputerFocused: boolean;
     setMutePhoneWhenComputerFocused: (enabled: boolean) => void;
@@ -19,6 +21,7 @@ type NotificationPushSectionProps = Readonly<{
 export function NotificationPushSection({
     homeName,
     pushEnabled,
+    pending = false,
     setPushEnabled,
     mutePhoneWhenComputerFocused,
     setMutePhoneWhenComputerFocused,
@@ -34,7 +37,7 @@ export function NotificationPushSection({
                 testID="settings-notifications-push-enabled"
                 setting={NOTIFICATIONS_SETTINGS.settings.pushEnabled}
                 subtitle={t('settingsNotifications.push.enabledSubtitle', { home: homeName })}
-                rightElement={(
+                rightElement={pending ? undefined : (
                     <Switch
                         value={pushEnabled}
                         onValueChange={(value) => setPushEnabled(Boolean(value))}
