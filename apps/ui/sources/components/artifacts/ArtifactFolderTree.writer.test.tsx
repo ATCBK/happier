@@ -119,13 +119,13 @@ it('uses current catalog authority and settles its durable receipt before a held
     await vi.waitFor(() => expect(state.screen.findByTestId('folders:unavailable')).toBeNull());
 });
 
-it('opens New folder in the shared modal without inserting an inline tree draft', async () => {
-    const state = await setup('all');
+it.each(['all', 'prompt'] as const)('inserts New folder into the shared tree (%s)', async kind => {
+    const state = await setup(kind);
     await state.screen.pressByTestIdAsync('folders:invite:new');
-    expect(state.screen.findByTestId('folders:edit:modal')).toBeTruthy();
+    expect(state.screen.findByTestId('folders:edit:modal')).toBeNull();
     expect(state.screen.findByTestId('folders:edit:name')).toBeTruthy();
     const tree = state.screen.findByTestId('folders:sheet')!;
-    expect(tree.findAll(node => node.props.testID === 'folders:edit:name')).toHaveLength(0);
+    expect(tree.findAll(node => node.props.testID === 'folders:edit:name').length).toBeGreaterThan(0);
     await state.screen.pressByTestIdAsync('folders:edit:cancel');
     await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:name')).toBeNull());
     expect(state.read().folders).toEqual([]);
@@ -220,6 +220,8 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
         await vi.waitFor(() => expect(screen.findByTestId('folders:edit:name')).toBeNull());
         const folderId = read().folders[0]!.id;
         await select('newInside', folderId);
+        const tree = screen.findByTestId('folders:sheet')!;
+        expect(tree.findAll(node => node.props.testID === 'folders:edit:name').length).toBeGreaterThan(0);
         await changeName('release NOTES');
         await screen.pressByTestIdAsync('folders:edit:save');
         await vi.waitFor(() => expect(screen.findByTestId('folders:edit:name')).toBeNull());
@@ -227,12 +229,12 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
         expect(boundary.requests).toHaveLength(1);
         await select('newInside', folderId);
         await changeName('Discard this child');
-        await screen.pressByTestIdAsync('folders:edit:cancel');
+        await act(async () => { screen.findByTestId('folders:edit:name')!.props.onKeyPress({ nativeEvent: { key: 'Escape' } }); });
         await vi.waitFor(() => expect(screen.findByTestId('folders:edit:name')).toBeNull());
         expect(boundary.requests).toHaveLength(1);
         await select('newInside', folderId);
         await changeName('Child folder');
-        await screen.pressByTestIdAsync('folders:edit:save');
+        await act(async () => { screen.findByTestId('folders:edit:name')!.props.onSubmitEditing(); });
         await vi.waitFor(() => expect(read().folders).toEqual(expect.arrayContaining([
             expect.objectContaining({ name: 'Child folder', parentId: folderId }),
         ])));
@@ -252,6 +254,20 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
             expect(fresh).toEqual(expect.objectContaining({ parentId: null }));
             expect(state.read().folders.find(folder => folder.id === 'child')?.parentId).toBe(fresh!.id);
         });
+    });
+
+    it('retires a child-create draft when its parent identity is replaced', async () => {
+        const state = await setup(kind, [{ id: 'original', name: 'Original', parentId: null }]);
+        await state.select('newInside');
+        await state.changeName('Retire this child');
+        await state.boundary.handle('/v1/account/entity-rows/prompt-library/folders', { method: 'POST', body: JSON.stringify({
+            expectedRevision: 4, content: { t: 'plain', v: { key: 'folders', value: { v: 1, folders: [{ id: 'replacement', name: 'Replacement', parentId: null }] } } },
+        }) });
+        const { storage } = await import('@/sync/domains/state/storage');
+        await act(async () => { await refreshPromptLibraryCatalog(storage.getState().settingsScope!); });
+        await vi.waitFor(() => expect(state.screen.findByTestId('folders:edit:name')).toBeNull());
+        await state.select('newInside', 'replacement');
+        expect(state.screen.findByTestId('folders:edit:name')!.props.value).toBe('');
     });
 
     it.each(['conflict', 'failed'] as const)('keeps the create draft and typed refusal after %s, then saves on retry', async outcome => {
@@ -300,9 +316,11 @@ describe.each(['all', 'prompt'] as const)('shared folder inline writes (%s)', ki
     });
 });
 
-it('starts the same creation modal from the Artifacts browser toolbar', async () => {
+it('starts the same inline editor from the Artifacts browser toolbar', async () => {
     const state = await setup('all', [], true);
     await state.screen.pressByTestIdAsync('artifacts:folders:new');
+    expect(state.screen.findByTestId('artifacts:folders:edit:modal')).toBeNull();
+    expect(state.screen.findByTestId('artifacts:folders:sheet')!.findAll(node => node.props.testID === 'artifacts:folders:edit:name').length).toBeGreaterThan(0);
     await state.changeName('  Browser   folder  ');
     expect(state.read().folders).toEqual([]);
     await state.screen.pressByTestIdAsync('artifacts:folders:edit:save');

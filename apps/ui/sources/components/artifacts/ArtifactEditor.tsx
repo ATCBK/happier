@@ -1,25 +1,25 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { View, type LayoutChangeEvent } from 'react-native';
+import { HAPPIER_FIELD_BOX_METRICS, HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { ArtifactHeaderMetadataV1Schema } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
-import { Icon } from '@/components/ui/icons/Icon';
+import type { CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import { MarkdownCodeEditorField } from '@/components/ui/markdown/editor/MarkdownCodeEditorField';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
-import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { Text } from '@/components/ui/text/Text';
-import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Modal } from '@/modal';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 
 import { artifactViewRoute } from './artifactBrowserModel';
 import { useArtifactActionsClient, type ArtifactQuota } from './artifactActionsClient';
+import { ArtifactQuotaNotice } from './ArtifactQuotaNotice';
 import { ArtifactView } from './ArtifactView';
 
 /**
@@ -27,9 +27,7 @@ import { ArtifactView } from './ArtifactView';
  * server refuses for a budget keeps every edit and names the size and the cap (lab A8p).
  */
 export function ArtifactEditor(props: Readonly<{ artifact: DecryptedArtifact | null; mode: 'new' | 'edit' }>): React.ReactElement {
-    const { theme } = useUnistyles();
     const router = useRouter();
-    const styles = stylesheet;
     const { artifact, mode } = props;
     const client = useArtifactActionsClient();
     const scope = useActiveServerAccountScope();
@@ -37,15 +35,23 @@ export function ArtifactEditor(props: Readonly<{ artifact: DecryptedArtifact | n
     const [opening] = React.useState(artifact);
     const [title, setTitle] = React.useState(artifact?.title ?? '');
     const [body, setBody] = React.useState(typeof artifact?.body === 'string' ? artifact.body : '');
+    const bodyRef = React.useRef(body);
+    bodyRef.current = body;
     const [saving, setSaving] = React.useState(false);
     const [quota, setQuota] = React.useState<ArtifactQuota | null>(null);
     const [conflict, setConflict] = React.useState(false);
+    const editorRef = React.useRef<CodeEditorHandle | null>(null);
+    // A new document starts with the cursor in its source, as the field did.
+    React.useEffect(() => { if (mode === 'new') editorRef.current?.focus?.(); }, [mode]);
     const changed = mode === 'new'
         ? title.trim().length > 0 || body.trim().length > 0
         : title !== (opening?.title ?? '') || body !== (opening?.body ?? '');
 
     const save = React.useCallback(async () => {
         if (saving || !changed) return;
+        // The editor may still hold a debounced keystroke: save what is on screen.
+        await editorRef.current?.flushPendingChange();
+        const body = editorRef.current?.getValue() ?? bodyRef.current;
         if (!title.trim() && !body.trim()) {
             await Modal.alert(t('common.error'), t('artifacts.emptyFieldsError'));
             return;
@@ -77,12 +83,22 @@ export function ArtifactEditor(props: Readonly<{ artifact: DecryptedArtifact | n
         } finally {
             setSaving(false);
         }
-    }, [opening, body, changed, client, mode, router, saving, scope, title]);
+    }, [opening, changed, client, mode, router, saving, scope, title]);
 
     const cancel = React.useCallback(async () => {
-        if (changed && !(await Modal.confirm(t('artifacts.discardChanges'), t('artifacts.discardChangesDescription'), { destructive: true }))) return;
+        if (changed && !(await Modal.confirm(t('artifacts.discardChanges'), t('artifacts.discardChangesDescription'),
+            { cancelText: t('common.keepEditing'), confirmText: t('common.discard'), destructive: true }))) return;
         safeRouterBack({ router, fallbackHref: '/artifacts' });
     }, [changed, router]);
+
+    // The source fills the window from its own top down (lab A8p) and scrolls inside, as an editor does.
+    const [viewportHeight, setViewportHeight] = React.useState<number | null>(null);
+    const [bodyTop, setBodyTop] = React.useState<number | null>(null);
+    const measureViewport = React.useCallback((event: LayoutChangeEvent) => setViewportHeight(event.nativeEvent.layout.height), []);
+    const measureBodyTop = React.useCallback((event: LayoutChangeEvent) => setBodyTop(event.nativeEvent.layout.y), []);
+    const bodyHeight = viewportHeight === null || bodyTop === null ? MIN_BODY_HEIGHT_PX
+        : Math.max(MIN_BODY_HEIGHT_PX, viewportHeight - bodyTop - HAPPIER_PAGE_METRICS.pagePaddingBottomPx);
+    const bodyFrame = React.useMemo(() => ({ height: bodyHeight }), [bodyHeight]);
 
     // A direct edit URL must not reinterpret a binary body as an empty Markdown document.
     if (mode === 'edit' && opening?.body !== null && typeof opening?.body === 'object') {
@@ -90,7 +106,7 @@ export function ArtifactEditor(props: Readonly<{ artifact: DecryptedArtifact | n
     }
 
     return (
-        <ItemList testID={`artifact-editor:${mode}`}>
+        <ItemList testID={`artifact-editor:${mode}`} onLayout={measureViewport}>
             <PageHeader
                 testID="artifact-editor:header"
                 title={title || t('artifacts.untitled')}
@@ -105,61 +121,34 @@ export function ArtifactEditor(props: Readonly<{ artifact: DecryptedArtifact | n
                 primaryAction={{ title: t('artifacts.save'), onPress: save, disabled: !changed, loading: saving, testID: 'artifact-editor:save' }}
                 cancelAction={{ title: t('common.cancel'), onPress: cancel, testID: 'artifact-editor:cancel' }}
             />
-            {conflict ? <SurfaceFreshnessLine testID="artifact-editor:conflict" tone="warning" reason={t('sessionInstructions.saveConflict')} /> : null}
-            {quota ? (
-                <View style={styles.refusal} testID="artifact-editor:quota" accessibilityRole="alert">
-                    <Icon name="warning" size={17} color={theme.colors.state.warning.foreground} />
-                    <View style={styles.refusalText}>
-                        <Text style={styles.refusalTitle}>
-                            {quota.budget === 'document' ? t('artifacts.browser.quota.documentTitle') : t('artifacts.browser.quota.accountTitle')}
-                        </Text>
-                        <Text style={styles.refusalBody}>
-                            {quota.budget === 'document'
-                                ? t('artifacts.browser.quota.documentBody', { size: formatByteSize(quota.usedBytes), limit: formatByteSize(quota.limitBytes) })
-                                : t('artifacts.browser.quota.accountBody', { used: formatByteSize(quota.usedBytes), limit: formatByteSize(quota.limitBytes) })}
-                        </Text>
-                    </View>
-                </View>
+            {/* A refusal is the page's one notice, in the document's column on the sections' edges (lab A8p). */}
+            {conflict ? (
+                <AttentionBanner testID="artifact-editor:conflict" tone="warning" announce="alert"
+                    title={t('artifacts.browser.conflict.title')} description={t('artifacts.browser.conflict.body')} />
             ) : null}
-            <ItemGroup title={t('artifacts.bodyLabel')} surface="none">
-                <FieldTextInput
-                    testID="artifact-editor:body"
-                    value={body}
-                    onChangeText={setBody}
-                    accessibilityLabel={t('artifacts.bodyLabel')}
-                    placeholder={t('artifacts.bodyPlaceholder')}
-                    multiline
-                    minLines={16}
-                    monospace
-                    autoFocus={mode === 'new'}
-                />
-            </ItemGroup>
+            {quota ? <ArtifactQuotaNotice testID="artifact-editor:quota" quota={quota} /> : null}
+            {/* The source is the page (lab A8p): on the canvas, unframed, filling the window below the header. */}
+            {/* The app's one Markdown source editor (Prompts, Skills and Board notes use it too). */}
+            <View onLayout={measureBodyTop}>
+                <PageContentColumn style={BODY_INSET}>
+                    <View style={bodyFrame}>
+                        <MarkdownCodeEditorField
+                            testID="artifact-editor:body"
+                            resetKey={opening?.id ?? 'new'}
+                            value={body}
+                            language="markdown"
+                            onChange={setBody}
+                            editorRef={editorRef}
+                            presentation="canvas"
+                        />
+                    </View>
+                </PageContentColumn>
+            </View>
         </ItemList>
     );
 }
 
-const stylesheet = StyleSheet.create((theme) => ({
-    refusal: {
-        flexDirection: 'row',
-        gap: 10,
-        padding: 14,
-        borderRadius: 12,
-        marginTop: 8,
-        backgroundColor: theme.colors.state.warning.background,
-    },
-    refusalText: {
-        flex: 1,
-        gap: 2,
-    },
-    refusalTitle: {
-        fontSize: 14,
-        lineHeight: 19,
-        fontWeight: '600',
-        color: theme.colors.text.primary,
-    },
-    refusalBody: {
-        fontSize: 13,
-        lineHeight: 18,
-        color: theme.colors.text.secondary,
-    },
-}));
+/** The source never draws shorter than a short note (sixteen field lines), even in a short window. */
+const MIN_BODY_HEIGHT_PX = 16 * HAPPIER_FIELD_BOX_METRICS.lineHeightPx;
+/** On the sections' text edge, like the notices above it. */
+const BODY_INSET = { paddingHorizontal: resolveItemGroupContentHorizontalInsetPx() } as const;

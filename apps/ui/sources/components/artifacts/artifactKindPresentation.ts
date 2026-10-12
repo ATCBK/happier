@@ -27,6 +27,16 @@ export function artifactKindLabel(kind: ArtifactBrowserKind): string {
     }
 }
 
+/**
+ * What one artifact is, as its card, row and header say it: a code document names its language
+ * ("TypeScript") with the code mark; every other artifact says its kind.
+ */
+export function artifactKindFact(kind: ArtifactBrowserKind, language: string | null): Readonly<{ label: string; icon: IconName }> {
+    return language !== null && kind === 'document'
+        ? { label: language, icon: 'code' }
+        : { label: artifactKindLabel(kind), icon: ARTIFACT_KIND_ICONS[kind] };
+}
+
 /** A kind's filter name ("Boards"). */
 export function artifactKindFilterLabel(kind: ArtifactBrowserKind | 'all'): string {
     switch (kind) {

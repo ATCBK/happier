@@ -9,12 +9,15 @@ import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStore
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { getStorage } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
 import { ActionsSettingsV1Schema, ApprovalRequestSchema, ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
 
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+const { getStorage } = await import('@/sync/domains/state/storage');
 
 const navigation = vi.hoisted(() => ({ canGoBack: true, back: vi.fn(), replace: vi.fn(), push: vi.fn() }));
 vi.mock('expo-router', async () => {
@@ -30,8 +33,24 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit');
     return createTextModuleMock();
 });
+// The platform editor surface (Monaco on web, a CodeMirror WebView on native) is the boundary: a host node
+// with the same value/onChange contract, so the editor's own draft, save and refusal logic stays real.
+vi.mock('@/components/ui/code/editor/CodeEditor', async () => {
+    const React = await import('react');
+    return {
+        CodeEditor: React.forwardRef((props: any, ref: any) => {
+            const value = React.useRef(props.value);
+            value.current = props.value;
+            React.useImperativeHandle(ref, () => ({ getValue: () => value.current, flushPendingChange: async () => undefined }));
+            return React.createElement('CodeEditor', { testID: props.testID, value: props.value, onChangeText: props.onChange });
+        }),
+    };
+});
 
-import { ArtifactEditor } from './ArtifactEditor';
+// The editor's Markdown field reaches the sync client at import: load it after a test installs its boundaries.
+async function loadArtifactEditor() {
+    return (await import('./ArtifactEditor')).ArtifactEditor;
+}
 
 describe('ArtifactEditor', () => {
     const initialState = getStorage().getState();
@@ -60,7 +79,6 @@ describe('ArtifactEditor', () => {
             ownerAccountId: 'owner', access: 'owner', storageMode: 'plain' };
         const current = { ...opening, title: 'Concurrent', body: 'Concurrent body', headerVersion: 2, bodyVersion: 2,
             header: { kind: 'artifact.legacy', title: 'Concurrent' }, rawHeader: { kind: 'artifact.legacy', title: 'Concurrent' } };
-        const homes = createHomeGovernanceHarness();
         installHomeGovernanceBoundaries(homes);
         await homes.reset();
         const serverId = await homes.addHome({ name: 'Editor', serverUrl: 'https://artifact-editor-cas.test', accountId: 'owner' });
@@ -73,8 +91,9 @@ describe('ArtifactEditor', () => {
         const id = await sync.createArtifactWithHeader(opening.rawHeader!, opening.body ?? '');
         opening.id = id;
         current.id = id;
+        const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={opening} mode="edit" />);
-        await act(async () => { screen.changeTextByTestId('artifact-editor:body', 'My draft'); });
+        await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'My draft'); });
         await act(async () => { await sync.updateArtifactWithHeader(id, current.rawHeader, current.body,
             { expectedRevision: { headerVersion: 1, bodyVersion: 1 } }); });
         await screen.update(<ArtifactEditor artifact={current} mode="edit" />);
@@ -82,7 +101,7 @@ describe('ArtifactEditor', () => {
         const writes = homes.requestsFor(`/v1/artifacts/${id}`).filter(request => request.input !== null);
         expect(writes.at(-1)?.input).toMatchObject({ expectedHeaderVersion: 1, expectedBodyVersion: 1 });
         expect(homes.artifacts(serverId).readPlainBody(id)).toBe('Concurrent body');
-        expect(screen.findByTestId('artifact-editor:body')?.props.value).toBe('My draft');
+        expect(screen.findByTestId('artifact-editor:body:source')?.props.value).toBe('My draft');
         expect(screen.findByTestId('artifact-editor:title')?.props.value).toBe('Opening');
         expect(navigation.back).not.toHaveBeenCalled();
         expect(navigation.replace).not.toHaveBeenCalled();
@@ -107,8 +126,9 @@ describe('ArtifactEditor', () => {
             actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
                 'artifact.create': { approvalRequiredSurfaces: ['ui'] }, 'artifact.update': { approvalRequiredSurfaces: ['ui'] },
             } }) } }));
+        const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={mode === 'edit' ? artifact : null} mode={mode} />);
-        await act(async () => { screen.changeTextByTestId('artifact-editor:body', 'Approval draft'); });
+        await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'Approval draft'); });
         await screen.pressByTestIdAsync('artifact-editor:save');
         const approval = persisted.list()[0];
         expect(approval).toBeDefined();
@@ -118,13 +138,14 @@ describe('ArtifactEditor', () => {
         expect(navigation.push).toHaveBeenCalledWith(`/inbox/approvals/${approval!.id}?serverId=${encodeURIComponent(served.homes.owner!.id)}`);
         expect(navigation.back).not.toHaveBeenCalled();
         expect(navigation.replace).not.toHaveBeenCalled();
-        expect(screen.findByTestId('artifact-editor:body')?.props.value).toBe('Approval draft');
+        expect(screen.findByTestId('artifact-editor:body:source')?.props.value).toBe('Approval draft');
         expect(served.requests.filter(request => request.method === 'POST' && request.path === `/v1/artifacts/${artifact.id}`)).toEqual([]);
         await screen.unmount();
     });
 
     it('returns to the collection when responsive navigation loses its back stack', async () => {
         await loadSyncSingletonForTests();
+        const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={null} mode="new" />);
         navigation.canGoBack = false;
         await screen.pressByTestIdAsync('artifact-editor:cancel');
@@ -137,8 +158,9 @@ describe('ArtifactEditor', () => {
         const served = await serveActionHomes({ homes: [{ key: 'owner', serverUrl: 'https://artifact-editor-success.test', accountId: 'owner' }],
             route: request => persisted.handle(request.path, { method: request.method, body: JSON.stringify(request.body) }) ?? undefined });
         disposeHome = served.dispose;
+        const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={null} mode="new" />);
-        await act(async () => { screen.changeTextByTestId('artifact-editor:body', 'First body'); });
+        await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'First body'); });
         await screen.pressByTestIdAsync('artifact-editor:save');
         const stored = persisted.list()[0];
         expect(stored).toBeDefined();
@@ -147,7 +169,7 @@ describe('ArtifactEditor', () => {
         await screen.unmount();
         const artifact = getStorage().getState().artifacts[stored!.id]!;
         const editor = await renderScreen(<ArtifactEditor artifact={artifact} mode="edit" />);
-        await act(async () => { editor.changeTextByTestId('artifact-editor:body', 'Second body'); });
+        await act(async () => { editor.changeTextByTestId('artifact-editor:body:source', 'Second body'); });
         await editor.pressByTestIdAsync('artifact-editor:save');
         expect(persisted.readPlainBody(stored!.id)).toBe('Second body');
         expect(getStorage().getState().artifacts[stored!.id]).toMatchObject({ body: 'Second body', headerVersion: 2, bodyVersion: 2 });
@@ -160,12 +182,13 @@ describe('ArtifactEditor', () => {
             route: request => request.path === '/v1/artifacts' && request.method === 'POST'
                 ? Response.json({ error: 'quota_exceeded', budget: 'document', limitBytes: 1, usedBytes: 10 }, { status: 413 }) : undefined });
         disposeHome = served.dispose;
+        const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={null} mode="new" />);
-        await act(async () => { screen.changeTextByTestId('artifact-editor:body', 'My document'); });
+        await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'My document'); });
         await screen.pressByTestIdAsync('artifact-editor:save');
         expect(screen.findByTestId('artifact-editor:quota')).not.toBeNull();
         expect(screen.getTextContent()).toContain('artifacts.browser.quota.documentTitle');
-        expect(screen.findByTestId('artifact-editor:body')?.props.value).toBe('My document');
+        expect(screen.findByTestId('artifact-editor:body:source')?.props.value).toBe('My document');
         expect(navigation.replace).not.toHaveBeenCalled();
         expect(navigation.back).not.toHaveBeenCalled();
         await screen.unmount();
@@ -180,9 +203,9 @@ describe('ArtifactEditor', () => {
         const second = { ...first, id: 'second', title: 'Second', body: 'Second body',
             header: { title: 'Second' }, rawHeader: { title: 'Second' }, headerVersion: 4, bodyVersion: 6 };
         const screen = await renderScreen(<EditArtifactContent id={first.id} artifact={first} />);
-        await act(async () => { screen.changeTextByTestId('artifact-editor:body', 'First draft'); });
+        await act(async () => { screen.changeTextByTestId('artifact-editor:body:source', 'First draft'); });
         await screen.update(<EditArtifactContent id={second.id} artifact={second} />);
-        expect(screen.findByTestId('artifact-editor:body')?.props.value).toBe('Second body');
+        expect(screen.findByTestId('artifact-editor:body:source')?.props.value).toBe('Second body');
         expect(screen.findByTestId('artifact-editor:title')?.props.value).toBe('Second');
         await screen.unmount();
     });
@@ -193,6 +216,7 @@ describe('ArtifactEditor', () => {
             header: { kind: 'artifact.legacy', title: 'archive.zip' }, rawHeader: { kind: 'artifact.legacy', title: 'archive.zip' },
             body: { blobId: 'a668646c-dc5f-464d-9e49-285c03698cc9', mime: 'application/zip', sizeBytes: 0, sha256: '0'.repeat(64) },
             headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, access: 'owner', storageMode: 'plain' };
+        const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={artifact} mode="edit" />);
         expect(screen.findByTestId('artifact-editor:save')).toBeNull();
         expect(screen.findByTestId('artifact:download')).not.toBeNull();

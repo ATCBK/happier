@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { HappierProvenanceChip } from '@happier-dev/plugin-ui/presentation';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
@@ -43,19 +43,12 @@ export const ArtifactProvenanceLabel = React.memo(function ArtifactProvenanceLab
 function SourcedProvenance(props: Readonly<{ provenance: Provenance; presentation: 'line' | 'chip'; testID?: string }>) {
     const names = useProvenanceNames(props.provenance);
     const router = useRouter();
-    const content = <ProvenanceText icon="chat-circle" session={names.session} machine={names.machine} presentation={props.presentation} chevron={props.presentation === 'chip'} testID={props.testID} />;
-    if (props.presentation !== 'chip') return content;
-    return (
-        <HappierPressable
-            accessibilityRole="link"
-            accessibilityLabel={t('artifacts.browser.provenance.openSession', { session: names.session })}
-            onPress={() => router.push(buildScopedSessionRouteHref({ sessionId: props.provenance.sessionId }) as never)}
-            style={stylesheet.chipPress}
-            testID={props.testID ? `${props.testID}:open` : undefined}
-        >
-            {content}
-        </HappierPressable>
-    );
+    return <ProvenanceText icon="chat-circle" session={names.session} machine={names.machine}
+        presentation={props.presentation} chevron={props.presentation === 'chip'} testID={props.testID}
+        {...(props.presentation === 'chip' ? {
+            accessibilityLabel: t('artifacts.browser.provenance.openSession', { session: names.session }),
+            onPress: () => router.push(buildScopedSessionRouteHref({ sessionId: props.provenance.sessionId }) as never),
+        } : {})} />;
 }
 
 function ProvenanceText(props: Readonly<{
@@ -65,14 +58,28 @@ function ProvenanceText(props: Readonly<{
     presentation: 'line' | 'chip';
     chevron?: boolean;
     testID?: string;
+    accessibilityLabel?: string;
+    onPress?: () => void;
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const chip = props.presentation === 'chip';
+    if (chip) return <HappierProvenanceChip testID={props.onPress && props.testID ? `${props.testID}:open` : props.testID}
+        label={[props.session, props.machine].filter(Boolean).join(' · ')}
+        accessibilityLabel={props.accessibilityLabel} onPress={props.onPress} style={styles.chipPress}
+        colors={{ foreground: theme.colors.text.primary, background: theme.colors.surface.elevated,
+            focus: theme.colors.border.focus }}
+        badgeStyle={[styles.chip, { paddingVertical: 0 }]}
+        leading={<Icon name={props.icon} size={13} color={theme.colors.text.tertiary} />}
+        trailing={props.chevron ? <Icon name="caret-right" size={11} color={theme.colors.text.tertiary} /> : undefined}
+        labelContent={<View style={styles.row} testID={props.onPress ? props.testID : undefined}>
+            <Text numberOfLines={1} style={[styles.session, styles.chipText]}>{props.session}</Text>
+            {props.machine ? <Text numberOfLines={1} style={styles.machine}>{`· ${props.machine}`}</Text> : null}
+        </View>} />;
     return (
-        <View style={[styles.row, chip ? styles.chip : null]} testID={props.testID}>
-            <Icon name={props.icon} size={chip ? 13 : 12} color={theme.colors.text.tertiary} />
-            <Text numberOfLines={1} style={[styles.session, chip ? styles.chipText : null]}>{props.session}</Text>
+        <View style={styles.row} testID={props.testID}>
+            <Icon name={props.icon} size={12} color={theme.colors.text.tertiary} />
+            <Text numberOfLines={1} style={styles.session}>{props.session}</Text>
             {props.machine ? <Text numberOfLines={1} style={styles.machine}>{`· ${props.machine}`}</Text> : null}
             {props.chevron ? <Icon name="caret-right" size={11} color={theme.colors.text.tertiary} /> : null}
         </View>

@@ -1,15 +1,21 @@
 import * as React from 'react';
+import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierArtifactPreviewCard, type HappierArtifactPreviewCardHost } from '@happier-dev/plugin-ui/presentation';
 
 import { Icon } from '@/components/ui/icons/Icon';
+import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { describeBoardSources } from '@/components/boards/model/boardSourcePresentation';
 import { ARTIFACT_KIND_ICONS } from './artifactKindPresentation';
 import type { ArtifactBrowserKind, ArtifactPreview } from './artifactBrowserModel';
+
+/** The band crops long content; its last lines fade into the band instead of ending mid-glyph (lab A1). */
+const PREVIEW_FADE = Platform.OS === 'web' ? resolveVerticalScrollEdgeMaskStyle({ top: false, bottom: true, left: false, right: false }, { fadeSize: 32 }) : null;
+const previewFrameStyle = { flex: 1, ...PREVIEW_FADE };
 
 const renderText: HappierArtifactPreviewCardHost['renderText'] = ({ text, style, numberOfLines, typography }) => <Text numberOfLines={numberOfLines}
     useDefaultTypography={typography !== 'mono'}
@@ -38,9 +44,11 @@ export const ArtifactCardPreview = React.memo(function ArtifactCardPreview(props
     const host = React.useMemo<HappierArtifactPreviewCardHost>(() => ({ renderText,
         renderIcon: ({ name, size, color }) => <Icon name={name === 'fallback' ? fallbackIcon : name} size={size} color={color} />,
     }), [fallbackIcon]);
-    return <HappierArtifactPreviewCard preview={props.preview} testID={props.testID}
-        colors={colors}
-        htmlLabel={t('artifacts.browser.kindOne.document')}
-        fileDetail={props.preview.kind === 'file' ? `${props.preview.mime} · ${formatByteSize(props.preview.sizeBytes)}` : undefined}
-        boardLabels={boardLabels} host={host} />;
+    return <View style={previewFrameStyle}>
+        <HappierArtifactPreviewCard preview={props.preview} testID={props.testID}
+            colors={colors}
+            htmlLabel={t('artifacts.browser.kindOne.document')}
+            fileDetail={props.preview.kind === 'file' ? `${props.preview.mime} · ${formatHappierDataBytes(props.preview.sizeBytes, { kind: 'storage' })}` : undefined}
+            boardLabels={boardLabels} host={host} />
+    </View>;
 });

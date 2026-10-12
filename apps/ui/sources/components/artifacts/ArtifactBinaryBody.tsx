@@ -11,7 +11,7 @@ import { Modal } from '@/modal';
 import { createNativeCacheFileSink, shareNativeCacheFile } from '@/sync/runtime/files/nativeCacheFileSink';
 import { downloadWebFile } from '@/sync/runtime/files/downloadWebFile';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 type Preview = Readonly<{ key: string }> & (
     | Readonly<{ phase: 'loading' | 'failed' }>
@@ -107,7 +107,7 @@ export function ArtifactBinaryBody(props: Readonly<{ artifactId: string; name: s
     const card = <View style={{ gap: 8 }} testID="artifact:fileCard">
         <Icon name={reference.mime.startsWith('image/') ? 'image' : 'file'} size={24} color={theme.colors.text.secondary} />
         <Text>{props.name}</Text>
-        <Text style={{ color: theme.colors.text.secondary }}>{`${reference.mime} · ${formatByteSize(reference.sizeBytes)}`}</Text>
+        <Text style={{ color: theme.colors.text.secondary }}>{`${reference.mime} · ${formatHappierDataBytes(reference.sizeBytes, { kind: 'storage' })}`}</Text>
     </View>;
     return <View style={{ gap: 16 }} testID="artifact:binaryBody">
         {ready ? <FileUriPreview uri={ready.uri} mime={reference.mime} title={props.name} fallback={card}

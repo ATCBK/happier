@@ -23,6 +23,7 @@ import { profileRoute } from '@/components/settings/profiles/profileCollectionRo
 import { roleRoute } from '@/components/settings/roles/roleCollectionRoutes';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createWorkflowDefinitionRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { createInboxItemRoute, readInboxApprovalServerId } from '@/components/inbox/inboxItemFocus';
 
 /**
  * The Artifacts browser's one reading of an Account Artifact: which kind it is, where it came from,
@@ -37,7 +38,7 @@ export const ARTIFACT_BROWSER_KINDS: readonly ArtifactBrowserKind[] = ['document
 
 const USE_TARGET_TO_BROWSER_KIND = {
     open: 'document', prompt_doc: 'prompt', prompt_bundle: 'prompt', memory: 'memory', board: 'board',
-    workflow: 'workflow', role: 'role', launch_profile: 'launchProfile',
+    workflow: 'workflow', role: 'role', launch_profile: 'launchProfile', approval: 'document',
 } as const satisfies Readonly<Record<ReturnType<typeof getArtifactUseTargetV1>['kind'], ArtifactBrowserKind>>;
 
 /** The browser kind, or `null` for a row the browser does not list. Locked rows stay listed as documents. */
@@ -56,8 +57,13 @@ export function classifyArtifactBrowserKind(artifact: ArtifactBrowserArtifact): 
 
 /** Where opening an artifact goes: its kind's own page, else the Artifacts view. */
 export function resolveArtifactOpenRoute(artifact: Pick<DecryptedArtifact, 'id' | 'header' | 'rawHeader'>): string {
-    const target = getArtifactUseTargetV1({ artifactId: artifact.id, header: artifact.rawHeader ?? artifact.header ?? {}, body: null });
+    const header = artifact.rawHeader ?? artifact.header ?? {};
+    const target = getArtifactUseTargetV1({ artifactId: artifact.id, header, body: null });
     switch (target.kind) {
+        case 'approval': {
+            const route = createInboxItemRoute({ kind: 'approval', id: artifact.id, serverId: readInboxApprovalServerId(header) });
+            return `${route.pathname}?${new URLSearchParams(route.params)}`;
+        }
         case 'prompt_doc': return promptCollectionItemHref('doc', artifact.id);
         case 'prompt_bundle': return promptCollectionItemHref('bundle', artifact.id);
         case 'memory': return memoryDocumentHref({ artifactId: artifact.id });
@@ -137,6 +143,7 @@ function readSkillPreviewText(content: unknown): string | undefined {
 
 export function readArtifactPreview(artifact: Pick<DecryptedArtifact, 'id' | 'header' | 'rawHeader' | 'title' | 'body' | 'provenance'>): ArtifactPreview {
     const header = artifact.rawHeader ?? artifact.header;
+    if (getArtifactUseTargetV1({ artifactId: artifact.id, header: header ?? {}, body: null }).kind === 'approval') return { kind: 'none' };
     if (header?.kind === 'prompt_doc.v2' || header?.kind === 'role.v1') {
         const stored = artifact.body === undefined ? header.excerpt : artifact.body;
         if (typeof stored !== 'string') return { kind: 'none' };
@@ -193,6 +200,8 @@ export function readArtifactPreview(artifact: Pick<DecryptedArtifact, 'id' | 'he
         }
         return labels ? { kind: 'workflow', steps: labels.map((title) => ({ title })) } : { kind: 'none' };
     }
+    // A launch profile is settings, not prose: its card shows the kind's mark, never the stored envelope.
+    if (header?.kind === 'launch-profile.v1') return { kind: 'none' };
     if (isArtifactHtmlHeaderV1(artifact.rawHeader ?? artifact.header)) return { kind: 'html', name: artifact.title ?? '' };
     if (artifact.body !== null && typeof artifact.body === 'object') {
         const reference = artifact.body;

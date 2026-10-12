@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { isArtifactHtmlHeaderV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { Redirect, useRouter, type Href } from '@/components/appShell/workspace/destinationRoute';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -24,8 +24,10 @@ import {
     classifyArtifactBrowserKind,
     readArtifactCodeLanguage,
     readArtifactProvenance,
+    opensInArtifactView,
+    resolveArtifactOpenRoute,
 } from './artifactBrowserModel';
-import { ARTIFACT_KIND_ICONS, artifactKindLabel } from './artifactKindPresentation';
+import { artifactKindFact } from './artifactKindPresentation';
 import { ArtifactProvenanceLabel } from './ArtifactProvenance';
 import { useArtifactOperations } from './useArtifactOperations';
 import { useArtifactBody } from './useArtifactBody';
@@ -52,6 +54,15 @@ export function ArtifactView(props: Readonly<{
     presentation: 'pane' | 'page';
     onDeleted?: () => void;
 }>): React.ReactElement {
+    // Retained browser selections can bypass the click-time destination check.
+    // Delegate before mounting any Document reader, including for a cached body.
+    if (props.artifact && !opensInArtifactView(props.artifact)) {
+        return <Redirect href={resolveArtifactOpenRoute(props.artifact) as Href} />;
+    }
+    return <ArtifactDocumentView {...props} />;
+}
+
+function ArtifactDocumentView(props: React.ComponentProps<typeof ArtifactView>): React.ReactElement {
     const { artifact } = props;
     const body = useArtifactBody(props.artifactId, artifact);
     const styles = stylesheet;
@@ -106,8 +117,11 @@ export function ArtifactView(props: Readonly<{
     }
     return (
         <ItemList testID="artifact:page">
-            <ArtifactPageHeader artifact={artifact} onDeleted={props.onDeleted} />
+            <ArtifactPageHeader artifact={artifact} />
             <ItemGroup surface="none">
+                {/* The title keeps the whole column; the artifact's operations sit under its facts, as in the pane. */}
+                <ArtifactActions artifact={artifact} presentation="page" onDeleted={props.onDeleted} />
+                <View style={styles.paneRule} />
                 {content}
             </ItemGroup>
         </ItemList>
@@ -128,10 +142,9 @@ function ArtifactBody(props: Readonly<{ artifact: DecryptedArtifact; prepared: A
 }
 
 function readFacts(artifact: DecryptedArtifact): readonly PageHeaderMetaFact[] {
-    const kind = classifyArtifactBrowserKind(artifact) ?? 'document';
-    const language = readArtifactCodeLanguage(artifact);
+    const kind = artifactKindFact(classifyArtifactBrowserKind(artifact) ?? 'document', readArtifactCodeLanguage(artifact));
     return [
-        { key: 'kind', text: language ?? artifactKindLabel(kind), icon: ARTIFACT_KIND_ICONS[kind] },
+        { key: 'kind', text: kind.label, icon: kind.icon },
         { key: 'edited', text: t('artifacts.browser.facts.edited', { age: formatRelativeTimeShort(artifact.updatedAt, Date.now()) }) },
     ];
 }
@@ -153,7 +166,7 @@ function ArtifactFacts(props: Readonly<{ artifact: DecryptedArtifact }>) {
     );
 }
 
-function ArtifactPageHeader(props: Readonly<{ artifact: DecryptedArtifact; onDeleted?: () => void }>) {
+function ArtifactPageHeader(props: Readonly<{ artifact: DecryptedArtifact }>) {
     return (
         <PageHeader
             testID="artifact:header"
@@ -170,8 +183,6 @@ function ArtifactPageHeader(props: Readonly<{ artifact: DecryptedArtifact; onDel
                     />
                 </View>
             )}
-            actions={<ArtifactActions artifact={props.artifact} presentation="page" onDeleted={props.onDeleted} />}
-            actionsPlacement="page"
         />
     );
 }

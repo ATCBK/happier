@@ -27,7 +27,7 @@ import {
   type DropdownMenuItem,
 } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
-import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
+import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
@@ -49,7 +49,7 @@ import {
   useEntityDragDomBinding,
   useEntityDropDomBinding,
 } from '@/components/ui/treeDragDrop/useEntityDragDomBinding';
-import { Modal, type CustomModalInjectedProps } from '@/modal';
+import { Modal } from '@/modal';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { randomUUID } from '@/platform/randomUUID';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -344,22 +344,6 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
   const finishEdit = React.useCallback((finished: FolderEdit) => {
     setEdit(current => current === finished ? null : current);
   }, []);
-  React.useEffect(() => {
-    if (currentEdit?.kind !== 'create') return;
-    const inFlight = { current: false };
-    const id = Modal.show({
-      component: FolderCreateModal,
-      props: { edit: currentEdit, testID: props.testID, onFinish: finishEdit, onCreated: onFolderCreated, inFlight },
-      chrome: {
-        kind: 'card', material: 'solid', title: t('artifacts.browser.folders.newFolder'),
-        subtitle: t('artifacts.browser.folders.nameHelp'),
-        dimensions: { size: 'dialog' }, phonePresentation: 'card', testID: `${props.testID}:edit:modal`,
-      },
-      onDismissRequest: () => !inFlight.current,
-      onRequestClose: () => finishEdit(currentEdit),
-    });
-    return () => Modal.hide(id);
-  }, [currentEdit, finishEdit, onFolderCreated, props.testID]);
 
   const orderedFolders = React.useMemo(() => {
     const children = new Map<string | null, PromptFolderEntryV1[]>();
@@ -555,8 +539,8 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
     [tree],
   );
   const items = React.useMemo(
-    (): TreeItem[] =>
-      tree.map((node) => ({
+    (): TreeItem[] => {
+      const rows: TreeItem[] = tree.map((node) => ({
         key: node.key,
         parentKey: node.parentKey,
         depth: node.depth,
@@ -567,10 +551,24 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
             ? t('settingsAccount.restoreRequiredTitle')
             : node.title || t('artifacts.untitled'),
         mark: <NodeMark node={node} />,
-      })),
-    [tree],
+      }));
+      if (currentEdit?.kind === 'create') {
+        const parentKey = currentEdit.parentId === null ? null : `folder:${currentEdit.parentId}`;
+        const parentIndex = rows.findIndex(row => row.key === parentKey);
+        rows.splice(parentIndex + 1, 0, {
+          key: `draft:folder:${currentEdit.id}`,
+          parentKey,
+          depth: parentIndex < 0 ? 0 : rows[parentIndex]!.depth + 1,
+          kind: 'leaf',
+          title: t('artifacts.browser.folders.newFolder'),
+        });
+      }
+      return rows;
+    },
+    [currentEdit, tree],
   );
-  const editKey = currentEdit?.kind === 'rename' ? `folder:${currentEdit.folder.id}` : null;
+  const editKey = currentEdit?.kind === 'rename' ? `folder:${currentEdit.folder.id}`
+    : currentEdit?.kind === 'create' ? `draft:folder:${currentEdit.id}` : null;
   const renderInlineEdit = React.useCallback(
     (item: TreeItem) => currentEdit && item.key === editKey ? (
       <FolderInlineEditor
@@ -708,17 +706,6 @@ export const ArtifactFolderTree = React.forwardRef(function ArtifactFolderTree(
   );
 });
 
-function FolderCreateModal(props: CustomModalInjectedProps & Readonly<{
-  edit: FolderEdit;
-  testID: string;
-  onFinish: (edit: FolderEdit) => void;
-  onCreated: (edit: FolderEdit, folderId: string) => void;
-  inFlight: { current: boolean };
-}>) {
-  const commands = useArtifactFolderCommands();
-  return <FolderInlineEditor {...props} commands={commands} canWrite={commands.canWrite} />;
-}
-
 /** Only the editing row subscribes to draft keystrokes; the draft survives a hidden/collapsed row. */
 function FolderInlineEditor(props: Readonly<{
   edit: FolderEdit;
@@ -727,15 +714,13 @@ function FolderInlineEditor(props: Readonly<{
   testID: string;
   onFinish: (edit: FolderEdit) => void;
   onCreated: (edit: FolderEdit, folderId: string) => void;
-  inFlight?: { current: boolean };
 }>) {
   const name = props.edit.titles.useTitle();
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [approval, setApproval] = React.useState<ActionApprovalRequestCreatedResult | null>(null);
   const [errorCode, setErrorCode] = React.useState<string | null>(null);
-  const localInFlight = React.useRef(false);
-  const inFlight = props.inFlight ?? localInFlight;
+  const inFlight = React.useRef(false);
   const scope = useAccountSettingsScope();
   const router = useRouter();
   const sameScope = props.edit.scopeKey === JSON.stringify([scope?.serverId, scope?.accountId]);
@@ -978,7 +963,8 @@ function RowTrailing(props: Readonly<{ node: Node; title: string }>) {
       ) : null}
       <Text style={[styles.age, styles.ageColumn]} numberOfLines={1}>
         {node.kind === 'leaf'
-          ? formatRelativeTimeShort(node.row.artifact.updatedAt, Date.now())
+          // The same Edited column as the List view of this library: the bare tabular age (lab c-art T).
+          ? formatShortRelativeTime(node.row.artifact.updatedAt)
           : count > 0
             ? String(count)
             : ''}

@@ -15,12 +15,12 @@ import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { ToolbarSelect } from '@/components/ui/forms/ToolbarSelect';
 import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
-import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
-import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
+import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
 import { Text } from '@/components/ui/text/Text';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
@@ -28,7 +28,7 @@ import { useArtifacts, useArtifactsLoaded, useLocalSettingMutable } from '@/sync
 import { sync } from '@/sync/sync';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -37,8 +37,10 @@ import {
     ARTIFACT_BROWSER_KINDS,
     artifactViewRoute,
     countArtifactBrowserKinds,
+    countArtifactBrowserSavedSince,
     opensInArtifactView,
     projectArtifactBrowserRows,
+    readArtifactCodeLanguage,
     readArtifactPreview,
     readArtifactProvenance,
     resolveArtifactOpenRoute,
@@ -48,8 +50,9 @@ import {
 } from './artifactBrowserModel';
 import { ArtifactCardPreview } from './ArtifactCardPreview';
 import { ArtifactFolderTree, useArtifactFolderCommands, type ArtifactFolderTreeHandle } from './ArtifactFolderTree';
-import { ARTIFACT_KIND_ICONS, artifactKindFilterLabel, artifactKindLabel } from './artifactKindPresentation';
+import { ARTIFACT_KIND_ICONS, artifactKindFact, artifactKindFilterLabel } from './artifactKindPresentation';
 import { ArtifactProvenanceLabel } from './ArtifactProvenance';
+import { ArtifactQuotaNotice } from './ArtifactQuotaNotice';
 import { ArtifactView } from './ArtifactView';
 import { ArtifactsEmptyMark } from './ArtifactsEmptyMark';
 import { useArtifactOperations } from './useArtifactOperations';
@@ -76,11 +79,11 @@ function rowTitle(row: ArtifactBrowserRow): string {
     return row.artifact.title || t('artifacts.untitled');
 }
 
-/** Artifacts saved since local midnight: the page's present-tense line. */
+/** Listed artifacts saved since local midnight: the page's present-tense line. */
 function countSavedToday(artifacts: readonly DecryptedArtifact[], nowMs: number): number {
     const midnight = new Date(nowMs);
     midnight.setHours(0, 0, 0, 0);
-    return artifacts.reduce((count, artifact) => count + (artifact.createdAt >= midnight.getTime() ? 1 : 0), 0);
+    return countArtifactBrowserSavedSince(artifacts, midnight.getTime());
 }
 
 /**
@@ -164,7 +167,10 @@ export function ArtifactsBrowser(props: Readonly<{
                 total={total}
                 savedToday={savedToday}
                 usage={usage}
-                showPresent={!firstVisit}
+                // A count is a fact about a list that has been read: never "0 artifacts" over the skeleton. The
+                // unread list keeps the line's space, so the toolbar and grid do not move when it arrives.
+                showPresent={total > 0}
+                reservePresent={!loaded && !loadFailed}
                 onNewDocument={newDocument}
                 toolbar={firstVisit ? null : (
                     <BrowserToolbar
@@ -218,7 +224,7 @@ export function ArtifactsBrowser(props: Readonly<{
     const main = presentation === 'folders' && total > 0 ? (
         <CoreCollectionScope>
             <ItemList pageColumn="wide">
-                <BrowserPageColumn>
+                <PageContentColumn>
                     {header}
                     <ArtifactFolderTree
                         ref={folderTree}
@@ -230,7 +236,7 @@ export function ArtifactsBrowser(props: Readonly<{
                         onOpenArtifact={openArtifact}
                         onArtifactDeleted={rowCommands.deleted}
                     />
-                </BrowserPageColumn>
+                </PageContentColumn>
             </ItemList>
         </CoreCollectionScope>
     ) : (
@@ -306,19 +312,18 @@ function useArtifactRowActions(row: ArtifactBrowserRow): CollectionRowActions {
     };
 }
 
-function readRowKey(row: ArtifactBrowserRow): string {
-    return row.key;
+function rowKindFact(row: ArtifactBrowserRow) {
+    return artifactKindFact(row.kind, readArtifactCodeLanguage(row.artifact));
 }
 
-function BrowserPageColumn(props: Readonly<{ children?: React.ReactNode }>) {
-    const maxWidthStyle = useLayoutMaxWidthStyle();
-    return <View style={[stylesheet.pageColumn, maxWidthStyle]}>{props.children}</View>;
+function readRowKey(row: ArtifactBrowserRow): string {
+    return row.key;
 }
 
 function renderBrowserPageScroller(children: React.ReactNode): React.ReactNode {
     return (
         <ItemList pageColumn="wide">
-            <BrowserPageColumn>{children}</BrowserPageColumn>
+            <PageContentColumn>{children}</PageContentColumn>
         </ItemList>
     );
 }
@@ -329,6 +334,7 @@ function BrowserHeader(props: Readonly<{
     savedToday: number;
     usage: ArtifactStorageUsageV1 | null;
     showPresent: boolean;
+    reservePresent: boolean;
     onNewDocument: () => void;
     toolbar: React.ReactNode;
 }>) {
@@ -346,6 +352,10 @@ function BrowserHeader(props: Readonly<{
             ) : null}
             {props.usage !== null && limit !== null ? <StorageMeter usedBytes={props.usage.usedBytes} limitBytes={limit} /> : null}
         </View>
+    ) : props.reservePresent ? (
+        <View style={[styles.present, phone ? styles.phonePresent : null]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+            <Text style={styles.presentText}>{' '}</Text>
+        </View>
     ) : undefined;
     return (
         <View>
@@ -353,7 +363,7 @@ function BrowserHeader(props: Readonly<{
                 testID="artifacts:header"
                 title={t('artifacts.title')}
                 alwaysShowTitle
-                description={phone && props.showPresent ? undefined : t('artifacts.browser.description')}
+                description={phone && (props.showPresent || props.reservePresent) ? undefined : t('artifacts.browser.description')}
                 details={phone ? undefined : present}
                 actions={(
                     <RoundButton
@@ -365,10 +375,13 @@ function BrowserHeader(props: Readonly<{
                     />
                 )}
             />
-            {props.usage !== null && limit !== null && props.usage.usedBytes >= limit ? (
-                <QuotaBanner usedBytes={props.usage.usedBytes} limitBytes={limit} />
-            ) : null}
             {props.toolbar}
+            {/* Under the toolbar, on the grid's edges (lab A8): it blocks saving, not finding. */}
+            {props.usage !== null && limit !== null && props.usage.usedBytes >= limit ? (
+                <View style={[styles.banner, props.toolbar ? null : styles.bannerWithoutToolbar]}>
+                    <ArtifactQuotaNotice testID="artifacts:quota" placement="inline" quota={{ budget: 'account', usedBytes: props.usage.usedBytes, limitBytes: limit }} />
+                </View>
+            ) : null}
             {phone ? present : null}
         </View>
     );
@@ -379,8 +392,8 @@ function StorageMeter(props: Readonly<{ usedBytes: number; limitBytes: number }>
     const styles = stylesheet;
     const ratio = props.limitBytes > 0 ? Math.min(1, props.usedBytes / props.limitBytes) : 1;
     const full = props.usedBytes >= props.limitBytes;
-    const used = formatByteSize(props.usedBytes);
-    const limit = formatByteSize(props.limitBytes);
+    const used = formatHappierDataBytes(props.usedBytes, { kind: 'storage' });
+    const limit = formatHappierDataBytes(props.limitBytes, { kind: 'storage' });
     return (
         <View
             style={styles.meter}
@@ -399,23 +412,6 @@ function StorageMeter(props: Readonly<{ usedBytes: number; limitBytes: number }>
     );
 }
 
-/** `quota_exceeded {budget: 'account'}` before it happens: one banner naming the budget and the recovery. */
-function QuotaBanner(props: Readonly<{ usedBytes: number; limitBytes: number }>) {
-    const { theme } = useUnistyles();
-    const styles = stylesheet;
-    return (
-        <View style={styles.banner} testID="artifacts:quota" accessibilityRole="alert">
-            <Icon name="warning" size={18} color={theme.colors.state.warning.foreground} />
-            <View style={styles.bannerText}>
-                <Text style={styles.bannerTitle}>{t('artifacts.browser.quota.accountTitle')}</Text>
-                <Text style={styles.bannerBody}>
-                    {t('artifacts.browser.quota.accountBody', { used: formatByteSize(props.usedBytes), limit: formatByteSize(props.limitBytes) })}
-                </Text>
-            </View>
-        </View>
-    );
-}
-
 function BrowserToolbar(props: Readonly<{
     query: string;
     onQueryChange: (query: string) => void;
@@ -430,6 +426,9 @@ function BrowserToolbar(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const phone = useDeviceType() === 'phone';
+    // A phone's Folders view is one compact row under the search (lab `c-art Tp`): kind, then New folder
+    // as its glyph and the view switch. The order choice is made in List or Grid and still orders items here.
+    const compactFolders = phone && props.presentation === 'folders';
     const styles = stylesheet;
     const folders = useArtifactFolderCommands();
     // Only kinds that hold something are offered; a kind that empties keeps its choice until changed.
@@ -448,15 +447,31 @@ function BrowserToolbar(props: Readonly<{
         { id: 'list' as const, label: t('artifacts.browser.view.list'), icon: <Icon name="list" size={16} color={theme.colors.text.secondary} /> },
         { id: 'folders' as const, label: t('artifacts.browser.view.folders'), icon: <Icon name="folder" size={16} color={theme.colors.text.secondary} /> },
     ], [theme.colors.text.secondary]);
+    const viewSwitch = (
+        <SegmentedTabBar
+            tabs={viewTabs}
+            activeTabId={props.presentation}
+            onSelectTab={props.onPresentationChange}
+            testIDPrefix="artifacts:view"
+            accessibilityLabel={t('artifacts.browser.view.label')}
+            segmentSizing="content"
+            targetSize="platform"
+        />
+    );
+    const search = (
+        <CompactSearchField
+            testID="artifacts:search"
+            value={props.query}
+            onChangeText={props.onQueryChange}
+            placeholder={t('artifacts.browser.searchPlaceholder')}
+            style={[styles.search, phone ? styles.phoneSearch : null]}
+        />
+    );
     return (
         <View style={styles.toolbar} testID="artifacts:toolbar">
-            <CompactSearchField
-                testID="artifacts:search"
-                value={props.query}
-                onChangeText={props.onQueryChange}
-                placeholder={t('artifacts.browser.searchPlaceholder')}
-                style={[styles.search, phone ? styles.phoneSearch : null]}
-            />
+            {/* A phone keeps the view switch beside the search, so the filters below stay one calm row
+                instead of the switch taking a row of its own (the platform's touch targets do not fit three). */}
+            {phone ? <View style={styles.phoneSearchRow}>{search}{viewSwitch}</View> : search}
             <View style={styles.toolbarChoices}>
                 <ToolbarSelect
                     testID="artifacts:kind"
@@ -466,16 +481,28 @@ function BrowserToolbar(props: Readonly<{
                     compact={phone}
                     onSelect={(id) => props.onKindChange(id === 'all' ? 'all' : ARTIFACT_BROWSER_KINDS.find((candidate) => candidate === id) ?? 'all')}
                 />
-                <ToolbarSelect
-                    testID="artifacts:sort"
-                    label={t('artifacts.browser.sort.label')}
-                    items={sortItems}
-                    selectedId={props.sort}
-                    compact={phone}
-                    onSelect={(id) => props.onSortChange(SORTS.find((candidate) => candidate === id) ?? 'updated_desc')}
-                />
+                {compactFolders ? null : (
+                    <ToolbarSelect
+                        testID="artifacts:sort"
+                        label={t('artifacts.browser.sort.label')}
+                        items={sortItems}
+                        selectedId={props.sort}
+                        compact={phone}
+                        onSelect={(id) => props.onSortChange(SORTS.find((candidate) => candidate === id) ?? 'updated_desc')}
+                    />
+                )}
                 <View style={styles.grow} />
-                {props.presentation === 'folders' ? (
+                {compactFolders ? (
+                    <IconButton
+                        testID="artifacts:folders:new"
+                        iconName="folder-plus"
+                        variant="plain"
+                        accessibilityLabel={t('artifacts.browser.folders.newFolder')}
+                        tooltip={t('artifacts.browser.folders.newFolder')}
+                        disabled={!folders.canWrite}
+                        onPress={props.onNewFolder}
+                    />
+                ) : props.presentation === 'folders' ? (
                     <ToolbarButton
                         testID="artifacts:folders:new"
                         label={t('artifacts.browser.folders.newFolder')}
@@ -484,16 +511,7 @@ function BrowserToolbar(props: Readonly<{
                         onPress={props.onNewFolder}
                     />
                 ) : null}
-                <SegmentedTabBar
-                    tabs={viewTabs}
-                    activeTabId={props.presentation}
-                    onSelectTab={props.onPresentationChange}
-                    testIDPrefix="artifacts:view"
-                    accessibilityLabel={t('artifacts.browser.view.label')}
-                    segmentSizing="content"
-                    slidingThumb
-                    targetSize="platform"
-                />
+                {phone ? null : viewSwitch}
             </View>
         </View>
     );
@@ -502,8 +520,10 @@ function BrowserToolbar(props: Readonly<{
 /** One anatomy for both presentations: kind mark, title, provenance, kind and age; cards add the preview. */
 function useBrowserAnatomy(presentation: 'grid' | 'list'): CollectionAnatomy<ArtifactBrowserRow> {
     const { theme } = useUnistyles();
+    // A phone's row already shows the kind as its mark (lab A1p): the word under the age would say it twice.
+    const phone = useDeviceType() === 'phone';
     return React.useMemo((): CollectionAnatomy<ArtifactBrowserRow> => ({
-        glyph: (row) => <Icon name={row.artifact.isDecrypted === false ? 'lock' : ARTIFACT_KIND_ICONS[row.kind]} size={18} color={theme.colors.text.secondary} />,
+        glyph: (row) => <Icon name={row.artifact.isDecrypted === false ? 'lock' : rowKindFact(row).icon} size={18} color={theme.colors.text.secondary} />,
         title: (row) => (row.artifact.isDecrypted === false ? t('settingsAccount.restoreRequiredTitle') : rowTitle(row)),
         where: (row) => (
             <ArtifactProvenanceLabel
@@ -513,21 +533,16 @@ function useBrowserAnatomy(presentation: 'grid' | 'list'): CollectionAnatomy<Art
                 testID={`artifacts:row:${row.key}:provenance`}
             />
         ),
-        // A card has no age column, so its footer carries the age after the kind (lab A1).
-        reason: (row) => (
-            <Text style={stylesheet.reason}>
-                {presentation === 'grid'
-                    ? `${artifactKindLabel(row.kind)} · ${formatRelativeTimeShort(row.artifact.updatedAt, Date.now())}`
-                    : artifactKindLabel(row.kind)}
-            </Text>
-        ),
-        age: (row) => formatRelativeTimeShort(row.artifact.updatedAt, Date.now()),
+        // A grid card's footer draws the age in its own right-aligned column (lab A1), so the kind stands alone.
+        ...(phone && presentation === 'list' ? {} : { reason: (row: ArtifactBrowserRow) => <Text style={stylesheet.reason}>{rowKindFact(row).label}</Text> }),
+        // The "Edited" column is a narrow tabular one: the bare age ("45m") fits where "45m ago" was cut off (lab A2).
+        age: (row) => formatShortRelativeTime(row.artifact.updatedAt),
         ...(presentation === 'grid' ? {
             preview: (row: ArtifactBrowserRow) => (
                 <ArtifactCardPreview preview={readArtifactPreview(row.artifact)} kind={row.kind} testID={`artifacts:row:${row.key}:previewBody`} />
             ),
         } : {}),
-        accessibilityLabel: (row) => `${rowTitle(row)}, ${artifactKindLabel(row.kind)}`,
+        accessibilityLabel: (row) => `${rowTitle(row)}, ${rowKindFact(row).label}`,
         testID: (row) => `artifacts:row:${row.key}`,
         columnTitles: {
             title: t('artifacts.browser.folders.columnName'),
@@ -535,14 +550,10 @@ function useBrowserAnatomy(presentation: 'grid' | 'list'): CollectionAnatomy<Art
             where: t('artifacts.browser.sourceLabel'),
             age: t('artifacts.browser.folders.columnEdited'),
         },
-    }), [presentation, theme.colors.text.secondary]);
+    }), [phone, presentation, theme.colors.text.secondary]);
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-    pageColumn: {
-        width: '100%',
-        alignSelf: 'center',
-    },
     present: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -584,28 +595,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.state.warning.foreground,
     },
     banner: {
-        flexDirection: 'row',
-        gap: 12,
-        alignItems: 'flex-start',
-        padding: 14,
-        borderRadius: 12,
+        marginHorizontal: PAGE_LIST_METRICS.sheetInsetPx,
+        marginBottom: 14,
+    },
+    bannerWithoutToolbar: {
         marginTop: 16,
-        backgroundColor: theme.colors.state.warning.background,
-    },
-    bannerText: {
-        flex: 1,
-        gap: 2,
-    },
-    bannerTitle: {
-        fontSize: 14,
-        lineHeight: 19,
-        fontWeight: '600',
-        color: theme.colors.text.primary,
-    },
-    bannerBody: {
-        fontSize: 13,
-        lineHeight: 18,
-        color: theme.colors.text.secondary,
     },
     toolbar: {
         flexDirection: 'row',
@@ -625,8 +619,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         maxWidth: 280,
     },
     phoneSearch: {
-        flexBasis: '100%',
+        flexBasis: 0,
         maxWidth: '100%',
+    },
+    phoneSearchRow: {
+        flexBasis: '100%',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
     },
     toolbarChoices: {
         flexGrow: 1,

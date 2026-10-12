@@ -29,6 +29,18 @@ const preview = { url: previewUrl, bundle: artifactHtmlBundleFromBodyV1('<h1>Rep
 const props = { artifactId: 'artifact-1', headerVersion: 1, bodyVersion: 1, body: '<h1>Report</h1>', name: 'Report' };
 
 describe('ArtifactHtmlBody', () => {
+    it('uses the saved Artifact network policy rather than a viewer preference or implicit open default', async () => {
+        setPlatform('web');
+        for (const network of ['open', 'none'] as const) {
+            const screen = await renderScreen(<ArtifactHtmlBody {...props} readPreview={async () => ({ ...preview,
+                bundle: { ...preview.bundle, requestedCapabilities: { network } },
+            })} />);
+            await flushHookEffects();
+            const frame = screen.tree.root.findByType('iframe');
+            expect(frame.props.srcDoc).toContain(network === 'open' ? 'connect-src data: https:;' : 'connect-src data:;');
+            await screen.unmount();
+        }
+    });
     it('loads private opened bytes in the shared opaque bundle frame without a data URL or host bridge', async () => {
         setPlatform('web');
         vi.stubGlobal('window', { location: { origin: 'https://app.example.test' } });

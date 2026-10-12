@@ -20,15 +20,15 @@ import { decryptArtifactWithBody } from '@/sync/engine/artifacts/syncArtifacts';
 import { sync } from '@/sync/sync';
 
 vi.mock('expo-router', async () => {
-    const { createExpoRouterMock } = await import('@/dev/testkit');
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock().module;
 });
 vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit');
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
 vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit');
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
 });
 import { ArtifactView } from './ArtifactView';
@@ -92,6 +92,17 @@ async function setup(kind: 'image' | 'html' | 'file', delayBlob?: Promise<Respon
 }
 
 describe('Artifact composed view reads', () => {
+    it.each(['pane', 'page'] as const)('never mounts cached approval custody as a Document in the %s', async presentation => {
+        const row: DecryptedArtifact = { id: 'approval', title: 'Review request', isDecrypted: true,
+            header: { kind: 'approval_request.v1', title: 'Review request', serverIdentityId: 'home' },
+            body: 'retained request envelope', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+        const screen = await renderScreen(<ArtifactView artifactId={row.id} artifact={row} presentation={presentation} />);
+        // Keep even a failing privacy assertion from dumping the renderer's custody tree.
+        expect(screen.findByTestId('artifact:body') !== null).toBe(false);
+        expect(screen.findByTestId('artifact:actions') !== null).toBe(false);
+        expect(screen.tree.root.findByType('Redirect').props.href).toBe('/inbox?item=approval%3Ahome%3Aapproval');
+        await screen.unmount();
+    });
     it.each([{ kind: 'image', warm: false }, { kind: 'html', warm: false }, { kind: 'image', warm: true }, { kind: 'html', warm: true }] as const)(
         'opens $kind (warm=$warm) through one authenticated head and renders its private preview', async ({ kind, warm }) => {
         const { served } = await setup(kind, undefined, warm);

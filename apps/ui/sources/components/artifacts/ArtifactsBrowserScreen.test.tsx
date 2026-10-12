@@ -229,6 +229,11 @@ describe('Artifacts browser row operations', () => {
 });
 
 describe('Artifacts browser recovery', () => {
+    it('names a code document by its language, as its own page does, rather than as a plain document', async () => {
+        const screen = await renderRows([artifactFixture('code-1', { title: 'relayHandshake.ts', header: { title: 'relayHandshake.ts' }, body: 'export const retries = 5;' })]);
+        expect(screen.findAll(node => node.props.accessibilityLabel === 'relayHandshake.ts, TypeScript').length).toBeGreaterThan(0);
+    });
+
     it('shows wide list headings for the actual anatomy and retains row operations when narrowed', async () => {
         const screen = await renderRows([artifactFixture('document')]);
         await screen.pressByTestIdAsync('artifacts:view:list');
@@ -248,6 +253,19 @@ describe('Artifacts browser recovery', () => {
         expect(screen.findByTestId('artifacts:search')).not.toBeNull();
         expect(screen.findByTestId('artifacts:kind')).not.toBeNull();
         expect(screen.findByTestId('artifacts:present')).not.toBeNull();
+    });
+
+    it('draws the phone Folders toolbar as one compact row: kind · icon-only New folder · view (lab c-art Tp)', async () => {
+        vi.spyOn(ReactNative, 'useWindowDimensions').mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+        const screen = await renderRows([artifactFixture('document')]);
+        await screen.pressByTestIdAsync('artifacts:view:folders');
+        expect(screen.findByTestId('artifacts:kind')).not.toBeNull();
+        expect(screen.findByTestId('artifacts:sort')).toBeNull();
+        const newFolder = screen.findByTestId('artifacts:folders:new');
+        expect(newFolder).not.toBeNull();
+        // The glyph alone, named for assistive technology; no visible label beside it.
+        expect(newFolder?.props.accessibilityLabel).toBe('artifacts.browser.folders.newFolder');
+        expect(newFolder?.props.title).toBeUndefined();
     });
 
     it('keeps the page identity visible beneath phone navigation chrome', async () => {

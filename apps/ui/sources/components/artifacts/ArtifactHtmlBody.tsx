@@ -4,6 +4,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { HappierHtmlSandboxFrame } from '@happier-dev/plugin-ui/presentation';
 
 import type { ArtifactBodyV1 } from '@happier-dev/protocol';
+import { normalizeUiSurfaceCapabilityRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
 import type { ArtifactHtmlPreview } from '@/sync/domains/artifacts/artifactTypes';
 import { HostedFrameHost } from '@/components/ui/surfaces/framed/HostedFrameHost';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -49,6 +50,8 @@ export function ArtifactHtmlBody(props: Readonly<{
     }, [key, props.artifactId, props.body, props.readPreview, props.preview, attempt]);
 
     const current = preview.key === key && preview.body === props.body ? preview : null;
+    const requestedCapabilities = current?.phase === 'ready' ? current.bundle.requestedCapabilities : undefined;
+    const networkPolicy = React.useMemo(() => normalizeUiSurfaceCapabilityRequestV1(requestedCapabilities), [requestedCapabilities]);
     const fail = () => setPreview(value => value === current ? { key, body: props.body, phase: 'failed' } : value);
     return <HappierHtmlSandboxFrame testID="artifact:htmlBody" title={props.name}
         backgroundColor={theme.colors.surface.elevated}
@@ -70,6 +73,8 @@ export function ArtifactHtmlBody(props: Readonly<{
                 key={key}
                 title={title}
                 bundle={current.bundle}
+                network={networkPolicy?.network === 'origins' ? undefined : networkPolicy?.network ?? 'none'}
+                networkOrigins={networkPolicy?.networkOrigins}
                 testID="artifact:htmlPreview"
                 sandbox={{ scripts: true, sameOrigin: false, popups: false, topNavigation: false, mixedContent: false }}
                 security={{

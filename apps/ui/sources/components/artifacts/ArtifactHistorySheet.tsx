@@ -6,9 +6,13 @@ import { HappierArtifactRevisionList, useHappierTextPresentation, type HappierAr
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX } from '@/components/ui/lists/itemGroupSpacing';
+import { ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX } from '@/components/ui/lists/itemDensityMetrics';
+import { useItemDensityInputs } from '@/components/ui/lists/useResolvedItemDensity';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
@@ -18,7 +22,7 @@ import type { CustomModalInjectedProps } from '@/modal/types';
 import { useActiveServerAccountScope, useArtifact, useLocalSetting } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 import { useArtifactActionsClient, type ArtifactActionsClient } from './artifactActionsClient';
 import type { ArtifactBodyV1, ArtifactRevisionProvenanceV1 } from '@happier-dev/protocol';
@@ -26,11 +30,13 @@ import { ArtifactBinaryBody } from './ArtifactBinaryBody';
 
 type Revision = Readonly<{ bodyVersion: number; body: ArtifactBodyV1 | null; createdAt: number; sizeBytes: number; provenance?: ArtifactRevisionProvenanceV1 }>;
 
-function revisionSubtitle(createdAt: number, provenance?: ArtifactRevisionProvenanceV1): string {
+function revisionSubtitle(createdAt: number, provenance: ArtifactRevisionProvenanceV1 | undefined, ownAccountId: string | null): string {
     const labels = [formatRelativeTimeShort(createdAt, Date.now())];
     if (provenance) {
         labels.push(provenance.savedBy.kind === 'agent' ? t('artifacts.browser.history.savedByAgentSession')
-            : t('artifacts.browser.history.savedByUser'));
+            // The reader's own saves say so; another person's save stays the neutral fact.
+            : provenance.savedBy.accountId === ownAccountId ? t('artifacts.browser.provenance.savedByYou')
+                : t('artifacts.browser.history.savedByUser'));
         if (provenance.restoredFromBodyVersion !== undefined)
             labels.push(t('artifacts.browser.history.restoredVersion', { n: provenance.restoredFromBodyVersion }));
     }
@@ -49,10 +55,32 @@ type HistorySelection = Readonly<{ client: ArtifactActionsClient; artifactId: st
 
 /** Two columns (versions beside the preview) from this width; narrower, the preview replaces the list. */
 const SIDE_BY_SIDE_MIN_WIDTH_PX = 640;
+// The caption starts level with the first version's title beside it: the untitled group's own top inset,
+// then that row's padding at the user's density.
+const CAPTION_TOP_PX = Platform.select(ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX);
 
 function ArtifactHistoryItemGroup(props: React.ComponentProps<HappierArtifactRevisionListProps['host']['ItemGroup']>) {
-    return <ItemGroup title={props.title} children={props.children} />;
+    // The sheet is already titled "History": a second "Versions" heading over its only list is the same word twice.
+    return <ItemGroup children={props.children} />;
 }
+
+/** Beside the preview the versions are the dialog's list pane: flat rows on the plane, no card in the card. */
+function ArtifactHistoryPaneItemGroup(props: React.ComponentProps<HappierArtifactRevisionListProps['host']['ItemGroup']>) {
+    return <ItemGroup surface="none" children={props.children} />;
+}
+
+function ArtifactHistoryItem(props: React.ComponentProps<HappierArtifactRevisionListProps['host']['Item']>) {
+    const { leading, ...item } = props;
+    return <Item {...item} leftElement={leading} />;
+}
+
+/** The current version's "Now" is the app's neutral status pill (lab A6 `.ar-tag`). */
+function ArtifactHistoryNowBadge(props: Readonly<{ label: string }>) {
+    return <StatusPill variant="neutral" label={props.label} hideDot />;
+}
+
+const HISTORY_LIST_HOST: HappierArtifactRevisionListProps['host'] = { Item: ArtifactHistoryItem, ItemGroup: ArtifactHistoryItemGroup, Text, Badge: ArtifactHistoryNowBadge };
+const HISTORY_PANE_HOST: HappierArtifactRevisionListProps['host'] = { ...HISTORY_LIST_HOST, ItemGroup: ArtifactHistoryPaneItemGroup };
 
 /**
  * An artifact's History (lab A6): earlier versions newest first → preview → Restore. Restore is the one
@@ -65,6 +93,10 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
     const scope = useActiveServerAccountScope();
     const router = useRouter();
     const artifact = useArtifact(props.artifactId);
+    const rowDensity = useItemDensityInputs().resolved;
+    const listColors = React.useMemo(() => ({ secondary: theme.colors.text.secondary, tertiary: theme.colors.text.tertiary, divider: theme.colors.border.subtle }),
+        [theme.colors.border.subtle, theme.colors.text.secondary, theme.colors.text.tertiary]);
+    const captionInset = React.useMemo(() => ({ paddingTop: (CAPTION_TOP_PX ?? 0) + ITEM_ROW_WITH_SUBTITLE_PADDING_VERTICAL_PX[rowDensity] }), [rowDensity]);
     const { width, fontScale } = useWindowDimensions();
     const [bodyWidth, setBodyWidth] = React.useState<number | null>(null);
     const measureBody = React.useCallback((event: LayoutChangeEvent) => {
@@ -166,24 +198,24 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
             sideBySide={sideBySide}
             title={t('artifacts.browser.history.versionsLabel')}
             currentTitle={t('artifacts.browser.history.current')}
-            currentSubtitle={artifact ? revisionSubtitle(artifact.updatedAt, currentProvenance) : undefined}
+            currentSubtitle={artifact ? revisionSubtitle(artifact.updatedAt, currentProvenance, scope?.accountId ?? null) : undefined}
             currentLabel={t('artifacts.browser.history.now')}
             retentionLabel={earlier.length === 0 ? t('artifacts.browser.history.empty') : t('artifacts.browser.history.keeps', { count: history.data.retentionCount })}
             revisions={earlier.map(revision => ({
                 bodyVersion: revision.bodyVersion,
                 title: t('artifacts.browser.history.version', { n: versionNumber(revision) }),
-                subtitle: revisionSubtitle(revision.createdAt, revision.provenance),
-                detail: formatByteSize(revision.sizeBytes),
+                subtitle: revisionSubtitle(revision.createdAt, revision.provenance, scope?.accountId ?? null),
+                detail: formatHappierDataBytes(revision.sizeBytes, { kind: 'storage' }),
             }))}
             selectedVersion={chosen?.bodyVersion ?? null}
             onSelectVersion={bodyVersion => setSelection({ client, artifactId, bodyVersion })}
-            colors={{ secondary: theme.colors.text.secondary, tertiary: theme.colors.text.tertiary }}
-            host={{ Item, ItemGroup: ArtifactHistoryItemGroup, Text }}
+            colors={listColors}
+            host={sideBySide ? HISTORY_PANE_HOST : HISTORY_LIST_HOST}
         />
     );
 
     const preview = chosen ? (
-        <View style={sideBySide ? styles.previewColumn : styles.previewStacked} testID="artifact-history:preview">
+        <View style={sideBySide ? [styles.previewColumn, captionInset] : styles.previewStacked} testID="artifact-history:preview">
             {!sideBySide ? (
                 <RoundButton
                     testID="artifact-history:versions"
@@ -192,6 +224,8 @@ function ArtifactHistoryContent(props: Readonly<{ artifactId: string; canRestore
                     title={t('artifacts.browser.history.versionsLabel')}
                     leading={<Icon name="caret-left" size={14} color={theme.colors.text.secondary} />}
                     textStyle={{ color: theme.colors.text.secondary }}
+                    // Back to the list leads the column, on the text edge, never centred over the preview.
+                    style={styles.backToVersions}
                     onPress={() => setSelection(null)}
                 />
             ) : null}
@@ -258,7 +292,8 @@ export function showArtifactHistorySheet(params: Readonly<{ artifactId: string; 
             scrollHost: 'body',
             phonePresentation: 'fullscreen',
             bodyScroll: 'none',
-            dimensions: { width: 860, maxHeightRatio: 0.86, size: 'lg' },
+            // A calm dialog in the middle of the window (lab A6), not a sheet that fills it; it keeps this size.
+            dimensions: { width: 860, maxHeightRatio: 0.66, size: 'lg' },
         },
         closeOnBackdrop: true,
     });
@@ -274,7 +309,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         minHeight: 0,
         flexDirection: 'row',
-        gap: 24,
     },
     stack: {
         flex: 1,
@@ -285,13 +319,16 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: 0,
         minWidth: 0,
         gap: 6,
-        paddingHorizontal: 16,
+        paddingHorizontal: 24,
     },
     previewStacked: {
         flex: 1,
         minHeight: 0,
         gap: 10,
         paddingHorizontal: 16,
+    },
+    backToVersions: {
+        alignSelf: 'flex-start',
     },
     previewScroll: {
         flex: 1,
@@ -314,6 +351,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     footerStacked: {
         flexDirection: 'column',
+        // A wrapping column sizes its line to the widest child (the note), so Restore stopped short of the edge.
+        flexWrap: 'nowrap',
         alignItems: 'stretch',
     },
     note: {
@@ -329,7 +368,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     noteFailed: {
         color: theme.colors.state.danger.foreground,
     },
+    // Loading fills the body like the failure state does, so its state sits where the failure will.
     placeholder: {
+        flex: 1,
         minHeight: 360,
     },
 }));

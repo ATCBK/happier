@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { getWidgetSizeFootprintV1 } from '@happier-dev/protocol/widgets/widgetPresentationV1';
+import { readInboxItemFocus } from '@/components/inbox/inboxItemFocus';
 
 import {
     classifyArtifactBrowserKind,
@@ -23,6 +24,24 @@ function artifact(id: string, header: Record<string, unknown> | null, extra: Par
 }
 
 describe('artifactBrowserModel', () => {
+    it.each(['approval_request.v1', 'target_action_approval.v1', 'execution_run_host_action_approval.v1'])(
+        'opens %s in the existing Home-qualified Inbox presenter and never previews replay custody', kind => {
+        const header = { kind, title: 'Review request', serverId: 'local-profile', serverIdentityId: 'home:identity',
+            excerpt: 'retained request envelope' };
+        const row = artifact('approval/id', header, { body: 'retained request envelope' });
+        for (const candidate of [row, { ...row, body: undefined },
+            { ...row, header: { title: 'Review request' }, rawHeader: header }]) {
+            const route = new URL(resolveArtifactOpenRoute(candidate), 'https://app.test');
+            expect(route.pathname).toBe('/inbox');
+            expect(readInboxItemFocus(route.searchParams.get('item') ?? undefined))
+                .toEqual({ kind: 'approval', serverId: 'home:identity', id: 'approval/id' });
+            expect(classifyArtifactBrowserKind(candidate)).toBeNull();
+            expect(readArtifactPreview(candidate)).toEqual({ kind: 'none' });
+        }
+        const legacy = new URL(resolveArtifactOpenRoute(artifact('legacy', { kind })), 'https://app.test');
+        expect(readInboxItemFocus(legacy.searchParams.get('item') ?? undefined))
+            .toEqual({ kind: 'approval', serverId: '', id: 'legacy' });
+    });
     it('uses personal organization for every listed kind and ignores recipient header placement', () => {
         const folders = { v: 1 as const, folders: [{ id: 'mine', name: 'My library', parentId: null }],
             artifactHeadersById: { shared: { folderId: 'mine', tags: ['personal'] } } };
@@ -291,6 +310,14 @@ describe('artifactBrowserModel', () => {
         expect(readArtifactPreview(artifact('skill', { kind: 'prompt_bundle.v2', title: 'API style guide', bundleSchemaId: 'skills' }, { body: bundle })))
             .toEqual({ kind: 'markdown', text: skill });
         expect(readArtifactPreview(artifact('skill', { kind: 'prompt_bundle.v2', title: 'API style guide', excerpt: bundle.slice(0, 40) })))
+            .toEqual({ kind: 'none' });
+    });
+
+    it('never previews a launch profile\'s stored envelope as document text', () => {
+        const stored = JSON.stringify({ kind: 'launch-profile.v1', v: 2, profile: { id: 'p1', name: 'Fast reviewer' } });
+        expect(readArtifactPreview(artifact('lp', { kind: 'launch-profile.v1', title: 'Fast reviewer', profileId: 'p1', excerpt: stored.slice(0, 60) })))
+            .toEqual({ kind: 'none' });
+        expect(readArtifactPreview(artifact('lp', { kind: 'launch-profile.v1', title: 'Fast reviewer', profileId: 'p1' }, { body: stored })))
             .toEqual({ kind: 'none' });
     });
 });
