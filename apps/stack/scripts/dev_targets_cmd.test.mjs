@@ -1117,12 +1117,14 @@ const result=spawnSync('/bin/bash',['-c',script],{stdio:'inherit',env:process.en
     systemctl: 'case "$1" in show) echo 0;; stop) :;; *) case "$*" in "reload ssh"|"mask tmp.mount") printf "%s\\n" "$*" >> "$TEST_SYSTEMCTL_LOG";; *) exit 9;; esac;; esac',
     'systemd-run': 'exit 0',
     umount: 'echo "must not unmount live tmp" >&2; exit 9',
-    sysctl: 'case "$*" in "-n fs.inotify.max_user_instances") cat "$TEST_INSTANCES";; "-p "*) [ "$(cat "$2")" = "fs.inotify.max_user_instances=1024" ] || exit 9; echo 1024 > "$TEST_INSTANCES"; echo instances >> "$TEST_SYSCTL_LOG";; *) exit 9;; esac',
+    sysctl: 'case "$*" in "-n fs.inotify.max_user_instances") cat "$TEST_INSTANCES";; "-n fs.inotify.max_user_watches") cat "$TEST_INSTANCES.watches";; "-n fs.inotify.max_queued_events") cat "$TEST_INSTANCES.queue";; "-p "*) echo 1024 > "$TEST_INSTANCES"; echo 2097152 > "$TEST_INSTANCES.watches"; echo 131072 > "$TEST_INSTANCES.queue"; echo instances >> "$TEST_SYSCTL_LOG";; *) exit 9;; esac',
   })) writeFakeBin({ root, name, content: '#!/bin/sh\nset -eu\n' + body + '\n' });
   const env = { PATH: `${binDir}:${process.env.PATH}`, TEST_ETC: etc,
     TEST_SUDO_LOG: join(root, 'sudo.log'), TEST_SYSTEMCTL_LOG: join(root, 'systemctl.log'),
     TEST_INSTANCES: join(root, 'instances'), TEST_SYSCTL_LOG: join(root, 'sysctl.log') };
   await writeFile(env.TEST_INSTANCES, '128\n');
+  await writeFile(env.TEST_INSTANCES + '.watches', '1048576\n');
+  await writeFile(env.TEST_INSTANCES + '.queue', '16384\n');
   await run(['add', 'worker', '--stack=prepare-test', '--platform=posix', '--ssh=worker',
     '--repo-dir=/home/dev/repo', '--cli-home-dir=/home/dev/cli'], root, env);
   const args = ['host', 'prepare', 'worker', '--fleet-ssh', '--disk-tmp', '--inotify', '--stack=prepare-test'];
@@ -1131,7 +1133,7 @@ const result=spawnSync('/bin/bash',['-c',script],{stdio:'inherit',env:process.en
   assert.equal(await readFile(join(etc, 'ssh/sshd_config.d/50-happier-fleet.conf'), 'utf8'),
     'MaxSessions 64\nMaxStartups 100:30:200\nPerSourcePenaltyExemptList 100.64.0.0/10\n');
   assert.equal(await readFile(join(etc, 'tmpfiles.d/tmp.conf'), 'utf8'), 'q /tmp 1777 root root 3d\n');
-  assert.equal(await readFile(join(etc, 'sysctl.d/60-happier-inotify.conf'), 'utf8'), 'fs.inotify.max_user_instances=1024\n');
+  assert.equal(await readFile(join(etc, 'sysctl.d/60-happier-inotify.conf'), 'utf8'), 'fs.inotify.max_user_instances=1024\nfs.inotify.max_user_watches=2097152\nfs.inotify.max_queued_events=131072\n');
   assert.equal(await readFile(env.TEST_INSTANCES, 'utf8'), '1024\n');
   assert.match(first.stderr + first.stdout, /next reboot/i);
   assert.equal(await readFile(env.TEST_SUDO_LOG, 'utf8'), 'invocation\ninvocation\ninvocation\n');

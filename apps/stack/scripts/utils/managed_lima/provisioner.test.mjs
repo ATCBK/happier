@@ -31,20 +31,25 @@ function fakeExecutor({ ready = false } = {}) {
   };
 }
 
-test('managed guest provisioning persists inotify instances even with a ready toolchain, without changing watches', async t => {
+test('managed guest provisioning persists inotify headroom even with a ready toolchain', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-lima-inotify-' });
   const runtime = fixture.path('instances');
   const writes = fixture.path('sysctl-writes');
   await writeFile(runtime, '128\n');
+  await writeFile(runtime + '.watches', '1048576\n');
+  await writeFile(runtime + '.queue', '16384\n');
   const { binDir } = writeFakeBin({ root: fixture.root, name: 'id', content: '#!/bin/sh\necho 1000\n' });
   writeFakeBin({ root: fixture.root, name: 'sudo', content: '#!/bin/sh\nexec "$@"\n' });
   writeFakeBin({ root: fixture.root, name: 'sysctl', content: `#!/bin/sh
 set -eu
 case "$*" in
   '-n fs.inotify.max_user_instances') cat "$TEST_INSTANCES" ;;
+  '-n fs.inotify.max_user_watches') cat "$TEST_INSTANCES.watches" ;;
+  '-n fs.inotify.max_queued_events') cat "$TEST_INSTANCES.queue" ;;
   '-p '*)
-    [ "$(cat "$2")" = 'fs.inotify.max_user_instances=1024' ] || exit 91
     echo 1024 > "$TEST_INSTANCES"
+    echo 2097152 > "$TEST_INSTANCES.watches"
+    echo 131072 > "$TEST_INSTANCES.queue"
     echo instances >> "$TEST_SYSCTL_WRITES" ;;
   *) echo 'unexpected sysctl mutation' >&2; exit 92 ;;
 esac
@@ -64,12 +69,21 @@ esac
   const first = await provisionManagedLimaGuest(options);
   assert.equal(first.changed, false, 'ready tooling must not be reinstalled');
   const dropIn = fixture.path('etc', 'sysctl.d', '60-happier-inotify.conf');
-  assert.equal(await readFile(dropIn, 'utf8'), 'fs.inotify.max_user_instances=1024\n');
+  assert.equal(await readFile(dropIn, 'utf8'), 'fs.inotify.max_user_instances=1024\nfs.inotify.max_user_watches=2097152\nfs.inotify.max_queued_events=131072\n');
   assert.equal((await stat(dropIn)).mode & 0o777, 0o644);
   assert.equal(await readFile(runtime, 'utf8'), '1024\n');
+  assert.equal(await readFile(runtime + '.watches', 'utf8'), '2097152\n');
+  assert.equal(await readFile(runtime + '.queue', 'utf8'), '131072\n');
   const second = await provisionManagedLimaGuest(options);
   assert.equal(second.changed, false);
   assert.equal(await readFile(writes, 'utf8'), 'instances\n', 'repeat does not rewrite the kernel setting');
+  await writeFile(runtime, '4096\n');
+  await writeFile(runtime + '.watches', '4194304\n');
+  await writeFile(runtime + '.queue', '262144\n');
+  await provisionManagedLimaGuest(options);
+  assert.equal(await readFile(runtime + '.watches', 'utf8'), '4194304\n', 'preparation must never lower existing headroom');
+  assert.equal(await readFile(dropIn, 'utf8'), 'fs.inotify.max_user_instances=4096\nfs.inotify.max_user_watches=4194304\nfs.inotify.max_queued_events=262144\n');
+  assert.equal(await readFile(writes, 'utf8'), 'instances\n');
 });
 
 test('managed Lima guest provisioning streams the canonical script and writes a content-addressed readiness marker', async () => {
@@ -139,7 +153,6 @@ test('managed Lima guest provisioning is idempotent for the exact script and too
 
   assert.equal(result.changed, false);
   assert.equal(executor.calls.filter((call) => call.kind === 'run').length, 1);
-  assert.ok(executor.calls.find((call) => call.kind === 'run').options.input.includes('fs.inotify.max_user_instances=1024'));
 });
 
 test('managed Lima guest provisioning repairs drifted tooling even when the readiness marker remains', async () => {
