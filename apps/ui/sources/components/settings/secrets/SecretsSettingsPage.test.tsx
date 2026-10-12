@@ -10,6 +10,8 @@ import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { sealSecretsDeep } from '@/sync/encryption/secretSettings';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { applySavedSecretCatalogPage, beginSavedSecretCatalogLoad, invalidateSavedSecretCatalog,
+    resetSavedSecretCatalogSnapshotsForTests, resolveSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 
 import type { SecretsSettingsPageProps } from './SecretsSettingsPage';
 
@@ -27,6 +29,7 @@ beforeEach(async () => {
 
 afterEach(() => {
     standardCleanup();
+    resetSavedSecretCatalogSnapshotsForTests();
 });
 
 const PERSONAL: SavedSecret = {
@@ -81,6 +84,19 @@ async function renderPage(overrides: Partial<SecretsSettingsPageProps> = {}, acc
 }
 
 describe('SecretsSettingsPage', () => {
+    it('keeps last-known row status while the catalog refresh withholds usable material', async () => {
+        const entry = ownedEntry();
+        const scope = { serverId: 'refresh-home', accountId: 'owner-a' };
+        applySavedSecretCatalogPage({ scope, entries: [entry], observedAt: 1 });
+        invalidateSavedSecretCatalog(scope);
+        beginSavedSecretCatalogLoad(scope);
+        const { screen } = await renderPage({ personalSecrets: [], sharedEntries: [entry], sharedCatalogStatus: 'refreshing',
+            sharedCatalogStale: true, resolveSharedReference: ref => resolveSavedSecretReference(scope, [], ref) });
+        const header = screen.findAll(row => row.props.testID === `saved-secret:${entry.ref}:header`
+            && typeof row.props.subtitle === 'string')[0];
+        expect(header?.props.subtitle).not.toContain('secrets.catalog.status.temporarily_unavailable');
+        expect(header?.props.subtitleLeading).toBeUndefined();
+    });
     it.each(['plain', 'e2ee'] as const)('discloses personal storage from the %s Account even when the device seals the value', async (mode) => {
         const accountId = `personal-storage-${mode}`;
         await homeHarness.addHome({

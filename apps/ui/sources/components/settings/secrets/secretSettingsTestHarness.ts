@@ -34,15 +34,23 @@ import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profil
 import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
+import type { ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 
 /** Real Home/Account/catalog/Action/crypto owners, with only HTTP and credential storage synthetic. */
 export async function createSecretSettingsTestHarness(options: Readonly<{
+    features?: ReturnType<typeof createRootLayoutFeaturesResponse>;
     mode?: 'plain' | 'e2ee';
     sharedEnabled?: boolean;
     plaintextStorageEnabled?: boolean;
     settings?: Settings;
+    /** Retained/future HTTP source bodies are intentionally wider than the UI projection. */
+    rawSettings?: Readonly<Record<string, unknown>>;
     rejectSettingsWrites?: boolean;
     approvalRequired?: boolean;
+    connectedPurposes?: ConnectedPurposeCatalogV1;
+    voiceEnabled?: boolean;
 }> = {}) {
     await loadSyncSingletonForTests();
     const mode = options.mode ?? 'plain';
@@ -51,7 +59,10 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
         ? { token, secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url') }
         : { token };
     const encryption = mode === 'e2ee' ? await createEncryptionFromAuthCredentials(credentials) : null;
-    const features = createRootLayoutFeaturesResponse();
+    const features = options.features ?? createRootLayoutFeaturesResponse();
+    if (options.voiceEnabled !== undefined && !tryWriteServerEnabledBitInPlace(features, 'voice', options.voiceEnabled)) {
+        throw new Error('Voice feature fixture is not writable');
+    }
     if (!tryWriteServerEnabledBitInPlace(features, 'teams', options.sharedEnabled ?? true)
         || !tryWriteServerEnabledBitInPlace(features, 'encryption.plaintextStorage', options.plaintextStorageEnabled ?? true)) {
         throw new Error('Saved Secrets feature fixture is not writable');
@@ -63,7 +74,7 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
         id: 'personal-a', name: 'Personal', kind: 'token',
         encryptedValue: { _isSecretValue: true, value: 'value' }, createdAt: 1, updatedAt: 1,
     }] : [] });
-    const raw = normalizeAccountSettingsForServerStorage({ raw: settings, mode,
+    const raw = options.rawSettings ?? normalizeAccountSettingsForServerStorage({ raw: settings, mode,
         settingsSecretsKey: null, normalizeServerRaw: normalizeVoiceSettingsServerDelta }).value;
     let settingsContent = AccountSettingsStoredContentEnvelopeSchema.parse(encryption ? {
         t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings',
@@ -86,9 +97,14 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
     const request = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         const url = new URL(String(input));
         const path = url.pathname;
+        const purposeResponse = purposes ? await purposes.handle(input, init) : null;
+        if (purposeResponse) return purposeResponse;
         const artifactResponse = artifacts.handle(`${path}${url.search}`, init);
         if (artifactResponse) return await artifactResponse;
-        if (path === '/v1/features') return Response.json(features);
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+        if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });
+        if (path.startsWith('/v1/account/authoring-memory/')) return Response.json({ status: 'absent' });
+        if (path === '/v1/account/project-rows/list') return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
         if (path === '/v1/account/encryption') return Response.json({ mode, updatedAt: 1 });
         if (path === '/v1/account/encryption/currentness') return Response.json({ mode, version: 1, updatedAt: 1,
             settingsVersion,
@@ -201,8 +217,14 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
         if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
         return new Response('{}', { status: 404 });
     });
+    const purposes = options.connectedPurposes ? createConnectedPurposeCatalogHttpBoundary({
+        initialValue: options.connectedPurposes, mode,
+        material: mode === 'e2ee' ? resolveAccountScopedCryptoMaterialFromCredentials(credentials) : null,
+        settingsRequest: (url, init) => request(url, init),
+    }) : null;
     const connection = await restoreServerAccountForTest({
         serverUrl: `https://secrets-${crypto.randomUUID()}.example.test`, accountId: 'account-a', credentials, request,
+        credentialScope: 'restored-home',
     });
     const { sync } = await import('@/sync/sync');
     const queue = Reflect.get(sync, 'settingsSync') as import('@/utils/sessions/sync').InvalidateSync;
@@ -210,11 +232,25 @@ export async function createSecretSettingsTestHarness(options: Readonly<{
     const scope = { serverId: connection.home.id, accountId: 'account-a' };
     storage.setState({ settings, settingsScope: scope, settingsVersion });
     return {
-        credentials, encryption, scope, request, resources, recipients, updates, deletes, repairs, settingsWrites, promotions, catalogRows, artifacts,
+        credentials, encryption, scope, request, resources, recipients, updates, deletes, repairs, settingsWrites, promotions, catalogRows, artifacts, purposes,
         setRejectSettingsWrites(next: boolean) { rejectSettingsWrites = next; },
         setLosePromotionResponse(next: boolean) { losePromotionResponse = next; },
+        replaceSettings(next: Settings, options?: Readonly<{ version?: number; publish?: boolean }>) {
+            settingsVersion = options?.version ?? settingsVersion;
+            const nextRaw = normalizeAccountSettingsForServerStorage({ raw: next, mode,
+                settingsSecretsKey: null, normalizeServerRaw: normalizeVoiceSettingsServerDelta }).value;
+            settingsContent = AccountSettingsStoredContentEnvelopeSchema.parse(encryption ? {
+                t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings',
+                    material: { type: 'dataKey', machineKey: encryption.getContentPrivateKey() },
+                    payload: nextRaw, randomBytes: getRandomBytes }),
+            } : { t: 'plain', v: nextRaw });
+            if (options?.publish !== false) storage.setState({ settings: next, settingsVersion, settingsScope: scope });
+        },
         get persistedSettings() {
             return settingsParse(openAccountSettingsStoredContent({ content: settingsContent, encryption, expectedMode: mode }).raw);
+        },
+        get persistedRawSettings() {
+            return openAccountSettingsStoredContent({ content: settingsContent, encryption, expectedMode: mode }).raw;
         },
         async addOwnerResource(resourceMode: 'plain' | 'e2ee' = mode) {
             const resourceDataKey = getRandomBytes(32);

@@ -1,76 +1,80 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { deriveSavedSecretImportResourceIdV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
+import { openSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
 
-import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { resetSavedSecretCatalogEngineForTests } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { resetTeamActionClientForTests } from '@/sync/ops/teams/teamActionClient';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import { clearActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
+import { createSecretSettingsTestHarness } from './secretSettingsTestHarness';
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const alert = vi.hoisted(() => vi.fn());
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
-vi.mock('socket.io-client', async () => {
-    const { createSocketIoBoundaryStub } = await import('@/dev/testkit/mocks/socketIo');
-    return { io: () => createSocketIoBoundaryStub().socket };
-});
-installSettingsViewCommonModuleMocks({
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+installSettingsViewCommonModuleMocks({ storage: 'real',
     modal: async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ spies: { alert } }).module,
 });
-vi.doUnmock('@/sync/domains/state/storage');
-const harness = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(harness);
-await loadSyncSingletonForTests();
+let home: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | null = null;
 
-beforeEach(async () => { await harness.reset(); clearActiveUnsavedChangesGuard(); alert.mockReset(); });
+beforeEach(() => {
+    resetSavedSecretCatalogEngineForTests();
+    resetSavedSecretCatalogSnapshotsForTests();
+    resetTeamActionClientForTests();
+    clearActiveUnsavedChangesGuard();
+    alert.mockReset();
+});
 afterEach(async () => {
-    standardCleanup(); clearActiveUnsavedChangesGuard();
-    await (await import('@/sync/syncEngine')).syncSwitchServer(null);
+    standardCleanup();
+    clearActiveUnsavedChangesGuard();
+    resetSavedSecretCatalogEngineForTests();
+    await home?.dispose();
+    home = null;
 });
 
-it('edits personal names and replacement bytes inline through the real Account settings CAS', async () => {
-    const accountId = 'personal-secret-owner';
-    const serverId = await harness.addHome({ name: 'Personal Secrets Home', serverUrl: 'https://personal-secret-editor.test', accountId });
-    await harness.selectHomes([serverId]);
-    const secret = {
-        id: 'personal-inline', name: 'Personal key', kind: 'apiKey' as const,
-        encryptedValue: { _isSecretValue: true as const, value: 'original-personal-secret' }, createdAt: 1, updatedAt: 1,
-    };
-    let baseline: Record<string, unknown> = { secrets: [secret] };
-    let version = 1;
-    const path = '/v2/account/settings';
-    harness.answer(serverId, `GET ${path}`, { select: () => ({ body: { content: { t: 'plain', v: baseline }, version } }) });
-    harness.answer(serverId, `POST ${path}`, { select: (input) => {
-        // This is the network boundary's canonical Account Settings v2 request.
-        const request = input as { content: { t: 'plain'; v: Record<string, unknown> }; expectedVersion: number };
-        baseline = request.content.v;
-        version = request.expectedVersion + 1;
-        return { body: { success: true, version } };
-    } });
-    const { syncRestore } = await import('@/sync/syncEngine');
-    await act(async () => syncRestore({ token: createAccountTokenForTests(accountId) }));
-    const { storage } = await import('@/sync/domains/state/storage');
-    await vi.waitFor(() => expect(storage.getState().settings.secrets[0]?.name).toBe(secret.name));
+it('edits an imported personal secret through its resource without recreating Settings values', async () => {
+    const secret = { id: 'personal-inline', name: 'Personal key', kind: 'apiKey' as const,
+        encryptedValue: { _isSecretValue: true as const, value: 'original-personal-secret' }, createdAt: 1, updatedAt: 1 };
+    home = await createSecretSettingsTestHarness({ settings: settingsParse({ secrets: [secret],
+        actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+            approvalWaivedSurfaces: { 'secrets.shared.promote': ['ui'], 'secrets.shared.update': ['ui'] },
+        }),
+    }) });
+    const ref = `happier:shared-secret:v1:${deriveSavedSecretImportResourceIdV1({ accountId: home.scope.accountId,
+        source: { kind: 'personal-saved-secret', secretId: secret.id } })}`;
     const { SecretsSettingsScreen } = await import('./SecretsSettingsScreen');
     const screen = await renderScreen(<SecretsSettingsScreen />);
-    await screen.pressByTestIdAsync(`saved-secret:${secret.id}:header`);
-    await screen.pressByTestIdAsync(`saved-secret:${secret.id}:rename`);
-    await act(async () => screen.changeTextByTestId(`saved-secret:${secret.id}:edit-input`, '  Personal renamed  '));
-    expect(harness.requestsFor(path).filter((request) => request.input !== null)).toHaveLength(0);
-    await screen.pressByTestIdAsync(`saved-secret:${secret.id}:edit-save`);
-    expect(alert).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(storage.getState().settings.secrets[0]?.name).toBe('Personal renamed'));
-    await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${secret.id}:edit-input`)).toBeNull());
-    await screen.pressByTestIdAsync(`saved-secret:${secret.id}:replace`);
-    await act(async () => screen.changeTextByTestId(`saved-secret:${secret.id}:edit-input`, '  personal replacement\n'));
-    await screen.pressByTestIdAsync(`saved-secret:${secret.id}:edit-save`);
-    await vi.waitFor(() => expect(baseline.secrets).toEqual([expect.objectContaining({
-        id: secret.id, name: 'Personal renamed',
-        encryptedValue: { _isSecretValue: true, value: '  personal replacement\n' },
-    })]));
-    expect(storage.getState().settings.secrets[0]?.name).toBe('Personal renamed');
-    expect(harness.requestsFor(path).filter((request) => request.input !== null)).toHaveLength(2);
+    await vi.waitFor(() => expect(home?.promotions).toHaveLength(1));
+    await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${ref}:header`)).not.toBeNull());
+    expect(home.persistedSettings.secrets).toEqual([]);
+    const settingsWritesBeforeEdit = home.settingsWrites.length;
+
+    await screen.pressByTestIdAsync(`saved-secret:${ref}:header`);
+    await screen.pressByTestIdAsync(`saved-secret:${ref}:rename`);
+    await act(async () => screen.changeTextByTestId(`saved-secret:${ref}:edit-input`, '  Personal renamed  '));
+    expect(home.updates).toEqual([]);
+    await screen.pressByTestIdAsync(`saved-secret:${ref}:edit-save`);
+    await vi.waitFor(() => expect(home?.updates).toHaveLength(1));
+    await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${ref}:edit-input`)).toBeNull());
+    await screen.pressByTestIdAsync(`saved-secret:${ref}:rotate`);
+    await act(async () => screen.changeTextByTestId(`saved-secret:${ref}:edit-input`, '  personal replacement\n'));
+    await screen.pressByTestIdAsync(`saved-secret:${ref}:edit-save`);
+    await vi.waitFor(() => expect(home?.updates).toHaveLength(2));
+    const replacement = home.updates[1]!;
+    expect(openSavedSecretResourceStoredContentV1({ resourceId: replacement.resourceId, mode: 'plain', storedContent: replacement.storedContent }))
+        .toMatchObject({ name: 'Personal renamed', value: '  personal replacement\n' });
+    expect(home.persistedSettings.secrets).toEqual([]);
+    expect(home.settingsWrites).toHaveLength(settingsWritesBeforeEdit);
     expect(alert).not.toHaveBeenCalled();
 });
+// Native filesystem classes are an OS boundary, not part of this source-driven UI journey.
+vi.mock('expo-file-system', async () =>
+    (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);

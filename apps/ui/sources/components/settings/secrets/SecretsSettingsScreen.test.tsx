@@ -13,6 +13,7 @@ import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Sche
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import type { IModal } from '@/modal';
 import { createManagedResourceDependencyFixture } from '@/dev/testkit/fixtures/managedResourceDependencyFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -28,7 +29,6 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { applySavedSecretCatalogPage, resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { clearActiveUnsavedChangesGuard, runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
-import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const alert = vi.hoisted(() => vi.fn());
@@ -40,14 +40,12 @@ vi.mock('@react-navigation/native', async () => {
     const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
     return createReactNavigationNativeMock();
 });
-installSettingsViewCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({ spies: { alert, confirm } }).module;
-    },
-});
-// Keep the store and its selectors real; the settings helper defaults to a stub.
-vi.doUnmock('@/sync/domains/state/storage');
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ spies: { alert, confirm } }).module);
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 await loadSyncSingletonForTests();
@@ -57,7 +55,7 @@ function entry(id: string): SavedSecretCatalogEntryV1 {
     return {
         ref: `happier:shared-secret:v1:${id}`, source: 'shared_resource', relationship: 'owner',
         name: id, kind: 'apiKey', encryptionMode: 'plain', owner: null, accessSources: [],
-        audience: { accounts: [{ kind: 'account', accountId: 'recipient', firstName: 'Recipient', lastName: null, username: null, avatarUrl: null }], teams: [], groups: [] },
+        audience: { accounts: [{ kind: 'account', accountId: 'recipient', name: 'Recipient', firstName: 'Recipient', lastName: null, username: null, avatarUrl: null }], teams: [], groups: [] },
         ownerAccountId: 'account-owner', revision: 3, materialStatus: 'ready',
         capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true },
     };
@@ -121,6 +119,7 @@ async function mount(editAccess = true, initializeSync = false, beforeRender?: (
         body: RemoteHostCatalogRowReadResponseV1Schema.parse({ status: 'absent' }),
     });
     for (const [route, body] of [
+        [NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV1Schema.parse({ status: 'absent' })],
         [MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema.parse({ status: 'absent' })],
         [ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' })],
         [PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'absent' })],
@@ -179,7 +178,9 @@ async function initializeRemovalSettings(scope: ServerAccountScope, waiveApprova
         // The actual deletion always uses the settled version without rebasing.
         expect(await getSyncSingleton().mutateAccountSettingsOnce({
             expectedSettingsScope: scope, expectedSettingsVersion: serverVersion, rebaseOnConflict: true,
-            mutate: raw => ({ settings: { ...raw }, value: undefined }),
+            // A setState-only policy does not change the real writer's captured
+            // Settings baseline. Persist the setup intent through that writer.
+            mutate: raw => ({ settings: { ...raw, actionsSettingsV1: settings.actionsSettingsV1 }, value: undefined }),
         })).toMatchObject({ status: 'applied' });
     });
 }
@@ -187,6 +188,8 @@ async function initializeRemovalSettings(scope: ServerAccountScope, waiveApprova
 describe('Saved Secrets editor continuity through the settings screen', () => {
     it('honors explicit Account Ask for deletion, reviews the Inbox-executed failure, and asks again for the exact manual retry', async () => {
         const { screen, scope, entries } = await mount(false, true, scope => initializeRemovalSettings(scope, false, false, true));
+        const { storage } = await import('@/sync/domains/state/storage');
+        expect(storage.getState().settings.actionsSettingsV1.actions['secrets.shared.delete']).toMatchObject({ approvalRequiredSurfaces: ['ui'] });
         const resource = createManagedResourceDependencyFixture();
         const path = '/v1/account/saved-secrets/resources/delete';
         harness.answer(scope.serverId, path, { select: input => input && typeof input === 'object' && 'managedResourceDispositions' in input
@@ -384,6 +387,32 @@ describe('Saved Secrets editor continuity through the settings screen', () => {
         await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${secret.ref}:edit-input`)).toBeNull());
     });
 
+    it('settles an acknowledged rename while the Saved Secret material refresh is pending', async () => {
+        const { screen, scope, entries } = await mount(false, true, scope => initializeRemovalSettings(scope, false, true));
+        const secret = entries[0]!;
+        const revalidation = createDeferred<void>();
+        let acknowledged = false;
+        harness.answer(scope.serverId, '/v1/account/saved-secrets/resources/materials', { select: async () => {
+            if (acknowledged) await revalidation.promise;
+            return { body: { resources: [materialFor(acknowledged ? { ...secret, name: 'Acknowledged name', revision: 4 } : secret)] } };
+        } });
+        harness.answer(scope.serverId, '/v1/account/saved-secrets/resources/update', { select: () => {
+            acknowledged = true;
+            return { body: { resourceId: 'secret-a', revision: 4 } };
+        } });
+        await screen.pressByTestIdAsync(`saved-secret:${secret.ref}:header`);
+        await screen.pressByTestIdAsync(`saved-secret:${secret.ref}:rename`);
+        await act(async () => screen.changeTextByTestId(`saved-secret:${secret.ref}:edit-input`, 'Acknowledged name'));
+        try {
+            await act(async () => screen.pressByTestId(`saved-secret:${secret.ref}:edit-save`));
+            await vi.waitFor(() => expect(acknowledged).toBe(true));
+            await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${secret.ref}:edit-input`)).toBeNull());
+            expect(screen.getTextContent()).toContain('Acknowledged name');
+        } finally {
+            await act(async () => { revalidation.resolve(); });
+        }
+    });
+
     it('preserves a new secret when collapse is declined and discards only after confirmation', async () => {
         const { screen } = await mount(false);
         await screen.pressByTestIdAsync('saved-secret-add');
@@ -468,3 +497,6 @@ describe('Saved Secrets editor continuity through the settings screen', () => {
         expect(screen.findByTestId('saved-secret-access-save')).not.toBeNull();
     });
 });
+// Native filesystem classes are an OS boundary, not part of this source-driven UI journey.
+vi.mock('expo-file-system', async () =>
+    (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);

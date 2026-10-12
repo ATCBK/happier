@@ -26,6 +26,7 @@ import type { SavedSecretReferenceResolution } from '@/sync/store/settings/saved
 import type { ScopedSnapshotStatus } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { t } from '@/text';
 import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
@@ -81,6 +82,10 @@ export type SecretsSettingsPageProps = Readonly<{
 /** A secret's type; shared rows the Home cannot fully read may not carry one. */
 function kindLabel(kind: SavedSecret['kind'] | null): string | null {
     return kind ? t(`secrets.catalog.kinds.${kind}`) : null;
+}
+
+function sharedRowStatus(resolution: SavedSecretReferenceResolution, entry: SavedSecretCatalogEntryV1) {
+    return resolution.displayStatus ?? resolution.status ?? entry.materialStatus;
 }
 
 function audienceSummary(entry: SavedSecretCatalogEntryV1): string {
@@ -183,25 +188,12 @@ export const SecretsSettingsPage = React.memo(function SecretsSettingsPage(props
                 </ItemGroup>
             ) : null}
             {props.sharedCatalogStale && props.onRetrySharedCatalog ? (
-                <ItemGroup>
-                    <Item
-                        testID="saved-secret-catalog-retry"
-                        title={t('secretsSettings.staleTitle')}
-                        subtitle={t('secretsSettings.staleDescription')}
-                        subtitleLeading={<View style={collectionListStyles.troubleDot} />}
-                        showChevron={false}
-                        rightElementOutsidePressable
-                        rightElement={(
-                            <RoundButton
-                                testID="saved-secret-catalog-retry-button"
-                                size="small"
-                                display="secondary"
-                                title={t('common.retry')}
-                                onPress={props.onRetrySharedCatalog}
-                            />
-                        )}
-                    />
-                </ItemGroup>
+                // Last-known rows stay at full strength; one quiet line says they are stale, with Retry.
+                <SurfaceFreshnessLine
+                    testID="saved-secret-catalog-retry"
+                    reason={t('secretsSettings.staleTitle')}
+                    action={{ label: t('common.retry'), testID: 'saved-secret-catalog-retry-button', onPress: props.onRetrySharedCatalog }}
+                />
             ) : null}
 
             <ItemGroup
@@ -266,7 +258,7 @@ export const SecretsSettingsPage = React.memo(function SecretsSettingsPage(props
                     <OwnedSharedSecretRow
                         key={entry.ref}
                         entry={entry}
-                        status={props.resolveSharedReference(entry.ref).status ?? entry.materialStatus}
+                        status={sharedRowStatus(props.resolveSharedReference(entry.ref), entry)}
                         expanded={isExpanded(entry.ref)}
                         onExpandedChange={(next) => toggle(entry.ref, next)}
                         accessEditor={accessKey === entry.ref ? props.accessEditor?.element ?? null : null}
@@ -301,7 +293,7 @@ export const SecretsSettingsPage = React.memo(function SecretsSettingsPage(props
                         <RecipientSecretRow
                             key={entry.ref}
                             entry={entry}
-                            status={props.resolveSharedReference(entry.ref).status ?? entry.materialStatus}
+                            status={sharedRowStatus(props.resolveSharedReference(entry.ref), entry)}
                         />
                     ))}
                     {recipientCorrupt.map((_entry, idx) => (

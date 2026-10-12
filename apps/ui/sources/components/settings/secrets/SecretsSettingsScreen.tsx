@@ -122,7 +122,6 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
         const finish = async () => {
             if (currentScopeKey.current !== requestedScopeKey) return;
             setSharedMutationPending(false);
-            await catalog.reload();
         };
         const result = await updateSavedSecretResource({
             scope,
@@ -148,7 +147,6 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
                 : t('secrets.catalog.operationFailed'));
             return;
         }
-        await catalog.reload();
         return true;
         } catch (cause) {
             if (currentScopeKey.current !== requestedScopeKey) return;
@@ -360,7 +358,6 @@ export const SecretsSettingsScreen = React.memo(function SecretsSettingsScreen()
             onCreated={async (ref, storage) => {
                 clearEditors();
                 if (storage === 'personal' || !scope) return;
-                await catalog.reload();
                 // A new shared secret opens on who can use it, as sharing is why it was created.
                 setAccessSelection({ scopeKey: `${scope.serverId}:${scope.accountId}`, ref });
             }}
