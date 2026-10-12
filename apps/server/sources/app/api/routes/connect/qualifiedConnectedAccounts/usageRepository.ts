@@ -25,6 +25,7 @@ import {
     readProviderAccountUsageRecord,
     readProviderAccountUsageHistory,
     readProviderAccountUsageHistoryWitness,
+    projectSealedProviderAccountUsageContentV4,
     requestProviderAccountUsageRefresh,
 } from "../providerAccountUsage/recordStorage";
 import {
@@ -587,7 +588,7 @@ async function readExactQualifiedConnectedServiceUsageSourceWithCredentialAdmiss
                 fetchedAt: record.fetchedAt?.getTime() ?? null,
                 staleAfterMs: record.staleAfterMs,
             };
-        });
+        }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
     } catch (error) {
         if (
             error instanceof ConnectedServiceUsageSourceBindingError
@@ -871,7 +872,7 @@ export async function writeQualifiedProviderAccountUsageRecordFromLegacyBoundary
         await writeQualifiedProviderAccountUsageRecordInTx(
             tx,
             params,
-        ));
+        ), { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 export async function writeQualifiedProviderAccountUsageRecord(
@@ -956,7 +957,7 @@ export async function writeQualifiedProviderAccountUsageRecord(
                 source: params.source,
             },
         );
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 type LegacyConnectedServiceQuotaCompatibilityWriteParams = Readonly<{
@@ -1045,6 +1046,9 @@ function buildLegacyConnectedServiceQuotaProviderAccountUsageSnapshot(
             accountLabel: params.snapshot.accountLabel,
             ...(params.snapshot.recoveryCredits
                 ? { recoveryCredits: params.snapshot.recoveryCredits }
+                : {}),
+            ...(params.snapshot.recoveryCreditDetails
+                ? { recoveryCreditDetails: params.snapshot.recoveryCreditDetails }
                 : {}),
             meters: params.snapshot.meters,
         }),
@@ -1189,7 +1193,7 @@ export async function writeLegacyConnectedServiceQuotaCompatibilityRecord(
             );
         }
         await deleteReleasedConnectedServiceQuotaSnapshotInStorage(tx, params);
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 async function listQualifiedUsageSourcesForRecordInStorage(
@@ -1240,7 +1244,7 @@ export async function readQualifiedProviderAccountUsageRecord(
     params: Readonly<{ accountId: string; recordId: string }>,
 ): Promise<QualifiedProviderAccountUsageAdmission> {
     return await inTx(async (tx) =>
-        await admitQualifiedProviderAccountUsageRecordInTx(tx, params));
+        await admitQualifiedProviderAccountUsageRecordInTx(tx, params), { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 export async function readQualifiedProviderAccountUsageHistory(params: Readonly<{ accountId: string }> & ReturnType<typeof import('@happier-dev/protocol/connect/providerAccountUsageHistory').QualifiedProviderAccountUsageHistoryRequestV4Schema.parse>) {
@@ -1252,7 +1256,7 @@ export async function readQualifiedProviderAccountUsageHistory(params: Readonly<
             : { entries: [await readProviderAccountUsageHistoryWitness(params, tx)].filter((entry): entry is NonNullable<typeof entry> => entry !== null), nextCursor: null };
         if (page.entries.some(entry => entry.record.accountId !== params.accountId || entry.record.recordId !== params.recordId || entry.record.payloadMode !== admitted.record.payloadMode)) return { status: 'storage_mode_mismatch' as const };
         return { status: 'resolved' as const, entries: page.entries, nextCursor: page.nextCursor, sources: admitted.sources };
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 export async function deleteQualifiedProviderAccountUsageRecord(
@@ -1281,7 +1285,7 @@ export async function deleteQualifiedProviderAccountUsageRecord(
             }
         }
         return await deleteProviderAccountUsageRecord(params, tx);
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 export async function clearQualifiedConnectedAccountUsageForAccountInTx(
@@ -1328,7 +1332,7 @@ export async function requestQualifiedProviderAccountUsageRefresh(
             }
         }
         return await requestProviderAccountUsageRefresh(params, tx);
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 async function readFirstQualifiedSourceForRef(
@@ -1416,7 +1420,7 @@ async function readFirstQualifiedSourceForRef(
             }
             return null;
         };
-        return await (storage ? readInStorage(storage) : inTx(readInStorage));
+        return await (storage ? readInStorage(storage) : inTx(readInStorage, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" }));
     } catch (error) {
         if (
             error instanceof ConnectedServiceUsageSourceBindingError
@@ -1468,7 +1472,7 @@ export async function readQualifiedConnectedAccountUsageRecordWithSource(
             sourceResolution: source,
             record: admitted.record,
         };
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 /**
@@ -1505,7 +1509,7 @@ export async function readLegacyConnectedServiceQuotaCompatibilityRecordWithSour
             sourceResolution: source,
             record: admitted.record,
         };
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 export async function readQualifiedConnectedAccountQuota(
@@ -1543,13 +1547,7 @@ export async function readQualifiedConnectedAccountQuota(
         return {
             ref: params.ref,
             sourceResolution,
-            content: {
-                t: "encrypted" as const,
-                c: record.sealedPayload.ciphertext,
-                ...(record.sealedPayload.subscription
-                    ? { subscription: record.sealedPayload.subscription }
-                    : {}),
-            },
+            content: projectSealedProviderAccountUsageContentV4(record.sealedPayload),
             metadata,
         };
     }
@@ -1646,7 +1644,7 @@ async function unlinkQualifiedConnectedAccountQuotaWithCredentialAdmission(
             );
         }
         return "removed";
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 export async function unlinkQualifiedConnectedAccountQuota(
@@ -1690,7 +1688,7 @@ export async function requestQualifiedConnectedAccountQuotaRefresh(
             accountId: params.accountId,
             recordId: source.recordId,
         }, tx);
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 
 
@@ -1715,7 +1713,7 @@ export async function requestLegacyConnectedServiceQuotaCompatibilityRefresh(
             accountId: params.accountId,
             recordId: source.recordId,
         }, tx);
-    });
+    }, { /* Credential/group source admission and shared PAU merges require a coherent family. */ isolationLevel: "Serializable" });
 }
 type QualifiedProviderAccountUsageAdmission =
     | Readonly<{

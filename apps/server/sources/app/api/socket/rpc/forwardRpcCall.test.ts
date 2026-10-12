@@ -1,6 +1,6 @@
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/actions';
-import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { Server } from 'socket.io';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,6 +26,24 @@ vi.mock('@/app/monitoring/metrics/index', () => ({
 import { forwardRpcCall } from './forwardRpcCall';
 
 describe('forwardRpcCall', () => {
+    it.each(['absent', 'connected', 'other-machine', 'lookup-failed', 'session'] as const)(
+        'distinguishes an unavailable Machine from an unavailable operation (%s)', async state => {
+            const target = { id: 'daemon', data: { clientType: 'machine-scoped', machineId: state === 'other-machine' ? 'machine-2' : 'machine-1' },
+                timeout: () => ({ emitWithAck: vi.fn() }) };
+            const fetchSockets = vi.fn(async (room: string) => {
+                if (room.startsWith('rpc:')) return [];
+                if (state === 'lookup-failed') throw new Error('cluster unavailable');
+                return state === 'connected' || state === 'other-machine' ? [target] : [];
+            });
+            const io = { in: (room: string) => ({ timeout: () => ({ fetchSockets: () => fetchSockets(room) }),
+                fetchSockets: () => fetchSockets(room) }) } as unknown as Server;
+            if (state === 'session') machineFindFirstMock.mockResolvedValue(null);
+            const result = await forwardRpcCall({ io, targetUserId: 'user-1',
+                method: `machine-1:${RPC_METHODS.SESSION_AGENT_TRANSITION}`, callParams: {} });
+            expect(result).toMatchObject({ ok: false, errorCode: state === 'absent' || state === 'other-machine'
+                ? 'target_unavailable' : 'RPC_METHOD_NOT_AVAILABLE' });
+        },
+    );
     it('does not return a private continuation transport error echo', async () => {
         const secret = 'd26-recognizable-private-value';
         const emitWithAck = vi.fn().mockRejectedValue(new Error(`socket echoed ${secret}`));
@@ -46,7 +64,8 @@ describe('forwardRpcCall', () => {
 
     it.each([
         { method: RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE, timeoutMs: 20 * 60_000 },
-        { method: RPC_METHODS.CAPABILITIES_INVOKE, timeoutMs: undefined },
+        { method: 'unrelated.method', timeoutMs: 20 * 60_000 },
+        { method: RPC_METHODS.CAPABILITIES_INVOKE, timeoutMs: null },
         { method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, timeoutMs: null },
     ])('preserves a waiting $method through the real Socket.IO acknowledgement timer', async ({ method, timeoutMs }) => {
         vi.useFakeTimers();
@@ -78,6 +97,7 @@ describe('forwardRpcCall', () => {
                 callParams: 'encrypted-nonce-observer-request',
                 timeoutMs,
             }).finally(() => { settled = true; });
+            void forwarded.catch(() => {});
 
             await vi.advanceTimersByTimeAsync(11 * 60_000);
             expect(settled).toBe(false);
@@ -390,6 +410,7 @@ describe('forwardRpcCall', () => {
                 targetUserId: 'user-1',
                 method,
                 callParams: { applicationAttemptId: 'voice-attempt-1' },
+                timeoutMs: null,
             }).finally(() => {
                 settled = true;
             });
@@ -416,7 +437,7 @@ describe('forwardRpcCall', () => {
                 {
                     method,
                     params: { applicationAttemptId: 'voice-attempt-1' },
-                    timeoutMs: 2_147_483_647,
+                    timeoutMs: null,
                     callerAuthority: 'account_automation',
                 },
             );
@@ -463,6 +484,7 @@ describe('forwardRpcCall', () => {
                 targetUserId: 'user-1',
                 method,
                 callParams,
+                timeoutMs: null,
             }).finally(() => {
                 settled = true;
             });
@@ -481,7 +503,7 @@ describe('forwardRpcCall', () => {
                 {
                     method,
                     params: callParams,
-                    timeoutMs: 2_147_483_647,
+                    timeoutMs: null,
                     callerAuthority: 'account_automation',
                 },
             );
@@ -490,7 +512,7 @@ describe('forwardRpcCall', () => {
         }
     });
 
-    it.each([EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, RPC_METHODS.CAPABILITIES_INVOKE])('keeps a submitted %s relay open for the daemon cancellation response', async (method) => {
+    it.each([EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, RPC_METHODS.CAPABILITIES_INVOKE, 'unrelated.method'])('keeps a submitted %s relay open for the daemon cancellation response', async (method) => {
         const controller = new AbortController();
         let resolveDaemonResponse!: (value: unknown) => void;
         let markSubmitted!: () => void;
@@ -522,6 +544,7 @@ describe('forwardRpcCall', () => {
             targetUserId: 'user-1',
             method: `machine-1:${method}`,
             callParams: { actionId: 'session.wait.idle' },
+            timeoutMs: null,
             cancellation: {
                 targetRequestId: 'relay-request-1',
                 signal: controller.signal,
@@ -630,8 +653,8 @@ describe('forwardRpcCall', () => {
             },
         })).resolves.toEqual({
             ok: false,
-            error: 'RPC method not available',
-            errorCode: 'RPC_METHOD_NOT_AVAILABLE',
+            error: 'RPC target changed after request submission',
+            errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN,
         });
         expect(emitWithAck).toHaveBeenCalledTimes(1);
         expect(onSubmittedUnknown).toHaveBeenCalledTimes(1);

@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDbMocks, installDbModuleMock } from '../../testkit/dbMocks';
+import { createDbMocks, createDbTransactionMock, installDbModuleMock } from '../../testkit/dbMocks';
 
 // Only the database transport is replaced; shell admission and HTTP routing stay real.
-const mocks = createDbMocks({ artifact: ['findFirst'], publicSessionShare: ['findUnique'] } as const);
-installDbModuleMock(() => ({ db: mocks.db }));
+const mocks = createDbMocks({ artifact: ['findFirst'], publicSessionShare: ['findUnique'], homeSettings: ['findUnique'], homeGovernancePolicy: ['findUnique'] } as const);
+const transactions = createDbTransactionMock(() => mocks.db);
+installDbModuleMock(() => ({ db: transactions.wrapDb(mocks.db) }));
+// Home configuration now reads through the SQLite snapshot transport as well.
+vi.doMock('@/storage/prisma', async importOriginal => ({
+    ...await importOriginal<typeof import('@/storage/prisma')>(),
+    withSqliteReadSnapshot: transactions.transaction,
+}));
 const { withAuthenticatedTestApp } = await import('../../testkit/sqliteFastify');
 const { registerPublicShareViewerRoutes } = await import('./registerPublicShareViewerRoutes');
 const { resolveStoredContentPublicShareSubjectOrigin } = await import('@/app/share/storedContentPublicShareOrigin');
@@ -15,6 +21,8 @@ describe('public share landing recovery through the HTTP owner', () => {
         keyDerivation: 'fragment_v1', expiresAt: null, maxUses: null, useCount: 0 };
     beforeEach(() => {
         mocks.reset();
+        mocks.db.homeSettings.findUnique.mockResolvedValue(null);
+        mocks.db.homeGovernancePolicy.findUnique.mockResolvedValue(null);
         mocks.db.artifact.findFirst.mockResolvedValue({ id: 'artifact' });
         vi.stubEnv('HAPPIER_PUBLIC_SERVER_URL', 'https://home.example.test');
         vi.stubEnv('HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN', 'preview.example.test');
@@ -31,6 +39,12 @@ describe('public share landing recovery through the HTTP owner', () => {
             mocks.db.publicSessionShare.findUnique.mockResolvedValue(row);
             const available = await app.inject({ method: 'GET', url: `/s/${lookupId}`, headers });
             expect(available.statusCode).toBe(200);
+            // An encrypted bundle's stored policy is opened by the browser, so
+            // the shell is the network ceiling; the opaque guest narrows it.
+            for (const directive of ['script-src', 'style-src', 'img-src', 'font-src', 'connect-src']) {
+                expect(String(available.headers['content-security-policy']).split(';').find(part => part.trim().startsWith(directive)))
+                    .toContain('https:');
+            }
             for (const unavailable of [{ ...row, expiresAt: new Date(1) }, { ...row, maxUses: 1, useCount: 1 }, null]) {
                 mocks.db.publicSessionShare.findUnique.mockResolvedValue(unavailable);
                 const landing = await app.inject({ method: 'GET', url: `/s/${lookupId}`, headers });

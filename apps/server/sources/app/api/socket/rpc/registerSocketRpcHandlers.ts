@@ -47,6 +47,7 @@ import {
     SOCKET_RPC_EVENTS,
     SocketRpcCancellationPayloadSchema,
     SocketRpcRequestIdSchema,
+    SocketRpcTimeoutMsSchema,
     SessionTransferRoutingV1Schema,
     SessionTransferRpcMethodV1Schema,
     WorkspaceSyncSourceRoutingV1Schema,
@@ -98,6 +99,8 @@ import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, resolveCurrentSessionMachineFromS
 import { forwardRpcCall } from "./forwardRpcCall";
 import type { RpcForwardTargetGuard } from "./_types";
 import { buildRpcMethodRoom } from "./rpcMethodRoom";
+import { getMachineSocketRoom } from "../../socketRooms";
+import { isWorkflowDraftClientRpcMethod } from '@happier-dev/protocol/actions/workflowAuthoringAction';
 
 const MAX_RPC_METHOD_NAME_LENGTH = 512;
 const RPC_REGISTERED_METHODS_SOCKET_DATA_KEY = "rpcRegisteredMethods";
@@ -111,6 +114,7 @@ type SessionPublisherPresenceForRpc = Pick<
     ReturnType<typeof createSessionPublisherPresence>,
     | "captureExplicitMachineStop"
     | "finalizeExplicitMachineStop"
+    | "resolveProjectedCurrentPublisher"
     | "isCurrentPublisherProjection"
     | "runAsProjectedCurrentPublisher"
 >;
@@ -153,6 +157,14 @@ function normalizeRpcMethodName(value: unknown): string | null {
     const trimmed = value.trim();
     if (!trimmed) return null;
     const separatorIndex = trimmed.indexOf(':');
+    if (separatorIndex > 0 && isWorkflowDraftClientRpcMethod(trimmed.slice(separatorIndex + 1))) {
+        // Scope and draft identities have no schema length ceiling. Their
+        // encoded suffix is content carried by this known method family and
+        // remains under the existing Socket.IO packet boundary. Retain the
+        // ordinary method-name budget for the Machine and fixed method prefix.
+        return separatorIndex + 1 + `${RPC_METHODS.UI_ACTION_EXECUTE}.workflow.`.length <= MAX_RPC_METHOD_NAME_LENGTH
+            ? trimmed : null;
+    }
     const automationMethod = separatorIndex > 0
         && isUiBrowserAutomationDispatchMethod(trimmed.slice(separatorIndex + 1));
     // The pre-existing method budget covers the Machine prefix and method family. The
@@ -169,7 +181,7 @@ function parseMachineScopedRpcMethod(method: string): MachineScopedRpcMethod | n
     const machineId = method.slice(0, separatorIndex).trim();
     const rpcMethod = method.slice(separatorIndex + 1).trim();
     if (!machineId || (!MACHINE_VISIBLE_CLIENT_RPC_METHODS.has(rpcMethod)
-        && !isUiBrowserAutomationDispatchMethod(rpcMethod))) return null;
+        && !isUiBrowserAutomationDispatchMethod(rpcMethod) && !isWorkflowDraftClientRpcMethod(rpcMethod))) return null;
     return { machineId, rpcMethod };
 }
 
@@ -329,13 +341,6 @@ class RpcForwardGuardUnavailableError extends Error {
         super("RPC forward guard refused the operation");
         this.name = "RpcForwardGuardUnavailableError";
     }
-}
-
-function buildMachineScopedSocketRoom(params: Readonly<{
-    userId: string;
-    machineId: string;
-}>): string {
-    return `machine:${params.machineId}:${params.userId}`;
 }
 
 function readSocketData(socket: SocketDataCarrier): Record<string, unknown> {
@@ -503,9 +508,16 @@ function createCurrentMachineAdmissionTargetGuard(
     rpcMethod: string,
     requiredRole?: 'use',
     isHandoffCurrent?: () => Promise<boolean>,
+    sourceSocket?: Pick<Socket, 'data' | 'connected'>,
 ): RpcForwardTargetGuard {
-    const matches = (target: SocketDataCarrier) => readMachineScopedSocketMachineId(target) === admission.machineId
-        && readVerifiedMachineSocketInstallationIdFromSocketData(readSocketData(target)) === admission.installationId;
+    // Reverse client RPCs continue the admitted daemon's authority. Their
+    // recipient is an App, so installation custody belongs to the source.
+    const matches = (target: SocketDataCarrier) => {
+        const machineSocket = sourceSocket ?? target;
+        return (!sourceSocket || sourceSocket.connected === true)
+            && readMachineScopedSocketMachineId(machineSocket) === admission.machineId
+            && readVerifiedMachineSocketInstallationIdFromSocketData(readSocketData(machineSocket)) === admission.installationId;
+    };
     return {
         filterTargets: async (targets) => targets.filter(matches),
         runOperation: async ({ target, readLatestTarget, operation }) => {
@@ -759,10 +771,7 @@ function emitMachineScopedRpcAvailability(params: Readonly<{
 }>): void {
     const parsed = parseMachineScopedRpcMethod(params.method);
     if (!parsed) return;
-    params.io.to(buildMachineScopedSocketRoom({
-        userId: params.userId,
-        machineId: parsed.machineId,
-    })).emit(params.event, { method: params.method });
+    params.io.to(getMachineSocketRoom(params.userId, parsed.machineId)).emit(params.event, { method: params.method });
 }
 
 async function emitMachineScopedRpcRegisteredIfAvailable(params: Readonly<{
@@ -1083,7 +1092,12 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 callback?.(buildForbiddenRpcResponse());
                 return;
             }
-            const timeoutMs = (data as { timeoutMs?: unknown } | undefined)?.timeoutMs;
+            const parsedTimeout = SocketRpcTimeoutMsSchema.safeParse((data as { timeoutMs?: unknown } | undefined)?.timeoutMs);
+            if (!parsedTimeout.success) {
+                callback?.({ ok: false, error: "Invalid RPC deadline" });
+                return;
+            }
+            const timeoutMs = parsedTimeout.data;
             let authorization: SocketRpcAuthorizationContext | undefined;
             let sessionWriteTargetUserId: string | null = null;
             let sessionActionOrigin: SessionActionRpcOriginV1 | undefined;
@@ -1099,10 +1113,11 @@ export function registerSocketRpcHandlers(params: Readonly<{
 
             const rawTransferRouting = (data as { transferRouting?: unknown } | undefined)?.transferRouting;
             const reverseAutomationSeparator = method.indexOf(':');
-            if (reverseAutomationSeparator > 0
+            const reverseClientContinuation = reverseAutomationSeparator > 0
                 && (method.slice(reverseAutomationSeparator + 1) === RPC_METHODS.UI_ACTION_EXECUTE
-                    || isUiBrowserAutomationDispatchMethod(method.slice(reverseAutomationSeparator + 1)))
-                && (readMachineScopedSocketMachineId(params.socket) !== method.slice(0, reverseAutomationSeparator)
+                    || isWorkflowDraftClientRpcMethod(method.slice(reverseAutomationSeparator + 1))
+                    || isUiBrowserAutomationDispatchMethod(method.slice(reverseAutomationSeparator + 1)));
+            if (reverseClientContinuation && (readMachineScopedSocketMachineId(params.socket) !== method.slice(0, reverseAutomationSeparator)
                     || !await isMachineScopedRpcMethodAvailable({ userId: params.userId, method }))) {
                 // Continue only an Action admitted by the exact daemon. An Account
                 // caller cannot use this lower transport to skip Action approval.
@@ -1777,7 +1792,8 @@ export function registerSocketRpcHandlers(params: Readonly<{
                     const { kind: _kind, ...context } = admitted;
                     machineAdmission = context;
                     machineAdmissionGuard = createCurrentMachineAdmissionTargetGuard(context, rpcMethod,
-                        isHandoffCurrent ? 'use' : undefined, isHandoffCurrent);
+                        isHandoffCurrent ? 'use' : undefined, isHandoffCurrent,
+                        reverseClientContinuation ? params.socket : undefined);
                 }
             }
             const targetUserId = sessionWriteTargetUserId ?? machineAdmission?.custodianAccountId ?? actorAccountId;
@@ -1851,6 +1867,15 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 sessionAccessTargetGuard,
                 sessionActionSourceGuard,
                 machineAdmissionGuard,
+                ...(reverseAutomationSeparator > 0 && isWorkflowDraftClientRpcMethod(method.slice(reverseAutomationSeparator + 1)) ? [{
+                    // A mounted draft must have one answering client. Exclude
+                    // the caller exactly as the canonical target selector does.
+                    filterTargets: async targets => {
+                        const candidates = targets.filter(target => target.id !== params.socket.id);
+                        return candidates.length === 1 ? candidates : [];
+                    },
+                    runOperation: async ({ operation }) => ({ status: 'current' as const, value: await operation() }),
+                } satisfies RpcForwardTargetGuard] : []),
                 ...(finiteWakeCurrent ? [{
                     filterTargets: async targets => await finiteWakeCurrent() ? targets : [],
                     runOperation: async ({ operation }) => await finiteWakeCurrent()
@@ -1860,7 +1885,7 @@ export function registerSocketRpcHandlers(params: Readonly<{
                 ...(externalActionExecution?.success ? [{
                     filterTargets: async (targets) => targets,
                     runOperation: async ({ operation }) => await verifyExternalActionMachineRpcExecution(externalActionExecution.data, {
-                        method, ...(callerRequestId === undefined ? {} : { requestId: callerRequestId }),
+                        method: admittedMethod, ...(callerRequestId === undefined ? {} : { requestId: callerRequestId }),
                         resolveCurrentSessionMachine: input => resolveCurrentSessionMachineFromServer({ io: params.io, presence: params.sessionPublisherPresence, ...input }),
                         ...(callParams === undefined ? {} : { params: callParams }),
                         ...(isProjectSource && workspaceSyncSourceRouting ? { workspaceSyncSourceRouting } : {}),

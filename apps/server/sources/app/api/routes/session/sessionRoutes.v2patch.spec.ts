@@ -539,6 +539,7 @@ describe("sessionRoutes v2 patch", () => {
                 publisherPrecondition: {
                     machineId: "machine-1",
                     committedFenceMs: 123,
+                    publisherGeneration: '1',
                 },
                 expectedOwnerMetadata: OWNER_METADATA_ENVELOPE,
                 sharedMetadata: {
@@ -561,6 +562,7 @@ describe("sessionRoutes v2 patch", () => {
             publisherPrecondition: {
                 machineId: "machine-1",
                 committedFenceMs: 123,
+                publisherGeneration: '1',
             },
             expectedOwnerMetadata: OWNER_METADATA_ENVELOPE,
             sharedMetadata: {

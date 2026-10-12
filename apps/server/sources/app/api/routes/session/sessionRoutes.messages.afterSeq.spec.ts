@@ -44,6 +44,36 @@ describe("sessionRoutes v1 messages pagination", () => {
         catchupReturnedInc.mockReset();
     });
 
+    it('states exact admitted references or null on authenticated publication HTTP pages', async () => {
+        const surfaceItemReference = { v: 1, references: [{ v: 1, itemId: 'visual', itemRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ',
+            sourceAddress: { serverId: 'home', sessionId: 's1' } }] };
+        sessionMessageFindMany.mockResolvedValue([
+            { id: 'm1', seq: 1, localId: null, sidechainId: null, messageRole: 'agent',
+                content: { t: 'encrypted', c: 'sealed' }, surfaceItemReference,
+                createdAt: new Date(1), updatedAt: new Date(1) },
+            { id: 'm2', seq: 2, localId: null, sidechainId: null, messageRole: 'agent',
+                content: { t: 'encrypted', c: 'sealed2' }, surfaceItemReference: null,
+                createdAt: new Date(2), updatedAt: new Date(2) },
+        ]);
+        const app = createAuthenticatedTestApp();
+        registerSessionMessageRoutes(app);
+        await app.ready();
+        try {
+            const response = await app.inject({ method: 'GET',
+                url: '/v1/sessions/s1/messages?scope=main&projection=externalShareableV1',
+                headers: { 'x-test-user-id': 'u1' } });
+            expect(response.statusCode).toBe(200);
+            const page = SessionMessagesPageV1Schema.parse(response.json());
+            expect(page.messages).toEqual(expect.arrayContaining([
+                expect.objectContaining({ id: 'm1', surfaceItemReference }),
+                expect.objectContaining({ id: 'm2', surfaceItemReference: null }),
+            ]));
+            expect(sessionMessageFindMany).toHaveBeenCalledWith(expect.objectContaining({
+                select: expect.objectContaining({ surfaceItemReference: true }),
+            }));
+        } finally { await app.close(); }
+    });
+
     it("admits preview reads only for a proof-bound session.list effect", async () => {
         const app = createAuthenticatedTestApp();
         let routeConfig: RouteOptions["config"];

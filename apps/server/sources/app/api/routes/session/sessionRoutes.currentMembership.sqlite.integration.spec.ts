@@ -2,9 +2,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { db } from "@/storage/db";
+import { withSqliteReadSnapshot } from "@/storage/prisma";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { sessionRoutes } from "./sessionRoutes";
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
+import { inspectSessionAccessGrants } from "@/app/session/access/sessionAccessGrantInspection";
+import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
+import { readmitSessionRowsWithAdmissionInTx } from "@/app/session/access/sessionReadAdmission";
+import { SessionMetadataPrivacyUpgradeRequiredError } from "@/app/session/metadata/sessionMetadataRecipientProjection";
 
 type Deferred = Readonly<{
     promise: Promise<void>;
@@ -29,14 +35,18 @@ async function expectBarrierEnteredBeforeResponse(
     ])).resolves.toBe("barrier-entered");
 }
 
-function installPauseBeforeReadTransaction(): Readonly<{
+async function installPauseBeforeReadTransaction(): Promise<Readonly<{
     reached: Promise<void>;
     release: () => void;
     restore: () => void;
-}> {
+}>> {
     const reached = deferred();
     const release = deferred();
     const originalTransaction = db.$transaction;
+    // Capture the real storage-owned client, without replacing the snapshot
+    // owner or any access logic. BEGIN is the same boundary as $transaction.
+    const snapshotReader = await withSqliteReadSnapshot(async reader => reader);
+    const originalSnapshotExecute = snapshotReader.$executeRawUnsafe.bind(snapshotReader);
     let paused = false;
     let restored = false;
 
@@ -48,6 +58,18 @@ function installPauseBeforeReadTransaction(): Readonly<{
         }
         return await Reflect.apply(originalTransaction, undefined, args);
     }) as typeof db.$transaction;
+    Object.defineProperty(snapshotReader, "$executeRawUnsafe", {
+        configurable: true,
+        writable: true,
+        value: async (query: string, ...values: unknown[]) => {
+            if (!paused && query === "BEGIN DEFERRED;") {
+                paused = true;
+                reached.resolve();
+                await release.promise;
+            }
+            return await Reflect.apply(originalSnapshotExecute, snapshotReader, [query, ...values]);
+        },
+    });
 
     return {
         reached: reached.promise,
@@ -57,19 +79,34 @@ function installPauseBeforeReadTransaction(): Readonly<{
             restored = true;
             release.resolve();
             db.$transaction = originalTransaction;
+            Object.defineProperty(snapshotReader, "$executeRawUnsafe", {
+                configurable: true,
+                writable: true,
+                value: originalSnapshotExecute,
+            });
         },
     };
 }
 
-function installPauseBeforeSessionTurnRead(): Readonly<{
+async function installPauseBeforeModelRead(input: Readonly<{
+    model: "sessionTurn";
+    method: "findMany";
+} | {
+    model: "sessionMessage";
+    method: "findFirst" | "findMany";
+}>): Promise<Readonly<{
     reached: Promise<void>;
     release: () => void;
     restore: () => void;
-}> {
+}>> {
     const reached = deferred();
     const release = deferred();
-    const directDelegate = db.sessionTurn;
-    const originalDirectFindMany = directDelegate.findMany.bind(directDelegate);
+    const directDelegate = db[input.model];
+    // Prisma delegates are the real database boundary; preserve their receiver.
+    const originalDirectRead = (Reflect.get(directDelegate, input.method) as Function).bind(directDelegate);
+    const snapshotReader = await withSqliteReadSnapshot(async reader => reader);
+    const snapshotDelegate = snapshotReader[input.model];
+    const originalSnapshotRead = (Reflect.get(snapshotDelegate, input.method) as Function).bind(snapshotDelegate);
     const originalTransaction = db.$transaction;
     let paused = false;
     let restored = false;
@@ -81,12 +118,20 @@ function installPauseBeforeSessionTurnRead(): Readonly<{
         await release.promise;
     };
 
-    Object.defineProperty(directDelegate, "findMany", {
+    Object.defineProperty(directDelegate, input.method, {
         configurable: true,
         writable: true,
         value: async (...args: unknown[]) => {
             await pause();
-            return await Reflect.apply(originalDirectFindMany, directDelegate, args);
+            return await Reflect.apply(originalDirectRead, directDelegate, args);
+        },
+    });
+    Object.defineProperty(snapshotDelegate, input.method, {
+        configurable: true,
+        writable: true,
+        value: async (...args: unknown[]) => {
+            await pause();
+            return await Reflect.apply(originalSnapshotRead, snapshotDelegate, args);
         },
     });
     db.$transaction = (async (...args: unknown[]) => {
@@ -97,20 +142,20 @@ function installPauseBeforeSessionTurnRead(): Readonly<{
 
         return await Reflect.apply(originalTransaction, undefined, [
             async (tx: object) => {
-                const transactionDelegate = Reflect.get(tx, "sessionTurn") as object;
-                const originalFindMany = Reflect.get(transactionDelegate, "findMany") as Function;
+                const transactionDelegate = Reflect.get(tx, input.model) as object;
+                const originalRead = Reflect.get(transactionDelegate, input.method) as Function;
                 const wrappedDelegate = new Proxy(transactionDelegate, {
                     get(target, property, receiver) {
-                        if (property !== "findMany") return Reflect.get(target, property, receiver);
-                        return async (...findManyArgs: unknown[]) => {
+                        if (property !== input.method) return Reflect.get(target, property, receiver);
+                        return async (...readArgs: unknown[]) => {
                             await pause();
-                            return await Reflect.apply(originalFindMany, target, findManyArgs);
+                            return await Reflect.apply(originalRead, target, readArgs);
                         };
                     },
                 });
                 const wrappedTx = new Proxy(tx, {
                     get(target, property, receiver) {
-                        if (property === "sessionTurn") return wrappedDelegate;
+                        if (property === input.model) return wrappedDelegate;
                         return Reflect.get(target, property, receiver);
                     },
                 });
@@ -127,10 +172,15 @@ function installPauseBeforeSessionTurnRead(): Readonly<{
             if (restored) return;
             restored = true;
             release.resolve();
-            Object.defineProperty(directDelegate, "findMany", {
+            Object.defineProperty(directDelegate, input.method, {
                 configurable: true,
                 writable: true,
-                value: originalDirectFindMany,
+                value: originalDirectRead,
+            });
+            Object.defineProperty(snapshotDelegate, input.method, {
+                configurable: true,
+                writable: true,
+                value: originalSnapshotRead,
             });
             db.$transaction = originalTransaction;
         },
@@ -257,6 +307,297 @@ describe("sessionRoutes current shared-participant reads (integration)", () => {
         ]);
     });
 
+    it('denies a captured manager roster after capability downgrade during its snapshot', async () => {
+        const fixture = await createSharedSessionFixture();
+        const share = { sessionId_sharedWithUserId: { sessionId: fixture.sessionId, sharedWithUserId: fixture.collaboratorId } };
+        await db.sessionShare.update({ where: share, data: { accessLevel: 'admin' } });
+        const params = { actorAccountId: fixture.collaboratorId, sessionId: fixture.sessionId,
+            authentication: createPresentUserSessionAccessAuthentication() };
+        expect(await inspectSessionAccessGrants(params)).toMatchObject({ ok: true, value: { visibility: 'complete' } });
+        const reader = await withSqliteReadSnapshot(async tx => tx);
+        const delegate = reader.session;
+        const original = delegate.findUniqueOrThrow.bind(delegate);
+        const reached = deferred();
+        const release = deferred();
+        let paused = false;
+        Object.defineProperty(delegate, 'findUniqueOrThrow', { configurable: true, writable: true,
+            value: async (...args: Parameters<typeof original>) => {
+                if (!paused && args[0]?.select?.shares) { paused = true; reached.resolve(); await release.promise; }
+                return await original(...args);
+            } });
+        const response = inspectSessionAccessGrants(params);
+        try {
+            await expectBarrierEnteredBeforeResponse({ reached: reached.promise }, response);
+            await db.sessionShare.update({ where: share, data: { accessLevel: 'view' } });
+            release.resolve();
+            const result = await response;
+            expect(await inspectSessionAccessGrants(params)).toMatchObject({ ok: true, value: { visibility: 'self', grants: [] } });
+            expect(result).toMatchObject({ ok: false, error: 'session_access_forbidden' });
+        } finally {
+            release.resolve(); await response;
+            Object.defineProperty(delegate, 'findUniqueOrThrow', { configurable: true, writable: true, value: original });
+        }
+    });
+
+    it.each(['owner', 'mode mismatch', 'revoked'] as const)('confirms fresh detail admission with one read (%s)', async (scenario) => {
+        const fixture = await createSharedSessionFixture();
+        await db.account.update({ where: { id: fixture.ownerId }, data: {
+            ...createSignedAccountContentBinding(), encryptionMode: 'plain',
+        } });
+        await db.session.update({ where: { id: fixture.sessionId }, data: {
+            metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
+            ownerMetadata: JSON.stringify({ t: 'plain', v: { v: 1 } }),
+        } });
+        const captured = await db.session.findUniqueOrThrow({ where: { id: fixture.sessionId },
+            select: { id: true, encryptionMode: true, metadataLayoutVersion: true, ownerMetadata: true } });
+        if (scenario !== 'owner') await db.account.update({ where: { id: fixture.ownerId }, data: { encryptionMode: 'e2ee' } });
+        if (scenario === 'revoked') await revokeShare(fixture);
+        const reader = await withSqliteReadSnapshot(async tx => tx);
+        const reads: string[] = [];
+        const restores: Array<() => void> = [];
+        // Count genuine DB delegate reads and preserve the real admission/privacy owners.
+        for (const model of ['session', 'account'] as const) {
+            for (const method of ['findUnique', 'findMany'] as const) {
+                const delegate = reader[model];
+                const original = Reflect.get(delegate, method) as (...args: unknown[]) => Promise<unknown>;
+                Object.defineProperty(delegate, method, { configurable: true, writable: true,
+                    value: async (...args: unknown[]) => {
+                        reads.push(`${model}.${method}`);
+                        return await Reflect.apply(original, delegate, args);
+                    } });
+                // Prisma delegate methods are virtual: deleting an intercepted
+                // property does not restore the proxy's method on the next case.
+                restores.push(() => Object.defineProperty(delegate, method, {
+                    configurable: true, writable: true, value: original,
+                }));
+            }
+        }
+        try {
+            const admission = withSqliteReadSnapshot(tx => readmitSessionRowsWithAdmissionInTx(tx, {
+                accountId: scenario === 'revoked' ? fixture.collaboratorId : fixture.ownerId,
+                authentication: createPresentUserSessionAccessAuthentication(), accessMode: 'effective_access_v1',
+            }, [captured]));
+            if (scenario === 'mode mismatch') await expect(admission).rejects.toBeInstanceOf(SessionMetadataPrivacyUpgradeRequiredError);
+            else expect((await admission).get(fixture.sessionId)).toMatchObject({ status: scenario === 'owner' ? 'allowed' : 'unavailable' });
+            expect(reads).toEqual(['session.findMany']);
+        } finally { for (const restore of restores) restore(); }
+    });
+
+    it('confirms owner session detail with one fresh Session or Account delegate read', async () => {
+        const fixture = await createSharedSessionFixture();
+        await db.account.update({ where: { id: fixture.ownerId }, data: {
+            ...createSignedAccountContentBinding(), encryptionMode: 'plain',
+        } });
+        await db.session.update({ where: { id: fixture.sessionId }, data: {
+            metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
+            ownerMetadata: JSON.stringify({ t: 'plain', v: { v: 1 } }),
+        } });
+        await withAuthenticatedTestApp(app => sessionRoutes(app), async app => {
+            const reader = await withSqliteReadSnapshot(async tx => tx);
+            const execute = reader.$executeRawUnsafe.bind(reader);
+            const findUnique = reader.session.findUnique.bind(reader.session);
+            const findMany = reader.session.findMany.bind(reader.session);
+            const findAccount = reader.account.findUnique.bind(reader.account);
+            const findAccounts = reader.account.findMany.bind(reader.account);
+            let phase = -1;
+            const confirmationReads: string[] = [];
+            // Observe real persistent-database calls, without replacing admission
+            // or content projection. The second BEGIN is fresh confirmation.
+            Object.defineProperty(reader, '$executeRawUnsafe', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof execute>) => {
+                    if (args[0] === 'BEGIN DEFERRED;') phase++;
+                    return await execute(...args);
+                } });
+            Object.defineProperty(reader.session, 'findUnique', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof findUnique>) => {
+                    if (phase === 1) confirmationReads.push('findUnique');
+                    return await findUnique(...args);
+                } });
+            Object.defineProperty(reader.session, 'findMany', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof findMany>) => {
+                    if (phase === 1) confirmationReads.push('findMany');
+                    return await findMany(...args);
+                } });
+            Object.defineProperty(reader.account, 'findUnique', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof findAccount>) => {
+                    if (phase === 1) confirmationReads.push('account.findUnique');
+                    return await findAccount(...args);
+                } });
+            Object.defineProperty(reader.account, 'findMany', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof findAccounts>) => {
+                    if (phase === 1) confirmationReads.push('account.findMany');
+                    return await findAccounts(...args);
+                } });
+            try {
+                const result = await app.inject({ method: 'GET',
+                    url: `/v2/sessions/${fixture.sessionId}?accessProjectionVersion=1`,
+                    headers: { 'x-test-user-id': fixture.ownerId, 'x-happier-account-stored-content-protocol': '4' } });
+                expect(result.statusCode).toBe(200);
+                expect(result.json().session).toMatchObject({ id: fixture.sessionId,
+                    effectiveAccess: { level: 'owner' } });
+                expect(confirmationReads).toHaveLength(1);
+                expect(phase).toBe(1);
+            } finally {
+                Object.defineProperty(reader, '$executeRawUnsafe', { configurable: true, writable: true, value: execute });
+                Object.defineProperty(reader.session, 'findUnique', { configurable: true, writable: true, value: findUnique });
+                Object.defineProperty(reader.session, 'findMany', { configurable: true, writable: true, value: findMany });
+                Object.defineProperty(reader.account, 'findUnique', { configurable: true, writable: true, value: findAccount });
+                Object.defineProperty(reader.account, 'findMany', { configurable: true, writable: true, value: findAccounts });
+            }
+        });
+    });
+
+    it.each([
+        { methodId: 'key_challenge', statusCode: 403, error: 'team_authentication_required' },
+        { methodId: 'missing-method', statusCode: 503, error: 'team_authentication_unavailable' },
+    ])('preserves fresh Team authentication denial ($statusCode) for captured detail', async ({ methodId, statusCode, error }) => {
+        harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional',
+            HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: '1' });
+        const fixture = await createSharedSessionFixture();
+        await db.account.update({ where: { id: fixture.ownerId }, data: {
+            ...createSignedAccountContentBinding(), encryptionMode: 'plain',
+        } });
+        await db.account.update({ where: { id: fixture.collaboratorId }, data: {
+            ...createSignedAccountContentBinding(), encryptionMode: 'e2ee',
+        } });
+        await db.session.update({ where: { id: fixture.sessionId }, data: {
+            metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
+            ownerMetadata: JSON.stringify({ t: 'plain', v: { v: 1 } }),
+        } });
+        await revokeShare(fixture);
+        const team = await db.team.create({ data: { name: crypto.randomUUID() } });
+        const membership = await db.teamMembership.create({ data: {
+            teamId: team.id, accountId: fixture.collaboratorId, role: 'member', sessionAccessStartsAt: null,
+        } });
+        const grant = await db.sessionTeamGrant.create({ data: {
+            sessionId: fixture.sessionId, teamId: team.id, accessLevel: 'view', effectiveAt: new Date(),
+        } });
+        try {
+            await withAuthenticatedTestApp(app => sessionRoutes(app), async app => {
+                const reader = await withSqliteReadSnapshot(async tx => tx);
+                const original = reader.session.findUnique.bind(reader.session);
+                const reached = deferred();
+                const release = deferred();
+                let paused = false;
+                Object.defineProperty(reader.session, 'findUnique', { configurable: true, writable: true,
+                    value: async (...args: Parameters<typeof original>) => {
+                        const row = await original(...args);
+                        if (!paused && args[0]?.where?.id === fixture.sessionId) {
+                            paused = true; reached.resolve(); await release.promise;
+                        }
+                        return row;
+                    } });
+                const response = app.inject({ method: 'GET',
+                    url: `/v2/sessions/${fixture.sessionId}?accessProjectionVersion=1`,
+                    headers: { 'x-test-user-id': fixture.collaboratorId,
+                        'x-happier-account-stored-content-protocol': '4' } });
+                try {
+                    await expectBarrierEnteredBeforeResponse({ reached: reached.promise }, response);
+                    await db.team.update({ where: { id: team.id }, data: {
+                        authenticationPolicy: { v: 1, mode: 'restricted', accepted: [{ kind: 'home_method', methodId }] },
+                    } });
+                    release.resolve();
+                    const result = await response;
+                    expect(result.statusCode, result.body).toBe(statusCode);
+                    expect(result.json()).toEqual({ error });
+                } finally {
+                    release.resolve(); await response;
+                    Object.defineProperty(reader.session, 'findUnique', { configurable: true, writable: true, value: original });
+                }
+            });
+        } finally {
+            await db.sessionTeamGrant.delete({ where: { sessionId_teamId: { sessionId: grant.sessionId, teamId: grant.teamId } } });
+            await db.teamMembership.delete({ where: { id: membership.id } });
+            await db.team.delete({ where: { id: team.id } });
+        }
+    });
+
+    it('denies metadata disclosure after share revocation during its snapshot', async () => {
+        const fixture = await createSharedSessionFixture();
+        await db.account.update({ where: { id: fixture.ownerId }, data: {
+            ...createSignedAccountContentBinding(), encryptionMode: 'plain',
+        } });
+        await db.session.update({ where: { id: fixture.sessionId }, data: {
+            metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
+            ownerMetadata: JSON.stringify({ t: 'plain', v: { v: 1 } }),
+        } });
+        await withAuthenticatedTestApp(app => sessionRoutes(app), async app => {
+            const reader = await withSqliteReadSnapshot(async tx => tx);
+            const delegate = reader.session;
+            const original = delegate.findUnique.bind(delegate);
+            const reached = deferred();
+            const release = deferred();
+            let paused = false;
+            // Keep the real admission query and pause only once its snapshot is pinned.
+            Object.defineProperty(delegate, 'findUnique', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    const result = await original(...args);
+                    if (!paused && args[0]?.where?.id === fixture.sessionId) {
+                        paused = true; reached.resolve(); await release.promise;
+                    }
+                    return result;
+                } });
+            const request = { method: 'GET' as const,
+                url: `/v2/sessions/${fixture.sessionId}?accessProjectionVersion=1`,
+                headers: { 'x-test-user-id': fixture.collaboratorId, 'x-happier-account-stored-content-protocol': '4' } };
+            const response = app.inject(request);
+            try {
+                await expectBarrierEnteredBeforeResponse({ reached: reached.promise }, response);
+                await revokeShare(fixture);
+                release.resolve();
+                const result = await response;
+                expect((await app.inject(request)).statusCode).toBe(404);
+                expect(result.statusCode).toBe(404);
+            } finally {
+                release.resolve(); await response;
+                Object.defineProperty(delegate, 'findUnique', { configurable: true, writable: true, value: original });
+            }
+        });
+    });
+
+    it('denies captured owner metadata after owning Account mode changes during its snapshot', async () => {
+        const fixture = await createSharedSessionFixture();
+        await db.account.update({ where: { id: fixture.ownerId }, data: {
+            ...createSignedAccountContentBinding(), encryptionMode: 'plain',
+        } });
+        await db.session.update({ where: { id: fixture.sessionId }, data: {
+            metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }),
+            ownerMetadata: JSON.stringify({ t: 'plain', v: { v: 1 } }),
+        } });
+        await withAuthenticatedTestApp(app => sessionRoutes(app), async app => {
+            const request = { method: 'GET' as const,
+                url: `/v2/sessions/${fixture.sessionId}?accessProjectionVersion=1`,
+                headers: { 'x-test-user-id': fixture.ownerId, 'x-happier-account-stored-content-protocol': '4' } };
+            expect((await app.inject(request)).statusCode).toBe(200);
+            const reader = await withSqliteReadSnapshot(async tx => tx);
+            const delegate = reader.session;
+            const original = delegate.findUnique.bind(delegate);
+            const reached = deferred();
+            const release = deferred();
+            let paused = false;
+            Object.defineProperty(delegate, 'findUnique', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    const result = await original(...args);
+                    if (!paused && args[0]?.where?.id === fixture.sessionId) {
+                        paused = true; reached.resolve(); await release.promise;
+                    }
+                    return result;
+                } });
+            const response = app.inject(request);
+            try {
+                await expectBarrierEnteredBeforeResponse({ reached: reached.promise }, response);
+                await db.account.update({ where: { id: fixture.ownerId }, data: { encryptionMode: 'e2ee' } });
+                release.resolve();
+                const result = await response;
+                expect((await app.inject(request)).statusCode).toBe(409);
+                expect(result.statusCode).toBe(409);
+            } finally {
+                release.resolve(); await response;
+                Object.defineProperty(delegate, 'findUnique', { configurable: true, writable: true, value: original });
+            }
+        });
+    });
+
     it("returns only the server-derived coarse actor for an eligible external-shareable page", async () => {
         const fixture = await createSharedSessionFixture();
 
@@ -379,7 +720,7 @@ describe("sessionRoutes current shared-participant reads (integration)", () => {
 
     it("does not resolve a local message after a collaborator share is revoked before the deciding transaction", async () => {
         const fixture = await createSharedSessionFixture();
-        const barrier = installPauseBeforeReadTransaction();
+        const barrier = await installPauseBeforeReadTransaction();
 
         try {
             await withAuthenticatedTestApp(
@@ -406,7 +747,7 @@ describe("sessionRoutes current shared-participant reads (integration)", () => {
 
     it("returns unavailable rather than deleted or available after a share is revoked before action-reference lookup", async () => {
         const fixture = await createSharedSessionFixture();
-        const barrier = installPauseBeforeReadTransaction();
+        const barrier = await installPauseBeforeReadTransaction();
 
         try {
             await withAuthenticatedTestApp(
@@ -442,7 +783,7 @@ describe("sessionRoutes current shared-participant reads (integration)", () => {
 
     it("does not project turns after a collaborator share is revoked before the deciding turn query", async () => {
         const fixture = await createSharedSessionFixture();
-        const barrier = installPauseBeforeSessionTurnRead();
+        const barrier = await installPauseBeforeModelRead({ model: "sessionTurn", method: "findMany" });
 
         try {
             await withAuthenticatedTestApp(
@@ -460,6 +801,48 @@ describe("sessionRoutes current shared-participant reads (integration)", () => {
                     const response = await responsePromise;
                     expect(response.statusCode).toBe(404);
                     expect(response.json()).toEqual({ error: "Session not found" });
+                },
+            );
+        } finally {
+            barrier.restore();
+        }
+    });
+
+    it.each([
+        ["local message", "findFirst", "GET", "local"],
+        ["action reference", "findFirst", "POST", "reference"],
+        ["message page", "findMany", "GET", "page"],
+    ] as const)("does not disclose a %s after revocation before its deciding content read", async (_name, method, httpMethod, route) => {
+        const fixture = await createSharedSessionFixture();
+        const barrier = await installPauseBeforeModelRead({ model: "sessionMessage", method });
+        const url = route === "local"
+            ? `/v2/sessions/${fixture.sessionId}/messages/by-local-id/${fixture.localId}`
+            : route === "reference"
+                ? `/v1/sessions/${fixture.sessionId}/messages/action-reference/resolve`
+                : `/v1/sessions/${fixture.sessionId}/messages?afterSeq=0`;
+        try {
+            await withAuthenticatedTestApp(
+                app => sessionRoutes(app),
+                async app => {
+                    const responsePromise = app.inject({
+                        method: httpMethod,
+                        url,
+                        headers: { "x-test-user-id": fixture.collaboratorId },
+                        ...(route === "reference" ? { payload: {
+                            v: 1,
+                            sessionId: fixture.sessionId,
+                            messageId: fixture.messageId,
+                            observedRevision: fixture.observedRevision,
+                        } } : {}),
+                    });
+                    await expectBarrierEnteredBeforeResponse(barrier, responsePromise);
+                    await revokeShare(fixture);
+                    barrier.release();
+                    const response = await responsePromise;
+                    expect(response.statusCode).toBe(route === "reference" ? 200 : 404);
+                    expect(response.json()).toEqual(route === "reference"
+                        ? { status: "unavailable" }
+                        : { error: "Session not found" });
                 },
             );
         } finally {

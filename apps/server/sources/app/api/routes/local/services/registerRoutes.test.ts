@@ -228,6 +228,32 @@ async function exchangePreviewTokenForCookie(input: Readonly<{
 }
 
 describe("local service API route composition", () => {
+    it('keeps raw local-service public and private links isolated despite stored-content subpath opt-in', async () => {
+        const mod = await loadLocalServiceRoutesModule();
+        if (!mod) throw new Error('Local-service route owner unavailable');
+        const runtimes = mod.createLocalServiceRouteRuntimes({
+            HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH: 'true',
+            HAPPIER_PUBLIC_SERVER_URL: 'https://app.happier.test',
+            HANDY_MASTER_SECRET: 'master-secret',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: '1',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: '1',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: 'secret_link',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: '60000',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED: '0',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestAuditSink]: '1',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewRateLimitProfileIds]: 'default',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestRateLimitChecker]: '1',
+        });
+        expect(runtimes.preview.registerPreview({ resource: preview, accountId: 'user_1' })).toMatchObject({
+            ok: true, accessUrl: null, accessUnavailableReasonCode: 'preview_private_route_unavailable',
+        });
+        expect(runtimes.public.createExposure({ preview, requestedMode: 'secret_link', requestedTtlMs: 60_000,
+            actorId: 'user_1', sessionAuthorized: true, dnsTlsValid: true, rateLimitProfileId: 'default' })).toEqual({
+            ok: false, reasonCode: 'public_origin_unavailable',
+        });
+        expect(runtimes.public.getSnapshot({ machineId: preview.machineId, previewId: preview.previewId }).exposures).toEqual([]);
+    });
+
     it("registers private preview routes behind the canonical feature gate", async () => {
         const mod = await loadLocalServiceRoutesModule();
         expect(mod?.registerLocalServiceRoutes).toBeTypeOf("function");

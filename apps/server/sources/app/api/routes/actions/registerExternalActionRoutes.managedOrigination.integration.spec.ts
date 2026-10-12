@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type InjectOptions } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { Server } from 'socket.io';
 import tweetnacl from 'tweetnacl';
@@ -32,7 +32,7 @@ import type { Fastify as AppFastify } from '@/app/api/types';
 import { enableAuthentication } from '@/app/api/utils/enableAuthentication';
 import { createExternalActionDaemonDispatcher, type ExternalActionForwardRpcCall } from '@/app/api/socket/externalActionDispatcher';
 import { auth } from '@/app/auth/auth';
-import { verifyCurrentExternalActionPrincipal, verifyExternalActionDomainExecutionRequest } from '@/app/auth/externalActionExecutionAuthorization';
+import { projectExternalActionBoundPrincipal, verifyCurrentExternalActionPrincipal, verifyExternalActionDomainExecutionRequest } from '@/app/auth/externalActionExecutionAuthorization';
 import { createReleaseLessDeclarationV1 } from '@/app/plugins/availability/currentDeclaration';
 import { resolveMachineAccess, setMachineAccessGrantInTx, removeMachineAccessGrantInTx } from '@/app/machines/machineAccess';
 import { db, isPrismaErrorCode } from '@/storage/db';
@@ -222,6 +222,150 @@ describe('ordinary Account managed Action origination', () => {
         } finally { await instance.close(); }
     });
 
+    it.each(['account', 'machine'] as const)(
+        'originates a Provider describe %s input variant through the real Account proof route', async placement => {
+            const selected = await fixture(true);
+            const actionId = 'providers.connections.describe';
+            const target = { kind: 'machine' as const, machineId: selected.controller.machineId };
+            const envelope = { v: 1 as const, requestId: selected.requestId, target,
+                input: placement === 'machine' ? { machineId: selected.controller.machineId } : {} };
+            const instance = await app(async request => {
+                const admitted = ExternalActionDaemonDispatchRequestSchema.parse(request.callParams);
+                expect(admitted.principal).toMatchObject({ accountId: selected.account.id,
+                    authentication: { kind: 'account' } });
+                expect(admitted.executionAuthorization.binding).toMatchObject({ actionId, target,
+                    machineId: selected.controller.machineId });
+                return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({
+                    v: 1, actionId, requestId: selected.requestId,
+                    execution: { ok: true, result: { connections: [] } },
+                })) };
+            });
+            try {
+                const headers = { authorization: `Bearer ${selected.token}` };
+                const minted = await instance.inject({ method: 'POST',
+                    url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId), headers,
+                    payload: { v: 1, machineId: selected.controller.machineId, envelope } });
+                expect(minted.statusCode, minted.body).toBe(200);
+                const executionAuthorization = ExternalActionExecutionAuthorizationV1Schema.parse(minted.json());
+                const relayed = await instance.inject({ method: 'POST', url: `/v1/actions/${actionId}`, headers,
+                    payload: { v: 1, machineId: selected.controller.machineId, envelope, executionAuthorization } });
+                expect(relayed.statusCode, relayed.body).toBe(200);
+                expect(relayed.json()).toMatchObject({ execution: { ok: true, result: { connections: [] } } });
+            } finally { await instance.close(); }
+        },
+    );
+
+    it.each(['terminal', 'account'] as const)(
+        'admits the original %s session fork root without inventing Session requester provenance', async kind => {
+        const selected = await fixture(true);
+        const { session, presence, io } = await sourceFixture(selected);
+        const token = await auth.createToken(selected.account.id, undefined, {
+            kind, authority: kind === 'terminal' ? 'account_automation' : 'present_user',
+        });
+        const actionId = 'session.fork';
+        const envelope = { v: 1 as const, requestId: selected.requestId,
+            target: { kind: 'session' as const, sessionId: session.id },
+            input: { sessionId: session.id, strategy: 'replay', forkPoint: { type: 'latest' } } };
+        const result = { sessionId: 'forked-session' };
+        const instance = await app(async request => {
+            const admitted = ExternalActionDaemonDispatchRequestSchema.parse(request.callParams);
+            expect(admitted.actionId).toBe(actionId);
+            expect(admitted.principal).toMatchObject({ accountId: selected.account.id, authentication: { kind } });
+            expect(admitted.principal).not.toHaveProperty('sessionActionOrigin');
+            expect(admitted.executionAuthorization.binding).toMatchObject(selected.controller);
+            return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({
+                v: 1, actionId, requestId: selected.requestId, execution: { ok: true, result },
+            })) };
+        }, undefined, { io, presence });
+        const headers = { authorization: `Bearer ${token}` };
+        try {
+            const direct = await instance.inject({ method: 'POST', url: `/v1/actions/${actionId}`, headers, payload: envelope });
+            expect(direct.statusCode, direct.body).toBe(200);
+            expect(direct.json()).toMatchObject({ execution: { ok: true, result } });
+            const minted = await instance.inject({ method: 'POST',
+                url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId), headers,
+                payload: { v: 1, machineId: selected.controller.machineId, envelope } });
+            expect(minted.statusCode, minted.body).toBe(200);
+            const executionAuthorization = ExternalActionExecutionAuthorizationV1Schema.parse(minted.json());
+            const relay = () => instance.inject({ method: 'POST', url: `/v1/actions/${actionId}`, headers,
+                payload: { v: 1, machineId: selected.controller.machineId, envelope, executionAuthorization } });
+            const verifyCodec = (path = `/v1/machines/${encodeURIComponent(selected.controller.machineId)}`,
+                method = 'GET', body?: unknown, effectActionId = actionId) => verifyExternalActionDomainExecutionRequest({
+                authorizationToken: executionAuthorization.token, effectActionId,
+                encodedTarget: encodeExternalActionResolvedTargetV1(executionAuthorization.binding.target), method, path, body,
+                machineSignature: signExternalActionMachineRequestV1({ authorizationToken: executionAuthorization.token,
+                    effectActionId, target: executionAuthorization.binding.target,
+                    installationId: executionAuthorization.binding.installationId, requestId: executionAuthorization.binding.requestId,
+                    method, path, body, privateKey: selected.keys.secretKey }),
+            });
+            expect(await verifyCodec()).toMatchObject({ binding: { actionId, target: envelope.target } });
+            expect((await relay()).statusCode).toBe(200);
+            expect(await verifyCodec('/v1/machines/another-machine')).toBeNull();
+            expect(await verifyCodec(undefined, 'POST', {})).toBeNull();
+            expect(await verifyCodec(undefined, 'GET', undefined, 'session.message.send')).toBeNull();
+            await db.accessKey.deleteMany({ where: { accountId: selected.account.id,
+                machineId: selected.controller.machineId, sessionId: session.id } });
+            expect(await verifyCurrentExternalActionPrincipal(executionAuthorization.binding)).toBeNull();
+            expect(await verifyCodec()).toBeNull();
+            expect((await relay()).statusCode).toBe(401);
+            await inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: selected.account.id,
+                machineId: selected.controller.machineId, sessionId: session.id, data: 'opaque-access-key' }));
+            await db.machine.update({ where: { id: selected.controller.machineId }, data: { installationId: crypto.randomUUID(),
+                installationPublicKey: new Uint8Array(tweetnacl.sign.keyPair().publicKey) } });
+            expect((await relay()).statusCode).toBe(401);
+        } finally { await instance.close(); }
+    });
+
+    it.each(['terminal', 'account'] as const)(
+        'refuses an original %s root with no access to the target Session', async kind => {
+        const selected = await fixture(true);
+        const foreign = await fixture(true);
+        const { session, presence, io } = await sourceFixture(foreign);
+        const token = await auth.createToken(selected.account.id, undefined, {
+            kind, authority: kind === 'terminal' ? 'account_automation' : 'present_user',
+        });
+        const envelope = { v: 1 as const, requestId: selected.requestId,
+            target: { kind: 'session' as const, sessionId: session.id },
+            input: { sessionId: session.id, strategy: 'replay', forkPoint: { type: 'latest' } } };
+        const instance = await app(async () => { throw new Error('An inaccessible Session must never dispatch'); },
+            undefined, { io, presence });
+        const headers = { authorization: `Bearer ${token}` };
+        try {
+            const direct = await instance.inject({ method: 'POST', url: '/v1/actions/session.fork', headers, payload: envelope });
+            expect(direct.statusCode).toBe(200);
+            expect(direct.json()).toMatchObject({ execution: { ok: false, errorCode: 'target_unavailable' } });
+            const minted = await instance.inject({ method: 'POST',
+                url: bindExternalActionExecutionAuthorizationHttpPathV1('session.fork'), headers,
+                payload: { v: 1, machineId: selected.controller.machineId, envelope } });
+            expect(minted.statusCode).toBe(401);
+            expect(minted.json()).toMatchObject({ error: 'invalid_token' });
+        } finally { await instance.close(); }
+    });
+
+    it.each(['terminal', 'account'] as const)(
+        'refuses self-approval and unexposed placement for an original %s automation root', async kind => {
+        const selected = await fixture(true);
+        const { session, presence, io } = await sourceFixture(selected);
+        const token = await auth.createToken(selected.account.id, undefined, {
+            kind, authority: kind === 'terminal' ? 'account_automation' : 'present_user',
+        });
+        const instance = await app(async () => { throw new Error('A refused root must never dispatch'); }, undefined, { io, presence });
+        const headers = { authorization: `Bearer ${token}`, [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' };
+        try {
+            for (const actionId of ['session.permission.respond', 'approval.request.decide', 'ui.find']) {
+                const envelope = { v: 1, requestId: crypto.randomUUID(),
+                    target: { kind: 'session', sessionId: session.id }, input: {} };
+                for (const url of [`/v1/actions/${actionId}`, bindExternalActionExecutionAuthorizationHttpPathV1(actionId)]) {
+                    const response = await instance.inject({ method: 'POST', url, headers,
+                        payload: url.endsWith('/execution-authorization')
+                            ? { v: 1, machineId: selected.controller.machineId, envelope } : envelope });
+                    expect(response.statusCode, response.body).toBe(401);
+                    expect(response.json()).toMatchObject({ error: 'invalid_token' });
+                }
+            }
+        } finally { await instance.close(); }
+    });
+
     it.each(['machines.work.summary.get', 'machines.terminal.list'] as const)(
         'relays the original terminal %s root with automation authority and exact installed custody', async actionId => {
         const selected = await fixture(true);
@@ -328,8 +472,8 @@ describe('ordinary Account managed Action origination', () => {
                     binding: { accountId: selected.account.id, machineId: selected.controller.machineId, sessionId: session.id },
                     completeActivitySnapshot: { state: 'active', activeCount: 1 } })).status).toBe('registered');
             } });
-        const envelope = { v: 1, requestId: selected.requestId,
-            target: { kind: 'machine', machineId: selected.controller.machineId }, input: selected.input };
+        const envelope = { v: 1 as const, requestId: selected.requestId,
+            target: { kind: 'machine' as const, machineId: selected.controller.machineId }, input: selected.input };
         const origin = SessionActionRpcOriginV1Schema.parse({ v: 1,
             caller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 1 },
             sourceTurnId: 'admitted-turn', callerPermissionMode: 'default', requestId: selected.requestId });
@@ -401,7 +545,7 @@ describe('ordinary Account managed Action origination', () => {
                 installationId: root.binding.installationId, ciphertext: 'opaque' } };
             const body = { v: 1, machineId: selected.controller.machineId, envelope, executionAuthorization: admitted };
             const path = '/v1/actions/machines.managed.acquire';
-            const post = (payload: unknown = body, bearer = false) => instance.inject({ method: 'POST', url: path, payload,
+            const post = (payload: InjectOptions['payload'] = body, bearer = false) => instance.inject({ method: 'POST', url: path, payload,
                 headers: bearer ? { authorization: `Bearer ${selected.token}` } : {
                     [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token,
                     [EXTERNAL_ACTION_EFFECT_ACTION_HEADER]: root.binding.actionId,
@@ -467,7 +611,7 @@ describe('ordinary Account managed Action origination', () => {
             carrier = { ...root, requesterAccountContext: { kind: 'installation_sealed_v1',
                 installationId: root.binding.installationId, ciphertext: 'opaque' } };
             const body = { v: 1, machineId: destination.controller.machineId, envelope, executionAuthorization: carrier };
-            const relay = (payload: unknown = body) => instance.inject({ method: 'POST', url: '/v1/actions/approval.request.decide',
+            const relay = (payload: InjectOptions['payload'] = body) => instance.inject({ method: 'POST', url: '/v1/actions/approval.request.decide',
                 headers: { authorization: `Bearer ${reviewer.token}` }, payload });
             const result = await relay();
             if (transportErrors.length > 0) throw transportErrors[0];
@@ -578,7 +722,7 @@ describe('ordinary Account managed Action origination', () => {
         const selected = await fixture(true);
         const source = await sourceFixture(selected);
         const instance = await app(async () => { throw new Error('Fact reporting must not dispatch another Action'); }, undefined, source);
-        const envelope = { v: 1, requestId: selected.requestId,
+        const envelope = { v: 1 as const, requestId: selected.requestId,
             target: { kind: 'machine' as const, machineId: selected.controller.machineId }, input: selected.input };
         const origin = SessionActionRpcOriginV1Schema.parse({ v: 1,
             caller: { kind: 'session', sessionId: source.session.id, starterDepth: 0, turnDepth: 1 },
@@ -595,7 +739,7 @@ describe('ordinary Account managed Action origination', () => {
                     sessionActionSource: selected.controller, installationProof } });
             expect(issued.statusCode, issued.body).toBe(200);
             let authorization = ExternalActionExecutionAuthorizationV1Schema.parse(issued.json());
-            const post = (path: string, body: unknown) => instance.inject({ method: 'POST', url: path, payload: body,
+            const post = (path: string, body: InjectOptions['payload']) => instance.inject({ method: 'POST', url: path, payload: body,
                 headers: { [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: authorization.token,
                     [EXTERNAL_ACTION_EFFECT_ACTION_HEADER]: authorization.binding.actionId,
                     [EXTERNAL_ACTION_RESOLVED_TARGET_HEADER]: encodeExternalActionResolvedTargetV1(authorization.binding.target),
@@ -945,7 +1089,7 @@ describe('ordinary Account managed Action origination', () => {
                 headers: { authorization: `Bearer ${actor.token}` }, payload: { v: 1, machineId: guest.id, envelope } });
             expect(issued.statusCode, issued.body).toBe(200);
             const authority = ExternalActionExecutionAuthorizationV1Schema.parse(issued.json());
-            const post = (path: string, body: unknown) => instance.inject({ method: 'POST', url: path, payload: body, headers: {
+            const post = (path: string, body: InjectOptions['payload']) => instance.inject({ method: 'POST', url: path, payload: body, headers: {
                 [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: authority.token,
                 [EXTERNAL_ACTION_EFFECT_ACTION_HEADER]: 'machines.environment.apply',
                 [EXTERNAL_ACTION_RESOLVED_TARGET_HEADER]: encodeExternalActionResolvedTargetV1(authority.binding.target),
@@ -973,6 +1117,87 @@ describe('ordinary Account managed Action origination', () => {
             expect(readOnlyReport.json()).toEqual({ code: 'permission_denied' });
             expect((await db.managedMachine.findUniqueOrThrow({ where: { id: row.id } })).environmentSetup)
                 .toEqual({ environment, state: 'pending' });
+        } finally { await instance.close(); }
+    });
+
+    it.each(['ui', 'voice', 'session'] as const)('retains the captured %s authority through managed setup proof issuance and guest dispatch', async originKind => {
+        const selected = await fixture(true);
+        const source = originKind === 'session' ? await sourceFixture(selected) : undefined;
+        const origin = source ? SessionActionRpcOriginV1Schema.parse({ v: 1,
+            caller: { kind: 'session', sessionId: source.session.id, starterDepth: 0, turnDepth: 0 },
+            sourceTurnId: 'admitted-turn', callerPermissionMode: 'default', workspaceWrites: 'allow',
+            requestId: selected.requestId }) : undefined;
+        const authority = originKind === 'ui' ? 'present_user' : 'account_automation';
+        const guestKeys = tweetnacl.sign.keyPair();
+        const guest = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: selected.account.id,
+            active: true, operationProtocolCapabilitiesRevision: 1, operationProtocolCapabilities: capabilities,
+            metadata: encodePlainMachineStoredContent({ host: 'guest', platform: 'linux', happyCliVersion: 'test',
+                homeDir: '/home/guest', happyHomeDir: '/home/guest/.happier' }),
+            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'),
+            installationId: crypto.randomUUID(), installationPublicKey: new Uint8Array(guestKeys.publicKey) } });
+        let delivered: ReturnType<typeof ExternalActionDaemonDispatchRequestSchema.parse> | undefined;
+        const instance = await app(async request => {
+            delivered = ExternalActionDaemonDispatchRequestSchema.parse(request.callParams);
+            return { ok: true, result: { kind: 'invalid_request', errorCode: 'invalid_envelope' } };
+        }, undefined, source);
+        try {
+            const rootEnvelope = { v: 1 as const, requestId: selected.requestId,
+                target: { kind: 'machine' as const, machineId: selected.controller.machineId }, input: selected.input };
+            const installationProof = origin ? signMachineInstallationProof({ privateKey: selected.keys.secretKey,
+                payload: { version: 1, accountId: selected.account.id, ...selected.controller,
+                    externalActionOrigin: { homeId, actionId: 'machines.managed.acquire', requestId: selected.requestId,
+                        requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(rootEnvelope), origin } } }) : undefined;
+            const issued = await instance.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1('machines.managed.acquire'),
+                headers: { authorization: `Bearer ${selected.token}`,
+                    ...(authority === 'account_automation' ? { [AUTHORITY_CEILING_HEADER_V1]: authority } : {}) },
+                payload: { v: 1, machineId: selected.controller.machineId, envelope: rootEnvelope,
+                    ...(origin ? { sessionActionOrigin: origin, sessionActionSource: selected.controller, installationProof } : {}) } });
+            expect(issued.statusCode, issued.body).toBe(200);
+            const root = ExternalActionExecutionAuthorizationV1Schema.parse(issued.json());
+            const presetId = crypto.randomUUID();
+            await db.managedMachinePreset.create({ data: { id: presetId, homeId, custodianAccountId: selected.account.id, name: 'Setup',
+                launch: selected.input.selection.launch, controllerMachineId: selected.controller.machineId,
+                controllerInstallationId: selected.controller.installationId, environment: { setupScript: 'echo configured' } } });
+            // The retained paid resource is the real Home owner boundary after
+            // the parent acquire's approved replay, without invoking native IO.
+            const row = await db.managedMachine.create({ data: { homeId, custodianAccountId: selected.account.id,
+                controllerMachineId: selected.controller.machineId, controllerInstallationId: selected.controller.installationId,
+                admittedActionRequestId: selected.requestId, admittedInput: { computeInput: selected.input, continuation: null,
+                    environmentSetup: { requestEnvelopeDigest: root.binding.requestEnvelopeDigest } },
+                presetId, presetRevision: 1, environmentSetup: { environment: { setupScript: 'echo configured' }, state: 'pending' },
+                launch: selected.input.selection.launch, allocation: 'bound', resource: { contributionRef: selected.input.selection.launch.provider,
+                    schemaVersion: 1, value: { id: 'approved-paid-resource' } }, enrolledMachineId: guest.id,
+                retention: selected.input.selection.retention, wakeOnAcceptedMessage: false } });
+            const body = { v: 1, machineId: guest.id,
+                envelope: { v: 1 as const, requestId: selected.requestId, target: { kind: 'machine' as const, machineId: guest.id },
+                    input: { homeId, machineId: guest.id, presetId, presetRevision: 1 } },
+                managedContinuation: { managedId: row.id, creationRequestId: selected.requestId, expectedIntentRevision: 0 } };
+            const headersFor = (path: string) => ({
+                [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token,
+                [EXTERNAL_ACTION_EFFECT_ACTION_HEADER]: 'machines.managed.acquire',
+                [EXTERNAL_ACTION_RESOLVED_TARGET_HEADER]: encodeExternalActionResolvedTargetV1(root.binding.target),
+                [AUTHORITY_CEILING_HEADER_V1]: authority,
+                [EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]: signExternalActionMachineRequestV1({ authorizationToken: root.token,
+                    effectActionId: 'machines.managed.acquire', target: root.binding.target, installationId: root.binding.installationId,
+                    requestId: root.binding.requestId, method: 'POST', path, body, privateKey: selected.keys.secretKey }),
+            });
+            const mintPath = bindExternalActionExecutionAuthorizationHttpPathV1('machines.environment.apply');
+            const minted = await instance.inject({ method: 'POST', url: mintPath, payload: body, headers: headersFor(mintPath) });
+            expect(minted.statusCode, minted.body).toBe(200);
+            const child = ExternalActionExecutionAuthorizationV1Schema.parse(minted.json());
+            const current = await verifyCurrentExternalActionPrincipal(child.binding);
+            expect(current).not.toBeNull();
+            expect(projectExternalActionBoundPrincipal(child.binding, current!, authority)?.authority).toBe(authority);
+            const dispatchPath = '/v1/actions/machines.environment.apply';
+            await instance.inject({ method: 'POST', url: dispatchPath, payload: body, headers: headersFor(dispatchPath) });
+            expect(delivered?.principal).toMatchObject({ accountId: selected.account.id, authority });
+            if (origin) expect(delivered?.principal).toHaveProperty('sessionActionOrigin', origin);
+            if (originKind === 'voice') {
+                // A new present-user claim must never raise an already narrowed principal.
+                expect(projectExternalActionBoundPrincipal(root.binding,
+                    { accountId: selected.account.id, authentication: { kind: 'account', tokenEpoch: selected.account.tokenEpoch },
+                        authority: 'account_automation' }, 'present_user')?.authority).toBe('account_automation');
+            }
         } finally { await instance.close(); }
     });
 
@@ -1117,8 +1342,8 @@ describe('ordinary Account managed Action origination', () => {
             const agentStart = { directory: { kind: 'path' as const, path: '/repo' },
                 agentTarget: { kind: 'agent' as const, identity: { pluginId: 'native.agent', localId: 'agent' } },
                 creationKey: 'guest-start', initialInput: { text: 'Original retained Agent continuation' } };
-            const rootEnvelope = { v: 1, requestId: selected.requestId,
-                target: { kind: 'machine', machineId: selected.controller.machineId },
+            const rootEnvelope = { v: 1 as const, requestId: selected.requestId,
+                target: { kind: 'machine' as const, machineId: selected.controller.machineId },
                 input: ManagedAcquireInputV1Schema.parse({ ...selected.input, agentStart }) };
             const installationProof = origin ? signMachineInstallationProof({ privateKey: selected.keys.secretKey,
                 payload: { version: 1, accountId: selected.account.id, ...selected.controller,

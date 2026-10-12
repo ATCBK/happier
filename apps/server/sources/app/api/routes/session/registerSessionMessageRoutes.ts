@@ -2,7 +2,7 @@ import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere
 import type { Prisma } from "@prisma/client";
 import type { FastifyRequest } from "fastify";
 import { z } from "zod";
-import { SessionHistoricalTranscriptImportV3Schema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS, SessionHistoricalTranscriptImportV3Schema, SessionTranscriptSurfaceItemReferenceInputV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 
 import { buildMessageUpdatedUpdate, buildNewMessageUpdate, eventRouter } from "@/app/events/eventRouter";
 import { catchupFollowupFetchesCounter, catchupFollowupReturnedCounter } from "@/app/monitoring/metrics/index";
@@ -23,7 +23,7 @@ import {
     SessionTranscriptObservationProvenanceV1Schema,
     deriveExternalShareableActorFromAdmissionReceiptV1,
     isRecoveredHistoryTranscriptObservationProvenance,
-    parseSessionMessageDeliveryResolutionV1,
+    readStoredSessionMessageDeliveryResolutionV1,
     type SessionMessageRole,
 } from "@happier-dev/protocol";
 import { isSessionAgentTransitionDividerLocalId } from "@happier-dev/protocol";
@@ -60,7 +60,7 @@ import {
     type SessionTurnProjectionSeqs,
 } from "./resolveSessionTurnProjectionSeqs";
 import { publishSessionReadyProjectionUpdate } from "@/app/session/ready/publishSessionReadyProjectionUpdate";
-import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
+import { readCurrentSessionAccessForOperation, resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { db } from "@/storage/db";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
@@ -133,6 +133,7 @@ const SessionTranscriptMessagePageResponseSchema = z.object({
         sourceCreatedAt: z.number().int().min(0).optional(),
         sourceUpdatedAt: z.number().int().min(0).optional(),
         transcriptObservationProvenance: SessionTranscriptObservationProvenanceV1Schema.optional(),
+        surfaceItemReference: SessionTranscriptSurfaceItemReferenceInputV1Schema.nullable().optional(),
         externalShareableActor: ExternalShareableActorV1Schema.optional(),
         /**
          * Authenticated-reader only. External/public-link projections keep their
@@ -157,6 +158,7 @@ function deriveExternalShareableActor(params: Readonly<{
 }>) {
     const admittedActor = deriveExternalShareableActorFromAdmissionReceiptV1(
         params.inputAdmissionReceipt,
+        'stored',
     );
     if (admittedActor) return admittedActor;
     if (parseSessionMessageRole(params.messageRole) !== "user") return null;
@@ -330,7 +332,12 @@ export function registerSessionMessageRoutes(app: Fastify) {
                     select: SESSION_TRANSCRIPT_PUBLICATION_SELECT,
                 });
             },
-        }), { readOnly: true });
+        }), { isolationLevel: "Serializable" /* Message content, storage authority and access admission must come from one snapshot. */, readOnly: true });
+        if (resolution.status !== "unavailable" && (await readCurrentSessionAccessForOperation({
+            accountId: request.userId, sessionId, authentication, capability: "readTranscript",
+        })).status !== "allowed") {
+            return reply.send({ status: "unavailable" });
+        }
         return reply.send(resolution);
     });
 
@@ -379,7 +386,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
         const { sessionId, localId } = request.params;
         const authentication = readSessionAccessAuthenticationFromRequest(request);
 
-        const { row, accessDecision, accountActor } = await inTx(async (tx) => {
+        const { row, accessDecision: snapshotAccessDecision, accountActor } = await inTx(async (tx) => {
             const publication = await loadSessionTranscriptPublication(tx, sessionId);
             const row = await tx.sessionMessage.findFirst({
                 where: buildSessionMessagePublicationWhere({
@@ -412,7 +419,10 @@ export function registerSessionMessageRoutes(app: Fastify) {
                 accessDecision: await resolveSessionAccessForOperation(tx, { accountId: userId, sessionId, authentication }),
                 accountActor: row ? (await projectSessionMessageAccountActors(tx, [row]))[0] ?? null : null,
             };
-        }, { readOnly: true });
+        }, { isolationLevel: "Serializable" /* Message content, storage authority and access admission must come from one snapshot. */, readOnly: true });
+        const accessDecision = snapshotAccessDecision.status === "allowed"
+            ? await readCurrentSessionAccessForOperation({ accountId: userId, sessionId, authentication, capability: "readTranscript" })
+            : snapshotAccessDecision;
         if (accessDecision.status === "authentication_required") {
             return reply.code(403).send({ error: "team_authentication_required" });
         }
@@ -438,7 +448,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
                 accountActor,
                 ...projectSessionInputAdmissionReceipt(row.inputAdmissionReceipt),
                 ...(() => {
-                    const deliveryResolution = parseSessionMessageDeliveryResolutionV1(row.deliveryResolution);
+                    const deliveryResolution = readStoredSessionMessageDeliveryResolutionV1(row.deliveryResolution);
                     return deliveryResolution ? { deliveryResolution } : {};
                 })(),
                 createdAt: row.createdAt.getTime(),
@@ -592,7 +602,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
             hasMore,
             publicationBlocked,
             externalShareableSnapshot,
-            accessDecision,
+            accessDecision: snapshotAccessDecision,
             turnProjectionNextBeforeSeq,
             pageAccountActors,
         } = await inTx(async (tx) => {
@@ -659,6 +669,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
                     sourceCreatedAt: true,
                     sourceUpdatedAt: true,
                     transcriptObservationProvenance: true,
+                    surfaceItemReference: true,
                     inputAdmissionReceipt: true,
                     authorAccountId: true,
                 },
@@ -849,7 +860,10 @@ export function registerSessionMessageRoutes(app: Fastify) {
                         authorAccountId: v.authorAccountId,
                     }))),
             };
-        }, { readOnly: true });
+        }, { isolationLevel: "Serializable" /* Message content, storage authority and access admission must come from one snapshot. */, readOnly: true });
+        const accessDecision = snapshotAccessDecision.status === "allowed"
+            ? await readCurrentSessionAccessForOperation({ accountId: userId, sessionId, authentication, capability: "readTranscript" })
+            : snapshotAccessDecision;
         if (accessDecision.status === "authentication_required") {
             return reply.code(403).send({ error: "team_authentication_required" });
         }
@@ -905,7 +919,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
                     return reference ? { messageActionReference: reference } : {};
                 })() : {}),
                 ...(!sessionListPreviewProjection ? (() => {
-                    const deliveryResolution = parseSessionMessageDeliveryResolutionV1(v.deliveryResolution);
+                    const deliveryResolution = readStoredSessionMessageDeliveryResolutionV1(v.deliveryResolution);
                     return deliveryResolution ? { deliveryResolution } : {};
                 })() : {}),
                 localId: v.localId,
@@ -937,6 +951,11 @@ export function registerSessionMessageRoutes(app: Fastify) {
                     });
                     return externalShareableActor ? { externalShareableActor } : {};
                 })(),
+                // Only the explicit publication page proves reference completeness.
+                // Omission remains compatible on ordinary/predecessor read surfaces.
+                ...(externalShareableProjection
+                    ? { surfaceItemReference: v.surfaceItemReference ?? null }
+                    : {}),
                 // Explicit object-or-null: a current server always states whether
                 // it proved an Account actor, so a client can retract stale
                 // attribution. Omission is reserved for older producers.
@@ -968,7 +987,7 @@ export function registerSessionMessageRoutes(app: Fastify) {
                     localId: z.string().trim().min(1),
                     content: SessionStoredMessageContentSchema,
                     messageRole: SessionMessageRoleSchema.optional(),
-                })).min(1).max(500),
+                })).min(1).max(SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS),
             }),
             response: {
                 200: z.object({

@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { createCipheriv, randomBytes } from 'node:crypto';
-import type { FastifyRequest } from 'fastify';
+import { maxHeaderSize } from 'node:http';
+import type { FastifyRequest, InjectOptions } from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
 import tweetnacl from "tweetnacl";
 import { decodeBase64, encodeBase64 } from 'privacy-kit';
@@ -13,6 +14,7 @@ import {
     EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
     EXTERNAL_ACTION_RESOLVED_TARGET_HEADER,
     ExternalActionExecutionAuthorizationV1Schema,
+    externalActionExecutionAuthorizationRequestSchemaForActionV1,
     ExternalActionRequestEnvelopeV1Schema,
     computeExternalActionRequestEnvelopeDigestV1,
     bindExternalActionExecutionAuthorizationHttpPathV1,
@@ -23,11 +25,13 @@ import {
     signExternalActionMachineRequestV1,
     signExternalActionMachineRpcRequestV1,
     createExternalActionDaemonDispatchResponseV1,
+    createExternalActionDaemonDispatchResponse,
     prepareExternalActionResponseEnvelopeV1,
-    EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2,
     type ExternalActionRequestEnvelopeV1,
     type ExternalActionServerPrincipalV1,
+    type ExternalActionDaemonDispatchRequest,
 } from "@happier-dev/protocol/actions";
+import { EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2 } from '@happier-dev/protocol/actions/externalActionApi';
 import { API_TOKEN_FULL_GRANT_V1, MACHINE_PLAIN_DATA_KEY_MARKER, SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, ACCOUNT_API_TOKENS_CREATE_HTTP_PATH_V1, encodePlainMachineStoredContent, encodePasswordCredentialFieldV1, type AccountPasswordCredentialV1 } from "@happier-dev/protocol";
 import { SOCKET_RPC_EVENTS, SessionActionRpcOriginV1Schema, WorkspaceSyncSourceContextV1Schema, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncSourceWriterTargetRoutingV1Schema } from "@happier-dev/protocol/socketRpc";
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -55,6 +59,10 @@ import { registerAccountEncryptionRoutes } from "@/app/api/routes/account/regist
 import { registerAccountSettingsRoutes } from "@/app/api/routes/account/registerAccountSettingsRoutes";
 import { kvRoutes } from '@/app/api/routes/kv/kvRoutes';
 import { SCM_REVIEWED_MARKS_KV_PREFIX, buildScmReviewedMarksKey } from '@happier-dev/protocol/scm/reviewedMarks';
+import { registerQualifiedConnectedAccountCredentialRoutesV4 } from '@/app/api/routes/connect/qualifiedConnectedAccounts/registerQualifiedConnectedAccountCredentialRoutesV4';
+import { mutateQualifiedConnectedServiceCredential } from '@/app/api/routes/connect/qualifiedConnectedAccounts/credentialRepository';
+import { writeQualifiedProviderAccountUsageRecord } from '@/app/api/routes/connect/qualifiedConnectedAccounts/usageRepository';
+import { createUsageSnapshot } from '@/app/api/routes/connect/providerAccountUsageTestkit';
 import { homeGovernanceRoutes } from "@/app/api/routes/home/homeGovernanceRoutes";
 import { featuresRoutes } from "@/app/api/routes/features/featuresRoutes";
 import { registerSessionListingRoutes } from "@/app/api/routes/session/registerSessionListingRoutes";
@@ -65,7 +73,7 @@ import { projectSourceRoutes } from '@/app/api/routes/projects/projectSourceRout
 import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import { auth } from "@/app/auth/auth";
-import { verifyExternalActionMachineRpcExecution, verifyCurrentExternalActionPrincipal, verifyWorkspaceSyncHandoffSourceAuthorization, verifyExternalActionDomainExecutionRequest } from "@/app/auth/externalActionExecutionAuthorization";
+import { verifyExternalActionMachineRpcExecution, verifyCurrentExternalActionPrincipal, verifyWorkspaceSyncHandoffSourceAuthorization, verifyExternalActionDomainExecutionRequest, isOriginalAccountExecutionAction, isOriginalTerminalExecutionAction } from "@/app/auth/externalActionExecutionAuthorization";
 import { qualifyTeamAuthenticationInTx } from "@/app/auth/entry/qualifyTeamAuthentication";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
@@ -100,10 +108,19 @@ import { defineMachineProvisionerSchemas, defineMachineProvisionerReconciliation
     MachineProvisionerBootstrapCarrierV1Schema, MachineProvisionerObservationV1Schema, MachineProvisionerPowerResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 
 import { registerExternalActionRoutes } from "./registerExternalActionRoutes";
+import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { registerSessionArchiveRoutes } from '@/app/api/routes/session/registerSessionArchiveRoutes';
+import { registerSessionBoardRoutes } from '@/app/api/routes/session/registerSessionBoardRoutes';
+import { initializeSessionSystemRecordsProtocolV1Activation, resetSessionSystemRecordsProtocolV1ActivationForTests } from '@/app/session/systemRecords/sessionSystemRecordProtocolContract';
+import { readSessionSystemRecordV1 } from '@/app/session/systemRecords/sessionSystemRecordService';
 import { serializeAutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol';
 import { encodeAutomationSessionLifecycleConfiguration } from '@/app/automations/automationSessionLifecycleConfigurationCodec';
 import { deleteAutomationTrigger } from '@/app/automations/automationCrudService';
+import { registerWorkflowRunStorageRoutes } from '@/app/api/routes/automations/registerWorkflowRunStorageRoutes';
+import { createSignedPluginInstallationPublisherHeader } from '@/testkit/pluginInstallationPublisherTestkit';
+import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 } from '@happier-dev/protocol';
+import { materializeWorkflowAcceptedSnapshotFixture } from '@/testkit/workflowAcceptedSnapshot';
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows';
 
 const ACTION_ID = "teams.policy.set" as const;
 const authorizationRequests = new Map<string, Readonly<{
@@ -137,6 +154,7 @@ describe("external Action execution authorization", () => {
                 HAPPIER_FEATURE_SESSIONS_FOLLOWING__ENABLED: "1",
             },
         });
+        await expect(initializeSessionSystemRecordsProtocolV1Activation(db)).resolves.toBe(true);
     }, 300_000);
 
     afterEach(async () => {
@@ -157,6 +175,7 @@ describe("external Action execution authorization", () => {
     });
 
     afterAll(async () => {
+        resetSessionSystemRecordsProtocolV1ActivationForTests();
         if (harness) await harness.close();
     });
 
@@ -239,7 +258,7 @@ describe("external Action execution authorization", () => {
 
     async function createApp(teamId: string, semanticWithdraw = false,
         resolveCurrentSessionMachine?: (input: Readonly<{ accountId: string; sessionId: string }>) => Promise<string | null>,
-        daemonTransport?: ExternalActionDaemonDispatcher) {
+        daemonTransport?: ExternalActionDaemonDispatcher, usageReads = false) {
         const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>() as any;
         app.setValidatorCompiler(validatorCompiler);
         app.setSerializerCompiler(serializerCompiler);
@@ -258,13 +277,16 @@ describe("external Action execution authorization", () => {
         registerAccountEncryptionRoutes(app);
         registerAccountSettingsRoutes(app);
         kvRoutes(app);
+        if (usageReads) registerQualifiedConnectedAccountCredentialRoutesV4(app);
         registerSessionListingRoutes(app);
         registerSessionMessageRoutes(app);
         registerSessionFollowSourceRoutes(app);
         registerSessionArchiveRoutes(app);
+        registerSessionBoardRoutes(app);
         registerProjectAccountRowRoutes(app);
         projectSourceRoutes(app);
         registerMachineAdmissionRoutes(app);
+        registerWorkflowRunStorageRoutes(app);
         if (semanticWithdraw) {
             // HTTP authentication is the boundary under test; accepted custody/removal use their real domain owner.
             app.post('/v2/sessions/:sessionId/pending/:localId/withdraw', {
@@ -404,6 +426,143 @@ describe("external Action execution authorization", () => {
             }),
         };
     }
+
+    it('spends the Team usage export root grant on its canonical read without requiring a query grant', async () => {
+        const fixture = await createFixture({ qualifiedPat: true });
+        const actionId = 'teams.credentials.usage.export';
+        const pat = await auth.createApiToken({ accountId: fixture.account.id, tokenId: crypto.randomUUID(),
+            label: 'Usage export', grant: { ...API_TOKEN_FULL_GRANT_V1,
+                actions: { families: [], ids: [actionId] }, targets: { sessions: [], machines: [fixture.machine.id] } } });
+        const { app } = await createApp(fixture.team.id);
+        const query = { resourceId: 'resource', startMs: 0, endMs: 1000, granularity: 'day', costMode: 'auto' };
+        try {
+            const authorization = await mint(app, { ...fixture, pat }, actionId, { ...fixture.envelope,
+                input: { query, resourceName: 'Shared model' } });
+            const read = bindHomeDomainActionHttpRequestV1('teams.credentials.usage.query', query);
+            const headers = machineHeaders({ authorizationToken: authorization.token, method: read.method,
+                path: read.path, body: read.body, privateKey: fixture.keyPair.secretKey, effectActionId: 'teams.credentials.usage.query' });
+            const verify = () => verifyExternalActionDomainExecutionRequest({ authorizationToken: authorization.token,
+                machineSignature: headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]!,
+                encodedTarget: headers[EXTERNAL_ACTION_RESOLVED_TARGET_HEADER]!,
+                effectActionId: 'teams.credentials.usage.query', method: read.method, path: read.path, body: read.body });
+            expect(Boolean(await verify())).toBe(true);
+            for (const purpose of [
+                { method: read.method, path: '/v1/teams/archive', body: read.body, effectActionId: 'teams.credentials.usage.query' },
+                { method: read.method, path: read.path, body: read.body, effectActionId: 'teams.credentials.get' },
+                { method: 'GET', path: read.path, body: read.body, effectActionId: 'teams.credentials.usage.query' },
+                { method: read.method, path: read.path, body: { ...query, credential: 'not-a-query-field' }, effectActionId: 'teams.credentials.usage.query' },
+            ]) {
+                const deniedHeaders = machineHeaders({ authorizationToken: authorization.token, ...purpose,
+                    privateKey: fixture.keyPair.secretKey });
+                expect(await verifyExternalActionDomainExecutionRequest({ authorizationToken: authorization.token,
+                    machineSignature: deniedHeaders[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]!,
+                    encodedTarget: deniedHeaders[EXTERNAL_ACTION_RESOLVED_TARGET_HEADER]!, ...purpose })).toBeNull();
+            }
+            await auth.updateApiToken({ accountId: fixture.account.id, tokenId: pat.tokenId,
+                grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: [actionId] },
+                    targets: { sessions: [], machines: ['other-machine'] } } });
+            expect(await verify()).toBeNull();
+        } finally { await app.close(); }
+    });
+
+    it('admits only the exact Workflow storage purposes of an authenticated Session root', async () => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const session = await db.session.create({ data: { accountId: fixture.account.id, tag: crypto.randomUUID(),
+            metadata: '{}', encryptionMode: 'plain', active: true, lastActiveAt: new Date() } });
+        await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id,
+            sessionId: session.id, data: 'source-key' } });
+        // Session publisher discovery is an external socket boundary. Persisted
+        // source custody, issuance, both signatures and route admission stay real.
+        let publisherCurrent = true;
+        const { app } = await createApp(fixture.team.id, false, async () => publisherCurrent ? fixture.machine.id : null);
+        const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const homeId = await getOrCreateServerIdentityId();
+        const runId = crypto.randomUUID();
+        const target = { kind: 'machine' as const, machineId: fixture.machine.id,
+            project: { machineId: fixture.machine.id, directory: '/repo' } };
+        const issue = async (actionId: 'workflow.run.start' | 'workflow.run.get') => {
+            const origin = SessionActionRpcOriginV1Schema.parse({ v: 1,
+                caller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 },
+                sourceTurnId: 'workflow-turn', callerPermissionMode: 'default', causalPermissionAuthority: null,
+                requestId: crypto.randomUUID() });
+            const envelope = ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: origin.requestId, target,
+                input: actionId === 'workflow.run.start' ? { runId,
+                    source: { kind: 'inline', definition: { version: 1, blocks: ['work'] } } } : { runId } });
+            const source = { machineId: fixture.machine.id, installationId: fixture.machine.installationId! };
+            const installationProof = signMachineInstallationProof({ privateKey: fixture.keyPair.secretKey,
+                payload: { version: 1, accountId: fixture.account.id, ...source, externalActionOrigin: {
+                    homeId, actionId, requestId: origin.requestId,
+                    requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), origin,
+                } } });
+            const issued = await app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+                headers: { authorization: `Bearer ${token}` }, payload: { v: 1, machineId: fixture.machine.id,
+                    envelope, sessionActionOrigin: origin, sessionActionSource: source, installationProof } });
+            expect(issued.statusCode, issued.body).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(issued.json());
+            expect(authorization.binding).toMatchObject({ authentication: { kind: 'account' }, sessionActionOrigin: origin });
+            authorizationRequests.set(authorization.token, { target, installationId: source.installationId, requestId: origin.requestId });
+            return authorization;
+        };
+        const path = '/v3/automations/runs/workflow-storage';
+        const post = (authorization: ReturnType<typeof ExternalActionExecutionAuthorizationV1Schema.parse>,
+            body: Record<string, unknown>, overrides: { effectActionId?: string; target?: ExternalActionRequestEnvelopeV1['target']; publisher?: boolean } = {}) => {
+            const headers = machineHeaders({ authorizationToken: authorization.token, effectActionId: overrides.effectActionId ?? authorization.binding.actionId,
+                method: 'POST', path, body, privateKey: fixture.keyPair.secretKey, ...(overrides.target ? { target: overrides.target } : {}) });
+            if (overrides.publisher !== false) headers[PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1] = createSignedPluginInstallationPublisherHeader({
+                keyPair: fixture.keyPair, machineId: fixture.machine.id, installationId: fixture.machine.installationId!, path, body,
+            });
+            return app.inject({ method: 'POST', url: path, headers, payload: body });
+        };
+        try {
+            const start = await issue('workflow.run.start');
+            const read = { operation: 'get', publisherMachineId: fixture.machine.id, runId };
+            // A missing Run is a domain 404, rather than a refused storage read.
+            const missing = await post(start, read);
+            expect(missing.statusCode, missing.body).toBe(404);
+            expect(missing.json()).toEqual({ error: 'run_not_found' });
+            const currentnessPath = '/v1/account/encryption/currentness';
+            const currentness = await app.inject({ method: 'GET', url: currentnessPath,
+                headers: machineHeaders({ authorizationToken: start.token, effectActionId: 'workflow.run.start',
+                    method: 'GET', path: currentnessPath, body: undefined, privateKey: fixture.keyPair.secretKey }) });
+            expect(currentness.statusCode, currentness.body).toBe(200);
+            const snapshot = await materializeWorkflowAcceptedSnapshotFixture({ definition: { version: 1,
+                defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } } }, blocks: ['work'] },
+                context: { source: { kind: 'inline' }, inputs: {}, machineId: fixture.machine.id,
+                    executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: fixture.machine.id,
+                        directory: '/repo', checkoutRootPath: '/repo' } }, origin: { kind: 'direct', originSessionId: session.id },
+                    authorization: { principal: { kind: 'session', sessionId: session.id } } } });
+            const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+                mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId: fixture.account.id, runId },
+                acceptedSnapshot: { ...snapshot, startedBy: 'agent', workDepth: 1 },
+            }));
+            const admitted = await post(start, { operation: 'admit', publisherMachineId: fixture.machine.id, machineId: fixture.machine.id,
+                runId, origin: { kind: 'direct', originSessionId: session.id }, acceptedEnvelope,
+                accountCurrentness: { mode: 'plain', version: currentness.json().version, contentKeyFingerprint: null } });
+            expect(admitted.statusCode, admitted.body).toBe(200);
+            expect(admitted.json()).toMatchObject({ kind: 'created', run: { id: runId, state: 'queued' } });
+            expect((await post(start, read)).json()).toMatchObject({ run: { id: runId, state: 'queued' } });
+            expect((await post(start, { operation: 'run-key.census', publisherMachineId: fixture.machine.id, runId })).statusCode).toBe(200);
+            expect((await post(start, read, { publisher: false })).statusCode).toBe(401);
+            expect((await post(start, { ...read, publisherMachineId: crypto.randomUUID() })).statusCode).toBe(401);
+            expect((await post(start, read, { effectActionId: 'workflow.run.cancel' })).statusCode).toBe(401);
+            expect((await post(start, read, { effectActionId: 'workflow.definition.get' })).statusCode).toBe(401);
+            expect((await post(start, read, { target: { kind: 'machine', machineId: crypto.randomUUID() } })).statusCode).toBe(401);
+            expect((await post(start, { operation: 'cancel', publisherMachineId: fixture.machine.id, runId, expectedRevision: 0 })).statusCode).toBe(401);
+            expect((await post(start, { operation: 'initialize', publisherMachineId: fixture.machine.id, runId,
+                parentAttempt: 0, expectedRevision: 0, accountCurrentness: { mode: 'plain', version: currentness.json().version,
+                    contentKeyFingerprint: null }, checkpointEnvelope: 'not-an-executor-claim',
+                rootInvocation: { id: crypto.randomUUID(), contentEnvelope: 'not-an-executor-fact' } })).statusCode).toBe(401);
+            const unrelatedCurrentnessPath = '/v1/account/encryption/currentness?accountId=other';
+            expect((await app.inject({ method: 'GET', url: unrelatedCurrentnessPath,
+                headers: machineHeaders({ authorizationToken: start.token, effectActionId: 'workflow.run.start',
+                    method: 'GET', path: unrelatedCurrentnessPath, body: undefined,
+                    privateKey: fixture.keyPair.secretKey }) })).statusCode).toBe(401);
+            const getter = await issue('workflow.run.get');
+            expect((await post(getter, { operation: 'cancel', publisherMachineId: fixture.machine.id, runId, expectedRevision: 0 })).statusCode).toBe(401);
+            publisherCurrent = false;
+            expect((await post(start, read)).statusCode).toBe(401);
+        } finally { await app.close(); }
+    });
 
     it.each(['scm.diffSummary.reviewed.mark', 'scm.diffSummary.reviewed.unmark',
         'scm.diffSummary.result.delete', 'scm.diffSummary.result.clear'] as const)(
@@ -546,18 +705,51 @@ describe("external Action execution authorization", () => {
         } finally { await app.close(); }
     });
 
-    it.each(['session.pending.resetStart.set', 'session.pending.resetStart.cancel'] as const)(
-        'admits only the exact Session mutation purpose under U3 root %s', async actionId => {
+    it.each([
+        { actionId: 'session.pending.resetStart.set' as const, mode: 'plain' as const, carrier: 'session' as const },
+        { actionId: 'session.pending.resetStart.cancel' as const, mode: 'plain' as const, carrier: 'session' as const },
+        { actionId: 'session.pending.resetStart.set' as const, mode: 'e2ee' as const, carrier: 'session' as const },
+        { actionId: 'session.pending.resetStart.set' as const, mode: 'plain' as const, carrier: 'machine' as const },
+        { actionId: 'session.pending.resetStart.set' as const, mode: 'e2ee' as const, carrier: 'machine' as const },
+    ])('admits only the exact Session mutation purpose under U3 root $actionId ($mode $carrier)', async ({ actionId, mode, carrier }) => {
         const fixture = await createFixture({ qualifiedPat: false });
+        const material = mode === 'e2ee' ? { type: 'dataKey' as const, machineKey: tweetnacl.randomBytes(32) } : undefined;
+        if (material) {
+            const signing = tweetnacl.sign.keyPair();
+            const contentPublicKey = Uint8Array.from(tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey);
+            await db.account.update({ where: { id: fixture.account.id }, data: { encryptionMode: 'e2ee',
+                publicKey: Buffer.from(signing.publicKey).toString('hex'), contentPublicKey,
+                contentPublicKeySig: signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey }) } });
+            const machineKey = createMachineDataEncryptionKeyV1({ material, dataKeyPublicKey: contentPublicKey, randomBytes: tweetnacl.randomBytes });
+            const nonce = tweetnacl.randomBytes(SESSION_DATA_KEY_NONCE_BYTES);
+            const cipher = createCipheriv('aes-256-gcm', machineKey.encryptionKey, nonce);
+            const ciphertext = Buffer.concat([cipher.update(serializeSessionDataKeyValue(decodePlainMachineStoredContent(fixture.machine.metadata))), cipher.final()]);
+            await db.machine.update({ where: { id: fixture.machine.id }, data: {
+                metadata: encodeBase64(Uint8Array.from(packSessionDataKeyBundleV0({ nonce, ciphertext, authTag: cipher.getAuthTag() }))),
+                dataEncryptionKey: Uint8Array.from(machineKey.dataEncryptionKey) } });
+        }
         const session = await db.session.create({ data: { accountId: fixture.account.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
-        const { app } = await createApp(fixture.team.id);
+        const { app } = await createApp(fixture.team.id, false, undefined, undefined, true);
         const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
-        const target = { kind: 'session' as const, sessionId: session.id };
+        const target = carrier === 'machine' ? { kind: 'machine' as const, machineId: fixture.machine.id }
+            : { kind: 'session' as const, sessionId: session.id };
         const reset = { source: { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'connected-account' }, bindingKind: 'account' },
             recordId: 'paug_v1_abcdefgh', meterId: 'weekly', witness: { observedAtMs: 100, id: 'accepted-history' } };
-        const envelope = { v: 1 as const, requestId: crypto.randomUUID(), target,
+        const plainEnvelope = { v: 1 as const, requestId: crypto.randomUUID(), target,
             input: { sessionId: session.id, localId: 'queued-work', ...(actionId.endsWith('.set') ? { reset } : {}) } };
+        const envelope = material ? sealExternalActionRequestV2({ binding: { serverIdentityId: await getOrCreateServerIdentityId(),
+            accountId: fixture.account.id, authentication: { kind: 'account', tokenEpoch: fixture.account.tokenEpoch },
+            actionId, requestId: plainEnvelope.requestId, target }, input: plainEnvelope.input, material, randomBytes: tweetnacl.randomBytes }) : plainEnvelope;
         try {
+            if (envelope.v === 2) {
+                const unprotected = await app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+                    headers: { authorization: `Bearer ${token}` }, payload: { v: 1, machineId: fixture.machine.id, envelope: plainEnvelope } });
+                expect(unprotected.statusCode).toBe(400);
+                const { pendingResetStartAdmission: _admission, ...missing } = envelope;
+                const unbound = await app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+                    headers: { authorization: `Bearer ${token}` }, payload: { v: 1, machineId: fixture.machine.id, envelope: missing } });
+                expect(unbound.statusCode).toBe(400);
+            }
             const issued = await app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
                 headers: { authorization: `Bearer ${token}` }, payload: { v: 1, machineId: fixture.machine.id, envelope } });
             expect(issued.statusCode, JSON.stringify({ body: issued.body, signedRoot: SignedRootActionIdSchema.safeParse(actionId).success,
@@ -566,18 +758,179 @@ describe("external Action execution authorization", () => {
             const method = actionId.endsWith('.set') ? 'PATCH' : 'POST';
             const path = `/v2/sessions/${session.id}/pending/queued-work${actionId.endsWith('.cancel') ? '/withdraw' : '/action'}`;
             const body = actionId.endsWith('.set') ? { requestedAction: { v: 1, kind: 'reset_start', reset } } : {};
-            const verify = (requestMethod: string, requestPath: string, requestBody: unknown) => verifyExternalActionDomainExecutionRequest({
-                authorizationToken: authorization.token, effectActionId: actionId, encodedTarget: encodeExternalActionResolvedTargetV1(target),
+            const verify = (requestMethod: string, requestPath: string, requestBody: unknown,
+                proofAuthorization = authorization) => verifyExternalActionDomainExecutionRequest({
+                authorizationToken: proofAuthorization.token, effectActionId: actionId, encodedTarget: encodeExternalActionResolvedTargetV1(target),
                 method: requestMethod, path: requestPath, body: requestBody,
-                machineSignature: signExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId: actionId,
-                    target, installationId: fixture.machine.installationId!, requestId: authorization.binding.requestId,
+                machineSignature: signExternalActionMachineRequestV1({ authorizationToken: proofAuthorization.token, effectActionId: actionId,
+                    target, installationId: fixture.machine.installationId!, requestId: proofAuthorization.binding.requestId,
                     method: requestMethod, path: requestPath, body: requestBody, privateKey: fixture.keyPair.secretKey }) });
             expect(await verify(method, path, body)).not.toBeNull();
+            if (actionId.endsWith('.set')) {
+                // Direct internal issuance can still create an unbound token;
+                // execution must reject it at the common verifier before any Session fallback.
+                const { pendingResetStartAdmission: _admission, ...unboundBinding } = authorization.binding;
+                const unbound = await auth.mintExternalActionExecutionAuthorization(unboundBinding);
+                expect(await auth.verifyExternalActionExecutionAuthorization(unbound.token)).not.toBeNull();
+                expect(await verify(method, path, body, unbound)).toBeNull();
+                expect(await verify('GET', '/v1/account/encryption/currentness', undefined, unbound)).toBeNull();
+            }
             expect(await verify(method, path.replace(session.id, 'another-session'), body)).toBeNull();
             expect(await verify('DELETE', path, body)).toBeNull();
             if (actionId.endsWith('.set')) expect(await verify(method, path.slice(0, -'/action'.length), body)).toBeNull();
             expect(await verify(method, path, { requestedAction: { v: 1, kind: 'send_now' } })).toBeNull();
             expect(await verify(method, path, { ...body, resumeWhenAvailable: true })).toBeNull();
+            if (actionId.endsWith('.set')) {
+                const initial = { localId: 'queued-work', content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hold' } } }, requestedAction: { v: 1, kind: 'reset_start', reset } };
+                const initialPath = `/v2/sessions/${session.id}/pending`;
+                expect(await verify('POST', initialPath, initial)).not.toBeNull();
+                expect(await verify('POST', initialPath, { ...initial, resumeWhenAvailable: true })).toBeNull();
+                expect(await verify('GET', '/v1/account/encryption/currentness', undefined)).not.toBeNull();
+                const sourcePath = `/v4/connect/qualified/provider-account-usage/sources/resolve?${new URLSearchParams({ source: JSON.stringify(reset.source) })}`;
+                const historyPath = (query: unknown) => `/v4/connect/qualified/provider-account-usage/history?${new URLSearchParams({ query: JSON.stringify(query) })}`;
+                expect(await verify('GET', sourcePath, undefined)).not.toBeNull();
+                expect(await verify('GET', `/v4/connect/qualified/provider-account-usage/record?recordId=${reset.recordId}`, undefined)).not.toBeNull();
+                expect(await verify('GET', historyPath({ recordId: reset.recordId, witness: reset.witness }), undefined)).not.toBeNull();
+                for (const requestPath of [
+                    sourcePath.replace('connected-account', 'another-account'),
+                    `/v4/connect/qualified/provider-account-usage/record?recordId=paug_v1_otherrecord`,
+                    historyPath({ recordId: reset.recordId, witness: { ...reset.witness, id: 'another' } }),
+                    historyPath({ recordId: reset.recordId, witness: { ...reset.witness, observedAtMs: 101 } }),
+                    historyPath({ recordId: reset.recordId, history: { range: { startAtMs: 0, endAtMs: 100 } } }),
+                    `${sourcePath}&source=${encodeURIComponent(JSON.stringify(reset.source))}`,
+                    '/v2/account/settings', '/v1/account/encryption', '/v1/account/encryption/currentness?accountId=other',
+                ]) expect(await verify('GET', requestPath, undefined), requestPath).toBeNull();
+                expect(await verify('PATCH', path.replace('queued-work', 'other-input'), body)).toBeNull();
+                expect(await verify('PATCH', path, { requestedAction: { v: 1, kind: 'reset_start', reset: { ...reset, meterId: 'other-window' } } })).toBeNull();
+                expect(await verify('POST', '/v2/pending/reset-starts/read', { source: reset.source })).toBeNull();
+                expect(await verify('POST', '/v4/connect/qualified/provider-account-usage/record', initial)).toBeNull();
+            } else expect(await verify('GET', '/v1/account/encryption/currentness', undefined)).toBeNull();
+            await db.account.update({ where: { id: fixture.account.id }, data: { encryptionMode: mode === 'e2ee' ? 'plain' : 'e2ee' } });
+            expect(await verify(method, path, body)).toBeNull();
+        } finally { await app.close(); }
+    });
+
+    it.each(['plain', 'e2ee'] as const)('issues usable input-bound fresh-reset roots through ordinary public dispatch (%s)', async mode => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const material = { type: 'dataKey' as const, machineKey: tweetnacl.randomBytes(32) };
+        if (mode === 'e2ee') {
+            const signing = tweetnacl.sign.keyPair();
+            const contentPublicKey = Uint8Array.from(tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey);
+            await db.account.update({ where: { id: fixture.account.id }, data: { encryptionMode: 'e2ee',
+                publicKey: Buffer.from(signing.publicKey).toString('hex'), contentPublicKey,
+                contentPublicKeySig: signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey }) } });
+            const machineKey = createMachineDataEncryptionKeyV1({ material, dataKeyPublicKey: contentPublicKey, randomBytes: tweetnacl.randomBytes });
+            const nonce = tweetnacl.randomBytes(SESSION_DATA_KEY_NONCE_BYTES);
+            const cipher = createCipheriv('aes-256-gcm', machineKey.encryptionKey, nonce);
+            const ciphertext = Buffer.concat([cipher.update(serializeSessionDataKeyValue(decodePlainMachineStoredContent(fixture.machine.metadata))), cipher.final()]);
+            await db.machine.update({ where: { id: fixture.machine.id }, data: {
+                metadata: encodeBase64(Uint8Array.from(packSessionDataKeyBundleV0({ nonce, ciphertext, authTag: cipher.getAuthTag() }))),
+                dataEncryptionKey: Uint8Array.from(machineKey.dataEncryptionKey) } });
+        }
+        await db.machine.update({ where: { id: fixture.machine.id }, data: { active: true, lastActiveAt: new Date(),
+            operationProtocolCapabilitiesRevision: 1,
+            operationProtocolCapabilities: { externalActionExecutionAuthorization: { protocolVersions: [1] } } } });
+        const session = await db.session.create({ data: { accountId: fixture.account.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const actionId = 'session.pending.resetStart.set';
+        const target = { kind: 'machine' as const, machineId: fixture.machine.id };
+        const reset = { source: { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'connected-account' }, bindingKind: 'account' },
+            recordId: 'paug_v1_abcdefgh', meterId: 'weekly', witness: { observedAtMs: 100, id: 'accepted-history' } };
+        const plain = { v: 1 as const, requestId: crypto.randomUUID(), target, input: { sessionId: session.id, localId: 'queued-work', reset } };
+        const binding = { serverIdentityId: await getOrCreateServerIdentityId(), accountId: fixture.account.id,
+            authentication: { kind: 'account' as const, tokenEpoch: fixture.account.tokenEpoch }, actionId, requestId: plain.requestId, target };
+        const envelope = mode === 'e2ee' ? sealExternalActionRequestV2({ binding, input: plain.input, material, randomBytes: tweetnacl.randomBytes }) : plain;
+        const forwarded: ExternalActionDaemonDispatchRequest[] = [];
+        const dispatch = createExternalActionDaemonDispatcher({ io: createSocketRoomDiscoveryHarness(async () => []),
+            forwardRpc: async ({ callParams }) => {
+                // This is the genuine daemon network boundary; issuer, database and signed verification remain real.
+                const request = callParams as ExternalActionDaemonDispatchRequest;
+                forwarded.push(request);
+                const execution = { ok: true, result: { accepted: true } };
+                const prepared = request.envelope.v === 2 ? prepareExternalActionResponseV2({ binding, request: request.envelope,
+                    executedMachineId: fixture.machine.id, execution, material, randomBytes: tweetnacl.randomBytes })
+                    : prepareExternalActionResponseEnvelopeV1({ v: 1, actionId, requestId: request.envelope.requestId, execution });
+                return { ok: true, result: createExternalActionDaemonDispatchResponse(prepared) };
+            } });
+        const { app } = await createApp(fixture.team.id, false, undefined, dispatch);
+        const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const relay = (payload: unknown) => app.inject({ method: 'POST', url: `/v1/actions/${actionId}`,
+            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, payload: JSON.stringify(payload) });
+        try {
+            const response = await relay(envelope);
+            expect(response.statusCode, response.body).toBe(200);
+            const authorization = forwarded[0]?.executionAuthorization;
+            if (!authorization) throw new Error('No signed daemon request forwarded');
+            const verify = (method: string, path: string, body?: unknown) => verifyExternalActionDomainExecutionRequest({
+                authorizationToken: authorization.token, effectActionId: actionId, encodedTarget: encodeExternalActionResolvedTargetV1(target), method, path, body,
+                machineSignature: signExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId: actionId, target,
+                    installationId: fixture.machine.installationId!, requestId: authorization.binding.requestId, method, path, body, privateKey: fixture.keyPair.secretKey }) });
+            expect(await verify('GET', '/v1/account/encryption/currentness')).not.toBeNull();
+            const path = `/v2/sessions/${session.id}/pending/queued-work/action`;
+            expect(await verify('PATCH', path, { requestedAction: { v: 1, kind: 'reset_start', reset } })).not.toBeNull();
+            expect(await verify('PATCH', path, { requestedAction: { v: 1, kind: 'reset_start', reset: { ...reset, meterId: 'other' } } })).toBeNull();
+            expect(await verify('GET', '/v2/account/settings')).toBeNull();
+            const invalid = envelope.v === 2 ? (() => { const { pendingResetStartAdmission: _admission, ...missing } = envelope; return missing; })()
+                : { ...plain, input: { sessionId: session.id, localId: 'queued-work' } };
+            expect((await relay(invalid)).statusCode).toBe(400);
+            if (mode === 'e2ee') expect((await relay(plain)).statusCode).toBe(400);
+            expect(forwarded).toHaveLength(1);
+        } finally { await app.close(); }
+    });
+
+    it('admits signed fresh-reset preparation through the real qualified B HTTP readers without general Account reads', async () => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const ref = { service: { pluginId: 'example.usage', localId: 'quota' }, accountId: 'connected-account' };
+        const credential = await mutateQualifiedConnectedServiceCredential({ accountId: fixture.account.id, ref,
+            expectedCredentialRevision: null, authenticationModeId: 'api-key', content: { t: 'plain', v: { token: 'credential' } },
+            metadata: { scopes: [], providerIdentity: { accountId: 'provider-subject' } } });
+        if (credential.status !== 'written') throw new Error('Credential fixture rejected');
+        const source = { ref, bindingKind: 'account' as const };
+        const snapshotBase = createUsageSnapshot({ fetchedAt: Date.now(), recordKey: { providerId: 'codex', accountSubjectId: 'provider-subject', subjectKind: 'account', quotaScope: 'account' } });
+        // B accepts provider meter identities independently of the HTTP header carrier.
+        const meterId = 'm'.repeat(maxHeaderSize);
+        const snapshot = { ...snapshotBase, meters: snapshotBase.meters.map(meter => ({ ...meter, meterId })) };
+        await writeQualifiedProviderAccountUsageRecord({ accountId: fixture.account.id, source,
+            expectedCredentialRevision: credential.credentialRevision, expectedConfigurationRevision: null,
+            recordId: snapshot.recordId, recordKey: snapshot.recordKey, payloadMode: 'plain_json_v1', status: 'ok', snapshot,
+            fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs });
+        const accepted = await db.providerAccountUsageHistory.findFirstOrThrow({ where: { accountId: fixture.account.id, recordId: snapshot.recordId } });
+        const reset = { source, recordId: snapshot.recordId, meterId, witness: { id: accepted.id, observedAtMs: accepted.observedAt.getTime() } };
+        const session = await db.session.create({ data: { accountId: fixture.account.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const target = { kind: 'machine' as const, machineId: fixture.machine.id };
+        const actionId = 'session.pending.resetStart.set';
+        const envelope = { v: 1 as const, requestId: crypto.randomUUID(), target, input: { sessionId: session.id, localId: 'fresh-input', reset } };
+        const { app } = await createApp(fixture.team.id, false, undefined, undefined, true);
+        try {
+            const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
+            const issued = await app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+                headers: { authorization: `Bearer ${token}` }, payload: { v: 1, machineId: fixture.machine.id, envelope } });
+            expect(issued.statusCode, issued.body).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(issued.json());
+            const headers = (path: string) => ({
+                [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: authorization.token,
+                [EXTERNAL_ACTION_EFFECT_ACTION_HEADER]: actionId,
+                [EXTERNAL_ACTION_RESOLVED_TARGET_HEADER]: encodeExternalActionResolvedTargetV1(target),
+                [EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]: signExternalActionMachineRequestV1({ authorizationToken: authorization.token,
+                    effectActionId: actionId, target, installationId: fixture.machine.installationId!, requestId: envelope.requestId,
+                    method: 'GET', path, body: undefined, privateKey: fixture.keyPair.secretKey }),
+            });
+            const read = (path: string) => app.inject({ method: 'GET', url: path, headers: headers(path) });
+            const address = await app.listen({ host: '127.0.0.1', port: 0 });
+            const currentnessPath = '/v1/account/encryption/currentness';
+            const networkResponse = await fetch(`${address}${currentnessPath}`, { headers: headers(currentnessPath) });
+            expect(networkResponse.status, `header ceiling ${maxHeaderSize}; signed token bytes ${Buffer.byteLength(authorization.token)}`).toBe(200);
+            const sourcePath = `/v4/connect/qualified/provider-account-usage/sources/resolve?${new URLSearchParams({ source: JSON.stringify(source) })}`;
+            const recordPath = `/v4/connect/qualified/provider-account-usage/record?recordId=${snapshot.recordId}`;
+            const witnessPath = `/v4/connect/qualified/provider-account-usage/history?${new URLSearchParams({ query: JSON.stringify({ recordId: snapshot.recordId, witness: reset.witness }) })}`;
+            for (const path of ['/v1/account/encryption/currentness', sourcePath, recordPath, witnessPath]) {
+                const response = await read(path);
+                expect(response.statusCode, `${path}: ${response.body}`).toBe(200);
+                if (path === witnessPath) expect(response.json()).toMatchObject({ entries: [{ id: accepted.id, observedAtMs: reset.witness.observedAtMs }] });
+            }
+            for (const path of [sourcePath.replace('connected-account', 'different-account'), `${recordPath}x`,
+                witnessPath.replace(encodeURIComponent(accepted.id), 'different-witness'), '/v2/account/settings', '/v1/account/encryption']) {
+                expect((await read(path)).statusCode, path).toBe(401);
+            }
         } finally { await app.close(); }
     });
 
@@ -627,6 +980,157 @@ describe("external Action execution authorization", () => {
             await db.account.update({ where: { id: fixture.account.id }, data: { tokenEpoch: { increment: 1 } } });
             expect(await verifyCurrentExternalActionPrincipal(authorization.binding)).toBeNull();
             expect(await verifyCurrentExternalActionPrincipal(terminalAuthorization.binding)).toBeNull();
+        } finally { await app.close(); }
+    });
+
+    it.each(['account', 'terminal'] as const)('mints client and Account read Actions only for an installed current Session publisher with %s credentials', async kind => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const session = await db.session.create({ data: { accountId: fixture.account.id,
+            tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id,
+            sessionId: session.id, data: 'opaque-source-key' } });
+        let publisher: string | null = fixture.machine.id;
+        const { app } = await createApp(fixture.team.id, false, async () => publisher);
+        const token = await auth.createToken(fixture.account.id, undefined, kind === 'account'
+            ? { kind, authority: 'present_user' } : { kind, authority: 'account_automation' });
+        const homeId = await getOrCreateServerIdentityId();
+        const source = { machineId: fixture.machine.id, installationId: fixture.machine.installationId! };
+        try {
+            for (const actionId of ['search.conversations', 'ui.find', 'workspace.tabs.list',
+                'workflow.definition.list', 'workflow.definition.get', 'boards.list',
+                'workflow.run.list', 'workflow.starters.list']) {
+                const origin = SessionActionRpcOriginV1Schema.parse({ v: 1,
+                    caller: { kind: 'session', sessionId: session.id, starterDepth: 0, turnDepth: 0 },
+                    sourceTurnId: 'client-read-turn', callerPermissionMode: null, requestId: crypto.randomUUID() });
+                const input = actionId === 'search.conversations'
+                    ? { query: { v: 1, query: 'session_handoff', scope: { type: 'global' }, mode: 'hints' },
+                        machineIds: [fixture.machine.id], mode: 'indexed' }
+                    : actionId === 'ui.find' ? { op: 'read' }
+                    : actionId === 'workflow.definition.get' ? { definitionId: crypto.randomUUID() } : {};
+                const envelope = { v: 1, requestId: origin.requestId,
+                    target: { kind: 'machine', machineId: fixture.machine.id }, input } satisfies ExternalActionRequestEnvelopeV1;
+                const installationProof = signMachineInstallationProof({ privateKey: fixture.keyPair.secretKey,
+                    payload: { version: 1, accountId: fixture.account.id, ...source,
+                        externalActionOrigin: { homeId, actionId, requestId: origin.requestId,
+                            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), origin } } });
+                const body = { v: 1, machineId: fixture.machine.id, envelope,
+                    sessionActionOrigin: origin, sessionActionSource: source, installationProof };
+                const mint = (payload: unknown = body) => app.inject({ method: 'POST',
+                    url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+                    headers: { authorization: `Bearer ${token}` }, payload });
+                const minted = await mint();
+                expect(minted.statusCode, minted.body).toBe(200);
+                const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(minted.json());
+                expect(authorization.binding).toMatchObject({ actionId,
+                    sessionActionOrigin: origin, sessionActionSource: source });
+                expect(await verifyCurrentExternalActionPrincipal(authorization.binding)).toMatchObject({
+                    accountId: fixture.account.id, authority: 'account_automation', sessionActionOrigin: origin });
+                authorizationRequests.set(authorization.token, { target: authorization.binding.target,
+                    installationId: fixture.machine.installationId!, requestId: origin.requestId });
+                const path = bindExternalActionExecutionAuthorizationVerifyHttpPathV1(actionId);
+                const proofBody = { v: 1 };
+                const verify = await app.inject({ method: 'POST', url: path, payload: proofBody,
+                    headers: machineHeaders({ authorizationToken: authorization.token, method: 'POST', path,
+                        body: proofBody, privateKey: fixture.keyPair.secretKey, effectActionId: actionId }) });
+                expect(verify.statusCode, `${actionId}: ${verify.body}`).toBe(200);
+                const missingProof = await mint({ ...body, installationProof: undefined });
+                // Paired origin/proof validation may reject before credential
+                // admission; neither refusal may mint an authorization token.
+                expect([400, 401]).toContain(missingProof.statusCode);
+                expect(missingProof.json()).toMatchObject(missingProof.statusCode === 400
+                    ? { error: 'invalid_request', code: 'invalid_envelope' }
+                    : { error: 'invalid_token' });
+                expect(missingProof.json()).not.toHaveProperty('token');
+                expect((await mint({ ...body, sessionActionOrigin: { ...origin, sourceTurnId: 'forged-turn' } })).statusCode).toBe(401);
+                expect((await mint({ v: 1, machineId: fixture.machine.id, envelope })).statusCode).toBe(401);
+                publisher = null;
+                expect((await mint()).statusCode).toBe(401);
+                publisher = fixture.machine.id;
+            }
+        } finally { await app.close(); }
+    });
+
+    it.each(['account', 'terminal'] as const)('binds Session visual creator proof to its installed current publisher with %s credentials', async kind => {
+        const fixture = await createFixture({ qualifiedPat: false });
+        const session = await db.session.create({ data: { accountId: fixture.account.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        const otherSession = await db.session.create({ data: { accountId: fixture.account.id, tag: crypto.randomUUID(), encryptionMode: 'plain', metadata: '{}' } });
+        await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id, sessionId: session.id, data: 'opaque-source-key' } });
+        let publisher: string | null = fixture.machine.id;
+        const { app } = await createApp(fixture.team.id, false, async () => publisher);
+        const token = await auth.createToken(fixture.account.id, undefined, kind === 'account'
+            ? { kind, authority: 'present_user' } : { kind, authority: 'account_automation' });
+        const actionId = 'session.board.item.upsert';
+        const origin = SessionActionRpcOriginV1Schema.parse({ v: 1,
+            caller: { kind: 'session', sessionId: session.id, starterDepth: 1, turnDepth: 2 }, sourceTurnId: 'visual-turn',
+            callerPermissionMode: 'default', causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' }, requestId: crypto.randomUUID() });
+        const target = { kind: 'session' as const, sessionId: session.id };
+        const envelope = { v: 1, requestId: origin.requestId, target, input: { sessionId: session.id,
+            itemId: 'visual', expectedItemRevision: null, destination: 'transcript', item: { v: 1, title: 'Visual', frame: 'frameless',
+                height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'hello' } } } } } } satisfies ExternalActionRequestEnvelopeV1;
+        const source = { machineId: fixture.machine.id, installationId: fixture.machine.installationId! };
+        const sign = (nextEnvelope = envelope, nextOrigin = origin) => signMachineInstallationProof({ privateKey: fixture.keyPair.secretKey,
+            payload: { version: 1, accountId: fixture.account.id, ...source, externalActionOrigin: { homeId: homeId,
+                actionId, requestId: nextOrigin.requestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(nextEnvelope), origin: nextOrigin } } });
+        const homeId = await getOrCreateServerIdentityId();
+        const payload = { v: 1, machineId: fixture.machine.id, envelope, sessionActionOrigin: origin, sessionActionSource: source, installationProof: sign() };
+        const mint = (body: unknown = payload) => app.inject({ method: 'POST', url: bindExternalActionExecutionAuthorizationHttpPathV1(actionId),
+            headers: { authorization: `Bearer ${token}` }, payload: body });
+        try {
+            const minted = await mint();
+            expect(minted.statusCode, JSON.stringify({ body: minted.body,
+                signedRoot: SignedRootActionIdSchema.safeParse(actionId).success,
+                original: kind === 'account' ? isOriginalAccountExecutionAction(actionId, payload) : isOriginalTerminalExecutionAction(actionId, payload),
+                request: externalActionExecutionAuthorizationRequestSchemaForActionV1(actionId).safeParse(payload) })).toBe(200);
+            const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(minted.json());
+            expect(authorization.binding.target).toEqual(target);
+            expect(await verifyCurrentExternalActionPrincipal(authorization.binding)).toMatchObject({ authority: 'account_automation', sessionActionOrigin: origin });
+            authorizationRequests.set(authorization.token, { target, installationId: source.installationId, requestId: origin.requestId });
+            const verify = async (method: string, path: string, body?: unknown, privateKey = fixture.keyPair.secretKey) => {
+                const headers = machineHeaders({ authorizationToken: authorization.token, effectActionId: actionId, method, path, body, privateKey });
+                return verifyExternalActionDomainExecutionRequest({ authorizationToken: authorization.token, effectActionId: actionId,
+                    encodedTarget: headers[EXTERNAL_ACTION_RESOLVED_TARGET_HEADER], machineSignature: headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER],
+                    method, path, body, resolveCurrentSessionMachine: async () => publisher });
+            };
+            const body = { operation: 'upsert_item', itemId: 'visual', expectedItemRevision: null, destination: 'transcript', itemContent: { t: 'plain', v: envelope.input.item } };
+            const path = `/v2/sessions/${session.id}/board`;
+            expect(await verify('PUT', path, body)).not.toBeNull();
+            const applied = await app.inject({ method: 'PUT', url: path, payload: body,
+                headers: machineHeaders({ authorizationToken: authorization.token, effectActionId: actionId,
+                    method: 'PUT', path, body, privateKey: fixture.keyPair.secretKey }) });
+            expect(applied.statusCode, applied.body).toBe(200);
+            const signedHeaders = machineHeaders({ authorizationToken: authorization.token, effectActionId: actionId,
+                method: 'PUT', path, body, privateKey: fixture.keyPair.secretKey });
+            const tampered = await app.inject({ method: 'PUT', url: path, headers: signedHeaders,
+                payload: { ...body, itemContent: { t: 'plain', v: { ...envelope.input.item, title: 'Substituted' } } } });
+            expect(tampered.statusCode).toBe(401);
+            const foreignPath = `/v2/sessions/${otherSession.id}/board`;
+            const foreignWrite = await app.inject({ method: 'PUT', url: foreignPath, payload: body,
+                headers: machineHeaders({ authorizationToken: authorization.token, effectActionId: actionId,
+                    method: 'PUT', path: foreignPath, body, privateKey: fixture.keyPair.secretKey }) });
+            expect(foreignWrite.statusCode).toBe(401);
+            expect(await readSessionSystemRecordV1({ actorUserId: fixture.account.id, sessionId: session.id,
+                authentication: createPresentUserSessionAccessAuthentication(),
+                address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'visual' } }))
+                .toMatchObject({ ok: true, record: { creator: { kind: 'session', sessionId: session.id } } });
+            expect(await verify('GET', `/v2/sessions/${session.id}?accessProjectionVersion=1`)).not.toBeNull();
+            expect(await verify('GET', `/v2/sessions/${session.id}/system-records/record?owner=host&namespace=surface&kind=item.v1&localId=visual`)).not.toBeNull();
+            expect(await verify('PUT', `/v2/sessions/${otherSession.id}/board`, body)).toBeNull();
+            expect(await verify('PUT', path, { ...body, operation: 'remove_item' })).toBeNull();
+            expect(await verify('PUT', path, body, tweetnacl.sign.keyPair().secretKey)).toBeNull();
+            expect(await verify('GET', `/v2/sessions/${session.id}/system-records/record?owner=host&namespace=permissions&kind=item.v1&localId=visual`)).toBeNull();
+            const missingProof = await mint({ ...payload, installationProof: undefined });
+            expect(missingProof.statusCode).toBe(400);
+            expect(missingProof.json()).toMatchObject({ error: 'invalid_request', code: 'invalid_envelope' });
+            expect((await mint({ ...payload, sessionActionOrigin: { ...origin, sourceTurnId: 'forged' } })).statusCode).toBe(401);
+            const foreignEnvelope = { ...envelope, target: { kind: 'session' as const, sessionId: otherSession.id } };
+            expect((await mint({ ...payload, envelope: foreignEnvelope, installationProof: sign(foreignEnvelope) })).statusCode).not.toBe(200);
+            publisher = null;
+            expect((await mint()).statusCode).toBe(401);
+            expect(await verify('PUT', path, body)).toBeNull();
+            publisher = fixture.machine.id;
+            await db.machine.update({ where: { id: fixture.machine.id }, data: { revokedAt: new Date() } });
+            expect(await verify('PUT', path, body)).toBeNull();
+            expect(await verifyCurrentExternalActionPrincipal(authorization.binding)).toBeNull();
         } finally { await app.close(); }
     });
 
@@ -791,7 +1295,7 @@ describe("external Action execution authorization", () => {
         const material = version === 2 ? { type: 'dataKey' as const, machineKey: tweetnacl.randomBytes(32) } : undefined;
         if (material) {
             const accountSigning = tweetnacl.sign.keyPair();
-            const contentPublicKey = tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey;
+            const contentPublicKey = new Uint8Array(tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey);
             await db.account.update({ where: { id: fixture.account.id }, data: { encryptionMode: 'e2ee',
                 publicKey: Buffer.from(accountSigning.publicKey).toString('hex'), contentPublicKey: new Uint8Array(contentPublicKey),
                 contentPublicKeySig: signAccountContentKeyBindingV1({ accountSigningSecretKey: accountSigning.secretKey, contentPublicKey }) } });
@@ -1530,6 +2034,14 @@ describe("external Action execution authorization", () => {
             const routing = WorkspaceSyncSourceRoutingV1Schema.parse({ v: 1, phase: 'prepare', operationId: root.binding.requestId, accountServerId: homeId,
                 sourceMachineId: child.id, sourceRootPath: '/child/source', sourceSessionId: session.id,
                 sourceContext: { machineAdmission: context, callerAuthority: 'account_automation', callerInputConstraints } });
+            const currentPrincipal = await verifyCurrentExternalActionPrincipal(root.binding);
+            if (!currentPrincipal || !('grant' in currentPrincipal)) throw new Error('Current PAT principal required');
+            const sourceProof = await verifyWorkspaceSyncHandoffSourceAuthorization(root, routing, resolvePublisher);
+            expect(sourceProof?.principal).toMatchObject({
+                expiresAt: currentPrincipal.expiresAt,
+                parentTokenId: currentPrincipal.parentTokenId,
+                embedConfig: currentPrincipal.embedConfig,
+            });
             const accountToken = await auth.createToken(custodian.id, undefined, { kind: 'account', authority: 'present_user' });
             const verify = (callerInputAuthorization: typeof root | null = root, workspaceSyncSourceRouting = routing, privateKey = parentKey.secretKey) => {
                 const rpcAdmission = { context: workspaceSyncSourceRouting.sourceContext?.machineAdmission ?? context, method,
@@ -2492,7 +3004,7 @@ describe("external Action execution authorization", () => {
             // proof is additional transport framing, not a cut from that input.
             const sealedEnvelope = { v: 2 as const, requestId, target: childBody.envelope.target,
                 payload: { t: 'encrypted' as const, c: '' }, handoffAdmission: envelope.handoffAdmission };
-            sealedEnvelope.payload.c = 'a'.repeat(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2
+            sealedEnvelope.payload.c = 'a'.repeat(EXTERNAL_ACTION_ENCRYPTED_REQUEST_WITHOUT_RESET_ADMISSION_MAX_BYTES_V2
                 - Buffer.byteLength(JSON.stringify(sealedEnvelope), 'utf8'));
             const sealedBody = { ...childBody, envelope: sealedEnvelope };
             const sealedResponse = await app.inject({ method: 'POST', url: childPath, payload: sealedBody,
@@ -3126,6 +3638,10 @@ describe("external Action execution authorization", () => {
                 installationId: fixture.machine.installationId!, externalActionOrigin: { homeId, actionId,
                     requestId: origin.requestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), origin } } });
         const presence = createSessionPublisherPresence();
+        const publisher = { data: {} as Record<string, unknown> };
+        expect((await presence.registerPublisher({ socket: publisher,
+            binding: { accountId: fixture.account.id, machineId: fixture.machine.id, sessionId: session.id },
+            completeActivitySnapshot: { state: 'active', activeCount: 1 } })).status).toBe('registered');
         let publisherVisible = true;
         let revokeGrantDuringDiscovery = false;
         // Only socket discovery is simulated: AccessKey, publisher freshness and Account/Machine admission are real.
@@ -3136,8 +3652,7 @@ describe("external Action execution authorization", () => {
                     principal: { kind: 'account', accountId: fixture.account.id } }));
             }
             return publisherVisible && room === getAccountSessionSocketRoom(fixture.account.id, session.id)
-                ? [{ data: { sessionPublisherAuthority: { v: 1, accountId: fixture.account.id,
-                    machineId: fixture.machine.id, sessionId: session.id, committedFenceMs: fence.getTime() } } }] : [];
+                ? [publisher] : [];
         } }) } as unknown as Server;
         const resolvePublisher = (input: Readonly<{ accountId: string; sessionId: string }>) => resolveCurrentSessionMachineFromServer({ io, presence, ...input });
         expect(await resolvePublisher({ accountId: fixture.account.id, sessionId: session.id })).toBe(fixture.machine.id);
@@ -3253,7 +3768,7 @@ describe("external Action execution authorization", () => {
             const ciphertext = Buffer.concat([cipher.update(serializeSessionDataKeyValue(decodePlainMachineStoredContent(fixture.machine.metadata))), cipher.final()]);
             await db.machine.update({ where: { id: fixture.machine.id }, data: {
                 metadata: encodeBase64(packSessionDataKeyBundleV0({ nonce, ciphertext, authTag: cipher.getAuthTag() })),
-                dataEncryptionKey: machineKey.dataEncryptionKey,
+                dataEncryptionKey: new Uint8Array(machineKey.dataEncryptionKey),
             } });
             expect(await resolveMachineAccess({ actorAccountId: fixture.account.id, machineId: fixture.machine.id }))
                 .toMatchObject({ owned: true, encryptionMode: 'e2ee', accessState: 'ready', installationId: fixture.machine.installationId });
@@ -3494,7 +4009,7 @@ describe("external Action execution authorization", () => {
             const created = await admitManagedAcquire({ requesterAccountId: fixture.account.id, custodianAccountId: fixture.account.id,
                 requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), input: { input, requestId: origin.requestId, continuationPresent: false } });
             const correlation = { homeId, managedId: created.machine.id, expectedIntentRevision: 0, requestId: origin.requestId, controller };
-            const post = (path: string, body: unknown) => app.inject({ method: 'POST', url: path, payload: body,
+            const post = (path: string, body: InjectOptions['payload']) => app.inject({ method: 'POST', url: path, payload: body,
                 headers: machineHeaders({ authorizationToken: authorization.token, effectActionId: actionId,
                     method: 'POST', path, body, privateKey: fixture.keyPair.secretKey }) });
             const submitted = await post('/v1/machines/managed/controller/submit', correlation);
@@ -3550,7 +4065,7 @@ describe("external Action execution authorization", () => {
         registerExternalActionRoutes(app, { dispatch: async () => ({ kind: 'placement_error', code: 'target_unavailable' }) });
         registerManagedMachineRoutes(app);
         const token = await auth.createToken(fixture.account.id, undefined, { kind: 'account', authority: 'present_user' });
-        const post = (authorization: { token: string }, effectActionId: string, path: string, body: unknown) => app.inject({ method: 'POST', url: path, payload: body,
+        const post = (authorization: { token: string }, effectActionId: string, path: string, body: InjectOptions['payload']) => app.inject({ method: 'POST', url: path, payload: body,
             headers: machineHeaders({ authorizationToken: authorization.token, effectActionId, method: 'POST', path, body, privateKey: fixture.keyPair.secretKey }) });
         const remember = (authorization: ReturnType<typeof ExternalActionExecutionAuthorizationV1Schema.parse>) => {
             authorizationRequests.set(authorization.token, { target: authorization.binding.target,
@@ -4615,20 +5130,25 @@ describe("external Action execution authorization", () => {
             operationProtocolCapabilities: { externalActionExecutionAuthorization: { protocolVersions: [1] } },
         } });
         const fence = new Date();
+        const presence = createSessionPublisherPresence();
+        const publishers: { sessionId: string; socket: { data: Record<string, unknown> } }[] = [];
         for (const sessionId of ['S1', 'S2']) {
             await db.session.create({ data: { id: sessionId, accountId: fixture.account.id, tag: sessionId,
                 metadata: '{}', active: true, lastActiveAt: fence } });
             await db.accessKey.create({ data: { accountId: fixture.account.id, machineId: fixture.machine.id,
                 sessionId, data: 'encrypted' } });
+            const socket = { data: {} as Record<string, unknown> };
+            expect((await presence.registerPublisher({ socket,
+                binding: { accountId: fixture.account.id, machineId: fixture.machine.id, sessionId },
+                completeActivitySnapshot: { state: 'active', activeCount: 1 } })).status).toBe('registered');
+            publishers.push({ sessionId, socket });
         }
-        const presence = createSessionPublisherPresence();
         // Only Socket.IO discovery and the daemon transport are simulated; current publisher,
         // credential, grant, placement and persistence decisions remain the real owners.
         let publisherVisible = true;
         const io = { in: (room: string) => ({ fetchSockets: async () => publisherVisible
-            ? ['S1', 'S2'].filter((sessionId) => room === getAccountSessionSocketRoom(fixture.account.id, sessionId))
-                .map((sessionId) => ({ data: { sessionPublisherAuthority: { v: 1, accountId: fixture.account.id,
-                    machineId: fixture.machine.id, sessionId, committedFenceMs: fence.getTime() } } }))
+            ? publishers.filter(({ sessionId }) => room === getAccountSessionSocketRoom(fixture.account.id, sessionId))
+                .map(({ socket }) => socket)
             : [] }) } as unknown as Server;
         const sentSessions: string[] = [];
         const dispatch = createExternalActionDaemonDispatcher({ io, sessionPublisherPresence: presence,

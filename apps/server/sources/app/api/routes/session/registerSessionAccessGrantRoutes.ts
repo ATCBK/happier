@@ -49,7 +49,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
             subjects: request.body.subjects,
             ...(request.body.creationTeamId === undefined ? {} : { creationTeamId: request.body.creationTeamId }),
             authentication: readSessionAccessAuthenticationFromRequest(request),
-        }), { readOnly: true });
+        }), { isolationLevel: "Serializable" /* Grant admission and removal must serialize with tracking, responsibility and deletion census. */, readOnly: true });
         return reply.send(value);
     });
     collaborationApp.post("/v2/sessions/access-grants/list", {
@@ -113,7 +113,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
                 });
             }
             return mutation;
-        });
+        }, { isolationLevel: "Serializable" /* Grant admission and removal must serialize with tracking, responsibility and deletion census. */ });
         if (!result.ok) {
             if (result.error === "session_team_credential_binding_rejected") {
                 return reply.code(409).send({ error: result.error, reason: result.reason });
@@ -162,7 +162,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
                 });
             }
             return mutation;
-        });
+        }, { isolationLevel: "Serializable" /* Grant admission and removal must serialize with tracking, responsibility and deletion census. */ });
         if (!result.ok) return reply.code(errorStatus(result.error)).send({ error: result.error });
         return reply.send({ changed: result.changed, subject: result.subject });
     });
@@ -175,7 +175,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
             sessionId: request.body.sessionId,
             primaryTeamId: request.body.primaryTeamId,
             authentication: readSessionAccessAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Grant admission and removal must serialize with tracking, responsibility and deletion census. */ });
         if (!result.ok) return reply.code(errorStatus(result.error)).send({ error: result.error });
         return reply.send({ changed: result.changed, primaryTeamId: result.primaryTeamId });
     });

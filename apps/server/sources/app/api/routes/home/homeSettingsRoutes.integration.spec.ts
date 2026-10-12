@@ -93,6 +93,54 @@ afterEach(async () => {
 });
 
 describe("Home settings routes", () => {
+    it('keeps public subpath links default-off and owner-controlled, with live values, revision safety and deployment locks', async () => {
+        const key = 'HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH';
+        vi.stubEnv(key, '');
+        try {
+            const app = createTestApp();
+            const owner = await createAccount('owner');
+            const admin = await createAccount('admin');
+            const before = await post(app, '/v1/home/settings/get', admin.token, {});
+            expect(before.statusCode).toBe(200);
+            expect(before.json().entries.find((entry: { key: string }) => entry.key === key)).toMatchObject({
+                value: false, source: 'default', fixed: false, editable: 'home', apply: 'live',
+            });
+            const denied = await post(app, '/v1/home/settings/set', admin.token, {
+                expectedRevision: 0, values: { [key]: true },
+            });
+            expect(denied.statusCode).toBe(403);
+            const saved = await post(app, '/v1/home/settings/set', owner.token, {
+                expectedRevision: 0, values: { [key]: true },
+            });
+            expect(saved.statusCode).toBe(200);
+            expect(saved.json().entries.find((entry: { key: string }) => entry.key === key)).toMatchObject({
+                value: true, source: 'home', fixed: false,
+            });
+            expect((await readHomeConfigEnv({}))[key]).toBe('true');
+            const stale = await post(app, '/v1/home/settings/set', owner.token, {
+                expectedRevision: 0, values: { [key]: false },
+            });
+            expect(stale.statusCode).toBe(409);
+            expect(stale.json()).toEqual({ error: 'home_settings_revision_conflict' });
+            vi.stubEnv(key, '0');
+            const locked = await post(app, '/v1/home/settings/get', owner.token, {});
+            expect(locked.json().entries.find((entry: { key: string }) => entry.key === key)).toMatchObject({
+                value: false, source: 'deployment', fixed: true,
+            });
+            // Deployment locks the effective value and console, not the stored Home override.
+            const underDeployment = await post(app, '/v1/home/settings/set', owner.token, {
+                expectedRevision: saved.json().revision, values: { [key]: true },
+            });
+            expect(underDeployment.statusCode).toBe(200);
+            expect(underDeployment.json().entries.find((entry: { key: string }) => entry.key === key)).toMatchObject({
+                value: false, source: 'deployment', fixed: true,
+            });
+            expect((await readHomeConfigEnv(process.env))[key]).toBe('0');
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
     it('registers Home rate limits from saved startup values after the route modules were imported', async () => {
         const keys = resolveRateLimitEnvKeysForId('account.settings');
         const claimKeys = resolveRateLimitEnvKeysForId('home.governance.claim');

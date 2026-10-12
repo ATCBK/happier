@@ -357,5 +357,5 @@ export async function writeProviderAccountUsageRecordWithPolicy(
     return await inTx(async (tx) => await writeProviderAccountUsageRecordWithPolicyInClient({
         ...params,
         client: tx,
-    }));
+    }), { /* PAU subscription/projection merges can share unchanged fetchedAt and refresh timestamps. */ isolationLevel: "Serializable" });
 }

@@ -2142,7 +2142,7 @@ describe("sessionUpdateHandler", () => {
         expect(emitUpdate).toHaveBeenCalledTimes(1);
     });
 
-    it("returns typed transaction unavailability before the ACK deadline when the socket mutation queue is held", async () => {
+    it("keeps pending materialization admitted while the socket mutation queue is held beyond nine seconds", async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_000);
         try {
@@ -2188,17 +2188,15 @@ describe("sessionUpdateHandler", () => {
             }, callback);
             await vi.advanceTimersByTimeAsync(9_500);
 
-            expect(callback).toHaveBeenCalledWith({
-                ok: false,
-                error: "transaction-unavailable",
-                retryAfterMs: expect.any(Number),
-            });
+            expect(callback).not.toHaveBeenCalled();
             expect(materializeNextPendingMessage).not.toHaveBeenCalled();
 
+            materializeNextPendingMessage.mockResolvedValueOnce({ ok: false, error: "invalid-params" });
             releaseMessage();
             await vi.runAllTimersAsync();
             await Promise.all([heldMessage, materialization]);
-            expect(materializeNextPendingMessage).not.toHaveBeenCalled();
+            expect(materializeNextPendingMessage).toHaveBeenCalled();
+            expect(callback).toHaveBeenCalledWith({ ok: false, error: "invalid-params" });
         } finally {
             vi.useRealTimers();
         }

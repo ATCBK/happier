@@ -44,7 +44,7 @@ import {
     resolveEffectiveLayout1SessionEncryptionMode,
     type Layout1SessionCreateRejection,
 } from "@/app/session/create/prepareLayout1SessionCreate";
-import { mapPendingActivationAuthorization } from "@/app/session/pending/pendingActivationAuthorization";
+import { mapPendingActivationAuthorization, mapPendingActivationFailureDetails } from "@/app/session/pending/pendingActivationAuthorization";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { isSessionCollaborationEnabled } from "@/app/session/access/sessionAccess";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
@@ -336,7 +336,7 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                     });
                     createdFresh = true;
                     return created;
-                });
+                }, { isolationLevel: "Serializable" /* Creation and rejoin admission and composed organization projection require a coherent lifecycle snapshot. */ });
             } catch (error) {
                 if (error instanceof ApiTokenOperationError && error.code === "invalid_token") return reply.code(401).send({ error: "invalid_token" });
                 if (error instanceof InactiveAccountError) {
@@ -384,7 +384,7 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
                         current = { ...current, currentStorageState: initialized.session.currentStorageState };
                     }
                     return await restoreSessionTagRejoinInTx(tx, current);
-                }).catch((restoreError: unknown) => {
+                }, { isolationLevel: "Serializable" /* Creation and rejoin admission and composed organization projection require a coherent lifecycle snapshot. */ }).catch((restoreError: unknown) => {
                     if (restoreError instanceof ApiTokenOperationError && restoreError.code === 'invalid_token') return null;
                     throw restoreError;
                 });
@@ -458,6 +458,7 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
             pendingBlockedCount: resolvedSession.pendingBlockedCount,
             pendingVersion: resolvedSession.pendingVersion,
             pendingActivationAuthorization: mapPendingActivationAuthorization(resolvedSession),
+            pendingActivationFailureDetails: mapPendingActivationFailureDetails(resolvedSession),
             active: resolvedSession.active,
             activeAt: resolvedSession.lastActiveAt.getTime(),
             createdAt: resolvedSession.createdAt.getTime(),
@@ -474,7 +475,7 @@ export function registerSessionCreateOrLoadRoute(app: Fastify) {
             sessions: [session],
             accessMode: "effective_access_v1",
             nowMs: Date.now(),
-        }));
+        }), { isolationLevel: "Serializable" /* Creation and rejoin admission and composed organization projection require a coherent lifecycle snapshot. */ });
         log({ module: "session-create", sessionId: resolvedSession.id, userId }, `Session resolved: ${resolvedSession.id}`);
         return reply.send({
             created: createdFresh,

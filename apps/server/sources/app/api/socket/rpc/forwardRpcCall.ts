@@ -46,16 +46,13 @@ import { db } from "@/storage/db";
 import { log } from "@/utils/logging/log";
 
 import { waitForRpcTargetAvailability } from "./rpcAvailabilityWait";
-import {
-    isRpcForwardCallerLifecycleOwned,
-    resolveRpcForwardTimeoutMs,
-} from "./rpcForwardTimeout";
+import { resolveRpcForwardTimeoutMs } from "./rpcForwardTimeout";
 import {
     resolveRpcClusterFetchTimeoutMs,
     resolveRpcMethodAvailabilityGraceMs,
     resolveRpcMethodAvailabilityPollMs,
 } from "./rpcMethodAvailability";
-import { discoverRpcTargets } from "./rpcTargetDiscovery";
+import { discoverRpcTargets, isMachineRpcTargetUnavailable } from "./rpcTargetDiscovery";
 import type { RpcAckResponseEmitter, RpcForwardTargetGuard } from "./_types";
 
 export type RpcForwardResult =
@@ -74,9 +71,10 @@ export type RpcForwardResult =
 function recordMethodUnavailable(params: Readonly<{
     method: string;
     callStartedAt: number;
+    targetUnavailable?: boolean;
 }>): Extract<RpcForwardResult, { ok: false; error: string }> {
     recordRpcMethodNotAvailable(params.method);
-    recordRpcCallFailure(params.method, "method_not_available");
+    recordRpcCallFailure(params.method, params.targetUnavailable ? "target_unavailable" : "method_not_available");
     observeRpcCall({
         method: params.method,
         durationMs: Date.now() - params.callStartedAt,
@@ -84,8 +82,8 @@ function recordMethodUnavailable(params: Readonly<{
     });
     return {
         ok: false,
-        error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
-        errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+        error: params.targetUnavailable ? "RPC target unavailable" : RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE,
+        errorCode: params.targetUnavailable ? "target_unavailable" : RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
     };
 }
 
@@ -115,7 +113,7 @@ export async function forwardRpcCall(params: Readonly<{
     targetUserId: string;
     method: string;
     callParams: unknown;
-    timeoutMs?: unknown;
+    timeoutMs?: number | null;
     authorization?: SocketRpcAuthorizationContext;
     /** Home-owned current Machine routing facts; never copied from inbound fields. */
     machineAdmission?: SocketRpcMachineAdmissionContextV1;
@@ -200,6 +198,12 @@ export async function forwardRpcCall(params: Readonly<{
         return recordMethodUnavailable({
             method: params.method,
             callStartedAt,
+            targetUnavailable: await isMachineRpcTargetUnavailable({
+                io: params.io,
+                userId: params.targetUserId,
+                method: params.method,
+                fetchTimeoutMs: resolveRpcClusterFetchTimeoutMs(params.method),
+            }),
         });
     }
 
@@ -276,7 +280,7 @@ export async function forwardRpcCall(params: Readonly<{
         if (params.cancellation?.signal.aborted) {
             throw new Error("RPC request cancelled by caller");
         }
-        const timeoutMs = resolveRpcForwardTimeoutMs(params.method, params.timeoutMs);
+        const timeoutMs = resolveRpcForwardTimeoutMs(params.timeoutMs);
         const targetRequestId = params.cancellation?.targetRequestId
             ?? (params.createCallerInputAuthorization ? `rpc_${randomUUID()}` : undefined);
         const request: SocketRpcRequestPayload = {
@@ -310,7 +314,10 @@ export async function forwardRpcCall(params: Readonly<{
             if (params.cancellation?.signal.aborted) {
                 throw new Error("RPC request cancelled by caller");
             }
-            const targetEmitter = selection.target.timeout(timeoutMs);
+            // Socket.IO 4.8.3 cluster ACKs call Node setTimeout directly. Keep
+            // its real 2^31-1 ms adapter boundary separate from the authored
+            // deadline, which is forwarded verbatim to the target owner.
+            const targetEmitter = selection.target.timeout(Math.min(timeoutMs ?? 2_147_483_647, 2_147_483_647));
             const callerInputAuthorization = params.createCallerInputAuthorization && targetRequestId
                 ? await params.createCallerInputAuthorization({ target: selection.target, requestId: targetRequestId })
                 : null;
@@ -332,7 +339,7 @@ export async function forwardRpcCall(params: Readonly<{
             // target and let that owner return the correlated terminal result.
             // Ending the relay locally after submission would discard a V2
             // Action's authenticated cancellation/outcome-unknown response.
-            if (!cancellationSignal || isRpcForwardCallerLifecycleOwned(params.method)) {
+            if (!cancellationSignal || timeoutMs === null) {
                 return await response;
             }
 
@@ -380,10 +387,13 @@ export async function forwardRpcCall(params: Readonly<{
         if (guarded.status === "unavailable") {
             if (requestSubmitted) {
                 params.onSubmittedUnknown?.();
-                return recordMethodUnavailable({
+                recordRpcCallFailure(params.method, "request_error");
+                observeRpcCall({
                     method: params.method,
-                    callStartedAt,
+                    durationMs: Date.now() - callStartedAt,
+                    result: "error",
                 });
+                return { ok: false, error: "RPC target changed after request submission", errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN };
             }
             return recordMethodUnavailable({
                 method: params.method,

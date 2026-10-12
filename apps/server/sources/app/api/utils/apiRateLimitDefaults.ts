@@ -135,6 +135,12 @@ export function resolveRateLimitEnvKeysForId(id: string): { maxEnvKey: string; w
 }
 
 
+function normalizeApiRateLimitKeyStrategy(raw: string): string {
+    if (["ip", "ip_only"].includes(raw)) return "ip-only";
+    if (["user", "user_or_ip", "userorip"].includes(raw)) return "user-or-ip";
+    return raw;
+}
+
 /** Global switches read by `apiRateLimitPolicy.ts`. */
 export const API_RATE_LIMIT_GLOBAL_SERVER_CONFIG = defineServerConfigRegistry({
     HAPPIER_API_RATE_LIMITS_ENABLED: {
@@ -172,8 +178,10 @@ export const API_RATE_LIMIT_GLOBAL_SERVER_CONFIG = defineServerConfigRegistry({
         docs: "self-hosting/env#api-rate-limits",
     },
     HAPPIER_API_RATE_LIMITS_GLOBAL_KEY_STRATEGY: {
-        type: "string",
+        type: "enum",
         default: "default",
+        bounds: { values: ["default", "ip-only", "user-or-ip"] },
+        normalizeEnumValue: normalizeApiRateLimitKeyStrategy,
         sensitivity: "plain",
         apply: "restart",
         editable: "home",
@@ -183,8 +191,10 @@ export const API_RATE_LIMIT_GLOBAL_SERVER_CONFIG = defineServerConfigRegistry({
         docs: "self-hosting/env#api-rate-limits",
     },
     HAPPIER_API_RATE_LIMITS_ROUTE_KEY_STRATEGY: {
-        type: "string",
+        type: "enum",
         default: "default",
+        bounds: { values: ["default", "ip-only", "user-or-ip"] },
+        normalizeEnumValue: normalizeApiRateLimitKeyStrategy,
         sensitivity: "plain",
         apply: "restart",
         editable: "home",

@@ -43,6 +43,7 @@ import {
 } from "@happier-dev/protocol";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
+import { PendingActivationFailureQueryV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import { PendingResetStartsReadInputV1Schema, PendingResetStartsReadResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import {
     emitPendingChanged,
@@ -478,6 +479,7 @@ function registerSessionPendingResource(app: Fastify, executionRunTarget: boolea
             schema: {
                 params: z.object({ runId, sessionId: z.string() }),
                 body: PendingActivationFailureRequestV1Schema,
+                querystring: PendingActivationFailureQueryV1Schema,
             },
             config: {
                 rateLimit: resolveApiHotEndpointRateLimit(process.env, "session.pending"),
@@ -490,6 +492,7 @@ function registerSessionPendingResource(app: Fastify, executionRunTarget: boolea
                 requestId: request.body.requestId,
                 requestedAt: request.body.requestedAt,
                 failureCode: request.body.failureCode,
+                failureDetails: request.query.failureDetails,
             });
             if (!res.ok) {
                 if (res.error === "invalid-params") return reply.code(400).send({ error: res.error });
@@ -715,6 +718,7 @@ function registerSessionPendingResource(app: Fastify, executionRunTarget: boolea
             const { sessionId, localId } = request.params;
             const res = await restorePendingMessage({ actorUserId: request.userId, authentication: readSessionAccessAuthenticationFromRequest(request), sessionId, ...(request.params.runId ? { targetExecutionRunId: request.params.runId } : {}), localId });
             if (!res.ok) {
+                if (res.error === "transaction-unavailable") return sendTransactionUnavailable(reply, res);
                 const authenticationStatus = pendingAuthenticationStatus(res.error);
                 if (authenticationStatus) return reply.code(authenticationStatus).send({ error: res.error });
                 if (res.error === "invalid-params") return reply.code(400).send({ error: res.error });

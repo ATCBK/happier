@@ -7,6 +7,7 @@ import { createSessionMetadataPrivacyUpgradeRequiredResponse } from "@/app/sessi
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { writeSessionPublicShare, deleteSessionPublicShare } from "@/app/share/storedContentPublicShare";
 import { resolveStoredContentPublicShareOrigin } from "@/app/share/storedContentPublicShareOrigin";
+import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 
 export function registerPublicShareOwnerRoutes(app: Fastify): void {
     /**
@@ -50,7 +51,8 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
             return reply.code(403).send({ error: 'session_access_forbidden' });
         }
 
-        const result = await writeSessionPublicShare({ userId, sessionId, authentication, lookupId, encryptedDataKey, expiresAt, maxUses, isConsentRequired, networkOff });
+        const configEnv = await readRequestHomeEnv(request);
+        const result = await writeSessionPublicShare({ userId, sessionId, authentication, lookupId, encryptedDataKey, expiresAt, maxUses, isConsentRequired, networkOff, configEnv });
 
         if (result.type === "forbidden") {
             return reply.code(403).send({ error: "session_access_forbidden" });
@@ -79,7 +81,7 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
         const publicShare = result.publicShare;
 
         return reply.send({
-            ...(publicShare.keyDerivation === "fragment_v1" ? { isolatedOrigin: resolveStoredContentPublicShareOrigin(publicShare.id) } : {}),
+            ...(publicShare.keyDerivation === "fragment_v1" ? { viewerOrigin: resolveStoredContentPublicShareOrigin(publicShare.id, configEnv) } : {}),
             publicShare: {
                 id: publicShare.id,
                 keyDerivation: publicShare.keyDerivation,
@@ -129,8 +131,9 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
             return reply.send({ publicShare: null });
         }
 
+        const configEnv = await readRequestHomeEnv(request);
         return reply.send({
-            ...(publicShare.keyDerivation === "fragment_v1" ? { isolatedOrigin: resolveStoredContentPublicShareOrigin(publicShare.id) } : {}),
+            ...(publicShare.keyDerivation === "fragment_v1" ? { viewerOrigin: resolveStoredContentPublicShareOrigin(publicShare.id, configEnv) } : {}),
             publicShare: {
                 id: publicShare.id,
                 keyDerivation: publicShare.keyDerivation,

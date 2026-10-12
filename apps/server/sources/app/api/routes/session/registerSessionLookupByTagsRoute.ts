@@ -86,6 +86,6 @@ export function registerSessionLookupByTagsRoute(app: Fastify) {
                 }
                 throw error;
             }
-        }, { readOnly: true });
+        }, { isolationLevel: "Serializable" /* Tag lookup combines storage mode, current access and Session projection from one snapshot. */, readOnly: true });
     });
 }

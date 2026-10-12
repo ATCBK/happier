@@ -12,6 +12,7 @@ import {
 } from "@happier-dev/protocol";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { inTx, type Tx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import { type Fastify } from "../../types";
 import {
     createV2SessionListRowSelect,
@@ -40,12 +41,13 @@ import {
     enforceCurrentAccountStoredContentCompatibilityForHttpRequest,
     readAccountStoredContentCompatibilityForHttpRequest,
 } from "@/app/clientCompatibility/accountStoredContentCompatibility";
-import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
+import { resolveSessionAccessForOperation, projectSessionEffectiveAccessV1 } from "@/app/session/access/sessionAccess";
+import { readmitSessionRowsWithAdmissionInTx } from "@/app/session/access/sessionReadAdmission";
 import { readSessionAccessAuthenticationFromRequest, type SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { listQueuedExecutionRunPendingTargetsForSessions } from "@/app/session/pending/pendingMessageService";
 import { loadPendingActivationPublicationInTx } from '@/app/session/pending/publishPendingMutation';
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
-import { projectSessionReportsForRowsInTx } from "@/app/session/awareness/sessionReportsProjection";
+import { projectSessionReportsForRowsInTx, readmitCapturedSessionReportReferencesInTx, type SessionReportContribution } from "@/app/session/awareness/sessionReportsProjection";
 
 const SESSION_METADATA_PRIVACY_UPGRADE_REQUIRED_RESPONSE_SCHEMA = z.object({
     error: z.literal("Session metadata privacy upgrade required"),
@@ -137,7 +139,7 @@ export function registerSessionListingRoutes(app: Fastify) {
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "sessions.list") },
         schema: { response: { 200: z.object({ sessionIds: z.array(z.string()) }).strict() } },
     }, async (request, reply) => {
-        const sessionIds = await inTx(tx => listSessionMetadataPrivacyUpgradeIdsInTx(tx, request.userId), { readOnly: true });
+        const sessionIds = await inTx(tx => listSessionMetadataPrivacyUpgradeIdsInTx(tx, request.userId), { isolationLevel: "Serializable" /* Metadata privacy upgrade census must observe storage tuple and access from one snapshot. */, readOnly: true });
         return reply.header("Cache-Control", "no-store").send({ sessionIds });
     });
 
@@ -330,7 +332,8 @@ export function registerSessionListingRoutes(app: Fastify) {
         const authentication = readSessionAccessAuthenticationFromRequest(request);
         const supportsCurrentStoredContent = readAccountStoredContentCompatibilityForHttpRequest(request)
             .supportsCurrentProtocol;
-        const result = await inTx(async (tx) => {
+        let contributions: readonly SessionReportContribution[] = [];
+        const result = await readSnapshotWithCurrentAdmission(async (tx) => {
             const { admission, row: session } = await findV2SessionByIdRowInTx(tx, {
                 userId,
                 sessionId,
@@ -371,6 +374,7 @@ export function registerSessionListingRoutes(app: Fastify) {
                     accessMode: request.query?.accessProjectionVersion === 1
                         ? "effective_access_v1" : "legacy_owner_or_direct",
                     nowMs: Date.now(),
+                    captureContributions: rows => { contributions = rows; },
                 });
                 if (admission.access.level !== "owner") {
                     return {
@@ -399,7 +403,22 @@ export function registerSessionListingRoutes(app: Fastify) {
                 }
                 throw error;
             }
-        }, { readOnly: true });
+        }, async (tx, captured) => {
+            if (captured.kind !== "found") return captured;
+            try {
+                const admissions = await readmitSessionRowsWithAdmissionInTx(tx, { accountId: userId, authentication,
+                    accessMode: request.query?.accessProjectionVersion === 1 ? "effective_access_v1" : "legacy_owner_or_direct" }, [captured.payload.session]);
+                const admission = admissions.get(sessionId);
+                if (!admission) return { kind: "unavailable" } as const;
+                if (admission.status !== "allowed") return { kind: admission.status } as const;
+                const [session] = await readmitCapturedSessionReportReferencesInTx(tx, { accountId: userId, authentication,
+                    accessMode: request.query?.accessProjectionVersion === 1 ? "effective_access_v1" : "legacy_owner_or_direct", sessions: [admission.row], contributions });
+                return { ...captured, payload: { session } };
+            } catch (error) {
+                if (isSessionMetadataPrivacyUpgradeRequiredError(error)) return { kind: "metadata_privacy_upgrade_required" } as const;
+                throw error;
+            }
+        });
         if (result.kind === "authentication_required") {
             return reply.code(403).send({ error: "team_authentication_required" });
         }

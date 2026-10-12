@@ -3,12 +3,15 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/storage/db";
 import { prismaRuntime, type TransactionClient } from "@/storage/prisma";
 import {
+    createStoredReadSchema,
     ProviderAccountUsageRecordKeyV1Schema,
-    ProviderAccountUsageSnapshotV1Schema,
+    parseBuiltInLegacyProviderAccountUsageSnapshotV1,
     SealedProviderAccountUsageSnapshotV1Schema,
+    type SealedProviderAccountUsageSnapshotV1,
 } from "@happier-dev/protocol";
 import {
     ProviderAccountUsageRecordMetadataSchema,
+    UpsertProviderAccountUsageRecordSchema,
     validateProviderAccountUsageRecordWrite,
 } from "./schemas";
 import type {
@@ -22,10 +25,19 @@ type ProviderAccountUsageRecordClient = Pick<typeof db, "providerAccountUsageRec
 
 type ParsedProviderAccountUsageRecordWrite = ReturnType<typeof validateProviderAccountUsageRecordWrite>;
 
+export function projectSealedProviderAccountUsageContentV4(sealedPayload: SealedProviderAccountUsageSnapshotV1) {
+    return {
+        t: "encrypted" as const,
+        c: sealedPayload.ciphertext,
+        ...(sealedPayload.subscription ? { subscription: sealedPayload.subscription } : {}),
+        ...(sealedPayload.recoveryCreditDetails ? { recoveryCreditDetails: sealedPayload.recoveryCreditDetails } : {}),
+    };
+}
+
 export function projectProviderAccountUsageRecordV4(record: StoredProviderAccountUsageRecord, sources: readonly import('@happier-dev/protocol').QualifiedConnectedServiceUsageSourceV4[]) {
     if (record.payloadMode === 'plain_json_v1' ? !record.snapshot : !record.sealedPayload) throw new ProviderAccountUsagePayloadInvariantError('Provider usage payload is unavailable');
     return {
-        content: record.payloadMode === 'plain_json_v1' ? { t: 'plain' as const, v: record.snapshot! } : { t: 'encrypted' as const, c: record.sealedPayload!.ciphertext, ...(record.sealedPayload!.subscription ? { subscription: record.sealedPayload!.subscription } : {}) },
+        content: record.payloadMode === 'plain_json_v1' ? { t: 'plain' as const, v: record.snapshot! } : projectSealedProviderAccountUsageContentV4(record.sealedPayload!),
         metadata: { fetchedAt: record.fetchedAt ?? record.snapshot?.fetchedAtMs ?? 0, staleAfterMs: record.staleAfterMs ?? record.snapshot?.staleAfterMs ?? 0, status: record.status === 'unavailable' || record.status === 'estimated' || record.status === 'error' ? record.status : 'ok' as const, ...(record.refreshRequestedAt !== undefined ? { refreshRequestedAt: record.refreshRequestedAt } : {}) },
         sources: [...sources],
     };
@@ -47,7 +59,11 @@ export async function readProviderAccountUsageHistory(params: Readonly<{ account
 }
 
 function parseHistoryRecord(payload: unknown): StoredProviderAccountUsageRecord {
-    const parsed = parseProviderAccountUsageRecordWrite(payload);
+    // Retained pages and exact witnesses share the persistence-only projection.
+    // Strict write validation still owns all recognized identities and invariants.
+    const retained = createStoredReadSchema(UpsertProviderAccountUsageRecordSchema).safeParse(payload);
+    if (!retained.success) throw new ProviderAccountUsagePayloadInvariantError(retained.error.message);
+    const parsed = parseProviderAccountUsageRecordWrite(retained.data);
     return { ...parsed, fetchedAt: parsed.fetchedAt ?? null, staleAfterMs: parsed.staleAfterMs ?? null };
 }
 
@@ -95,7 +111,7 @@ function isJsonFieldAbsent(value: unknown): boolean {
 
 function zodProviderAccountUsageMetadata(raw: unknown) {
     try {
-        return ProviderAccountUsageRecordMetadataSchema.parse(raw);
+        return createStoredReadSchema(ProviderAccountUsageRecordMetadataSchema).parse(raw);
     } catch {
         throw new ProviderAccountUsagePayloadInvariantError(
             "Stored provider account usage metadata is invalid",
@@ -180,7 +196,7 @@ function parseStoredProviderAccountUsageRecord(row: Readonly<{
     refreshRequestedAt: Date | null;
     metadata: unknown;
 }>): StoredProviderAccountUsageRecord {
-    const recordKey = ProviderAccountUsageRecordKeyV1Schema.parse(row.recordKeyJson);
+    const recordKey = createStoredReadSchema(ProviderAccountUsageRecordKeyV1Schema).parse(row.recordKeyJson);
     const payloadMode =
         row.payloadMode === "plain_json_v1" || row.payloadMode === "sealed_account_scoped_v1"
             ? row.payloadMode
@@ -199,21 +215,29 @@ function parseStoredProviderAccountUsageRecord(row: Readonly<{
     if (!status) {
         throw new ProviderAccountUsagePayloadInvariantError(`Unsupported provider account usage status: ${row.status}`);
     }
-    const snapshot = isJsonFieldAbsent(row.snapshot)
+    const metadata = row.metadata === null || row.metadata === undefined
         ? undefined
-        : ProviderAccountUsageSnapshotV1Schema.parse(row.snapshot);
+        : zodProviderAccountUsageMetadata(row.metadata);
+    const storedSnapshot = isJsonFieldAbsent(row.snapshot)
+        ? undefined
+        : parseBuiltInLegacyProviderAccountUsageSnapshotV1(row.snapshot);
+    // 0.2 stores supplemental facts beside the strict base; native V4 fields win.
+    const snapshot = storedSnapshot ? {
+        ...storedSnapshot,
+        ...(storedSnapshot.subscription === undefined && metadata?.subscription
+            ? { subscription: metadata.subscription } : {}),
+        ...(storedSnapshot.recoveryCreditDetails === undefined && metadata?.recoveryCreditDetails
+            ? { recoveryCreditDetails: metadata.recoveryCreditDetails } : {}),
+    } : undefined;
     const sealedPayload = isJsonFieldAbsent(row.sealedPayload)
         ? undefined
-        : SealedProviderAccountUsageSnapshotV1Schema.parse(row.sealedPayload);
+        : createStoredReadSchema(SealedProviderAccountUsageSnapshotV1Schema).parse(row.sealedPayload);
     if (payloadMode === "plain_json_v1" && (sealedPayload || (!snapshot && status !== "refresh_requested"))) {
         throw new ProviderAccountUsagePayloadInvariantError("Stored plain provider account usage record payload is invalid");
     }
     if (payloadMode === "sealed_account_scoped_v1" && (snapshot || (!sealedPayload && status !== "refresh_requested"))) {
         throw new ProviderAccountUsagePayloadInvariantError("Stored sealed provider account usage record payload is invalid");
     }
-    const metadata = row.metadata === null || row.metadata === undefined
-        ? undefined
-        : zodProviderAccountUsageMetadata(row.metadata);
     return {
         accountId: row.accountId,
         recordId: row.recordId as StoredProviderAccountUsageRecord["recordId"],

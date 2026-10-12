@@ -6,6 +6,9 @@ import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { sessionRoutes } from "./sessionRoutes";
 import { deriveSessionSystemRecordAddressKeys } from '@/app/session/systemRecords/sessionSystemRecordAddressKeys';
 import { encodeSessionSystemRecordRevision } from '@/app/session/systemRecords/sessionSystemRecordRevision';
+import { inTx } from '@/storage/inTx';
+import { writeHistoricalSessionMessageBatchInTx } from '@/app/session/sessionTranscriptWrite';
+import { parseSessionMessageRole } from '@/app/session/messageRole/resolveSessionMessageRole';
 
 describe("session historical transcript import route (SQLite integration)", () => {
     let harness: LightSqliteHarness;
@@ -22,7 +25,6 @@ describe("session historical transcript import route (SQLite integration)", () =
     });
 
     beforeEach(() => {
-        vi.resetModules();
         harness.resetEnv({
             HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional",
         });
@@ -68,27 +70,94 @@ describe("session historical transcript import route (SQLite integration)", () =
         return { account, session };
     }
 
-    it('binds a fork import to the current child record while retaining only original acknowledgement correlation', async () => {
+    it('binds every fork acknowledgement in one unchanged native row only to current child records', async () => {
         const { account, session } = await createFixture({ encryptionMode: 'e2ee' });
+        const references = [];
+        for (const itemId of ['child-first', 'child-second']) {
+            const record = await db.sessionSystemRecord.create({ data: {
+                accountId: account.id, sessionId: session.id, ownerKind: 'host', pluginId: null,
+                namespace: 'surface', kind: 'item.v1', localId: itemId,
+                ...deriveSessionSystemRecordAddressKeys({ ownerKind: 'host', pluginId: null, namespace: 'surface', localId: itemId }),
+                content: { t: 'encrypted', c: 'child-item-sealed' }, version: 1,
+            } });
+            references.push({ v: 1 as const, itemId,
+                itemRevision: encodeSessionSystemRecordRevision({ id: record.id, version: record.version }),
+                sourceAddress: { serverId: 'origin-home', sessionId: 'parent-session' },
+                sourceItemId: itemId.replace('child-', ''), sourceItemRevision: null });
+        }
+        const surfaceItemReference = { v: 1, references };
+        const submitted = { v: 1, references: [references[0], { ...references[0], itemId: 'missing-child', sourceItemId: 'missing' }, references[1]] };
+        await withAuthenticatedTestApp((app) => sessionRoutes(app), async (app) => {
+            const response = await app.inject({ method: 'POST', url: `/v3/sessions/${session.id}/transcript/import`,
+                headers: { 'content-type': 'application/json', 'x-test-user-id': account.id },
+                payload: { items: [{ localId: 'fork-row', content: { t: 'encrypted', c: 'child-message-sealed' }, surfaceItemReference: submitted }] },
+            });
+            expect(response.statusCode).toBe(200);
+        });
+        await expect(db.sessionMessage.count({ where: { sessionId: session.id } })).resolves.toBe(1);
+        await expect(db.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId: session.id, localId: 'fork-row' } },
+            select: { sessionId: true, content: true, surfaceItemReference: true } })).resolves.toEqual({
+            sessionId: session.id, content: { t: 'encrypted', c: 'child-message-sealed' }, surfaceItemReference,
+        });
+    });
+
+    it('enriches an unsettled fork retry without rewriting or duplicating its original native row', async () => {
+        const { account, session } = await createFixture({ encryptionMode: 'e2ee' });
+        const content = { t: 'encrypted' as const, c: 'original-native-row' };
         const record = await db.sessionSystemRecord.create({ data: {
             accountId: account.id, sessionId: session.id, ownerKind: 'host', pluginId: null,
             namespace: 'surface', kind: 'item.v1', localId: 'child-visual',
             ...deriveSessionSystemRecordAddressKeys({ ownerKind: 'host', pluginId: null, namespace: 'surface', localId: 'child-visual' }),
-            content: { t: 'encrypted', c: 'child-item-sealed' }, version: 1,
+            content: { t: 'encrypted', c: 'child-copy' }, version: 1,
         } });
-        const surfaceItemReference = { v: 1, itemId: 'child-visual',
-            itemRevision: encodeSessionSystemRecordRevision({ id: record.id, version: record.version }),
-            sourceAddress: { serverId: 'origin-home', sessionId: 'parent-session' } };
+        const member = { v: 1 as const, itemId: 'child-visual', itemRevision: encodeSessionSystemRecordRevision(record),
+            sourceAddress: { serverId: 'origin-home', sessionId: 'parent-session' },
+            sourceItemId: 'parent-visual', sourceItemRevision: null };
+        const surfaceItemReference = { v: 1 as const, references: [member] };
         await withAuthenticatedTestApp((app) => sessionRoutes(app), async (app) => {
-            const response = await app.inject({ method: 'POST', url: `/v3/sessions/${session.id}/transcript/import`,
+            const post = (epoch: 2 | 3, association?: typeof surfaceItemReference) => app.inject({
+                method: 'POST', url: `/v${epoch}/sessions/${session.id}/transcript/import`,
                 headers: { 'content-type': 'application/json', 'x-test-user-id': account.id },
-                payload: { items: [{ localId: 'fork-row', content: { t: 'encrypted', c: 'child-message-sealed' }, surfaceItemReference }] },
+                payload: { items: [{ localId: 'native-result', content,
+                    ...(association ? { surfaceItemReference: association } : {}) }] },
             });
-            expect(response.statusCode).toBe(200);
-        });
-        await expect(db.sessionMessage.findUnique({ where: { sessionId_localId: { sessionId: session.id, localId: 'fork-row' } },
-            select: { sessionId: true, content: true, surfaceItemReference: true } })).resolves.toEqual({
-            sessionId: session.id, content: { t: 'encrypted', c: 'child-message-sealed' }, surfaceItemReference,
+            expect((await post(2)).statusCode).toBe(200);
+            const before = await db.sessionMessage.findUniqueOrThrow({
+                where: { sessionId_localId: { sessionId: session.id, localId: 'native-result' } },
+            });
+            const retryWrite = () => inTx((tx) => writeHistoricalSessionMessageBatchInTx(tx, {
+                sessionId: session.id, writeAuthority: 'hosted', storagePolicy: 'optional',
+                items: [{ localId: 'native-result', sidechainId: null, content, surfaceItemReference,
+                    messageRole: parseSessionMessageRole(before.messageRole),
+                    ...(before.transcriptObservationProvenance ? { transcriptObservationProvenance: before.transcriptObservationProvenance } : {}) }],
+            }));
+            expect(await retryWrite()).toMatchObject({ ok: true, didWrite: true, firstSeq: before.seq, lastSeq: before.seq });
+            expect(await retryWrite()).toMatchObject({ ok: true, didWrite: false, firstSeq: before.seq, lastSeq: before.seq });
+            expect((await post(3, surfaceItemReference)).statusCode).toBe(200);
+            const after = await db.sessionMessage.findUniqueOrThrow({
+                where: { sessionId_localId: { sessionId: session.id, localId: 'native-result' } },
+            });
+            expect(after).toMatchObject({ id: before.id, seq: before.seq, content, surfaceItemReference });
+            expect(after.rowRevision).toBeGreaterThan(before.rowRevision);
+            const secondRecord = await db.sessionSystemRecord.create({ data: {
+                accountId: account.id, sessionId: session.id, ownerKind: 'host', pluginId: null,
+                namespace: 'surface', kind: 'item.v1', localId: 'child-second',
+                ...deriveSessionSystemRecordAddressKeys({ ownerKind: 'host', pluginId: null, namespace: 'surface', localId: 'child-second' }),
+                content: { t: 'encrypted', c: 'second-child-copy' }, version: 1,
+            } });
+            const secondMember = { ...member, itemId: 'child-second',
+                itemRevision: encodeSessionSystemRecordRevision(secondRecord), sourceItemId: 'parent-second' };
+            const completed = { v: 1 as const, references: [secondMember, member] };
+            expect((await post(3, completed)).statusCode).toBe(200);
+            // Older omission cannot withdraw a grant already admitted by the current owner.
+            expect((await post(2)).statusCode).toBe(200);
+            await expect(db.sessionMessage.findUnique({ where: { id: before.id },
+                select: { content: true, surfaceItemReference: true } })).resolves.toEqual({ content, surfaceItemReference: completed });
+            // A later partial retry augments rather than erasing its previously admitted sibling.
+            expect((await post(3, { v: 1, references: [secondMember] })).statusCode).toBe(200);
+            await expect(db.sessionMessage.findUnique({ where: { id: before.id },
+                select: { content: true, surfaceItemReference: true } })).resolves.toEqual({ content, surfaceItemReference: completed });
+            await expect(db.sessionMessage.count({ where: { sessionId: session.id } })).resolves.toBe(1);
         });
     });
 

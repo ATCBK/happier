@@ -295,7 +295,7 @@ export function registerPublicShareReadRoutes(app: Fastify): void {
                 session,
                 metadataProjection,
             };
-        });
+        }, { /* Public share admission, subject mode and disclosed transcript must share one capture. */ isolationLevel: "Serializable" });
 
         // Handle errors from transaction
         if ('error' in result) {
@@ -502,7 +502,7 @@ export function registerPublicShareReadRoutes(app: Fastify): void {
                 messages,
                 hasMore,
             };
-        });
+        }, { /* Public share admission, subject mode and disclosed transcript must share one capture. */ isolationLevel: "Serializable" });
 
         if ('error' in accessResult) {
             if (accessResult.requiresConsent) {

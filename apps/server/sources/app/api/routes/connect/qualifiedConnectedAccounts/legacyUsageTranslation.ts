@@ -68,6 +68,9 @@ export function projectProviderAccountUsageSnapshotToLegacyQuota(
             ...(snapshot.recoveryCredits
                 ? { recoveryCredits: snapshot.recoveryCredits }
                 : {}),
+            ...(snapshot.recoveryCreditDetails
+                ? { recoveryCreditDetails: snapshot.recoveryCreditDetails }
+                : {}),
             meters: snapshot.meters,
         }),
     );

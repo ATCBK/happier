@@ -118,6 +118,26 @@ describe('local service preview routes', () => {
         machineFindUnique.mockReset().mockResolvedValue(null);
     });
 
+    it('keeps local services isolated when stored-content subpath opt-in is enabled', () => {
+        const env = { HANDY_MASTER_SECRET: 'secret', HAPPIER_PUBLIC_SERVER_URL: 'https://app.happier.test',
+            HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH: '1',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ENABLED: 'true',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__ALLOWED_MODES: 'secret_link',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__MAX_TTL_MS: '60000',
+            HAPPIER_FEATURE_LOCAL_SERVICES_PUBLIC_PREVIEW__DNS_TLS_REQUIRED: '0',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestAuditSink]: '1',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewRateLimitProfileIds]: 'default',
+            [FEATURE_ENV_KEYS.localServicesPublicPreviewAllowTestRateLimitChecker]: '1' };
+        const runtimes = createLocalServiceRouteRuntimes(env);
+        expect(runtimes.preview.registerPreview({ resource: preview, accountId: 'user_1' }))
+            .toMatchObject({ ok: true, accessUrl: null });
+        expect(runtimes.public.createExposure({ preview, requestedMode: 'secret_link', requestedTtlMs: 60_000,
+            actorId: 'user_1', sessionAuthorized: true, dnsTlsValid: true, rateLimitProfileId: 'default' }))
+            .toEqual({ ok: false, reasonCode: 'public_origin_unavailable' });
+        expect(runtimes.public.getSnapshot({ machineId: preview.machineId, previewId: preview.previewId }).exposures).toEqual([]);
+    });
+
     it('admits a shared current Machine viewer only against the actual current service and retires its registration', async () => {
         const target = { kind: 'managed_service', machineId: 'machine_1', managedServiceId: 'instance_1', cwd: '/workspace/app',
             declaration: { workspaceRefId: 'workspace_1', selection: { kind: 'manifest', name: 'web' } } };

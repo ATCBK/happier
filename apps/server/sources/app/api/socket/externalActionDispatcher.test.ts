@@ -152,6 +152,7 @@ describe("createExternalActionDaemonDispatcher", () => {
         expect(forwardRpc).toHaveBeenCalledWith(expect.objectContaining({
             targetUserId: "account-1",
             method: `machine-1:${EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1}`,
+            timeoutMs: null,
             callParams: expect.objectContaining({
                 actionId: "session.spawn_new",
                 envelope,
@@ -671,6 +672,7 @@ describe("createExternalActionDaemonDispatcher", () => {
             machineId: "machine-2",
             sessionId: "session-1",
             committedFenceMs: 42,
+            publisherGeneration: "1",
         };
         const io = {
             in: vi.fn((room: string) => ({
@@ -680,7 +682,12 @@ describe("createExternalActionDaemonDispatcher", () => {
                 },
             })),
         };
-        const isCurrentPublisherProjection = vi.fn(async () => true);
+        const resolveProjectedCurrentPublisher = vi.fn(async () => ({
+            accountId: currentProjection.accountId,
+            machineId: currentProjection.machineId,
+            sessionId: currentProjection.sessionId,
+            committedFence: new Date(currentProjection.committedFenceMs),
+        }));
         const forwardRpc = vi.fn(async () => ({
             ok: true as const,
             result: relayResponse("session.message.send", envelope),
@@ -689,7 +696,7 @@ describe("createExternalActionDaemonDispatcher", () => {
             io: io as never,
             forwardRpc: forwardRpc as never,
             resolveMachine: async () => "available",
-            sessionPublisherPresence: { isCurrentPublisherProjection } as never,
+            sessionPublisherPresence: { resolveProjectedCurrentPublisher },
         });
 
         const result = await dispatch({
@@ -699,7 +706,7 @@ describe("createExternalActionDaemonDispatcher", () => {
         });
         expect(result).toEqual(dispatchedResponse(response("session.message.send", envelope)));
 
-        expect(isCurrentPublisherProjection).toHaveBeenCalledWith({
+        expect(resolveProjectedCurrentPublisher).toHaveBeenCalledWith({
             expectedAccountId: "account-1",
             expectedSessionId: "session-1",
             projection: currentProjection,
@@ -723,6 +730,7 @@ describe("createExternalActionDaemonDispatcher", () => {
             machineId: "runner-machine",
             sessionId: "session-1",
             committedFenceMs: 7,
+            publisherGeneration: "1",
         };
         const rooms: string[] = [];
         const io = {
@@ -743,7 +751,12 @@ describe("createExternalActionDaemonDispatcher", () => {
             io: io as never,
             forwardRpc: forwardRpc as never,
             resolveMachine: async () => "available",
-            sessionPublisherPresence: { isCurrentPublisherProjection: async () => true } as never,
+            sessionPublisherPresence: { resolveProjectedCurrentPublisher: async () => ({
+                accountId: runnerProjection.accountId,
+                machineId: runnerProjection.machineId,
+                sessionId: runnerProjection.sessionId,
+                committedFence: new Date(runnerProjection.committedFenceMs),
+            }) },
         });
 
         const result = await dispatch({

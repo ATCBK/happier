@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import type { RouteOptions } from "fastify";
+import type { FastifyRequest, RouteOptions } from "fastify";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -107,6 +107,55 @@ function externalActionV2JsonPayloadWithByteLength(byteLength: number): string {
 }
 
 describe("registerExternalActionRoutes", () => {
+    it('refuses host-only Account and PAT plugin claims before Action dispatch or authorization issuance', async () => {
+        const dispatch = vi.fn(async (request: Parameters<NonNullable<RegisterExternalActionRoutesDependencies['dispatch']>>[0]) => dispatchedResponse({ v: 1, actionId: request.actionId,
+            requestId: request.envelope.requestId, execution: { ok: true, result: { accepted: true } } }));
+        const app = createApp({ dispatch, beforeRegister: instance => {
+            // Credential authentication is the boundary; retain real route and policy owners.
+            instance.addHook('preHandler', async (request: FastifyRequest) => {
+                request.authTokenLegacy = false;
+                request.authTokenEpoch = 1;
+            });
+        } });
+        const pluginInvocation = { kind: 'mountedPluginSurface', mountedBinding: {
+            pluginId: 'happier.channels', contributionLocalId: 'channels-app', occurrenceId: 'mounted-occurrence',
+            sourceCustody: { kind: 'development', registeredRootId: 'channels-root' },
+            materializationRef: { machineId: 'machine-1', pluginId: 'happier.channels', materializationId: 'installed-channels' },
+        } };
+        try {
+            for (const candidate of [
+                { actionId: 'automation.conversation.targets.list', headers: {
+                    authorization: 'Bearer signed-account-token', 'x-test-user-id': 'account-1', 'x-test-auth-token-kind': 'account',
+                }, invocation: {} },
+                { actionId: 'automation.conversation.targets.list', headers: patHeaders, invocation: { pluginInvocation } },
+                { actionId: 'plugins.list', headers: patHeaders, invocation: { pluginInvocation } },
+                { actionId: 'automation.conversation.targets.list', headers: {
+                    authorization: 'Bearer terminal-token', 'x-test-user-id': 'account-1', 'x-test-auth-token-kind': 'terminal',
+                }, invocation: { pluginInvocation } },
+            ]) {
+                const envelope = { v: 1, requestId: 'plugin-root',
+                    target: { kind: 'machine', machineId: 'machine-1' }, input: {}, ...candidate.invocation };
+                for (const suffix of ['', '/execution-authorization']) {
+                    const response = await app.inject({ method: 'POST',
+                        url: `/v1/actions/${candidate.actionId}${suffix}`, headers: candidate.headers,
+                        payload: suffix ? { v: 1, machineId: 'machine-1', envelope } : envelope,
+                    });
+                    expect(response.statusCode, candidate.actionId + suffix).toBe(401);
+                    expect(response.json()).toEqual({ error: 'invalid_token' });
+                }
+            }
+            expect(dispatch).not.toHaveBeenCalled();
+            const admitted = await app.inject({ method: 'POST', url: '/v1/actions/automation.conversation.targets.list',
+                headers: { authorization: 'Bearer signed-account-token', 'x-test-user-id': 'account-1',
+                    'x-test-auth-token-kind': 'account' },
+                payload: { v: 1, requestId: 'plugin-root', target: { kind: 'machine', machineId: 'machine-1' },
+                    input: {}, pluginInvocation },
+            });
+            expect(admitted.statusCode).toBe(200);
+            expect(admitted.json()).toMatchObject({ requestId: 'plugin-root', execution: { ok: true } });
+        } finally { await app.close(); }
+    });
+
     it("relays opaque V2 through the real dispatcher and preserves its binary response", async () => {
         const material = { type: "dataKey" as const, machineKey: new Uint8Array(32).fill(9) };
         const target = { kind: "machine" as const, machineId: "machine-1" };

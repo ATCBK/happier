@@ -32,13 +32,11 @@ function resolveApiRateLimitKeyStrategy(
     const entry = opts.scope === "global"
         ? RATE_LIMIT_CONFIG.HAPPIER_API_RATE_LIMITS_GLOBAL_KEY_STRATEGY
         : RATE_LIMIT_CONFIG.HAPPIER_API_RATE_LIMITS_ROUTE_KEY_STRATEGY;
-    const raw = readServerConfig(env, entry).toLowerCase();
+    const raw = readServerConfig(env, entry);
     if (raw === "default") {
         return opts.scope === "global" ? "ip-only" : "user-or-ip";
     }
-    if (["ip", "ip-only", "ip_only"].includes(raw)) return "ip-only";
-    if (["user", "user-or-ip", "user_or_ip", "userorip"].includes(raw)) return "user-or-ip";
-    return opts.scope === "global" ? "ip-only" : "user-or-ip";
+    return raw;
 }
 
 function resolveIpKey(request: ApiRateLimitRequest): string {

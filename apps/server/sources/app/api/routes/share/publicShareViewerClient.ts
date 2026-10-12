@@ -6,25 +6,27 @@ import {
     readStoredContentPublicShareSecretV1, StoredContentPublicShareReadResponseV1Schema,
     ArtifactBlobReferenceV1Schema, artifactHtmlBundleFromBodyV1, isArtifactHtmlHeaderV1,
     readSessionDataKeyBundleV0, openAesGcmPayloadWebCrypto, type ArtifactHtmlBundleV1,
+    WidgetDefinitionV1StoredSchema, getWidgetSharedInputIssuesV1, isWidgetDefinitionPubliclyRenderableV1, readWidgetDefinitionNetworkOverrideV1, type WidgetDefinitionV1,
 } from "@happier-dev/protocol/sharing/public-viewer";
 import { renderArtifactHtmlViewer } from './artifactHtmlViewer';
 import { StoredContentPublicShareVisualReadResponseV1Schema } from '@happier-dev/protocol/sharing/public-viewer';
 import { isSessionSurfaceItemIdentityCorrespondingV1, SessionSurfaceItemV1StoredSchema, type SessionSurfaceItemV1 } from '@happier-dev/protocol/sessions/board/item';
-import type { SessionTranscriptSurfaceItemReferenceV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
+import { readSessionTranscriptSurfaceItemReferencesV1, type SessionTranscriptSurfaceItemReferenceInputV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import type { SessionMessageRole } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import { readPublicSessionVisualMessages } from './publicSessionVisuals';
+import type { UiSurfaceNetworkRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
 
 export type PublicSessionVisualResult = { status: 'ready'; item: SessionSurfaceItemV1; networkOff: boolean }
     | { status: 'unavailable' | 'invalid_content' | 'network_error' };
 export type PublicSessionOpenedMessage = Readonly<{
     id: string; publishedSessionId: string; seq: number; localId: string | null; createdAt: number; raw: unknown; text: string;
-    reference: SessionTranscriptSurfaceItemReferenceV1 | null;
+    reference: SessionTranscriptSurfaceItemReferenceInputV1 | null;
     messageRole?: SessionMessageRole;
-    loadVisual?: () => Promise<PublicSessionVisualResult>;
+    loadVisual?: (referenceIndex?: number, signal?: AbortSignal) => Promise<PublicSessionVisualResult>;
 }>;
 
 export type PublicShareViewerResult =
-    | { status: "ready"; title: string; text: string; messages?: readonly PublicSessionOpenedMessage[]; html?: ArtifactHtmlBundleV1; binary?: { bytes: Uint8Array; mime: string }; nextBeforeSeq: number | null; messagesAccessToken: string | null }
+    | { status: "ready"; title: string; text: string; messages?: readonly PublicSessionOpenedMessage[]; html?: ArtifactHtmlBundleV1; widgetDefinition?: WidgetDefinitionV1; binary?: { bytes: Uint8Array; mime: string }; nextBeforeSeq: number | null; messagesAccessToken: string | null }
     | { status: "invalid_link" | "unavailable" | "invalid_content" | "consent_required" | "network_error" | "metadata_privacy_upgrade_required" };
 
 interface ViewerInput {
@@ -94,6 +96,15 @@ export async function loadPublicShareViewerContent(input: ViewerInput): Promise<
             const header = record(await open(share.content.header));
             const body = record(await open(share.content.body));
             if (!header || !body) return { status: "invalid_content" };
+            if (header.kind === 'widget-definition.v1') {
+                if (header.v !== 1 || typeof body.body !== 'string') return { status: 'invalid_content' };
+                const stored: unknown = JSON.parse(body.body);
+                const definition = WidgetDefinitionV1StoredSchema.parse(stored);
+                if (definition.id !== share.subject.id || getWidgetSharedInputIssuesV1({ id: definition.id,
+                    definition: { kind: 'inline', definition: stored } }).length > 0) return { status: 'invalid_content' };
+                return { status: 'ready', title: definition.name, text: '', widgetDefinition: definition,
+                    nextBeforeSeq: null, messagesAccessToken: null };
+            }
             let html: ArtifactHtmlBundleV1 | undefined;
             let binary: { bytes: Uint8Array; mime: string } | undefined;
             if (body.body !== null && typeof body.body !== 'string') {
@@ -110,11 +121,11 @@ export async function loadPublicShareViewerContent(input: ViewerInput): Promise<
                 const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new Uint8Array(bytes)));
                 const hash = [...digest].map(byte => byte.toString(16).padStart(2, '0')).join('');
                 if (bytes.byteLength !== reference.sizeBytes || hash !== reference.sha256) throw new Error('Artifact blob integrity mismatch');
-                if (isArtifactHtmlHeaderV1(header)) html = artifactHtmlBundleFromBodyV1(bytes, reference.mime);
+                if (isArtifactHtmlHeaderV1(header)) html = artifactHtmlBundleFromBodyV1(bytes, reference.mime, 'stored');
                 else binary = { bytes, mime: reference.mime };
             } else if (isArtifactHtmlHeaderV1(header)) {
                 if (typeof body.body !== 'string') return { status: 'invalid_content' };
-                html = artifactHtmlBundleFromBodyV1(body.body);
+                html = artifactHtmlBundleFromBodyV1(body.body, typeof header.mime === 'string' ? header.mime : 'text/html', 'stored');
             }
             return { status: "ready", title: typeof header.title === "string" ? header.title : "Shared Artifact",
                 text: typeof body.body === 'string' ? body.body : '', ...(html ? { html } : {}), ...(binary ? { binary } : {}), nextBeforeSeq: null, messagesAccessToken: null };
@@ -123,24 +134,32 @@ export async function loadPublicShareViewerContent(input: ViewerInput): Promise<
             if ((share.encryptionMode === 'plain') !== (message.content.t === 'plain')) throw new Error('Content mode mismatch');
             const raw = message.content.t === 'plain' ? message.content.v : await open(message.content.c);
             const reference = message.surfaceItemReference ?? null;
-            const loadVisual = reference && share.messagesAccessToken ? async (): Promise<PublicSessionVisualResult> => {
+            const references = readSessionTranscriptSurfaceItemReferencesV1(reference);
+            const loadVisual = references && share.messagesAccessToken ? async (referenceIndex?: number, signal?: AbortSignal): Promise<PublicSessionVisualResult> => {
+                const index = referenceIndex ?? 0;
+                const selected = references[index];
+                if (!Number.isInteger(index) || index < 0 || !selected) return { status: 'unavailable' };
                 const visualUrl = new URL(`/v1/public-shares/${encodeURIComponent(lookupId)}/visual/${encodeURIComponent(message.id)}`, input.location.origin);
+                if (referenceIndex !== undefined) visualUrl.searchParams.set('referenceIndex', String(index));
                 if (input.consent) visualUrl.searchParams.set('consent', 'true');
                 let response: Response;
                 try { response = await input.fetch(visualUrl.toString(), { credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', cache: 'no-store',
-                    headers: { 'x-public-share-messages-access-token': share.messagesAccessToken! } }); }
+                    headers: { 'x-public-share-messages-access-token': share.messagesAccessToken! }, ...(signal ? { signal } : {}) }); }
                 catch { return { status: 'network_error' }; }
                 if (!response.ok) return { status: response.status === 503 ? 'network_error' : 'unavailable' };
                 try {
                     const visual = StoredContentPublicShareVisualReadResponseV1Schema.parse(await response.json());
                     if (visual.messageId !== message.id || visual.encryptionMode !== share.encryptionMode
-                        || visual.reference.itemId !== reference.itemId || visual.reference.itemRevision !== reference.itemRevision
-                        || visual.reference.sourceAddress.serverId !== reference.sourceAddress.serverId
-                        || visual.reference.sourceAddress.sessionId !== reference.sourceAddress.sessionId) return { status: 'invalid_content' };
+                        || visual.reference.itemId !== selected.itemId || visual.reference.itemRevision !== selected.itemRevision
+                        || visual.reference.sourceAddress.serverId !== selected.sourceAddress.serverId
+                        || visual.reference.sourceAddress.sessionId !== selected.sourceAddress.sessionId
+                        || ('sourceItemId' in selected && (!('sourceItemId' in visual.reference)
+                            || visual.reference.sourceItemId !== selected.sourceItemId
+                            || visual.reference.sourceItemRevision !== selected.sourceItemRevision))) return { status: 'invalid_content' };
                     const content = visual.record.content;
                     const value = content.t === 'plain' ? content.v : await open(content.c);
                     const item = SessionSurfaceItemV1StoredSchema.parse(value);
-                    if (!isSessionSurfaceItemIdentityCorrespondingV1(reference.itemId, item)) return { status: 'invalid_content' };
+                    if (!isSessionSurfaceItemIdentityCorrespondingV1(selected.itemId, item)) return { status: 'invalid_content' };
                     if (item.destination !== 'transcript' && item.destination !== 'both') return { status: 'unavailable' };
                     return { status: 'ready', item, networkOff: visual.networkOff };
                 } catch { return { status: 'invalid_content' }; }
@@ -156,20 +175,52 @@ export async function loadPublicShareViewerContent(input: ViewerInput): Promise<
 }
 
 const binaryObjectUrls = new WeakMap<HTMLElement, string>();
-type SessionVisualRow = { element: HTMLElement; body: HTMLElement; source: PublicSessionOpenedMessage;
-    loading: boolean; loaded: boolean; dispose?: () => void; observer?: IntersectionObserver };
-type SessionPresentation = { active: boolean; rows: Map<string, SessionVisualRow> };
+const widgetPresentations = new WeakMap<HTMLElement, { active: boolean; dispose?: () => void }>();
+type SessionVisualRow = { body: HTMLElement; source: PublicSessionOpenedMessage; referenceIndex: number;
+    loading: boolean; loaded: boolean; visible: boolean; result?: PublicSessionVisualResult;
+    request?: AbortController; dispose?: () => void; observer?: IntersectionObserver };
+type SessionMessageRow = { element: HTMLElement; body: HTMLElement; visuals: Map<string, SessionVisualRow> };
+type SessionPresentation = { active: boolean; rows: Map<string, SessionMessageRow> };
 const sessionPresentations = new WeakMap<HTMLElement, SessionPresentation>();
+
+/** A public copy has no installed-plugin runtime or authenticated Resource/Action bridge. */
+async function mountPublicWidgetDefinition(root: HTMLElement, definition: WidgetDefinitionV1, options: Readonly<{
+    networkOff?: boolean; networkOverride?: UiSurfaceNetworkRequestV1;
+}> = {}): Promise<() => void> {
+    if (!isWidgetDefinitionPubliclyRenderableV1(definition)) {
+        root.setAttribute('data-public-widget-state', 'unavailable');
+        root.textContent = 'This live widget needs an available viewer connection in Happier. The author’s credentials are never used by this public link.';
+        return () => root.replaceChildren();
+    }
+    if (definition.body.kind === 'html') {
+        renderArtifactHtmlViewer(root, definition.body.source, definition.name, {
+            requestedCapabilities: options.networkOverride ?? readWidgetDefinitionNetworkOverrideV1(definition) ?? { network: 'none' },
+            networkOff: options.networkOff,
+        });
+        return () => root.replaceChildren();
+    }
+    const { mountPublicSessionDeclarative } = await import('./publicDeclarativeViewer');
+    root.replaceChildren();
+    return mountPublicSessionDeclarative(root, definition.body.document);
+}
 
 /** Release opened bytes when their DOM presentation is replaced or the link changes. */
 export function disposePublicShareViewerContent(root: HTMLElement): void {
+    const widget = widgetPresentations.get(root);
+    if (widget) {
+        widget.active = false;
+        widget.dispose?.();
+        widgetPresentations.delete(root);
+    }
     const url = binaryObjectUrls.get(root);
     if (url) URL.revokeObjectURL(url);
     binaryObjectUrls.delete(root);
     const presentation = sessionPresentations.get(root);
     if (presentation) {
         presentation.active = false;
-        for (const row of presentation.rows.values()) { row.observer?.disconnect(); row.dispose?.(); }
+        for (const row of presentation.rows.values()) for (const visual of row.visuals.values()) {
+            visual.observer?.disconnect(); visual.request?.abort(); visual.dispose?.();
+        }
         sessionPresentations.delete(root);
     }
 }
@@ -191,66 +242,116 @@ function renderSessionMessages(root: HTMLElement, messages: readonly PublicSessi
             const body = document.createElement('div');
             body.setAttribute('aria-live', 'polite');
             element.append(body);
-            row = { element, body, source: message, loading: false, loaded: false };
+            row = { element, body, visuals: new Map() };
             current.rows.set(message.id, row);
         }
-        const target = row;
-        if (visible.has(message.id) && !target.loaded && !target.loading && target.body.childNodes.length === 0) {
-            const open = async (): Promise<void> => {
-                if (target.loading || target.loaded || !current.active || !target.source.loadVisual) return;
-                target.loading = true;
-                target.observer?.disconnect();
-                target.body.textContent = 'Opening visual…';
-                const result = await target.source.loadVisual();
-                if (!current.active) return;
-                target.loading = false;
-                if (result.status !== 'ready') {
-                    target.body.textContent = result.status === 'network_error' ? 'This visual could not be reached.'
-                        : result.status === 'invalid_content' ? 'This visual could not be opened.' : 'This visual is no longer available in this shared Session.';
-                    if (result.status === 'network_error') offerOpen('Try again');
-                    return;
+        for (const visual of visible.get(message.id) ?? []) {
+            const key = visual.status === 'available' ? `available:${visual.referenceIndex}` : `not_copied:${visual.sourceKey}`;
+            let saved = row.visuals.get(key);
+            if (!saved) {
+                const body = row.visuals.size === 0 ? row.body : document.createElement('div');
+                body.setAttribute('aria-live', 'polite');
+                if (row.visuals.size > 0) row.element.append(body);
+                saved = { body, source: message, referenceIndex: visual.status === 'available' ? visual.referenceIndex : 0,
+                    loading: false, loaded: false, visible: typeof globalThis.IntersectionObserver !== 'function' };
+                row.visuals.set(key, saved);
+            }
+            const target = saved;
+            if (visual.status === 'not_copied') {
+                target.body.setAttribute('data-public-visual-state', 'not_copied');
+                target.body.textContent = 'This visual was not copied into this shared Session.';
+            }
+            if (visual.status === 'available' && !target.observer && !target.loaded && !target.loading && target.body.childNodes.length === 0) {
+                const releaseBody = (): void => {
+                    const height = target.body.getBoundingClientRect().height;
+                    if (height > 0) target.body.style.minHeight = `${height}px`;
+                    target.request?.abort();
+                    target.request = undefined;
+                    target.dispose?.();
+                    target.dispose = undefined;
+                    target.loading = false;
+                    target.loaded = false;
+                    target.body.replaceChildren();
+                };
+                const open = async (): Promise<void> => {
+                    if (target.loading || target.loaded || !target.visible || !current.active || !target.source.loadVisual) return;
+                    const request = new AbortController();
+                    target.request = request;
+                    const isRequested = () => current.active && target.visible && target.request === request && !request.signal.aborted;
+                    target.loading = true;
+                    target.body.replaceChildren();
+                    target.body.textContent = 'Opening visual…';
+                    const result = target.result ?? await target.source.loadVisual(target.referenceIndex, request.signal);
+                    if (!isRequested()) return;
+                    target.result = result;
+                    target.loading = false;
+                    target.loaded = true;
+                    if (result.status !== 'ready') {
+                        target.body.textContent = result.status === 'network_error' ? 'This visual could not be reached.'
+                            : result.status === 'invalid_content' ? 'This visual could not be opened.' : 'This visual is no longer available in this shared Session.';
+                        if (result.status === 'network_error') offerOpen('Try again', true);
+                        return;
+                    }
+                    const { item } = result;
+                    const heading = document.createElement('h2');
+                    heading.textContent = item.title;
+                    const surface = document.createElement('div');
+                    target.body.replaceChildren(heading, surface);
+                    if (item.snapshot) {
+                        const provenance = document.createElement('p');
+                        provenance.textContent = `Snapshot · As of ${item.snapshot.asOf}${item.snapshot.provenance.length ? ' · ' + item.snapshot.provenance.map(entry => entry.label).join(' · ') : ''}`;
+                        target.body.append(provenance);
+                    }
+                    if (item.source.kind === 'declarative') {
+                        try {
+                            const { mountPublicSessionDeclarative } = await import('./publicDeclarativeViewer');
+                            if (isRequested()) target.dispose = mountPublicSessionDeclarative(surface, item.source.document);
+                        } catch { if (isRequested()) surface.textContent = 'This visual could not be displayed.'; }
+                    } else if (item.source.kind === 'hostedHtml') {
+                        try { renderArtifactHtmlViewer(surface, item.source.source, item.title, {
+                            requestedCapabilities: item.source.requestedCapabilities ?? { network: 'none' },
+                            networkOff: result.networkOff,
+                        }); }
+                        catch { surface.textContent = 'This HTML visual could not be displayed.'; }
+                    } else if (item.source.kind === 'widget' && item.source.instance.definition.kind === 'inline') {
+                        try {
+                            const dispose = await mountPublicWidgetDefinition(surface, item.source.instance.definition.definition, {
+                                networkOff: result.networkOff, networkOverride: item.source.instance.networkOverride,
+                            });
+                            if (isRequested()) target.dispose = dispose;
+                            else dispose();
+                        } catch { if (isRequested()) surface.textContent = 'This visual could not be displayed.'; }
+                    } else {
+                        surface.textContent = item.source.kind === 'widget'
+                            ? 'This live widget needs an available viewer connection in Happier. The author’s credentials are never used by this public link.'
+                            : 'This walkthrough requires the Session’s Changed files view in Happier.';
+                    }
+                };
+                const offerOpen = (label: string, retry = false): void => {
+                    const button = document.createElement('button');
+                    button.type = 'button'; button.textContent = label;
+                    button.setAttribute('aria-label', `${label} attached to message ${message.seq}`);
+                    button.addEventListener('click', () => {
+                        target.visible = true;
+                        if (retry) { target.result = undefined; target.loaded = false; }
+                        void open();
+                    }, { once: true });
+                    target.body.append(button);
+                };
+                offerOpen('Open visual');
+                if (typeof globalThis.IntersectionObserver === 'function') {
+                    target.observer = new IntersectionObserver(entries => {
+                        const next = entries.some(entry => entry.isIntersecting);
+                        if (target.visible === next) return;
+                        target.visible = next;
+                        if (next) void open();
+                        else releaseBody();
+                    });
+                    target.observer.observe(target.body);
                 }
-                target.loaded = true;
-                const { item } = result;
-                const heading = document.createElement('h2');
-                heading.textContent = item.title;
-                const surface = document.createElement('div');
-                target.body.replaceChildren(heading, surface);
-                if (item.snapshot) {
-                    const provenance = document.createElement('p');
-                    provenance.textContent = `Snapshot · As of ${item.snapshot.asOf}${item.snapshot.provenance.length ? ' · ' + item.snapshot.provenance.map(entry => entry.label).join(' · ') : ''}`;
-                    target.body.append(provenance);
-                }
-                if (item.source.kind === 'declarative') {
-                    try {
-                        const { mountPublicSessionDeclarative } = await import('./publicDeclarativeViewer');
-                        if (current.active) target.dispose = mountPublicSessionDeclarative(surface, item.source.document);
-                    } catch { if (current.active) surface.textContent = 'This visual could not be displayed.'; }
-                } else if (item.source.kind === 'hostedHtml') {
-                    // The shared bundle/document owner closes network by default. Its admitted
-                    // network-policy extension supplies an explicit share-level off override.
-                    try { renderArtifactHtmlViewer(surface, item.source.source, item.title); }
-                    catch { surface.textContent = 'This HTML visual could not be displayed.'; }
-                } else {
-                    surface.textContent = item.source.kind === 'widget'
-                        ? 'This live widget needs an available viewer connection in Happier. The author’s credentials are never used by this public link.'
-                        : 'This walkthrough requires the Session’s Changed files view in Happier.';
-                }
-            };
-            const offerOpen = (label: string): void => {
-                const button = document.createElement('button');
-                button.type = 'button'; button.textContent = label;
-                button.setAttribute('aria-label', `${label} attached to message ${message.seq}`);
-                button.addEventListener('click', () => { void open(); }, { once: true });
-                target.body.append(button);
-            };
-            offerOpen('Open visual');
-            if (typeof globalThis.IntersectionObserver === 'function') {
-                target.observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void open(); });
-                target.observer.observe(target.element);
             }
         }
-        return target.element;
+        return row.element;
     });
     root.replaceChildren(title, ...elements);
     if (action) {
@@ -260,7 +361,11 @@ function renderSessionMessages(root: HTMLElement, messages: readonly PublicSessi
     }
 }
 
-export function renderPublicShareViewer(root: HTMLElement, result: PublicShareViewerResult, action?: () => void): void {
+export interface PublicShareViewerRenderOptions {
+    delivery?: 'main-origin' | 'isolated-origin';
+}
+
+export function renderPublicShareViewer(root: HTMLElement, result: PublicShareViewerResult, action?: () => void, options: PublicShareViewerRenderOptions = {}): void {
     if (result.status !== 'ready' || !result.messages) disposePublicShareViewerContent(root);
     const document = root.ownerDocument;
     const title = document.createElement("h1");
@@ -268,6 +373,19 @@ export function renderPublicShareViewer(root: HTMLElement, result: PublicShareVi
     if (result.status === "ready") {
         title.textContent = result.title;
         if (result.messages) { renderSessionMessages(root, result.messages, title, action); return; }
+        if (result.widgetDefinition) {
+            const definition = result.widgetDefinition;
+            const surface = document.createElement('div');
+            root.replaceChildren(title, surface);
+            const presentation: { active: boolean; dispose?: () => void } = { active: true };
+            widgetPresentations.set(root, presentation);
+            surface.textContent = 'Opening visual…';
+            void mountPublicWidgetDefinition(surface, definition).then(dispose => {
+                if (presentation.active) presentation.dispose = dispose;
+                else dispose();
+            }).catch(() => { if (presentation.active) surface.textContent = 'This visual could not be displayed.'; });
+            return;
+        }
         if (result.html) {
             try { renderArtifactHtmlViewer(root, result.html, result.title); }
             catch { renderPublicShareViewer(root, { status: 'invalid_content' }); }
@@ -278,7 +396,7 @@ export function renderPublicShareViewer(root: HTMLElement, result: PublicShareVi
             // other active documents are download-only, even if opened in a tab.
             const mime = result.binary.mime.toLowerCase();
             const image = /^(?:image\/(?:png|jpeg|gif|webp|avif|bmp))$/u.test(mime);
-            const pdf = mime === 'application/pdf';
+            const pdf = mime === 'application/pdf' && options.delivery === 'isolated-origin';
             const url = URL.createObjectURL(new Blob([new Uint8Array(result.binary.bytes)], { type: image || pdf ? mime : 'application/octet-stream' }));
             binaryObjectUrls.set(root, url);
             const download = document.createElement('a');

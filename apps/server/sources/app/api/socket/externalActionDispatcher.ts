@@ -22,6 +22,7 @@ import {
     ManagedAcquireInputV1Schema, ManagedAdmissionComputeInputV1Schema, resolveManagedAcquireReviewV1,
 } from "@happier-dev/protocol";
 import { ACTION_API_SERVER_ORIGIN } from "@happier-dev/protocol/rpc";
+import { projectExternalActionPendingResetStartEnvelopeAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
 import type { Server } from "socket.io";
 
@@ -122,7 +123,7 @@ type MintExecutionAuthorization = (
 
 type SessionPublisherPresenceForExternalAction = Pick<
     ReturnType<typeof createSessionPublisherPresence>,
-    "isCurrentPublisherProjection"
+    "resolveProjectedCurrentPublisher"
 >;
 
 type SocketDataCarrier = Readonly<{ data?: unknown }>;
@@ -268,14 +269,13 @@ export async function resolveCurrentSessionPublisherFromServer(params: Readonly<
         const projection = readSessionPublisherAuthorityProjection(socket.data);
         if (!projection) continue;
         try {
-            if (await params.presence.isCurrentPublisherProjection({
+            const authority = await params.presence.resolveProjectedCurrentPublisher({
                 expectedAccountId: params.accountId,
                 expectedSessionId: params.sessionId,
                 projection,
-            })) {
-                authorities.set(projection.machineId, { accountId: projection.accountId,
-                    machineId: projection.machineId, sessionId: projection.sessionId,
-                    committedFence: new Date(projection.committedFenceMs) });
+            });
+            if (authority) {
+                authorities.set(authority.machineId, authority);
             }
         } catch {
             // A currentness read is fail-closed; another current publisher may
@@ -407,6 +407,23 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
         if (options.signal?.aborted) {
             return { kind: "placement_error", code: "target_unavailable" };
         }
+        let pendingResetStartAdmission: ExternalActionExecutionAuthorizationBindingV1['pendingResetStartAdmission'];
+        try {
+            pendingResetStartAdmission = projectExternalActionPendingResetStartEnvelopeAdmissionV1({
+                actionId: request.actionId, envelope: request.envelope, target });
+        } catch {
+            return { kind: 'invalid_request', errorCode: 'invalid_envelope',
+                ...(request.envelope.requestId ? { requestId: request.envelope.requestId } : {}) };
+        }
+        if (pendingResetStartAdmission) {
+            const account = await db.account.findUnique({ where: { id: request.principal.accountId }, select: { encryptionMode: true } });
+            const mode = account ? resolveEffectiveAccountEncryptionModeFromAccountRow(account) : null;
+            if (mode?.status !== 'ready' || !isExternalActionRequestVersionAllowedForAccountModeV1({
+                accountEncryptionMode: mode.mode, envelopeVersion: request.envelope.v })) {
+                return { kind: 'invalid_request', errorCode: 'invalid_encrypted_envelope',
+                    ...(request.envelope.requestId ? { requestId: request.envelope.requestId } : {}) };
+            }
+        }
 
         let machineId: string;
         let sessionId: string | undefined;
@@ -431,7 +448,8 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
         if (executionAuthorization) {
             const root = await auth.verifyExternalActionExecutionAuthorization(executionAuthorization.token);
             const current = root ? await verifyCurrentExternalActionPrincipalInTx(db, root) : null;
-            const principal = root && current ? projectExternalActionBoundPrincipal(root, current) : null;
+            const principal = root && current
+                ? projectExternalActionBoundPrincipal(root, current, request.principal.authority) : null;
             if (!root || !principal || root.serverIdentityId !== await getServerIdentityId()
                 || !sameManagedInput(root, executionAuthorization.binding)
                 || !sameManagedInput(principal, request.principal)
@@ -449,6 +467,7 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                 serverIdentityId: await getServerIdentityId(), ...provenance, machineId,
                 actionId: request.actionId, requestId: request.envelope.requestId ?? randomUUID(),
                 requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), target,
+                ...(pendingResetStartAdmission ? { pendingResetStartAdmission } : {}),
                 ...(handoffAdmission ? { handoffAdmission } : {}),
                 ...(request.managedContinuation ? { managedContinuation: request.managedContinuation } : {}),
                 ...(request.sessionActionSource ? { sessionActionSource: request.sessionActionSource } : {}),
@@ -637,6 +656,7 @@ export function createExternalActionDaemonDispatcher(params: Readonly<{
                 io: params.io,
                 targetUserId: executionAuthorization.binding.custodianAccountId,
                 method: `${machineId}:${EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1}`,
+                timeoutMs: null,
                 callParams: {
                     actionId: request.actionId,
                     envelope: request.envelope,

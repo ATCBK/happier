@@ -721,7 +721,7 @@ describe("publicShareRoutes (AccountChange integration)", () => {
 
                 expect(res.statusCode).toBe(200);
                 expect(res.json()).toEqual({
-                    isolatedOrigin: expect.any(String),
+                    viewerOrigin: expect.any(String),
                     publicShare: expect.objectContaining({
                         token: "tok-create",
                         useCount: 0,

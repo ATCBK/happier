@@ -12,15 +12,17 @@ import { auth } from "@/app/auth/auth";
 
 // Bearer keying is proven through the real auth owner (mint + verifyTokenForRoute).
 // Only the storage boundary is stubbed: createToken/verify read the account
-// token epoch and active status through db.account.findUnique.
+// token epoch and active status through db.account.findUnique, including transactions.
 const dbAccountFindUniqueMock = vi.hoisted(() => vi.fn());
-vi.mock("@/storage/db", () => ({
-    db: {
+vi.mock("@/storage/db", async () => {
+    const { createDbTransactionMock } = await import("@/app/api/testkit/dbMocks");
+    const db = {
         account: {
             findUnique: dbAccountFindUniqueMock,
         },
-    },
-}));
+    };
+    return { db: createDbTransactionMock(() => db).wrapDb(db) };
+});
 
 const previousMasterSecret = process.env.HANDY_MASTER_SECRET;
 
@@ -170,6 +172,19 @@ describe("apiRateLimitPolicy", () => {
         const keyGen = createApiRateLimitKeyGenerator({ HAPPIER_API_RATE_LIMITS_ROUTE_KEY_STRATEGY: "ip-only" });
         const key = await keyGen({ headers: { authorization: "Bearer valid-token" }, ip: "203.0.113.9" });
         expect(key).toBe("ip:203.0.113.9");
+    });
+
+    it("keeps scope-specific defaults and legacy strategy aliases with the real bearer verifier", async () => {
+        const token = await auth.createToken("strategy-account", undefined, { kind: "account", authority: "present_user" });
+        const request = { headers: { authorization: `Bearer ${token}` }, ip: "203.0.113.9" };
+        for (const scope of ["route", "global"] as const) {
+            const key = scope === "global" ? "HAPPIER_API_RATE_LIMITS_GLOBAL_KEY_STRATEGY" : "HAPPIER_API_RATE_LIMITS_ROUTE_KEY_STRATEGY";
+            for (const value of ["default", "not-a-strategy"]) {
+                expect(await createApiRateLimitKeyGenerator({ [key]: value }, { scope })(request)).toBe(scope === "global" ? "ip:203.0.113.9" : "uid:strategy-account");
+            }
+            expect(await createApiRateLimitKeyGenerator({ [key]: "ip_only" }, { scope })(request)).toBe("ip:203.0.113.9");
+            expect(await createApiRateLimitKeyGenerator({ [key]: "userorip" }, { scope })(request)).toBe("uid:strategy-account");
+        }
     });
 
     it("gates fixed route rate limits behind HAPPIER_API_RATE_LIMITS_ENABLED", () => {

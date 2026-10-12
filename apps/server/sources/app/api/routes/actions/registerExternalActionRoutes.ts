@@ -10,6 +10,7 @@ import {
     ExternalActionActionIdV1Schema,
     EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER,
     ExternalActionExecutionAuthorizationRequestV1Schema,
+    externalActionExecutionAuthorizationRequestSchemaForActionV1,
     ExternalActionExecutionAuthorizationVerifyRequestV1Schema,
     computeExternalActionRequestEnvelopeDigestV1,
     ExternalActionRequestEnvelopeSchema,
@@ -17,6 +18,7 @@ import {
     isExternalActionRequestVersionAllowedForAccountModeV1,
     type ExternalActionServerPrincipalV1,
     type ExternalActionExecutionAuthorizationBindingV1,
+    type ExternalActionRequestEnvelope,
     type PreparedExternalActionResponseEnvelope,
     projectExternalActionHttpError,
     projectExternalActionResponseEnvelopeV1,
@@ -24,6 +26,7 @@ import {
     prepareExternalActionResponseEnvelopeV1,
     readExternalActionProtectedRequestId,
 } from "@happier-dev/protocol/actions";
+import { projectExternalActionPendingResetStartEnvelopeAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 import {
     type ExternalActionDaemonDispatcher,
@@ -37,7 +40,7 @@ import { db } from "@/storage/db";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
 import { ManagedMachineActionIdV1Schema, projectApiTokenSessionSpawnAdmissionV1, resolveCredentialActionAdmissionV1,
     SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1, MachineEnvironmentApplyInputV1Schema } from '@happier-dev/protocol';
-import { getActionSpec, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions';
+import { ActionIdSchema, getActionSpec, isPluginProvenanceOnlyActionId, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { SessionRequesterHandoffBootstrapRpcRequestV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { hasCurrentSessionActionRpcSourceBinding } from '@/app/api/socket/sessionScopedBinding';
@@ -47,7 +50,8 @@ import { readCurrentManagedFiniteWakeCustodyInTx } from '@/app/machines/managed/
 import { verifyCurrentExternalActionPrincipal, verifyCurrentExternalActionPrincipalInTx,
     isOriginalAccountExecutionAction, isOriginalTerminalExecutionAction, isOriginalAccountHandoffAction, resolveExternalActionExecutionMachineAdmissionInTx,
     readCurrentExternalActionHandoffBindingInTx, hasCurrentExternalActionSessionSource,
-    isExternalActionAuthorizationBoundToEnvelope, projectExternalActionBoundPrincipal } from '@/app/auth/externalActionExecutionAuthorization';
+    isExternalActionAuthorizationBoundToEnvelope, projectExternalActionBoundPrincipal,
+    readExternalActionSessionProposalSurface } from '@/app/auth/externalActionExecutionAuthorization';
 import { ManagedMachineError, readManagedAdmissionState, projectManagedMachine, requireCurrentManagedMachineInTx, sameManagedInput } from '@/app/machines/managed/managedRows';
 import { isAutomationOriginRunPublisherTx } from '@/app/automations/automationTriggerCauseChain';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
@@ -64,10 +68,13 @@ async function readInstalledSessionRequestPrincipal(
     actionId: string,
     body: ReturnType<typeof ExternalActionExecutionAuthorizationRequestV1Schema.parse>,
     principal: ExternalActionServerPrincipalV1,
-): Promise<ExternalActionServerPrincipalV1 | null> {
+): Promise<Extract<ExternalActionServerPrincipalV1, { sessionActionOrigin: unknown }> | null> {
     const origin = body.sessionActionOrigin;
     const source = body.sessionActionSource;
     if (!origin || !source || !body.installationProof || !('authentication' in principal)) return null;
+    const builtInAction = ActionIdSchema.safeParse(actionId);
+    if (builtInAction.success && getActionSpec(builtInAction.data).originalExecution?.nativePurpose === 'session_board_write' && (body.envelope.target?.kind !== 'session'
+        || body.envelope.target.sessionId !== origin.caller.sessionId || body.machineId !== source.machineId)) return null;
     const sourceMachine = await db.machine.findUnique({ where: { id: source.machineId },
         select: { installationPublicKey: true } });
     if (!sourceMachine?.installationPublicKey
@@ -215,13 +222,23 @@ function createRequestLifetime(
 function readExternalActionRequestPrincipal(
     request: FastifyRequest,
     actionId: string,
-    origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource' | 'workflowActionOrigin'>,
+    origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource' | 'workflowActionOrigin'>
+        & Readonly<{ envelope?: ExternalActionRequestEnvelope }>,
 ): ExternalActionServerPrincipalV1 | null {
-    const publicAction = PublicActionIdSchema.safeParse(actionId);
+    const pluginInvocation = origin?.envelope?.pluginInvocation;
+    // This claim only narrows an original Account root. The signed envelope
+    // digest retains it; the exact receiving daemon derives plugin authority.
+    if ((pluginInvocation || isPluginProvenanceOnlyActionId(actionId))
+        && (request.authTokenKind !== 'account' || origin?.sessionActionOrigin || origin?.workflowActionOrigin)) return null;
+    if (isPluginProvenanceOnlyActionId(actionId)
+        && (!pluginInvocation || origin?.envelope?.target?.kind !== 'machine')) return null;
+    const publicAction = readExternalActionSessionProposalSurface(origin) !== undefined
+        ? SignedRootActionIdSchema.safeParse(actionId) : PublicActionIdSchema.safeParse(actionId);
     if (request.authTokenKind === 'terminal' && (request.authAuthority === 'account_automation' || request.authAuthority === 'present_user')
         && request.authTokenLegacy === false && request.authTokenEpoch !== undefined && publicAction.success
         && isOriginalTerminalExecutionAction(actionId, origin)
-        && resolveCredentialActionAdmissionV1({ spec: getActionSpec(publicAction.data), authority: 'account_automation', grant: null }).ok) {
+        && resolveCredentialActionAdmissionV1({ spec: getActionSpec(publicAction.data), authority: 'account_automation', grant: null,
+            surface: readExternalActionSessionProposalSurface(origin) }).ok) {
         // Managed FIN issuance still requires its installed source proof below;
         // this is credential authentication, not a native Action admission.
         // Current terminal policy may allow human local operations, but this
@@ -232,12 +249,14 @@ function readExternalActionRequestPrincipal(
         } };
     }
     const signedRootAction = SignedRootActionIdSchema.safeParse(actionId);
-    if (request.authTokenKind === 'account' && request.authAuthority === 'present_user'
+    if (request.authTokenKind === 'account'
+        && (request.authAuthority === 'present_user' || request.authAuthority === 'account_automation')
         && request.authTokenLegacy === false && request.authTokenEpoch !== undefined
         && signedRootAction.success
-        && isOriginalAccountExecutionAction(actionId)
-        && resolveCredentialActionAdmissionV1({ spec: getActionSpec(signedRootAction.data), authority: request.authAuthority, grant: null }).ok) {
-        return { accountId: request.userId, authority: 'present_user', authentication: {
+        && isOriginalAccountExecutionAction(actionId, origin)
+        && resolveCredentialActionAdmissionV1({ spec: getActionSpec(signedRootAction.data), authority: request.authAuthority, grant: null,
+            surface: readExternalActionSessionProposalSurface(origin) }).ok) {
+        return { accountId: request.userId, authority: request.authAuthority, authentication: {
             kind: 'account', tokenEpoch: request.authTokenEpoch,
             ...(request.authTokenAuthenticationEvidence ? { evidence: [...request.authTokenAuthenticationEvidence] } : {}),
         } };
@@ -285,7 +304,9 @@ async function readAdmittedRootRelay(app: Fastify, request: FastifyRequest, acti
             machineId: root.machineId, actionId: root.actionId });
     if (admission.kind !== 'admitted' || admission.installationId !== root.installationId
         || admission.custodianAccountId !== root.custodianAccountId) return null;
-    const principal = projectExternalActionBoundPrincipal(root, current);
+    const principal = projectExternalActionBoundPrincipal(root, current, request.authAuthority);
+    // A signed Account root proves credential provenance, not a higher
+    // invocation authority than this authenticated request's lowering ceiling.
     return principal ? { principal, authorization } : null;
 }
 
@@ -429,18 +450,10 @@ async function readManagedGuestContinuation(
             }
         }
     });
-    let continuationPrincipal: ExternalActionServerPrincipalV1;
-    if ('authentication' in principal) {
-        continuationPrincipal = principal.authority === 'account_automation' && 'sessionActionOrigin' in principal
-            ? { accountId: principal.accountId, authority: principal.authority, authentication: principal.authentication,
-                sessionActionOrigin: principal.sessionActionOrigin }
-            : { accountId: principal.accountId, authority: principal.authority, authentication: principal.authentication };
-    } else {
-        if ('authentication' in root) return null;
-        // Preserve the original root grant, never a subsequently widened PAT.
-        continuationPrincipal = { accountId: root.accountId, authority: principal.authority,
-            principalId: root.principalId, credentialId: root.credentialId, grant: root.grant };
-    }
+    // The shared projector retains the accepted root grant and can only lower
+    // the current principal by this signed invocation's captured ceiling.
+    const continuationPrincipal = projectExternalActionBoundPrincipal(root, principal, request.authAuthority);
+    if (!continuationPrincipal) return null;
     return { principal: continuationPrincipal,
         ...(root.sessionActionOrigin ? { sessionActionSource: root.sessionActionSource } : {}),
         managedContinuation: { ...body.managedContinuation, controller,
@@ -476,7 +489,7 @@ export function registerExternalActionRoutes(
         async (request, reply) => {
             reply.header("cache-control", "no-store");
             const actionId = ExternalActionActionIdV1Schema.safeParse(request.params.actionId);
-            const body = ExternalActionExecutionAuthorizationRequestV1Schema.safeParse(request.body);
+            const body = externalActionExecutionAuthorizationRequestSchemaForActionV1(request.params.actionId).safeParse(request.body);
             let principal = readExternalActionRequestPrincipal(request, request.params.actionId, body.success ? body.data : undefined);
             let continuation: Awaited<ReturnType<typeof readManagedGuestContinuation>> = null;
             let handoffContinuation: Awaited<ReturnType<typeof readHandoffContinuation>> = null;
@@ -508,7 +521,7 @@ export function registerExternalActionRoutes(
                 return sendExternalActionHttpError(reply, "request_too_large");
             }
             const homeId = await getOrCreateServerIdentityId();
-            if ('authentication' in principal) {
+            if ('authentication' in principal || actionId.data === 'session.pending.resetStart.set') {
                 const account = await db.account.findUnique({ where: { id: principal.accountId }, select: { encryptionMode: true } });
                 const mode = account ? resolveEffectiveAccountEncryptionModeFromAccountRow(account) : null;
                 if (mode?.status !== 'ready' || !isExternalActionRequestVersionAllowedForAccountModeV1({
@@ -521,9 +534,11 @@ export function registerExternalActionRoutes(
                 if (!principal) {
                     return sendExternalActionHttpError(reply, 'invalid_token', body.data.envelope.requestId);
                 }
-                const publicAction = PublicActionIdSchema.safeParse(actionId.data);
+                const publicAction = readExternalActionSessionProposalSurface(body.data) !== undefined
+                    ? SignedRootActionIdSchema.safeParse(actionId.data) : PublicActionIdSchema.safeParse(actionId.data);
                 if (!publicAction.success || !resolveCredentialActionAdmissionV1({ spec: getActionSpec(publicAction.data), authority: principal.authority,
-                    grant: 'grant' in principal ? principal.grant : null }).ok) {
+                    grant: null,
+                    surface: readExternalActionSessionProposalSurface(body.data) }).ok) {
                     return sendExternalActionHttpError(reply, 'credential_scope_denied', body.data.envelope.requestId);
                 }
             }
@@ -535,6 +550,11 @@ export function registerExternalActionRoutes(
                 kind: "machine" as const,
                 machineId: body.data.machineId,
             };
+            let pendingResetStartAdmission: ExternalActionExecutionAuthorizationBindingV1['pendingResetStartAdmission'];
+            try {
+                pendingResetStartAdmission = projectExternalActionPendingResetStartEnvelopeAdmissionV1({
+                    actionId: actionId.data, envelope: body.data.envelope, target });
+            } catch { return sendExternalActionHttpError(reply, 'invalid_envelope', body.data.envelope.requestId); }
             let handoffAdmission: ExternalActionExecutionAuthorizationBindingV1['handoffAdmission'];
             if (body.data.envelope.handoffAdmission) {
                 if (!isOriginalAccountHandoffAction(actionId.data) && !(actionId.data === 'session.spawn_new' && handoffContinuation)) {
@@ -589,6 +609,7 @@ export function registerExternalActionRoutes(
                     requestId: body.data.envelope.requestId ?? randomUUID(),
                     requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(body.data.envelope),
                     target,
+                    ...(pendingResetStartAdmission ? { pendingResetStartAdmission } : {}),
                     ...(handoffAdmission ? { handoffAdmission } : {}),
                     ...(handoffPreflight ? { handoffPreflight: handoffPreflight.binding.handoffPreflight,
                         sessionActionOrigin: handoffPreflight.binding.sessionActionOrigin,
@@ -662,6 +683,9 @@ export function registerExternalActionRoutes(
             if (request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER] !== undefined) return;
             await app.authenticate(request, reply);
             if (reply.sent) return;
+            // These Account roots need their strict body claim. Authenticate
+            // before parsing, then finish admission in the existing handler.
+            if (request.authTokenKind === 'account' && isPluginProvenanceOnlyActionId(request.params.actionId)) return;
             if (!readExternalActionRequestPrincipal(request, request.params.actionId)) {
                 return sendExternalActionHttpError(reply, "invalid_token");
             }
@@ -687,7 +711,9 @@ export function registerExternalActionRoutes(
             }
 
             const wrapped = ExternalActionExecutionAuthorizationRequestV1Schema.safeParse(request.body);
-            let principal = readExternalActionRequestPrincipal(request, request.params.actionId, wrapped.success ? wrapped.data : undefined);
+            const rawEnvelope = wrapped.success ? null : ExternalActionRequestEnvelopeSchema.safeParse(request.body);
+            let principal = readExternalActionRequestPrincipal(request, request.params.actionId,
+                wrapped.success ? wrapped.data : rawEnvelope?.success ? { envelope: rawEnvelope.data } : undefined);
             let continuation: Awaited<ReturnType<typeof readManagedGuestContinuation>> = null;
             let admittedRoot: Awaited<ReturnType<typeof readAdmittedRootRelay>> = null;
             if (wrapped.success && wrapped.data.executionAuthorization) {
@@ -707,8 +733,9 @@ export function registerExternalActionRoutes(
                 principal = await readInstalledSessionRequestPrincipal(app, actionId.data, wrapped.data, principal);
             }
             if (!principal) return sendExternalActionHttpError(reply, 'invalid_token');
-            const envelope = ExternalActionRequestEnvelopeSchema.safeParse(wrapped.success && (admittedRoot || continuation || wrapped.data.sessionActionOrigin)
-                ? wrapped.data.envelope : request.body);
+            const envelope = wrapped.success && (admittedRoot || continuation || wrapped.data.sessionActionOrigin)
+                ? ExternalActionRequestEnvelopeSchema.safeParse(wrapped.data.envelope)
+                : rawEnvelope ?? ExternalActionRequestEnvelopeSchema.safeParse(request.body);
             if (!envelope.success) {
                 return sendExternalActionHttpError(
                     reply,

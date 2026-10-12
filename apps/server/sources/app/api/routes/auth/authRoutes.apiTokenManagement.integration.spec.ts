@@ -64,6 +64,7 @@ describe("authRoutes (API-token management) (integration)", () => {
     afterEach(async () => {
         harness.resetEnv();
         await db.session.deleteMany();
+        await db.machine.deleteMany();
         await db.account.deleteMany();
     });
 
@@ -167,6 +168,12 @@ describe("authRoutes (API-token management) (integration)", () => {
             expect(child.statusCode, child.body).toBe(200);
             const childId = child.json().apiToken.tokenId;
             const machineId = randomUUID();
+            await db.machine.create({ data: {
+                id: machineId,
+                accountId: account.id,
+                metadata: '{}',
+                installationId: randomUUID(),
+            } });
             const authorization = await auth.mintExternalActionExecutionAuthorization({
                 serverIdentityId: await getOrCreateServerIdentityId(), accountId: account.id, principalId: account.id,
                 credentialId: childId, grant: API_TOKEN_FULL_GRANT_V1, machineId,

@@ -161,7 +161,6 @@ function scheduleTrackedSessionBadgeRefresh(params: Parameters<typeof refreshTra
 }
 
 const RELEASED_UI_V0_2_0_DIRECT_USER_MESSAGE_SENT_FROM = new Set(["web", "ios", "android", "mac", "pending_send_now", "retry"]);
-const PENDING_MATERIALIZATION_REQUEST_BUDGET_MS = 9_000;
 const PENDING_MATERIALIZATION_RETRY_AFTER_MS = 1_000;
 const ExecutionRunPublicStateSocketSchema = ExecutionRunPublicStateSchema.strip();
 const TranscriptStreamSegmentEphemeralSocketMessageSchema = TranscriptStreamSegmentEphemeralMessageSchema.strip();
@@ -555,6 +554,7 @@ export function sessionUpdateHandler(
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket,
                 deadlineAtMs: Date.now() + 5_000,
+                isolationLevel: "Serializable", // Discussion creation composes tracked-target admission with the message write.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(
                         tx,
@@ -609,6 +609,7 @@ export function sessionUpdateHandler(
         try {
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
+                isolationLevel: "Serializable", // Follow sources, access and frontiers must describe one observation.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(tx, authority, userId, request.data.sessionId)) return null;
                     const machine = await tx.machine.findUnique({
@@ -658,6 +659,7 @@ export function sessionUpdateHandler(
         try {
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
+                isolationLevel: "Serializable", // Frontier acceptance composes current edge, source and destination authority.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(tx, authority, userId, destinationSessionId)) return { ok: false as const, rejection: "stale_publisher_generation" as const };
                     const machine = await tx.machine.findUnique({
@@ -723,6 +725,7 @@ export function sessionUpdateHandler(
             }
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
+                isolationLevel: "Serializable", // Voice-follow admission, active target and source observations share one snapshot.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(tx, authority, userId, request.data.voiceSessionId)) return null;
                     const machine = await tx.machine.findUnique({
@@ -797,6 +800,7 @@ export function sessionUpdateHandler(
             }
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
+                isolationLevel: "Serializable", // Voice frontier acceptance participates in the target/edge replacement family.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(tx, authority, userId, request.data.voiceSessionId)) return null;
                     const machine = await tx.machine.findUnique({
@@ -2345,7 +2349,6 @@ export function sessionUpdateHandler(
                     ...(response.ok === true && targetRequest?.success ? { recipient: targetRequest.data.recipient, sidechainId: targetRequest.data.sidechainId } : {}),
                 }));
             };
-            const deadlineAtMs = Date.now() + PENDING_MATERIALIZATION_REQUEST_BUDGET_MS;
             try {
                 await receiveMessageLock.inLock(async () => {
                 try {
@@ -2402,7 +2405,6 @@ export function sessionUpdateHandler(
                         ? null
                         : await publisher.presence.runAsCurrentPublisherInTx({
                             socket,
-                            deadlineAtMs,
                             operation: materialize,
                         });
 
@@ -2522,7 +2524,7 @@ export function sessionUpdateHandler(
                             : {}),
                     });
                 }
-                }, { deadlineAtMs });
+                });
             } catch (error) {
                 if (
                     isLockAdmissionDeadlineExceededError(error)

@@ -20,6 +20,12 @@ describe("scoped API-token route admission", () => {
                 recordId: 'paug_v1_abcdefgh', meterId: 'weekly', witness: { id: 'history', observedAtMs: 100 },
             } } } };
         expect(isExternalActionSessionRoutePurposeAllowed(set, 'session.pending.resetStart.set')).toBe(true);
+        const initial = { method: 'POST', routeOptions: { url: '/v2/sessions/:sessionId/pending', config: { apiTokenSessionAction: 'session.message.send' } },
+            body: { localId: 'new-held-work', content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hold' } } },
+                requestedAction: set.body.requestedAction } };
+        expect(isExternalActionSessionRoutePurposeAllowed(initial, 'session.pending.resetStart.set')).toBe(true);
+        expect(isExternalActionSessionRoutePurposeAllowed({ ...initial, body: { ...initial.body, resumeWhenAvailable: true } }, 'session.pending.resetStart.set')).toBe(false);
+        expect(isExternalActionSessionRoutePurposeAllowed({ ...initial, body: { ...initial.body, requestedAction: { v: 1, kind: 'enqueue' } } }, 'session.pending.resetStart.set')).toBe(false);
         expect(isExternalActionSessionRoutePurposeAllowed({ ...set, body: { requestedAction: { v: 1, kind: 'send_now' } } }, 'session.pending.resetStart.set')).toBe(false);
         expect(isExternalActionSessionRoutePurposeAllowed({ ...set, routeOptions: { ...set.routeOptions, url: '/v2/sessions/:sessionId/pending' } }, 'session.pending.resetStart.set')).toBe(false);
         expect(isExternalActionSessionRoutePurposeAllowed({ ...set, routeOptions: { ...set.routeOptions, url: '/v2/sessions/:sessionId/pending/:localId' } }, 'session.pending.resetStart.set')).toBe(false);

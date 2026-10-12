@@ -71,7 +71,7 @@ export function publicShareRoutes(app: Fastify): void {
                 take: limit,
             });
             return { type: "ok" as const, logs };
-        });
+        }, { /* Public share authority and access-log contents must share one capture. */ isolationLevel: "Serializable" });
 
         if (result.type === "forbidden") {
             if (result.reason === "authentication_unavailable") {

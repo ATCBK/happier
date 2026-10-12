@@ -22,6 +22,8 @@ import {
 import {
     readProviderAccountUsageRecord,
     readProviderAccountUsageHistory,
+    readProviderAccountUsageHistoryWitness,
+    projectProviderAccountUsageRecordV4,
     requestProviderAccountUsageRefresh,
     updateProviderAccountUsageRecordIfCurrent,
     upsertProviderAccountUsageRecord,
@@ -55,6 +57,184 @@ describe("provider account usage record storage (integration)", () => {
         await db.account.deleteMany().catch(() => {});
     });
 
+    it('compacts accepted writes to the canonical endpoints and reset phases while advancing current freshness', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });
+        const start = Date.now() - 20_000;
+        const first = createUsageSnapshot({ fetchedAt: start });
+        const samples = [0, 1000, 2000, 3000, 4000, 5000, 6000, 7000].map(offset => ({ ...first,
+            fetchedAtMs: start + offset, observedAtMs: start + offset,
+            meters: first.meters.map(meter => ({ ...meter, resetsAt: start + 5000, windowDurationMs: 5000 })),
+        }));
+        for (const snapshot of samples) await writeProviderAccountUsageRecordWithPolicy({ accountId: account.id,
+            recordId: first.recordId, recordKey: first.recordKey, payloadMode: 'plain_json_v1', status: 'ok',
+            fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs, snapshot });
+        const page = await readProviderAccountUsageHistory({ accountId: account.id, recordId: first.recordId,
+            history: { range: { startAtMs: start, endAtMs: start + 8000 }, pageSize: 100 } });
+        expect(page.entries.map(entry => entry.observedAtMs)).toEqual([start, start + 1000, start + 4000, start + 5000, start + 6000, start + 7000]);
+        expect((await readProviderAccountUsageRecord({ accountId: account.id, recordId: first.recordId }))?.snapshot).toEqual(samples.at(-1));
+        for (const entry of page.entries) expect(await readProviderAccountUsageHistoryWitness({ accountId: account.id,
+            recordId: first.recordId, witness: { id: entry.id, observedAtMs: entry.observedAtMs } })).toEqual(entry);
+    });
+
+    it('retains timestamp-only reset phases in plain history independently of caller fingerprints', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });
+        const start = Date.now() - 10_000;
+        const first = createUsageSnapshot({ fetchedAt: start });
+        for (const offset of [0, 1000, 5000, 6000]) {
+            const snapshot = { ...first, fetchedAtMs: start + offset, observedAtMs: start + offset,
+                meters: first.meters.map(meter => ({ ...meter, resetsAt: start + 5000, windowDurationMs: 5000 })) };
+            await writeProviderAccountUsageRecordWithPolicy({ accountId: account.id, recordId: first.recordId,
+                recordKey: first.recordKey, payloadMode: 'plain_json_v1', status: 'ok', fetchedAt: snapshot.fetchedAtMs,
+                staleAfterMs: snapshot.staleAfterMs, snapshot, materialFingerprint: 'caller-claimed-same-material' });
+        }
+        const page = await readProviderAccountUsageHistory({ accountId: account.id, recordId: first.recordId,
+            history: { range: { startAtMs: start, endAtMs: start + 7000 }, pageSize: 100 } });
+        expect(page.entries.map(entry => entry.observedAtMs)).toEqual([start, start + 1000, start + 5000, start + 6000]);
+    });
+
+    it('keeps a Pending reset witness when it becomes an interior observation of an unchanged run', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });
+        const first = createUsageSnapshot({ fetchedAt: Date.now() - 10_000 });
+        const write = (offset: number) => writeProviderAccountUsageRecordWithPolicy({ accountId: account.id,
+            recordId: first.recordId, recordKey: first.recordKey, payloadMode: 'plain_json_v1', status: 'ok',
+            fetchedAt: first.fetchedAtMs + offset, staleAfterMs: first.staleAfterMs,
+            snapshot: { ...first, fetchedAtMs: first.fetchedAtMs + offset, observedAtMs: first.observedAtMs + offset } });
+        await write(0); await write(1000);
+        const history = { range: { startAtMs: first.fetchedAtMs, endAtMs: first.fetchedAtMs + 10_000 }, pageSize: 100 };
+        const before = await readProviderAccountUsageHistory({ accountId: account.id, recordId: first.recordId, history });
+        const pinned = before.entries.at(-1)!;
+        const session = await db.session.create({ data: { accountId: account.id, tag: 'compact-witness', metadata: '{}', agentState: '{}' }, select: { id: true } });
+        await db.sessionPendingMessage.create({ data: { sessionId: session.id, authorAccountId: account.id,
+            localId: 'held', position: 0, requestedAction: { v: 1, kind: 'reset_start', reset: {
+                recordId: first.recordId, meterId: 'weekly', witness: { id: pinned.id, observedAtMs: pinned.observedAtMs },
+                source: { ref: { service: { pluginId: 'example.usage', localId: 'usage' }, accountId: 'connected-account' }, bindingKind: 'account' },
+            } }, content: { t: 'plain', v: { text: 'held' } } } });
+        await write(2000); await write(3000);
+        const after = await readProviderAccountUsageHistory({ accountId: account.id, recordId: first.recordId, history });
+        expect(after.entries.map(entry => entry.observedAtMs)).toEqual([first.fetchedAtMs, first.fetchedAtMs + 1000, first.fetchedAtMs + 3000]);
+        expect(await readProviderAccountUsageHistoryWitness({ accountId: account.id, recordId: first.recordId,
+            witness: { id: pinned.id, observedAtMs: pinned.observedAtMs } })).toEqual(pinned);
+    });
+
+    it('reads existing uncompacted history with unknown persisted fields but keeps writes canonical', async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });
+        const snapshot = createUsageSnapshot({ fetchedAt: Date.now() - 1000 });
+        const write = { accountId: account.id, recordId: snapshot.recordId, recordKey: snapshot.recordKey,
+            payloadMode: 'plain_json_v1' as const, status: 'ok' as const, fetchedAt: snapshot.fetchedAtMs,
+            staleAfterMs: snapshot.staleAfterMs, snapshot };
+        await writeProviderAccountUsageRecordWithPolicy(write);
+        const row = await db.providerAccountUsageHistory.findFirstOrThrow({ where: { accountId: account.id } });
+        await db.providerAccountUsageHistory.update({ where: { id: row.id }, data: { payload: {
+            ...write, unknownHistoryField: true, metadata: { unknownMetadata: true },
+            snapshot: { ...snapshot, unknownSnapshotField: true, meters: snapshot.meters.map(meter => ({ ...meter, unknownMeterField: true })) },
+        } } });
+        const page = await readProviderAccountUsageHistory({ accountId: account.id, recordId: snapshot.recordId,
+            history: { range: { startAtMs: snapshot.fetchedAtMs, endAtMs: snapshot.fetchedAtMs + 1 }, pageSize: 10 } });
+        expect(page.entries[0]?.record.snapshot).toEqual(snapshot);
+        expect(page.entries[0]?.record).not.toHaveProperty('unknownHistoryField');
+        expect(await readProviderAccountUsageHistoryWitness({ accountId: account.id, recordId: snapshot.recordId,
+            witness: { id: row.id, observedAtMs: snapshot.fetchedAtMs } })).toEqual(page.entries[0]);
+        await db.providerAccountUsageRecord.update({ where: { accountId_recordId: { accountId: account.id, recordId: snapshot.recordId } },
+            data: { recordKeyJson: { ...snapshot.recordKey, unknownKeyField: true },
+                metadata: { unknownMetadata: true },
+                snapshot: { ...snapshot, unknownSnapshotField: true,
+                    meters: snapshot.meters.map(meter => ({ ...meter, unknownMeterField: true })) } } });
+        expect((await readProviderAccountUsageRecord({ accountId: account.id, recordId: snapshot.recordId }))?.snapshot).toEqual(snapshot);
+        await expect(upsertProviderAccountUsageRecord({ ...write, snapshot: { ...snapshot, unknownSnapshotField: true } })).rejects.toThrow();
+        for (const malformed of [
+            { ...write, snapshot: { ...snapshot, staleAfterMs: 'invalid' } },
+            { ...write, recordId: buildProviderAccountUsageRecordId({ ...snapshot.recordKey, accountSubjectId: 'other-account' }) },
+            { ...write, payloadMode: 'sealed_account_scoped_v1' },
+        ]) {
+            await db.providerAccountUsageHistory.update({ where: { id: row.id }, data: { payload: malformed } });
+            await expect(readProviderAccountUsageHistory({ accountId: account.id, recordId: snapshot.recordId,
+                history: { range: { startAtMs: snapshot.fetchedAtMs, endAtMs: snapshot.fetchedAtMs + 1 }, pageSize: 10 } }))
+                .rejects.toBeInstanceOf(ProviderAccountUsagePayloadInvariantError);
+            await expect(readProviderAccountUsageHistoryWitness({ accountId: account.id, recordId: snapshot.recordId,
+                witness: { id: row.id, observedAtMs: snapshot.fetchedAtMs } }))
+                .rejects.toBeInstanceOf(ProviderAccountUsagePayloadInvariantError);
+        }
+    });
+
+
+    it("reads predecessor plain recovery details from metadata into the intrinsic V4 snapshot", async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: "plain" }, select: { id: true } });
+        const snapshot = createUsageSnapshot({ fetchedAt: Date.now() - 3000 });
+        const subscription = { status: "subscribed", renewal: "off", observedAtMs: snapshot.fetchedAtMs, staleAfterMs: 60000 };
+        const recoveryCreditDetails = { reset_one: { remainingCount: 2, appliesToProviderLimitIds: ["weekly"] } };
+        await upsertProviderAccountUsageRecord({
+            accountId: account.id, recordId: snapshot.recordId, recordKey: snapshot.recordKey,
+            payloadMode: "plain_json_v1", status: "ok", fetchedAt: snapshot.fetchedAtMs,
+            staleAfterMs: snapshot.staleAfterMs, snapshot,
+        });
+        // 0.2 recordStorage writes supplemental facts in metadata beside its strict base snapshot.
+        await db.providerAccountUsageRecord.update({
+            where: { accountId_recordId: { accountId: account.id, recordId: snapshot.recordId } },
+            data: {
+                snapshot: {
+                    ...snapshot,
+                    recoveryCredits: {
+                        kind: "usage_limit_resets", availableCount: 1,
+                        credits: [{ providerCreditId: "reset_one", kind: "rate_limit_reset", status: "available" }],
+                    },
+                },
+                metadata: { subscription, recoveryCreditDetails },
+            },
+        });
+        const record = await readProviderAccountUsageRecord({ accountId: account.id, recordId: snapshot.recordId });
+        expect(record?.snapshot).toMatchObject({ subscription, recoveryCreditDetails, meters: snapshot.meters });
+        expect(projectProviderAccountUsageRecordV4(record!, []).content)
+            .toMatchObject({ t: "plain", v: { subscription, recoveryCreditDetails } });
+        const nativeDetails = { reset_one: { remainingCount: 1, appliesToProviderLimitIds: [] } };
+        const nativeSubscription = { ...subscription, renewal: "on" };
+        await db.providerAccountUsageRecord.update({
+            where: { accountId_recordId: { accountId: account.id, recordId: snapshot.recordId } },
+            data: { snapshot: { ...snapshot, subscription: nativeSubscription, recoveryCreditDetails: nativeDetails } },
+        });
+        expect((await readProviderAccountUsageRecord({ accountId: account.id, recordId: snapshot.recordId }))?.snapshot)
+            .toMatchObject({ subscription: nativeSubscription, recoveryCreditDetails: nativeDetails });
+        const native = { ...snapshot, fetchedAtMs: snapshot.fetchedAtMs + 1000, observedAtMs: snapshot.observedAtMs + 1000 };
+        await writeProviderAccountUsageRecordWithPolicy({
+            accountId: account.id, recordId: snapshot.recordId, recordKey: snapshot.recordKey,
+            payloadMode: "plain_json_v1", status: "ok", fetchedAt: native.fetchedAtMs,
+            staleAfterMs: native.staleAfterMs, snapshot: native,
+        });
+        expect((await readProviderAccountUsageRecord({ accountId: account.id, recordId: snapshot.recordId }))?.snapshot)
+            .not.toHaveProperty("recoveryCreditDetails");
+    });
+
+    it("preserves opaque recovery details in current and historical V4 encrypted projections", async () => {
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" }, select: { id: true } });
+        const snapshot = createUsageSnapshot({ fetchedAt: Date.now() - 3000 });
+        const recoveryCreditDetails = { ciphertext: "opaque-recovery-details" };
+        await writeProviderAccountUsageRecordWithPolicy({
+            accountId: account.id, recordId: snapshot.recordId, recordKey: snapshot.recordKey,
+            payloadMode: "sealed_account_scoped_v1", status: "ok", fetchedAt: snapshot.fetchedAtMs,
+            staleAfterMs: snapshot.staleAfterMs,
+            sealedPayload: { format: "account_scoped_v1", ciphertext: "opaque-base", recoveryCreditDetails },
+        });
+        const storedSealed = { format: "account_scoped_v1", ciphertext: "opaque-base", unknownEnvelopeField: true,
+            recoveryCreditDetails: { ...recoveryCreditDetails, unknownFacetField: true } };
+        await db.providerAccountUsageRecord.update({
+            where: { accountId_recordId: { accountId: account.id, recordId: snapshot.recordId } },
+            data: { sealedPayload: storedSealed },
+        });
+        const accepted = await db.providerAccountUsageHistory.findFirstOrThrow({ where: { accountId: account.id } });
+        await db.providerAccountUsageHistory.update({ where: { id: accepted.id }, data: { payload: {
+            accountId: account.id, recordId: snapshot.recordId, recordKey: snapshot.recordKey,
+            payloadMode: "sealed_account_scoped_v1", status: "ok", fetchedAt: snapshot.fetchedAtMs,
+            staleAfterMs: snapshot.staleAfterMs, sealedPayload: storedSealed, unknownHistoryField: true,
+        } } });
+        const current = await readProviderAccountUsageRecord({ accountId: account.id, recordId: snapshot.recordId });
+        expect(projectProviderAccountUsageRecordV4(current!, []).content)
+            .toEqual({ t: "encrypted", c: "opaque-base", recoveryCreditDetails });
+        const history = await readProviderAccountUsageHistory({
+            accountId: account.id, recordId: snapshot.recordId,
+            history: { range: { startAtMs: snapshot.fetchedAtMs, endAtMs: snapshot.fetchedAtMs + 1 }, pageSize: 10 },
+        });
+        expect(history.entries.map(entry => projectProviderAccountUsageRecordV4(entry.record, []).content))
+            .toEqual([{ t: "encrypted", c: "opaque-base", recoveryCreditDetails }]);
+    });
 
     it('retains material accepted history, omits refresh-only changes and pages the requested range', async () => {
         const account = await db.account.create({ data: { publicKey: null, encryptionMode: 'plain' }, select: { id: true } });

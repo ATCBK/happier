@@ -95,7 +95,7 @@ export function registerSessionArchiveRoutes(app: Fastify) {
                     archivedAt: new Date(archivedAt),
                 }),
             };
-        });
+        }, { isolationLevel: "Serializable" /* Archive lifecycle decisions must serialize with rejoin, discussion posting and tracking effects. */ });
 
         if (!res.ok) {
             if (res.error === "authentication_required") return reply.code(403).send({ error: "team_authentication_required" });
@@ -183,7 +183,7 @@ export function registerSessionArchiveRoutes(app: Fastify) {
                     archivedAt: null,
                 }),
             };
-        });
+        }, { isolationLevel: "Serializable" /* Archive lifecycle decisions must serialize with rejoin, discussion posting and tracking effects. */ });
 
         if (!res.ok) {
             if (res.error === "authentication_required") return reply.code(403).send({ error: "team_authentication_required" });

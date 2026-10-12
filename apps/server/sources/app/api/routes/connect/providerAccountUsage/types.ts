@@ -1,9 +1,11 @@
 import type {
     ConnectedServiceQuotaSnapshotV1,
+    ConnectedServiceQuotaRecoveryCreditDetailsByIdV1,
     ConnectedServiceUsageSourceV1,
     ProviderAccountUsageRecordId,
     ProviderAccountUsageRecordKeyV1,
     ProviderAccountUsageSnapshotV1,
+    ProviderAccountSubscriptionV1,
     SealedConnectedServiceQuotaSnapshotV1,
     SealedProviderAccountUsageSnapshotV1,
 } from "@happier-dev/protocol";
@@ -20,6 +22,8 @@ export type LegacyQuotaCompatibilityProjection = Readonly<{
 }>;
 export type ProviderAccountUsageRecordMetadata = Readonly<{
     materialFingerprint?: string;
+    subscription?: ProviderAccountSubscriptionV1;
+    recoveryCreditDetails?: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1;
     legacyQuotaCompatibilityProjections?: readonly LegacyQuotaCompatibilityProjection[];
 }>;
 

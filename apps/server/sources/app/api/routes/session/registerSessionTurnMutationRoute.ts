@@ -7,6 +7,7 @@ import {
 import { z } from "zod";
 
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
+import { readCurrentSessionAccessForOperation } from "@/app/session/access/sessionAccess";
 import {
     isExternalShareableSessionTurnVisible,
     isSessionTranscriptShareable,
@@ -130,8 +131,10 @@ export function registerSessionTurnMutationRoute(app: Fastify) {
                 publication,
                 currentlyAccessible: session !== null,
             };
-        }, { readOnly: true });
-        if (!session || !currentlyAccessible) {
+        }, { isolationLevel: "Serializable" /* Turn, Session and publication visibility must come from one admitted snapshot. */, readOnly: true });
+        if (!session || !currentlyAccessible || (await readCurrentSessionAccessForOperation({
+            accountId: userId, sessionId, authentication, capability: "readTranscript",
+        })).status !== "allowed") {
             return reply.code(404).send({ error: "Session not found" });
         }
 

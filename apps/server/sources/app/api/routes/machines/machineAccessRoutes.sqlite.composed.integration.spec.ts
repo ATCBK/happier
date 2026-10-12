@@ -61,6 +61,20 @@ describe('Machine accessible discovery and access HTTP (SQLite)', () => {
         return { owner, recipient, other, machine };
     }
 
+    it('omits revoked owned Machines from listing but preserves offline discovery and exact owner reads', async () => {
+        const { owner, machine } = await fixture();
+        const offline = await db.machine.create({ data: { ...machine, id: `machine-${randomUUID()}` } });
+        await db.machine.update({ where: { id: machine.id }, data: { revokedAt: new Date(), active: false } });
+        await withAuthenticatedTestApp(machinesRoutes, async app => {
+            const list = await app.inject({ method: 'GET', url: '/v1/machines', headers: headers(owner.id) });
+            expect(list.statusCode, list.body).toBe(200);
+            expect(list.json().map((row: { id: string }) => row.id)).toEqual([offline.id]);
+            const historical = await app.inject({ method: 'GET', url: `/v1/machines/${machine.id}`, headers: headers(owner.id) });
+            expect(historical.statusCode, historical.body).toBe(200);
+            expect(historical.json()).toMatchObject({ machine: { id: machine.id, active: false, revokedAt: expect.any(Number) } });
+        });
+    });
+
     it('exposes the current owner audience through the real access route', async () => {
         const { owner, machine } = await fixture();
         let routeError: Error | undefined;

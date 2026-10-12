@@ -1,4 +1,3 @@
-import { inTx } from "@/storage/inTx";
 import { z } from 'zod';
 
 import {
@@ -19,7 +18,7 @@ import {
     mutateSessionSubagentCustody,
     retireSessionSubagentCustodySource,
 } from '@/app/session/subagents/sessionSubagentCustodyService';
-import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
+import { readCurrentSessionAccessForOperation } from "@/app/session/access/sessionAccess";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import type { Fastify } from '../../types';
 
@@ -41,11 +40,12 @@ export function registerSessionSubagentCustodyRoutes(app: Fastify) {
             response: { 200: SessionSubagentCustodyCapabilityV1Schema, 404: ErrorSchema },
         },
     }, async (request, reply) => {
-        const admission = await inTx(tx => resolveSessionAccessForOperation(tx, {
+        const admission = await readCurrentSessionAccessForOperation({
             accountId: request.userId,
             sessionId: request.params.sessionId,
             authentication: readSessionAccessAuthenticationFromRequest(request),
-        }), { readOnly: true });
+            capability: "readTranscript",
+        });
         if (admission.status !== "allowed" || !admission.access.capabilities.readTranscript) {
             return reply.code(404).send({ error: 'Session not found' });
         }

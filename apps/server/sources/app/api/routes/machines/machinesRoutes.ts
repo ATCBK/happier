@@ -881,6 +881,7 @@ export function machinesRoutes(app: Fastify) {
             const machines = await tx.machine.findMany({
                 where: {
                     id: { in: ids },
+                    revokedAt: null,
                     ...(isApiTokenCaller ? {} : persistentMachineWhere),
                 },
                 orderBy: { lastActiveAt: 'desc' },

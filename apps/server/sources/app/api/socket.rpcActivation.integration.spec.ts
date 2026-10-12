@@ -7,6 +7,8 @@ import { SOCKET_RPC_EVENTS } from "@happier-dev/protocol/socketRpc";
 
 import { auth } from "@/app/auth/auth";
 import { db } from "@/storage/db";
+import { inTx } from "@/storage/inTx";
+import { resolveCurrentMachineRecipientAccountIdsInTx } from "@/app/machines/machineAccess";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
 import { startSocket } from "./socket";
@@ -92,7 +94,67 @@ describe("startSocket RPC activation", () => {
         await db.account.deleteMany();
     });
 
-    it("admits the initial RPC registration exactly once after delayed post-connect authentication", async () => {
+    it("distinguishes admitted daemon socket connections from heartbeats and disconnects", async () => {
+        const machineId = "m-presence-reconnect";
+        const account = await db.account.create({ data: { publicKey: `presence-${Date.now()}` } });
+        await db.machine.create({ data: {
+            id: machineId, accountId: account.id, metadata: "metadata", metadataVersion: 1,
+            daemonState: null, daemonStateVersion: 0, active: false,
+        } });
+        // Establish the real heartbeat audience before waiting on transport;
+        // storage/schema failures must surface instead of timing out silently.
+        expect(await inTx(tx => resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId))).toEqual([account.id]);
+        const token = await auth.createToken(account.id, undefined, { kind: "account", authority: "present_user" });
+        const app = Fastify({ logger: false }) as unknown as AppFastify;
+        startSocket(app);
+        await app.listen({ port: 0, host: "127.0.0.1" });
+        const address = app.server.address();
+        if (typeof address !== "object" || !address) throw new Error("Failed to bind socket server");
+        const options = { path: "/v1/updates", transports: ["websocket"], reconnection: false, autoConnect: false };
+        const reader = ioClient(`http://127.0.0.1:${address.port}`, { ...options, auth: { token } });
+        const daemon = ioClient(`http://127.0.0.1:${address.port}`, { ...options, auth: {
+            token, clientType: "machine-scoped", machineId, runtimeId: "presence-runtime",
+            startupSource: "manual", serviceManaged: false,
+        } });
+        const nextPresence = () => new Promise<Record<string, unknown>>(resolve => {
+            const receive = (payload: Record<string, unknown>) => {
+                if (payload.type !== "machine-activity" || payload.id !== machineId) return;
+                reader.off("ephemeral", receive);
+                resolve(payload);
+            };
+            reader.on("ephemeral", receive);
+        });
+        try {
+            const readerConnected = waitForConnection(reader);
+            reader.connect();
+            await readerConnected;
+            // An acknowledged request passes the real admission hold, ensuring
+            // this authenticated reader is ready before daemon admission.
+            await reader.timeout(5_000).emitWithAck(SOCKET_RPC_EVENTS.CALL, { method: `${machineId}:neutral.probe`, params: {} });
+
+            const admitted = nextPresence();
+            daemon.connect();
+            expect(await admitted).toMatchObject({ type: "machine-activity", id: machineId, active: true, reconnected: true });
+
+            const heartbeat = nextPresence();
+            daemon.emit("machine-alive", { machineId, time: Date.now() });
+            expect(await heartbeat).toEqual({ type: "machine-activity", id: machineId, active: true, activeAt: expect.any(Number) });
+
+            const disconnected = nextPresence();
+            daemon.disconnect();
+            expect(await disconnected).toEqual({ type: "machine-activity", id: machineId, active: false, activeAt: expect.any(Number) });
+
+            const reconnected = nextPresence();
+            daemon.connect();
+            expect(await reconnected).toMatchObject({ type: "machine-activity", id: machineId, active: true, reconnected: true });
+        } finally {
+            daemon.close();
+            reader.close();
+            await app.close();
+        }
+    });
+
+    it("admits the initial RPC registration exactly once after delayed post-connect room admission", async () => {
         const machineId = "m-rpc-activation";
         const method = `${machineId}:neutral.immediate`;
         const sentinel = { source: "machine-connect-callback", value: 42 };
@@ -125,25 +187,20 @@ describe("startSocket RPC activation", () => {
         const firstRead = new Promise<void>((resolve) => { readArrived = resolve; });
         let packetArrived: () => void = () => {};
         const firstPacket = new Promise<void>((resolve) => { packetArrived = resolve; });
-        server.once("connection", (socket) => {
+        server.prependOnceListener("connection", (socket) => {
             initializing = true;
             socket.onAny((event) => {
                 if (event === SOCKET_RPC_EVENTS.REGISTER) packetArrived();
             });
         });
-        // Delay the real persistence boundary; token verification and RPC admission
-        // remain real. The connection callback runs before the final account read.
-        const originalFindUnique = db.account.findUnique;
-        const readSpy = vi.spyOn(db.account, "findUnique").mockImplementation((...args) => {
-            const query = originalFindUnique(...args);
-            if (!initializing) return query;
+        // Delay the real Socket.IO adapter boundary. Authentication, packet
+        // admission and handler registration remain the production path.
+        const adapter = server.of('/').adapter;
+        const originalAddAll = adapter.addAll.bind(adapter);
+        const admissionSpy = vi.spyOn(adapter, "addAll").mockImplementation((...args) => {
+            if (!initializing) return originalAddAll(...args);
             readArrived();
-            return new Proxy(query, {
-                get(target, property, receiver) {
-                    if (property !== "then") return Reflect.get(target, property, receiver);
-                    return (...thenArgs: unknown[]) => readReleased.then(() => Reflect.apply(target.then, target, thenArgs));
-                },
-            });
+            return readReleased.then(() => originalAddAll(...args));
         });
         await app.listen({ port: 0, host: "127.0.0.1" });
         const address = app.server.address();
@@ -219,8 +276,7 @@ describe("startSocket RPC activation", () => {
             expect(registrationCount).toBe(1);
         } finally {
             releaseRead();
-            readSpy.mockRestore();
-            Reflect.set(db.account, "findUnique", originalFindUnique);
+            admissionSpy.mockRestore();
             machineSocket.close();
             callerSocket.close();
             await app.close();

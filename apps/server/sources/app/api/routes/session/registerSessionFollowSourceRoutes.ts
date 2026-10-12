@@ -15,10 +15,9 @@ import {
     listSessionFollowSources,
     removeSessionFollowSource,
     setSessionFollowSource,
-    projectSessionFollowSourceForRunnerInTx,
+    projectSessionFollowSourceForRunner,
     type SessionFollowSourceFailure,
 } from "@/app/session/follow/sessionFollowEdgeService";
-import { inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
 
@@ -86,11 +85,11 @@ export function registerSessionFollowSourceRoutes(app: Fastify) {
         if (!params.success || !body.success || !principal) {
             return reply.code(404).send({ error: "session_follow_source_unavailable" });
         }
-        const projection = await inTx(async (tx) => await projectSessionFollowSourceForRunnerInTx(tx, {
+        const projection = await projectSessionFollowSourceForRunner({
             principal,
             destinationSessionId: params.data.destinationSessionId,
             request: body.data,
-        }), { readOnly: true });
+        });
         if (!projection) return reply.code(404).send({ error: "session_follow_source_unavailable" });
         return reply.send(projection);
     });

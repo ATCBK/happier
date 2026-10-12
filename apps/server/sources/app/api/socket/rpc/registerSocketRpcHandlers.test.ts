@@ -32,6 +32,8 @@ import type {
 
 import { createFakeSocket as createSocketHarnessFake, triggerSocketHandler } from "../../testkit/socketHarness";
 import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1 } from "../externalActionDispatcher";
+import { workflowDraftClientRpcMethod } from '@happier-dev/protocol/actions/workflowAuthoringAction';
+import { getMachineSocketRoom } from '../../socketRooms';
 
 type RpcTargetEmitWithAck = (
     event: string,
@@ -55,6 +57,8 @@ function createOwnedSessionAccessRow(sessionId = "sess_1") {
         active: true,
         archivedAt: null,
         lastActiveAt: new Date(2),
+        publisherGeneration: 1n,
+        publisherGenerationLastActiveAt: new Date(2),
         updatedAt: new Date(2),
         accountId: "user-1",
         primaryTeamId: null,
@@ -288,10 +292,10 @@ describe("registerSocketRpcHandlers", () => {
         }, handshake: { auth: { token: await auth.createToken('user-1', undefined, { kind: 'account', authority: 'present_user' }) } } });
         const effect = vi.fn(async (_event: string, _request: unknown) => ({ updated: true }));
         const target = { id: 'target-runtime', data: { clientType: 'session-scoped', sessionPublisherAuthority: {
-            v: 1, accountId: 'user-1', sessionId: 'report', machineId: 'machine-target', committedFenceMs: 2,
+            v: 1, accountId: 'user-1', sessionId: 'report', machineId: 'machine-target', committedFenceMs: 2, publisherGeneration: '1',
         } }, timeout: () => ({ emitWithAck: effect }) };
         const publisher = { data: { sessionPublisherAuthority: {
-            v: 1, accountId: 'user-1', sessionId: 'lead', machineId: 'machine-source', committedFenceMs: 2,
+            v: 1, accountId: 'user-1', sessionId: 'lead', machineId: 'machine-source', committedFenceMs: 2, publisherGeneration: '1',
         } } };
         const rooms: Record<string, unknown[]> = { 'session:lead:user-1': [publisher],
             'rpc:user-1:report:session.notes.set': [target], [target.id]: [target] };
@@ -615,23 +619,37 @@ describe("registerSocketRpcHandlers", () => {
     it.each([
         uiBrowserAutomationDispatchMethod({ browserSessionId: 'visible-session', viewId: 'visible-view' }),
         RPC_METHODS.UI_ACTION_EXECUTE,
+        workflowDraftClientRpcMethod({ scope: { serverId: 'home', accountId: 'user-1' }, draftId: 'draft' }),
+        workflowDraftClientRpcMethod({ scope: { serverId: 'home-' + '\u0800'.repeat(600), accountId: 'user-1' }, draftId: 'draft' }),
     ])("admits UI Action continuation %s only from the authenticated exact Machine", async (rpcMethod) => {
+        // Real daemons are enrolled. A legacy row without installation custody
+        // skipped the receiving guard and hid rejection of the App recipient.
+        machineFindFirstMock.mockResolvedValue({ revokedAt: null, replacedByMachineId: null,
+            installationId: 'installed-machine-1' });
         const method = `machine-1:${rpcMethod}`;
         const effect = vi.fn(async () => 'encrypted-page-result');
         const target = { id: 'ui-view', data: { clientType: 'user-scoped' }, timeout: () => ({ emitWithAck: effect }) };
-        const { io } = createTargetRoutingIo({ [`rpc:user-1:${method}`]: [target], [target.id]: [target] });
+        const connectedMachines: ReturnType<typeof createFakeSocket>[] = [];
+        const { io } = createTargetRoutingIo({ [`rpc:user-1:${method}`]: [target], [target.id]: [target],
+            [getMachineSocketRoom('user-1', 'machine-1')]: connectedMachines });
         for (const data of [
             { clientType: 'user-scoped' },
             { clientType: 'machine-scoped', machineId: 'machine-2' },
-            { clientType: 'machine-scoped', machineId: 'machine-1' },
+            { clientType: 'machine-scoped', machineId: 'machine-1', verifiedMachineInstallationId: 'retired-installation' },
+            { clientType: 'machine-scoped', machineId: 'machine-1', verifiedMachineInstallationId: 'installed-machine-1' },
         ]) {
             const socket = createFakeSocket({ id: 'caller', data });
+            connectedMachines.splice(0, connectedMachines.length, socket);
             registerSocketRpcHandlers({ userId: 'user-1', socket: socket as unknown as Socket, io });
             const ack = vi.fn();
             await triggerSocketHandler(socket, SOCKET_RPC_EVENTS.CALL, { method, params: 'encrypted-admitted-action' }, ack);
-            expect(ack).toHaveBeenCalledWith(data.machineId === 'machine-1'
-                ? { ok: true, result: 'encrypted-page-result' }
-                : { ok: false, error: 'Forbidden', errorCode: RPC_ERROR_CODES.FORBIDDEN });
+            if (data.machineId === 'machine-1' && data.verifiedMachineInstallationId === 'retired-installation') {
+                expect(ack).toHaveBeenCalledWith(expect.objectContaining({ ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+            } else {
+                expect(ack).toHaveBeenCalledWith(data.machineId === 'machine-1'
+                    ? { ok: true, result: 'encrypted-page-result' }
+                    : { ok: false, error: 'Forbidden', errorCode: RPC_ERROR_CODES.FORBIDDEN });
+            }
         }
         expect(effect).toHaveBeenCalledOnce();
         machineFindFirstMock.mockResolvedValue({ revokedAt: new Date(1), replacedByMachineId: null });
@@ -641,6 +659,25 @@ describe("registerSocketRpcHandlers", () => {
         await triggerSocketHandler(revoked, SOCKET_RPC_EVENTS.CALL, { method, params: 'encrypted-admitted-action' }, revokedAck);
         expect(revokedAck).toHaveBeenCalledWith({ ok: false, error: 'Forbidden', errorCode: RPC_ERROR_CODES.FORBIDDEN });
         expect(effect).toHaveBeenCalledOnce();
+    });
+
+    it('refuses an ambiguous mounted draft instead of choosing a client by socket id', async () => {
+        machineFindFirstMock.mockResolvedValue({ revokedAt: null, replacedByMachineId: null,
+            installationId: 'installed-machine-1' });
+        const method = `machine-1:${workflowDraftClientRpcMethod({ scope: { serverId: 'home', accountId: 'user-1' }, draftId: 'draft' })}`;
+        const effect = vi.fn(async () => 'encrypted-page-result');
+        const targets = ['first-editor', 'second-editor'].map(id => ({ id, data: { clientType: 'user-scoped' },
+            timeout: () => ({ emitWithAck: effect }) }));
+        const socket = createFakeSocket({ id: 'caller', data: { clientType: 'machine-scoped', machineId: 'machine-1',
+            verifiedMachineInstallationId: 'installed-machine-1' } });
+        const { io } = createTargetRoutingIo({ [`rpc:user-1:${method}`]: targets,
+            [getMachineSocketRoom('user-1', 'machine-1')]: [socket],
+            ...Object.fromEntries(targets.map(target => [target.id, [target]])) });
+        registerSocketRpcHandlers({ userId: 'user-1', socket: socket as unknown as Socket, io });
+        const ack = vi.fn();
+        await triggerSocketHandler(socket, SOCKET_RPC_EVENTS.CALL, { method, params: 'encrypted-admitted-action' }, ack);
+        expect(ack).toHaveBeenCalledWith(expect.objectContaining({ ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+        expect(effect).not.toHaveBeenCalled();
     });
 
     it("advertises exact UI automation methods for maximum valid browser identity strings", async () => {
@@ -705,7 +742,7 @@ describe("registerSocketRpcHandlers", () => {
         const effect = vi.fn(async (_event: string, _request: Record<string, unknown>) => ({ success: true }));
         accessKeyFindUniqueMock.mockResolvedValue({ session: { accountId: 'user-1' }, machine: { revokedAt: null, replacedByMachineId: null } });
         const target = { id: "session-daemon", data: { clientType: "session-scoped",
-            sessionPublisherAuthority: { v: 1, accountId: 'user-1', sessionId: 'sess_1', machineId: 'machine-current', committedFenceMs: 2 } },
+            sessionPublisherAuthority: { v: 1, accountId: 'user-1', sessionId: 'sess_1', machineId: 'machine-current', committedFenceMs: 2, publisherGeneration: '1' } },
             timeout: () => ({ emitWithAck: effect }) };
         const method = `sess_1:${SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND}`;
         const { io } = createTargetRoutingIo({ [`rpc:user-1:${method}`]: [target], [target.id]: [target] });
@@ -722,7 +759,7 @@ describe("registerSocketRpcHandlers", () => {
         expect(issued.binding).toMatchObject({ actionId: 'session.message.send', machineId: 'machine-current',
             credentialId: principal.credentialId, target: { kind: 'session', sessionId: 'sess_1' } });
         expect(issued.binding.requestId).toBe(forwarded.requestId);
-        expect(issued.binding.grant.permissionModes).toEqual(['read-only']);
+        expect(issued.binding).toMatchObject({ grant: { permissionModes: ['read-only'] } });
         expect(forwarded.callerInputConstraints).toEqual({ models: null, permissionModes: ['read-only'] });
         expect(issued.binding.requestEnvelopeDigest).toBe(computeExternalActionSocketRpcRequestDigestV1({
             method, params: opaqueParams, requestId: issued.binding.requestId, target: { kind: 'session', sessionId: 'sess_1' },
@@ -740,7 +777,7 @@ describe("registerSocketRpcHandlers", () => {
         const { socket, admission, principal, tokenRow } = createTokenViewer();
         const effect = vi.fn(async () => ({ success: true }));
         const target = { id: 'session-daemon', data: { clientType: 'session-scoped',
-            sessionPublisherAuthority: { v: 1, accountId: 'user-1', sessionId: 'sess_1', machineId: 'machine-current', committedFenceMs: 2 } },
+            sessionPublisherAuthority: { v: 1, accountId: 'user-1', sessionId: 'sess_1', machineId: 'machine-current', committedFenceMs: 2, publisherGeneration: '1' } },
             timeout: () => {
                 // The persistent DB boundary narrows the credential after ingress, before actual proof minting.
                 apiTokenFindUniqueMock.mockResolvedValue({ ...tokenRow, accessGrant: { ...principal.grant, permissionModes: ['read-only'] } });
@@ -777,7 +814,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         const effect = vi.fn(async () => result);
         const target = { id: "current-session-daemon", data: { clientType: "session-scoped",
             sessionPublisherAuthority: { v: 1, accountId: "user-1", sessionId: "sess_1",
-                machineId: "machine-1", committedFenceMs: 2 } }, timeout: () => ({ emitWithAck: effect }) };
+                machineId: "machine-1", committedFenceMs: 2, publisherGeneration: '1' } }, timeout: () => ({ emitWithAck: effect }) };
         const method = `sess_1:${SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION}`;
         const { io } = createTargetRoutingIo({ [`rpc:user-1:${method}`]: [target], [target.id]: [target] });
         registerSocketRpcHandlers({ userId: "user-1", socket: socket as unknown as Socket, io,
@@ -919,7 +956,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
             await triggerSocketHandler(socket, SOCKET_RPC_EVENTS.CALL, {
                 method, params: "sealed-scm-input", authorization: { kind: "session.write", sessionId: "private-session" },
             }, ack);
-            expect(ack).toHaveBeenCalledWith(expect.objectContaining({ ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE }));
+            expect(ack).toHaveBeenCalledWith(expect.objectContaining({ ok: false, errorCode: 'target_unavailable' }));
             expect(effect).not.toHaveBeenCalled();
         });
     });
@@ -2388,6 +2425,22 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         }));
     });
 
+    it("rejects malformed explicit deadlines before looking up or dispatching a target", async () => {
+        const effect = vi.fn(async () => "result");
+        const { io, inMock } = createIo({ targetsByRoom: {
+            "rpc:user-1:agent.run": [{ id: "target", timeout: () => ({ emitWithAck: effect }) }],
+        } });
+        const socket = createFakeSocket({ id: "caller" });
+        registerSocketRpcHandlers({ userId: "user-1", socket: socket as unknown as Socket, io });
+        for (const timeoutMs of [0, -1, Number.POSITIVE_INFINITY, "1000", false]) {
+            const acknowledge = vi.fn();
+            await triggerSocketHandler(socket, SOCKET_RPC_EVENTS.CALL, { method: "agent.run", params: {}, timeoutMs }, acknowledge);
+            expect(acknowledge).toHaveBeenCalledWith(expect.objectContaining({ ok: false, error: expect.any(String) }));
+        }
+        expect(effect).not.toHaveBeenCalled();
+        expect(inMock).not.toHaveBeenCalled();
+    });
+
     it("forwards calls through room discovery and excludes the caller socket", async () => {
         const targetEmitWithAck = vi.fn().mockResolvedValue({ ok: true, value: 123 });
         const target = {
@@ -2434,7 +2487,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         });
     });
 
-    it("keeps execution-run input forwarding under the caller lifecycle", async () => {
+    it("keeps explicitly unbounded execution-run input forwarding under the caller lifecycle", async () => {
         const method = `sess_1:${SESSION_RPC_METHODS.EXECUTION_RUN_SEND}`;
         const targetEmitWithAck = vi.fn().mockResolvedValue({ ok: true });
         const target = {
@@ -2453,12 +2506,13 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         await triggerSocketHandler(socket, SOCKET_RPC_EVENTS.CALL, {
             method,
             params: { runId: "run-1", message: "Continue" },
+            timeoutMs: null,
         }, callback);
 
         expect(target.timeout).toHaveBeenCalledWith(2_147_483_647);
         expect(targetEmitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REQUEST, expect.objectContaining({
             method,
-            timeoutMs: 2_147_483_647,
+            timeoutMs: null,
         }));
         expect(callback).toHaveBeenCalledWith({ ok: true, result: { ok: true } });
     });
@@ -2729,8 +2783,8 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         expect(targetEmitWithAck).not.toHaveBeenCalled();
         expect(callback).toHaveBeenCalledWith({
             ok: false,
-            error: "RPC method not available",
-            errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            error: "RPC target unavailable",
+            errorCode: 'target_unavailable',
         });
     });
 
@@ -2966,6 +3020,8 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
     });
 
     it("uses a dedicated cluster fetch timeout for session-scoped rpc discovery", async () => {
+        // The Session namespace is not a persisted Machine identity.
+        machineFindFirstMock.mockResolvedValue(null);
         const method = `sess_1:${SESSION_RPC_METHODS.SESSION_GOAL_SET}`;
         const { io, timeout } = createIo({
             targetsByRoom: {
@@ -3326,6 +3382,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
             sessionPublisherPresence: {
                 captureExplicitMachineStop,
                 finalizeExplicitMachineStop: vi.fn(),
+                resolveProjectedCurrentPublisher: vi.fn(async () => null),
                 isCurrentPublisherProjection: vi.fn(),
                 runAsProjectedCurrentPublisher: vi.fn(),
             },
@@ -3378,6 +3435,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
                 },
             })),
             finalizeExplicitMachineStop,
+            resolveProjectedCurrentPublisher: vi.fn(async () => null),
             isCurrentPublisherProjection: vi.fn(),
             runAsProjectedCurrentPublisher: vi.fn(),
         };
@@ -3398,8 +3456,8 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         expect(finalizeExplicitMachineStop).not.toHaveBeenCalled();
         expect(callback).toHaveBeenCalledWith({
             ok: false,
-            error: "RPC method not available",
-            errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            error: "RPC target unavailable",
+            errorCode: 'target_unavailable',
         });
     });
 
@@ -3434,6 +3492,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
                 },
             })),
             finalizeExplicitMachineStop,
+            resolveProjectedCurrentPublisher: vi.fn(async () => null),
             isCurrentPublisherProjection: vi.fn(),
             runAsProjectedCurrentPublisher: vi.fn(),
         };
@@ -3486,6 +3545,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
                     reason: "machine_control_unavailable" as const,
                 })),
                 finalizeExplicitMachineStop: vi.fn(),
+                resolveProjectedCurrentPublisher: vi.fn(async () => null),
                 isCurrentPublisherProjection: vi.fn(),
                 runAsProjectedCurrentPublisher: vi.fn(),
             },
@@ -3537,6 +3597,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
                 },
             })),
             finalizeExplicitMachineStop,
+            resolveProjectedCurrentPublisher: vi.fn(async () => null),
             isCurrentPublisherProjection: vi.fn(),
             runAsProjectedCurrentPublisher: vi.fn(),
         };
@@ -3558,7 +3619,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
     });
 
     it("routes model transition to the single DB-current publisher even when a stale socket sorts first", async () => {
-        sessionFindUniqueMock.mockResolvedValue(createOwnedSessionAccessRow());
+        sessionFindUniqueMock.mockResolvedValue({ ...createOwnedSessionAccessRow(), publisherGeneration: 2n });
         const method = `sess_1:${SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION}`;
         const staleEmitWithAck = vi.fn().mockResolvedValue({ ok: true, status: "wrong-stale-result" });
         const exactResult = {
@@ -3585,6 +3646,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
                     machineId: "machine-stale",
                     sessionId: "sess_1",
                     committedFenceMs: 1,
+                    publisherGeneration: "1",
                 },
             },
             timeout: vi.fn(() => ({ emitWithAck: staleEmitWithAck })),
@@ -3598,6 +3660,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
                     machineId: "machine-current",
                     sessionId: "sess_1",
                     committedFenceMs: 2,
+                    publisherGeneration: "2",
                 },
             },
             timeout: vi.fn(() => ({ emitWithAck: currentEmitWithAck })),
@@ -3624,6 +3687,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         const sessionPublisherPresence = {
             captureExplicitMachineStop: vi.fn(),
             finalizeExplicitMachineStop: vi.fn(),
+            resolveProjectedCurrentPublisher: vi.fn(async () => null),
             isCurrentPublisherProjection: vi.fn(async (params: { projection: unknown }) => (
                 (params.projection as { committedFenceMs?: unknown } | null)?.committedFenceMs === 2
             )),
@@ -3666,6 +3730,8 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         { name: "zero", currentFenceValues: [] as number[] },
         { name: "multiple", currentFenceValues: [1, 2] },
     ])("fails model transition closed when $name registered targets prove current", async ({ currentFenceValues }) => {
+        // No Machine exists under this Session's namespace.
+        machineFindFirstMock.mockResolvedValue(null);
         const method = `sess_1:${SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION}`;
         const firstEffect = vi.fn().mockResolvedValue({ ok: true, status: "wrong-first" });
         const secondEffect = vi.fn().mockResolvedValue({ ok: true, status: "wrong-second" });
@@ -3678,6 +3744,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
                     machineId: `machine-${id}`,
                     sessionId: "sess_1",
                     committedFenceMs,
+                    publisherGeneration: String(committedFenceMs),
                 },
             },
             timeout: vi.fn(() => ({ emitWithAck: effect })),
@@ -3697,6 +3764,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         const sessionPublisherPresence = {
             captureExplicitMachineStop: vi.fn(),
             finalizeExplicitMachineStop: vi.fn(),
+            resolveProjectedCurrentPublisher: vi.fn(async () => null),
             isCurrentPublisherProjection: vi.fn(async (params: { projection: unknown }) => currentFenceValues.includes(
                 (params.projection as { committedFenceMs: number }).committedFenceMs,
             )),
@@ -3725,7 +3793,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         });
     });
 
-    it("suppresses a model-transition result when post-effect publisher revalidation fails", async () => {
+    it("reports an unknown model-transition outcome when post-effect publisher revalidation fails", async () => {
         sessionFindUniqueMock.mockResolvedValue(createOwnedSessionAccessRow());
         const method = `sess_1:${SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION}`;
         const effect = vi.fn().mockResolvedValue({ ok: true, status: "applied" });
@@ -3738,6 +3806,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
                     machineId: "machine-current",
                     sessionId: "sess_1",
                     committedFenceMs: 2,
+                    publisherGeneration: "1",
                 },
             },
             timeout: vi.fn(() => ({ emitWithAck: effect })),
@@ -3755,6 +3824,7 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         const sessionPublisherPresence = {
             captureExplicitMachineStop: vi.fn(),
             finalizeExplicitMachineStop: vi.fn(),
+            resolveProjectedCurrentPublisher: vi.fn(async () => null),
             isCurrentPublisherProjection: vi.fn(async () => true),
             runAsProjectedCurrentPublisher: async <T>(params: {
                 readLatestProjection: () => Promise<unknown>;
@@ -3787,8 +3857,8 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         expect(effect).toHaveBeenCalledTimes(1);
         expect(callback).toHaveBeenCalledWith({
             ok: false,
-            error: "RPC method not available",
-            errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
+            error: "RPC target changed after request submission",
+            errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN,
         });
     });
 });

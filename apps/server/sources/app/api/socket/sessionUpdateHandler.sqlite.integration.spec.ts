@@ -415,20 +415,26 @@ describe("session update handler on SQLite", () => {
             },
         }]);
 
-        const surfaceRecord = await db.sessionSystemRecord.create({ data: {
-            sessionId: session.id, accountId: owner.id, ownerKind: "host", pluginId: null,
-            namespace: "surface", kind: "item.v1", localId: "visual", version: 1,
-            content: { t: "encrypted", c: "item-ciphertext" },
-            ...deriveSessionSystemRecordAddressKeys({ ownerKind: "host", pluginId: null,
-                namespace: "surface", localId: "visual" }),
-        } });
-        const surfaceItemReference = { v: 1 as const, itemId: "visual",
-            itemRevision: encodeSessionSystemRecordRevision(surfaceRecord),
-            sourceAddress: { serverId: "home-1", sessionId: session.id } };
+        const references = [];
+        for (const itemId of ['visual-first', 'visual-second']) {
+            const surfaceRecord = await db.sessionSystemRecord.create({ data: {
+                sessionId: session.id, accountId: owner.id, ownerKind: "host", pluginId: null,
+                namespace: "surface", kind: "item.v1", localId: itemId, version: 1,
+                content: { t: "encrypted", c: "item-ciphertext" },
+                ...deriveSessionSystemRecordAddressKeys({ ownerKind: "host", pluginId: null,
+                    namespace: "surface", localId: itemId }),
+            } });
+            references.push({ v: 1 as const, itemId,
+                itemRevision: encodeSessionSystemRecordRevision(surfaceRecord),
+                sourceAddress: { serverId: "home-1", sessionId: session.id },
+                sourceItemId: itemId, sourceItemRevision: encodeSessionSystemRecordRevision(surfaceRecord) });
+        }
+        const surfaceItemReference = { v: 1 as const, references };
+        const submitted = { v: 1, references: [references[0], { ...references[0], itemId: 'missing' }, references[1]] };
         const visualLocalId = `visual-${randomUUID()}`;
         const visualAcks: unknown[] = [];
         await getSocketHandler(socket, "transcript-observation-v1")(
-            { ...observation, v: 2, localId: visualLocalId, surfaceItemReference },
+            { ...observation, v: 2, localId: visualLocalId, surfaceItemReference: submitted },
             (value: unknown) => visualAcks.push(value),
         );
         expect(visualAcks).toEqual([expect.objectContaining({ ok: true, status: "observed", localId: visualLocalId })]);

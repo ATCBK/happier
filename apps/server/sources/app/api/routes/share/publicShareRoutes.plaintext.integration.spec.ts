@@ -292,7 +292,7 @@ describe("publicShareRoutes plaintext sessions (integration)", () => {
             const accessRes = await app.inject({
                 method: "GET",
                 url: `/v1/public-shares/${encodeURIComponent(token)}/content`,
-                headers: { host: new URL(createRes.json().isolatedOrigin).host },
+                headers: { host: new URL(createRes.json().viewerOrigin).host },
             });
             expect(accessRes.statusCode).toBe(200);
             const json = accessRes.json();

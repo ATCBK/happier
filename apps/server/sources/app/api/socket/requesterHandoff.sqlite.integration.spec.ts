@@ -29,12 +29,12 @@ describe('requester handoff placement and exact signed ingress', () => {
         const keys = nacl.sign.keyPair();
         const machineData = { metadata: encodePlainMachineStoredContent({ host: 'shared', platform: 'linux', happyCliVersion: 'test',
             homeDir: '/home/shared', happyHomeDir: '/home/shared/.happier' }), active: true,
-            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'),
+            dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
             operationProtocolCapabilitiesRevision: 1, operationProtocolCapabilities: { externalActionExecutionAuthorization: { protocolVersions: [1] } } };
         const source = await db.machine.create({ data: { ...machineData, id: randomUUID(), accountId: alice.id,
-            installationId: randomUUID(), installationPublicKey: keys.publicKey } });
+            installationId: randomUUID(), installationPublicKey: new Uint8Array(keys.publicKey) } });
         const target = await db.machine.create({ data: { ...machineData, id: randomUUID(), accountId: bob.id,
-            installationId: randomUUID(), installationPublicKey: nacl.sign.keyPair().publicKey } });
+            installationId: randomUUID(), installationPublicKey: new Uint8Array(nacl.sign.keyPair().publicKey) } });
         const grant = { machineId: source.id, accountId: bob.id, accessLevel: 'view' as const, createdByAccountId: alice.id };
         await db.machineAccountGrant.create({ data: grant });
         const session = await db.session.create({ data: { accountId: bob.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}' } });

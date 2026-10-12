@@ -9,7 +9,7 @@ import { createDbMocks, createDbTransactionMock, installDbModuleMock } from '../
 
 // Database transport is the only substitute. Route parsing, transaction handling,
 // Account mode, stored-content opening, kind policy and publication owner are real.
-const mocks = createDbMocks({ artifact: ['findFirst'], publicSessionShare: ['findUnique', 'create', 'update'], session: ['findUnique'], sessionMessage: ['findFirst'], sessionSystemRecord: ['findFirst'] } as const);
+const mocks = createDbMocks({ artifact: ['findFirst'], publicSessionShare: ['findUnique', 'create', 'update'], session: ['findUnique'], sessionMessage: ['findFirst'], sessionSystemRecord: ['findFirst'], homeSettings: ['findUnique'], homeGovernancePolicy: ['findUnique'] } as const);
 const transactions = createDbTransactionMock(() => mocks.db);
 installDbModuleMock(() => ({ db: transactions.wrapDb(mocks.db) }));
 const { withAuthenticatedTestApp } = await import('../../testkit/sqliteFastify');
@@ -26,6 +26,8 @@ describe('Artifact public-share kind admission through the HTTP owner', () => {
         createdAt: new Date(1), updatedAt: new Date(1), createdByUserId: 'owner' };
     beforeEach(() => {
         mocks.reset();
+        mocks.db.homeSettings.findUnique.mockResolvedValue(null);
+        mocks.db.homeGovernancePolicy.findUnique.mockResolvedValue(null);
         mocks.db.publicSessionShare.findUnique.mockResolvedValue(share);
         vi.stubEnv('HAPPIER_PUBLIC_SERVER_URL', 'https://home.example.test');
         vi.stubEnv('HAPPIER_FEATURE_LOCAL_SERVICES_PREVIEW__HOST_ORIGIN_DOMAIN', 'preview.example.test');
@@ -107,6 +109,16 @@ describe('Artifact public-share kind admission through the HTTP owner', () => {
             const response = await app.inject({ method: 'GET', url: `/v1/public-shares/${lookupId}/visual/message`, headers });
             expect(response.statusCode, response.body).toBe(200);
             expect(response.json()).toMatchObject({ messageId: 'message', networkOff: true, record: { address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'visual' }, content: { t: 'plain' } } });
+            expect(mocks.db.publicSessionShare.update).not.toHaveBeenCalled();
+            const revision = encodeSessionSystemRecordRevision({ id: 'record', version: 1 });
+            const members = ['first', 'second'].map(sourceItemId => ({ v: 1, itemId: 'visual', itemRevision: revision,
+                sourceAddress: { serverId: 'origin-home', sessionId: 'parent' }, sourceItemId, sourceItemRevision: revision }));
+            mocks.db.sessionMessage.findFirst.mockResolvedValue({ id: 'message', content: { t: 'plain', v: {} },
+                surfaceItemReference: { v: 1, references: members } });
+            const selected = await app.inject({ method: 'GET', url: `/v1/public-shares/${lookupId}/visual/message?referenceIndex=1`, headers });
+            expect(selected.statusCode, selected.body).toBe(200);
+            expect(selected.json().reference).toEqual(members[1]);
+            expect((await app.inject({ method: 'GET', url: `/v1/public-shares/${lookupId}/visual/message?referenceIndex=2`, headers })).statusCode).toBe(404);
             expect(mocks.db.publicSessionShare.update).not.toHaveBeenCalled();
             mocks.db.sessionMessage.findFirst.mockResolvedValue(null);
             expect((await app.inject({ method: 'GET', url: `/v1/public-shares/${lookupId}/visual/other`, headers })).statusCode).toBe(404);

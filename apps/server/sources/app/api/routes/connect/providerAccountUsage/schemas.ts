@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
     ConnectedServiceIdSchema,
+    ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema,
     ConnectedServiceUsageSourceV1Schema,
     ProviderAccountUsageRecordIdSchema,
     ProviderAccountUsageRecordKeyV1Schema,
@@ -29,6 +30,7 @@ export const ProviderAccountUsageStatusSchema = z.enum([
 export const ProviderAccountUsageRecordMetadataSchema = z.object({
     materialFingerprint: z.string().trim().min(1).max(256).optional(),
     subscription: ProviderAccountSubscriptionV1Schema.optional(),
+    recoveryCreditDetails: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema.optional(),
     legacyQuotaCompatibilityProjections: z.array(z.object({
         source: z.object({
             serviceId: ConnectedServiceIdSchema,

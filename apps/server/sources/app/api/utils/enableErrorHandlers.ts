@@ -10,6 +10,7 @@ import { redactPublicShareCapabilityUrl } from "@happier-dev/protocol";
 import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
 import { InactiveAccountError } from "@/app/auth/accountStatus";
 import { readSharedQaSchemaMismatchDiagnostic } from '@/storage/prismaErrors';
+import { isTransactionConflictExhaustedError } from '@/storage/inTx';
 
 function sendGlobalErrorResponse(
     reply: FastifyReply,
@@ -34,6 +35,9 @@ export function enableErrorHandlers(app: Fastify) {
         // An already-issued credential reveals no lifecycle state at effect time.
         if (error instanceof InactiveAccountError) {
             return sendGlobalErrorResponse(reply, 401, { error: "invalid_token" });
+        }
+        if (isTransactionConflictExhaustedError(error)) {
+            return sendGlobalErrorResponse(reply, 503, { error: error.code, statusCode: 503 });
         }
         const method = request.method;
         const url = redactHttpRequestUrlForLog(request.url);

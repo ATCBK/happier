@@ -8,6 +8,8 @@ import {
 } from "vitest";
 
 import { db } from "@/storage/db";
+import { ConnectedServiceQuotaSnapshotV1Schema } from "@happier-dev/protocol";
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import {
     createLightSqliteHarness,
     type LightSqliteHarness,
@@ -26,12 +28,16 @@ import {
     createQualifiedConnectedAccountGroup,
     createQualifiedConnectedAccountGroupMember,
 } from "./groupRepository";
+import { resolveLegacyQualifiedConnectedAccountService } from "./identity";
+import { projectProviderAccountUsageSnapshotToLegacyQuota } from "./legacyUsageTranslation";
 import {
     listQualifiedUsageSourcesForRecord,
     readQualifiedConnectedAccountUsageRecord,
+    readQualifiedConnectedAccountQuota,
     requestQualifiedConnectedAccountQuotaRefresh,
     unlinkQualifiedConnectedAccountQuota,
     writeQualifiedProviderAccountUsageRecord,
+    writeLegacyConnectedServiceQuotaCompatibilityRecord,
 } from "./usageRepository";
 
 const service = Object.freeze({
@@ -59,9 +65,9 @@ describe("qualified Connected Account usage stored identity", () => {
         await db.account.deleteMany();
     });
 
-    async function createCredential(accountId: string) {
+    async function createCredential(accountId: string, encrypted = false, credentialService: Parameters<typeof mutateQualifiedConnectedServiceCredential>[0]["ref"]["service"] = service) {
         const ref = {
-            service,
+            service: credentialService,
             accountId: "qualified-account",
         };
         const credential =
@@ -70,7 +76,7 @@ describe("qualified Connected Account usage stored identity", () => {
                 ref,
                 expectedCredentialRevision: null,
                 authenticationModeId: "api-key",
-                content: {
+                content: encrypted ? { t: "encrypted", c: "opaque-e2ee-credential" } : {
                     t: "plain",
                     v: { token: "credential" },
                 },
@@ -121,6 +127,48 @@ describe("qualified Connected Account usage stored identity", () => {
             staleAfterMs: snapshot.staleAfterMs,
         };
     }
+
+    it("preserves opaque recovery details through the qualified quota reader", async () => {
+        const account = await db.account.create({ data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" }, select: { id: true } });
+        const { credential, ref } = await createCredential(account.id, true);
+        const write = buildUsageWrite(account.id, {
+            credentialRevision: credential.credentialRevision,
+            source: { ref, bindingKind: "account" }, fetchedAt: Date.now() - 1000,
+            planLabel: "encrypted account",
+        });
+        const { snapshot: _snapshot, ...baseWrite } = write;
+        const recoveryCreditDetails = { ciphertext: "opaque-recovery-details" };
+        await writeQualifiedProviderAccountUsageRecord({
+            ...baseWrite, payloadMode: "sealed_account_scoped_v1",
+            sealedPayload: { format: "account_scoped_v1", ciphertext: "opaque-base", recoveryCreditDetails },
+        });
+        expect(await readQualifiedConnectedAccountQuota({ accountId: account.id, ref }))
+            .toMatchObject({ content: { t: "encrypted", c: "opaque-base", recoveryCreditDetails } });
+    });
+
+    it("preserves legacy quota recovery details through intrinsic storage and quota projections", async () => {
+        const account = await db.account.create({ data: { publicKey: null, encryptionMode: "plain" }, select: { id: true } });
+        const serviceId = "anthropic" as const;
+        const { ref } = await createCredential(account.id, false, resolveLegacyQualifiedConnectedAccountService(serviceId));
+        const fetchedAt = Date.now() - 1000;
+        const recoveryCreditDetails = { reset_one: { remainingCount: 2, appliesToProviderLimitIds: ["weekly"] } };
+        const snapshot = ConnectedServiceQuotaSnapshotV1Schema.parse({
+            v: 1, serviceId, profileId: ref.accountId, fetchedAt, staleAfterMs: 60_000,
+            planLabel: "legacy plan", accountLabel: null, source: "provider_api", confidence: "exact",
+            recoveryCreditDetails, meters: [],
+        });
+        await writeLegacyConnectedServiceQuotaCompatibilityRecord({
+            accountId: account.id, serviceId, profileId: ref.accountId,
+            payloadMode: "plain_json_v1", status: "ok", fetchedAt,
+            staleAfterMs: snapshot.staleAfterMs, snapshot,
+        });
+        const stored = await readQualifiedConnectedAccountUsageRecord({ accountId: account.id, ref });
+        expect(stored?.snapshot).toMatchObject({ recoveryCreditDetails });
+        expect(await readQualifiedConnectedAccountQuota({ accountId: account.id, ref }))
+            .toMatchObject({ content: { t: "plain", v: { recoveryCreditDetails } } });
+        expect(projectProviderAccountUsageSnapshotToLegacyQuota({ serviceId, profileId: ref.accountId, snapshot: stored?.snapshot }))
+            .toMatchObject({ recoveryCreditDetails });
+    });
 
     it('accepts refresh for a producer-initialized account before its first quota observation', async () => {
         const account = await db.account.create({
