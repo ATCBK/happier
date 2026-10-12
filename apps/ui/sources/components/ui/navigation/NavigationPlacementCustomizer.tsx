@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 import { resolveAnchoredListMoveV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
 import { type EntityDragScopeV1 } from '@happier-dev/protocol/plugins/ui';
 
@@ -8,14 +9,14 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { type IconName } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { EntityFlatReorderList, EntityFlatReorderRow, entityReorderPreview, entityReorderRefused, type EntityFlatReorderBinding } from '@/components/ui/treeDragDrop/ui/EntityFlatReorder';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { type CustomModalInjectedProps } from '@/modal';
 import { useProfile } from '@/sync/domains/state/storage';
 import { NavigationSurfacePlacementsV1Schema, resolveNavigationPlacements, reorderNavigationPlacement, updateNavigationPlacement, type NavigationPlacement, type NavigationPlacementPreferences, type NavigationSurfaceId, type NavigationSurfacePlacementsV1 } from '@/sync/domains/settings/mobileSurfacePinning';
 import { t } from '@/text';
-import { useNavigationSurfacePlacement } from './useNavigationSurfacePlacement';
+import { useNavigationSurfacePlacement, useNavigationSurfacePlacementActionWriter } from './useNavigationSurfacePlacement';
 
 export type NavigationPlacementItem = Readonly<{
     id: string;
@@ -34,29 +35,31 @@ type CustomizerProps = Readonly<{
 /** Modal-bound preferences remain live when a settings Action changes the same device. */
 export function NavigationPlacementCustomizer(props: CustomizerProps & CustomModalInjectedProps) {
     const owner = useNavigationSurfacePlacement(props.surfaceId);
+    const setPreferences = useNavigationSurfacePlacementActionWriter(props.surfaceId, owner.placementsBySurface);
     const profile = useProfile();
     const home = useActiveServerSnapshot();
     const scope = React.useMemo(() => home.serverId && profile.id ? { serverId: home.serverId, accountId: profile.id } : null, [home.serverId, profile.id]);
     const footer = React.useMemo(() => <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-        <RoundButton title={t('navigationPlacement.reset')} display="secondary" size="small" onPress={() => owner.setPreferences({ orderedIds: [], placements: {} })} />
+        <RoundButton title={t('navigationPlacement.reset')} display="secondary" size="small" onPress={() => { void setPreferences({ orderedIds: [], placements: {} }); }} />
         <RoundButton title={t('common.done')} size="small" onPress={props.onClose} />
-    </View>, [owner.setPreferences, props.onClose]);
+    </View>, [setPreferences, props.onClose]);
     React.useEffect(() => {
         props.setChrome?.({ kind: 'card', title: t(`navigationPlacement.${props.surfaceId}`), subtitle: t('navigationPlacement.description'),
             scrollHost: 'body', bodyScroll: 'none', phonePresentation: 'sheet', footer, dimensions: { size: 'lg' } });
     }, [footer, props.setChrome, props.surfaceId]);
     return <NavigationPlacementCustomizerView {...props} scope={scope} preferences={owner.preferences}
-        placementsBySurface={owner.placementsBySurface} onChange={owner.setPreferences} showHeader={false} />;
+        placementsBySurface={owner.placementsBySurface} onChange={setPreferences} showHeader={false} />;
 }
 
 /** The same real controls with a controlled specimen boundary, so captures never write an Account. */
 export function NavigationPlacementCustomizerView(props: CustomizerProps & Readonly<{
     preferences: NavigationPlacementPreferences;
     placementsBySurface?: NavigationSurfacePlacementsV1;
-    onChange: (preferences: NavigationPlacementPreferences) => void;
+    onChange: (preferences: NavigationPlacementPreferences) => void | Promise<boolean>;
     scope?: EntityDragScopeV1 | null;
     showHeader?: boolean;
 }>) {
+    const { theme } = useUnistyles();
     const testID = props.testID ?? 'navigation-placement-customizer';
     const placements = resolveNavigationPlacements(props.items, props.preferences);
     const items = placements.ordered;
@@ -86,8 +89,10 @@ export function NavigationPlacementCustomizerView(props: CustomizerProps & Reado
             const parsed = NavigationSurfacePlacementsV1Schema.safeParse('value' in input ? input.value : undefined);
             const next = parsed.success ? parsed.data[props.surfaceId] : null;
             if (!next) return { status: 'refused', reason: { code: 'invalid_navigation_placement', message: t('entityDragDrop.reasons.gone') } };
-            props.onChange(next);
-            return { status: 'applied' };
+            const applied = await props.onChange(next);
+            return applied === false
+                ? { status: 'refused', reason: { code: 'navigation_placement_not_applied', message: t('errors.operationFailed') } }
+                : { status: 'applied' };
         },
     };
     return <ItemList testID={testID}>
@@ -95,7 +100,12 @@ export function NavigationPlacementCustomizerView(props: CustomizerProps & Reado
         <EntityFlatReorderList binding={binding} testID={`${testID}.reorder`} initialOrganizing>
             <ItemGroup>
                 {items.map(item => <EntityFlatReorderRow key={item.id} id={item.id}>
-                    {({ renderHandle }) => <SegmentedChoiceItem title={item.title} leftElement={renderHandle(`${testID}.move:${item.id}`)}
+                    {({ renderHandle }) => <SegmentedChoiceItem title={item.title}
+                        // The handle, then the destination's own glyph, so each row reads as the rail item it places.
+                        leftElement={<View style={LEADING_STYLE}>
+                            {renderHandle(`${testID}.move:${item.id}`)}
+                            {item.icon ? <Icon name={item.icon} size={ICON_SIZE.md} color={theme.colors.text.secondary} /> : null}
+                        </View>}
                         value={props.preferences.placements[item.id] ?? item.defaultPlacement ?? 'pinned'} options={options}
                         testIDPrefix={`${testID}.placement:${item.id}`}
                         onChange={placement => props.onChange(updateNavigationPlacement(props.preferences, item.id, placement))} />}
@@ -104,3 +114,5 @@ export function NavigationPlacementCustomizerView(props: CustomizerProps & Reado
         </EntityFlatReorderList>
     </ItemList>;
 }
+
+const LEADING_STYLE = { flexDirection: 'row', alignItems: 'center', gap: 8 } as const;

@@ -1,10 +1,12 @@
 import * as React from 'react';
+import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
-import { storage, useLocalSetting, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { useLocalSetting } from '@/sync/domains/state/storage';
 import {
     EMPTY_NAVIGATION_PLACEMENT_PREFERENCES,
-    NavigationSurfacePlacementsV1Schema,
     readNavigationSurfacePlacements,
+    NavigationSurfacePlacementsV1Schema,
     type NavigationPlacementPreferences,
     type NavigationSurfaceId,
     type NavigationSurfacePlacementsV1,
@@ -14,9 +16,8 @@ import {
 export function useNavigationSurfacePlacement(surfaceId: NavigationSurfaceId): Readonly<{
     preferences: NavigationPlacementPreferences;
     placementsBySurface: NavigationSurfacePlacementsV1;
-    setPreferences(preferences: NavigationPlacementPreferences): void;
 }> {
-    const [stored, setStored] = useLocalSettingMutable('navigationSurfacePlacementsV1');
+    const stored = useLocalSetting('navigationSurfacePlacementsV1');
     const legacyPhone = useLocalSetting('sessionCockpitBarSurfaceIds');
     const legacyApp = useLocalSetting('compactAppDestinationPreferencesV1');
     const placementsBySurface = React.useMemo(() => readNavigationSurfacePlacements({
@@ -24,9 +25,16 @@ export function useNavigationSurfacePlacement(surfaceId: NavigationSurfaceId): R
         sessionCockpitBarSurfaceIds: legacyPhone,
         compactAppDestinationPreferencesV1: legacyApp,
     }), [legacyApp, legacyPhone, stored]);
-    const setPreferences = React.useCallback((preferences: NavigationPlacementPreferences) => {
-        const current = readNavigationSurfacePlacements(storage.getState().localSettings);
-        setStored(NavigationSurfacePlacementsV1Schema.parse({ ...current, [surfaceId]: preferences }));
-    }, [setStored, surfaceId]);
-    return { preferences: placementsBySurface[surfaceId] ?? EMPTY_NAVIGATION_PLACEMENT_PREFERENCES, placementsBySurface, setPreferences };
+    return { preferences: placementsBySurface[surfaceId] ?? EMPTY_NAVIGATION_PLACEMENT_PREFERENCES, placementsBySurface };
+}
+
+/** Only placement editors mount Action admission; read-only chrome retains its local subscription. */
+export function useNavigationSurfacePlacementActionWriter(surfaceId: NavigationSurfaceId,
+    placementsBySurface: NavigationSurfacePlacementsV1) {
+    const writeSetting = useSettingActionWriter();
+    return React.useCallback(async (preferences: NavigationPlacementPreferences): Promise<boolean> => {
+        const value = NavigationSurfacePlacementsV1Schema.parse({ ...placementsBySurface, [surfaceId]: preferences });
+        const outcome = await writeSetting({ anchor: 'appearance.navigationPlacements' }, value);
+        return outcome.ok && SettingsDeclarationActionOutputSchemasV1['settings.set'].safeParse(outcome.result).success;
+    }, [placementsBySurface, surfaceId, writeSetting]);
 }
