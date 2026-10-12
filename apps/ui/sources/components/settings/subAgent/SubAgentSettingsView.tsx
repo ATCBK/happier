@@ -11,6 +11,8 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSettingMutable } from '@/sync/domains/state/storage';
 import { useSetting } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useAllMachines } from '@/sync/store/hooks';
 import { resolvePreferredMachineId } from '@/components/settings/pickers/resolvePreferredMachineId';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
@@ -39,13 +41,16 @@ export const SubAgentSettingsView = React.memo(function SubAgentSettingsView() {
     const executionRunsEnabled = useFeatureEnabled('execution.runs');
     const [notifyParentOnCompletion, setNotifyParentOnCompletion] = useSettingMutable('executionRunsNotifyParentOnCompletionDefault');
     const machines = useAllMachines();
+    const scope = useActiveServerAccountScope();
+    const reachabilityRevision = useMachineReachabilityRevision();
     const recentMachinePaths = useAuthoringMemoryField('recentMachinePaths');
     const preferredMachineId = React.useMemo(() => {
         return resolvePreferredMachineId({
             machines,
+            scope,
             recentMachinePaths: Array.isArray(recentMachinePaths) ? recentMachinePaths : [],
         });
-    }, [machines, recentMachinePaths]);
+    }, [machines, recentMachinePaths, scope, reachabilityRevision]);
     const daemonMergedProjection = useDaemonMergedProjectionInputs({
         machineId: preferredMachineId,
         enabled: Boolean(preferredMachineId),
