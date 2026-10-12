@@ -31,6 +31,7 @@ import { SharedSavedSecretPromoteInputV1Schema } from '@happier-dev/protocol/acc
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { decodeBase64 } from '@/api/encryption';
 import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 
 vi.mock('axios', () => ({
   default: { get: vi.fn(), post: vi.fn() },
@@ -39,22 +40,10 @@ vi.mock('axios', () => ({
 const persistenceMocks = vi.hoisted(() => ({
   readStoredCredentials: vi.fn(),
 }));
-const featureMocks = vi.hoisted(() => ({
-  fetchServerFeaturesSnapshot: vi.fn(async () => ({
-    status: 'ready' as const,
-    features: {
-      features: { teams: { enabled: true, credentialResources: { enabled: false, externalApi: { enabled: false } } } },
-      capabilities: {},
-    },
-  })),
-}));
-
 vi.mock('@/persistence', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/persistence')>(),
   readStoredCredentials: persistenceMocks.readStoredCredentials,
 }));
-
-vi.mock('@/features/serverFeaturesClient', () => featureMocks);
 
 describe('Saved Secret catalog hydration', () => {
   const serverFeatures = (teamsEnabled: boolean, credentialResourcesEnabled = false) => FeaturesResponseSchema.parse({
@@ -68,16 +57,22 @@ describe('Saved Secret catalog hydration', () => {
   });
 
   beforeEach(() => {
+    resetServerFeaturesClientForTests();
+    // Only the network is replaced; feature decoding, admission and cache lifecycle stay real.
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(JSON.stringify(serverFeatures(true)), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })));
     resetActiveAccountSettingsSnapshotForTests();
     vi.mocked(axios.get).mockReset();
     vi.mocked(axios.post).mockReset();
     persistenceMocks.readStoredCredentials.mockReset();
     persistenceMocks.readStoredCredentials.mockResolvedValue(null);
-    featureMocks.fetchServerFeaturesSnapshot.mockClear();
   });
 
   afterEach(() => {
     resetActiveAccountSettingsSnapshotForTests();
+    resetServerFeaturesClientForTests();
+    vi.unstubAllGlobals();
   });
 
   it('publishes invocation Connected-account catalogs across preference refresh without changing Settings and retires late writes', async () => {
