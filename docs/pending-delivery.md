@@ -1,5 +1,26 @@
 # Pending delivery architecture
 
+## First-input admission and storage failures (development)
+
+Pending position allocation runs through `inPendingQueuePositionTx`. Its shared
+`acquireSessionAccountCursorLocksInTx` owner locks the complete publication audience
+in Account id order, including the owner and direct ReportsTo projection recipients.
+On PostgreSQL, it then locks the Session row before admission reads, so concurrent
+startup metadata or activity writes cannot commit between that read and the
+queue-counter update. This Account-before-Session order retains same-Account
+heartbeat protection and avoids owner-first cycles for mutually shared Sessions.
+SQLite retains its single-writer transaction behavior. Serialization recovery
+belongs to `inTx`; admission adds no separate retry policy.
+
+After that recovery is exhausted, a PostgreSQL write-conflict rollback or failure
+to acquire a transaction before its callback starts is a definite Machine-input
+rejection, `session_input_storage_unavailable`. An indeterminate database commit
+remains `outcomeUnknown`. The daemon carries the admission result back to the
+new-session UI, which retains the prompt as a draft and shows the canonical
+rejection explanation instead of treating a known failure as an uncertain send.
+Neither result automatically resends the prompt. A rolled-back first admission
+does not itself make the Session's empty hosted transcript unreadable.
+
 ## Quota reset starts (development)
 
 Reset start changes the requested action of one already admitted main-conversation
@@ -218,6 +239,17 @@ This section describes development behavior that is not yet a released contract.
 - Modern delegation requires server Pending Input V2 support and activation capability from the session's exact target machine. Older or mixed components retain the existing direct-wake fallback rather than treating unattended daemon activation as available.
 
 The durable banner derives the user-facing state from this ownership: waiting while the machine is offline, waiting while the daemon is reachable, queued without activation, or terminal start failure. Pending owns the payload; the server owns activation authorization; session activity fences staleness; and the daemon owns unattended process start.
+
+In current development source, a terminal activation refusal also retains
+`pendingActivationFailureDetails` on the Session read projection. Its closed
+fields name the activation reason, spawn error code and retained-runner
+serviceability reason when available. The exact failure CAS stores these facts
+in the existing failure column; the authorization envelope still reports
+`runtime_start_failed`. The daemon's existing rejection log carries the same
+facts once the CAS succeeds. A stale report cannot replace newer activation
+state, and the original Pending input remains in custody. Native error prose,
+paths, credentials and input content are excluded. This is source behavior,
+not evidence that an already-running daemon or server has loaded it.
 
 ## Execution-run targets
 

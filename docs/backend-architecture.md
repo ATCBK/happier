@@ -251,7 +251,7 @@ Socket.IO connections are tagged by scope:
 The router implements recipient filters so updates go only to interested connections (e.g., all session listeners or a specific machine).
 
 ### Update sequence numbers
-- `Account.seq` is the per-user update counter. It is incremented by `allocateUserSeq` and used as `UpdatePayload.seq`.
+- `Account.seq` is the Account change-feed cursor. `markAccountChanged` and its ordered set form, `markAccountsChanged`, increment it and persist the coalesced `AccountChange` in the same transaction as the domain mutation. The Account row stays locked through commit, so a reader that checkpoints a higher cursor cannot later discover a lower committed cursor. Coalescing permits cursor gaps. Content-free socket wakes run after commit; the durable feed owns recovery.
 - Sessions and artifacts maintain their own `seq` for per-object ordering.
 
 ## Presence and activity
@@ -338,7 +338,7 @@ erDiagram
 ```mermaid
 flowchart TD
     Start([inTx call]) --> Begin[Begin Transaction]
-    Begin --> |Serializable| Exec[Execute Operations]
+    Begin --> |ReadCommitted or explicit Serializable| Exec[Execute Operations]
     Exec --> Commit{Commit}
 
     Commit --> |Success| After[afterTx callbacks]
@@ -351,11 +351,14 @@ flowchart TD
 ```
 
 `inTx()` wraps Prisma transactions with:
-- Serializable isolation.
-- Automatic retry on `P2034` (serialization failures).
+
+- ReadCommitted by default on PostgreSQL/MySQL. Callers explicitly retain Serializable for named cross-row admission, read-then-write invariants or coherent snapshots; SQLite retains its provider-owned transaction/read-snapshot behavior.
+- Automatic retry on `P2034` and PostgreSQL serialization/deadlock failures, using the existing provider-owned recovery budget.
 - `afterTx()` to emit socket updates after commit.
 
-This pattern is used for multi-write operations like batch KV mutation and session deletion.
+Account publication holds its row locks through commit. The required lock order is the complete current Account audience in id order before Session write locks or the retained owner-metadata fence; a stale audience capture cannot establish that order. A Session-only presence touch that allocates no Account cursor needs no Account prelock. Serializable alone does not prevent Account/Session deadlocks.
+
+This development-source pattern is used for multi-write operations like batch KV mutation and session deletion.
 
 ### Blob storage (S3/MinIO)
 The server uses S3-compatible storage for user assets (e.g., avatars):

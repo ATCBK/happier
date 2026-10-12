@@ -33,6 +33,16 @@ snapshot, and signed credentials still recheck current Account revocation/status
 after cryptographic verification. PAT last-use updates and all mutation paths
 remain writable transactions.
 
+Protected standalone snapshot-backed Session, SystemRecord and private Artifact
+reads close their content snapshot before final admission in a fresh read
+snapshot. The storage-owned `readSnapshotWithCurrentAdmission` helper owns that
+sequencing; the existing
+domain policy owners still decide the operation's capability, principal and
+encryption currentness. Lists filter their captured corpus instead of refreshing
+it from the write pool or substituting newly accessible rows. Supplied-transaction
+read helpers remain in their caller's transaction, including mutation readbacks.
+This is development-source behavior, not certification of a deployed runtime.
+
 The existing SQLite busy-timeout owner supplies transaction acquisition and
 execution defaults (30 seconds by default, with the existing one-second
 transaction minimum). The retry budget permits two complete attempts plus the
