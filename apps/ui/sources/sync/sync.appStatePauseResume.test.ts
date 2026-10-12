@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
@@ -104,6 +105,7 @@ vi.mock('@/sync/api/session/apiSocket', () => ({
         connect: apiSocketConnect,
         disconnect: apiSocketDisconnect,
         initialize: vi.fn(),
+        invalidateRequests: vi.fn(),
         request: vi.fn(async () => new Response('ok', { status: 200 })),
     },
 }));
@@ -215,6 +217,11 @@ describe('sync AppState pause/resume', () => {
         await loadSyncSingletonForTests();
 
         const { sync } = await import('./sync');
+        const { publishAppliedActiveServerSnapshot } = await import('./runtime/orchestration/appliedActiveServerRuntime');
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        // Configured Home selection alone does not establish a serving runtime.
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        expect(getActiveServerAccountScope()).toEqual(activeScope);
         let releaseReplay!: () => void;
         const replayBarrier = new Promise<void>((resolve) => {
             releaseReplay = resolve;
@@ -222,18 +229,20 @@ describe('sync AppState pause/resume', () => {
         const fetchPendingMessages = vi.spyOn(sync, 'fetchPendingMessages')
             .mockImplementation(async () => replayBarrier);
 
-        const first = (sync as any).rearmPendingOutboxForActiveScope() as Promise<void>;
-        const second = (sync as any).rearmPendingOutboxForActiveScope() as Promise<void>;
-        await Promise.resolve();
-
-        expect(second).toBe(first);
-        expect(fetchPendingMessages.mock.calls).toEqual([
-            ['session-a', activeScope],
-            ['session-b', activeScope],
-        ]);
-
-        releaseReplay();
-        await first;
+        const owner = sync as unknown as { rearmPendingOutboxForActiveScope(): Promise<void> };
+        const first = owner.rearmPendingOutboxForActiveScope();
+        const second = owner.rearmPendingOutboxForActiveScope();
+        try {
+            expect(second).toBe(first);
+            // IndexedDB completes on a later task, not the next microtask.
+            await vi.waitFor(() => expect(fetchPendingMessages.mock.calls).toEqual([
+                ['session-a', activeScope],
+                ['session-b', activeScope],
+            ]));
+        } finally {
+            releaseReplay();
+            await Promise.all([first, second]);
+        }
     });
 
     it('invokes durable outbox rearm from both bootstrap and the foreground resume pipeline', async () => {
