@@ -10,7 +10,7 @@ import { inTx } from "@/storage/inTx";
 import { resolveMachinePresetForAcquireInTx } from "./machinePresetService";
 import { createReleaseLessDeclarationV1 } from "@/app/plugins/availability/currentDeclaration";
 import { admitManagedAcquire } from "./managedAcquire";
-import { CRABBOX_PLUGIN } from '../../../../../../packages/plugins/machine-crabbox/src/manifest';
+import { CRABBOX_PLUGIN } from '@happier-dev/plugins-machine-crabbox/manifest';
 import { mutateQualifiedConnectedServiceCredential, deleteQualifiedConnectedServiceCredential, listQualifiedConnectedAccounts } from "@/app/api/routes/connect/qualifiedConnectedAccounts/credentialRepository";
 import { defineProtocolObject, defineProtocolString } from "@happier-dev/protocol/plugins/actions/protocol-composable-schema";
 import { defineMachineProvisionerSchemas, MachineProvisionerCheckResultProtocolV1Schema, MachineProvisionerBootstrapCarrierV1Schema,

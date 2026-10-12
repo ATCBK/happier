@@ -21,7 +21,7 @@ describe('Peer grant current Machine admission (real SQLite)', () => {
             id: randomUUID(), accountId: owner.id, metadata: encodePlainMachineStoredContent({
                 host: 'peer-host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/peer', happyHomeDir: '/home/peer/.happier',
             }),
-            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'),
+            dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
             active: true, installationId: randomUUID(),
         } });
         await db.machineAccountGrant.create({ data: {

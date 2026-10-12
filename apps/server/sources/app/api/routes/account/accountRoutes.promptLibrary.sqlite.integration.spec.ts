@@ -71,9 +71,9 @@ describe('Account prompt-library reserved rows (SQLite)', () => {
         harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: '1',
             HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST: 'none' });
         const signing = tweetnacl.sign.keyPair();
-        const recipient = tweetnacl.box.keyPair().publicKey;
+        const recipient = new Uint8Array(tweetnacl.box.keyPair().publicKey);
         const contentPublicKeySig = signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey: recipient });
-        const account = await db.account.create({ data: { encryptionMode: fromMode, publicKey: encodeHex(signing.publicKey),
+        const account = await db.account.create({ data: { encryptionMode: fromMode, publicKey: encodeHex(new Uint8Array(signing.publicKey)),
             contentPublicKey: recipient, contentPublicKeySig, settings: null } });
         const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(41) };
         const record = { key: 'role-overrides' as const, value: { v: 1 as const, overrides: {

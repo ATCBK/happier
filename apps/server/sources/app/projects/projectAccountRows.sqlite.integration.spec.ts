@@ -123,7 +123,7 @@ describe('Project Account rows (SQLite integration)', () => {
         const signing = tweetnacl.sign.keyPair();
         const contentKey = tweetnacl.box.keyPair();
         const account = await db.account.create({ data: { encryptionMode: 'e2ee', publicKey: Buffer.from(signing.publicKey).toString('hex'),
-            contentPublicKey: contentKey.publicKey, contentPublicKeySig: signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey: contentKey.publicKey }) } });
+            contentPublicKey: new Uint8Array(contentKey.publicKey), contentPublicKeySig: signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey: contentKey.publicKey }) } });
         const key = { kind: 'project-organization', serverId: 'home-a', projectKey: 'encrypted' } as const;
         // Only the real Account cipher's framing is server-readable; opaque bytes are never interpreted here.
         const ciphertext = new Uint8Array(43); ciphertext[0] = 0xa1; ciphertext[1] = 34; ciphertext[42] = 7;

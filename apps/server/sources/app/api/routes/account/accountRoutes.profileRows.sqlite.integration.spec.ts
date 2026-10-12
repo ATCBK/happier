@@ -28,6 +28,7 @@ import { writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSett
 import { buildAccountStoredContentCompatibilityHttpHeadersV1, CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION } from '@happier-dev/protocol';
 import { migrateLegacyAiLaunchProfilesV1 } from '@happier-dev/protocol/providers/migrations/legacyProfilesV1';
 import { DEFAULT_PROVIDER_SETTINGS_V1 } from '@happier-dev/protocol/providers/settings/v1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1, splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 
 const record = {
@@ -340,7 +341,7 @@ describe('Account Profile rows (SQLite)', () => {
         if (sourceRecord.definition.kind !== 'legacy') throw new Error('Expected a captured legacy source');
         const migration = migrateLegacyAiLaunchProfilesV1({ themePreference: 'dark', profiles: [sourceRecord.definition.profile] }, DEFAULT_PROVIDER_SETTINGS_V1, {
             migratedAt: 20, pendingCustomProfileIds: [], candidates: [{ kind: 'connection', sourceProfileId: sourceRecord.id,
-                connection: { v: 1, id: 'pc-deepseek', source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
+                connection: { v: 1, id: ProviderConnectionIdSchema.parse('pc-deepseek'), source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
                     role: 'default', displayName: 'DeepSeek', displayNameMode: 'automatic', revision: 0, createdAt: 20, updatedAt: 20 },
                 removedEnvironmentVariableNames: ['DEEPSEEK_BASE_URL'], selectedModel: { agentTargetKey: 'agent:claude', modelId: 'deepseek-reasoner' } }] },
             { lastUsedProfile: null }, { profileRecordIds: [sourceRecord.id], records: [{ record: sourceRecord, revision: 2 }] });
@@ -429,7 +430,7 @@ describe('Account Profile rows (SQLite)', () => {
         const source = { themePreference: 'dark', profiles: [legacy] };
         const migration = migrateLegacyAiLaunchProfilesV1(source, DEFAULT_PROVIDER_SETTINGS_V1, {
             migratedAt: 20, pendingCustomProfileIds: [], candidates: [{ kind: 'connection', sourceProfileId: legacy.id,
-                connection: { v: 1, id: 'pc-inactive', source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
+                connection: { v: 1, id: ProviderConnectionIdSchema.parse('pc-inactive'), source: { kind: 'contribution', contributionKey: 'happier.provider.deepseek/deepseek' },
                     role: 'default', displayName: 'DeepSeek', displayNameMode: 'automatic', revision: 0, createdAt: 20, updatedAt: 20 } }],
         }, { lastUsedProfile: null });
         if (!migration.ok) throw new Error('Expected genuine source conversion');

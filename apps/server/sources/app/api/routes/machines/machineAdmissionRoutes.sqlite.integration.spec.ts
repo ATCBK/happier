@@ -25,10 +25,10 @@ describe('Machine receiver current admission on SQLite', () => {
         const machine = await db.machine.create({ data: { id: randomUUID(), accountId: custodian.id, active: true,
             metadata: encodePlainMachineStoredContent({ host: 'admitted', platform: 'linux', happyCliVersion: 'test',
                 homeDir: '/home/shared', happyHomeDir: '/home/shared/.happier' }),
-            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'),
+            dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
             installationId: randomUUID(), installationPublicKey: new Uint8Array(key.publicKey),
         } });
-        const grant = { machineId: machine.id, accountId: actor.id, accessLevel: 'view', createdByAccountId: custodian.id };
+        const grant = { machineId: machine.id, accountId: actor.id, accessLevel: 'view' as const, createdByAccountId: custodian.id };
         await db.machineAccountGrant.create({ data: grant });
         const context = { actorAccountId: actor.id, custodianAccountId: custodian.id, machineId: machine.id,
             installationId: machine.installationId!, role: 'use' as const, encryptionMode: 'plain' as const };
@@ -90,7 +90,7 @@ describe('Machine receiver current admission on SQLite', () => {
             id: randomUUID(), accountId: custodian.id, active: true,
             metadata: encodePlainMachineStoredContent({ host: 'source-fixture', platform: 'linux', happyCliVersion: 'test',
                 homeDir: '/home/source', happyHomeDir: '/home/source/.happier' }),
-            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'),
+            dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
             installationId: randomUUID(), installationPublicKey: new Uint8Array(key.publicKey),
         } });
         const parent = await createMachine(parentKey);

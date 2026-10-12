@@ -112,7 +112,7 @@ describe("hostedRelayLiveActivityProvider", () => {
                 }),
             },
         });
-        const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+        const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
             success: true,
             status: "sent",
             classification: { action: "success" },
@@ -185,7 +185,7 @@ describe("hostedRelayLiveActivityProvider", () => {
                 accessKey: "relay-access-key",
             },
             now: new Date(1_800_000_000_000),
-            fetchImpl: vi.fn<typeof fetch>(async () => {
+            fetchImpl: vi.fn(async () => {
                 throw new Error("network unavailable");
             }),
         });
@@ -241,7 +241,7 @@ describe("hostedRelayLiveActivityProvider", () => {
                 }),
             },
         });
-        const fetchImpl = vi.fn<typeof fetch>(async () => {
+        const fetchImpl = vi.fn(async () => {
             throw new Error("network unavailable");
         });
 

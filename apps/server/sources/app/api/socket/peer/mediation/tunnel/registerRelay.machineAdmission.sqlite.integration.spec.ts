@@ -25,7 +25,7 @@ describe('Tunnel current Machine admission (real SQLite)', () => {
         const machine = await db.machine.create({ data: {
             id: randomUUID(), accountId: owner.id, installationId: randomUUID(), active: true,
             metadata: encodePlainMachineStoredContent({ host: 'tunnel-host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/tunnel', happyHomeDir: '/home/tunnel/.happier' }),
-            dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'),
+            dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
         } });
         // Socket.IO is the network boundary; admission and coordinator logic stay real.
         const machineEvents = new EventEmitter();
