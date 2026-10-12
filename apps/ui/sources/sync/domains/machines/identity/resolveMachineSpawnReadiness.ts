@@ -30,6 +30,8 @@ export function resolveMachineSpawnReadiness(params: Readonly<{
     rpcAvailable?: MachineReadinessProbeState;
     keyAvailable?: MachineReadinessProbeState;
     requireExactSpawnReadiness?: boolean;
+    /** Server-scoped canonical reachability when the caller has that scope. */
+    machineReachable?: boolean;
     nowMs?: number;
 }>): MachineSpawnReadiness {
     const selectedMachineId = typeof params.selectedMachineId === 'string' ? params.selectedMachineId.trim() : '';
@@ -49,7 +51,7 @@ export function resolveMachineSpawnReadiness(params: Readonly<{
         };
     }
 
-    if (!isMachineOnline(machine, params.nowMs)) {
+    if (!(params.machineReachable ?? isMachineOnline(machine, params.nowMs))) {
         return { status: 'offline', machineId: selectedMachineId };
     }
 
@@ -88,18 +90,20 @@ export function canAttemptMachineSpawn(params: Readonly<{
     selectedMachineId?: string | null;
     machine?: Parameters<typeof resolveMachineSpawnReadiness>[0]['machine'];
     spawnReadiness?: MachineSpawnReadiness | null;
+    machineReachable?: boolean;
     nowMs?: number;
 }>): boolean {
     const readiness = params.spawnReadiness ?? resolveMachineSpawnReadiness({
         selectedMachineId: params.selectedMachineId,
         machine: params.machine,
         requireExactSpawnReadiness: true,
+        machineReachable: params.machineReachable,
         nowMs: params.nowMs,
     });
 
     if (readiness.status === 'ready') return true;
     if (readiness.status === 'unknown' || readiness.status === 'probing') {
-        return Boolean(params.machine && isMachineOnline(params.machine, params.nowMs));
+        return Boolean(params.machine && (params.machineReachable ?? isMachineOnline(params.machine, params.nowMs)));
     }
     return false;
 }

@@ -23,6 +23,7 @@ import {
     projectWork,
     resolveWorkItemOpenTarget,
     resolveWorkItemContextActions,
+    resolveWorkMachineNotices,
     resolveWorkReadPresentation,
     resolveWorkTitleTailStarts,
     type WorkItem,
@@ -238,6 +239,20 @@ describe('projectWork', () => {
         expect(read('idle')).toEqual({ nothingYet: true, holdWorkingPlace: false, managedUnavailable: false });
         // A failed refresh, including one of a known empty window, is not proof of current emptiness.
         expect(read('loaded', true).nothingYet).toBe(false);
+    });
+
+    it('says an offline machine once: the pane notice carries it, so no second "needs this machine online" line', () => {
+        // Work is listed and the machine is down: the pane's offline notice alone (lab `convo-ST`).
+        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: false, unavailableReason: 'machineOffline' }))
+            .toEqual({ offline: true, unavailable: false });
+        // Another reason agents cannot start is its own message beside the offline notice.
+        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: false, unavailableReason: 'sessionInactive' }))
+            .toEqual({ offline: true, unavailable: true });
+        expect(resolveWorkMachineNotices({ machineReachable: true, nothingYet: false, unavailableReason: 'machineOffline' }))
+            .toEqual({ offline: false, unavailable: true });
+        // With nothing started, the empty state explains it instead of either line.
+        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: true, unavailableReason: 'machineOffline' }))
+            .toEqual({ offline: false, unavailable: false });
     });
 
     it('keeps the words that tell sibling titles apart, with one word of context, and leaves distinct titles alone', () => {

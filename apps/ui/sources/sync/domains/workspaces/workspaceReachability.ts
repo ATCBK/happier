@@ -2,7 +2,7 @@ import { resolveExactServerScopedMachine } from '@/sync/domains/machines/resolve
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import type { Machine } from '@/sync/domains/state/storageTypes';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 
 import type { WorkspaceScopeBase } from './workspaceScope';
 
@@ -33,7 +33,7 @@ export function isWorkspaceScopeReachableFromState(
         machineListByServerId: state.machineListByServerId ?? {},
         machineListStatusByServerId: state.machineListStatusByServerId,
     });
-    return machine ? isMachineOnline(machine) : false;
+    return machine ? isMachineReachable(scope.serverId, machine) : false;
 }
 
 export function isWorkspaceScopeReachable(scope: WorkspaceScopeBase): boolean {

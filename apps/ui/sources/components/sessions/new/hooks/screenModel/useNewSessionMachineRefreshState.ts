@@ -6,7 +6,8 @@ import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import { sync } from '@/sync/sync';
 import { prefetchMachineCapabilities, prefetchMachineCapabilitiesIfStale } from '@/hooks/server/useMachineCapabilitiesCache';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useStableRecentPathsForMachine } from '@/utils/sessions/useStableRecentPathsForMachine';
 import { resolveDaemonCapabilitiesCacheKeySalt } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
 
@@ -57,6 +58,11 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
     favoriteMachineItems: ReadonlyArray<Machine>;
     recentPaths: ReadonlyArray<string>;
 }> {
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const machineReachable = React.useCallback(
+        (machine: Machine) => isMachineReachable(params.capabilityServerId, machine),
+        [params.capabilityServerId, reachabilityRevision],
+    );
     const refreshMachineData = React.useCallback(() => {
         fireAndForget(sync.refreshMachinesThrottled({ staleMs: 0, force: true }), { tag: 'NewSessionScreenModel.refreshMachinesThrottled.manual' });
         params.refreshMachineEnvPresence();
@@ -110,7 +116,7 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
         favoriteMachineItems,
         recentMachines,
         selectedMachineId: params.selectedMachineId,
-        isMachineOnline,
+        isMachineOnline: machineReachable,
         staleMs: 2 * 60 * 1000,
         request: CAPABILITIES_REQUEST_NEW_SESSION,
         prefetchMachineCapabilitiesIfStale,

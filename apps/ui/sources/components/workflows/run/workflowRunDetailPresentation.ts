@@ -1,5 +1,6 @@
 import type {
     WorkflowAuthoredInputV1,
+    WorkflowDefinitionV1,
     WorkflowInvocationRecoveryV1,
     WorkflowProgressEnvelopeV1,
     WorkflowInvocationLifecycleV1,
@@ -10,11 +11,16 @@ import type {
 } from '@happier-dev/protocol';
 
 import { t } from '@/text';
+import { formatWorkflowConversationProblem } from '@/components/workflows/presentation/workflowProblemPresentation';
+import type { WorkflowInvocationStructureEntry } from './workflowInvocationStructure';
+import { findWorkflowBlock, findWorkflowBlockListRef, getWorkflowBlockList } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
+import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 import type { WorkStatusPresentation } from '@/components/work/status/resolveWorkStatusTone';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import {
     describeWorkflowRunState,
     isTerminalWorkflowRunState,
+    isWorkflowRunStopping,
     type WorkflowRunCoverage,
 } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 
@@ -294,11 +300,95 @@ export function formatWorkflowRunOriginLabel(origin: WorkflowRunSummaryV1['origi
  */
 export type WorkflowRunAttentionLead = Readonly<{ step: string; waitForYou: boolean }>;
 
+/** The quiet second outcome line, derived from frozen structure and exact live rows. */
+export function formatWorkflowRunConsequenceSentence(params: Readonly<{
+    run: WorkflowRunSummaryV1;
+    definition: WorkflowDefinitionV1 | null;
+    frozenChildren?: Readonly<Record<string, WorkflowDefinitionV1>>;
+    invocations: readonly WorkflowRunInvocationIndexV1[];
+    structure: ReadonlyMap<string, WorkflowInvocationStructureEntry>;
+    historyComplete?: boolean;
+    machineReachable?: boolean;
+}>): string | null {
+    if (!params.definition || params.machineReachable === false
+        || (params.run.state !== 'running' && params.run.state !== 'claimed')) return null;
+    // Select current physical attempts before looking at lane states. A prior held/failed attempt
+    // is history, and cannot make a successfully retried lane appear blocked again.
+    const currentBySlot = new Map<string, WorkflowRunInvocationIndexV1>();
+    for (const row of params.invocations) {
+        const slot = `${row.parentRecordId}:${row.memberOrdinal}`;
+        const prior = currentBySlot.get(slot);
+        if (!prior || BigInt(row.attempt) > BigInt(prior.attempt)) currentBySlot.set(slot, row);
+    }
+    const rows = [...currentBySlot.values()].filter(row => row.lifecycle !== 'superseded');
+    const children = new Map<string, WorkflowRunInvocationIndexV1[]>();
+    for (const row of rows) {
+        if (row.parentRecordId === null) continue;
+        const siblings = children.get(row.parentRecordId) ?? [];
+        siblings.push(row);
+        children.set(row.parentRecordId, siblings);
+    }
+    for (const row of rows) {
+        const entry = params.structure.get(row.id);
+        if (!entry?.blockId || entry.isFrame || row.lifecycle !== 'running') continue;
+        let definition: WorkflowDefinitionV1 | undefined = params.definition;
+        for (const coordinate of entry.occurrence) {
+            if (coordinate.kind !== 'workflow' || !definition) continue;
+            const call = findWorkflowBlock({ ...definition, name: '' }, coordinate.blockId);
+            definition = call?.kind === 'workflow' ? params.frozenChildren?.[call.workflowRef] : undefined;
+        }
+        if (!definition) continue;
+        const draft = { ...definition, name: '' };
+        const block = findWorkflowBlock(draft, entry.blockId);
+        if (block?.kind !== 'parallel') continue;
+        const branchFrames = children.get(row.id) ?? [];
+        const runningLanes: string[] = [];
+        let intervention = false;
+        let failure = false;
+        let unresolved = false;
+        for (const [ordinal, branch] of block.branches.entries()) {
+            const frame = branchFrames.find(candidate => candidate.memberOrdinal === String(ordinal));
+            if (!frame) continue;
+            const descendants = [frame];
+            let live = false;
+            for (let index = 0; index < descendants.length; index += 1) {
+                const descendant = descendants[index]!;
+                const lifecycle = descendant.lifecycle;
+                intervention ||= lifecycle === 'waiting_for_review' || lifecycle === 'waiting_for_approval' || lifecycle === 'needs_attention';
+                failure ||= lifecycle === 'failed';
+                unresolved ||= lifecycle === 'cancel_requested' || lifecycle === 'cancelled' || lifecycle === 'outcome_uncertain';
+                live ||= params.structure.get(descendant.id)?.coverageKind === 'executable'
+                    && (lifecycle === 'running' || lifecycle === 'admitting');
+                descendants.push(...(children.get(descendant.id) ?? []));
+            }
+            if (live) runningLanes.push(branch.name?.trim() || t('workflows.page.inspector.lane', { position: ordinal + 1 }));
+        }
+        // A fail-stop join will not release its successor after a failed lane. Unknown effects and
+        // stop requests also do not support a promise about what will run next.
+        if (!runningLanes.length || (!intervention && !failure) || unresolved
+            || (failure && block.failurePolicy === 'fail_stop')) continue;
+        const listRef = findWorkflowBlockListRef(draft, block.id);
+        const siblings = listRef ? getWorkflowBlockList(draft, listRef) : null;
+        const next = siblings?.[siblings.findIndex(candidate => candidate.id === block.id) + 1];
+        const nextRow = row.parentRecordId === null ? undefined : children.get(row.parentRecordId)?.find(candidate =>
+            candidate.memberOrdinal === (BigInt(row.memberOrdinal) + 1n).toString());
+        return [t('workflows.run.consequenceLanes', { lanes: runningLanes }),
+            params.historyComplete === true && branchFrames.length === block.branches.length && next
+                && (!nextRow || nextRow.lifecycle === 'pending' || nextRow.lifecycle === 'waiting_for_capacity')
+                ? t('workflows.run.consequenceJoin', { step: workflowBlockReferenceLabel(next), count: block.branches.length }) : null,
+        ].filter(Boolean).join(' ');
+    }
+    return null;
+}
+
 export function formatWorkflowRunOutcomeSentence(params: Readonly<{
     run: WorkflowRunSummaryV1;
     coverage: WorkflowRunCoverage;
     historyComplete?: boolean;
     attention?: WorkflowRunAttentionLead | null;
+    cancelRequested?: boolean;
+    /** Exact failed occurrence, named from the frozen definition rather than selection. */
+    failure?: Readonly<{ step: string }> | null;
     /**
      * The Run's exact Machine as the machine owner currently sees it. An active
      * Run whose Machine is known unreachable says it lost contact — no more:
@@ -307,9 +397,15 @@ export function formatWorkflowRunOutcomeSentence(params: Readonly<{
     machine?: Readonly<{ name: string; reachable: boolean; status?: WorkStatusPresentation }>;
 }>): string {
     const { run, coverage } = params;
+    if (isWorkflowRunStopping({ ...run, cancelRequested: params.cancelRequested })) return t('workflows.run.stopping');
     if (params.machine?.reachable === false && !isTerminalWorkflowRunState(run.state)) {
         if (params.machine.status && params.machine.status.bucket !== 'offline') return `${params.machine.name} · ${params.machine.status.word}`;
         return t('workflows.run.machineUnavailable', { machine: params.machine.name });
+    }
+    if (run.state === 'failed') {
+        return params.failure
+            ? t('workflows.run.failedStepSentence', { step: params.failure.step })
+            : t('workflows.run.failedSentence');
     }
     if (run.state === 'succeeded') {
         // A loaded page is not necessarily complete history. Until the cursor is
@@ -318,25 +414,41 @@ export function formatWorkflowRunOutcomeSentence(params: Readonly<{
         if (params.historyComplete === false || coverage.coverage === 'partial') {
             return coverage.knownFailure ? t('workflows.runState.completed_with_failures') : formatWorkflowRunStateLabel(run.state);
         }
-        const counts = coverage.observedLeafCounts;
-        if (coverage.knownFailure && counts.failed === 0) return t('workflows.runState.completed_with_failures');
-        return counts.failed > 0
-            ? t('workflows.run.completedWithFailures', {
-                completed: counts.completed,
-                failed: counts.failed,
-            })
-            : t('workflows.run.completedCount', { count: counts.completed });
+        if (coverage.knownFailure) return t('workflows.runState.completed_with_failures');
+        // Runtime rows count occurrences (including repeated steps). The root's
+        // authored progress is the same projection read by the Run row and map.
+        const progress = run.stepProgress;
+        return progress
+            ? progress.completed === progress.total
+                ? t('workflows.run.completedCount', { count: progress.total })
+                : t('workflows.list.stepsProgress', progress)
+            : formatWorkflowRunStateLabel(run.state);
+    }
+    // A parked Run whose held step is not known yet says only that it waits; the word already says it.
+    if (!params.attention && (run.state === 'waiting_for_review'
+        || run.attentionRequired === true && (run.state === 'queued' || run.state === 'claimed'))) {
+        return t('workflows.review.waitTitle');
     }
     if (params.attention && (run.state === 'queued' || run.state === 'claimed' || run.state === 'running' || run.state === 'waiting_for_review')) {
         if (params.attention.waitForYou && params.attention.step === t('workflows.page.blocks.waitTitle')) {
             return t('workflows.review.waitBody');
         }
+        // A parked Run leads with the word that already says it waits; the sentence then only names the step.
+        if (run.state === 'waiting_for_review' || run.state === 'queued' || run.state === 'claimed') {
+            return t('workflows.run.attentionParkedSentence', { step: params.attention.step });
+        }
         return params.attention.waitForYou
             ? t('workflows.run.attentionWaitSentence', { step: params.attention.step })
             : t('workflows.run.attentionReviewSentence', { step: params.attention.step });
     }
+    // A stopped Run says how far it got, from the server's authored progress the Run row also reads
+    // (DESIGN-15 R9); unlike a success count it does not depend on the loaded history pages.
+    if (run.state === 'cancelled' && run.stepProgress) {
+        return t('workflows.run.stoppedCount', run.stepProgress);
+    }
     if (run.state === 'pause_requested') return t('workflows.run.pausePending');
     if (run.state === 'paused') return t('workflows.run.paused');
+    if (run.state === 'claimed' && coverage.observedLeafCounts.completed > 0) return formatWorkflowRunStateLabel('running');
     return formatWorkflowRunStateLabel(run.state);
 }
 
@@ -349,10 +461,14 @@ export function formatWorkflowRunOutcomeSentence(params: Readonly<{
 export function describeWorkflowInvocationCause(params: Readonly<{
     lifecycle: WorkflowInvocationLifecycleV1 | null;
     reasonCode: string | null;
+    reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details'];
     /** The invocation's authored block label, resolved against the frozen definition. */
     blockLabel: string | null;
 }>): string | null {
     if (params.lifecycle === 'waiting_for_capacity') return t('workflows.run.capacityOccupied');
+    if (params.reasonDetails && (params.reasonDetails.code === params.reasonCode || params.reasonCode === 'conversation_workspace_mismatch')) {
+        return formatWorkflowConversationProblem(params.reasonDetails);
+    }
     if (params.lifecycle === 'skipped' && params.reasonCode === 'condition_false' && params.blockLabel !== null) {
         return t('workflows.condition.skippedReason', { block: params.blockLabel });
     }
@@ -367,6 +483,8 @@ export function formatWorkflowRunOutcomeLabel(params: Readonly<{
     state: WorkflowRunStateV1;
     coverage: WorkflowRunCoverage;
     historyComplete?: boolean;
+    cancelRequested?: boolean;
+    workflowCustodyState?: WorkflowRunSummaryV1['workflowCustodyState'];
     /** Membership in the canonical attention window, independent of its step kinds. */
     inAttentionWindow?: boolean;
     /**
@@ -375,19 +493,23 @@ export function formatWorkflowRunOutcomeLabel(params: Readonly<{
      */
     waitingOnlyForYou?: boolean;
 }>): string {
+    if (isWorkflowRunStopping(params)) return t('workflows.run.stopping');
     if (params.state === 'succeeded' && params.coverage.knownFailure) {
         return t('workflows.runState.completed_with_failures');
     }
     if (params.state === 'waiting_for_review'
         || ((params.state === 'queued' || params.state === 'claimed') && params.inAttentionWindow === true)) {
         return describeWorkflowRunState(params.state, {
-            word: params.waitingOnlyForYou === true
+            // Until the held items are known, the Run only waits; "your review" would name a kind of hold
+            // nothing has read yet (DESIGN-16 D10).
+            word: params.waitingOnlyForYou !== false || params.inAttentionWindow !== true
                 ? t('workflows.review.waitTitle')
                 : t('workflows.runState.waiting_for_review'),
             inAttentionWindow: params.inAttentionWindow,
         }).label;
     }
-    return formatWorkflowRunStateLabel(params.state);
+    return formatWorkflowRunStateLabel(params.state === 'claimed' && params.coverage.observedLeafCounts.completed > 0
+        ? 'running' : params.state);
 }
 
 /**

@@ -92,7 +92,10 @@ vi.mock('react-native-svg', () => {
     const host = (name: string) => (props: Record<string, unknown>) => React.createElement(name, props);
     return Object.fromEntries(['Svg', 'Path', 'Circle', 'Rect', 'Defs', 'RadialGradient', 'LinearGradient', 'Stop',
         'G', 'Line', 'Polyline', 'Polygon', 'Ellipse', 'ClipPath', 'Mask', 'Use', 'Text', 'TSpan'].map(name =>
-        [name, host(name === 'Svg' ? 'svg' : name[0]!.toLowerCase() + name.slice(1))]).concat([['default', host('svg')]]));
+        [name, host(name === 'Svg' ? 'svg' : name[0]!.toLowerCase() + name.slice(1))]).concat([['default', host('svg')],
+        // Inline-markup SVG (agent marks) keeps its box; its drawing is the same SDK capture limitation.
+        ['SvgXml', (props: Record<string, unknown>) => React.createElement('span', { style: {
+            display: 'inline-block', width: props.width, height: props.height } })]]));
 });
 // This capture uses plain prompt text. Native Markdown SDK layout is an explicit capture limitation.
 vi.mock('react-native-enriched-markdown', () => ({ EnrichedMarkdownText: (props: Record<string, unknown>) =>
@@ -114,7 +117,7 @@ function hostTree(node: ReactTestRendererJSON | ReactTestRendererJSON[] | string
 // Module loading belongs to collection, not the existing per-interaction timeout.
 const { WorkflowTriggerSetV1Schema } = await import('@happier-dev/protocol');
 const { lightTheme, darkTheme } = await import('@/theme');
-const { ScheduledWorkflowSectionView } = await import('./ScheduledWorkflowSection');
+const { ScheduledWorkflowGroup, ScheduledWorkflowSectionView } = await import('./ScheduledWorkflowSection');
 const { SessionTriggersSectionView } = await import('./SessionTriggersSection');
 const { projectScheduledWorkflowRows } = await import('./scheduledWorkflowRows');
 const { projectSessionTriggerGroups } = await import('./sessionTriggerGroups');
@@ -132,6 +135,22 @@ const { BoardCardView } = await import('@/components/boards/cards/BoardCardView'
 const { DaemonContributionRegistryProjectionAutomationEligibleEventV1Schema, PluginProjectionInstalledPackageV2Schema } = await import('@happier-dev/protocol');
 import type { PluginEventAutomationComposerModel } from '@/components/automations/editor/usePluginEventAutomationComposer';
 const { MessageViewWithSessionCommon } = await import('@/components/sessions/transcript/MessageView');
+const { WorkerUpdateCard } = await import('@/components/sessions/work/WorkerUpdateCard');
+const { AgentSessionStartBlocker } = await import('@/components/machines/agents/AgentSessionStartBlocker');
+const { WorkflowRunContent } = await import('@/components/workflows/run/WorkflowRunContent');
+const { resolveGlassPresentationVariables } = await import('@/components/ui/glass/glassDocumentPresentation');
+const { useGlassMaterialSettings } = await import('@/components/ui/glass/useGlassMaterialSettings');
+const { useGlassRuntimeEnvironment } = await import('@/components/ui/glass/glassRuntimeEnvironment');
+// The app's document boundary publishes the glass material as root custom properties; a static
+// capture must carry the same values, or every glass surface falls back to an opaque tint.
+const glassRoot: { css: string } = { css: '' };
+function GlassRootVariables() {
+    const variables = resolveGlassPresentationVariables(useGlassMaterialSettings(), useGlassRuntimeEnvironment());
+    glassRoot.css = `:root{${Object.entries(variables).map(([key, value]) => `${key}:${value}`).join(';')}}`;
+    return null;
+}
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { createWorkflowDefinitionFixture, createWorkflowInvocationIndexFixture } = await import('@/dev/testkit/fixtures/workflowRunFixtures');
 const { AppSessionTranscriptSourceProvider } = await import('@/components/sessions/transcript/source/appSessionTranscriptSource');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');
 const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
@@ -156,13 +175,15 @@ it.each(variants)('captures D6 source surfaces beside their existing Work-row re
         destination: createSessionFixture({ id: 'destination', metadata: { ...createSessionFixture().metadata!, name: 'Release workspace' } }),
     } });
     const run = createWorkflowRunSummaryFixture({ id: 'daily-run', state: 'running',
-        stepProgress: { completed: 1, total: 3 } });
+        stepProgress: { completed: 1, total: 3, destinations: [{ sourceKey: '$root', blockId: 'notes', sessionIds: ['destination'],
+            ordinal: 2, name: 'Draft the notes', observation: { recordId: 'notes-attempt', sequence: '1', attempt: '0',
+                contentRevision: '0', lifecycle: 'running' } }] } });
     storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run, { kind: 'available', value: { title: 'Daily digest' } })]);
     const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'daily', revision: 1, enabled: true, health: 'available',
         scopeSessionId: 'destination', target: { kind: 'inline', definition: { version: 1, inputs: [], blocks: [{ kind: 'step', id: 'review', name: 'Review overnight changes',
             document: { text: 'Review overnight changes', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] } },
         destinations: { targetSessionIds: ['destination'], usesOriginSession: false, unresolvedWorkflowRefs: [],
-            leaves: [{ sourceKey: '$root', blockId: 'review', sessionIds: ['destination'], ordinal: 1, name: 'Review overnight changes' }] },
+            leaves: [{ sourceKey: '$root', blockId: 'review', sessionIds: ['destination'], ordinal: 1, name: 'Summarize overnight CI' }] },
         triggers: [{ id: 'morning', revision: 1, enabled: true, kind: 'schedule', nextRunAt: Date.UTC(2026, 9, 9, 7),
             createdAt: 1, updatedAt: 1, triggerDefinitionEnvelope: null,
             schedule: { kind: 'cron', everyMs: null, scheduleExpr: '0 9 * * *', timezone: 'Europe/Zurich' } }] });
@@ -173,7 +194,8 @@ it.each(variants)('captures D6 source surfaces beside their existing Work-row re
         resolveWorkflowTitle: () => null, formatAge: () => 'yesterday' });
     const noop = () => {};
     const row = <WorkflowRunItemBody kind="workflow_run" runId={run.id} serverId={home.id} isSingle />;
-    const workRow = <WorkflowRunItemBody kind="workflow_run" runId={run.id} serverId={home.id} presentation="work" />;
+    const workRow = <WorkflowRunItemBody kind="workflow_run" runId={run.id} serverId={home.id} presentation="work"
+        destinationSessionId="destination" />;
     const event = DaemonContributionRegistryProjectionAutomationEligibleEventV1Schema.parse({ event: {
         id: 'happier.scm.forge.github/automation/issue-opened-v1',
         identity: { pluginId: 'happier.scm.forge.github', localId: 'automation/issue-opened-v1' },
@@ -224,18 +246,29 @@ it.each(variants)('captures D6 source surfaces beside their existing Work-row re
             toolChromeCommon={settingsDefaults} toolRouteCommon={{ messagesById: {}, reducerState: null }} />
     </AppSessionTranscriptSourceProvider>;
     const { renderScreen } = await import('@/dev/testkit');
-    const screen = await renderScreen(<main>
-        <header><h1>Scheduled work and event authoring</h1><p>DV4-SCHED · source-rendered components · {capture.dark ? 'dark' : 'light'} · {capture.width}px</p></header>
+    const screen = await renderScreen(<main><GlassRootVariables />
+        <header><h1>Scheduled work and event authoring</h1><p>DESIGN-SESSION · source-rendered components · {capture.dark ? 'dark' : 'light'} · {capture.width}px</p></header>
         <div className="comparison">
             <section><h2>Reference · existing R22 Run row</h2>{row}</section>
             <section><h2>Session · habits and destination work</h2>
                 <SessionTriggersSectionView groups={groups}
                     status="ready" pendingKeys={new Set()} onToggle={noop} onOpen={noop} onAdd={noop} onRetry={noop} onHistory={noop} />
-                <WorkSection testID="capture-writes-here" title="Writes here" count={1} anatomy="page">{workRow}<ScheduledWorkflowSectionView rows={rows} onOpen={noop} sessionId="destination" /></WorkSection>
+                <WorkSection testID="capture-writes-here" title="Writes here" count={2} anatomy="page"><ScheduledWorkflowSectionView rows={rows} onOpen={noop} sessionId="destination" />{workRow}</WorkSection>
             </section>
-            <section><h2>Work sidebar · upcoming destination</h2><WorkSection testID="capture-scheduled" title="Scheduled" count={1}>
-                <ScheduledWorkflowSectionView rows={rows} onOpen={noop} /></WorkSection></section>
+            <section><h2>Session list · Scheduled group</h2><webHosts.View style={{ maxWidth: 380 }}>
+                {(['default', 'compact', 'minimal'] as const).map(density => <ScheduledWorkflowGroup key={density} density={density}
+                    read={{ available: true, rows, status: 'ready', retry: noop, serverId: home.id }} />)}</webHosts.View></section>
             <section><h2>Transcript · injected workflow message</h2>{message}</section>
+            <section><h2>Transcript · run cards</h2><AppSessionTranscriptSourceProvider sessionId="destination" serverId={home.id}>
+                <WorkerUpdateCard serverId={home.id} at={Date.now() - 3 * 60_000} update={{ v: 1, workerKind: 'workflow_run',
+                    workerId: run.id, ownerState: 'succeeded', wake: 'finished', headline: 'Daily digest',
+                    result: 'Three PRs merged overnight; the checkout retry flake is back on main.', canInspect: true,
+                    transcriptPointer: { kind: 'workflow_run', runId: run.id } }} />
+                <WorkerUpdateCard serverId={home.id} at={Date.now() - 40 * 60_000} update={{ v: 1, workerKind: 'execution_run',
+                    workerId: 'run_scout', ownerState: 'failed', wake: 'finished', headline: 'Scout · flaky webkit tests',
+                    result: 'build-vps went offline 4 minutes in.', canInspect: true,
+                    transcriptPointer: { kind: 'execution_run', sessionId: 'destination', runId: 'run_scout' } }} />
+            </AppSessionTranscriptSourceProvider></section>
             <section><h2>Trigger · schedule and footer</h2><TriggerPopover testID="capture-trigger" anchorRef={React.createRef()}
                 sessionId={null} initial={{ when: readScheduleWhen({ kind: 'cron', everyMs: null,
                     scheduleExpr: '0 9 * * *', timezone: 'Europe/Zurich' })!, then: createDefaultThen('runWorkflow'), enabled: true }}
@@ -254,6 +287,29 @@ it.each(variants)('captures D6 source surfaces beside their existing Work-row re
                     notice={t('workflows.testRun.savedNotice')}
                     onChangeValues={noop} onRun={noop} onCancel={noop} />
             </section>
+            {(['flow', 'steps', 'activity'] as const).map(view => <section key={view} className="wide"><h2>Run detail · {view}</h2>
+                <AppPaneProvider><webHosts.View style={{ height: 760 }}><WorkflowRunContent active={false} serverId={home.id}
+                    run={createWorkflowRunSummaryFixture({ id: run.id, state: 'running', stepProgress: { completed: 1, total: 3 },
+                        createdAt: new Date(2026, 9, 8, 11, 48).toISOString(), updatedAt: new Date(2026, 9, 8, 11, 58).toISOString() })}
+                    title="Prepare the 0.3 release" machineName="MacBook Pro" machineReachable
+                    definition={createWorkflowDefinitionFixture({ blocks: ['Gather changes', 'Write changelog', 'Publish summary'].map((name, index) => ({
+                        kind: 'step', id: `step-${index + 1}`, name,
+                        document: { text: name, references: [], attachments: [] }, input: [], result: { kind: 'text' } })) })}
+                    invocations={[createWorkflowInvocationIndexFixture({ id: 'gather', runId: run.id, lifecycle: 'completed' }),
+                        createWorkflowInvocationIndexFixture({ id: 'changelog', runId: run.id, sequence: '1', lifecycle: 'running' })]}
+                    invocationsLoaded invocationHistoryComplete firstFailedInvocationId={null} firstFailedInvocationResolution="resolved"
+                    selectedInvocationId={null} onSelectInvocation={noop} view={view} onChangeView={noop} hasSource
+                    sourceAction={{ kind: 'edit', onPress: noop }} /></webHosts.View></AppPaneProvider></section>)}
+            <section><h2>New Session · selected-route readiness (signed out, installable)</h2>
+                {(['signedOut', 'notInstalled'] as const).map(state => <webHosts.View key={state} style={{ marginBottom: 16 }}>
+                    <AgentSessionStartBlocker machineName="ubuntu-03" onSetUp={noop}
+                        connectedServicesRecoveryAction={state === 'signedOut' ? { label: 'Use Claude (work account)', onPress: noop } : null}
+                        agent={{ agentId: 'claude', title: 'Claude', state: state === 'signedOut' ? 'needsSignIn' : 'notInstalled',
+                            installed: state === 'signedOut', version: state === 'signedOut' ? '2.1.292' : null, latestVersion: '2.1.292', update: null,
+                            signIn: { status: 'signedOut', via: null, nativeLogin: 'terminal', connectedServices: [] },
+                            platform: { supported: true }, install: { available: true, mode: 'automatic', sizeBytes: 52_000_000,
+                                guideUrl: null, requiresVendorConsent: false }, dependencies: [], job: null, stale: false } as never} />
+                </webHosts.View>)}</section>
             <section><h2>Board · same next occurrence</h2><BoardCardView card={{ key: 'capture-workflow',
                 ref: { kind: 'workflow', qualifiedId: { serverId: home.id, id: 'daily' } }, picked: true,
                 availability: 'ready', title: 'Daily digest', status: { bucket: 'idle', tone: 'neutral', word: 'Idle' },
@@ -275,8 +331,8 @@ it.each(variants)('captures D6 source surfaces beside their existing Work-row re
     const web = await vi.importActual<{ StyleSheet: { getSheet(): { textContent: string } } }>('react-native-web');
     const fonts = ['Inter-Regular', 'Inter-Medium', 'Inter-SemiBold', 'IBMPlexMono-Regular'].map(name =>
         `@font-face{font-family:${name};src:url(data:font/ttf;base64,${readFileSync(join(process.cwd(), 'sources/assets/fonts', `${name}.ttf`)).toString('base64')})}`).join('');
-    const html = `<!doctype html><html><meta charset="utf-8"><style>${fonts}${web.StyleSheet.getSheet().textContent}
-        body{margin:0;background:${theme.colors.surface.base};color:${theme.colors.text.primary};font:14px system-ui}main{padding:24px}h1{font-size:24px;margin:0 0 8px}p{color:${theme.colors.text.secondary}}h2{font-size:13px;font-weight:500;margin:0 0 16px;color:${theme.colors.text.secondary}}.comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}section{min-width:0;padding:16px;background:${theme.colors.surface.base}}@media(max-width:600px){main{padding:16px}.comparison{grid-template-columns:1fr;gap:20px}section{padding:0}}</style><body>${body}</body></html>`;
+    const html = `<!doctype html><html><meta charset="utf-8"><style>${fonts}${glassRoot.css}${web.StyleSheet.getSheet().textContent}
+        body{margin:0;background:${theme.colors.surface.base};color:${theme.colors.text.primary};font:14px system-ui}main{padding:24px}h1{font-size:24px;margin:0 0 8px}p{color:${theme.colors.text.secondary}}h2{font-size:13px;font-weight:500;margin:0 0 16px;color:${theme.colors.text.secondary}}.comparison{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}section{min-width:0;padding:16px;background:${theme.colors.surface.base}}section.wide{grid-column:1/-1}@media(max-width:600px){main{padding:16px}.comparison{grid-template-columns:1fr;gap:20px}section{padding:0}}</style><body>${body}</body></html>`;
     for (const directory of captureDir.split(',')) {
         const output = resolve(repoRoot, directory);
         mkdirSync(output, { recursive: true });

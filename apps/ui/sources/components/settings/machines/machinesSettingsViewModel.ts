@@ -12,10 +12,12 @@ import { useHomeViewSelectionSettings } from '@/hooks/server/useHomeViewSelectio
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { useManagedMachineInventory } from './managed/useManagedMachineInventory';
 import { useMachinePresets } from './managed/useMachinePresets';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 
 export type MachinesSettingsViewModel = ReturnType<typeof useMachinesSettingsViewModel>;
 
 export function useMachinesSettingsViewModel() {
+    const reachabilityRevision = useMachineReachabilityRevision();
     const allMachines = useAllMachines();
     const machineListByServerId = useMachineListByServerId();
     const machineListStatusByServerId = useMachineListStatusByServerId();
@@ -80,5 +82,6 @@ export function useMachinesSettingsViewModel() {
         managedInventory,
         presetsByServerId: presetInventory.presetsByServerId,
         presetInventory,
+        reachabilityRevision,
     };
 }

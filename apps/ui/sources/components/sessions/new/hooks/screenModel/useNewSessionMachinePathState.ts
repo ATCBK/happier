@@ -8,7 +8,8 @@ import type {
 import { resolvePreferredLaunchMachineId } from '@/components/settings/pickers/resolvePreferredMachineId';
 import { normalizeOptionalParam } from '@/profileRouteParams';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { resolveDefaultDirectoryForMachine } from '@/utils/sessions/machineDefaultDirectory';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
 import { useStableRecentPathsResolver } from '@/utils/sessions/useStableRecentPathsForMachine';
@@ -169,6 +170,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
     getRequestedPath: () => string;
     getBestPathForMachine: (machineId: string | null) => string;
 }> {
+    const reachabilityRevision = useMachineReachabilityRevision();
     const recentMachinePaths = React.useMemo((): RecentMachinePathsList => {
         return Array.isArray(params.recentMachinePaths) ? (params.recentMachinePaths as any[]).slice() as any : [];
     }, [params.recentMachinePaths]);
@@ -179,8 +181,12 @@ export function useNewSessionMachinePathState(params: Readonly<{
     });
 
     const resolveMachineId = React.useCallback((preferredMachineId: string | null): string | null => (
-        resolvePreferredLaunchMachineId({ machines: params.machines, preferredMachineId, recentMachinePaths })
-    ), [params.machines, recentMachinePaths]);
+        resolvePreferredLaunchMachineId({
+            machines: params.machines.filter(machine => isMachineReachable(params.serverId, machine)),
+            preferredMachineId,
+            recentMachinePaths,
+        })
+    ), [params.machines, params.serverId, reachabilityRevision, recentMachinePaths]);
 
     const getBestPathForMachine = React.useCallback((machineId: string | null): string => (
         resolveDefaultDirectoryForMachine({
@@ -461,8 +467,11 @@ export function useNewSessionMachinePathState(params: Readonly<{
     }, []);
 
     const getRequestedPath = React.useCallback(() => {
-        return directoryKindRef.current === 'managed' ? '' : selectedPathDraftRef.current;
-    }, []);
+        // Blank picker text has not selected a replacement folder. Keep the
+        // committed directory that the chip shows until another path is authored.
+        return directoryKindRef.current === 'managed' ? ''
+            : selectedPathDraftRef.current.trim() ? selectedPathDraftRef.current : selectedPath;
+    }, [selectedPath]);
 
     const setDirectoryIntent = React.useCallback((intent: SessionDirectoryIntentV1) => {
         if (fixedDirectoryIntent) return;
@@ -605,8 +614,8 @@ export function useNewSessionMachinePathState(params: Readonly<{
         const recoversPersistedMachine = preferredMachineId !== null
             && preferredMachineId !== reconciledPersistedMachineId
             && preferredMachine !== null
-            && isMachineOnline(preferredMachine)
-            && (persistedMachine === null || !isMachineOnline(persistedMachine));
+            && isMachineReachable(params.serverId, preferredMachine)
+            && (persistedMachine === null || !isMachineReachable(params.serverId, persistedMachine));
         const restoredMachineId = recoversPersistedMachine ? preferredMachineId : reconciledPersistedMachineId;
         const restorationKey = `${reconciledPersistedMachineId}:${restoredMachineId}`;
         if (restorationKey === lastAppliedPersistedMachineIdRef.current) {
@@ -657,7 +666,7 @@ export function useNewSessionMachinePathState(params: Readonly<{
         setSelectedMachineIdState(machineIdToUse);
         hasUserEditedPathRef.current = false;
         applyCommittedSelectedPath(trimmedPath || getPersistedPathForMachine(machineIdToUse) || getBestPathForMachine(machineIdToUse));
-    }, [applyCommittedSelectedPath, executionTarget, managedMachineSelection, getBestPathForMachine, getPersistedPathForMachine, params.machines, params.pathParam, params.persistedExecutionTarget, resolveMachineId, setSelectedMachineIdState]);
+    }, [applyCommittedSelectedPath, executionTarget, managedMachineSelection, getBestPathForMachine, getPersistedPathForMachine, params.machines, params.pathParam, params.persistedExecutionTarget, params.serverId, reachabilityRevision, resolveMachineId, setSelectedMachineIdState]);
 
     // Keep selection valid when machine snapshots change (server/account switch, revoke, reconnect).
     React.useEffect(() => {
@@ -679,9 +688,9 @@ export function useNewSessionMachinePathState(params: Readonly<{
         if (!selectedMachineId) return;
         const machine = params.machines.find((m) => m.id === selectedMachineId);
         if (!machine) return;
-        if (!isMachineOnline(machine)) return;
+        if (!isMachineReachable(params.serverId, machine)) return;
         selectedMachineOnlineSeenByIdRef.current.set(selectedMachineId, true);
-    }, [params.machines, selectedMachineId]);
+    }, [params.machines, params.serverId, reachabilityRevision, selectedMachineId]);
 
     // If we implicitly selected an offline machine, upgrade to the best available online machine
     // once machine snapshots hydrate. Keep explicit user/route choices stable.

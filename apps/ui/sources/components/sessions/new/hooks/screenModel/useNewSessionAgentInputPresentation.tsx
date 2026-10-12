@@ -20,7 +20,8 @@ import type { NewSessionTranscriptStorage } from '@/components/sessions/new/modu
 import { t } from '@/text';
 import { createNewSessionLinkedFilesActionChip } from '@/components/sessions/agentInput/definitions/createLinkedFilesActionChip';
 import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { getMachineDisplaySubtitle } from '@/sync/domains/machines/machineDisplayRenderable';
 import type { NewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import { createTemporaryComputerTeamAccessActionChip } from '@/components/sessions/agentInput/definitions/createTemporaryComputerTeamAccessActionChip';
@@ -139,18 +140,21 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     }> | undefined;
     agentInputExtraActionChips: ReadonlyArray<AgentInputExtraActionChip>;
 }> {
+    const reachabilityRevision = useMachineReachabilityRevision();
     const selectedMachineActive = params.selectedMachine?.active;
     const selectedMachineActiveAt = params.selectedMachine?.activeAt;
     const selectedMachineRevokedAt = params.selectedMachine?.revokedAt;
     const selectedMachineReplacedByMachineId = params.selectedMachine?.replacedByMachineId;
     const selectedMachineOnline = React.useMemo(() => (
-        params.selectedMachine ? isMachineOnline(params.selectedMachine) : false
+        params.selectedMachine ? isMachineReachable(params.targetServerId, params.selectedMachine) : false
     ), [
         params.selectedMachine?.id,
         selectedMachineActive,
         selectedMachineActiveAt,
         selectedMachineReplacedByMachineId,
         selectedMachineRevokedAt,
+        params.targetServerId,
+        reachabilityRevision,
     ]);
     const selectedMachineReadinessStatus = params.selectedMachineSpawnReadiness?.status;
     const selectedMachineLabel = getMachineDisplaySubtitle(params.selectedMachine ?? undefined, params.selectedMachineId ?? '');

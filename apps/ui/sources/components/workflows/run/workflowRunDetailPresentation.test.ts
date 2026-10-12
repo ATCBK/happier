@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { WorkflowProgressEnvelopeV1Schema } from '@happier-dev/protocol';
+import { WorkflowProgressEnvelopeV1Schema, WorkflowDefinitionV1Schema } from '@happier-dev/protocol';
+import type { WorkflowRunInvocationIndexV1 } from '@happier-dev/protocol';
+import { projectWorkflowInvocationStructure } from './workflowInvocationStructure';
 
 import {
     createWorkflowInvocationIndexFixture,
@@ -20,12 +22,95 @@ import {
     describeWorkflowInvocationCause,
     formatWorkflowRunOutcomeLabel,
     formatWorkflowRunOutcomeSentence,
+    formatWorkflowRunOutcomeLine,
+    formatWorkflowRunConsequenceSentence,
     formatWorkflowWorkspaceSourceLabel,
     isObservedCompletionTransition,
     projectWorkflowInvocationRecovery,
 } from './workflowRunDetailPresentation';
 
 describe('managed workflow Run presentation', () => {
+    it('keeps Stop pending until physical custody settles, even after the parent is cancelled', () => {
+        const coverage = { observedLeafCounts: { completed: 1, failed: 0, attention: 5 }, coverage: 'complete' as const, knownFailure: false };
+        const run = createWorkflowRunSummaryFixture({ state: 'cancelled', workflowCustodyState: 'pending', stepProgress: { completed: 1, total: 5 } });
+        expect(formatWorkflowRunOutcomeSentence({ run, coverage })).toBe(t('workflows.run.stopping'));
+        expect(formatWorkflowRunOutcomeLabel({ state: run.state, workflowCustodyState: run.workflowCustodyState, coverage })).toBe(t('workflows.run.stopping'));
+        expect(formatWorkflowRunOutcomeSentence({ run: { ...run, workflowCustodyState: 'settled' }, coverage })).toBe(t('workflows.run.stoppedCount', { completed: 1, total: 5 }));
+    });
+    it('describes the persisted conversation refusal through the one problem owner', () => {
+        const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+            invocationPath: { blockId: 'a', scope: [] }, attempt: '0', logicalInvocationRecordId: 'inv-1',
+            reason: { code: 'workflow_conversation_unavailable', details: { code: 'workflow_conversation_unavailable',
+                reason: 'connectedServices', expected: { kind: 'object', ids: ['profile-1'] }, observed: { kind: 'unset' } } } });
+        expect(describeWorkflowInvocationCause({ lifecycle: 'failed', reasonCode: progress.reason!.code,
+            reasonDetails: progress.reason!.details, blockLabel: 'Review' }))
+            .toBe(t('workflows.problem.conversationChecks.connectedServices'));
+    });
+    it('uses authored progress rather than repeated runtime attempts for completion counts', () => {
+        const coverage = { observedLeafCounts: { completed: 7, failed: 0, attention: 0 }, coverage: 'complete' as const, knownFailure: false };
+        const run = createWorkflowRunSummaryFixture({ state: 'succeeded', stepProgress: { completed: 3, total: 3 } });
+        expect(formatWorkflowRunOutcomeSentence({ run, coverage })).toBe(t('workflows.run.completedCount', { count: 3 }));
+        expect(formatWorkflowRunOutcomeSentence({ run: { ...run, stepProgress: null }, coverage })).toBe(t('workflows.runState.succeeded'));
+    });
+    it('says how far a stopped Run got rather than the bare state word (DESIGN-15 R9)', () => {
+        const coverage = { observedLeafCounts: { completed: 1, failed: 0, attention: 0 }, coverage: 'complete' as const, knownFailure: false };
+        const run = createWorkflowRunSummaryFixture({ state: 'cancelled', workflowCustodyState: 'settled', stepProgress: { completed: 1, total: 5 } });
+        expect(formatWorkflowRunOutcomeSentence({ run, coverage })).toBe(t('workflows.run.stoppedCount', { completed: 1, total: 5 }));
+        // The count is the server's projection, so a partly loaded history still states it.
+        expect(formatWorkflowRunOutcomeSentence({ run, coverage, historyComplete: false })).toBe(t('workflows.run.stoppedCount', { completed: 1, total: 5 }));
+        expect(formatWorkflowRunOutcomeSentence({ run: { ...run, stepProgress: null }, coverage })).toBe(t('workflows.runState.cancelled'));
+    });
+    it('describes a claimed continuation and an accepted Stop from their current facts', () => {
+        const coverage = { observedLeafCounts: { completed: 1, failed: 0, attention: 0 }, coverage: 'complete' as const, knownFailure: false };
+        const run = createWorkflowRunSummaryFixture({ state: 'claimed' });
+        expect(formatWorkflowRunOutcomeSentence({ run, coverage })).toBe(t('workflows.runState.running'));
+        expect(formatWorkflowRunOutcomeSentence({ run, coverage, cancelRequested: true })).toBe(t('workflows.run.stopping'));
+        expect(formatWorkflowRunOutcomeLabel({ state: 'claimed', coverage, cancelRequested: true })).toBe(t('workflows.run.stopping'));
+    });
+    it('names only live independent lanes and their frozen join, without promising advancement while paused or failed', () => {
+        const step = (id: string, name: string) => ({ kind: 'step', id, name,
+            document: { text: name, references: [], attachments: [] }, input: [], result: { kind: 'text' } });
+        const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [
+            { kind: 'parallel', id: 'lanes', failurePolicy: 'collect_outcomes', branches: [
+                { id: 'changelog', name: 'Changelog', blocks: [step('write', 'Write changelog')] },
+                { id: 'issues', name: 'Issues', blocks: [step('check', 'Check issues')] },
+                { id: 'tests', name: 'Tests', blocks: [step('test', 'Run tests')] },
+            ] }, step('review', 'Review the release'),
+        ] });
+        const row = (id: string, parentRecordId: string | null, memberOrdinal: string,
+            lifecycle: WorkflowRunInvocationIndexV1['lifecycle']) =>
+            createWorkflowInvocationIndexFixture({ id, parentRecordId, memberOrdinal, lifecycle });
+        const invocations = [row('root', null, '0', 'running'), row('parallel', 'root', '0', 'running'),
+            row('changelog', 'parallel', '0', 'running'), row('issues', 'parallel', '1', 'running'), row('tests', 'parallel', '2', 'running'),
+            row('write', 'changelog', '0', 'waiting_for_review'), row('check', 'issues', '0', 'running'), row('test', 'tests', '0', 'running')];
+        const run = createWorkflowRunSummaryFixture({ state: 'running' });
+        const params = { run, definition, invocations, historyComplete: true,
+            structure: projectWorkflowInvocationStructure({ definition, invocations }) };
+        expect(formatWorkflowRunConsequenceSentence(params)).toBe('Issues and Tests keep going. Review the release starts when all 3 lanes finish.');
+        expect(formatWorkflowRunConsequenceSentence({ ...params, historyComplete: false })).toBe('Issues and Tests keep going.');
+        expect(formatWorkflowRunConsequenceSentence({ ...params, run: { ...run, state: 'paused' } })).toBeNull();
+        expect(formatWorkflowRunConsequenceSentence({ ...params, machineReachable: false })).toBeNull();
+        expect(formatWorkflowRunConsequenceSentence({ ...params, definition: null })).toBeNull();
+        const stopped = invocations.map(row => row.id === 'test' ? { ...row, lifecycle: 'completed' as const } : row);
+        expect(formatWorkflowRunConsequenceSentence({ ...params, invocations: stopped })).toBe('Issues keeps going. Review the release starts when all 3 lanes finish.');
+        const failed = stopped.map(row => row.id === 'write' ? { ...row, lifecycle: 'failed' as const } : row);
+        const failStop = { ...definition, blocks: definition.blocks.map(block => block.kind === 'parallel'
+            ? { ...block, failurePolicy: 'fail_stop' as const } : block) };
+        expect(formatWorkflowRunConsequenceSentence({ ...params, invocations: failed, definition: failStop })).toBeNull();
+        const noLiveWork = stopped.map(row => row.id === 'check' ? { ...row, lifecycle: 'waiting_for_approval' as const } : row);
+        expect(formatWorkflowRunConsequenceSentence({ ...params, invocations: noLiveWork })).toBeNull();
+    });
+    it('names the failed step and retained work without an attention row or complete history', () => {
+        const run = createWorkflowRunSummaryFixture({ state: 'failed' });
+        const coverage = summarizeWorkflowInvocationCoverage([], { kindsByInvocationId: new Map(), historyComplete: false });
+        expect(formatWorkflowRunOutcomeSentence({ run, coverage, historyComplete: false,
+            failure: { step: 'Publish summary' },
+        })).toBe('Publish summary failed. Completed work is kept.');
+        expect(formatWorkflowRunOutcomeSentence({ run, coverage })).toBe('Completed work is kept.');
+        expect(formatWorkflowRunOutcomeSentence({ run: { ...run, state: 'cancelled', workflowCustodyState: 'settled' }, coverage,
+            failure: { step: 'Publish summary' },
+        })).toBe(t('workflows.runState.cancelled'));
+    });
     it('offers an explicit engine replacement only for a stopped unavailable step with settled custody', () => {
         const run = createWorkflowRunSummaryFixture({ state: 'failed', workflowCustodyState: 'settled' });
         const invocation = createWorkflowInvocationIndexFixture({ lifecycle: 'failed' });
@@ -610,9 +695,23 @@ describe('managed workflow Run presentation', () => {
         expect(formatWorkflowRunOutcomeSentence({ run, coverage, attention: {
             step: t('workflows.page.blocks.waitTitle'), waitForYou: true,
         } })).toBe(t('workflows.review.waitBody'));
+        // The parked Run's word already says it waits ("Waiting for you —"), so the sentence only names the step.
         expect(formatWorkflowRunOutcomeSentence({ run, coverage, attention: {
             step: 'Check the release', waitForYou: true,
-        } })).toBe(t('workflows.run.attentionWaitSentence', { step: 'Check the release' }));
+        } })).toBe(t('workflows.run.attentionParkedSentence', { step: 'Check the release' }));
+        // A Run still working elsewhere leads with "Running", so the sentence says what waits (lab run-A).
+        expect(formatWorkflowRunOutcomeSentence({ run: { ...run, state: 'running' }, coverage, attention: {
+            step: 'Write changelog', waitForYou: false,
+        } })).toBe(t('workflows.run.attentionReviewSentence', { step: 'Write changelog' }));
+    });
+
+    it('says only that a parked Run waits until its held step is known (DESIGN-16 D10)', () => {
+        const run = createWorkflowRunSummaryFixture({ state: 'waiting_for_review' });
+        const coverage = summarizeWorkflowInvocationCoverage([], { kindsByInvocationId: new Map(), historyComplete: false });
+        const word = formatWorkflowRunOutcomeLabel({ state: run.state, coverage, inAttentionWindow: false });
+        const line = formatWorkflowRunOutcomeLine({ word, sentence: formatWorkflowRunOutcomeSentence({ run, coverage, attention: null }) });
+        // One idea once, with no step to name yet: never "Waiting for your review — Needs you".
+        expect(line).toBe(t('workflows.review.waitTitle'));
     });
 
     it('presents a claimed Run with a known hold through attention while preserving terminal parent authority', () => {
@@ -624,10 +723,10 @@ describe('managed workflow Run presentation', () => {
             .toBe(t('workflows.review.waitTitle'));
         expect(formatWorkflowRunOutcomeSentence({ run: createWorkflowRunSummaryFixture({ state: 'claimed' }),
             coverage, attention: { step: 'Check the release', waitForYou: true } }))
-            .toBe(t('workflows.run.attentionWaitSentence', { step: 'Check the release' }));
+            .toBe(t('workflows.run.attentionParkedSentence', { step: 'Check the release' }));
         expect(formatWorkflowRunOutcomeLabel({ state: 'claimed', coverage: {
             ...coverage, observedLeafCounts: { completed: 1, failed: 0, attention: 0 },
-        } })).toBe(t('workflows.runState.claimed'));
+        } })).toBe(t('workflows.runState.running'));
     });
 
     it('describes known Agent review attention without parking concurrent work or guessing a terminal parent', () => {

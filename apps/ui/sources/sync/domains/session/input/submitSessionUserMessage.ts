@@ -690,6 +690,22 @@ export async function submitSessionUserMessage(
     opts: SubmitSessionUserMessageOptions,
 ): Promise<SubmitSessionUserMessageResult> {
     if (!isSubmitAccountLifetimeCurrent(opts)) return accountScopeRetiredResult();
+    if (opts.requestedAction?.kind === 'reset_start') {
+        if (opts.recipient?.kind === 'execution_run' || opts.explicitMode === 'interrupt'
+            || opts.applyConfigAndSteer === true || opts.steerWithoutConfig === true) {
+            return {
+                type: 'rejected',
+                persistence: 'none',
+                wake: { attempted: false, state: 'not_needed' },
+                errorCode: 'session_input_idempotency_conflict',
+                errorMessage: 'Reset input cannot target a Run or interrupt the current turn',
+            };
+        }
+        // Reset is a Pending action, never a direct-send compatibility fallback.
+        // Its receipt is inert: activating a runtime belongs to a later input action.
+        if (!usesExistingDurablePendingMessage(opts)) return enqueuePending(port, opts);
+        opts = { ...opts, configuredMode: 'server_pending', explicitMode: 'server_pending', forceImmediate: false };
+    }
     if (opts.recipient) {
         try {
             const recipient = normalizeParticipantRecipientRoutingIdentityV1(opts.recipient);

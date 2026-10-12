@@ -67,7 +67,7 @@ import { readSessionWorkflowStepRunId, SessionStepWork } from './SessionStepWork
 import { describeWorkPaneLine } from './workPaneLine';
 import { WorkFlatSheet, WorkSection } from './WorkSection';
 import {
-    groupWorkByState, resolveWorkReadPresentation, resolveWorkTitleTailStarts,
+    groupWorkByState, resolveWorkMachineNotices, resolveWorkReadPresentation, resolveWorkTitleTailStarts,
     type WorkItem, type WorkStateGroups,
 } from './workProjection';
 
@@ -273,7 +273,8 @@ export const SessionWorkView = React.memo((props: Readonly<{
         <SegmentedTabBar
             testIDPrefix="session-work-view"
             accessibilityLabel={t('sessionWork.view.a11y')}
-            compact={!phone}
+            // The pane header's List | Map is the regular control (lab `convo-W2`), not the compact one:
+            // its 10 px labels read smaller than every other word in the pane.
             segmentSizing={phone ? 'equal' : 'content'}
             tabs={[
                 { id: 'list' as const, label: t('sessionWork.view.list') },
@@ -330,6 +331,7 @@ export const SessionWorkView = React.memo((props: Readonly<{
     ));
 
     const unavailableText = resolveUnavailableText(launcher, machineName);
+    const machineNotices = resolveWorkMachineNotices({ machineReachable, nothingYet, unavailableReason: launcher.unavailableReason });
     // One list by state on every surface (INT r0.4 §6 I4, lab `convo-W1/W8full`, `phone-P5`).
     const previousStateGroups = React.useRef<Readonly<{ sessionId: string; serverId: string | null;
         groups: ReturnType<typeof groupWorkByState> }> | null>(null);
@@ -393,7 +395,7 @@ export const SessionWorkView = React.memo((props: Readonly<{
 
     return (
         <View style={styles.container}>
-            {!machineReachable && !nothingYet ? (
+            {machineNotices.offline ? (
                 <SurfaceFreshnessLine
                     testID="session-work-machine-offline"
                     tone="warning"
@@ -464,9 +466,8 @@ export const SessionWorkView = React.memo((props: Readonly<{
                             title={t('common.unavailable')}
                             action={sources ? { label: t('common.retry'), onPress: sources.managedRuns.retry } : undefined} />
                     ) : null}
-                    {/* With no work yet, Triggers is what the Session can set up first, then the invite
-                        (lab `convo-ST`). The Session's guidance follows the invite, as it follows the list. */}
-                    {nothingYet ? triggersSlot : null}
+                    {/* With no work yet the invite stands where the list will be (lab `convo-ST`); the Session's
+                        guidance follows it in the same order as under a list. */}
                     {nothingYet ? (
                         <View style={styles.empty}>
                             {/* The invite (lab `convo-ST`, "Nothing started yet"): the Agents that can take work
@@ -517,7 +518,7 @@ export const SessionWorkView = React.memo((props: Readonly<{
                             />
                         ))
                     ) : null}
-                    {unavailableText && !nothingYet ? (
+                    {unavailableText && machineNotices.unavailable ? (
                         <SurfaceStateCard
                             testID="session-work-unavailable"
                             size="line"
@@ -526,9 +527,11 @@ export const SessionWorkView = React.memo((props: Readonly<{
                         />
                     ) : null}
                     {/* The configuration sections under the live list, each opened by its own full-width
-                        hairline (`WorkSection anatomy="page"`): Triggers, then Roles (and Notes). */}
+                        hairline (`WorkSection anatomy="page"`), in one order whether or not work has started
+                        (lab `b-work A`, plan 60 D43/D44): Instructions · Memory · Voice · Triggers, then Roles
+                        (and Notes). */}
                     {guidanceSections}
-                    {nothingYet ? null : triggersSlot}
+                    {triggersSlot}
                     {isBot ? contextSection : null}
                     <View testID="session-work-roles-slot" style={styles.slot}>
                         {/* Lane U2's section. */}

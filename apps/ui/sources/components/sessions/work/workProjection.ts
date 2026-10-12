@@ -67,6 +67,25 @@ export function resolveWorkReadPresentation(input: Readonly<{
 }
 
 /**
+ * Which pane notices say why work cannot go on here, one message per state (lab `convo-ST`): an
+ * unreachable machine is said once, by the pane's offline notice, so the "starting agents needs this
+ * machine online" line is not stacked under it. Any other reason agents cannot start keeps its own
+ * line. With nothing started, the empty state explains instead of either line.
+ */
+export function resolveWorkMachineNotices(input: Readonly<{
+    machineReachable: boolean;
+    nothingYet: boolean;
+    unavailableReason: string | null;
+}>): Readonly<{ offline: boolean; unavailable: boolean }> {
+    const offline = !input.machineReachable && !input.nothingYet;
+    return {
+        offline,
+        unavailable: input.unavailableReason !== null && !input.nothingYet
+            && !(offline && input.unavailableReason === 'machineOffline'),
+    };
+}
+
+/**
  * Where each title's distinguishing end starts, for a list whose rows may truncate (DESIGN.md: never
  * truncate what tells Sessions apart). Sibling work is often named from one stem ("… child A",
  * "… child B"), and an end ellipsis would cut exactly the part that differs. For a title that shares
@@ -139,6 +158,11 @@ export type WorkSummary = Readonly<{
     sessions: number;
     runs: number;
 }>;
+
+/** Outstanding includes waiting and stalled work; neither belongs to the working bucket. */
+export function readWorkWorkingCount(summary: WorkSummary): number {
+    return Math.max(0, summary.outstanding - summary.needsYou - summary.stalled);
+}
 
 export type WorkProjection = Readonly<{
     sessions: readonly WorkItem[];

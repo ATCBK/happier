@@ -1,5 +1,6 @@
 import { t } from '@/text';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { formatLastSeen } from '@/utils/sessions/sessionUtils';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
@@ -19,10 +20,20 @@ export function describeMachinePresenceLine(
     machine: Readonly<{ id?: string; active: boolean; activeAt?: number | null; revokedAt?: number | null }>,
     nowMs?: number,
     managedMachine?: ManagedMachineV1 | null,
+    serverId?: string | null,
 ): MachinePresenceLine {
-    const online = isMachineOnline(machine, nowMs);
+    const presenceOnline = isMachineOnline(machine, nowMs);
+    const online = machine.id && serverId
+        ? isMachineReachable(serverId, { ...machine, id: machine.id }, nowMs)
+        : presenceOnline;
+    const lastSeen = formatLastSeen(machine.activeAt ?? 0);
+    // A fresh heartbeat with a failed request from this Home is a live machine this Home cannot
+    // reach, not an offline one ("Offline · last seen just now" contradicts itself). "Offline"
+    // stays for a stale heartbeat.
     const word = online ? t('settingsOverview.machineOnline')
-        : t('settingsOverview.machineOffline', { lastSeen: formatLastSeen(machine.activeAt ?? 0) });
+        : presenceOnline
+            ? t('settingsOverview.machineUnreachableFromHome', { lastSeen })
+            : t('settingsOverview.machineOffline', { lastSeen });
     return {
         online,
         label: resolveWorkStatusTone({ kind: 'machine', facts: {

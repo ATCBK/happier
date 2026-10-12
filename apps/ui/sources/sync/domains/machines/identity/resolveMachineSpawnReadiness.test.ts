@@ -46,6 +46,17 @@ describe('resolveMachineSpawnReadiness', () => {
     });
 
     it('rejects attempts that are structurally or exactly unavailable', () => {
+        expect(resolveMachineSpawnReadiness({
+            selectedMachineId: 'machine-1',
+            machine: onlineMachine,
+            machineReachable: false,
+        })).toEqual({ status: 'offline', machineId: 'machine-1' });
+        expect(canAttemptMachineSpawn({
+            selectedMachineId: 'machine-1',
+            machine: onlineMachine,
+            machineReachable: false,
+            spawnReadiness: { status: 'unknown', machineId: 'machine-1' },
+        })).toBe(false);
         expect(canAttemptMachineSpawn({
             selectedMachineId: 'machine-1',
             machine: onlineMachine,

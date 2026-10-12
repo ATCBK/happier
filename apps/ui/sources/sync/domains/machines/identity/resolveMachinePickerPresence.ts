@@ -1,4 +1,5 @@
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { isMachineReplaced } from './machineIdentityTypes';
 
@@ -12,6 +13,7 @@ export type MachinePickerPresence =
 
 export function resolveMachinePickerPresence(
     machine: Readonly<{
+        id: string;
         active: boolean;
         activeAt?: number | null;
         revokedAt?: number | null;
@@ -19,6 +21,7 @@ export function resolveMachinePickerPresence(
         replacedAt?: unknown;
     }>,
     nowMs?: number,
+    serverId?: string | null,
 ): MachinePickerPresence {
     const revokedAt = typeof machine.revokedAt === 'number' ? machine.revokedAt : 0;
     if (Number.isFinite(revokedAt) && revokedAt > 0) {
@@ -29,7 +32,10 @@ export function resolveMachinePickerPresence(
         return { status: 'replaced', selectable: false };
     }
 
-    if (!isMachineOnline(machine, nowMs)) {
+    const online = serverId
+        ? isMachineReachable(serverId, machine, nowMs)
+        : isMachineOnline(machine, nowMs);
+    if (!online) {
         return { status: 'offline', selectable: false };
     }
 

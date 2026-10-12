@@ -10,6 +10,7 @@ import { getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessi
 import { describeMachineSharedOwnership } from '@/sync/domains/machines/machineOwnershipGroups';
 import { t } from '@/text';
 import { resolveMachinePickerPresence } from './resolveMachinePickerPresence';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { buildMachineSelectionBuckets } from './machineSelection/buildMachineSelectionBuckets';
 import type { MachineDestinationPurposeV1 } from '@happier-dev/protocol/machines/pools';
@@ -101,6 +102,7 @@ export function MachineSelector({
     popoverBoundaryRef,
 }: MachineSelectorProps) {
     const { theme } = useUnistyles();
+    const reachabilityRevision = useMachineReachabilityRevision();
     const [dropdownOpen, setDropdownOpen] = React.useState(false);
     const demandedWorkerFacts = useMachineDestinationWorkerStatus({
         purpose,
@@ -186,7 +188,7 @@ export function MachineSelector({
         isFavorite: boolean,
         iconName: IconName,
     ): DropdownMenuItem => {
-        const presence = resolveMachinePickerPresence(machine);
+        const presence = resolveMachinePickerPresence(machine, undefined, serverId);
         const eligibility = resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, serverId ?? ''), machine);
         const purposeEligible = eligibility.eligible;
         const unavailable = !presence.selectable || !purposeEligible;
@@ -207,7 +209,7 @@ export function MachineSelector({
             ),
             rightElement: renderFavoriteToggle(machine, isFavorite),
         };
-    }, [disableOfflineMachines, getMachineOptionTestID, purpose, resolveMachinePlacementFacts, serverId, renderFavoriteToggle, theme.colors.text.secondary]);
+    }, [disableOfflineMachines, getMachineOptionTestID, purpose, reachabilityRevision, resolveMachinePlacementFacts, serverId, renderFavoriteToggle, theme.colors.text.secondary]);
 
     const dropdownItems = React.useMemo(() => {
         const favoriteItems = showFavorites
@@ -261,7 +263,7 @@ export function MachineSelector({
                         const machine = machineById.get(machineId);
                         if (!machine) return;
                         if (!resolveMachineDestinationPurposeEligibility(purpose, resolveMachinePlacementFacts?.(machine, serverId ?? ''), machine).eligible) return;
-                        if (disableOfflineMachines && !resolveMachinePickerPresence(machine).selectable) return;
+                        if (disableOfflineMachines && !resolveMachinePickerPresence(machine, undefined, serverId).selectable) return;
                         onSelect(machine);
                     }}
                     rowKind="item"
@@ -313,7 +315,7 @@ function MachineSelectorList(props: MachineSelectorProps) {
         recent: props.recentSectionTitle, favorites: props.favoritesSectionTitle, all: props.allSectionTitle,
     }), [props.recentSectionTitle, props.favoritesSectionTitle, props.allSectionTitle]);
     const resolveAvailability = React.useCallback((machine: Machine) => {
-        const presence = resolveMachinePickerPresence(machine);
+        const presence = resolveMachinePickerPresence(machine, undefined, groupServerId);
         return { selectable: presence.selectable || (props.disableOfflineMachines === false && presence.status === 'offline') };
     }, [props.disableOfflineMachines]);
     const selectMachine = React.useCallback((machine: Machine) => {

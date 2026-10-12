@@ -8,7 +8,7 @@ import type { EmbeddedTerminalRendererHandle } from '@/components/terminal/embed
 import { useMachineTerminalSession } from '@/hooks/machine/useMachineTerminalSession';
 import { useMachine } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
@@ -33,6 +33,7 @@ export const AgentSignInTerminal = React.memo(function AgentSignInTerminal(props
     const target = { serverId: props.serverId, machineId: props.machineId, agentId: props.agentId };
     const signIn = useAgentSignIn(target);
     const machine = useMachine(props.machineId);
+    const presence = useMachinePresenceSummary(props.serverId, props.machineId);
     const terminalRef = React.useRef<EmbeddedTerminalRendererHandle | null>(null);
     const didStartRef = React.useRef(false);
     const notifiedExitTerminalRef = React.useRef<string | null>(null);
@@ -43,7 +44,7 @@ export const AgentSignInTerminal = React.memo(function AgentSignInTerminal(props
         serverId: props.serverId,
         cwd: machine?.metadata?.homeDir?.trim() || null,
         launch,
-        machineReachable: Boolean(machine && isMachineOnline(machine)),
+        machineReachable: Boolean(machine && presence.reachability === 'reachable'),
         machineRpcTargetAvailable: true,
         terminalKey,
         attachedTerminalId: signIn.terminalId,

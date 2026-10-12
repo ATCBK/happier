@@ -33,7 +33,7 @@ function createSession(overrides: Partial<Session> = {}): Session {
 }
 
 function createPort() {
-    const enqueuePendingMessage = vi.fn(async () => ({ localId: 'pending-1', accepted: true }));
+    const enqueuePendingMessage = vi.fn<SessionSubmitPort['enqueuePendingMessage']>(async () => ({ localId: 'pending-1', accepted: true }));
     const updatePendingRequestedAction = vi.fn(async () => undefined);
     const ensureSessionRuntimeForPendingInput = vi.fn(async () => ({ type: 'success' as const }));
     const shouldDelegatePendingActivationToDaemon = vi.fn(async () => false);
@@ -79,6 +79,37 @@ function createAccountLifetime(scope = { serverId: 'server-1', accountId: 'accou
 }
 
 describe('submitSessionUserMessage Pending action ownership', () => {
+    const resetAction = {
+        v: 1, kind: 'reset_start', reset: {
+            source: { bindingKind: 'account', ref: { service: { pluginId: 'happier.agent.codex', localId: 'codex-account' }, accountId: 'connected-account' } },
+            recordId: 'paug_v1_receipt1', meterId: 'requests', witness: { id: 'accepted-history-row', observedAtMs: 100 },
+        },
+    } as const;
+
+    it.each([false, true])('keeps reset starts pending regardless of direct preference (forceImmediate=%s)', async (forceImmediate) => {
+        const harness = createPort();
+        const result = await submitSessionUserMessage(harness.port, {
+            ...submitOptions(createSession({ metadata: { ...createSession().metadata!, version: '0.0.1' } })),
+            requestedAction: resetAction, forceImmediate,
+        });
+        expect(result).toMatchObject({ persistence: 'pending', wake: { attempted: false, state: 'not_needed' } });
+        expect(harness.enqueuePendingMessage.mock.calls[0]?.[4]).toMatchObject({ requestedAction: resetAction });
+        expect(harness.sendMessage).not.toHaveBeenCalled();
+        expect(harness.ensureSessionRuntimeForPendingInput).not.toHaveBeenCalled();
+    });
+
+    it('refuses reset starts for Runs or an incompatible immediate intent before effects', async () => {
+        for (const overrides of [{ recipient: { kind: 'execution_run' as const, runId: 'run-a' } }, { explicitMode: 'interrupt' as const }]) {
+            const harness = createPort();
+            const result = await submitSessionUserMessage(harness.port, {
+                ...submitOptions(createSession()), requestedAction: resetAction, ...overrides,
+            });
+            expect(result).toMatchObject({ type: 'rejected', persistence: 'none', errorCode: 'session_input_idempotency_conflict' });
+            expect(harness.enqueuePendingMessage).not.toHaveBeenCalled();
+            expect(harness.sendMessage).not.toHaveBeenCalled();
+            expect(harness.ensureSessionRuntimeForPendingInput).not.toHaveBeenCalled();
+        }
+    });
     it.each([false, true])('admits the allowed permission mode through direct and pending submission (direct=%s)', async (forceImmediate) => {
         const session = createSession({ permissionMode: 'yolo' });
         let admittedMode: unknown;

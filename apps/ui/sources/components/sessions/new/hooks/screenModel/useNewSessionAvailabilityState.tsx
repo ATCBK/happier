@@ -25,7 +25,8 @@ import {
 import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInteractionsWithFallback';
 import { resolveTerminalHost } from '@/sync/domains/settings/terminalSettings';
 import { resolveWindowsTerminalAvailable } from '@/capabilities/windowsTerminalAvailability';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type {
@@ -69,6 +70,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     machines: ReadonlyArray<Machine>;
     allProfiles: ReadonlyArray<AIBackendProfile>;
 }>) {
+    const reachabilityRevision = useMachineReachabilityRevision();
     const staticAgentId = params.staticAgentId ?? params.agentType ?? null;
     const behaviorAgentId = resolveNewSessionBehaviorAgentId({
         runtimeCarrierAgentId: params.runtimeCarrierAgentId,
@@ -197,12 +199,14 @@ export function useNewSessionAvailabilityState(params: Readonly<{
         if (!params.selectedMachineId) return false;
         const machine = params.selectedMachine;
         if (!machine) return false;
-        return isMachineOnline(machine);
+        return isMachineReachable(params.capabilityServerId, machine);
     }, [
         params.selectedMachineId,
         params.selectedMachine?.active,
         params.selectedMachine?.activeAt,
         params.selectedMachine?.revokedAt,
+        params.capabilityServerId,
+        reachabilityRevision,
     ]);
 
     const selectedMachineSpawnReadiness = React.useMemo(() => {
@@ -228,6 +232,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
             machine: params.selectedMachine,
             rpcAvailable,
             keyAvailable,
+            machineReachable: selectedMachineOnline,
             requireExactSpawnReadiness: true,
         });
     }, [
