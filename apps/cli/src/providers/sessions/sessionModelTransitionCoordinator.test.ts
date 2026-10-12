@@ -363,6 +363,51 @@ function createHarness(params?: Readonly<{
 }
 
 describe('createSessionModelTransitionCoordinator', () => {
+  function createNativeHarness() {
+    const authorizer = createSessionModelTransitionAuthorizer({
+      agentId: 'claude', agentTargetKey: native('old').agentTargetKey,
+      sessionId: 'session-1', machineId: 'machine-1', nativeModelApplyPolicy: 'live',
+      readActiveTarget: (): AuthorizedSessionModelTransitionTarget => harness.coordinator.readActiveTarget(),
+    });
+    const harness = createHarness({ initial: native('old'), authorize: authorizer });
+    return harness;
+  }
+  it('arms a live model at the owner, ignores its metadata echo, and applies only at prompt custody', async () => {
+    const harness = createNativeHarness();
+    const next = native('next');
+    const armed = await harness.coordinator.submit(next, { source: 'command', applyTiming: 'next_prompt' });
+    expect(armed).toMatchObject({ ok: true, status: 'armed', activeSelection: native('old'), requestedSelection: next });
+    expect(harness.readCurrent()).toEqual(native('old'));
+    await vi.waitFor(async () => expect((await harness.coordinator.runWithStableActiveTarget(async () => undefined)).status).toBe('completed'));
+    await harness.coordinator.submit(next, { source: 'metadata' });
+    expect(harness.readCurrent()).toEqual(native('old'));
+    await harness.coordinator.submit(next, { source: 'prompt', runWithActiveSelection: async transfer => {
+      await transfer({ abortSignal: new AbortController().signal, dispatch: async () => { harness.events.push('send'); } });
+    } });
+    expect(harness.readCurrent()).toEqual(next);
+    expect(harness.events.indexOf('apply:next')).toBeLessThan(harness.events.indexOf('send'));
+    await harness.coordinator.dispose();
+  });
+  it('un-arms a deferred live model without applying it or sending', async () => {
+    const harness = createNativeHarness();
+    await harness.coordinator.submit(native('next'), { source: 'command', applyTiming: 'next_prompt' });
+    expect(await harness.coordinator.unarm()).toMatchObject({ ok: true, status: 'already_active' });
+    expect(harness.readCurrent()).toEqual(native('old'));
+    expect(harness.events).not.toContain('apply:next');
+    expect(harness.events).not.toContain('send');
+    await harness.coordinator.dispose();
+  });
+  it('keeps a failed Send armed so a later metadata echo cannot silently retry the model', async () => {
+    const harness = createNativeHarness();
+    const next = native('next');
+    await harness.coordinator.submit(next, { source: 'command', applyTiming: 'next_prompt' });
+    harness.applyRuntime.mockResolvedValueOnce({ status: 'failed', reason: 'provider_unavailable' });
+    expect(await harness.coordinator.submit(next, { source: 'command', applyTiming: 'immediate' })).toMatchObject({ ok: false, status: 'apply_failed' });
+    await vi.waitFor(async () => expect((await harness.coordinator.runWithStableActiveTarget(async () => undefined)).status).toBe('completed'));
+    expect(await harness.coordinator.submit(next, { source: 'metadata' })).toMatchObject({ ok: true, status: 'armed' });
+    expect(harness.readCurrent()).toEqual(native('old'));
+    await harness.coordinator.dispose();
+  });
   it('reads applied X while Y is only pending, but refuses unknown runtime custody after effect starts', async () => {
     const initialTarget = authorized(native('X'));
     let active = () => initialTarget;
@@ -2517,6 +2562,23 @@ describe('createSessionModelTransitionCoordinator', () => {
     expect(harness.applyRuntime).not.toHaveBeenCalled();
     expect(harness.fence).not.toHaveBeenCalled();
     expect(harness.publishActive).not.toHaveBeenCalled();
+  });
+
+  it('un-arms a pending route through the same intent owner without applying a runtime change', async () => {
+    const active = native('old');
+    const initialTarget = authorized(active);
+    let readActiveTarget = () => initialTarget;
+    const authorize = createSessionModelTransitionAuthorizer({ sessionId: 'session', machineId: 'machine',
+      agentId: 'claude', agentTargetKey: active.agentTargetKey, nativeModelApplyPolicy: 'live',
+      readActiveTarget: () => readActiveTarget() });
+    const harness = createHarness({ initialTarget, authorize });
+    readActiveTarget = () => harness.coordinator.readActiveTarget();
+    await expect(harness.coordinator.submit(provider('pc_other', 'new'), { source: 'command' }))
+      .resolves.toMatchObject({ status: 'restart_required' });
+    await expect(harness.coordinator.unarm()).resolves.toMatchObject({ ok: true, status: 'already_active', activeSelection: active });
+    expect(harness.publishIntent.mock.calls.at(-1)?.[0]).toEqual(active);
+    expect(harness.applyRuntime).not.toHaveBeenCalled();
+    await harness.coordinator.dispose();
   });
 
   it('treats an exact restart-only Provider reauthorization as already active without a runtime effect or active-fact publication', async () => {

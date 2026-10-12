@@ -1,4 +1,5 @@
 import { ProviderSettingsLimitError } from '@happier-dev/protocol/providers/settings/v1';
+import { isProviderContributionAuthoringMachineRequiredV1 } from '@happier-dev/protocol/providers/connections/creationV1';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import type { DaemonProviderConnectionsDescribeRequestV1, DaemonProviderContributionAuthoringPreviewV1 } from '@happier-dev/protocol/rpc/providers';
 import { DaemonProviderConnectionMutationResponseV1Schema, DaemonProviderModelSettingsMutationResponseV1Schema, DaemonProviderConnectionsDescribeResponseV1Schema,
@@ -158,9 +159,10 @@ export function createProviderConnectionService(deps: ProviderConnectionServiceD
       if (!deps.featureGate.isEnabled('providers')) return { status: 'error', error: createProviderErrorV1('provider_feature_disabled', { machineId: deps.machineId }) };
       if (value.machineId !== deps.machineId) return { status: 'error', error: createProviderErrorV1('provider_not_enabled_on_machine', { machineId: value.machineId }) };
       const source = resolveProviderContributionRegistryEntry((await deps.loadSnapshot()).registry, value.contributionKey);
-      const needsSelection = !value.endpointOverrides?.length && source?.contribution.definition.endpointTemplates.some(endpoint =>
-        'localUrlCandidates' in endpoint && endpoint.localUrlCandidates && endpoint.localUrlCandidates.length > 1);
-      if (value.selectedCandidateId != null || needsSelection) return machine.previewCreateContribution(value);
+      if (isProviderContributionAuthoringMachineRequiredV1({ definition: source?.contribution.definition,
+        selectedCandidateId: value.selectedCandidateId, endpointOverrides: value.endpointOverrides })) {
+        return machine.previewCreateContribution(value);
+      }
       const request = parseProviderActionRequestV1('providers.connections.describe', { authoringPreview: {
         connectionId: value.connectionId, contributionKey: value.contributionKey, displayName: value.displayName,
         selectedCandidateId: null, endpointOverrides: value.endpointOverrides ?? [],

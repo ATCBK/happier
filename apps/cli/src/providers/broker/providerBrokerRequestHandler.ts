@@ -29,9 +29,8 @@ import type {
 import { createExternalProviderTerminalTokenReader } from './externalProviderTerminalTokens';
 import { isSameTeamCredentialBrokerApplication } from './teamCredentialModelCatalog';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH,
-    PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from './providerBrokerPrivateProtocol';
+    PROVIDER_BROKER_MODEL_ID_HEADER, projectProviderBrokerEndpointMetadata } from './providerBrokerPrivateProtocol';
 import type { SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
-import { normalizeProviderOriginRelativePathSyntax } from '@happier-dev/protocol/providers/safety/url';
 
 /** Request-policy refusals come from the evaluator owner; Home admission
  * failures use the one canonical protocol vocabulary. */
@@ -372,15 +371,9 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
                 if (!await context.revalidate(request.signal)) return { ok: false, reasonCode: 'resource_unavailable' };
                 request.signal?.throwIfAborted();
                 if (request.method === 'GET' && request.pathAndQuery === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
-                    const endpoint = context.access.endpointUrl(context.authority.payload.application.endpointTemplateId);
-                    if (!endpoint) return { ok: false, reasonCode: 'resource_unavailable' };
-                    const url = new URL(endpoint);
-                    if (url.search || url.hash) return { ok: false, reasonCode: 'resource_unavailable' };
-                    // Project only the canonical runtime path, never the hub's
-                    // upstream origin or credentials, and perform no inference.
-                    const path = normalizeProviderOriginRelativePathSyntax(url.pathname);
-                    return { ok: true, response: { ok: true, status: 204, statusText: 'No Content',
-                        headers: { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: path }, body: null } };
+                    const response = projectProviderBrokerEndpointMetadata(
+                        context.access.endpointUrl(context.authority.payload.application.endpointTemplateId));
+                    return response ? { ok: true, response } : { ok: false, reasonCode: 'resource_unavailable' };
                 }
                 return { ok: true, response: await context.access.request(request) };
             } catch {
@@ -574,6 +567,39 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
                 verification.authority.payload.application,
             )
         ) return { ok: false, reasonCode: 'resource_changed' };
+        if (request.method === 'GET' && request.pathAndQuery === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
+            if (!input.authorizeModelCatalog || !context.streamLifetime) return { ok: false, reasonCode: 'resource_unavailable' };
+            const requestedModel = Object.entries(request.headers ?? {})
+                .find(([name]) => name.toLowerCase() === PROVIDER_BROKER_MODEL_ID_HEADER)?.[1];
+            const modelId = requestedModel ? policySnapshot.modelCatalog.resolveCanonicalModelId(requestedModel) : null;
+            if (!modelId || !policySnapshot.modelCatalog.models.some(model => model.id === modelId)) {
+                return { ok: false, reasonCode: 'model_not_allowed' };
+            }
+            const authorize = () => input.authorizeModelCatalog!({
+                authorization: { kind: 'private', authority: verification.authority },
+                expectedResourceRevision: policySnapshot.resourceRevision, request,
+            });
+            const authorized = await authorize();
+            if (!authorized.ok) return authorized;
+            // The exact runtime must be materialized to read its declaration.
+            // Home authorizes this private metadata demand first; no inference,
+            // upstream credential disclosure or UsageEvent is performed.
+            const selected = await context.streamLifetime.acquireSource({
+                source: policySnapshot.source, resourceId: verification.authority.payload.resourceId,
+                brokerMachineId: verification.authority.payload.target.machineId,
+                operation: verification.authority.payload.consumer,
+                expectedResourceRevision: policySnapshot.resourceRevision,
+                application: verification.authority.payload.application,
+                modelId, sourceRevision: policySnapshot.sourceRevision,
+            });
+            if (!selected) return { ok: false, reasonCode: 'resource_unavailable' };
+            const current = await authorize();
+            if (!current.ok) return current;
+            request.signal?.throwIfAborted();
+            const response = projectProviderBrokerEndpointMetadata(selected.access.endpointUrl(
+                verification.authority.payload.application.endpointTemplateId));
+            return response ? { ok: true, response } : { ok: false, reasonCode: 'resource_unavailable' };
+        }
         if (request.method === 'GET' && request.pathAndQuery === '/v1/models') {
             if (!input.authorizeModelCatalog) return { ok: false, reasonCode: 'resource_unavailable' };
             const authorized = await input.authorizeModelCatalog({

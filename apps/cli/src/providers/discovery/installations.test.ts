@@ -28,7 +28,11 @@ function registry(options: Readonly<{ managedRuntime?: boolean }> = {}): Provide
       id: 'openai', protocol: 'openai-responses', localUrlCandidates: ['http://127.0.0.1:1234/v1'],
       capabilities: { streaming: 'supported', toolRoundTrips: 'supported', statefulResponses: 'supported', reasoningControls: 'supported' },
     }],
-    catalog: { source: 'probe', manualModelPolicy: 'allowed', probes: [{ endpointTemplateId: 'openai', path: '/v1/models', parser: 'openai-models' }] },
+    catalog: {
+      source: 'probe', manualModelPolicy: 'allowed',
+      probes: [{ endpointTemplateId: 'openai', path: '/v1/models', parser: 'openai-models' }],
+      ...(options.managedRuntime ? { sourceRegistryVersion: 'installations-fixture:v1' } : {}),
+    },
     ...(options.managedRuntime
       ? { managedRuntime: { kind: 'managed', endpointTemplateIds: ['openai'] } }
       : {}),
@@ -143,23 +147,30 @@ describe('createProviderLocalInstallationReader', () => {
   });
 
   it('fails a stalled advisory installation lookup closed without blocking Provider reads', async () => {
+    let notifyLookupStarted!: () => void;
+    const lookupStarted = new Promise<void>((resolve) => { notifyLookupStarted = resolve; });
     const reader = createProviderLocalInstallationReader({
       runtimeStore: await runtimeStore(),
-      resolveSystemTool: vi.fn(() => new Promise<never>(() => {})),
+      resolveSystemTool: vi.fn(() => {
+        notifyLookupStarted();
+        return new Promise<never>(() => {});
+      }),
       runSystemTool: vi.fn(),
       now: () => 100,
       installationResolutionTimeoutMs: 10,
     });
 
-    const outcome = await Promise.race([
-      reader.read({ machineId: 'machine-a', registry: registry(), candidates: [] })
-        .then((rows) => ({ status: 'completed' as const, rows })),
-      new Promise<{ status: 'timed_out' }>((resolve) => {
-        setTimeout(() => resolve({ status: 'timed_out' }), 100);
-      }),
-    ]);
-
-    expect(outcome).toEqual({ status: 'completed', rows: [] });
+    // Control the timeout clock while keeping the persisted cache real; disk
+    // latency is not part of the installation-resolution deadline.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const outcome = reader.read({ machineId: 'machine-a', registry: registry(), candidates: [] });
+      await lookupStarted;
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(outcome).resolves.toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps a timed-out installation lookup in flight instead of starting another after its cache expires', async () => {

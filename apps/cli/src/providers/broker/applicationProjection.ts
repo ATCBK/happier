@@ -73,6 +73,7 @@ export function projectManagedProviderBrokerApplication(input: Readonly<{
 export function resolveManagedProviderBrokerPurpose(input: Readonly<{
   registry: ProviderContributionRegistryView;
   application: ProviderBrokerApplicationBindingV1;
+  service: ResolvedProviderManagedRuntimeDeclarationV1['connectedAccounts'][number]['service'];
 }>): ResolvedProviderManagedRuntimeDeclarationV1['connectedAccounts'][number] | null {
   if (!projectManagedProviderBrokerApplication({
     registry: input.registry,
@@ -84,8 +85,11 @@ export function resolveManagedProviderBrokerPurpose(input: Readonly<{
     implementationIdentity: provider.identity,
     managedRuntime: provider.definition.managedRuntime!,
   });
-  return runtime.connectedAccounts.find((purpose) =>
-    purpose.endpointTemplateIds?.includes(input.application.endpointTemplateId)) ?? null;
+  const purposes = runtime.connectedAccounts.filter((purpose) =>
+    purpose.service.pluginId === input.service.pluginId
+    && purpose.service.localId === input.service.localId
+    && purpose.endpointTemplateIds?.includes(input.application.endpointTemplateId));
+  return purposes.length === 1 ? purposes[0]! : null;
 }
 
 /**

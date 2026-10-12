@@ -29,7 +29,7 @@ export function createProviderAccessOperations(context: ProviderConnectionServic
 
   async function setEnabled(input: Readonly<{
     action: 'setEnabled'; machineId: string; connectionId: string;
-    enabled: boolean; scope?: 'account' | 'machine' | 'connection';
+    enabled: boolean; scope: 'account' | 'machine' | 'connection';
   }>): Promise<ProviderConnectionServiceResult<ProviderConnectionView>> {
     if (!deps.featureGate.isEnabled('providers')) return { status: 'error', error: featureError(input.connectionId) };
     const machineError = assertMachine(input.machineId, input.connectionId);
@@ -47,7 +47,7 @@ export function createProviderAccessOperations(context: ProviderConnectionServic
     };
     const connection = readSnapshotSettings(snapshot).connections.find((entry) => entry.id === input.connectionId);
     if (!connection) return { status: 'error', error: createProviderErrorV1('provider_connection_not_found', { connectionId: input.connectionId, machineId: input.machineId }) };
-    let scope = input.scope ?? null;
+    const scope = input.scope;
     let dnsEvidence: ProviderEndpointDnsEvidence = new Map();
     let previewResolution: Extract<ProviderConnectionResolution, { status: 'resolved' }> | null = null;
     if (input.enabled) {
@@ -64,10 +64,8 @@ export function createProviderAccessOperations(context: ProviderConnectionServic
       if (resolution.record.scope !== 'machine') return { status: 'error', error: createProviderErrorV1('provider_connection_invalid', {
         connectionId: input.connectionId, machineId: input.machineId,
       }) };
-      scope = resolution.record.scope;
       previewResolution = resolution;
     }
-    if (!scope) return { status: 'error', error: createProviderErrorV1('provider_connection_disabled', { connectionId: input.connectionId, machineId: input.machineId }) };
     await deps.updateProviderSettings((providerSettings) => {
       const settings = readSettings(providerSettings);
       const resolution = input.enabled
@@ -88,7 +86,7 @@ export function createProviderAccessOperations(context: ProviderConnectionServic
       }
       return setProviderConnectionGrant({
         settings, connectionId: input.connectionId, machineId: input.machineId,
-        scope: resolution?.record.scope ?? scope!,
+        scope,
         enabled: input.enabled,
         connectionSecurityFingerprint: resolution?.record.connectionSecurityFingerprint ?? 'unused-for-disable',
         endpointSetFingerprint: resolution?.record.endpointSetFingerprint ?? 'unused-for-disable',

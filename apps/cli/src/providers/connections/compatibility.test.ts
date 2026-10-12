@@ -9,6 +9,8 @@ import {
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import type { ResolvedProviderConnectionRecord } from '@/providers/registry';
+import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
+import { PLUGIN_MANIFEST as CUSTOM_ACP_MANIFEST } from '../../../../../packages/plugins/custom-acp/src/manifest';
 
 import { projectProviderConnectionCompatibility } from './compatibility';
 
@@ -57,6 +59,11 @@ function lease(externalAgentProtocol?: ProviderWireProtocol): PluginRuntimeRegis
       },
     }],
     ['gemini', { definition: { id: 'gemini', kindVersion: 1 }, runtimeSpec: { title: 'Gemini' } }],
+    ['custom-acp', projectManifestAgentContribution({
+      definition: CUSTOM_ACP_MANIFEST.contributes.agents![0]!,
+      pluginId: CUSTOM_ACP_MANIFEST.id,
+      provenance: 'first_party', source: { kind: 'bundled' },
+    })],
   ]);
   const runtimes = new Map([...['codex', 'claude'], ...(externalAgentProtocol ? ['external'] : [])].map((agentId) => [agentId, {
     pluginId: `happier.agent.${agentId}`,

@@ -1,4 +1,5 @@
-import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
+import type { AIBackendProfile } from '@happier-dev/protocol/profiles/backendProfileSchema';
+import { readAiLaunchProfileCollection } from '@happier-dev/protocol/profiles/read';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { DEFAULT_BUILT_IN_BACKEND_PROFILES } from '@happier-dev/protocol/profiles/builtInBackendProfiles';
 import { ProviderConnectionIdSchema, ProviderModelIdSchema } from '@happier-dev/protocol/providers/ids';
@@ -23,24 +24,20 @@ function stringArray(value: unknown): readonly string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
-function hasNonLegacyPersistedSourceRow(raw: Readonly<Record<string, unknown>>, sourceProfileId: string): boolean {
-  if (!Array.isArray(raw.profiles)) return false;
-  const matches = raw.profiles.filter((entry) => isRecord(entry) && own(entry, 'id') === sourceProfileId);
-  if (matches.length === 0) return false;
-  return matches.length !== 1 || !AIBackendProfileSchema.safeParse(matches[0]).success;
-}
-
-function readPersistedLegacyProfile(
-  raw: Readonly<Record<string, unknown>>,
+function readPersistedSourceProfile(
+  profiles: ReturnType<typeof readAiLaunchProfileCollection>['entries'],
   sourceProfileId: string,
-): ReturnType<typeof AIBackendProfileSchema.safeParse> | null {
-  if (!Array.isArray(raw.profiles)) return null;
-  const matches = raw.profiles.filter((entry) => isRecord(entry) && own(entry, 'id') === sourceProfileId);
-  return matches.length === 1 ? AIBackendProfileSchema.safeParse(matches[0]) : null;
+) {
+  const matches = profiles.filter((entry) => isRecord(entry.raw) && own(entry.raw, 'id') === sourceProfileId);
+  if (matches.length === 0) return { kind: 'absent' } as const;
+  const source = matches[0];
+  return matches.length === 1 && source?.kind === 'legacy'
+    ? { kind: 'legacy', profile: source.profile } as const
+    : { kind: 'nonlegacy' } as const;
 }
 
 function isPersistedProfileDispositionComplete(
-  profile: ReturnType<typeof AIBackendProfileSchema.parse>,
+  profile: AIBackendProfile,
   descriptor: NonNullable<ProviderContributionV1['legacyProfileMigrations']>[number],
 ): boolean {
   const migrated = new Map(descriptor.migratedEnvironmentVariables.map((entry) => [entry.name, entry.value]));
@@ -103,6 +100,7 @@ export function buildLegacyProfileMigrationContext(input: Readonly<{
   processEnv?: Readonly<Record<string, string | undefined>>;
 }>): ProviderAccountSettingsMigrationContextV1 {
   const candidates: ProviderAccountSettingsMigrationCandidateV1[] = [];
+  const persistedProfiles = readAiLaunchProfileCollection(input.rawSettings.profiles).entries;
   const knownSourceIds = new Set<string>([
     ...DEFAULT_ENVIRONMENT_PROFILE_IDS,
     ...DEFAULT_BUILT_IN_BACKEND_PROFILES.map((profile) => profile.id),
@@ -120,15 +118,16 @@ export function buildLegacyProfileMigrationContext(input: Readonly<{
       knownSourceIds.add(sourceProfileId);
       const completedOutcome = readCompletedConnectionOutcome(input.providerSettings, sourceProfileId);
       // Built-ins historically need not be persisted at all. When a row is
-      // present, however, only the exact legacy schema is safe to transform;
+      // present, however, only the canonical legacy projection is safe to transform;
       // opaque/future/duplicate rows remain byte-for-byte legacy state. A known
       // completed Provider source may still repair its Provider-owned output;
       // the profile loop independently preserves any opaque row.
-      if (hasNonLegacyPersistedSourceRow(input.rawSettings, sourceProfileId) && completedOutcome === null) continue;
-      const persisted = readPersistedLegacyProfile(input.rawSettings, sourceProfileId);
+      const source = readPersistedSourceProfile(persistedProfiles, sourceProfileId);
+      if (source.kind === 'nonlegacy' && completedOutcome === null) continue;
+      const persisted = source.kind === 'legacy' ? source.profile : null;
       if (completedOutcome === null
         && persisted
-        && (!persisted.success || !isPersistedProfileDispositionComplete(persisted.data, descriptor))) continue;
+        && !isPersistedProfileDispositionComplete(persisted, descriptor)) continue;
       const enabled = isRecord(input.rawSettings.profileEnabledById)
         ? own(input.rawSettings.profileEnabledById, sourceProfileId)
         : undefined;
@@ -164,12 +163,12 @@ export function buildLegacyProfileMigrationContext(input: Readonly<{
         ?? (hasExplicitModelAlias ? aliasValue : implicitDefaultModelId);
       const explicitRetiredModelAlias = hasExplicitModelAlias
         && descriptor.implicitModelAliasReplacements.some((replacement) => replacement.legacyModelId === selectedModelId);
-      const retainedEnvironmentVariables = persisted?.success
-        ? persisted.data.environmentVariables.filter((entry) =>
+      const retainedEnvironmentVariables = persisted
+        ? persisted.environmentVariables.filter((entry) =>
             descriptor.retainedEnvironmentVariables.some((retained) => retained.name === entry.name))
         : descriptor.retainedEnvironmentVariables;
-      const retainedRequirements = persisted?.success
-        ? persisted.data.envVarRequirements.filter((entry) =>
+      const retainedRequirements = persisted
+        ? persisted.envVarRequirements.filter((entry) =>
             descriptor.retainedEnvironmentVariables.some((retained) => retained.name === entry.name))
         : [];
       const retainedLaunchProfile = retainedEnvironmentVariables.length > 0 || retainedRequirements.length > 0
@@ -179,10 +178,10 @@ export function buildLegacyProfileMigrationContext(input: Readonly<{
             name: entry.definition.name,
             extraEnvironmentVariables: retainedEnvironmentVariables,
             envVarRequirements: retainedRequirements,
-            defaultPermissionModeByTargetKey: persisted?.success ? persisted.data.defaultPermissionModeByTargetKey : {},
-            defaultPersistenceModeByTargetKey: persisted?.success ? persisted.data.defaultPersistenceModeByTargetKey : {},
+            defaultPermissionModeByTargetKey: persisted ? persisted.defaultPermissionModeByTargetKey : {},
+            defaultPersistenceModeByTargetKey: persisted ? persisted.defaultPersistenceModeByTargetKey : {},
             compatibilityByTargetKey: descriptor.primaryModel ? { [descriptor.primaryModel.agentTargetKey]: true } : {},
-            createdAt: persisted?.success ? persisted.data.createdAt : input.migratedAt,
+            createdAt: persisted ? persisted.createdAt : input.migratedAt,
             updatedAt: input.migratedAt,
           })
         : undefined;
@@ -227,15 +226,13 @@ export function buildLegacyProfileMigrationContext(input: Readonly<{
   }
 
   const pendingCustomProfileIds: string[] = [];
-  if (Array.isArray(input.rawSettings.profiles)) {
-    for (const rawProfile of input.rawSettings.profiles) {
-      const parsed = AIBackendProfileSchema.safeParse(rawProfile);
-      if (!parsed.success || knownSourceIds.has(parsed.data.id)) continue;
-      const routingLike = parsed.data.environmentVariables.some((entry) =>
-        isLegacyAiLaunchEndpointLikeEnvironmentNameV1(entry.name));
-      if (routingLike && profileReferenceEvidence(input.rawSettings, parsed.data.id, input.authoringMemory.lastUsedProfile)) {
-        pendingCustomProfileIds.push(parsed.data.id);
-      }
+  for (const entry of persistedProfiles) {
+    if (entry.kind !== 'legacy' || knownSourceIds.has(entry.profile.id)) continue;
+    const profile = entry.profile;
+    const routingLike = profile.environmentVariables.some((entry) =>
+      isLegacyAiLaunchEndpointLikeEnvironmentNameV1(entry.name));
+    if (routingLike && profileReferenceEvidence(input.rawSettings, profile.id, input.authoringMemory.lastUsedProfile)) {
+      pendingCustomProfileIds.push(profile.id);
     }
   }
 

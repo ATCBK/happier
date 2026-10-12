@@ -19,6 +19,8 @@ import {
 import { isSameTeamCredentialBrokerApplication } from '@/providers/broker/teamCredentialModelCatalog';
 import { composeProviderBindingMaterialization } from '@/providers/spawn/compose';
 import { resolveProviderCredentialPlaintextAsync } from '@/providers/spawn/credentials';
+import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
+import { readProviderBrokerEndpointUrl, PROVIDER_BROKER_MODEL_ID_HEADER } from './providerBrokerPrivateProtocol';
 
 type BrokerTunnel = Readonly<{
   localPort: number;
@@ -202,6 +204,16 @@ export async function openExactSessionTeamCredentialProviderBinding(
     await input.revalidateSelection?.({ signal: input.signal, brokerOpen: opened, tunnel });
     input.signal.throwIfAborted();
 
+    const endpointUrl = await readProviderBrokerEndpointUrl({
+      localOrigin: `http://127.0.0.1:${tunnel.localPort}`,
+      headers: { authorization: `Bearer ${tunnel.localCapability}`,
+        [MACHINE_HTTP_LOCAL_CAPABILITY_HEADER]: tunnel.localCapability,
+        [PROVIDER_BROKER_MODEL_ID_HEADER]: selection.modelId },
+      signal: input.signal,
+    });
+    await input.revalidateSelection?.({ signal: input.signal, brokerOpen: opened, tunnel });
+    input.signal.throwIfAborted();
+
     const bindingKey = `team_resource:${selection.resourceId}:revision:${selection.expectedResourceRevision}:route:brokered`;
     const prepared = prepareLeasedAgentProviderBinding({
       lease: input.lease,
@@ -228,7 +240,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
         contributionKey: null,
         endpoint: {
           endpointTemplateId: selection.application.endpointTemplateId,
-          normalizedUrl: `http://127.0.0.1:${tunnel.localPort}/v1`,
+          normalizedUrl: endpointUrl,
           protocol: selection.application.protocol,
           publicHeaders: {
             'X-Happier-Machine-Local-Capability': tunnel.localCapability,
@@ -263,7 +275,7 @@ export async function openExactSessionTeamCredentialProviderBinding(
         model: selection.descriptor,
         upstream: {
           protocol: selection.application.protocol,
-          normalizedUrl: `http://127.0.0.1:${tunnel.localPort}/v1`,
+          normalizedUrl: endpointUrl,
           credential: 'apiKey',
         },
         materialization: composed.launchMaterialization,

@@ -74,6 +74,7 @@ type Proposal = {
   committedIntentUpdatedAt?: number;
   selection: ProviderBoundModelRef;
   source: 'command' | 'metadata' | 'prompt';
+  applyTiming?: 'immediate' | 'next_prompt';
   runWithActiveSelection: ((
     transferPromptAdmission: (opts: Readonly<{
       abortSignal: AbortSignal;
@@ -258,6 +259,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
     selection: ProviderBoundModelRef,
     context: Readonly<{
       source: Proposal['source'];
+      applyTiming?: 'immediate' | 'next_prompt';
       callerInputConstraints?: CallerInputConstraintsV1;
       runWithActiveSelection?: NonNullable<Proposal['runWithActiveSelection']>;
     }>,
@@ -270,6 +272,8 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
     target: AuthorizedSessionModelTransitionTarget,
   ) => Promise<void>;
   readActiveTarget: () => AuthorizedSessionModelTransitionTarget;
+  /** Restore applied intent through this same command queue; callers never guess the active route. */
+  unarm: (callerInputConstraints?: CallerInputConstraintsV1) => Promise<SessionModelTransitionResultV1>;
   readAppliedTarget: () => Promise<SessionAppliedModelTransitionTarget>;
   runWithStableActiveTarget: <T>(
     effect: (
@@ -310,6 +314,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
   let stableActiveTargetEffect = false;
   let stableActiveTargetEffectSettled: Promise<void> | null = null;
   let publisherAuthorityUnavailable = false;
+  let armedSelection: ProviderBoundModelRef | null = null;
 
   const isCurrent = (): boolean =>
     !disposed
@@ -767,6 +772,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
         );
       }
       activeTarget = target;
+      armedSelection = null;
       const promptCustody =
         await runPromptCustodyAfterSuccessfulTransition(proposal);
       if (promptCustody === 'settled') return true;
@@ -926,6 +932,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
       sameAuthorizedTarget(activeTarget, target)
       && samePublishedActiveFacts(activeTarget, target)
     ) {
+      armedSelection = null;
       const promptCustody =
         await runPromptCustodyAfterSuccessfulTransition(proposal);
       if (promptCustody === 'settled') return;
@@ -946,6 +953,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
     }
 
     if (target.policy === 'restart_session') {
+      armedSelection = null;
       await settleBeforeRuntimeEffect(proposal, failure(
         'restart_required',
         activeTarget.selection,
@@ -953,6 +961,15 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
       ));
       return;
     }
+
+    if (proposal.applyTiming === 'next_prompt'
+      || (proposal.source === 'metadata' && armedSelection && sameSelection(armedSelection, proposal.selection))) {
+      armedSelection = proposal.selection;
+      await settleBeforeRuntimeEffect(proposal, { ok: true, status: 'armed',
+        activeSelection: activeTarget.selection, requestedSelection: proposal.selection });
+      return;
+    }
+    if (armedSelection && !sameSelection(armedSelection, proposal.selection)) armedSelection = null;
 
     const previousTarget = activeTarget;
     if (!activeFenceEpochId) {
@@ -1178,6 +1195,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
         );
       }
       activeTarget = target;
+      armedSelection = null;
     } catch (error) {
       if (!isCurrent()) {
         proposal.resolve(failure(
@@ -1877,6 +1895,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
     rawSelection: ProviderBoundModelRef,
     context: Readonly<{
       source: Proposal['source'];
+      applyTiming?: 'immediate' | 'next_prompt';
       callerInputConstraints?: CallerInputConstraintsV1;
       captureBefore?: boolean;
       expected?: SessionModelMutationExpectedV1;
@@ -1884,6 +1903,9 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
     }>,
   ): Promise<SessionModelTransitionResultV1> => {
     const selection = ProviderBoundModelRefSchema.parse(rawSelection);
+    if (context.applyTiming === 'next_prompt' && (context.captureBefore || context.expected)) {
+      return Promise.resolve(failure('unsupported', activeTarget.selection, selection, 'exact_model_mutation_requires_immediate_transition'));
+    }
     if (context.callerInputConstraints && !isModelRefGrantedV1(context.callerInputConstraints, selection)) {
       return Promise.resolve(failure('unsupported', activeTarget.selection, selection, 'model_not_granted'));
     }
@@ -1931,6 +1953,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
       || (
         runWithActiveSelection === null
         && proposal.runWithActiveSelection === null
+        && proposal.applyTiming === context.applyTiming
         && !context.captureBefore && !context.expected
         && !proposal.captureBefore && !proposal.expected
       );
@@ -1969,6 +1992,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
       ...(context.expected ? { expected: context.expected } : {}),
       selection,
       source: context.source,
+      ...(context.applyTiming ? { applyTiming: context.applyTiming } : {}),
       runWithActiveSelection,
       effectStarted: false,
       superseded: false,
@@ -2031,6 +2055,9 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
 
   return Object.freeze({
     submit,
+    unarm: (callerInputConstraints?: CallerInputConstraintsV1) => submit(activeTarget.selection, {
+      source: 'command', ...(callerInputConstraints ? { callerInputConstraints } : {}),
+    }),
     admitReplacementTarget,
     readActiveTarget: () => activeTarget,
     readAppliedTarget,

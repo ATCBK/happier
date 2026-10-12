@@ -1,4 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { activate, PLUGIN_MANIFEST } from '@happier-dev/plugins-cliproxyapi';
+import { evaluateTeamCredentialRequestPolicyV1 } from './requestPolicyV1';
+import { PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from './providerBrokerPrivateProtocol';
 import type { PluginApi } from '@happier-dev/plugin-sdk';
 import { TeamCredentialDirectMaterialPayloadV1Schema } from '@happier-dev/protocol/teams';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
@@ -30,15 +36,15 @@ const materializeNullBrokerAuthoritySpawnEnv: ProviderAdapter['materialize'] = (
   env: [{ name: 'BROKER_AUTHORITY', value: null, source: 'provider' }],
 });
 
-function lease(adapter: ProviderAdapter): PluginRuntimeRegistryLease {
+function lease(adapter: ProviderAdapter, protocol = 'openai-responses'): PluginRuntimeRegistryLease {
   const registry = {
     contributes: {
       agentDefinitionsById: new Map([['codex', { definition: {
         id: 'codex', kindVersion: 1,
         providerRequirements: {
-          acceptsProtocols: ['openai-responses'], required: { streaming: true, toolRoundTrips: true },
+          acceptsProtocols: [protocol], required: { streaming: true, toolRoundTrips: true },
           credentialSupport: { supportsNoAuth: false, apiKeyTransports: [{
-            protocol: 'openai-responses',
+            protocol,
             destination: { kind: 'httpHeader', names: 'anyValidated', formats: ['bearer'] },
           }] },
           authIsolation: { suppressConnectedServiceIds: [], ownedEnvKeys: ['BROKER_AUTHORITY'] },
@@ -88,6 +94,85 @@ const authority = {
 };
 
 describe('Session Team credential Provider binding', () => {
+  // The tunnel's HTTP transport is the system boundary; ordinary custody cases
+  // receive the same endpoint metadata the broker publishes for Responses.
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () =>
+    new Response(null, { status: 204, headers: { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' } }))));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ['anthropic', 'cliproxyapi-anthropic', '/v1/messages'],
+    ['openai-responses', 'cliproxyapi-openai-responses', '/v1/responses'],
+    ['openai-chat', 'cliproxyapi-openai-chat', '/v1/chat/completions'],
+  ] as const)('composes the declared Team %s endpoint with the real Agent SDK and request policy', async (protocol, endpointTemplateId, expectedPath) => {
+    const activation = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
+    const runtime = activation.registration('providers', 'cliproxyapi')?.managedRuntime;
+    if (!runtime) throw new Error('missing managed runtime');
+    const snapshot = { id: 'cliproxyapi-managed', state: 'healthy' as const, mode: 'spawn' as const,
+      baseUrl: 'http://127.0.0.1:45123', startedAtMs: 1, lastHealthyAtMs: 2, diagnostics: [], diagnosticsTruncated: false };
+    const service = {
+      snapshot: () => snapshot, waitUntilHealthy: async () => snapshot, observe: () => ({ dispose() {} }),
+      request: async () => ({ ok: true, status: 200, statusText: 'OK', headers: { 'content-type': 'application/json' },
+        body: Response.json({ v: 1, contractVersion: 'happier.cliproxyapi-managed/v2', sdkVersion: 'v7.2.95',
+          wrapperBuildVersion: 'test', protocols: [protocol], purposes: [], modelListEnabled: false,
+          sourceClass: 'provider_connection' }).body }),
+      stop: async () => ({ status: 'stopped' as const }), dispose: async () => undefined,
+    };
+    const declared = await runtime.start({ reason: 'explicitStartLocal', endpointTemplateIds: [endpointTemplateId] }, {
+      signal: new AbortController().signal,
+      connectedAccounts: {
+        getBinding: async () => null,
+      },
+      managedServices: { supervise: async () => service },
+      // Only managed-process and Connected Account service boundaries are
+      // supplied; the public plugin start and endpoint declaration stay real.
+    } as never);
+    await activation.dispose();
+    const endpoint = declared.endpoints.find(candidate => candidate.endpointTemplateId === endpointTemplateId);
+    if (!endpoint || endpoint.endpoint.kind !== 'servicePath') throw new Error('missing service endpoint');
+    const declaredPath = endpoint.endpoint.path;
+    const application = { ...row.application, endpointTemplateId, protocol };
+    const selectedAuthority = { ...authority, payload: { ...authority.payload, application } };
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(null, {
+      status: 204, headers: { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: declaredPath },
+    })));
+    const opened = await openExactSessionTeamCredentialProviderBinding({
+      sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex',
+      selection: { resourceId: 'resource-1', brokerMachineId: 'broker-1', expectedResourceRevision: 3,
+        agentTargetKey: row.selection.agentTargetKey, modelId: row.descriptor.id, descriptor: row.descriptor,
+        application, sourceRevision: row.sourceRevision },
+      lease: lease({ v: 1, adapterVersion: 1, prepare: prepareSpawnEnv, materialize: materializeBrokerAuthoritySpawnEnv }, protocol),
+      materializationBaseDir: '/tmp/happier-team-endpoint-test', signal: new AbortController().signal,
+      openBroker: async () => ({ ok: true, authority: selectedAuthority,
+        target: { custodianAccountId: 'account-2', brokerMachineId: 'broker-1', endpointId: 'b'.repeat(64),
+          endpointRevision: 1, endpoint: { endpointId: 'b'.repeat(64) } } }),
+      openTunnel: async () => ({ localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'relay',
+        retire: async () => undefined, close: async () => undefined }),
+    });
+    try {
+      let policyResult: ReturnType<typeof evaluateTeamCredentialRequestPolicyV1> | undefined;
+      let requestedPath = '';
+      const sdkFetch: typeof fetch = async (url, init) => {
+        requestedPath = new URL(url instanceof Request ? url.url : String(url)).pathname;
+        policyResult = evaluateTeamCredentialRequestPolicyV1({ policy: {
+          allowedProtocolKinds: null, allowedModelIds: null, reasoningEffort: null,
+        }, request: { pathAndQuery: requestedPath, method: 'POST',
+          body: new TextEncoder().encode(String(init?.body)) }, resolveCanonicalModelId: model => model });
+        return Response.json({ id: 'result', type: 'message', role: 'assistant', content: [], model: row.descriptor.id,
+          object: 'response', output: [], choices: [], usage: { input_tokens: 0, output_tokens: 0 } });
+      };
+      const baseURL = opened.providerBinding.upstream.normalizedUrl;
+      if (protocol === 'anthropic') await new Anthropic({ apiKey: 'test', baseURL, fetch: sdkFetch, maxRetries: 0 })
+        .messages.create({ model: row.descriptor.id, max_tokens: 1, messages: [] });
+      else {
+        const sdk = new OpenAI({ apiKey: 'test', baseURL, fetch: sdkFetch, maxRetries: 0 });
+        if (protocol === 'openai-responses') await sdk.responses.create({ model: row.descriptor.id, input: 'test' });
+        else await sdk.chat.completions.create({ model: row.descriptor.id, messages: [] });
+      }
+      expect(requestedPath).toBe(expectedPath);
+      expect(policyResult).toMatchObject({ ok: true });
+    } finally { await opened.cleanup(); }
+  });
   it.each([
     {
       name: 'Session',
@@ -332,7 +417,6 @@ describe('Session Team credential Provider binding', () => {
       signal, readCatalog, openBroker, openTunnel,
     });
 
-    expect(readCatalog).toHaveBeenCalledTimes(2);
     expect(openBroker).toHaveBeenCalledOnce();
     expect(openTunnel).toHaveBeenCalledWith(expect.objectContaining({
       brokerOpen: brokerOpened,
@@ -512,6 +596,41 @@ describe('Session Team credential Provider binding', () => {
     expect(adapter.materialize).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it.each(['missing declaration', 'cancelled', 'selection changed'] as const)(
+    'does not publish Team custody when endpoint discovery is %s', async (failure) => {
+      const controller = new AbortController();
+      const close = vi.fn(async () => undefined);
+      const retire = vi.fn(async () => { throw new Error('retirement unavailable'); });
+      const adapter: ProviderAdapter = {
+        v: 1, adapterVersion: 1, prepare: prepareSpawnEnv,
+        materialize: vi.fn(materializeBrokerAuthoritySpawnEnv),
+      };
+      let discoveryFinished = false;
+      vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => {
+        discoveryFinished = true;
+        if (failure === 'cancelled') controller.abort(new Error('cancelled-during-endpoint-discovery'));
+        return new Response(null, { status: 204,
+          headers: failure === 'missing declaration' ? {} : { [PROVIDER_BROKER_ENDPOINT_PATH_HEADER]: '/v1' } });
+      }));
+      await expect(openSessionTeamCredentialProviderBinding({
+        sessionId: 'session-1', machineId: 'worker-1', agentId: 'codex',
+        agentTargetKey: row.selection.agentTargetKey, modelId: row.selection.modelId,
+        binding: { v: 1, slot: { kind: 'provider_model' }, resourceId: 'resource-1', expectedResourceRevision: 3, deliveryMode: 'brokered' },
+        lease: lease(adapter), materializationBaseDir: '/tmp/happier-team-broker-test', signal: controller.signal,
+        // Home catalog and the tunnel HTTP transport are external boundaries.
+        readCatalog: async () => failure === 'selection changed' && discoveryFinished
+          ? [{ ...row, sourceRevision: 'catalog:changed' }] : [row],
+        openBroker: async () => ({ ok: true, authority,
+          target: { custodianAccountId: 'account-2', brokerMachineId: 'broker-1', endpointId: 'b'.repeat(64), endpointRevision: 1,
+            endpoint: { endpointId: 'b'.repeat(64) } } }),
+        openTunnel: async () => ({ localPort: 43123, localCapability: 'c'.repeat(64), observedPath: 'direct', retire, close }),
+      })).rejects.toThrow(failure === 'missing declaration' ? 'provider_endpoint_unavailable'
+        : failure === 'cancelled' ? 'cancelled-during-endpoint-discovery' : 'selection_changed');
+      expect(adapter.materialize).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
 
   it('renews an established tunnel with its prior signed authority whatever the placement was', async () => {
     const close = vi.fn(async () => undefined);

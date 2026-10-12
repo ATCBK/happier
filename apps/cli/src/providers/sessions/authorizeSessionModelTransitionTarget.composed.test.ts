@@ -2,16 +2,17 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   buildBackendTargetKeyV2,
+  AccountSettingsSchema,
   DEFAULT_PROVIDER_SETTINGS_V1,
   ProviderConnectionIdSchema,
   ProviderSettingsV1Schema,
   setProviderExperimentalConfirmationV1,
+  splitProviderSettingsV1,
   type ProviderBoundModelRef,
   type ProviderModelDescriptorV1,
 } from '@happier-dev/protocol';
 
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
-import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { resolveProviderModelCompatibility } from '@/providers/catalog/compatibility';
 import { createRuntimeProviderSpawnAuthorizationAttempt } from '@/providers/spawn/authorize';
@@ -54,35 +55,32 @@ const sonnet: ProviderModelDescriptorV1 = {
 };
 
 describe('real Claude registry Provider transition authorization composition', () => {
-  const registries: Array<
-    Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>>
+  const fixtures: Array<
+    Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>
   > = [];
 
   afterEach(async () => {
-    await Promise.all(registries.splice(0).map(async (registry) => {
-      await registry.dispose();
+    await Promise.all(fixtures.splice(0).map(async (fixture) => {
+      await fixture.dispose();
     }));
   });
 
   it('classifies current-source CLIProxyAPI Haiku to Sonnet as live through the exact real Claude binding', async () => {
-    const registry = await resolveExecutablePluginRuntimeRegistry({
-      pluginIds: [
-        'happier.agent.claude',
-        'happier.provider.cliproxyapi',
-      ],
+    const fixture = await createAdmittedPluginRuntimeFixture({
+      runtimeOptions: {
+        pluginIds: [
+          'happier.agent.claude',
+          'happier.provider.cliproxyapi',
+        ],
+      },
     });
-    registries.push(registry);
+    fixtures.push(fixture);
+    const { registry, lease } = fixture;
     const claude = registry.contributes.agentDefinitionsById.get('claude');
     expect(claude?.identity).toEqual({
       pluginId: 'happier.agent.claude',
       localId: 'claude',
     });
-    const lease: PluginRuntimeRegistryLease = {
-      registry,
-      source: 'ephemeral',
-      durableRevision: registry.durableRevision ?? -1,
-      release: async () => undefined,
-    };
     const providerRegistry = {
       providersByContributionKey:
         registry.contributes.providersByContributionKey ?? new Map(),
@@ -127,7 +125,7 @@ describe('real Claude registry Provider transition authorization composition', (
     const connection = resolveProviderConnectionForMachine({
       connectionId,
       machineId,
-      accountSettings: { providerSettingsV1: initialSettings },
+      providerSettings: initialSettings,
       registry: providerRegistry,
       dnsEvidenceByEndpointUrl,
     });
@@ -194,14 +192,18 @@ describe('real Claude registry Provider transition authorization composition', (
         agentTargetKey: targetKey,
         agentId: 'claude',
         lease,
-        getAccountSettingsSnapshot: () => ({
-          source: 'network',
-          settings: { providerSettingsV1: settings } as never,
-          settingsVersion: 1,
-          loadedAtMs: 1,
-          settingsSecretsReadKeys: [],
-          scopeKey: 'account-g4-composed',
-        }),
+        getAccountSettingsSnapshot: () => {
+          const { catalog, defaults } = splitProviderSettingsV1(settings);
+          return {
+            source: 'network',
+            settings: AccountSettingsSchema.parse({ providerDefaultModelSelectionsByAgentTargetKeyV1: defaults }),
+            providerConnectionsCatalog: { status: 'ready', revision: 1, catalog },
+            settingsVersion: 1,
+            loadedAtMs: 1,
+            settingsSecretsReadKeys: [],
+            scopeKey: 'account-g4-composed',
+          };
+        },
         resolveAddresses: async () => ['1.1.1.1'],
         materializationBaseDir: '/unused',
         sessionId: `session-${model.id}`,

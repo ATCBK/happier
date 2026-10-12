@@ -153,6 +153,8 @@ export type ProviderConnectionServiceDeps = Readonly<{
     dnsEvidence: ProviderEndpointDnsEvidence;
   }>): ProviderConnectionResolution;
   runtimeSummary(input: ProviderConnectionRuntimeSummaryInput): Promise<ProviderConnectionRuntimeProjection>;
+  /** Captured Machine/Account observation of the incumbent shared process owner. */
+  readSharedGatewayRuntime?(input: Readonly<{ connectionId: string; machineId: string }>): Promise<NonNullable<ProviderConnectionRuntimeSummary['gateway']>>;
   acquireCompatibilityProjection?(): Readonly<{
     project(connection: Extract<ProviderConnectionResolution, { status: 'resolved' }>['record']): readonly DaemonProviderAgentCompatibilitySummaryV1[];
     release(): Promise<void>;

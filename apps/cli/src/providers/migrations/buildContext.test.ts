@@ -50,6 +50,19 @@ const contribution = ProviderContributionV1Schema.parse({
 const registry = new Map([['happier.provider.deepseek/deepseek', { definition: contribution }]]);
 
 describe('buildLegacyProfileMigrationContext', () => {
+  it('retains versioned source rows instead of reinterpreting them as legacy profiles', () => {
+    const context = buildLegacyProfileMigrationContext({ providerSettings: DEFAULT_PROVIDER_SETTINGS_V1,
+      rawSettings: { favoriteProfiles: ['deepseek'], profiles: [{ v: 99, id: 'deepseek', name: 'Future DeepSeek',
+        environmentVariables: contribution.legacyProfileMigrations![0]!.migratedEnvironmentVariables,
+        envVarRequirements: [{ name: 'DEEPSEEK_AUTH_TOKEN', kind: 'secret', required: true }],
+        createdAt: 1, updatedAt: 1,
+      }] },
+      authoringMemory: { lastUsedProfile: null }, providersByContributionKey: registry,
+      allocatedConnectionIdsBySourceProfileId: { deepseek: 'pc-deepseek' }, migratedAt: 20,
+    });
+    expect(context.candidates).toEqual([]);
+    expect(context.pendingCustomProfileIds).toEqual([]);
+  });
   it('uses the opened Provider catalog completion rather than a raw Settings carrier', () => {
     const providerSettings = ProviderSettingsV1Schema.parse({ ...DEFAULT_PROVIDER_SETTINGS_V1,
       migration: { v: 1, migratedAt: 1, completedSources: [{ sourceProfileId: 'deepseek', kind: 'connection',
@@ -156,7 +169,24 @@ describe('buildLegacyProfileMigrationContext', () => {
     const context = buildLegacyProfileMigrationContext({ providerSettings: DEFAULT_PROVIDER_SETTINGS_V1, authoringMemory: { lastUsedProfile: null },
       rawSettings: {
         schemaVersion: 7,
-        favoriteProfiles: ['deepseek'],
+        favoriteProfiles: ['deepseek', 'company'],
+        profiles: [{
+          id: 'deepseek', name: 'DeepSeek', retiredProfile: true,
+          environmentVariables: [
+            ...contribution.legacyProfileMigrations![0]!.migratedEnvironmentVariables.map(variable => ({ ...variable, retiredVariable: true })),
+            { name: 'API_TIMEOUT_MS', value: '700000', retiredVariable: true },
+          ],
+          envVarRequirements: [
+            { name: 'DEEPSEEK_AUTH_TOKEN', kind: 'secret', required: true, retiredRequirement: true },
+            { name: 'API_TIMEOUT_MS', kind: 'config', required: false, retiredRequirement: true },
+          ],
+          createdAt: 1, updatedAt: 1,
+        }, {
+          id: 'company', name: 'Company',
+          environmentVariables: [{ name: 'OPENAI_BASE_URL', value: 'https://company.example', retiredVariable: true }],
+          envVarRequirements: [{ name: 'COMPANY_API_KEY', kind: 'secret', required: true, retiredRequirement: true }],
+          createdAt: 1, updatedAt: 1,
+        }],
         secretBindingsByProfileId: { deepseek: { DEEPSEEK_AUTH_TOKEN: 'same-saved-secret-id' } },
       },
       providersByContributionKey: registry,
@@ -176,10 +206,12 @@ describe('buildLegacyProfileMigrationContext', () => {
       retainedLaunchProfile: {
         v: 2,
         extraEnvironmentVariables: expect.arrayContaining([
-          { name: 'API_TIMEOUT_MS', value: '${DEEPSEEK_API_TIMEOUT_MS:-600000}' },
+          { name: 'API_TIMEOUT_MS', value: '700000' },
         ]),
+        envVarRequirements: [{ name: 'API_TIMEOUT_MS', kind: 'config', required: false }],
       },
     });
+    expect(context.pendingCustomProfileIds).toEqual(['company']);
   });
 
   it('migrates deterministic defaults to the verified replacement while preserving explicit retired aliases as stale', () => {

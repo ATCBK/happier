@@ -19,6 +19,7 @@ type RuntimeAssetEntry = Readonly<{
   platformDir: string;
   archiveName: string;
   binaryName: string;
+  extraBinaries?: readonly string[];
   licenseNames: readonly string[];
   runtimeAssetRelativePath: string;
 }>;
@@ -98,9 +99,13 @@ async function createInstalledCliTree(platformDir: string): Promise<Readonly<{
   const runtimeAsset = unpackTools.getCliRuntimeAssetArchiveManifest()
     .find((entry) => entry.platformDir === platformDir);
   if (!runtimeAsset) throw new Error(`no runtime asset declared for ${platformDir}`);
-  const wrapperMembers = [runtimeAsset.binaryName, ...runtimeAsset.licenseNames];
+  const wrapperMembers = [runtimeAsset.binaryName, ...(runtimeAsset.extraBinaries ?? []), ...runtimeAsset.licenseNames];
   await writeFile(join(stagingDir, runtimeAsset.binaryName), 'managed-wrapper');
   await chmod(join(stagingDir, runtimeAsset.binaryName), 0o755);
+  for (const binaryName of runtimeAsset.extraBinaries ?? []) {
+    await writeFile(join(stagingDir, binaryName), `stub:${binaryName}`);
+    await chmod(join(stagingDir, binaryName), 0o755);
+  }
   for (const licenseName of runtimeAsset.licenseNames) {
     await writeFile(join(stagingDir, licenseName), `notice:${licenseName}`);
   }

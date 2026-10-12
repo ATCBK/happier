@@ -516,7 +516,10 @@ describe('migrateProviderSettings', () => {
 
   it('previews the latest captured HTTP source without writing or returning private settings', async () => {
     const reviewedMapping = guidedReviewedMapping();
-    const raw = guidedRawProfile();
+    const raw = { ...guidedRawProfile(), providerDefaultModelSelectionsByAgentTargetKeyV1: {
+      codex: { v: 1, updatedAt: 1, retiredSelection: true,
+        ref: { agentTargetKey: 'codex', providerConnectionId: null, modelId: 'model', retiredRef: true } },
+    } };
     const { state } = installMigrationAccount({ raw });
     const result = await previewLegacyProfileMigration({
       credentials: credentials(), sourceProfileId: 'company', reviewedMapping, deps: cacheBoundary,

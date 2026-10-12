@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ConnectedAccountServiceKeyIngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import {
   ProviderConnectionIdSchema,
@@ -12,6 +13,8 @@ import type { ProviderSpawnAuthorizationAttempt } from '../spawn/authorize';
 import { prepareProviderLaunch } from './prepareLaunch';
 
 const connectionId = ProviderConnectionIdSchema.parse('pc_gateway');
+const codexServiceKey = ConnectedAccountServiceKeyIngressSchema.parse('openai-codex');
+const githubServiceKey = ConnectedAccountServiceKeyIngressSchema.parse('github');
 const selection: SessionModelSelectionV1 = {
   v: 1,
   updatedAt: 1,
@@ -85,7 +88,7 @@ function attempt(
         required: {},
         credentialSupport: { supportsNoAuth: true, apiKeyTransports: [] },
         authIsolation: {
-          suppressConnectedServiceIds: ['openai-codex'],
+          suppressConnectedServiceIds: [codexServiceKey],
           ownedEnvKeys: [],
         },
         materialization: 'engineConfig',
@@ -120,8 +123,8 @@ function base(overrides: Record<string, unknown> = {}) {
     connectedServices: {
       v: 2 as const,
       bindingsByServiceId: {
-        'openai-codex': { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
-        github: { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
+        [codexServiceKey]: { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
+        [githubServiceKey]: { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },
       },
     },
     featureEnabled: true,
@@ -182,9 +185,9 @@ describe('prepareProviderLaunch', () => {
       agentTargetKey: 'agent:happier.agent.codex/codex',
       connectedServices: {
         v: 2,
-        bindingsByServiceId: { github: expect.anything() },
+        bindingsByServiceId: { [githubServiceKey]: expect.anything() },
       },
-      suppressedConnectedServiceIds: ['openai-codex'],
+      suppressedConnectedServiceIds: [codexServiceKey],
     });
     expect(input.resolvePrerequisites).toHaveBeenCalledWith(expect.objectContaining({
       agentTargetKey: 'agent:happier.agent.codex/codex',

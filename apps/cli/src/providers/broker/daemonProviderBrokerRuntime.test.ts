@@ -17,7 +17,8 @@ import {
 import { createPeerMediationLoopbackApp } from '@/daemon/peer/mediation/loopback/server';
 import { createProviderBrokerRouteGrantSigningInputV2, type SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
-import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH } from './providerBrokerPrivateProtocol';
+import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH,
+  PROVIDER_BROKER_MODEL_ID_HEADER, PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from './providerBrokerPrivateProtocol';
 import { createBrokerProviderRegistry } from './providerBroker.testkit';
 import {
   computeTeamCredentialSourceMemberKeyV1,
@@ -575,7 +576,7 @@ describe('startDaemonProviderBrokerRuntime', () => {
     if (!address || typeof address === 'string') throw new Error('upstream unavailable');
 
     const access: ManagedProviderEndpointHttpAccess = {
-      endpointUrl: () => `http://127.0.0.1:${address.port}/v1`,
+      endpointUrl: () => `http://127.0.0.1:${address.port}${protocol === 'anthropic' ? '/' : '/v1'}`,
       request: async (request) => {
         const response = await fetch(`http://127.0.0.1:${address.port}${request.pathAndQuery}`, {
           method: request.method,
@@ -692,19 +693,29 @@ describe('startDaemonProviderBrokerRuntime', () => {
         }));
         return { ok: true as const, resourceId: 'resource-1', brokerMachineId: 'broker-machine', source, operation: authority.payload.consumer, usageEventId: 'usage-1' };
       },
-      authorizeModelCatalog: async () => ({ ok: true as const }),
+      authorizeModelCatalog: async () => { dispatchOrder.push('metadata-admission'); return { ok: true as const }; },
       sourceOwner,
       createRequestId: () => 'request-1',
     });
     closeTasks.push(runtime.close);
 
-    const target = await runtime.resolveProviderBrokerApplicationTarget({
+    const openTarget = () => runtime.resolveProviderBrokerApplicationTarget({
       handshake: { v: 1, kind: 'provider_broker', authority },
       authority,
       authenticatedRemoteEndpointId: authority.payload.initiator.endpointId,
       localEndpointId: authority.payload.target.endpointId,
       signal: new AbortController().signal,
     });
+    const metadataTarget = await openTarget();
+    if (!metadataTarget) throw new Error('metadata target unavailable');
+    const metadata = await rawRequestThroughApplicationTarget({ ...metadataTarget, method: 'GET',
+      path: PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH, headers: { [PROVIDER_BROKER_MODEL_ID_HEADER]: modelId } });
+    expect(metadata).toContain('HTTP/1.1 204 No Content');
+    expect(metadata).toContain(`${PROVIDER_BROKER_ENDPOINT_PATH_HEADER}: ${protocol === 'anthropic' ? '/' : '/v1'}`);
+    expect(dispatchOrder).toEqual(['policy', 'metadata-admission', 'source-selection', 'metadata-admission']);
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+    dispatchOrder.length = 0;
+    const target = await openTarget();
     expect(target).not.toBeNull();
     const response = await rawRequestThroughApplicationTarget({ ...target!, method: 'POST',
       path: protocol === 'anthropic' ? '/v1/messages' : '/v1/responses',
@@ -722,7 +733,7 @@ describe('startDaemonProviderBrokerRuntime', () => {
     expect(custody.acquire).toHaveBeenCalledWith(expect.objectContaining({
       operationClaim: { kind: 'providerBroker', operation: authority.payload.consumer },
     }));
-    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(2));
   });
 
   it('reuses one exact source projection for the application-stream lifetime', async () => {
@@ -1060,14 +1071,16 @@ describe('startDaemonProviderBrokerRuntime', () => {
 async function rawRequestThroughApplicationTarget(input: Readonly<{
   port: number;
   localCapability: string;
-  method: 'DELETE' | 'POST';
+  method: 'DELETE' | 'POST' | 'GET';
   path: string;
   body?: string;
+  headers?: Readonly<Record<string, string>>;
 }>): Promise<string> {
   const request = [
     `${input.method} ${input.path} HTTP/1.1`,
     'Host: 127.0.0.1',
     'Connection: close',
+    ...Object.entries(input.headers ?? {}).map(([name, value]) => `${name}: ${value}`),
     ...(input.body === undefined
       ? ['Content-Length: 0']
       : ['Content-Type: application/json', `Content-Length: ${Buffer.byteLength(input.body)}`]),

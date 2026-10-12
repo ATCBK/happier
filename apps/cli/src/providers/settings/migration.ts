@@ -9,7 +9,8 @@ import { ProfileRecordV1Schema, sealProfileRecordContentV1, resolveEffectiveProf
 import { createCliProfileStore } from '@/settings/profiles/profileStore';
 import { createCliProviderConnectionsStore } from './catalogStore';
 import { composeProviderSettingsV1, splitProviderSettingsV1, sealProviderConnectionsContentV1,
-  listProviderConnectionsCatalogSavedSecretRefsV1, ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+  listProviderConnectionsCatalogSavedSecretRefsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '@happier-dev/protocol/providers/selection/v1';
 import type { ProviderSettingsV1 } from '@happier-dev/protocol/providers/settings/v1';
 import { loadAiLaunchProfileArtifacts, prepareLegacyProfileRecordsV1, readLegacyProfileRecordsV1,
   readAiLaunchProfileEnabledV1 } from '@happier-dev/protocol/profiles/read';
@@ -47,7 +48,7 @@ async function readActiveMigrationSource(credentials: StoredCredentials, include
   const providerStorage = await providerStore.readStorageContext();
   if (providerStorage.mode !== source.mode) throw new ProviderSettingsMigrationError('provider_catalog_unavailable');
   const providerSettings = composeProviderSettingsV1(providerCatalog.catalog,
-    ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema.parse(source.raw.providerDefaultModelSelectionsByAgentTargetKeyV1 ?? {}));
+    ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema.parse(source.raw.providerDefaultModelSelectionsByAgentTargetKeyV1 ?? {}));
   const ordinaryEnabledById = accountSettingsParse(source.raw).profileEnabledById;
   return { store, catalog, source, providerStore, providerCatalog, providerSettings,
     raw: catalog.source !== 'destination' ? source.raw : {

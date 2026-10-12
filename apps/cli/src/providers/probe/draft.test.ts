@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AccountSettingsSchema,
+  DEFAULT_PROVIDER_SETTINGS_V1,
   createProviderProbeRequestFingerprintV1,
   encryptSecretStringV1,
   sealSavedSecretResourceStoredContentV1,
+  splitProviderSettingsV1,
 } from '@happier-dev/protocol';
 
 import { createProviderProbeHttpClient } from './client';
@@ -60,6 +62,11 @@ function snapshot(secretValue = 'secret-a') {
       }],
     }),
     settingsVersion: 1,
+    providerConnectionsCatalog: {
+      status: 'ready' as const,
+      revision: 1,
+      catalog: splitProviderSettingsV1(DEFAULT_PROVIDER_SETTINGS_V1).catalog,
+    },
     loadedAtMs: 1,
     settingsSecretsReadKeys: [key],
   };

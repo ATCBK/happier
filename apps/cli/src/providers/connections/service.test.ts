@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { isDeepStrictEqual } from 'node:util';
 import {
   AccountSettingsSchema,
+  CustomProviderTemplateV1Schema,
   DEFAULT_PROVIDER_SETTINGS_V1,
   ProviderConnectionIdSchema,
   ProviderContributionV1Schema,
@@ -28,6 +29,9 @@ import { resolveProviderConnectionForMachine, type ProviderContributionRegistryV
 import { createProviderConnectionRpcAdapter } from './rpcAdapter';
 import { createProviderConnectionService } from './service';
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
+import { createUnavailableManagedServices } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import type {
   ProviderConnectionServiceDeps,
   ProviderConnectionServiceSnapshot,
@@ -278,6 +282,7 @@ function harness(options: Readonly<{
   rowBacked?: boolean;
   providerSettings?: ProviderSettingsV1;
   resolveManagedBindingTarget?: Parameters<typeof createConnectedAccountPurposeBindingOwner>[0]['resolveTarget'];
+  readSharedGatewayRuntime?: ProviderConnectionServiceDeps['readSharedGatewayRuntime'];
 }> = {}) {
   let raw: Readonly<Record<string, unknown>> = {
     providerSettingsV1: DEFAULT_PROVIDER_SETTINGS_V1,
@@ -414,6 +419,7 @@ function harness(options: Readonly<{
     }),
     runtimeSummary,
     acquireCompatibilityProjection,
+    ...(options.readSharedGatewayRuntime ? { readSharedGatewayRuntime: options.readSharedGatewayRuntime } : {}),
     discoveryCandidates,
     localInstallations,
     refreshOnEnable,
@@ -445,6 +451,35 @@ function harness(options: Readonly<{
 }
 
 describe('provider connection service', () => {
+  it('describes exact managed gateway custody without inferring it from endpoint health or a different placement', async () => {
+    const owner = createManagedServicesOwner({
+      processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+      dependencies: createUnavailableManagedServices().dependencies,
+      resolveScope: () => null,
+    });
+    const h = harness({ readSharedGatewayRuntime: async ({ connectionId, machineId }) => owner.readSharedProviderGatewayRuntime({
+      homeId: 'home', accountId: 'account', connectionId, machineId,
+    }) });
+    h.providersByContributionKey.set(contributionKey, managedContribution());
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway', role: 'default',
+      displayName: 'Gateway', displayNameMode: 'automatic', revision: 0, createdAt: 1, updatedAt: 1,
+      source: { kind: 'contribution', contributionKey }, deployment: { kind: 'managedLocal' },
+      purposeBindingDefaults: { upstream: { kind: 'account', account: {
+        service: { pluginId: 'happier.connected-account.openai', localId: 'openai' }, accountId: 'upstream-account',
+      } } },
+    });
+    try {
+      h.setRaw({ providerSettingsV1: { ...DEFAULT_PROVIDER_SETTINGS_V1, connections: [connection] } });
+      expect(await h.service.describe({ machineId: 'machine-a', connectionId: connection.id })).toMatchObject({
+        status: 'success', connections: [{ runtime: { gateway: { status: 'idle', reachability: 'not_checked' } } }],
+      });
+      h.setRaw({ providerSettingsV1: { ...DEFAULT_PROVIDER_SETTINGS_V1,
+        connections: [{ ...connection, gatewayPlacement: { kind: 'machine', machineId: 'other-machine' } }] } });
+      expect(await h.service.describe({ machineId: 'machine-a', connectionId: connection.id })).toMatchObject({
+        status: 'success', connections: [{ runtime: { gateway: { status: 'not_checked', reachability: 'not_checked' } } }],
+      });
+    } finally { await owner.dispose(); }
+  });
   it('mutates Provider rows without rewriting Account Settings', async () => {
     const fixture = harness({ rowBacked: true });
     const preferences = structuredClone(fixture.getRaw());
@@ -459,7 +494,7 @@ describe('provider connection service', () => {
   it('preserves unavailable default selection intent through an unrelated Provider catalog mutation', async () => {
     const selection = {
       v: 1 as const,
-      ref: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_unavailable', modelId: 'saved-model' },
+      ref: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_unavailable'), modelId: 'saved-model' },
       updatedAt: 1,
     };
     const fixture = harness({ rowBacked: true, providerSettings: {
@@ -476,7 +511,7 @@ describe('provider connection service', () => {
 
   it('retains default intent when its selected Provider connection is deleted', async () => {
     const selection = { v: 1 as const, updatedAt: 1, ref: {
-      agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_selected', modelId: 'selected-model',
+      agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_selected'), modelId: 'selected-model',
     } };
     const fixture = harness({ rowBacked: true, providerSettings: { ...DEFAULT_PROVIDER_SETTINGS_V1,
       connections: [ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_selected',
@@ -673,7 +708,7 @@ describe('provider connection service', () => {
     expect(runtimeSummaryInput?.resolution.record.deployment).toMatchObject({ kind: 'managedLocal' });
   });
 
-  it('captures declaration facts for Account enable without runtime observation', async () => {
+  it('refuses Account enable at the machine-only service without runtime observation or a write', async () => {
     const h = harness();
     await expect(h.service.create({
       action: 'createContribution',
@@ -687,41 +722,21 @@ describe('provider connection service', () => {
     h.loadSnapshot.mockClear();
     h.collectDnsEvidence.mockClear();
 
-    const replacement = contribution();
-    const replacementRegistry: ProviderContributionRegistryView = {
-      providersByContributionKey: new Map([[contributionKey, {
-        ...replacement,
-        definition: ProviderContributionV1Schema.parse({
-          ...replacement.definition,
-          name: 'Replacement Gateway',
-        }),
-      }]]),
-    };
-    h.beforeNextUpdate((current) => {
-      h.setRegistry(replacementRegistry);
-      return current;
-    });
+    const before = structuredClone(h.getRaw());
 
     await expect(h.service.setEnabled({
       action: 'setEnabled',
       machineId: 'machine-a',
       connectionId: 'pc_generation',
       enabled: true,
+      scope: 'account',
     })).resolves.toMatchObject({
-      status: 'success',
-      providerName: 'Gateway',
+      status: 'error',
+      error: { code: 'provider_connection_invalid' },
     });
 
     expect(h.collectDnsEvidence).not.toHaveBeenCalled();
-    expect(readRetainedProviderSettingsFixture(h.getRaw()).settings.accountGrants).toHaveLength(1);
-
-    await expect(h.service.describe({
-      machineId: 'machine-a',
-      connectionId: ProviderConnectionIdSchema.parse('pc_generation'),
-    })).resolves.toMatchObject({
-      status: 'success',
-      connections: [{ providerName: 'Replacement Gateway' }],
-    });
+    expect(h.getRaw()).toEqual(before);
   });
 
   it('does not mutate persisted state for an unmatched managed authoring preview', async () => {
@@ -831,7 +846,7 @@ describe('provider connection service', () => {
     await expect(managed.service.update({
       action: 'update',
       machineId: 'machine-a',
-      connectionId: 'pc_managed',
+      connectionId: ProviderConnectionIdSchema.parse('pc_managed'),
       expectedRevision: 0,
       deployment: {
         kind: 'managedLocal',
@@ -903,7 +918,7 @@ describe('provider connection service', () => {
     await expect(managed.service.update({
       action: 'update',
       machineId: 'machine-a',
-      connectionId: 'pc_managed',
+      connectionId: ProviderConnectionIdSchema.parse('pc_managed'),
       expectedRevision: 0,
       deployment: {
         kind: 'managedLocal',
@@ -949,7 +964,7 @@ describe('provider connection service', () => {
     await expect(managed.service.update({
       action: 'update',
       machineId: 'machine-a',
-      connectionId: 'pc_managed',
+      connectionId: ProviderConnectionIdSchema.parse('pc_managed'),
       expectedRevision: 1,
       deployment: {
         kind: 'managedLocal',
@@ -978,7 +993,7 @@ describe('provider connection service', () => {
     await expect(managed.service.update({
       action: 'update',
       machineId: 'machine-a',
-      connectionId: 'pc_managed',
+      connectionId: ProviderConnectionIdSchema.parse('pc_managed'),
       expectedRevision: 2,
       deployment: { kind: 'external' },
     })).resolves.toMatchObject({
@@ -1019,7 +1034,7 @@ describe('provider connection service', () => {
     await expect(legacy.service.update({
       action: 'update',
       machineId: 'machine-a',
-      connectionId: 'pc_legacy',
+      connectionId: ProviderConnectionIdSchema.parse('pc_legacy'),
       expectedRevision: 2,
       displayName: 'Stale',
       displayNameMode: 'custom',
@@ -1087,7 +1102,7 @@ describe('provider connection service', () => {
     await expect(managed.service.update({
       action: 'update',
       machineId: 'machine-a',
-      connectionId: 'pc_managed',
+      connectionId: ProviderConnectionIdSchema.parse('pc_managed'),
       expectedRevision: 0,
       deployment: { kind: 'external' },
     })).resolves.toMatchObject({
@@ -1128,7 +1143,7 @@ describe('provider connection service', () => {
     const target = (id: string) => kind === 'account'
       ? { kind: 'account' as const, account: { service, accountId: id } }
       : { kind: 'group' as const, service, groupId: id };
-    const request = { action: 'update' as const, machineId: 'machine-a', connectionId: 'pc_managed', expectedRevision: 0 };
+    const request = { action: 'update' as const, machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_managed'), expectedRevision: 0 };
     await expect(managed.service.update({ ...request, deployment: {
       kind: 'managedLocal', purposeBindingDefaults: { upstream: target('other-home') },
     } })).resolves.toMatchObject({ status: 'success', revision: 1, authorized: false });
@@ -1165,7 +1180,7 @@ describe('provider connection service', () => {
         revision: 0, createdAt: 1, updatedAt: 1,
       })],
     }), secrets: [] });
-    const request = { action: 'update' as const, machineId: 'machine-a', connectionId: 'pc_managed' };
+    const request = { action: 'update' as const, machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_managed') };
     await expect(managed.service.update({ ...request, expectedRevision: 0, deployment: {
       kind: 'managedLocal', purposeBindingDefaults: { upstream: replacement, secondary: other },
     } })).resolves.toMatchObject({ status: 'success', revision: 1 });
@@ -1205,7 +1220,7 @@ describe('provider connection service', () => {
     const request = {
       action: 'update' as const,
       machineId: 'machine-a',
-      connectionId: 'pc_managed',
+      connectionId: ProviderConnectionIdSchema.parse('pc_managed'),
       expectedRevision: 0,
       deployment: {
         kind: 'managedLocal' as const,
@@ -1378,7 +1393,7 @@ describe('provider connection service', () => {
       },
       {
         action: 'setEnabled', expectedConnectionId: 'pc_gateway', run: () => adapter.mutateConnection({
-          action: 'setEnabled', machineId: 'machine-a', connectionId: gatewayConnectionId, enabled: true,
+          action: 'setEnabled', machineId: 'machine-a', connectionId: gatewayConnectionId, enabled: true, scope: 'account',
         }),
       },
       {
@@ -2429,7 +2444,7 @@ describe('provider connection service', () => {
       secrets: [],
     });
     const request = {
-      action: 'update' as const, machineId: 'machine-a', connectionId: 'pc_managed', expectedRevision: 0,
+      action: 'update' as const, machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_managed'), expectedRevision: 0,
       deployment: {
         kind: 'managedLocal' as const,
         purposeBindingDefaults: {
@@ -2451,19 +2466,19 @@ describe('provider connection service', () => {
     });
     expect(readRetainedProviderSettingsFixture(h.getRaw()).settings.connections[0]).toEqual(saved);
     await expect(h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_managed', expectedRevision: 1,
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_managed'), expectedRevision: 1,
       claudeHelperModels: null,
     })).resolves.toMatchObject({ status: 'success', revision: 2, gatewayPlacement: request.gatewayPlacement });
     expect(readRetainedProviderSettingsFixture(h.getRaw()).settings.connections[0]?.claudeHelperModels).toBeUndefined();
     await expect(h.service.update({ ...request, expectedRevision: 2 })).resolves.toMatchObject({ status: 'success', revision: 3 });
     await expect(h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_managed', expectedRevision: 3, deployment: { kind: 'external' },
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_managed'), expectedRevision: 3, deployment: { kind: 'external' },
     })).resolves.toMatchObject({ status: 'success', revision: 4 });
     const external = readRetainedProviderSettingsFixture(h.getRaw()).settings.connections[0];
     expect(external?.gatewayPlacement).toBeUndefined();
     expect(external?.claudeHelperModels).toBeUndefined();
     await expect(h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_managed', expectedRevision: 4, claudeHelperModels: request.claudeHelperModels,
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_managed'), expectedRevision: 4, claudeHelperModels: request.claudeHelperModels,
     })).resolves.toMatchObject({ status: 'error', error: { code: 'provider_connection_invalid' } });
   });
 
@@ -2485,7 +2500,7 @@ describe('provider connection service', () => {
       }), secrets: [],
     });
     await expect(h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_managed', expectedRevision: 1,
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_managed'), expectedRevision: 1,
       deployment: { kind: 'managedLocal', purposeBindingDefaults: {} },
     })).resolves.toMatchObject({ status: 'success', revision: 2, authorized: false });
     expect(readRetainedProviderSettingsFixture(h.getRaw()).settings.connections[0]?.purposeBindingDefaults).toEqual({});
@@ -2494,7 +2509,7 @@ describe('provider connection service', () => {
     expect(h.startManagedProviderRuntime).not.toHaveBeenCalled();
     const before = structuredClone(h.getRaw());
     await expect(h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_managed', expectedRevision: 2,
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_managed'), expectedRevision: 2,
       deployment: { kind: 'managedLocal', purposeBindingDefaults: { upstream: {
         kind: 'group', service: { pluginId: 'other-vendor', localId: 'other' }, groupId: 'wrong-pool',
       } } },
@@ -2526,7 +2541,7 @@ describe('provider connection service', () => {
     await expect(h.service.update({
       action: 'update',
       machineId: 'machine-a',
-      connectionId: 'pc_managed',
+      connectionId: ProviderConnectionIdSchema.parse('pc_managed'),
       expectedRevision: 0,
       deployment: {
         kind: 'managedLocal',
@@ -2625,7 +2640,7 @@ describe('provider connection service', () => {
       };
     });
     await expect(h.service.setEnabled({
-      action: 'setEnabled', machineId: 'machine-a', connectionId: 'pc_gateway', enabled: true,
+      action: 'setEnabled', machineId: 'machine-a', connectionId: 'pc_gateway', enabled: true, scope: 'account',
     })).resolves.toMatchObject({ status: 'error', error: { code: 'provider_connection_changed' } });
     const settings = readRetainedProviderSettingsFixture(h.getRaw()).settings;
     expect(settings.accountGrants).toEqual([]);
@@ -2684,7 +2699,7 @@ describe('provider connection service', () => {
       contributionKey, displayName: null, savedSecretId: 'secret_api', enable: false,
     });
     await expect(dnsMissing.service.setEnabled({
-      action: 'setEnabled', machineId: 'machine-a', connectionId: 'pc_saved', enabled: true,
+      action: 'setEnabled', machineId: 'machine-a', connectionId: 'pc_saved', enabled: true, scope: 'account',
     })).resolves.toMatchObject({ status: 'success', authorized: false });
     await expect(dnsMissing.service.create({
       action: 'createContribution', machineId: 'machine-a', connectionId: 'pc_gateway',
@@ -2854,7 +2869,7 @@ describe('provider connection service', () => {
   it('normalizes mutation callback domain errors into stable service results', async () => {
     const h = harness();
     await expect(h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_missing', expectedRevision: 0,
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_missing'), expectedRevision: 0,
       displayName: 'Missing',
     })).resolves.toMatchObject({ status: 'error', error: { code: 'provider_connection_not_found' } });
   });
@@ -3060,6 +3075,35 @@ describe('provider connection service', () => {
       });
   });
 
+  it.each(['contribution', 'custom'] as const)('preserves a valid %s Account grant through DNS failure without authorizing the unresolved endpoint', async (source) => {
+    const dnsEvidence = new Map<string, readonly string[]>([['https://gateway.example/v1', ['1.1.1.1']]]);
+    const h = harness({ dnsEvidence });
+    if (source === 'contribution') {
+      await h.service.create({
+        action: 'createContribution', machineId: 'machine-a', connectionId: 'pc_gateway',
+        contributionKey, displayName: null, savedSecretId: 'secret_api', enable: true,
+      });
+    } else {
+      const definition = contribution().definition;
+      await h.service.create({
+        action: 'createCustom', machineId: 'machine-a', connectionId: 'pc_gateway',
+        template: CustomProviderTemplateV1Schema.parse({ v: 1, name: 'Custom gateway', endpointTemplates: definition.endpointTemplates,
+          credential: definition.credential, catalog: { source: 'manual', manualModelPolicy: 'allowed' } }),
+        savedSecretId: 'secret_api', enable: true,
+      });
+    }
+    dnsEvidence.clear();
+    h.runtimeSummary.mockClear();
+    await expect(h.service.describe({ machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_gateway') }))
+      .resolves.toMatchObject({ status: 'success', connections: [{
+        grants: { accountEnabled: true, accountState: 'valid', effectiveState: 'valid' },
+        authorized: false,
+        authorizationError: { code: 'provider_endpoint_unreachable' },
+        runtime: { health: 'not_checked' },
+      }] });
+    expect(h.runtimeSummary).not.toHaveBeenCalled();
+  });
+
   it('projects only effective grants and never renders a stale account grant as enabled', async () => {
     const h = harness();
     await h.service.create({
@@ -3205,7 +3249,7 @@ describe('provider connection service', () => {
     });
     const malformedSnapshot = structuredClone(h.getRaw());
     await expect(h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_gateway', expectedRevision: 0,
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_gateway'), expectedRevision: 0,
       displayName: 'No write', displayNameMode: 'custom',
     })).resolves.toMatchObject({ status: 'error', error: { code: 'provider_settings_invalid' } });
     expect(h.getRaw()).toEqual(malformedSnapshot);
@@ -3269,7 +3313,7 @@ describe('provider connection service', () => {
     });
     const before = structuredClone(h.getRaw());
     await expect(h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_gateway', expectedRevision: 0,
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_gateway'), expectedRevision: 0,
       displayNameMode: 'automatic',
     })).resolves.toMatchObject({ status: 'error', error: { code: 'provider_connection_invalid' } });
     expect(h.getRaw()).toEqual(before);
@@ -3282,12 +3326,12 @@ describe('provider connection service', () => {
       contributionKey, displayName: null, savedSecretId: null, enable: false,
     });
     const updated = await h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_gateway', expectedRevision: 0,
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_gateway'), expectedRevision: 0,
       displayName: 'Primary', displayNameMode: 'custom',
     });
     expect(updated).toMatchObject({ status: 'success', connectionId: 'pc_gateway', displayName: 'Primary', revision: 1 });
     await expect(h.service.update({
-      action: 'update', machineId: 'machine-a', connectionId: 'pc_gateway', expectedRevision: 0,
+      action: 'update', machineId: 'machine-a', connectionId: ProviderConnectionIdSchema.parse('pc_gateway'), expectedRevision: 0,
       displayName: 'Stale write', displayNameMode: 'custom',
     })).resolves.toMatchObject({ status: 'error', error: { code: 'provider_connection_changed' } });
     await expect(h.service.setEndpointOverride({
@@ -3307,10 +3351,11 @@ describe('provider connection service', () => {
       action: 'bindSecret', machineId: 'machine-a', connectionId: 'pc_work',
       credentialSlotId: 'apiKey', savedSecretId: 'secret_api', scope: 'account',
     })).toMatchObject({ status: 'success', connectionId: 'pc_work' });
-    expect(await h.service.bindSecret({
+    // Deliberately malformed boundary input still reaches the real service validator.
+    expect(await Reflect.apply(h.service.bindSecret, undefined, [{
       action: 'bindSecret', machineId: 'machine-a', connectionId: 'pc_work',
       credentialSlotId: 'otherKey', savedSecretId: 'secret_api', scope: 'account',
-    })).toMatchObject({ status: 'error', error: { code: 'provider_connection_invalid' } });
+    }])).toMatchObject({ status: 'error', error: { code: 'provider_connection_invalid' } });
   });
 
   it('accepts one current shared Saved Secret reference for contribution/custom authoring and an existing binding', async () => {

@@ -23,9 +23,9 @@ export function createBrokerProviderRegistry(): ProviderContributionRegistryView
       connectedAccounts: [
         { purpose: 'openai-upstream', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
           title: { key: 'managedPurpose.openai.title', fallback: 'Use OpenAI upstream account' }, required: false,
-          materializationKinds: ['httpHeaders'], endpointTemplateIds: endpointTemplates.slice(0, 2).map((endpoint) => endpoint.id) },
+          materializationKinds: ['httpHeaders'], endpointTemplateIds: endpointTemplates.map((endpoint) => endpoint.id) },
         { purpose: 'anthropic-upstream', service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' },
-          materializationKinds: ['httpHeaders'], endpointTemplateIds: ['cliproxyapi-anthropic'] },
+          materializationKinds: ['httpHeaders'], endpointTemplateIds: endpointTemplates.map((endpoint) => endpoint.id) },
       ],
     },
   });

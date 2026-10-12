@@ -1,6 +1,7 @@
 import { projectProviderBindingCompatibilityForConnectionV1, resolveProviderBindingCompatibilityWithFingerprintV1 } from '@happier-dev/protocol/providers/binding-compatibility';
 import type { DaemonProviderAgentCompatibilitySummaryV1 } from '@happier-dev/protocol/rpc/providers';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
 
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { readLeasedAgentProviderBindingAdapter } from '@/plugins/runtime/providerBindings/adapter';
@@ -38,7 +39,12 @@ export function projectProviderConnectionCompatibility(input: Readonly<{
   const definitions = [...input.lease.registry.contributes.agentDefinitionsById.entries()]
     .sort(([left], [right]) => left.localeCompare(right));
   for (const [agentId, contribution] of definitions) {
-    const agentTargetKey = buildBackendTargetKeyV2({ kind: 'backend', backendId: agentId });
+    // A declared configuration container is not an executable Agent target.
+    const [target] = contribution.identity
+      ? listAgentExecutionTargetsV1(contribution.identity)
+      : [{ kind: 'backend' as const, backendId: agentId }];
+    if (!target) continue;
+    const agentTargetKey = buildBackendTargetKeyV2(target);
     const agentName = readAgentName(contribution, agentId);
     // A static declaration without an active adapter is not incompatibility.
     // Omit it until the same leased generation has executable runtime truth.

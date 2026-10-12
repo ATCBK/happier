@@ -233,6 +233,22 @@ export function createRuntimeProviderConnectionServices(input: Readonly<{
         ? { summary: result.summary, probeObservationIdentity: result.probeObservationIdentity }
         : { summary: EMPTY_RUNTIME_SUMMARY, probeObservationIdentity: null };
     },
+    readSharedGatewayRuntime: async ({ connectionId, machineId }) => {
+      const unchecked = { status: 'not_checked', reachability: 'not_checked' } as const;
+      const readIdentity = input.resolveSharedGateway?.readIdentity;
+      if (!readIdentity || machineId !== input.machineId) return unchecked;
+      const lease = tryAcquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: input.happyHomeDir });
+      if (!lease) return unchecked;
+      try {
+        const identity = await readIdentity({ connectionId });
+        if (identity.connectionId !== connectionId || identity.machineId !== machineId) return unchecked;
+        return lease.registry.readSharedProviderGatewayRuntime?.(identity) ?? unchecked;
+      } catch {
+        return unchecked;
+      } finally {
+        await lease.release();
+      }
+    },
     acquireCompatibilityProjection: () => {
       // Settings may read current executable facts, but must never start runtime
       // activation for advisory compatibility presentation.

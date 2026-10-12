@@ -6,7 +6,7 @@ import { normalizeProviderOriginRelativePathSyntax } from '@happier-dev/protocol
 import { MACHINE_HTTP_LOCAL_CAPABILITY_HEADER } from '@happier-dev/iroh-native/node';
 import type { ManagedProviderEndpointAccessProjection } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import type { ManagedServiceRequest } from '@happier-dev/plugin-sdk/managed-services';
-import { PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH, PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from './providerBrokerPrivateProtocol';
+import { readProviderBrokerEndpointUrl } from './providerBrokerPrivateProtocol';
 
 type BrokerTunnel = Readonly<{
   localPort: number;
@@ -99,14 +99,9 @@ export async function openAccountConnectionProviderBrokerAccess(input: Parameter
   let endpointUrl: string;
   try {
     await assertAdmitted();
-    const response = await (input.fetchImpl ?? fetch)(new URL(PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH, localOrigin), {
-      method: 'GET', headers, redirect: 'error', signal: input.signal,
-    });
-    const declaredPath = response.headers.get(PROVIDER_BROKER_ENDPOINT_PATH_HEADER);
-    if (response.status !== 204 || declaredPath === null) throw unavailable();
-    const path = normalizeProviderOriginRelativePathSyntax(declaredPath);
+    endpointUrl = await readProviderBrokerEndpointUrl({ localOrigin, headers, signal: input.signal,
+      ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}) });
     await assertAdmitted();
-    endpointUrl = new URL(path, localOrigin).href;
   } catch {
     // Never publish an unverified base path or leave its listener exposed.
     // Preserve the opening failure even if remote retirement also fails.

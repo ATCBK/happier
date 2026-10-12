@@ -4,11 +4,12 @@ import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { readOwnRecordValue } from '@happier-dev/protocol/providers/ownRecordValue';
 import { resolveProviderGrantV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
 import { resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
+import { projectAvailableProviderContributionsV1 } from '@happier-dev/protocol/providers/connections/sourceFactsV1';
+import { describeAccountProviderConnectionV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
 import type { ResolvedProviderManagedConnectedAccountPurposeDeclarationV1 } from '@happier-dev/protocol';
 
 import {
   getProviderContribution,
-  normalizeProviderContributionRegistryKey,
 } from '@/providers/registry/lookup';
 import { redactProviderSettingsDiagnostic } from './settings';
 import type {
@@ -92,6 +93,9 @@ export async function describeProviderConnections(
     return { status: 'error', error: createProviderErrorV1('provider_settings_invalid', { machineId: input.machineId }) };
   }
   const settings = read.settings;
+  const accountDefinitions = [...snapshot.registry.providersByContributionKey].map(([contributionKey, contribution]) => ({
+    contributionKey, definition: contribution.definition, provenance: contribution.provenance,
+  }));
   const selected = input.connectionId
     ? settings.connections.filter((connection) => connection.id === input.connectionId)
     : settings.connections;
@@ -182,42 +186,9 @@ export async function describeProviderConnections(
         dnsEvidence,
       });
       const resolved = resolution.status === 'resolved' ? resolution : null;
-      const currentMachineOverrides = connection.endpointOverridesByMachineId;
-      const { [input.machineId]: _currentMachineOverrides, ...otherMachineOverrides } = currentMachineOverrides ?? {};
-      const accountViewConnection = currentMachineOverrides && Object.prototype.hasOwnProperty.call(currentMachineOverrides, input.machineId)
-        ? {
-            ...connection,
-            ...(Object.keys(otherMachineOverrides).length > 0
-              ? { endpointOverridesByMachineId: otherMachineOverrides }
-              : { endpointOverridesByMachineId: undefined }),
-          }
-        : connection;
-      const accountViewResolution = accountViewConnection === connection
-        ? resolution
-        : deps.resolveConnection({
-            providerSettings: {
-              ...settings,
-              connections: settings.connections.map((entry) =>
-                entry.id === connection.id ? accountViewConnection : entry),
-            },
-            connectionId: connection.id,
-            machineId: input.machineId,
-            registry: snapshot.registry,
-            dnsEvidence,
-          });
-      const accountViewResolved = accountViewResolution.status === 'resolved' ? accountViewResolution : null;
-      const accountGrant = settings.accountGrants.find((grant) => grant.connectionId === connection.id);
+      const accountView = describeAccountProviderConnectionV1(settings, connection, accountDefinitions);
       const machineGrant = settings.machineGrants.find((grant) =>
         grant.connectionId === connection.id && grant.machineId === input.machineId);
-      const accountGrantResolution = accountViewResolved?.record.scope === 'account'
-        ? resolveProviderGrantV1(settings, {
-            scope: 'account',
-            connectionId: connection.id,
-            machineId: input.machineId,
-            connectionSecurityFingerprint: accountViewResolved.record.connectionSecurityFingerprint,
-            endpointSetFingerprint: accountViewResolved.record.endpointSetFingerprint,
-          })
-        : null;
       const machineGrantResolution = resolved
         ? resolveProviderGrantV1(settings, {
             scope: 'machine',
@@ -236,11 +207,13 @@ export async function describeProviderConnections(
             endpointSetFingerprint: resolved.record.endpointSetFingerprint,
           })
         : null;
-      // Resolution/scope applicability belongs to this projection. Once a view
-      // is usable, the protocol grant owner decides absent/valid/stale.
-      const accountState = accountGrantResolution?.state ?? (accountGrant ? 'stale' as const : 'absent' as const);
+      // Saved Account enablement is syntax-derived at the Account owner. DNS
+      // readiness cannot revoke it; runtime admission still uses resolution.
+      const accountState = accountView.grants.accountState;
       const machineState = machineGrantResolution?.state ?? (machineGrant ? 'stale' as const : 'absent' as const);
-      const effectiveState = effectiveGrantResolution?.state ?? 'absent' as const;
+      const effectiveState = effectiveGrantResolution?.state
+        ?? (resolution.status === 'endpoint_unresolved' && machineOverrides.size === 0
+          ? accountState : 'absent' as const);
       const runtimeProjection = resolved && resolved.record.authorization.authorized
         ? await deps.runtimeSummary({
             connectionId: connection.id,
@@ -254,6 +227,13 @@ export async function describeProviderConnections(
             lifetime,
           })
         : EMPTY_RUNTIME_PROJECTION;
+      const gatewayRuntime = connection.deployment.kind === 'managedLocal'
+        && managedRuntimeDeclaration && managedRuntimeDeclaration.connectedAccounts.length > 0
+        ? connection.gatewayPlacement?.kind === 'machine' && connection.gatewayPlacement.machineId !== input.machineId
+          ? { status: 'not_checked' as const, reachability: 'not_checked' as const }
+          : await deps.readSharedGatewayRuntime?.({ connectionId: connection.id, machineId: input.machineId })
+            ?? { status: 'not_checked' as const, reachability: 'not_checked' as const }
+        : null;
       const compatibility = resolved && compatibilityProjection
         ? [...compatibilityProjection.project(resolved.record)]
         : [];
@@ -419,37 +399,18 @@ export async function describeProviderConnections(
                 : null,
         revision: connection.revision,
         probeObservationIdentity: runtimeProjection.probeObservationIdentity,
-        runtime: runtimeProjection.summary,
+        runtime: gatewayRuntime ? { ...runtimeProjection.summary, gateway: gatewayRuntime } : runtimeProjection.summary,
       };
     }));
   } finally {
     await compatibilityProjection?.release();
   }
 
-  const configured = new Set(settings.connections.flatMap((connection) =>
-    connection.source.kind === 'contribution'
-      ? [normalizeProviderContributionRegistryKey(connection.source.contributionKey)]
-      : []).filter((key): key is string => key !== null));
-  const allAvailable = [...snapshot.registry.providersByContributionKey.entries()]
-    .filter(([key]) => !configured.has(key))
-    .map(([contributionKey, entry]) => ({
-      contributionKey, name: entry.definition.name, kind: entry.definition.kind,
-      provenance: entry.provenance,
-      icon: entry.definition.icon ?? null,
-      ...(entry.definition.websiteUrl ? { websiteUrl: entry.definition.websiteUrl } : {}),
-      endpointTemplates: entry.definition.endpointTemplates.map((endpoint) => ({
-        id: endpoint.id,
-        protocol: endpoint.protocol,
-      })),
-      credential: entry.definition.credential
-        ? {
-            required: entry.definition.credential.required,
-            ...(entry.definition.credential.keyUrl ? { keyUrl: entry.definition.credential.keyUrl } : {}),
-          }
-        : null,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name) || a.contributionKey.localeCompare(b.contributionKey));
-  const available = allAvailable;
+  const available = projectAvailableProviderContributionsV1({ connections: settings.connections,
+    definitions: [...snapshot.registry.providersByContributionKey].map(([contributionKey, entry]) => ({
+      contributionKey, definition: entry.definition, provenance: entry.provenance,
+    })),
+  });
   const discoveryCandidatesReader = deps.discoveryCandidates;
   const allDiscoveryCandidates = deps.featureGate.isEnabled('providers.localDiscovery') && discoveryCandidatesReader
     ? await readAdvisoryProjection(() => discoveryCandidatesReader({

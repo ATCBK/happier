@@ -33,7 +33,7 @@ type ConnectedSelectionInput = Pick<ConnectedOpenInput, 'source' | 'application'
 
 /**
  * The one current Connected Account/Pool choice for a broker source: the
- * CLIProxyAPI purpose family the signed application needs, and the member the
+ * CLIProxyAPI upstream purpose the signed source and application admit, and the member the
  * canonical purpose-binding owner selects for it. A pure read — it neither
  * starts nor joins managed custody — so the Home can attribute and admit a
  * request before anything is materialized, and acquisition re-enters the same
@@ -44,21 +44,15 @@ async function resolveConnectedServicesBrokerSelection(
   resolveBindingIntentSelection: ConnectedAccountPurposeBindingOwner['resolveBindingIntentSelection'],
   request: ConnectedSelectionInput,
 ) {
+  const service = request.source.target.kind === 'account'
+    ? request.source.target.account.service
+    : request.source.target.service;
   const family = await withRegistry((registry) => (
     isCLIProxyAPIBrokerApplication(registry, request.application)
-      ? resolveManagedProviderBrokerPurpose({ registry, application: request.application })
+      ? resolveManagedProviderBrokerPurpose({ registry, application: request.application, service })
       : null
   ));
-  if (
-    !family
-    || (
-      request.source.target.kind === 'account'
-        ? request.source.target.account.service.pluginId !== family.service.pluginId
-          || request.source.target.account.service.localId !== family.service.localId
-        : request.source.target.service.pluginId !== family.service.pluginId
-          || request.source.target.service.localId !== family.service.localId
-    )
-  ) return null;
+  if (!family) return null;
   const purpose = {
     consumer: request.application.implementationIdentity,
     purpose: family.purpose,

@@ -2,7 +2,7 @@ import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unex
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
-import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, FeaturesResponseSchema, ProviderConnectionIdSchema, ProviderConnectionV1Schema, SavedSecretSchema, createProviderErrorV1 } from '@happier-dev/protocol';
+import { AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, FeaturesResponseSchema, ProviderConnectionIdSchema, ProviderConnectionV1Schema, ProviderContributionV1Schema, SavedSecretSchema, createProviderErrorV1 } from '@happier-dev/protocol';
 import { SharedSavedSecretPromoteInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { deriveSavedSecretImportResourceIdV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { openSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
@@ -26,12 +26,15 @@ vi.mock('@/persistence', async importOriginal => ({ ...await importOriginal<type
 function runtimeRegistry(
   activateContributionsOnDemand: ResolvedExecutablePluginRuntimeRegistry['activateContributionsOnDemand'],
 ): ResolvedExecutablePluginRuntimeRegistry {
+  const managedOwner = createManagedServicesOwner({
+    processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+    dependencies: createUnavailablePluginServices().managedServices.dependencies,
+    resolveScope: () => null,
+  });
   return {
-    projectManagedServices: createManagedServicesOwner({
-      processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
-      dependencies: createUnavailablePluginServices().managedServices.dependencies,
-      resolveScope: () => null,
-    }),
+    claimReleaseLessDeclarations: async () => undefined,
+    projectManagedServices: managedOwner,
+    readSharedProviderGatewayRuntime: managedOwner.readSharedProviderGatewayRuntime,
     contributes: {
       agents: Object.freeze([]),
       actions: Object.freeze([]),
@@ -71,6 +74,56 @@ afterEach(async () => {
 });
 
 describe('runtime Provider connection composition', () => {
+  it('reads admitted gateway custody without activation and leaves unavailable authority unchecked', async () => {
+    const { setActiveAccountSettingsSnapshot } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+    const activeRegistry = runtimeRegistry(async () => { throw new Error('Description cannot activate plugins'); });
+    const controller = createPluginReloadController();
+    await controller.adoptPreparedRuntimeRegistry({ registry: activeRegistry, changedPluginIds: [], durableRevision: 1,
+      runningSessionDisposition: 'retainRunningSessions' });
+    vi.doMock('@/plugins/runtime/reload/singleton', () => ({ pluginReloadController: controller }));
+    const credentials: StoredCredentials = { token: 'gateway-read-test', encryption: null };
+    const { defaultsByAgentTargetKey: _defaults, ...catalog } = DEFAULT_PROVIDER_SETTINGS_V1;
+    const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway', role: 'named',
+      displayName: 'Gateway', displayNameMode: 'custom', revision: 0, createdAt: 1, updatedAt: 1,
+      source: { kind: 'contribution', contributionKey: 'acme.gateway/gateway' }, deployment: { kind: 'managedLocal' } });
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: AccountSettingsSchema.parse({}), rawSettings: {},
+      settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials),
+      providerConnectionsCatalog: { status: 'ready', revision: 1, catalog: { ...catalog, connections: [connection] } } });
+    const definition = ProviderContributionV1Schema.parse({ v: 1, id: 'gateway', name: 'Gateway', kind: 'aggregator',
+      endpointTemplates: [{ id: 'chat', protocol: 'openai-chat', baseUrl: 'http://127.0.0.1:9000/v1',
+        capabilities: { streaming: 'unknown', toolRoundTrips: 'unknown', statefulResponses: 'unknown', reasoningControls: 'unknown' } }],
+      catalog: { source: 'manual', manualModelPolicy: 'allowed' }, managedRuntime: { kind: 'managed',
+        endpointTemplateIds: ['chat'], connectedAccounts: [{ purpose: 'upstream', required: false,
+          service: { pluginId: 'happier.connected-account.openai', localId: 'openai' } }] } });
+    const { createMachineSharedProviderGatewayResolver } = await import('@/daemon/machine/bootstrapMachineSyncRuntime');
+    let accountId: string | null = 'current-account';
+    const resolveSharedGateway = createMachineSharedProviderGatewayResolver({ machineId: 'machine-a',
+      readAccountId: () => accountId, readOrigin: async () => ({ serverIdentityId: 'current-home', machineId: 'machine-a' }) });
+    const { createRuntimeProviderConnectionServices } = await import('./runtimeServices');
+    const services = createRuntimeProviderConnectionServices({ machineId: 'machine-a', credentials,
+      happyHomeDir: configuration.happyHomeDir, featureGate: { isEnabled: () => true }, resolveSharedGateway,
+      runtimeSummary: async () => ({ status: 'error' }),
+      resolveRegistry: async () => ({ providersByContributionKey: new Map([['acme.gateway/gateway', {
+        provenance: 'first_party' as const, source: { kind: 'bundled' as const }, pluginId: 'acme.gateway',
+        identity: { pluginId: 'acme.gateway', localId: 'gateway' }, definition,
+      }]]) }),
+    });
+    try {
+      expect(await services.describeConnections({ machineId: 'machine-a', connectionId: connection.id })).toMatchObject({
+        status: 'success', connections: [{ runtime: { gateway: { status: 'idle', reachability: 'not_checked' } } }],
+      });
+      accountId = null;
+      expect(await services.describeConnections({ machineId: 'machine-a', connectionId: connection.id })).toMatchObject({
+        status: 'success', connections: [{ runtime: { gateway: { status: 'not_checked', reachability: 'not_checked' } } }],
+      });
+      accountId = 'current-account';
+      await controller.shutdown({ timeoutMs: 0 });
+      expect(await services.describeConnections({ machineId: 'machine-a', connectionId: connection.id })).toMatchObject({
+        status: 'success', connections: [{ runtime: { gateway: { status: 'not_checked', reachability: 'not_checked' } } }],
+      });
+    } finally { await controller.shutdown({ timeoutMs: 0 }); }
+  });
+
   it('saves Account authoring without resolving machine endpoints or runtime state', async () => {
     const { setActiveAccountSettingsSnapshot } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
     const credentials: StoredCredentials = { token: 'provider-account-daemon-edit', encryption: null };
