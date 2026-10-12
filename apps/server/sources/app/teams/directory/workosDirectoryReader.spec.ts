@@ -56,7 +56,8 @@ describe("WorkOS directory reader", () => {
             context: {
                 organizationId: "org_1",
                 directoryId: "directory_1",
-                listUsers: vi.fn(async () => page([{ ...user("user_1"), idpId: exactSubject }])),
+                listUsers: vi.fn(async () => page([{ ...user("user_1"), idpId: exactSubject,
+                    firstName: "  Alice ", lastName: " Example  " }])),
                 listGroups: vi.fn(async () => page([])),
                 listEvents: vi.fn(),
             },
@@ -65,7 +66,7 @@ describe("WorkOS directory reader", () => {
             writeGroupMembersPage: vi.fn(async () => true),
         })).resolves.toEqual({ ok: true });
         expect(writePeoplePage).toHaveBeenCalledWith([
-            expect.objectContaining({ externalSubjectId: exactSubject }),
+            expect.objectContaining({ externalSubjectId: exactSubject, displayName: "Alice Example" }),
         ]);
     });
 

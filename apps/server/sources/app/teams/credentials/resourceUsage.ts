@@ -14,6 +14,7 @@ import type {
     TeamCredentialUsageQueryResultV1,
 } from '@happier-dev/protocol/teams';
 import { inTx, type Tx } from '@/storage/inTx';
+import { resolveAccountDisplayLabelV1 } from '@/app/account/profile/accountDisplayProfile';
 import { AccountStatus } from '@/storage/enums.generated';
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from '../actorContext';
 import { resolveTeamCredentialCapabilities } from '../capabilities';
@@ -267,10 +268,10 @@ async function resolveBreakdownLabelsInTx(
     if (input.dimension === 'member') {
         const accounts = await tx.account.findMany({
             where: { id: { in: keys } },
-            select: { id: true, firstName: true, lastName: true, username: true },
+            select: { id: true, name: true, username: true },
         });
         return new Map(accounts.flatMap((account) => {
-            const displayName = [account.firstName, account.lastName].filter(Boolean).join(' ') || account.username;
+            const displayName = resolveAccountDisplayLabelV1(account);
             return displayName ? [[account.id, displayName] as const] : [];
         }));
     }

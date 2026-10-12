@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
+import { readAccountNameFromLegacyProfileV1 } from "@happier-dev/protocol";
 import type {
     DirectoryProjectionCatchUp,
     DirectoryProjectionCatchUpResult,
@@ -102,9 +103,7 @@ function normalizeUser(
     ) return null;
     const externalUpdatedAt = parseDate(parsed.data.updatedAt);
     if (!externalUpdatedAt) return null;
-    const displayName = [parsed.data.firstName, parsed.data.lastName]
-        .filter((part): part is string => part !== null && part.trim().length > 0)
-        .join(" ");
+    const displayName = readAccountNameFromLegacyProfileV1(parsed.data) ?? "";
     if (displayName.length > 256) return null;
     const idpId = parsed.data.idpId;
     return {

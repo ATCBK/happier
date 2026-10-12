@@ -20,6 +20,7 @@ import {
 import type { ProviderBrokerApplicationBindingV1 } from "@happier-dev/protocol";
 
 import type { Tx } from "@/storage/inTx";
+import { resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import {
     qualifyTeamOperationAuthenticationInTx,
     qualifyTeamOperationAuthenticationsInTx,
@@ -1214,7 +1215,7 @@ export async function readTeamCredentialResourcePageInTx(tx: Tx, input: Credenti
         externalApiAudiences ?? readAudiencesInTx(tx, resourceIds),
         tx.account.findMany({
             where: { id: { in: custodianAccountIds } },
-            select: { id: true, firstName: true, lastName: true, username: true },
+            select: { id: true, name: true, username: true },
         }),
         tx.teamCredentialUsageLimit.findMany({
             where: { resourceId: { in: resourceIds }, enabled: true },
@@ -1266,7 +1267,7 @@ export async function readTeamCredentialResourcePageInTx(tx: Tx, input: Credenti
     );
     const sourceOwnerNames = new Map(sourceOwners.map((account) => [
         account.id,
-        [account.firstName, account.lastName].filter(Boolean).join(' ') || account.username || null,
+        resolveAccountDisplayLabelV1(account),
     ]));
     const activeLimitCounts = new Map<string, number>();
     for (const limitRow of activeLimits) {

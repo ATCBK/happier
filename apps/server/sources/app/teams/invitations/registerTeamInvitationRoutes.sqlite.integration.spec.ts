@@ -74,7 +74,7 @@ describe("Team invitation routes (SQLite integration)", () => {
 
     async function teamWithOwner(encryptionMode: "plain" | "e2ee" = "plain") {
         const actor = await db.account.create({
-            data: { publicKey: randomUUID(), encryptionMode, firstName: "Ada", lastName: "Lovelace" },
+            data: { publicKey: randomUUID(), encryptionMode, name: "Ada Lovelace", firstName: "Ada", lastName: "Lovelace" },
         });
         const team = await db.team.create({ data: { name: "Acme" } });
         await db.teamMembership.create({

@@ -51,6 +51,7 @@ export type TeamMembershipRow = Readonly<{
     createdAt: Date;
     account: Readonly<{
         id: string;
+        name: string | null;
         firstName: string | null;
         lastName: string | null;
         username: string | null;

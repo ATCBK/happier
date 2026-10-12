@@ -94,7 +94,7 @@ describe("Team credential source candidates", () => {
     afterAll(async () => { await harness?.close(); });
 
     it("pins each offerable Pool to its persisted lifetime and names the resource already using it", async () => {
-        const owner = await db.account.create({ data: { encryptionMode: "plain", firstName: "Ada" } });
+        const owner = await db.account.create({ data: { encryptionMode: "plain", name: "Ada" } });
         const team = await db.team.create({ data: { name: "Sources team" } });
         await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: "admin" } });
 
@@ -174,7 +174,7 @@ describe("Team credential source candidates", () => {
     });
 
     it("offers a Connected Account with its canonical presentation and immutable credential lifetime", async () => {
-        const owner = await db.account.create({ data: { encryptionMode: "plain", firstName: "Ada" } });
+        const owner = await db.account.create({ data: { encryptionMode: "plain", name: "Ada" } });
         const team = await db.team.create({ data: { name: "Connected source team" } });
         await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: "admin" } });
         const identity = createLegacyCredentialFixtureIdentity({ serviceId: SERVICE_ID, profileId: "primary" });

@@ -39,7 +39,7 @@ describe("Team credential activity reads", () => {
     });
 
     it("authorizes managers after resource deletion and paginates newest first", async () => {
-        const actor = await db.account.create({ data: { encryptionMode: "plain", firstName: "Ada", lastName: "Lovelace" } });
+        const actor = await db.account.create({ data: { encryptionMode: "plain", name: "Ada Lovelace", firstName: "Ada", lastName: "Lovelace" } });
         const team = await db.team.create({ data: { name: "Activity team" } });
         await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: "admin" } });
         const resourceId = "deleted-resource";

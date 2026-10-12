@@ -61,7 +61,7 @@ export async function deliverTeamInvitationEmail(
     // label from the same owner, so the two never name the person differently.
     const inviter = await db.account.findUnique({
         where: { id: input.inviterAccountId },
-        select: { firstName: true, lastName: true, username: true },
+        select: { name: true, username: true },
     });
 
     const result = await deps.delivery.deliver({

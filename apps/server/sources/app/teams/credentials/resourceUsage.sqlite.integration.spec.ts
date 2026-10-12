@@ -6,6 +6,9 @@ import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lig
 import { queryTeamCredentialUsage } from './resourceUsage';
 import { removeTeamMemberForActorInTx } from '../memberships/memberAdministration';
 import { recordTeamCredentialDirectDeliveryActivityInTx } from './resourceActivity';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { TeamCredentialUsageQueryInputV1Schema } from '@happier-dev/protocol/teams';
+import { UsageFileResultSchema } from '@happier-dev/protocol/usage/usageExport';
 
 const TEST_AUTHENTICATION = {
   env: process.env,
@@ -17,6 +20,33 @@ describe('Team credential resource usage query', () => {
   let harness: LightSqliteHarness;
   beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: 'team-resource-usage-' }); }, 120_000);
   afterAll(async () => { await harness?.close(); });
+
+  it('uses the same real Home resource authority for export, including restricted-Team and outsider refusal', async () => {
+    const custodian = await db.account.create({ data: { encryptionMode: 'plain' } });
+    const outsider = await db.account.create({ data: { encryptionMode: 'plain' } });
+    const team = await db.team.create({ data: { name: 'Export authority', authenticationPolicy: {
+      v: 1, mode: 'restricted', accepted: [{ kind: 'home_method', methodId: 'key_challenge' }],
+    } } });
+    await db.teamMembership.create({ data: { teamId: team.id, accountId: custodian.id, role: 'admin' } });
+    const resource = await db.teamCredentialResource.create({ data: { teamId: team.id,
+      custodianAccountId: custodian.id, displayName: 'Shared model', disclosureCeiling: 'brokered_only',
+      sessionUsePolicy: 'personal_allowed', sourceBindingJson: '{}', allMembersDeliveryMode: 'brokered' } });
+    const query = { resourceId: resource.id, startMs: 0, endMs: Date.now(), granularity: 'day', costMode: 'auto' } as const;
+    const executorFor = (actorId: string) => createActionExecutor({ homeDomainAction: async ({ input }) => {
+      // This adapts the genuine Home query/HTTP result boundary; authorization and database reads stay real.
+      const value = await queryTeamCredentialUsage(actorId, TeamCredentialUsageQueryInputV1Schema.parse(input), TEST_AUTHENTICATION);
+      return 'ok' in value ? { ok: false, errorCode: value.error, error: value.error } : value;
+    } } as ActionExecutorDeps);
+    const request = { query, resourceName: 'Shared model' };
+    expect(await executorFor(custodian.id).execute('teams.credentials.usage.export', request, { surface: 'cli' }))
+      .toMatchObject({ ok: false, errorCode: 'team_authentication_required' });
+    await db.team.update({ where: { id: team.id }, data: { authenticationPolicy: null } });
+    const exported = await executorFor(custodian.id).execute('teams.credentials.usage.export', request, { surface: 'cli' });
+    expect(exported.ok).toBe(true);
+    if (exported.ok) expect(UsageFileResultSchema.parse(exported.result).mediaType).toBe('text/csv');
+    expect(await executorFor(outsider.id).execute('teams.credentials.usage.export', request, { surface: 'cli' }))
+      .toMatchObject({ ok: false, errorCode: 'not_found_or_not_visible' });
+  });
 
   it('requires restricted-Team qualification from a current source custodian before usage disclosure', async () => {
     const custodian = await db.account.create({ data: { encryptionMode: 'plain' } });
@@ -593,7 +623,7 @@ describe('Team credential resource usage query', () => {
 
   it('labels member and external-key breakdowns for the viewer and keeps source members manager-only', async () => {
     const manager = await db.account.create({ data: { encryptionMode: 'plain' } });
-    const actor = await db.account.create({ data: { encryptionMode: 'plain', firstName: 'Ada', lastName: 'Lovelace', username: 'ada' } });
+    const actor = await db.account.create({ data: { encryptionMode: 'plain', name: 'Ada Lovelace', firstName: 'Ada', lastName: 'Lovelace', username: 'ada' } });
     const team = await db.team.create({ data: { name: 'Label usage team' } });
     const actorMembership = await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: 'member' } });
     await db.teamMembership.create({ data: { teamId: team.id, accountId: manager.id, role: 'admin' } });

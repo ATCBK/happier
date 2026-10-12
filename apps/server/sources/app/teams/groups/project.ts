@@ -230,6 +230,7 @@ export type TeamGroupMembershipRow = Readonly<{
         accountId: string;
         account: Readonly<{
             id: string;
+            name: string | null;
             firstName: string | null;
             lastName: string | null;
             username: string | null;

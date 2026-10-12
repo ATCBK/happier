@@ -8,6 +8,7 @@ import {
     type TeamCredentialActivityKindV1,
 } from "@happier-dev/protocol/teams";
 import type { Tx } from "@/storage/inTx";
+import { resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";
 import { qualifyTeamCredentialOperationInTx } from "./resourceRead";
@@ -89,14 +90,14 @@ export async function readTeamCredentialActivityInTx(
         orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: limit + 1,
         select: {
             id: true, kind: true, subjectDisplayName: true, createdAt: true,
-            actorAccount: { select: { firstName: true, lastName: true, username: true } },
+            actorAccount: { select: { name: true, username: true } },
         },
     });
     const page = rows.slice(0, limit);
     const items = page.map(row => ({
         kind: TeamCredentialActivityKindV1Schema.parse(row.kind),
         actorDisplayName: row.actorAccount
-            ? [row.actorAccount.firstName, row.actorAccount.lastName].filter(Boolean).join(" ") || row.actorAccount.username || null
+            ? resolveAccountDisplayLabelV1(row.actorAccount)
             : null,
         subjectDisplayName: row.subjectDisplayName,
         createdAt: row.createdAt.toISOString(),
