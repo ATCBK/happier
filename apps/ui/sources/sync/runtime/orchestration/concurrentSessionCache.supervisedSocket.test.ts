@@ -1238,6 +1238,7 @@ describe('concurrent session cache supervised sockets', () => {
         await vi.waitFor(() => {
             expect(machineRefreshCount).toBeGreaterThanOrEqual(1);
         });
+        const sessionRefreshCount = fetchAndApplySessionsSpy.mock.calls.length;
 
         fakeSocket.emitServerEvent('update', {
             id: 'update-1',
@@ -1257,6 +1258,7 @@ describe('concurrent session cache supervised sockets', () => {
             expect(machineRefreshCount).toBeGreaterThanOrEqual(2);
             expect(storage.getState().machineListByServerId['server-b']?.[0]?.daemonState?.transfer?.listenerClasses?.loopback_http?.active).toBe(true);
         });
+        expect(fetchAndApplySessionsSpy).toHaveBeenCalledTimes(sessionRefreshCount);
 
         stopConcurrentSessionCacheSync();
     });

@@ -1,7 +1,5 @@
 const CONCURRENT_SESSION_CACHE_REFRESH_UPDATE_TYPES = new Set([
     'account-change',
-    'new-machine',
-    'update-machine',
     'new-session',
     'delete-session',
     'pending-changed',
@@ -9,6 +7,13 @@ const CONCURRENT_SESSION_CACHE_REFRESH_UPDATE_TYPES = new Set([
     'new-message',
     'message-updated',
 ]);
+
+const CONCURRENT_MACHINE_CACHE_REFRESH_UPDATE_TYPES = new Set([
+    'new-machine',
+    'update-machine',
+]);
+
+export type ConcurrentSessionCacheUpdateImpact = 'machines' | 'snapshot' | null;
 
 function readConcurrentUpdateType(raw: unknown): string | null {
     if (!raw || typeof raw !== 'object') {
@@ -25,8 +30,13 @@ function readConcurrentUpdateType(raw: unknown): string | null {
 }
 
 export function shouldRefreshConcurrentSessionCacheForUpdate(raw: unknown): boolean {
+    return classifyConcurrentSessionCacheUpdate(raw) !== null;
+}
+
+export function classifyConcurrentSessionCacheUpdate(raw: unknown): ConcurrentSessionCacheUpdateImpact {
     const updateType = readConcurrentUpdateType(raw);
-    return updateType !== null && CONCURRENT_SESSION_CACHE_REFRESH_UPDATE_TYPES.has(updateType);
+    if (updateType !== null && CONCURRENT_MACHINE_CACHE_REFRESH_UPDATE_TYPES.has(updateType)) return 'machines';
+    return updateType !== null && CONCURRENT_SESSION_CACHE_REFRESH_UPDATE_TYPES.has(updateType) ? 'snapshot' : null;
 }
 
 export function isAccountChangeUpdate(raw: unknown): boolean {

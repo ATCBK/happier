@@ -95,7 +95,7 @@ import {
     type ConcurrentServerSocket,
 } from './concurrentServerConnections/createConcurrentServerSocketTransport';
 import {
-    shouldRefreshConcurrentSessionCacheForUpdate,
+    classifyConcurrentSessionCacheUpdate,
     isAccountChangeUpdate,
 } from './concurrentSessionCacheUpdateClassifier';
 import { startRuntimeActiveGatedInterval } from '@/utils/runtime/isRuntimeActive';
@@ -143,6 +143,8 @@ function toRawConcurrentSelectionSettings(settings: ConcurrentSelectionSettings)
     };
 }
 
+type ConcurrentRefreshIntent = 'machines' | 'continue' | 'replace';
+
 type ManagedConcurrentServer = {
     id: string;
     serverUrl: string;
@@ -161,10 +163,11 @@ type ManagedConcurrentServer = {
     machineDataKeys: Map<string, MachineDataKeyCacheEntry>;
     irohLease: ResolvedServerScopedTransport | null;
     irohConfigKey: string | null;
-    refreshQueued: 'continue' | 'replace' | null;
+    refreshQueued: ConcurrentRefreshIntent | null;
     refreshInFlight: Promise<void> | null;
     refreshAbortController: AbortController | null;
     refreshTimer: ReturnType<typeof setTimeout> | null;
+    refreshTimerIntent: ConcurrentRefreshIntent | null;
     sessionListFrontier: OrdinarySessionListFrontier;
     /** One applied ordinary page has landed for this Home since it was managed. */
     hasFetchedSessionListSnapshot: boolean;
@@ -704,7 +707,11 @@ function clearConcurrentMachineListCache(serverIdRaw: string, options?: Readonly
     });
 }
 
-async function refreshServerSnapshot(entry: ManagedConcurrentServer, signal: AbortSignal): Promise<void> {
+async function refreshServerSnapshot(
+    entry: ManagedConcurrentServer,
+    signal: AbortSignal,
+    options: Readonly<{ includeSessions: boolean }> = { includeSessions: true },
+): Promise<void> {
     const startedAt = Date.now();
     let responseBytes = 0;
     const encryption = await getOrCreateEncryption(entry);
@@ -717,14 +724,53 @@ async function refreshServerSnapshot(entry: ManagedConcurrentServer, signal: Abo
             responseBytes += contentLength;
         }
     }, signal);
-    let fallbackSessions: Session[] = [];
-    let didApplySessionListRenderables = false;
-    let machines: Machine[] = [];
     const shouldContinue = () => (
         !signal.aborted
         && managedServers.get(entry.id) === entry
         && entry.reachabilityState.phase === 'online'
     );
+    const refreshMachines = async (): Promise<void> => {
+        let machines: Machine[] = [];
+        await fetchAndApplyMachines({
+            credentials: entry.credentials,
+            readAccountMode: async () => (await fetchAccountEncryptionMode(entry.credentials, { request })).mode,
+            encryption,
+            machineDataKeys: entry.machineDataKeys,
+            request,
+            shouldContinue,
+            throwOnError: true,
+            sourceServerId: entry.id,
+            replace: true,
+            getMachineSnapshot: () => Object.fromEntries((storage.getState().machineListByServerId[entry.id] ?? []).map((machine) => [machine.id, machine])),
+            applyMachines: (nextMachines, replace) => {
+                if (replace !== false) { machines = nextMachines; return; }
+                const current = new Map((storage.getState().machineListByServerId[entry.id] ?? []).map((machine) => [machine.id, machine]));
+                for (const machine of nextMachines) current.set(machine.id, machine);
+                machines = [...current.values()];
+            },
+        });
+        if (!shouldContinue()) return;
+        const previousMachines = storage.getState().machineListByServerId[entry.id] ?? null;
+        storage.getState().applyMachines(machines, true, { sourceServerId: entry.id });
+        const ownedMachines = storage.getState().machineListByServerId[entry.id] ?? null;
+        updateConcurrentMachineListCache({
+            serverId: entry.id,
+            machines: ownedMachines,
+            status: 'idle',
+            authoritative: true,
+            inventoryChangedAtOwner: ownedMachines !== previousMachines,
+        });
+    };
+    if (!options.includeSessions) {
+        try {
+            await refreshMachines();
+        } finally {
+            syncPerformanceTelemetry.recordDuration('sync.concurrent.refresh', Date.now() - startedAt, { responseBytes });
+        }
+        return;
+    }
+    let fallbackSessions: Session[] = [];
+    let didApplySessionListRenderables = false;
     const previousFrontier = entry.sessionListFrontier;
     const continuation = resolveOrdinarySessionListContinuation(previousFrontier);
     try {
@@ -784,40 +830,8 @@ async function refreshServerSnapshot(entry: ManagedConcurrentServer, signal: Abo
             entry.refreshQueued ??= 'continue';
         }
 
-        await fetchAndApplyMachines({
-            credentials: entry.credentials,
-            readAccountMode: async () => (await fetchAccountEncryptionMode(entry.credentials, { request })).mode,
-            encryption,
-            machineDataKeys: entry.machineDataKeys,
-            request,
-            shouldContinue,
-            throwOnError: true,
-            sourceServerId: entry.id,
-            replace: true,
-            getMachineSnapshot: () => Object.fromEntries((storage.getState().machineListByServerId[entry.id] ?? []).map((machine) => [machine.id, machine])),
-            applyMachines: (nextMachines, replace) => {
-                if (replace !== false) { machines = nextMachines; return; }
-                const current = new Map((storage.getState().machineListByServerId[entry.id] ?? []).map((machine) => [machine.id, machine]));
-                for (const machine of nextMachines) current.set(machine.id, machine);
-                machines = [...current.values()];
-            },
-        });
-
-        // Guard against late async writes: a refresh can finish after this server is removed.
-        if (!shouldContinue()) {
-            return;
-        }
-
-        const previousMachines = storage.getState().machineListByServerId[entry.id] ?? null;
-        storage.getState().applyMachines(machines, true, { sourceServerId: entry.id });
-        const ownedMachines = storage.getState().machineListByServerId[entry.id] ?? null;
-        updateConcurrentMachineListCache({
-            serverId: entry.id,
-            machines: ownedMachines,
-            status: 'idle',
-            authoritative: true,
-            inventoryChangedAtOwner: ownedMachines !== previousMachines,
-        });
+        await refreshMachines();
+        if (!shouldContinue()) return;
         if (!didApplySessionListRenderables) {
             const previousRows = storage.getState().sessionListRowsByServerId?.[entry.id] ?? {};
             const nextRenderables = fallbackSessions.map((session) => (
@@ -1029,33 +1043,47 @@ function isManagedServerActive(entry: ManagedConcurrentServer): boolean {
     return managedServers.get(entry.id) === entry;
 }
 
-function queueRefresh(entry: ManagedConcurrentServer, source: 'socket' | 'other' = 'other'): void {
+function mergeRefreshIntent(left: ConcurrentRefreshIntent | null, right: ConcurrentRefreshIntent): ConcurrentRefreshIntent {
+    if (left === 'replace' || right === 'replace') return 'replace';
+    if (left === 'continue' || right === 'continue') return 'continue';
+    return 'machines';
+}
+
+function queueRefresh(
+    entry: ManagedConcurrentServer,
+    source: 'socket' | 'other' = 'other',
+    intent: ConcurrentRefreshIntent = 'continue',
+): void {
     if (!isManagedServerActive(entry)) return;
     if (entry.reachabilityState.phase !== 'online') return;
     if (entry.refreshTimer) {
+        entry.refreshTimerIntent = mergeRefreshIntent(entry.refreshTimerIntent, intent);
         if (source === 'socket') {
             syncPerformanceTelemetry.count('sync.concurrent.refresh.socket', { coalesced: 1 });
         }
         return;
     }
+    entry.refreshTimerIntent = intent;
     if (source === 'socket') {
         syncPerformanceTelemetry.count('sync.concurrent.refresh.socket', { enqueued: 1 });
     }
     entry.refreshTimer = setTimeout(() => {
         entry.refreshTimer = null;
-        void runRefresh(entry, source);
+        const refreshIntent = entry.refreshTimerIntent ?? 'continue';
+        entry.refreshTimerIntent = null;
+        void runRefresh(entry, source, refreshIntent);
     }, REFRESH_DEBOUNCE_MS);
 }
 
 async function runRefresh(
     entry: ManagedConcurrentServer,
     source: 'socket' | 'other',
-    intent: 'continue' | 'replace' = 'continue',
+    intent: ConcurrentRefreshIntent = 'continue',
 ): Promise<void> {
     if (!isManagedServerActive(entry)) return;
     if (entry.reachabilityState.phase !== 'online') return;
     if (entry.refreshInFlight) {
-        if (intent === 'replace' || entry.refreshQueued === null) entry.refreshQueued = intent;
+        entry.refreshQueued = mergeRefreshIntent(entry.refreshQueued, intent);
         if (source === 'socket') {
             syncPerformanceTelemetry.count('sync.concurrent.refresh.socket', { inFlightQueued: 1 });
         }
@@ -1075,12 +1103,15 @@ async function runRefresh(
         // with retained rows reads as refreshing rather than current, and a Home that has never
         // been observed reads as loading rather than absent.
         const successAtBeforeRefresh = entry.lastSessionListSuccessAt;
-        publishConcurrentSessionListObservation({
-            entry,
-            phase: successAtBeforeRefresh === null ? 'loading' : 'refreshing',
-        });
+        const refreshesSessions = intent !== 'machines';
+        if (refreshesSessions) {
+            publishConcurrentSessionListObservation({
+                entry,
+                phase: successAtBeforeRefresh === null ? 'loading' : 'refreshing',
+            });
+        }
         try {
-            await refreshServerSnapshot(entry, abortController.signal);
+            await refreshServerSnapshot(entry, abortController.signal, { includeSessions: refreshesSessions });
         } catch (error) {
             if (abortController.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
                 return;
@@ -1096,7 +1127,7 @@ async function runRefresh(
             // during it and the reachability owner's `offline` fact are both more current than a
             // stale error, so neither is overwritten. The last success time is preserved either
             // way, so retained rows stay truthfully labelled.
-            if (
+            if (refreshesSessions &&
                 entry.reachabilityState.phase === 'online'
                 && entry.lastSessionListSuccessAt === successAtBeforeRefresh
             ) {
@@ -1113,7 +1144,7 @@ async function runRefresh(
             const queuedIntent = entry.refreshQueued;
             entry.refreshQueued = null;
             if (queuedIntent === 'replace') void runRefresh(entry, 'other', 'replace');
-            else queueRefresh(entry);
+            else queueRefresh(entry, 'other', queuedIntent);
         }
     });
     await entry.refreshInFlight;
@@ -1128,6 +1159,7 @@ async function disposeManagedServer(entry: ManagedConcurrentServer): Promise<voi
         clearTimeout(entry.refreshTimer);
         entry.refreshTimer = null;
     }
+    entry.refreshTimerIntent = null;
     entry.reachabilityUnsubscribe?.();
     entry.reachabilityUnsubscribe = null;
     const reachabilityRelease = entry.reachabilityRelease;
@@ -1194,6 +1226,7 @@ function createManagedServer(
         refreshInFlight: null,
         refreshAbortController: null,
         refreshTimer: null,
+        refreshTimerIntent: null,
         sessionListFrontier: previous?.sessionListFrontier ?? EMPTY_ORDINARY_SESSION_LIST_FRONTIER,
         hasFetchedSessionListSnapshot: previous?.hasFetchedSessionListSnapshot ?? false,
         // Recreating the managed entry (credential rotation, carrier change) does not un-observe
@@ -1295,10 +1328,11 @@ async function connectManagedServer(
                     schedulePushTokenReconciliation();
                     publishHomeAccountChange(entry.id);
                 }
-                if (!shouldRefreshConcurrentSessionCacheForUpdate(raw)) {
+                const impact = classifyConcurrentSessionCacheUpdate(raw);
+                if (impact === null) {
                     return;
                 }
-                queueRefresh(entry, 'socket');
+                queueRefresh(entry, 'socket', impact === 'machines' ? 'machines' : 'continue');
             });
             socket.on('ephemeral', (raw: unknown) => {
                 if (!isManagedServerActive(entry)) return;
