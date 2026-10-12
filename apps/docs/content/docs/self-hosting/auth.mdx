@@ -470,7 +470,7 @@ The following four recommendation and presentation settings require the 0.3 deve
 - `AUTH_ANONYMOUS_SIGNUP_ENABLED` (default `true`)
   - If `false`, anonymous account creation is disabled (`POST /v1/auth` will return `403 signup-disabled` for new users).
 - `AUTH_SIGNUP_PROVIDERS` (CSV, default empty)
-  - Enables provider-based signup (e.g. `github`, `okta`).
+  - Enables signup through deployment-contributed providers (e.g. `github`, `okta`). Home-managed providers follow the console admission policy; see [Enterprise identity](/self-hosting/auth-enterprise-identity).
 - `AUTH_REQUIRED_LOGIN_PROVIDERS` (CSV, default empty)
   - Enforces providers for ongoing access (e.g. `github`, `okta`).
 

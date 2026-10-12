@@ -78,6 +78,15 @@ Reissue mints a fresh seven-day invitation. There is no per-invitation TTL contr
 cleanup scheduler; expiry is enforced at reads and writes, and terminal rows are retained
 as governance provenance.
 
+In development 0.3, manager-visible rows publish `finishedAt`: acceptance time,
+revocation time, or expiry time, following the same state precedence. Active rows
+publish `null`. Accepted rows also project the accepting Account through the
+shared neutral Account display-profile owner; the Members display-name owner
+formats that person in the client. Older rows may omit either field. The client
+never substitutes creation or expiry time for an unknown acceptance or revocation
+instant. Revocation currently stores no actor, so its row carries no invented
+manager identity.
+
 ## Conditional writes
 
 Every transition is a conditional write whose affected-row count decides the winner, so

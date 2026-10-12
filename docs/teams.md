@@ -44,6 +44,31 @@ connections, and directory provisioning.
 Every route, provisioning adapter, and operator adapter calls these services. Nothing else
 writes a `Team` row.
 
+In 0.3 development source, the existing Team summary also carries `directoryMembership`
+for viewers who can read the Team's authentication facts. It is `null` when no directory
+source manages membership; otherwise it contains only the provider display name and a
+coarse `syncing`, `healthy`, or `needs_attention` state. Multiple sources form one name
+line and the most urgent state. The directory projection owns the attempt and freshness
+decisions. Source and connection ids, schedules, counts, errors and setup data stay in
+the manager-only directory projection. An older server may omit this fact; the UI then
+shows unknown rather than claiming there is no directory.
+
+The development summary's `counts` includes active `groups` and `archivedGroups`,
+read together by `readTeamSummaryCountsInTx` and disclosed under the same
+`viewRoster` qualification as the Group lists. The Groups page offers its archived
+sequence only when the summary reports an archived count above zero; opening it
+still performs the existing separate paginated read. Older summaries may omit
+`archivedGroups`, which does not establish that an archived sequence exists.
+
+Home administrators who can read a Team receive the existing coarse membership
+totals even when they are not Team members: `counts.members` includes active and
+suspended memberships, and `counts.suspendedMembers` is the suspended subset.
+The Home-admin directory can therefore show active membership using their
+difference, without a second count or a roster read. This does not grant a Team
+role or roster access. Without `viewRoster`, `counts.groups` and
+`counts.archivedGroups` are `null`; waiting invitations retain their separate
+Team-manager qualification. A denied or inactive viewer receives no counts.
+
 ## Identity
 
 `Team.id` is opaque and immutable. Names are presentation:

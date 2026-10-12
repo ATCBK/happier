@@ -128,8 +128,8 @@ They are encrypted with your `HANDY_MASTER_SECRET`. Two things follow:
 
 ## WorkOS
 
-WorkOS connects a company's identity system to Happier. Home-level company sign-in is
-being implemented; on a Home shared by several companies, each customer
+WorkOS connects a company's identity system to Happier. Home-level company sign-in has
+focused server coverage in 0.3 development source; on a Home shared by several companies, each customer
 keeps its connection scoped to its Team. The Home holds the WorkOS platform credentials;
 each Home or Team connection holds only references to exact WorkOS objects.
 
@@ -150,10 +150,12 @@ restart prompt rather than a partially applied sign-in.
 
 ### Company sign-in for a Home
 
-> **Not available yet.** AM-13 implementation and validation are incomplete. These
-> are the approved Home company sign-in semantics, not a shipped or usable flow.
+> **0.3 development source.** Home company connection administration, Test sign-in,
+> exact OAuth binding checks, self-service admission and verified-domain routing
+> have focused server and UI tests. Package and loaded-runtime validation remains open; this is
+> not available in a released Happier version.
 
-A Home owner will add a company connection in **Sign-in providers → Identity providers**.
+A Home owner adds a company connection in **Sign-in providers → Identity providers**.
 Finish setup in the Admin Portal, select the exact connection, run **Test sign-in** and
 turn it on. These steps share the Team setup flow described below. The test creates no
 Account or linked identity and grants no role or membership. Members see the company's
@@ -164,6 +166,11 @@ permission to use that provider and an allowed Account type, within deployment c
 Enabling SSO does not widen **Closed** or **Invitation only** admission. Company signup
 with an encryption key is independent of anonymous key-only signup; Plain signup still
 requires the Home's keyless OAuth configuration to permit it.
+
+`AUTH_SIGNUP_PROVIDERS` is the signup allowlist for deployment-contributed providers.
+Home-managed company providers use the console's **Self-service** admission policy,
+provider permissions and Account-type controls. The Home's allowed Team provider
+kinds govern Team connections; Home company connections follow Home sign-in settings.
 
 Existing Accounts can link the company identity explicitly. Happier identifies it by
 the immutable provider instance and the WorkOS subject, never by matching email addresses.

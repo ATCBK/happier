@@ -88,8 +88,11 @@ No-op retries write no event. Session Agent and CLI exposure, dangerous approval
 policy and MCP=false come from the same Home-family Action row owner as remove.
 
 The own Members entry and non-manager Overview share one confirmation and deferred
-approval continuation. Successful immediate or approved execution refreshes the
-exact Home's Team and member directories before returning to Settings → Teams.
+approval continuation. The existing Team destination host settles the result even
+if the own-entry row is virtualized away, but not after the destination unmounts or
+its Account/Home/Team binding changes. Successful immediate or approved execution
+refreshes the exact Home's Team directories and returns to Settings → Teams before
+re-reading the detail that is no longer accessible.
 
 ### Structural effective membership
 

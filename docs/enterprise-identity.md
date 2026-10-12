@@ -308,22 +308,25 @@ the matching Team-owned provider. Home bindings cannot become Team directory sou
 Home owners mutate the company binding, while Home administrators can read the connection
 facts permitted by the governance projection.
 
-> **AM-13 status:** Home company sign-in is only partially implemented. The scope migration
-> and policy/domain boundary work do not yet establish usable administration, OAuth, or UI
-> flows. The Home behavior below is the approved target; its implementation and validation
-> gates remain open.
+> **AM-13 status:** Home connection administration, exact OAuth currentness, non-mutating
+> Test, self-service admission and verified-domain routing are implemented in 0.3 development
+> source with focused server tests. Home collection, shared setup/detail, Portal/Test returns
+> and Team policy/lifecycle details have focused UI tests. Package and loaded-runtime fidelity
+> gates remain open. This is not a released availability claim.
 
 Setup is deliberately staged, with the same setup, Test, and Admin Portal presentation for
 both scopes:
 
-1. **Create the connection.** `createTeamWorkosConnection` requires Team
-   `manageAuthentication`, Home policy allowing `workos_sso`, and an available platform. It is
-   idempotent by construction: an existing WorkOS connection for that Team is returned rather
+1. **Create the connection.** The shared administration owner requires the exact Home or Team
+   `manageAuthentication` authority and an available platform; Team setup additionally requires
+   Home policy allowing `workos_sso`. It is
+   idempotent by construction: an existing WorkOS connection for that scope is returned rather
    than duplicated, and more than one existing connection or provider instance is a
    `identity_connection_conflict` instead of a guess. The connection starts with both
    `organizationId` and `connectionId` null.
 2. **Open the Admin Portal.** The organization is resolved by an external id derived from the
-   Home server identity and Team id — `happier:<homeServerIdentityId>:team:<teamId>` — looked
+   Home server identity and scope — `happier:<homeServerIdentityId>:home` or
+   `happier:<homeServerIdentityId>:team:<teamId>` — looked
    up first, then created with an idempotency key, with a 409 falling back to another lookup.
    The organization id is persisted under the connection's expected revision. The portal link
    is generated only after current permission, verified to be HTTPS, returned once, and never
@@ -349,11 +352,25 @@ the separate anonymous-signup switch; Plain signup retains the OAuth keyless dep
 ceilings. `closed` and `invitation_only` do not become JIT admission. Existing Accounts link
 through an explicit authenticated flow, never by matching an email address.
 
+`AUTH_SIGNUP_PROVIDERS` governs deployment-contributed providers only. Home-managed
+providers retain the console-owned admission policy, including explicit `self_service`
+for Home WorkOS provisioning. The Team-provider-kind policy applies only to Team
+bindings; connection projection, WorkOS administration, catalog publication and OAuth
+runtime share the scoped policy decision in `governancePolicy.ts`.
+
 Domain routing reads current verified domains from the exact bound WorkOS Organization and
 selects only its current connection. An unverified, ambiguous, stale, or unavailable routing
 result does not silently choose another provider. Test sign-in checks the current binding and
 profile without creating or linking an Account. Disablement stops new sign-ins without
 discarding existing identities, and removal retains the ordinary sole-login protections.
+
+Ordinary catalog publication and OAuth consume the connection lifecycle's `connected`
+state; missing/inactive upstream selections are not offered until restored. Admin Test
+remains available for repair. Anonymous email routing resolves only bindings with a
+caller-visible sign-in action. Connect-only, disabled, unusable and policy-excluded bindings
+produce the same anonymous response as a nonmatch, without querying their Organization
+domains. Routing a verified domain to an available company sign-in intentionally reveals
+that company's sign-in association; the email still grants no authority.
 
 SSO alone does not remove people who leave a company. Home directory synchronization,
 offboarding, IdP role grants, and Teams derived from groups are not part of Home company
@@ -463,6 +480,12 @@ Directory Group list projections report `memberCount`, distinct `boundAccountCou
 observation exists and while the source is not active or a reconcile run is incomplete.
 These are roster binding counts, not exact native grant/removal counts: native membership
 eligibility and surviving contributions still determine the effects of a mapping change.
+
+For a bound mapping, the authorized directory reader also projects `teamGroupName` from the
+same-Team Group. A `null` name explicitly means the target is not visible. Rows and mapping
+removal confirmations use this fact independently of the paged native Group chooser, so a
+target outside its loaded page keeps its name; a withheld target says it is a Group the viewer
+cannot see. This is display metadata, not Group authority.
 
 A directory person's `accountBinding.teamMembershipId` links to the bound Account's actual
 same-Team membership, including independently native or differently managed memberships.

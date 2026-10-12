@@ -183,11 +183,12 @@ see the rows as facts; only owners change them.
 These credentials are the Home's; supplying them alone does not connect anyone's
 company account.
 
-> **Home company sign-in is not available yet.** AM-13 implementation and validation
-> are incomplete. The following describes the approved target, not a shipped or
-> usable company sign-in flow.
+> **0.3 development source.** Home company connection administration, Test sign-in,
+> exact OAuth binding checks, self-service admission and verified-domain routing
+> have focused server and UI tests. Package and loaded-runtime validation remains open; this is
+> not available in a released Happier version.
 
-In **Identity providers**, an owner will be able to add a company Home sign-in
+In **Sign-in providers → Identity providers**, an owner adds a company Home sign-in
 connection through WorkOS. The connection uses the same setup as a Team connection:
 open the **Admin Portal**, choose the exact SSO connection, **Test sign-in**, then
 turn it on. Test sign-in checks the connection without creating or linking an
@@ -201,6 +202,12 @@ choose a connection automatically. New accounts can be created only when
 type. **Closed** and **Invitation only** do not become open signup merely because
 SSO is enabled. Existing accounts can explicitly link the company identity;
 matching an email address never links two accounts.
+
+`AUTH_SIGNUP_PROVIDERS` controls providers contributed by the deployment. Company
+providers managed here follow the console's **Self-service** admission policy,
+provider permissions and Account-type controls. The Home's allowed Team provider
+kinds apply to Team connections; Home connections follow the Home's own sign-in
+settings.
 
 Turning the connection off stops new company sign-ins and keeps existing accounts
 and linked identities. Removing it checks whether anyone would lose their only
@@ -217,6 +224,21 @@ direct connections and host-side access method. It distinguishes saved addresses
 from deployment-set and inferred addresses. Changing reachability does not change
 the Home's authentication identity. Hosting controls appear only where an
 executor exists.
+
+In **development-only, unreleased 0.3**, **Reach** also offers **Allow public
+links on this hostname** for public Session and Artifact links. It is off by
+default, applies live, and only a Home owner can change it. Admins can view the
+setting. An explicit deployment value for `HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH`
+takes precedence and the row shows **Fixed by your deployment**.
+
+Use it when this Home has a configured HTTPS public address and cannot provide
+an isolated share domain. The public-link rate limiter must still be configured;
+an isolated domain remains preferred when present. HTML stays in the restricted
+sandbox; PDFs on this hostname offer download instead of inline preview.
+Turning the setting off blocks main-hostname public links without revoking or
+deleting the shares, so eligible links resume when it is turned back on.
+Local-service links and private web previews still require their separate
+origins. See [public-link hosting prerequisites](/self-hosting/local-service-previews#stored-content-public-links-in-03-development).
 
 **Email** configures SMTP, sender identity and a write-only password. Use **Save**
 for staged changes, then **Send a test email** to check delivery. Readiness requires
