@@ -89,7 +89,7 @@ const nativeMetadata = {
     your_home: { title: 'Your Home', titleKey: 'homeWidgets.yourHomeTitle', descriptionKey: 'homeWidgets.yourHomeDescription', icon: 'house' },
 } as const;
 
-const inputs: InputHints = { fields: [{ path: 'session', title: 'Session', prompt: 'Which session?', description: 'The session it shows; it reads that session where it runs.', widget: 'json', inputType: { hostType: 'session' }, required: true, optionsSourceId: 'sessions' }] };
+const inputs: InputHints = { fields: [{ path: 'session', title: 'Session', prompt: 'Which session?', description: 'The session it shows; it reads that session where it runs.', widget: 'select', inputType: { hostType: 'session' }, required: true, optionsSourceId: 'sessions' }] };
 const sessionInputs: WidgetInputDescriptorV1 = {
     inputs,
     inputSchema: { type: 'object', properties: { session: { type: 'object', properties: {

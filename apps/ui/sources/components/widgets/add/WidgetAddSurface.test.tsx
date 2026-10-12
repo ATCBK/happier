@@ -1,22 +1,25 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { WidgetSizePicker } from '@happier-dev/plugin-ui/presentation';
+import { HappierInputField, WidgetSizePicker } from '@happier-dev/plugin-ui/presentation';
 import { composeWidgetGroupContextV1, createWidgetSurfaceArtifactPortV1, instantiateWidgetLayoutFragmentGroupV1, resolveConfiguredWidgetInputs, type WidgetLayoutFragmentSummaryV1, type WidgetSizeV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { createWorkBoardArtifactBoundary } from '../../../../../../packages/protocol/src/boards/workBoardArtifactV1.testkit';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { buildWidgetCandidateSetup, type WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
-import { selectBuiltinWidgetCandidates, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
+import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 
-import { buildHomeWidgetAddSections } from './HomeWidgetAddPopover';
-import { buildBoardWidgetAddContent, buildCompanionWidgetAddSections } from './widgetAddSections';
 
 import type { WidgetAddAsk, WidgetAddEntry, WidgetAddSection } from './widgetAddModel';
 import type { WidgetSetupDraft, WidgetSetupSubmitResult } from './widgetSetupModel';
-import { WidgetAddPanel } from './WidgetAddSurface';
-import { buildAccountWidgetAddSections } from './accountWidgetAddSections';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installSessionActionFixture } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { SessionCurrentProjectionRecordV1Schema, SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/personal/viewer';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -31,16 +34,27 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 vi.mock('@/components/ui/popover', async (importOriginal) =>
     (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
-// Option discovery crosses the network to the Action executor (`action.options.resolve`); that call is
-// the boundary. The panel, the setup step, the binder and the size policy below it are real.
-const optionsResolve = vi.hoisted(() => ({ options: [] as unknown[] }));
-vi.mock('@/sync/domains/workflows/callWorkflowAction', () => ({
-    callWorkflowAction: async (args: { input: { optionsSourceId?: string; fieldPath?: string }; parseResult: (value: unknown) => unknown }) => args.parseResult({
-        actionId: null, fieldPath: args.input.fieldPath ?? null, optionsSourceId: args.input.optionsSourceId ?? null, options: optionsResolve.options,
-    }),
-}));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+await loadSyncSingletonForTests();
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { buildWidgetCandidateSetup } = await import('@/components/widgets/surface/widgetSurfaceSetup');
+const { selectBuiltinWidgetCandidates } = await import('@/components/widgets/widgetCatalog');
+const { buildHomeWidgetAddSections } = await import('./HomeWidgetAddPopover');
+const { buildBoardWidgetAddContent, buildCompanionWidgetAddSections } = await import('./widgetAddSections');
+const { WidgetAddPanel } = await import('./WidgetAddSurface');
+const { buildAccountWidgetAddSections } = await import('./accountWidgetAddSections');
+const { storage } = await import('@/sync/domains/state/storage');
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let releaseLoader: (() => void) | undefined;
 
-afterEach(() => { standardCleanup(); optionsResolve.options = []; accessibilityBoundary.os = 'web'; accessibilityBoundary.announce.mockClear(); });
+afterEach(async () => {
+    standardCleanup(); releaseLoader?.(); releaseLoader = undefined; await connection?.dispose(); connection = undefined;
+    accessibilityBoundary.os = 'web'; accessibilityBoundary.announce.mockClear();
+});
 
 const HOME: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'me', owner: { kind: 'home' } };
 const THIS_SESSION: WidgetSurfaceContext = { session: { ref: { serverId: 'home', sessionId: 'A' }, label: 'Retry relay handshake' } };
@@ -63,6 +77,7 @@ function widgetEntry(candidate: WidgetCandidate, recorder: Recorder, options: Re
     context?: WidgetSurfaceContext;
     result?: () => WidgetSetupSubmitResult;
     count?: string;
+    scope?: WidgetSurfaceRefV1;
 }> = {}): WidgetAddEntry {
     const id = candidate.key;
     return {
@@ -72,7 +87,7 @@ function widgetEntry(candidate: WidgetCandidate, recorder: Recorder, options: Re
         icon: candidate.icon,
         ...(options.count ? { count: options.count } : {}),
         setup: () => buildWidgetCandidateSetup({
-            candidate, context: options.context ?? {}, audience: 'personal', scope: HOME,
+            candidate, context: options.context ?? {}, audience: 'personal', scope: options.scope ?? HOME,
             mode: { kind: 'add', submitLabel: 'Add to Home' },
             submit: async (draft) => { recorder.submits.push({ id, draft }); return options.result?.() ?? { ok: true }; },
             renderPreview: () => { recorder.previews.push(id); return `preview:${id}`; },
@@ -412,29 +427,61 @@ describe('WidgetAddSurface', () => {
     });
 
     it('picks a Session on Home from the sessions source, listing one the viewer cannot read without letting it be chosen', async () => {
-        optionsResolve.options = [
-            { value: { serverId: 'home', sessionId: 'B' }, label: 'Fix settings modal remount', description: 'Needs you' },
-            { value: { serverId: 'home', sessionId: 'C' }, label: 'C', description: 'Recent', disabled: true },
-        ];
+        await homes.reset();
+        const serverId = await homes.addHome({ name: 'Picker', serverUrl: 'https://picker.test', accountId: 'me' });
+        homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://picker.test', accountId: 'me', request: homes.request });
+        releaseLoader = await installRealActionExecutorModuleLoader();
+        installSessionActionFixture({ homes, storage, serverId, session: { id: 'B', pendingPermissionRequestCount: 1,
+            pendingUserActionRequestCount: 0, active: true, activeAt: Date.now(),
+            metadata: { path: '/repo', host: 'test', name: 'Fix settings modal remount' } } });
+        installSessionActionFixture({ homes, storage, serverId, session: { id: 'C', active: false } });
+        const wire = async (id: string) => {
+            const response: unknown = await (await homes.request(`https://picker.test/v2/sessions/${id}`)).json();
+            if (!response || typeof response !== 'object' || !('session' in response)) throw new Error('Missing HTTP Session');
+            return SessionCurrentProjectionRecordV1Schema.parse(response.session);
+        };
+        const viewer = SessionViewerProjectionV1Schema.parse({ readState: { state: 'not_started' },
+            relevance: { relevant: false, reasons: [] }, attention: { needsAttention: false, reasons: [], primary: null, presentation: 'full' },
+            follow: { follows: false, notificationLevel: 'none' }, notification: { level: 'none', source: 'preference' } });
+        const b = { ...await wire('B'), viewer, agentState: JSON.stringify({ requests: {
+            ask: { tool: 'Bash', arguments: {}, createdAt: Date.now() },
+        } }) };
+        // This inaccessible encrypted row comes from the same HTTP producer shape;
+        // the real hydrator/awareness owner decides that it cannot be selected.
+        const { SecretBoxEncryption } = await import('@/sync/encryption/encryptor');
+        const { encodeBase64 } = await import('@/encryption/base64');
+        const cipher = new SecretBoxEncryption(new Uint8Array(32).fill(7));
+        const c = { ...await wire('C'), encryptionMode: 'e2ee', metadata: encodeBase64((await cipher.encrypt([{}]))[0]!), viewer };
+        // C must enter through the query hydrator, not an already-ready plain
+        // Session left in the cache by the plain HTTP producer helper above.
+        const { C: _seededPlainC, ...sessions } = storage.getState().sessions;
+        storage.setState({ sessions, sessionListRowsByServerId: {} });
+        homes.answer(serverId, 'POST /v2/sessions/query', { body: SessionListQueryResponseV1Schema.parse({ sessions: [b, c], hasNext: false, nextCursor: null,
+            attentionHasNext: false, attentionNextCursor: null }) });
+        const home = { serverId: connection.home.id, accountId: 'me', owner: { kind: 'home' as const } };
         const summary = selectBuiltinWidgetCandidates().find((candidate) => candidate.definition?.kind === 'builtin' && candidate.definition.id === 'session_summary')!;
         const rec = recorder();
-        const screen = await renderPanel({ serverId: 'home', sections: [{ id: 'builtins', title: 'Built in', entries: [widgetEntry(summary, rec)] }] });
+        const screen = await renderPanel({ serverId: home.serverId, sections: [{ id: 'builtins', title: 'Built in', entries: [widgetEntry(summary, rec, { scope: home })] }] });
         await act(async () => { screen.pressByTestId(`add.entry.${summary.key}`); });
         await flushHookEffects({ cycles: 4 });
-        const menu = () => screen.findAllByType(DropdownMenu).find((node) => node.props.testID === 'add.detail.field.session')!;
-        const items = menu().props.items as ReadonlyArray<{ id: string; title: string; subtitle?: string; disabled?: boolean }>;
-        expect(items.map((item) => [item.title, item.subtitle, item.disabled === true])).toEqual([
+        const field = () => screen.findAllByType(HappierInputField).find(node => node.props.field.path === 'session')!;
+        await vi.waitFor(() => expect(field().props.options).toHaveLength(2));
+        const items = field().props.options as ReadonlyArray<{ label: string; description?: string; disabled?: boolean }>;
+        expect(items.map(item => [item.label, item.description, item.disabled === true])).toEqual([
             ['Fix settings modal remount', 'Needs you', false],
             ['C', 'Recent', true],
         ]);
-        await act(async () => { menu().props.onSelect(items[1]!.id); });
+        await screen.pressByTestIdAsync('add.detail.field.session.control.trigger');
+        expect(screen.findByTestId('add.detail.field.session.option.1')!.props.disabled).toBe(true);
+        await act(async () => { screen.findHostByTestId('add.detail.field.session.option.1')?.props.onPress?.(); });
         await flushHookEffects({ cycles: 2 });
         expect(screen.getTextContent()).toContain('widgetAdd.stillNeeded(field=Session)');
-        await act(async () => { menu().props.onSelect(items[0]!.id); });
+        await screen.pressByTestIdAsync('add.detail.field.session.option.0');
         await flushHookEffects({ cycles: 2 });
         await screen.pressByTestIdAsync('add.detail.submit');
         await flushHookEffects({ cycles: 3 });
-        expect(rec.submits.map((submit) => submit.draft.bindings)).toEqual([{ session: { kind: 'value', value: { serverId: 'home', sessionId: 'B' } } }]);
+        expect(rec.submits.map((submit) => submit.draft.bindings)).toEqual([{ session: { kind: 'value', value: { serverId: home.serverId, sessionId: 'B' } } }]);
     });
 
     it('moves the focus to the first input still needed when ↵ or ⌘↵ cannot add yet', async () => {
@@ -443,11 +490,11 @@ describe('WidgetAddSurface', () => {
         const screen = await renderPanel({ serverId: 'home', sections: [{ id: 'builtins', title: 'Built in', entries: [widgetEntry(summary, rec)] }] });
         await act(async () => { screen.pressByTestId(`add.entry.${summary.key}`); });
         await flushHookEffects({ cycles: 3 });
-        const menu = () => screen.findAllByType(DropdownMenu).find((node) => node.props.testID === 'add.detail.field.session')!;
-        expect(menu().props.open).toBe(false);
+        const choicesOpen = () => screen.findAllHostsByTestId('add.detail.field.session.control').some(node => node.props.role === 'radiogroup');
+        expect(choicesOpen()).toBe(false);
         await act(async () => { screen.findByTestId('add.search')!.props.onKeyPress({ nativeEvent: { key: 'Enter' }, preventDefault: () => {} }); });
         await flushHookEffects({ cycles: 3 });
-        expect(menu().props.open).toBe(true);
+        expect(choicesOpen()).toBe(true);
         expect(rec.submits).toEqual([]);
     });
 });

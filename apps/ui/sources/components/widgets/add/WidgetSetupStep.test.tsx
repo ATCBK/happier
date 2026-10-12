@@ -1,43 +1,112 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import type { PublicActionInputById } from '@happier-dev/protocol';
-import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { AccountProfileSchema, PluginProjectionV2Schema, RPC_METHODS, TargetedActionRpcRequestV1Schema, type PublicActionInputById } from '@happier-dev/protocol';
+import { flushHookEffects, renderScreen as renderBaseScreen, standardCleanup } from '@/dev/testkit';
 import { HappierInputField } from '@happier-dev/plugin-ui/presentation';
-import { buildWidgetCandidateSetup } from '@/components/widgets/surface/widgetSurfaceSetup';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
-import { WidgetSetupStep } from './WidgetSetupStep';
-import { WidgetSetupFieldRow } from './WidgetSetupFieldRow';
-import { buildWidgetGroupInputsCandidate } from '@/components/widgets/group/widgetGroupInputs';
 import { USAGE_QUERY_INPUT_FIELDS } from '@happier-dev/protocol/inputs/usageQuery';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { storage } from '@/sync/domains/state/storage';
-import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installSessionActionFixture } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { widgetProjectionEntry } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import type { WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
-// Only the Action network boundary is replaced; draft binding and options demand remain real.
+// Only the daemon transport is replaced: Account admission, the catalog, executor,
+// draft binding and options demand all remain real.
 const discovery = vi.hoisted(() => ({ requests: [] as PublicActionInputById['action.options.resolve'][] }));
-vi.mock('@/sync/domains/workflows/callWorkflowAction', () => ({
-    callWorkflowAction: async (args: { input: PublicActionInputById['action.options.resolve']; parseResult(value: unknown): unknown }) => {
-        discovery.requests.push(args.input);
-        const selected = args.input.consumer?.kind === 'widget' ? args.input.consumer.selectedSession?.sessionId : undefined;
-        return args.parseResult({ actionId: null, fieldPath: args.input.fieldPath ?? null, optionsSourceId: args.input.optionsSourceId ?? null,
-            options: [{ value: 'choice', label: `${selected ?? 'ambient'}:${args.input.draftInput?.filter ?? 'none'}` }] });
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: async (args: { method: string; payload: unknown }) => {
+        if (args.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)
+            return { protocolVersion: 1, projection: projectionWire };
+        if (args.method !== 'action.options.resolve') throw new Error(`Unexpected daemon RPC: ${args.method}`);
+        const targeted = TargetedActionRpcRequestV1Schema.safeParse(args.payload);
+        const input = (await import('@happier-dev/protocol/actions')).getActionSpec('action.options.resolve').inputSchema.parse(targeted.success ? targeted.data.input : args.payload);
+        discovery.requests.push(input);
+        const selected = input.consumer?.kind === 'widget' ? input.consumer.selectedSession?.sessionId : undefined;
+        return { actionId: 'widgets.item.add', fieldPath: input.fieldPath ?? null, optionsSourceId: null,
+            options: [{ value: 'choice', label: `${selected ?? 'ambient'}:${input.draftInput?.filter ?? 'none'}` }] };
     },
 }));
-afterEach(() => { standardCleanup(); discovery.requests = []; });
+installDisconnectedServerSocketBoundary();
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+await loadSyncSingletonForTests();
+const { buildWidgetCandidateSetup } = await import('@/components/widgets/surface/widgetSurfaceSetup');
+const { buildWidgetGroupInputsCandidate } = await import('@/components/widgets/group/widgetGroupInputs');
+const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
+const { WidgetSetupStep } = await import('./WidgetSetupStep');
+const { WidgetSetupFieldRow } = await import('./WidgetSetupFieldRow');
+const { storage } = await import('@/sync/domains/state/storage');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let releaseLoader: (() => void) | undefined;
+let projectionWire: ReturnType<typeof PluginProjectionV2Schema.parse>;
+let scope: WidgetSurfaceRefV1;
+beforeEach(async () => {
+    await homes.reset();
+    const serverId = await homes.addHome({ name: 'Setup', serverUrl: 'https://setup-home.test', accountId: 'me' });
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://setup-home.test', accountId: 'me', request: homes.request });
+    scope = { serverId: connection.home.id, accountId: 'me', owner: { kind: 'home' } };
+    for (const id of ['A', 'B']) installSessionActionFixture({ homes, storage, serverId, session: { id } });
+    storage.setState({ machines: { machine_1: createMachineFixture({ id: 'machine_1', active: true, activeAt: Date.now() }) },
+        profile: AccountProfileSchema.parse({ id: 'me', connectedAccountsV4: [{ ref: { service: { pluginId: 'acme.options', localId: 'cloud' }, accountId: 'mine' },
+            status: 'connected', authenticationModeId: 'token', configurationReady: true, configurationRevision: null,
+            revisionSemantics: 'revisioned', credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS', scopes: [] }] }) });
+    const consumer = { pluginId: 'acme.options', localId: 'checks' };
+    const entries = [{ ...widgetProjectionEntry({ ...candidate.surface!, target: 'session', inputs: { fields: [
+        ...candidate.inputs!.fields, { path: 'connection', title: 'Connection', widget: 'select', connectedAccountOptions: true },
+    ] }, inputSchema: { type: 'object', properties: { session: { type: 'object' }, filter: { type: 'string' }, result: { type: 'string' },
+        connection: { type: 'object', required: ['service', 'accountId'], additionalProperties: false, properties: {
+            service: { type: 'object', required: ['pluginId', 'localId'], additionalProperties: false,
+                properties: { pluginId: { type: 'string' }, localId: { type: 'string' } } }, accountId: { type: 'string' },
+        } } } }, resources: [consumer] }),
+        connectedAccountPurposeBindings: [{ path: 'connection', purpose: 'metrics', consumer }] },
+    widgetProjectionEntry({ pluginId: 'acme.options', localId: 'first', target: 'app', inputs: { fields: [
+        { path: 'period', title: 'Period', widget: 'select', inputType: { pluginId: 'acme.options', localId: 'choice' } },
+        { path: 'result', title: 'Owned result', widget: 'select', inputType: { pluginId: 'acme.options', localId: 'choice' }, contextMode: 'own' },
+    ] }, inputSchema: { type: 'object', properties: { period: { type: 'string' }, result: { type: 'string' } }, additionalProperties: false } })];
+    projectionWire = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+        installedPackagesById: { 'acme.options': { id: 'acme.options', displayName: 'Options', enabled: true,
+            occurrenceId: 'acme.options#1', source: { kind: 'local', locator: '/plugins/acme.options' } } },
+        familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(entries.map(entry => [entry.id, entry])) } },
+        resourcesById: { checks: { id: 'checks', pluginId: 'acme.options', resourceKind: 'config', scope: 'global',
+            connectedAccountPurposes: [{ purpose: 'metrics', serviceRefs: [{ pluginId: 'acme.options', localId: 'cloud' }] }] } } });
+    clearDaemonMergedProjectionCacheForTests();
+    releaseLoader = await installRealActionExecutorModuleLoader();
+});
+afterEach(async () => {
+    standardCleanup(); discovery.requests = []; releaseLoader?.(); releaseLoader = undefined;
+    clearDaemonMergedProjectionCacheForTests(); await connection?.dispose(); connection = undefined;
+});
+function renderScreen(element: React.ReactElement) {
+    return renderBaseScreen(<AppShellPluginUiProjectionValueProvider value={{
+        pluginUiProjection: normalizePluginUiProjection(projectionWire), pluginBrowserProjection: null, phase: 'current', interactionEnabled: true,
+        machineId: 'machine_1', serverId: scope.serverId, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(),
+        reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {},
+    }}>{element}</AppShellPluginUiProjectionValueProvider>);
+}
 
-const scope = { serverId: 'setup-home', accountId: 'me', owner: { kind: 'companion' as const, sessionId: 'A' } };
 const candidate: WidgetCandidate = { key: 'acme.options/checks', title: 'Checks', pluginName: 'Options', sharedPluginName: false,
     icon: 'squares-four', homeDefault: 'available', target: 'session', sessionInputPath: 'session',
     sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' },
     surface: { pluginId: 'acme.options', localId: 'checks' }, inputs: { fields: [
         { path: 'session', title: 'Session', widget: 'json', required: true },
         { path: 'filter', title: 'Filter', widget: 'text' },
-        { path: 'result', title: 'Result', widget: 'select', required: true, optionsSourceId: 'sessions' },
+        { path: 'result', title: 'Result', widget: 'select', required: true, inputType: { pluginId: 'acme.options', localId: 'choice' } },
     ] } };
 
 describe('WidgetSetupStep discovery', () => {
@@ -85,8 +154,8 @@ describe('WidgetSetupStep discovery', () => {
     it('sends a group field read with its own declaring child identity', async () => {
         const first: WidgetCandidate = { ...candidate, target: 'app', sessionInputPath: undefined,
             surface: { pluginId: 'acme.options', localId: 'first' },
-            inputs: { fields: [{ path: 'period', title: 'Period', widget: 'select', optionsSourceId: 'sessions' },
-                { path: 'result', title: 'Owned result', widget: 'select', optionsSourceId: 'sessions', contextMode: 'own' }] } };
+            inputs: { fields: [{ path: 'period', title: 'Period', widget: 'select', inputType: { pluginId: 'acme.options', localId: 'choice' } },
+                { path: 'result', title: 'Owned result', widget: 'select', inputType: { pluginId: 'acme.options', localId: 'choice' }, contextMode: 'own' }] } };
         const children = [first, candidate];
         const setup = buildWidgetCandidateSetup({ candidate: buildWidgetGroupInputsCandidate({ title: 'Group', candidates: children })!,
             fieldCandidates: children, scope, audience: 'personal', context: {},
@@ -103,6 +172,8 @@ describe('WidgetSetupStep discovery', () => {
             consumer: { definition: { kind: 'installed', surface: first.surface } },
         });
         expect(screen.findAllByType(WidgetSetupFieldRow).filter(row => row.props.entry.field.path === 'result')).toHaveLength(1);
+        expect(screen.findAllByType(HappierInputField).find(row => row.props.field.path === 'result')!.props.options)
+            .toEqual([expect.objectContaining({ value: 'choice', label: 'B:none' })]);
     });
     it('does not write when a ready size-only setup is cancelled', async () => {
         const submit = vi.fn(async () => ({ ok: true as const }));
@@ -154,7 +225,7 @@ describe('WidgetSetupStep discovery', () => {
         await flushHookEffects({ cycles: 2 });
         expect(screen.findByTestId('literal.submit')!.props.disabled).toBe(false);
         await screen.pressByTestIdAsync('literal.submit');
-        expect(submit).toHaveBeenCalledWith({ bindings: { filter: { kind: 'value', value: { branch: 'main' } } } });
+        expect(submit).toHaveBeenCalledWith({ size: 'medium', bindings: { filter: { kind: 'value', value: { branch: 'main' } } } });
         expect(discovery.requests).toHaveLength(0);
     });
 
@@ -187,8 +258,8 @@ describe('WidgetSetupStep discovery', () => {
         const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} serverId={scope.serverId}
             onCancel={() => {}} onDone={() => {}} testID="connection" />);
         await flushHookEffects({ cycles: 4 });
-        expect(discovery.requests.some(request => request.fieldPath === 'connection')).toBe(true);
-        expect(screen.findAllByType(HappierInputField).find(row => row.props.field.path === 'connection')!.props.options).toHaveLength(1);
+        await vi.waitFor(() => expect(screen.findAllByType(HappierInputField).find(row => row.props.field.path === 'connection')!.props.options)
+            .toEqual([expect.objectContaining({ value: { service: { pluginId: 'acme.options', localId: 'cloud' }, accountId: 'mine' } })]));
         expect(buildWidgetCandidateSetup({ candidate: personal, scope: { ...scope, owner: { kind: 'sessionBoard', sessionId: 'A' } },
             audience: 'shared', context: {}, mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }) }).fields[0]?.viewer)
             .toEqual({ purpose: 'metrics' });
