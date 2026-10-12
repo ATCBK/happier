@@ -4,6 +4,7 @@ import { sanitizeBugReportUrl } from '@happier-dev/protocol/bugs/reports/sanitiz
 
 import type { DaemonLocallyPersistedState } from '@/persistence';
 import type { readSettings } from '@/persistence';
+import { redactProcessArgv, redactProcessCommand } from '@/processes/redaction/redactProcessCommand';
 
 const DOCTOR_REDACTED_VALUE = '<redacted>';
 const DOCTOR_STRING_REDACTION_MARKER = '[redacted]';
@@ -140,8 +141,9 @@ export function redactDoctorDiagnosticText(value: string): string {
 function redactProcessArgvArray(value: readonly unknown[], state: RedactionState): readonly unknown[] {
   const output: unknown[] = [];
   let redactNext = false;
+  const redactedArgs = redactProcessArgv(value.map(item => typeof item === 'string' ? item : ''));
 
-  for (const item of value) {
+  for (const [index, item] of value.entries()) {
     if (typeof item !== 'string') {
       output.push(redactDoctorDiagnosticValueInternal(item, state));
       redactNext = false;
@@ -154,7 +156,7 @@ function redactProcessArgvArray(value: readonly unknown[], state: RedactionState
       continue;
     }
 
-    const redacted = redactDoctorDiagnosticText(item);
+    const redacted = redactDoctorDiagnosticText(redactedArgs[index]!);
     output.push(redacted);
     redactNext = isSensitiveCliFlagWithoutInlineValue(item);
   }
@@ -234,5 +236,5 @@ export function redactDaemonStateForDisplay(state: DaemonLocallyPersistedState):
 }
 
 export function redactDoctorProcessCommandForDisplay(command: string): string {
-  return redactDoctorDiagnosticText(command);
+  return redactDoctorDiagnosticText(redactProcessCommand(command));
 }

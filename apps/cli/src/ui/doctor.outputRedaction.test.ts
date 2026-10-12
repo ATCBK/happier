@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DaemonRunningInspection } from '@/daemon/controlClient';
+import type { MachineProcessesAnswerV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 
-const { consoleLogMock, daemonInspectionMock } = vi.hoisted(() => ({
+const { consoleLogMock, daemonInspectionMock, processActionMock } = vi.hoisted(() => ({
   consoleLogMock: vi.fn(),
   // The daemon-control adapter crosses process and authenticated HTTP boundaries.
-  daemonInspectionMock: vi.fn(async () => ({ status: 'starting', pid: 4242 })),
+  daemonInspectionMock: vi.fn<() => Promise<DaemonRunningInspection>>(async () => ({ status: 'starting', pid: 4242 })),
+  processActionMock: vi.fn(),
 }));
 
 vi.mock('@/configuration', () => ({
@@ -18,6 +21,7 @@ vi.mock('@/configuration', () => ({
 vi.mock('@/persistence', () => ({
   readSettings: async () => ({
     schemaVersion: 5,
+    machineId: 'machine-doctor',
     activeServerId: 'safe-relay',
     servers: {
       safeRelay: {
@@ -74,17 +78,7 @@ vi.mock('@/persistence', () => ({
 
 vi.mock('@/daemon/controlClient', () => ({
   inspectDaemonRunningStateAndCleanupStaleState: daemonInspectionMock,
-}));
-
-vi.mock('@/daemon/doctor', () => ({
-  findRunawayHappyProcesses: vi.fn(async () => []),
-  findAllHappyProcesses: vi.fn(async () => [
-    {
-      pid: 5252,
-      type: 'daemon-spawned-session',
-      command: '/usr/bin/node /repo/dist/index.mjs codex --api-key doctor-process-arg-secret-123456 --model useful-model --env SECRET_TOKEN=doctor-process-env-secret-123456',
-    },
-  ]),
+  requestDaemonSignedRootActionExecution: processActionMock,
 }));
 
 vi.mock('@/ui/doctorSnapshot', () => ({
@@ -135,6 +129,8 @@ describe('doctor output redaction', () => {
   beforeEach(() => {
     process.env.HAPPIER_SERVER_URL = 'https://doctor-env-user:doctor-env-password-123456@safe-relay.example.test/api?mode=dev&profile=sk-doctor-env-profile-secret-123456&token=doctor-env-token-123456#doctor-env-fragment-secret-123456';
     consoleLogMock.mockReset();
+    daemonInspectionMock.mockResolvedValue({ status: 'starting', pid: 4242 });
+    processActionMock.mockReset();
     vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
       consoleLogMock(...args.map(String));
     });
@@ -199,6 +195,44 @@ describe('doctor output redaction', () => {
     expect(output).not.toContain('doctor-daemon-env-secret-123456');
     expect(output).not.toContain('doctor-process-arg-secret-123456');
     expect(output).not.toContain('doctor-process-env-secret-123456');
+  });
+
+  it('projects the daemon ownership answer instead of discovering CLI commands', async () => {
+    daemonInspectionMock.mockResolvedValue({ status: 'running', state: {
+      pid: 4242, httpPort: 4949, startedAt: 1, startedWithCliVersion: '9.9.9', controlToken: 'control-token',
+    } });
+    const answer = {
+      v: 1, machineId: 'machine-doctor', capturedAtMs: 1, state: 'live', platform: 'linux', evidenceModel: 'fenced',
+      owners: [{ rowId: 'session', owner: { kind: 'session', sessionId: 'session-1' }, state: 'running',
+        totals: { memoryBytes: 2048, processCount: 1 }, members: [{ rowId: 'child', ref: 'child-ref', name: 'typechecker',
+          pid: 5252, startedAtMs: 1, memoryBytes: 2048, memoryKind: 'rss', level: 'likely',
+          command: 'typechecker --api-key doctor-process-arg-secret-123456' }] }],
+      leftBehind: [], totals: { happier: { memoryBytes: 2048, processCount: 1 }, leftBehind: { memoryBytes: 0, processCount: 0 } },
+    } satisfies MachineProcessesAnswerV1;
+    processActionMock.mockResolvedValue({ ok: true, result: answer });
+
+    await runDoctorCommand('all');
+
+    const output = consoleLogMock.mock.calls.map(args => args.join(' ')).join('\n');
+    expect(output).toContain('typechecker');
+    expect(output).toContain('session-1');
+    expect(output).toContain('Likely');
+    expect(output).toContain('5252');
+    expect(output).not.toContain('doctor-process-arg-secret-123456');
+    expect(processActionMock).toHaveBeenCalledWith(expect.objectContaining({
+      actionId: 'machines.processes.list', input: { machineId: 'machine-doctor', scope: 'happier', view: 'tree' }, surface: 'cli',
+    }), expect.anything());
+  });
+
+  it('does not list processes when the daemon cannot answer', async () => {
+    daemonInspectionMock.mockResolvedValue({ status: 'not-running' });
+
+    await runDoctorCommand('all');
+
+    expect(processActionMock).not.toHaveBeenCalled();
+    const output = consoleLogMock.mock.calls.map(args => args.join(' ')).join('\n');
+    expect(output).not.toContain('All Happier CLI Processes');
+    expect(output).toContain('Process ownership is unavailable');
   });
 
   it('opens with the brand header and shows a step while it inspects this computer', async () => {

@@ -9,7 +9,7 @@ import chalk from 'chalk'
 import { configuration } from '@/configuration'
 import { readSettings, readStoredCredentials } from '@/persistence'
 import { inspectDaemonRunningStateAndCleanupStaleState } from '@/daemon/controlClient'
-import { findRunawayHappyProcesses, findAllHappyProcesses } from '@/daemon/doctor'
+import { readDaemonProcessesForDoctor } from '@/daemon/doctor'
 import { readDaemonState } from '@/persistence'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -286,50 +286,34 @@ export async function runDoctorCommand(filter?: 'all' | 'daemon'): Promise<void>
         }
 
         if (shouldShowGlobalProcessInventory(filter)) {
-            // All Happier processes
-            const allProcesses = await findAllHappyProcesses();
-            if (allProcesses.length > 0) {
-                console.log(chalk.bold('\n🔍 All Happier CLI Processes'));
-
-                // Group by type
-                const grouped = allProcesses.reduce((groups, process) => {
-                    if (!groups[process.type]) groups[process.type] = [];
-                    groups[process.type].push(process);
-                    return groups;
-                }, {} as Record<string, typeof allProcesses>);
-
-                // Display each group
-                Object.entries(grouped).forEach(([type, processes]) => {
-                    const typeLabels: Record<string, string> = {
-                        'current': '📍 Current Process',
-                        'daemon': '🤖 Daemon',
-                        'daemon-version-check': '🔍 Daemon Version Check (stuck)',
-                        'daemon-spawned-session': '🔗 Daemon-Spawned Sessions',
-                        'user-session': '👤 User Sessions',
-                        'dev-daemon': '🛠️  Dev Daemon',
-                        'dev-daemon-version-check': '🛠️  Dev Daemon Version Check (stuck)',
-                        'dev-session': '🛠️  Dev Sessions',
-                        'dev-doctor': '🛠️  Dev Doctor',
-                        'dev-related': '🛠️  Dev Related',
-                        'doctor': '🩺 Doctor',
-                        'unknown': '❓ Unknown'
-                    };
-
-                    console.log(chalk.blue(`\n${typeLabels[type] || type}:`));
-                    processes.forEach(({ pid, command }) => {
-                        const color = type === 'current' ? chalk.green :
-                            type.startsWith('dev') ? chalk.cyan :
-                                type.includes('daemon') ? chalk.blue : chalk.gray;
-                        console.log(`  ${color(`PID ${pid}`)}: ${chalk.gray(redactDoctorProcessCommandForDisplay(command))}`);
-                    });
-                });
+            console.log(chalk.bold('\n🔍 Started by Happier'));
+            if (inspection.status !== 'running') {
+                console.log(chalk.gray('Process ownership is unavailable until the daemon answers.'));
             } else {
-                console.log(chalk.red('❌ No happier processes found'));
-            }
-
-            if (allProcesses.length > 1) { // More than just current process
-                console.log(chalk.bold('\n💡 Process Management'));
-                console.log(chalk.gray('To clean up runaway processes: happier doctor clean'));
+                const processes = await readDaemonProcessesForDoctor({ target: inspection.state });
+                if (processes.status === 'unavailable') {
+                    console.log(chalk.gray(`Process ownership is unavailable: ${processes.reason}`));
+                } else {
+                    for (const owner of processes.answer.owners) {
+                        const identity = owner.owner.kind === 'session' ? owner.owner.sessionId
+                            : owner.owner.kind === 'terminal' ? owner.owner.terminalId
+                                : owner.owner.kind === 'service' ? owner.owner.serviceId
+                                    : owner.owner.kind === 'run' ? owner.owner.runId : owner.owner.kind;
+                        console.log(chalk.blue(`${owner.owner.kind}: ${identity} (${owner.totals.processCount} processes)`));
+                        for (const row of owner.members) {
+                            const label = row.level === 'proven' ? '' : ` · ${row.level === 'likely' ? 'Likely' : row.level === 'left_behind' ? 'Left behind' : 'Unknown'}`;
+                            console.log(`  PID ${row.pid}: ${redactDoctorProcessCommandForDisplay(row.command ?? row.name)}${label}`);
+                        }
+                    }
+                    if (processes.answer.leftBehind.length) {
+                        console.log(chalk.yellow(`Left behind: ${processes.answer.leftBehind.length}`));
+                        for (const row of processes.answer.leftBehind) {
+                            console.log(`  PID ${row.pid}: ${redactDoctorProcessCommandForDisplay(row.command ?? row.name)} · Left behind`);
+                        }
+                        console.log(chalk.gray('Review and clean up confirmed left-behind processes: happier doctor clean'));
+                    }
+                    console.log(`Happier in total: ${processes.answer.totals.happier.processCount} processes`);
+                }
             }
         }
     } catch (error) {

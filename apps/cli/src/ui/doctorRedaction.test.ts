@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
-import { redactDoctorDiagnosticValue } from './doctorRedaction';
+import { redactDoctorDiagnosticValue, redactDoctorProcessCommandForDisplay } from './doctorRedaction';
 
 describe('doctor diagnostic redaction', () => {
+    it('applies canonical process privacy before additional Doctor diagnostic redaction', () => {
+        const command = 'env TOKEN=ordinary" credential suffix" agent postgresql://alice:database-credential@example.test:5432/db --port=5173';
+        const redacted = redactDoctorProcessCommandForDisplay(command);
+        expect(redacted).not.toContain('credential');
+        expect(redacted).not.toContain('alice');
+        expect(redacted).toContain('example.test:5432/db');
+        expect(redacted).toContain('--port=5173');
+    });
+    it('keeps argv boundaries while removing inline and URL credentials from structured process diagnostics', () => {
+        const redacted = redactDoctorDiagnosticValue({ processArgv: ['env', 'TOKEN=ordinary credential suffix',
+            'agent', 'postgresql://alice:database-credential@example.test:5432/db', 'public argument with spaces', '--port=5173'] });
+        const serialized = JSON.stringify(redacted);
+        expect(serialized).not.toMatch(/ordinary|credential|suffix|alice/);
+        expect(redacted).toMatchObject({ processArgv: expect.arrayContaining(['public argument with spaces', '--port=5173']) });
+        expect(serialized).toContain('example.test:5432/db');
+    });
     it('uses the credential classifier without suppressing count and prose fields', () => {
         expect(redactDoctorDiagnosticValue({
             accessToken: 'doctor-access-secret',

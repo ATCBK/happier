@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { inspect } from 'node:util';
 
 import { reloadConfiguration } from '@/configuration';
 import { readStoredCredentials } from '@/persistence';
@@ -81,5 +82,39 @@ it.each(['unreadable', 'network', 'timeout', 'http'] as const)('reports %s Home 
     env.restore();
     reloadConfiguration();
     await removeTempDir(home);
+  }
+});
+
+it('keeps HTTP credentials out of interactive authentication DEBUG errors', async () => {
+  const home = await createTempDir('happier-auth-debug-error-');
+  const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL',
+    'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_AUTH_METHOD', 'HAPPIER_TAILSCALE_AUTO_PUBLIC_URL', 'DEBUG']);
+  const restoreTty = setStdioTtyForTest({ stdin: false, stdout: false });
+  const output = captureConsoleLogAndMuteStdout();
+  const origin = 'https://debug-auth.example.test';
+  const token = 'debug-private-bearer';
+  const password = 'debug-private-password';
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({
+    features: {}, capabilities: { serverIdentity: { serverIdentityId: 'srv_debug_auth' } },
+  })));
+  const post = vi.spyOn(axios, 'post').mockRejectedValue(Object.assign(new Error(`Authorization: Bearer ${token}`), {
+    code: 'ERR_BAD_RESPONSE', response: { status: 500, data: { token } },
+    config: { headers: { Authorization: `Bearer ${token}` }, data: { password } },
+  }));
+  try {
+    env.patch({ HAPPIER_HOME_DIR: home, HAPPIER_SERVER_URL: origin, HAPPIER_WEBAPP_URL: origin,
+      HAPPIER_PUBLIC_SERVER_URL: undefined, HAPPIER_ACTIVE_SERVER_ID: undefined,
+      HAPPIER_AUTH_METHOD: 'web', HAPPIER_TAILSCALE_AUTO_PUBLIC_URL: '0', DEBUG: '1' });
+    reloadConfiguration();
+    await expect(doAuth()).resolves.toBeNull();
+    expect(post).toHaveBeenCalled();
+    const printed = inspect(vi.mocked(console.log).mock.calls, { depth: null, maxStringLength: null });
+    expect(printed).not.toContain(token);
+    expect(printed).not.toContain(password);
+    expect(printed).toContain('ERR_BAD_RESPONSE');
+    expect(printed).toContain('500');
+    expect(await readStoredCredentials()).toBeNull();
+  } finally {
+    output.restore(); restoreTty(); env.restore(); reloadConfiguration(); await removeTempDir(home);
   }
 });

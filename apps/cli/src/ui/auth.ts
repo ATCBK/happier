@@ -18,6 +18,7 @@ import { openBrowser, BROWSER_NOT_OPENED_NOTE, COPY_LINK_INTO_BROWSER_PROMPT } f
 import type { AuthMethod } from "./ink/AuthSelector";
 import { randomUUID } from 'node:crypto';
 import { logger } from './logger';
+import { projectSafeAuthError } from '@/cli/commands/auth/errorDiagnostic';
 import { ensureDaemonRunningForSessionCommand, shouldAutoStartDaemonAfterAuth } from '@/daemon/ensureDaemon';
 import { buildConfigureServerLinks, buildTerminalConnectLinks } from '@happier-dev/cli-common/links';
 import { createStepPrinter } from '@happier-dev/cli-common/output';
@@ -308,7 +309,7 @@ export async function doAuth(options: Readonly<{
         }
     } catch (error) {
         if (debugEnabled) {
-            console.log(`[AUTH DEBUG] Failed to send auth request:`, error);
+            console.log(`[AUTH DEBUG] Failed to send auth request:`, projectSafeAuthError(error));
         }
         console.log('Failed to create authentication request, please try again later.');
         return null;
