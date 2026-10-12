@@ -4,7 +4,6 @@ export const OPENROUTER_PROVIDER_CONTRIBUTION = {
   v: 1,
   id: 'openrouter',
   name: 'OpenRouter',
-  icon: 'openrouter',
   websiteUrl: 'https://openrouter.ai',
   kind: 'aggregator',
   endpointTemplates: [
