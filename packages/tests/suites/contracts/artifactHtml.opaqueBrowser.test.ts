@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ArtifactHtmlBundleV1 } from '../../../protocol/src/artifacts/artifactHtmlV1';
+import { admitCallerAuthoredUiSurfaceCapabilitiesV1 } from '../../../protocol/src/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
+import { createSurfaceContextFixture } from '../../../plugin-sdk/src/ui/surfaceContext.fixture';
 import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 
 const repo = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -76,12 +78,13 @@ beforeAll(async () => {
         stdin: {
             contents: `export { buildHostedHtmlDocument } from '${resolve(repo, 'apps/ui/sources/components/plugins/hostedWeb/buildHostedHtmlDocument.ts')}';
                 export { buildArtifactHtmlSrcdoc, renderArtifactHtmlViewer } from '${resolve(repo, 'apps/server/sources/app/api/routes/share/artifactHtmlViewer.ts')}';
-                export { ARTIFACT_HTML_RESPONSE_SANDBOX_CSP_V1 } from '${resolve(repo, 'packages/protocol/src/artifacts/artifactHtmlDocumentV1.ts')}';`,
+                export { ARTIFACT_HTML_RESPONSE_SANDBOX_CSP_V1, ARTIFACT_HTML_SHELL_CSP_V1 } from '${resolve(repo, 'packages/protocol/src/artifacts/artifactHtmlDocumentV1.ts')}';`,
             resolveDir: repo,
             sourcefile: 'artifact-html-browser-owners.ts',
         },
         bundle: true, write: false, format: 'iife', globalName: '__E2__', platform: 'browser', target: 'es2022',
         alias: {
+            '@happier-dev/plugin-sdk/host/ui': resolve(repo, 'packages/plugin-sdk/src/host/ui/index.ts'),
             '@happier-dev/protocol/sharing/public-viewer': resolve(repo, 'packages/protocol/src/sharing/publicViewer.ts'),
             '@happier-dev/protocol/artifacts/artifactHtmlDocumentV1': resolve(repo, 'packages/protocol/src/artifacts/artifactHtmlDocumentV1.ts'),
             '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1': resolve(repo, 'packages/protocol/src/plugins/contributions/ui/hostedHtmlCapabilitiesV1.ts'),
@@ -108,6 +111,135 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); });
 
 describe('opaque browser bundle boundary', () => {
+    it.each([undefined, { hostMethods: ['context', 'watchContext'] }] as const)('plain caller HTML reaches ready, follows live theme and height, and forwards only trusted links (request %j)', async request => {
+        await withPage(async page => {
+            await page.addScriptTag({ content: owners });
+            const shellCsp = await page.evaluate(() => Reflect.get(globalThis, '__E2__').ARTIFACT_HTML_SHELL_CSP_V1);
+            await page.route(hostUrl, route => route.fulfill({ contentType: 'text/html', headers: { 'Content-Security-Policy': shellCsp }, body: '<main id="artifact"></main>' }));
+            await page.goto(hostUrl);
+            await page.addScriptTag({ content: owners });
+            const config = { identity: { instanceId: 'plain-caller', mountNonce: 'plain-nonce' }, frameOrigin: 'null', hostOrigin: new URL(hostUrl).origin };
+            const surface = createSurfaceContextFixture();
+            const admission = admitCallerAuthoredUiSurfaceCapabilitiesV1({ request, admittedHostMethods: ['context', 'watchContext'] });
+            if (admission.kind !== 'admitted') throw new Error('expected_caller_admission');
+            const methods = admission.advertisedHostMethods;
+            const input = bundle({ 'index.html': ['text/html', `<style>html,body{margin:0}#content{height:137px;color:var(--happier-plugin-color-text)}</style>
+                <div id="content"><a id="link" href="https://external.invalid/read">Read</a><input id="control" type="checkbox"></div><script>globalThis.authorRuns = (globalThis.authorRuns || 0) + 1</script>`] });
+            // The remote host transport is modeled with canonical wire vectors.
+            // The document, SDK, CSS mapping, CSP, ports and activation stay real.
+            await page.evaluate(async ({ input, config, surface, methods }) => {
+                const received: Array<{ kind: string; payload?: { height?: number; url?: string } }> = [];
+                let port: MessagePort;
+                let subscriptionId = '';
+                let hostSequence = 0;
+                const push = (kind: string, payload: unknown) => port.postMessage({ version: 1, direction: 'hostToFrame', sequence: ++hostSequence, identity: config.identity, kind, ...(kind === 'bootstrap' ? { origin: 'null' } : {}), payload });
+                const handle = (message: { kind: string; payload?: Record<string, unknown>; sequence: number }) => {
+                    received.push(message);
+                    if (message.kind !== 'hostApi') return;
+                    const wire = message.payload!;
+                    if (wire.kind === 'negotiate') push('hostApi', { wireVersion: 1, identity: config.identity, kind: 'negotiated', apiVersion: '1.0.0', methods, surface });
+                    else if (wire.kind === 'request' || wire.kind === 'subscribe') {
+                        if (wire.kind === 'subscribe') subscriptionId = String(wire.subscriptionId);
+                        push('hostApi', { wireVersion: 1, identity: config.identity, kind: 'result', requestId: wire.requestId, method: wire.method,
+                            ...(wire.method === 'context' ? { result: { surface, activity: { active: true } } } : {}) });
+                    }
+                };
+                window.addEventListener('message', event => {
+                    if (event.source !== frame.contentWindow || event.origin !== 'null' || event.data.kind !== 'ready') return;
+                    port = event.ports[0]; port.onmessage = event => handle(event.data); port.start(); handle(event.data);
+                    push('bootstrap', { apiVersion: '1.0.0', wireVersion: 1, identity: config.identity });
+                });
+                Reflect.set(globalThis, '__plainCaller', { received, pushTheme(color: string) {
+                    surface.theme.colors.text = color;
+                    push('hostApi', { wireVersion: 1, identity: config.identity, kind: 'subscription', subscriptionId, event: { surface, activity: { active: true } } });
+                } });
+                const frame = document.createElement('iframe'); frame.setAttribute('sandbox', 'allow-scripts');
+                frame.srcdoc = await Reflect.get(globalThis, '__E2__').buildHostedHtmlDocument(input, config, { externalHttpLinks: true });
+                document.body.append(frame);
+            }, { input, config, surface, methods });
+            const frame = page.frames().find(frame => frame !== page.mainFrame())!;
+            await frame.waitForLoadState('load');
+            await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, '__plainCaller').received.some((message: { kind: string }) => message.kind === 'ready'))).toBe(true);
+            await expect.poll(() => frame.evaluate(() => document.documentElement.style.getPropertyValue('--happier-plugin-color-text'))).toBe('#f0f0f0');
+            await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, '__plainCaller').received.some((message: { kind: string; payload: { height?: number } }) => message.kind === 'heightChanged' && message.payload.height === 137))).toBe(true);
+            await page.evaluate(() => Reflect.get(globalThis, '__plainCaller').pushTheme('#123456'));
+            await frame.waitForFunction(() => document.documentElement.style.getPropertyValue('--happier-plugin-color-text') === '#123456');
+            expect(await frame.evaluate(() => Reflect.get(globalThis, 'authorRuns'))).toBe(1);
+            await frame.locator('#control').click();
+            expect(await frame.locator('#control').isChecked()).toBe(true);
+            await frame.evaluate(() => { document.querySelector<HTMLElement>('#content')!.style.height = '211px'; document.querySelector<HTMLElement>('#link')!.click(); });
+            await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, '__plainCaller').received.some((message: { kind: string; payload: { height?: number } }) => message.kind === 'heightChanged' && message.payload.height === 211))).toBe(true);
+            await frame.evaluate(() => { document.querySelector<HTMLElement>('#content')!.style.height = '73px'; });
+            await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, '__plainCaller').received.some((message: { kind: string; payload: { height?: number } }) => message.kind === 'heightChanged' && message.payload.height === 73))).toBe(true);
+            expect(await page.evaluate(() => Reflect.get(globalThis, '__plainCaller').received.filter((message: { kind: string }) => message.kind === 'openExternal'))).toEqual([]);
+            await frame.locator('#link').click();
+            await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, '__plainCaller').received.filter((message: { kind: string }) => message.kind === 'openExternal'))).toEqual([expect.objectContaining({ payload: { url: 'https://external.invalid/read' } })]);
+            expect(await frame.evaluate(() => Reflect.get(window, 'origin'))).toBe('null');
+        });
+    });
+    it('enforces stored none/exact/open policy for actual fetch and CDN assets under the inherited shell CSP', async () => {
+        const font = await readFile(resolve(repo, 'apps/ui/sources/assets/fonts/Inter-Regular.ttf'));
+        for (const viewer of ['Board', 'Artifact'] as const) {
+            for (const mode of ['none', 'origins', 'open', 'shareOff'] as const) {
+                await withPage(async page => {
+                    const requests: string[] = [];
+                    for (const hostname of ['approved.invalid', 'other.invalid']) {
+                        await page.route(`https://${hostname}/**`, async route => {
+                            requests.push(route.request().url());
+                            const path = new URL(route.request().url()).pathname;
+                            const response = path.endsWith('.js') ? { contentType: 'text/javascript', body: 'globalThis.remoteExecuted = true' }
+                                : path.endsWith('.css') ? { contentType: 'text/css', body: '#probe {color:rgb(17,34,51)}' }
+                                : path.endsWith('.svg') ? { contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="7" height="9"/>' }
+                                : path.endsWith('.ttf') ? { contentType: 'font/ttf', body: font }
+                                : { contentType: 'text/plain', body: 'network response' };
+                            await route.fulfill({ ...response, headers: { 'Access-Control-Allow-Origin': '*' } });
+                        });
+                    }
+                    await page.addScriptTag({ content: owners });
+                    const shellCsp = await page.evaluate(() => Reflect.get(globalThis, '__E2__').ARTIFACT_HTML_SHELL_CSP_V1);
+                    await page.route(hostUrl, route => route.fulfill({ contentType: 'text/html', headers: { 'Content-Security-Policy': shellCsp }, body: '<main id="artifact"></main>' }));
+                    await page.goto(hostUrl);
+                    await page.addScriptTag({ content: owners });
+                    const requestedCapabilities = mode === 'origins' ? { networkOrigins: ['https://approved.invalid'] }
+                        : { network: mode === 'none' ? 'none' as const : 'open' as const };
+                    const input = { ...bundle({ 'index.html': ['text/html', `<body><div id="probe">local</div><script>
+                        const asset = (tag, property, url) => new Promise(resolve => {
+                            const element = document.createElement(tag); if(tag === 'link') element.rel = 'stylesheet';
+                            element.onload = () => resolve(true); element.onerror = () => resolve(false);
+                            element[property] = url; document.body.append(element);
+                        });
+                        const probe = async (hostname) => {
+                            const origin = 'https://' + hostname;
+                            const results = await Promise.all([
+                                fetch(origin + '/fetch').then(response => response.text()).then(() => true, () => false),
+                                asset('script', 'src', origin + '/script.js'), asset('link', 'href', origin + '/style.css'),
+                                asset('img', 'src', origin + '/image.svg'),
+                                new FontFace('RemoteFont', 'url(' + origin + '/font.ttf)').load().then(() => true, () => false),
+                            ]); return results;
+                        };
+                        Promise.all(['approved.invalid', 'other.invalid'].map(probe)).then(results => document.body.dataset.network = JSON.stringify(results));
+                    </script>`] }), requestedCapabilities };
+                    await page.evaluate(async ({ input, viewer, mode, requestedCapabilities }) => {
+                        const api = Reflect.get(globalThis, '__E2__');
+                        if (viewer === 'Artifact') api.renderArtifactHtmlViewer(document.querySelector('#artifact'), input, 'network', { networkOff: mode === 'shareOff' });
+                        else {
+                            const frame = document.createElement('iframe'); frame.setAttribute('sandbox', 'allow-scripts');
+                            frame.srcdoc = await api.buildHostedHtmlDocument(input, undefined, mode === 'shareOff' ? { network: 'none' } : requestedCapabilities);
+                            document.body.append(frame);
+                        }
+                    }, { input, viewer, mode, requestedCapabilities });
+                    const frame = page.frames().find(candidate => candidate !== page.mainFrame())!;
+                    await frame.waitForFunction(() => document.body.dataset.network);
+                    const expected = mode === 'open' ? [true, true] : mode === 'origins' ? [true, false] : [false, false];
+                    expect(JSON.parse(await frame.evaluate(() => document.body.dataset.network!))).toEqual(expected.map(allowed => Array(5).fill(allowed)));
+                    expect(requests.length).toBe(expected.filter(Boolean).length * 5);
+                    expect(await frame.evaluate(() => Reflect.get(window, 'origin'))).toBe('null');
+                    if (mode === 'origins') expect(requests.every(url => new URL(url).hostname === 'approved.invalid')).toBe(true);
+                    expect(await frame.evaluate(() => document.querySelector('#probe')?.textContent)).toBe('local');
+                });
+            }
+        }
+    });
     it('characterizes native CSS imports as skipping the cyclic edge while preserving each entrypoint cascade', async () => {
         await withPage(async page => {
             // Only HTTP transport is modeled; Chromium owns stylesheet loading,
@@ -142,9 +274,9 @@ describe('opaque browser bundle boundary', () => {
         });
         await withPage(async page => {
             await page.addScriptTag({ content: owners });
-            const response = await page.evaluate(({ input, config }) => {
+            const response = await page.evaluate(async ({ input, config }) => {
                 const api = Reflect.get(globalThis, '__E2__');
-                return { html: api.buildHostedHtmlDocument(input, config), csp: api.ARTIFACT_HTML_RESPONSE_SANDBOX_CSP_V1 };
+                return { html: await api.buildHostedHtmlDocument(input, config), csp: api.ARTIFACT_HTML_RESPONSE_SANDBOX_CSP_V1 };
             }, { input, config });
             const responseUrl = new URL('response.html', hostUrl).href;
             // This is the browser response-header boundary, not an Android or
@@ -215,12 +347,12 @@ describe('opaque browser bundle boundary', () => {
                     });
                     await page.setContent('<main id="artifact"></main>');
                     await page.addScriptTag({ content: owners });
-                    await page.evaluate(({ input, viewer }) => {
+                    await page.evaluate(async ({ input, viewer }) => {
                         const api = Reflect.get(globalThis, '__E2__');
                         if (viewer === 'Artifact') api.renderArtifactHtmlViewer(document.querySelector('#artifact'), input, 'cycle');
                         else {
                             const frame = document.createElement('iframe'); frame.setAttribute('sandbox', 'allow-scripts');
-                            frame.srcdoc = api.buildHostedHtmlDocument(input); document.body.append(frame);
+                            frame.srcdoc = await api.buildHostedHtmlDocument(input); document.body.append(frame);
                         }
                     }, { input, viewer });
                     const frame = page.frames().find(frame => frame !== page.mainFrame())!;
@@ -256,12 +388,12 @@ describe('opaque browser bundle boundary', () => {
                 page.on('request', request => { if (/^https?:/.test(request.url())) network.push(request.url()); });
                 await page.setContent('<main id="artifact"></main>');
                 await page.addScriptTag({ content: owners });
-                await page.evaluate(({ input, viewer }) => {
+                await page.evaluate(async ({ input, viewer }) => {
                     const api = Reflect.get(globalThis, '__E2__');
                     if (viewer === 'Artifact') api.renderArtifactHtmlViewer(document.querySelector('#artifact'), input, 'bundle');
                     else {
                         const frame = document.createElement('iframe'); frame.setAttribute('sandbox', 'allow-scripts');
-                        frame.srcdoc = api.buildHostedHtmlDocument(input); document.body.append(frame);
+                        frame.srcdoc = await api.buildHostedHtmlDocument(input); document.body.append(frame);
                     }
                 }, { input, viewer });
                 const frame = page.frames().find(frame => frame !== page.mainFrame())!;
@@ -352,18 +484,79 @@ describe('opaque browser bundle boundary', () => {
                     const child = new DOMParser().parseFromString(childHtml, 'text/html').body.firstChild;
                     nativeApply(nativeAppend, document.body, [child]);
                 });
+                attempt(() => {
+                    const nativeSlice = Array.prototype.slice;
+                    try {
+                        Array.prototype.slice = () => [];
+                        const child = new DOMParser().parseFromString(childHtml, 'text/html').body.firstChild;
+                        document.body.appendChild(child);
+                    } finally { Array.prototype.slice = nativeSlice; }
+                });
+                attempt(() => {
+                    const nativeIterator = NodeList.prototype[Symbol.iterator];
+                    try {
+                        NodeList.prototype[Symbol.iterator] = function* () {};
+                        const wrapper = new DOMParser().parseFromString('<div>' + childHtml + '</div>', 'text/html').body.firstChild;
+                        document.body.append(wrapper);
+                    } finally { NodeList.prototype[Symbol.iterator] = nativeIterator; }
+                });
+                attempt(() => {
+                    const nativeIterator = Array.prototype[Symbol.iterator];
+                    try {
+                        Array.prototype[Symbol.iterator] = function* () {};
+                        const child = new DOMParser().parseFromString(childHtml, 'text/html').body.firstChild;
+                        document.body.append(child);
+                    } finally { Array.prototype[Symbol.iterator] = nativeIterator; }
+                });
+                attempt(() => {
+                    try {
+                        Object.defineProperty(Element, Symbol.hasInstance, { configurable: true, value: () => false });
+                        Object.defineProperty(Node, Symbol.hasInstance, { configurable: true, value: () => false });
+                        const child = new DOMParser().parseFromString(childHtml, 'text/html').body.firstChild;
+                        document.body.append(child);
+                    } finally {
+                        delete Element[Symbol.hasInstance];
+                        delete Node[Symbol.hasInstance];
+                    }
+                });
+                attempt(() => {
+                    const nativeString = String;
+                    try {
+                        globalThis.String = () => '<p>safe</p>';
+                        document.body.insertAdjacentHTML('beforeend', childHtml);
+                    } finally { globalThis.String = nativeString; }
+                });
+                attempt(() => {
+                    let conversions = 0;
+                    document.body.insertAdjacentHTML('beforeend', {
+                        toString() { return ++conversions === 1 ? '<p>safe</p>' : childHtml; },
+                    });
+                });
+                attempt(() => {
+                    let conversions = 0;
+                    const wrapper = document.createElement('div');
+                    document.body.append(wrapper);
+                    wrapper.innerHTML = {
+                        toString() { return ++conversions === 1 ? '<p>safe</p>' : childHtml; },
+                    };
+                });
+                attempt(() => {
+                    const child = new DOMParser().parseFromString(childHtml, 'text/html').body.firstChild;
+                    Object.setPrototypeOf(child, null);
+                    document.body.append(child);
+                });
                 </script></body>`] });
             await withPage(async page => {
                 const network: string[] = [];
                 page.on('request', request => { if (/^https?:/.test(request.url())) network.push(request.url()); });
                 await page.setContent('<main id="artifact"></main>');
                 await page.addScriptTag({ content: owners });
-                await page.evaluate(({ input, viewer }) => {
+                await page.evaluate(async ({ input, viewer }) => {
                     const api = Reflect.get(globalThis, '__E2__');
                     if (viewer === 'Artifact') api.renderArtifactHtmlViewer(document.querySelector('#artifact'), input, 'isolation');
                     else {
                         const frame = document.createElement('iframe'); frame.setAttribute('sandbox', 'allow-scripts');
-                        frame.srcdoc = api.buildHostedHtmlDocument(input); document.body.append(frame);
+                        frame.srcdoc = await api.buildHostedHtmlDocument(input); document.body.append(frame);
                     }
                 }, { input, viewer });
                 const frame = page.frames().find(frame => frame !== page.mainFrame())!;
@@ -393,9 +586,9 @@ describe('opaque browser bundle boundary', () => {
             await withPage(async page => {
                 await page.setContent('<main id="artifact"></main>');
                 await page.addScriptTag({ content: owners });
-                const expandedBytes = await page.evaluate(({ input, viewer }) => {
+                const expandedBytes = await page.evaluate(async ({ input, viewer }) => {
                     const api = Reflect.get(globalThis, '__E2__');
-                    const html = viewer === 'Artifact' ? api.buildArtifactHtmlSrcdoc(input, document) : api.buildHostedHtmlDocument(input);
+                    const html = viewer === 'Artifact' ? api.buildArtifactHtmlSrcdoc(input, document) : await api.buildHostedHtmlDocument(input);
                     const frame = document.createElement('iframe'); frame.setAttribute('sandbox', 'allow-scripts'); frame.srcdoc = html; document.body.append(frame);
                     return new TextEncoder().encode(html).byteLength;
                 }, { input, viewer });

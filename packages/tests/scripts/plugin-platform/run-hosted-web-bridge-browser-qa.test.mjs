@@ -21,7 +21,7 @@ test('hosted-web bridge browser QA sends launch and runtime facts only after gue
     );
   }
 
-  assert.match(source, /bootstrap:\s*\{[\s\S]*frameOrigin:\s*assetOrigin[\s\S]*subPath:\s*'work\/ideas\.md'[\s\S]*launchInput:\s*\{ noteId:\s*'note-7' \}/u);
+  assert.match(source, /bootstrap:\s*\{[\s\S]*frameOrigin,[\s\S]*subPath:\s*'work\/ideas\.md'[\s\S]*launchInput:\s*\{ noteId:\s*'note-7' \}/u);
   assert.match(source, /launch and runtime facts are absent from the frame URL/u);
 });
 
