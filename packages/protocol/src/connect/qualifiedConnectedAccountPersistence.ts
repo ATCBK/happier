@@ -1,11 +1,43 @@
 import {
   defineProtocolObject,
+  defineProtocolLiteral,
+  defineProtocolUnion,
   defineProtocolString,
   type ProtocolComposableSchema,
 } from '../plugins/actions/protocolComposableSchema.js';
 import {
   PluginContributionIdentityV1Schema,
 } from '../plugins/contributionIdentity.js';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
+import { PluginSourceCustodyV1ProtocolSchema, pluginSourceCustodyV1Equal } from '../plugins/runtime/sourceCustody.js';
+
+export const HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 = Object.freeze({
+  pluginId: 'happier', localId: 'mcp-sign-in',
+} as const);
+
+/** Host services are reserved Connected Account identities, never Plugin ids. */
+export const ConnectedAccountServiceIdentityV1Schema = defineProtocolUnion([
+  PluginContributionIdentityV1Schema,
+  defineProtocolObject({
+    pluginId: defineProtocolLiteral(HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1.pluginId),
+    localId: defineProtocolLiteral(HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1.localId),
+  }, { policy: 'closed' }),
+]);
+
+/** Built-in host callbacks belong to the running host, not an installed plugin. */
+export const ConnectedAccountSourceCustodyV1Schema = asProtocolZod(defineProtocolUnion([
+  PluginSourceCustodyV1ProtocolSchema,
+  defineProtocolObject({ kind: defineProtocolLiteral('host') }, { policy: 'closed' }),
+]));
+export type ConnectedAccountSourceCustodyV1 = ReturnType<typeof ConnectedAccountSourceCustodyV1Schema.parse>;
+
+export function connectedAccountSourceCustodyV1Equal(
+  left: ConnectedAccountSourceCustodyV1,
+  right: ConnectedAccountSourceCustodyV1,
+): boolean {
+  if (left.kind === 'host' || right.kind === 'host') return left.kind === right.kind;
+  return pluginSourceCustodyV1Equal(left, right);
+}
 
 export const QualifiedConnectedAccountIdSchema = defineProtocolString({
   minLength: 1,
@@ -19,13 +51,13 @@ export const QualifiedConnectedAccountIdSchema = defineProtocolString({
  * this schema through the SDK and emits its own declarations; a named
  * Protocol alias here would surface as `import("@happier-dev/protocol")` in
  * that package's `.d.ts`, which external authors never install. The shape is
- * still compiler-bound to `PluginContributionIdentityV1Schema` below.
+ * still compiler-bound to `ConnectedAccountServiceIdentityV1Schema` below.
  */
 export const QualifiedConnectedAccountRefSchema: ProtocolComposableSchema<{
   service: { pluginId: string; localId: string };
   accountId: string;
 }> = defineProtocolObject({
-  service: PluginContributionIdentityV1Schema,
+  service: ConnectedAccountServiceIdentityV1Schema,
   accountId: QualifiedConnectedAccountIdSchema,
 }, { policy: 'closed' });
 

@@ -2,7 +2,7 @@ import * as z from 'zod/mini';
 import { lazyDefinition } from '../lazyZodSchema.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
-import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { ConnectedAccountServiceIdentityV1Schema } from './qualifiedConnectedAccountPersistence.js';
 import { QualifiedConnectedAccountRefSchema, QualifiedConnectedAccountIdSchema } from './qualifiedConnectedAccountPersistence.js';
 import { ConnectedServiceAuthGroupIdSchema } from './connectedServiceBindings.js';
 import { BackendTargetKeyV2Schema } from '../backends/targets/backendTargetRefV2.js';
@@ -12,11 +12,11 @@ import { ProviderAccountSubscriptionMonthlyPriceV1Schema } from './accountSubscr
 
 export const QualifiedConnectedEntityRefSchema = lazyDefinition(() => z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('account'), account: asProtocolZod(QualifiedConnectedAccountRefSchema) }),
-    z.strictObject({ kind: z.literal('group'), service: asProtocolZod(PluginContributionIdentityV1Schema), groupId: ConnectedServiceAuthGroupIdSchema }),
+    z.strictObject({ kind: z.literal('group'), service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema), groupId: ConnectedServiceAuthGroupIdSchema }),
 ]));
 export type QualifiedConnectedEntityRef = z.infer<typeof QualifiedConnectedEntityRefSchema>;
 export const QualifiedAcknowledgementSubjectSchema = lazyDefinition(() => z.discriminatedUnion('kind', [
-    z.strictObject({ kind: z.literal('adoption'), agentTargetKey: BackendTargetKeyV2Schema, service: asProtocolZod(PluginContributionIdentityV1Schema), groupId: ConnectedServiceAuthGroupIdSchema }),
+    z.strictObject({ kind: z.literal('adoption'), agentTargetKey: BackendTargetKeyV2Schema, service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema), groupId: ConnectedServiceAuthGroupIdSchema }),
     z.strictObject({ kind: z.literal('warning'), warningId: z.string(), scope: z.discriminatedUnion('kind', [
         z.strictObject({ kind: z.literal('account') }), z.strictObject({ kind: z.literal('machine'), machineId: z.string() }),
     ]) }),
@@ -134,7 +134,7 @@ export type AccountEncryptionMigrateConnectedAcknowledgementsResultV1 = z.infer<
 
 export const QualifiedConnectedDisclosureSubjectSchema = lazyDefinition(() => z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('account'), account: asProtocolZod(QualifiedConnectedAccountRefSchema) }),
-    z.strictObject({ kind: z.literal('group-member'), group: z.strictObject({ service: asProtocolZod(PluginContributionIdentityV1Schema), groupId: ConnectedServiceAuthGroupIdSchema }), accountId: asProtocolZod(QualifiedConnectedAccountIdSchema) }),
+    z.strictObject({ kind: z.literal('group-member'), group: z.strictObject({ service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema), groupId: ConnectedServiceAuthGroupIdSchema }), accountId: asProtocolZod(QualifiedConnectedAccountIdSchema) }),
 ]));
 export type QualifiedConnectedDisclosureSubject = z.infer<typeof QualifiedConnectedDisclosureSubjectSchema>;
 export type LegacyConnectedMetadataInventoryV1 = Readonly<{

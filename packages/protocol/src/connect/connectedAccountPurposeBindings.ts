@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
-import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { ConnectedAccountServiceIdentityV1Schema } from './qualifiedConnectedAccountPersistence.js';
 import { ConnectedAccountPurposeIdSchema, QualifiedConnectedAccountPurposeV1Schema } from './connectedAccountPurposes.js';
 import {
   ConnectedServiceAuthGroupIdSchema,
@@ -22,7 +22,7 @@ export const QualifiedConnectedAccountPurposeBindingAccountTargetV1Schema =
 export const QualifiedConnectedAccountPurposeBindingGroupTargetV1Schema =
   lazyZodSchema(() => z.object({
     kind: z.literal('group'),
-    service: asProtocolZod(PluginContributionIdentityV1Schema),
+    service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
     groupId: ConnectedServiceAuthGroupIdSchema,
   }).strict());
 

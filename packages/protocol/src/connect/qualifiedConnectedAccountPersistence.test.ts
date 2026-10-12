@@ -10,6 +10,19 @@ const {
 } = qualifiedConnectedAccountPersistence;
 
 describe('qualified connected-account identity', () => {
+  it('admits only the reserved built-in host service beside plugin-qualified services', () => {
+    const validate = compilePluginJsonSchema(QualifiedConnectedAccountRefJsonSchema);
+    for (const [service, accepted] of [
+      [{ pluginId: 'happier', localId: 'mcp-sign-in' }, true],
+      [{ pluginId: 'happier', localId: 'other-service' }, false],
+      [{ pluginId: 'other', localId: 'mcp-sign-in' }, false],
+    ] as const) {
+      const account = { service, accountId: 'server-a' };
+      expect(QualifiedConnectedAccountRefSchema.safeParse(account).success).toBe(accepted);
+      expect(validate(account)).toBe(accepted);
+    }
+  });
+
   it('retains the exact qualified service and account id', () => {
     expect(QualifiedConnectedAccountRefSchema.parse({
       service: { pluginId: 'acme.accounts', localId: 'git/hosting' },

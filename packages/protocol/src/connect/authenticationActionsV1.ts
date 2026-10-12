@@ -6,7 +6,7 @@ import {
   ConnectedAccountPendingAttemptsResponseSchema,
   ConnectedAccountRevokeResponseV1Schema,
 } from './connectedAccountDaemonRpcV1.js';
-import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { ConnectedAccountServiceIdentityV1Schema } from './qualifiedConnectedAccountPersistence.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 
 const machine = { machineId: z.string().trim().min(1).max(256) };
@@ -21,7 +21,7 @@ export const CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_INPUT_SCHEMAS = {
   'connectedServices.authentication.reconcile': commands.reconcile.omit({ operation: true }).extend(machine),
   'connectedServices.authentication.cancel': commands.cancel.omit({ operation: true }).extend(machine),
   'connectedServices.authentication.read': commands.read.omit({ operation: true }).extend(machine),
-  'connectedServices.authentication.pending.list': z.object({ ...machine, service: asProtocolZod(PluginContributionIdentityV1Schema) }).strict(),
+  'connectedServices.authentication.pending.list': z.object({ ...machine, service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema) }).strict(),
 } as const;
 const pendingResponse = lazyZodSchema(() => z.union([
   ConnectedAccountPendingAttemptsResponseSchema,

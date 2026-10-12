@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
 import {
-  PluginContributionIdentityV1Schema,
   PluginContributionLocalIdSchema,
 } from '../plugins/contributionIdentity.js';
 import { StoredJsonContentEnvelopeSchema } from '../storage/storedJsonContentEnvelope.js';
@@ -18,6 +17,7 @@ import {
 } from './connectedServiceSchemas.js';
 import {
   QualifiedConnectedAccountIdSchema,
+  ConnectedAccountServiceIdentityV1Schema,
   QualifiedConnectedAccountRefSchema,
 } from './qualifiedConnectedAccountPersistence.js';
 
@@ -63,7 +63,7 @@ function createQualifiedConnectedAccountRevisionSemanticsV4Schema<
   ]);
 }
 
-export const QualifiedConnectedAccountServiceRefSchema = PluginContributionIdentityV1Schema;
+export const QualifiedConnectedAccountServiceRefSchema = ConnectedAccountServiceIdentityV1Schema;
 export const QualifiedConnectedServiceUsageSourceV4Schema = lazyZodSchema(() => z.discriminatedUnion('bindingKind', [
   z.object({ ref: asProtocolZod(QualifiedConnectedAccountRefSchema), bindingKind: z.literal('account') }).strict(),
   z.object({ ref: asProtocolZod(QualifiedConnectedAccountRefSchema), bindingKind: z.literal('group_member'), groupId: ConnectedServiceAuthGroupIdSchema, groupGeneration: z.number().int().nonnegative().optional() }).strict(),

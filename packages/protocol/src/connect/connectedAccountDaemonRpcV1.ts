@@ -1,7 +1,7 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 
-import { PluginContributionIdentityV1Schema, type PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
+import type { PluginContributionIdentityV1 } from '../plugins/contributionIdentity.js';
 import {
   PluginJsonValueV2Schema,
 } from '../plugins/contributions/publicTypes.js';
@@ -16,11 +16,11 @@ import {
 import {
   QualifiedConnectedAccountProfileV4Schema,
 } from './qualifiedConnectedAccountProjectionsV4.js';
-import { QualifiedConnectedAccountRefSchema } from './qualifiedConnectedAccountPersistence.js';
+import { QualifiedConnectedAccountRefSchema, ConnectedAccountServiceIdentityV1Schema, ConnectedAccountSourceCustodyV1Schema } from './qualifiedConnectedAccountPersistence.js';
 import { ConnectedServiceIdSchema, type ConnectedServiceId } from './connectedServiceBindings.js';
 import { ConnectedServiceCredentialRevisionV1Schema } from './connectedServiceSchemas.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
-import { PluginSourceCustodyV1Schema } from '../plugins/runtime/sourceCustody.js';
+
 import { ManagedResourceDependencyV1Schema, ManagedResourceDispositionV1Schema } from '../machines/managed/managedDependencyV1.js';
 
 type ReadonlyArrayProperties<T> = T extends object
@@ -103,7 +103,7 @@ const SecretValuesSchema = lazyZodSchema(() => z.record(
 export const ConnectedAccountAuthenticationCommandSchemas = {
     beginConnect: lazyZodSchema(() => z.object({
       operation: z.literal('beginConnect'),
-      service: asProtocolZod(PluginContributionIdentityV1Schema),
+      service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       modeId: BoundedIdentitySchema,
       expectedConfigurationRevision:
         ExpectedConfigurationRevisionSchema.optional(),
@@ -189,7 +189,7 @@ export const ConnectedAccountControlTargetSchema =
   lazyZodSchema(() => z.discriminatedUnion('kind', [
     z.object({
       kind: z.literal('service'),
-      service: asProtocolZod(PluginContributionIdentityV1Schema),
+      service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       modeId: BoundedIdentitySchema,
     }).strict(),
     z.object({
@@ -235,11 +235,11 @@ export const ConnectedAccountDaemonControlCommandSchema =
   lazyZodSchema(() => z.discriminatedUnion('operation', [
     z.object({
       operation: z.literal('listPendingAttempts'),
-      service: asProtocolZod(PluginContributionIdentityV1Schema),
+      service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
     }).strict(),
     z.object({
       operation: z.literal('describeService'),
-      service: asProtocolZod(PluginContributionIdentityV1Schema),
+      service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       requiredOperation:
         BuiltInLegacyConnectedAccountOperationSchema.optional(),
     }).strict(),
@@ -276,7 +276,7 @@ export const ConnectedAccountConfigurationTargetSchema =
   lazyZodSchema(() => z.discriminatedUnion('kind', [
     z.object({
       kind: z.literal('service'),
-      service: asProtocolZod(PluginContributionIdentityV1Schema),
+      service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       modeId: BoundedIdentitySchema,
     }).strict(),
     z.object({
@@ -287,7 +287,7 @@ export const ConnectedAccountConfigurationTargetSchema =
     z.object({
       kind: z.literal('attempt'),
       attemptId: BoundedIdentitySchema,
-      service: asProtocolZod(PluginContributionIdentityV1Schema),
+      service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       modeId: BoundedIdentitySchema,
     }).strict(),
   ]));
@@ -443,10 +443,10 @@ export const ConnectedAccountDaemonControlResponseSchema =
     ConnectedAccountPendingAttemptsResponseSchema,
     z.object({
       status: z.literal('described'),
-      service: asProtocolZod(PluginContributionIdentityV1Schema),
+      service: asProtocolZod(ConnectedAccountServiceIdentityV1Schema),
       descriptor: PluginConnectedAccountDescriptorContributionV2Schema,
       occurrenceId: BoundedIdentitySchema,
-      sourceCustody: PluginSourceCustodyV1Schema,
+      sourceCustody: ConnectedAccountSourceCustodyV1Schema,
       // Relayed from the same server list as the V4 accounts response, which is
       // bounded at its writer rather than in the projection it produces.
       accounts: z.array(QualifiedConnectedAccountProfileV4Schema),
@@ -458,7 +458,7 @@ export const ConnectedAccountDaemonControlResponseSchema =
       target: ConnectedAccountConfigurationTargetSchema,
       mode: PluginConnectedAccountAuthenticationModeV2Schema,
       occurrenceId: BoundedIdentitySchema,
-      sourceCustody: PluginSourceCustodyV1Schema,
+      sourceCustody: ConnectedAccountSourceCustodyV1Schema,
       configuration: ConnectedAccountConfigurationControlViewSchema,
     }).strict(),
     z.object({
@@ -466,7 +466,7 @@ export const ConnectedAccountDaemonControlResponseSchema =
       target: ConnectedAccountConfigurationTargetSchema,
       mode: PluginConnectedAccountAuthenticationModeV2Schema,
       occurrenceId: BoundedIdentitySchema,
-      sourceCustody: PluginSourceCustodyV1Schema,
+      sourceCustody: ConnectedAccountSourceCustodyV1Schema,
       configuration: ConnectedAccountConfigurationControlViewSchema,
     }).strict(),
     ...ConnectedAccountRevokeResponseV1Schema.options,
