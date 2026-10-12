@@ -29,9 +29,9 @@ import {
 import { getStackName, resolveStackBaseDir } from '../../utils/paths/paths.mjs';
 import { assertCanonicalManagedStackName } from '../../utils/stack/names.mjs';
 
-async function collectSnapshotEntrypointErrors({ snapshotPath, manifest }) {
+async function collectSnapshotEntrypointErrors({ snapshotPath, manifest, components = Object.keys(manifest.components) }) {
   const missing = [];
-  for (const component of Object.keys(manifest.components)) {
+  for (const component of components) {
     const entrypoint = resolveRuntimeManifestEntrypoint({ snapshotPath, manifest, component });
     if (!entrypoint || !(await pathExists(entrypoint))) {
       missing.push(component);
@@ -50,9 +50,10 @@ async function collectSnapshotComponentReferenceErrors({
   snapshotPath,
   producerStackBaseDir,
   manifest,
+  components = ['web', 'server', 'daemon'],
 }) {
   const errors = [];
-  for (const component of ['web', 'server', 'daemon']) {
+  for (const component of components) {
     const artifactFingerprint = String(manifest?.components?.[component]?.artifactFingerprint ?? '').trim();
     if (!artifactFingerprint) continue;
     const componentPath = join(snapshotPath, resolveSnapshotComponentDirectoryName(component));
@@ -247,20 +248,22 @@ export async function inspectActiveRuntimeSnapshot({ stackBaseDir, env = process
       ...(await collectSnapshotEntrypointErrors({
         snapshotPath: normalizedExpectedSnapshotPath,
         manifest: validation.manifest,
+        components: requiredComponents,
       })),
       ...(await collectSnapshotComponentReferenceErrors({
         snapshotPath: normalizedExpectedSnapshotPath,
         producerStackBaseDir,
         manifest: validation.manifest,
+        components: requiredComponents,
       })),
       ...(await collectSnapshotRuntimePayloadErrors({
         snapshotPath: normalizedExpectedSnapshotPath,
-        components: Object.keys(validation.manifest.components),
+        components: requiredComponents,
       })),
     );
   }
 
-  const daemonDistClosure = validation.ok && validation.manifest.components.daemon
+  const daemonDistClosure = validation.ok && requiredComponents.includes('daemon') && validation.manifest.components.daemon
     ? await inspectDaemonDistClosure({ snapshotPath: normalizedExpectedSnapshotPath })
     : { fingerprint: null, errors: [] };
   errors.push(...daemonDistClosure.errors);
