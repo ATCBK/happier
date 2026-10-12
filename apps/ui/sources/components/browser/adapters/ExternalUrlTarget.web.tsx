@@ -6,10 +6,6 @@ import {
     type BrowserViewLifecycleEmitter,
 } from '@/sync/domains/browser/control/lifecycle';
 import type { BrowserControlViewState } from '@/sync/domains/browser/control/state';
-import {
-    buildOpenExternalTabSelection,
-    openBrowserExternalTabSelection,
-} from '@/sync/domains/browser/adapters/selection';
 import { resolveExternalUrlIframeSandbox } from '@/sync/domains/browser/adapters/targets/localPreview';
 import { t } from '@/text';
 
@@ -57,6 +53,7 @@ export function ExternalUrlTarget(props: Readonly<{
     lifecycleState?: BrowserSurfaceLifecycleState;
     nowMs?: () => number;
     reasonCode?: string;
+    onOpenInSystemBrowser?: () => void;
 }>): React.ReactElement {
     const view = props.view;
     const isExternalUrl = view?.target.kind === 'externalUrl' && view.adapterKind === 'externalUrl';
@@ -70,10 +67,7 @@ export function ExternalUrlTarget(props: Readonly<{
     // non-framable fallback, the slow-load hint, AND the unavailable card. All three
     // fulfil the identical OWNER-OPEN external path, so an unavailable in-app engine can never
     // dead-end while the URL is still known.
-    const openInSystemBrowser = React.useCallback(() => {
-        if (!externalUrl) return;
-        void openBrowserExternalTabSelection(buildOpenExternalTabSelection(externalUrl));
-    }, [externalUrl]);
+    const openInSystemBrowser = props.onOpenInSystemBrowser;
     const escapeAction = externalUrl ? openInSystemBrowser : undefined;
 
     if (view && isExternalUrl && view.engineKind === 'desktopWebView') {
@@ -108,6 +102,9 @@ export function ExternalUrlTarget(props: Readonly<{
 
     if (view && isExternalUrl && view.engineKind === 'webIframe' && externalUrl) {
         if (framability.verdict === 'nonFramable') {
+            if (!openInSystemBrowser) {
+                return <BrowserFrameUnavailable testID={props.testID} reasonCode="browser_control_route_unavailable" />;
+            }
             return (
                 <BrowserFrameNonFramable
                     testID={props.testID}
@@ -149,7 +146,7 @@ export function ExternalUrlTarget(props: Readonly<{
                     testID={`${props.testID}-slow-hint`}
                     text={t('browserPresence.slowPage')}
                     busy
-                    action={{ label: t('browserPresence.openInYourBrowser'), onPress: openInSystemBrowser }}
+                    action={openInSystemBrowser ? { label: t('browserPresence.openInYourBrowser'), onPress: openInSystemBrowser } : undefined}
                 />
             </View>
         );

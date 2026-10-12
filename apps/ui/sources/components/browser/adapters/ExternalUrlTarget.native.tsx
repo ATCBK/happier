@@ -39,6 +39,7 @@ export function ExternalUrlTarget(props: Readonly<{
     lifecycleState?: BrowserSurfaceLifecycleState;
     nowMs?: () => number;
     reasonCode?: string;
+    onOpenInSystemBrowser?: () => void;
 }>): React.ReactElement {
     const view = props.view;
     const isExternalUrl = view?.target.kind === 'externalUrl' && view.adapterKind === 'externalUrl';

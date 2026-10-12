@@ -6,6 +6,8 @@ import type {
     FeatureDecision,
 } from '@happier-dev/protocol';
 import * as React from 'react';
+import { BROWSER_AUTOMATION_MAX_ACTION_TIMEOUT_MS } from '@happier-dev/protocol/browser/automation/v1';
+import { randomUUID } from '@/platform/randomUUID';
 
 import { BrowserShell } from '@/components/browser/BrowserShell';
 import type { BrowserDaemonControlCommandSender } from '@/sync/domains/browser/control/machineRpc';
@@ -633,6 +635,36 @@ export function BrowserSurfaceHost(props: Readonly<{
         defaultMachineId: props.pluginBrowserActionContext?.machineId ?? undefined,
     }), [executeBrowserAction, browserActionAccountLifetime, props.pluginBrowserActionContext?.sessionId, props.pluginBrowserActionContext?.machineId]);
 
+    const onOpenInSystemBrowser = React.useCallback((view: Readonly<{ browserSessionId: string; viewId: string }>) => executeBrowserAction(
+        'browser.view.openExternal', { ...view, commandId: `browser_command:${view.viewId}:openExternal:${Date.now()}` }, {
+            surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            serverId: browserActionAccountLifetime?.scope.serverId,
+            expectedAccountId: browserActionAccountLifetime?.scope.accountId,
+            defaultSessionId: props.pluginBrowserActionContext?.sessionId ?? undefined,
+            defaultMachineId: props.pluginBrowserActionContext?.machineId ?? undefined,
+        }), [executeBrowserAction, browserActionAccountLifetime, props.pluginBrowserActionContext?.sessionId, props.pluginBrowserActionContext?.machineId]);
+
+    const onCheckAgain = React.useCallback(async (target: Readonly<{ browserSessionId: string; viewId: string }>) => {
+        const view = runtimeControlAdapter.readState()?.viewsById[target.viewId];
+        if (!view || view.browserSessionId !== target.browserSessionId) {
+            return { ok: false as const, errorCode: 'runtime_action_disabled', error: 'browser_view_unavailable' };
+        }
+        const sessionId = props.pluginBrowserActionContext?.sessionId;
+        return await executeBrowserAction('browser.automation.snapshot', {
+            v: 1, ...target, automationRequestId: randomUUID(),
+            navigationGeneration: view.navigationGeneration, requestedBy: 'user',
+            requesterRef: sessionId ? { kind: 'session', id: sessionId } : { kind: 'browserView', id: view.viewId },
+            actionKind: 'snapshot', timeoutMs: BROWSER_AUTOMATION_MAX_ACTION_TIMEOUT_MS,
+        }, {
+            surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            serverId: browserActionAccountLifetime?.scope.serverId,
+            expectedAccountId: browserActionAccountLifetime?.scope.accountId,
+            defaultSessionId: sessionId ?? undefined,
+            defaultMachineId: props.pluginBrowserActionContext?.machineId ?? undefined,
+        });
+    }, [executeBrowserAction, runtimeControlAdapter, browserActionAccountLifetime,
+        props.pluginBrowserActionContext?.sessionId, props.pluginBrowserActionContext?.machineId]);
+
     // B-2 cause-2: in-app render engines (iframe / RN WebView / Wry-desktop child view) own their
     // own page-load lifecycle. They feed it back here through the SAME canonical
     // `applyBrowserControlEvent` path the daemon engines use, so a URL-bearing open (seeded as
@@ -788,6 +820,8 @@ export function BrowserSurfaceHost(props: Readonly<{
                 platform={props.platform}
                 state={surfaceState.browserState}
                 onCommand={onCommand}
+                onCheckAgain={onCheckAgain}
+                onOpenInSystemBrowser={onOpenInSystemBrowser}
                 daemonControlAvailable={sendDaemonCommand !== undefined}
                 onViewLifecycle={applyViewLifecycleSignal}
                 lifecycleState={lifecycleSlot ? lifecycleSnapshot.lifecycleState : undefined}

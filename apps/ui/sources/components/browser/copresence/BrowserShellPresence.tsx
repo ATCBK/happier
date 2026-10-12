@@ -1,5 +1,6 @@
 import type { HappierAgentPageRect, HappierPresenceTakeControlResult } from '@happier-dev/plugin-ui/presentation';
-import { BrowserCommandDispatchResultV1Schema, type ActionExecuteResult, type BrowserCommandV1 } from '@happier-dev/protocol';
+import { BrowserCommandDispatchResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
+import { type ActionExecuteResult, type BrowserCommandV1 } from '@happier-dev/protocol';
 import * as React from 'react';
 
 import { getAgentCore, type AgentId } from '@/agents/catalog/catalog';
@@ -75,7 +76,7 @@ export function useBrowserSessionAgentIdentity(agent: BrowserShellAgentPresence 
  * The presence capsule's data leaf. It alone subscribes to the automation owner, so a controller
  * change or a finished action re-renders this capsule and not the browser chrome around it.
  *
- * Take control and Hand back use the host's Browser Action ingress. The existing runtime adapter
+ * Take control, Hand back and Check again use the host's Browser Action ingress. The existing runtime adapter
  * reaches the controller owner; only its authoritative evidence changes who controls the page.
  */
 export function BrowserShellPresence(props: Readonly<{
@@ -83,6 +84,7 @@ export function BrowserShellPresence(props: Readonly<{
     /** The in-app automation owner, for views the app renders itself. */
     controlService: BrowserAutomationControlService | null;
     onCommand?: (command: BrowserCommandV1) => void | Promise<ActionExecuteResult>;
+    onCheckAgain?: (view: Readonly<{ browserSessionId: string; viewId: string }>) => Promise<ActionExecuteResult>;
     agent: BrowserShellAgentPresence | null;
     /** Where the page is drawn when it does not fill the frame (a fitted stream). */
     pageRect?: HappierAgentPageRect | null;
@@ -113,6 +115,8 @@ export function BrowserShellPresence(props: Readonly<{
     const identity = useBrowserSessionAgentIdentity(props.agent);
     const agentTurnActive = identity.turnActive;
     const daemonController = daemonOwned ? view.automationController ?? null : null;
+    // Presentation of this admitted request only; the controller's uncertainty is never reset here.
+    const [checking, setChecking] = React.useState(false);
 
     const presence = React.useMemo(() => selectBrowserCopresence({
         snapshot: !daemonOwned && controlService ? controlService.getSnapshot() : null,
@@ -139,6 +143,13 @@ export function BrowserShellPresence(props: Readonly<{
         void props.onCommand?.({ kind: 'handBack', commandId: `hand-back:${view.viewId}:${nowMs?.() ?? Date.now()}`, ...viewKey });
     }, [nowMs, props.onCommand, view.viewId, viewKey]);
     const canControl = Boolean(props.onCommand) && (daemonOwned || controlService !== null);
+    const checkAgain = React.useCallback(async () => {
+        if (!props.onCheckAgain) return;
+        setChecking(true);
+        try { await props.onCheckAgain(viewKey); } catch {
+            // A failed fresh look does not change the owner's existing recovery evidence.
+        } finally { setChecking(false); }
+    }, [props.onCheckAgain, viewKey]);
     // The source owner holds Agent reading and recording while a confidential entry stays on the page;
     // only closing the page ends it (navigating or handing back does not).
     const confidentialityHeld = daemonController?.confidentialityHeld === true;
@@ -150,7 +161,9 @@ export function BrowserShellPresence(props: Readonly<{
         agent,
         onTakeControl: canControl ? takeControl : undefined,
         onHandBack: canControl ? handBack : undefined,
-    } : null), [agent, canControl, handBack, inViewer, presence, takeControl]);
+        onCheckAgain: props.onCheckAgain ? checkAgain : undefined,
+        checking,
+    } : null), [agent, canControl, handBack, inViewer, presence, takeControl, props.onCheckAgain, checkAgain, checking]);
     usePublishSessionViewerPresence('browser', viewerPresence);
     usePublishSessionViewerSourceFacts('browser', inViewer ? {
         machineName: null,
@@ -182,6 +195,8 @@ export function BrowserShellPresence(props: Readonly<{
                     compact={props.compact}
                     onTakeControl={canControl ? takeControl : undefined}
                     onHandBack={canControl ? handBack : undefined}
+                    onCheckAgain={props.onCheckAgain ? checkAgain : undefined}
+                    checking={checking}
                 />
             )}
         </>

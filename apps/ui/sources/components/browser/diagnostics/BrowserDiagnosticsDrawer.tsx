@@ -509,7 +509,6 @@ export function BrowserDiagnosticsDrawer(props: Readonly<{
                             activeTabId={activeSection}
                             onSelectTab={setActiveSection}
                             compact
-                            slidingThumb
                             segmentSizing="content"
                             accessibilityLabel={t('browserShell.devtools.title')}
                         />

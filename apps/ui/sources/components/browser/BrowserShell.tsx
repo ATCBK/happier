@@ -95,10 +95,6 @@ import {
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import {
-    buildOpenExternalTabSelection,
-    openBrowserExternalTabSelection,
-} from '@/sync/domains/browser/adapters/selection';
 import { t } from '@/text';
 import { getPreferredLanguage } from '@/text';
 
@@ -235,6 +231,8 @@ export function BrowserShell(props: Readonly<{
     platform: BrowserPlatformV1;
     state: BrowserControlState;
     onCommand: (command: BrowserCommandV1) => void | Promise<ActionExecuteResult>;
+    onCheckAgain?: (view: Readonly<{ browserSessionId: string; viewId: string }>) => Promise<ActionExecuteResult>;
+    onOpenInSystemBrowser?: (view: Readonly<{ browserSessionId: string; viewId: string }>) => void | Promise<ActionExecuteResult>;
     /**
      * B-2 cause-2: a sink the in-app render engines call to feed their page-load lifecycle
      * (iframe `onLoad`/`onError`, RN `onLoadStart`/`onLoadEnd`/`onError`, desktop `publishPageInfo`)
@@ -460,9 +458,9 @@ export function BrowserShell(props: Readonly<{
     const openableUrl = activeView && (activeView.target.kind === 'externalUrl' || activeView.target.kind === 'localServicePreview')
         ? activeView.currentUrl ?? activeView.pendingUrl ?? null
         : null;
-    const openInYourBrowser = React.useMemo(() => (openableUrl
-        ? () => { void openBrowserExternalTabSelection(buildOpenExternalTabSelection(openableUrl)); }
-        : null), [openableUrl]);
+    const openInYourBrowser = React.useMemo(() => (openableUrl && activeView && props.onOpenInSystemBrowser
+        ? () => { void props.onOpenInSystemBrowser?.({ browserSessionId: activeView.browserSessionId, viewId: activeView.viewId }); }
+        : null), [openableUrl, activeView?.browserSessionId, activeView?.viewId, props.onOpenInSystemBrowser]);
 
     const overflowItems = useBrowserToolbarOverflowItems({
         activeView,
@@ -685,6 +683,7 @@ export function BrowserShell(props: Readonly<{
                     />
                 ) : (
                     <BrowserViewHost
+                        onOpenInSystemBrowser={openInYourBrowser ?? undefined}
                         testID={`${testID}-view`}
                         view={activeView}
                         onViewLifecycle={props.onViewLifecycle}
@@ -736,6 +735,7 @@ export function BrowserShell(props: Readonly<{
                         onCommand={isDaemonAuthoritativeBrowserView(activeView)
                             && !(props.daemonControlAvailable ?? Boolean(props.browserContext?.daemonControl?.sendCommand))
                             ? undefined : props.onCommand}
+                        onCheckAgain={props.onCheckAgain}
                         agent={props.agent ?? null}
                         pageRect={streamedPageRect}
                         compact={chromeDensity.collapsed}

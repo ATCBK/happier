@@ -376,6 +376,7 @@ export function BrowserViewHost(props: Readonly<{
     onStreamedPageRectChange?: (rect: BrowserStreamedPageRect | null) => void;
     onOpenStreamedPageHere?: () => void;
     onClosePage?: () => void;
+    onOpenInSystemBrowser?: () => void;
     nowMs?: () => number;
     testID?: string;
 }>): React.ReactElement {
@@ -448,6 +449,7 @@ export function BrowserViewHost(props: Readonly<{
     if (renderKind === 'externalUrl') {
         return (
             <ExternalUrlTarget
+                onOpenInSystemBrowser={props.onOpenInSystemBrowser}
                 testID={`${testID}-frame`}
                 view={view}
                 profileId={props.browserProfile?.profileId ?? null}

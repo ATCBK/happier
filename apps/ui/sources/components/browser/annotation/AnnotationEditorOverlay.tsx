@@ -480,7 +480,6 @@ export function AnnotationEditorOverlay(props: AnnotationEditorOverlayProps): Re
                             role="radiogroup"
                             compact
                             segmentSizing="content"
-                            slidingThumb
                             accessibilityLabel={t('browserContext.editor.title')}
                             testIDPrefix={`${props.testID}-tool`}
                         />

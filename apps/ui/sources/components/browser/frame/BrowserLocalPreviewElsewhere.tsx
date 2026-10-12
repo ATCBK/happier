@@ -1,10 +1,9 @@
 import * as React from 'react';
 import type { BrowserViewTargetV1 } from '@happier-dev/protocol';
 import { LocalServicePublicPreviewControls } from '@/components/sessions/localServices/LocalServicePublicPreviewControls';
-import { useLocalServicePublicPreviewActions } from '@/components/sessions/localServices/publicPreviewActions';
+import { useLocalServiceEntryActions } from '@/components/sessions/localServices/useLocalServiceEntryActions';
 import { useLocalServiceCapabilityDisabledReasons, useLocalServicePublicPreviewFeatureEnabled } from '@/components/sessions/localServices/useLocalServicePublicPreviewFeature';
 import { useLocalServicePublicPreviewState } from '@/sync/domains/local/services/publicPreview/useLocalServicePublicPreviewState';
-import { createFrontDoorRuntimeActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useMachineDisplayNamesById } from '@/sync/store/hooks';
@@ -28,11 +27,21 @@ export function BrowserLocalPreviewPublicLinkControls(props: Readonly<{
         serverId: props.serverId,
         enabled: enabled && Boolean(props.target.sessionId),
     });
-    const runtimeActionExecute = React.useMemo(() => createFrontDoorRuntimeActionExecutor(), []);
-    const actions = useLocalServicePublicPreviewActions({ runtimeActionExecute, machineId: props.target.machineId, sessionId: props.target.sessionId, serverId: props.serverId });
+    // The same Action admission as the Services surface: Account binding, cancellation and the
+    // approval continuation, so an Ask-first create waits for its decision here too.
+    const { handlers, review } = useLocalServiceEntryActions({
+        machineId: props.target.machineId,
+        serverId: props.serverId ?? null,
+        sessionId: props.target.sessionId,
+        scope: 'workspace',
+        testID: props.testID,
+    });
     // The existing public-exposure contract is Session-bound; do not manufacture a Session.
     if (!props.target.sessionId) return null;
-    return <LocalServicePublicPreviewControls launchTargets={NO_LAUNCH_TARGETS} browserTarget={props.target} serviceTitle={props.serviceTitle} state={state} actions={actions} capabilityDisabledReasons={capabilityDisabledReasons} testID={props.testID} />;
+    return <>
+        {review}
+        <LocalServicePublicPreviewControls launchTargets={NO_LAUNCH_TARGETS} browserTarget={props.target} serviceTitle={props.serviceTitle} state={state} actions={handlers.publicPreviewActions} capabilityDisabledReasons={capabilityDisabledReasons} testID={props.testID} />
+    </>;
 }
 
 /**
