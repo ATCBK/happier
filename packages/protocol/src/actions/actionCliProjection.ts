@@ -48,6 +48,8 @@ export type ActionCliCommandBinding = z.infer<typeof ActionCliCommandBindingSche
 export type ActionCliBindContext = Readonly<{
   actionId: ActionId;
   invocationId: string;
+  /** The selected declared command, so one Action binder can project its friendly verbs. */
+  commandPath?: readonly string[];
   /** Caller presentation mode; binders may request data needed only by human output. */
   output?: 'human' | 'json';
 }>;
