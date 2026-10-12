@@ -6,6 +6,11 @@ import {
 } from '../connectedServices/sessionAuthSwitch/connectedServiceSwitchDeferralQueue';
 import type { TrackedSession } from '../types';
 import { requestPlannedRunnerRestart } from './requestPlannedRunnerRestart';
+import type { RestartSessionRunnerCompletion } from './restartSessionRunnerOnCurrentRuntime';
+import { createVersionRuntimeRefreshAttemptHandoff } from './versionRuntimeRefreshAttemptHandoff';
+import { waitForTrackedRunnerProcessesExit } from '../sessions/waitForTrackedRunnerProcessesExit';
+import type { PlannedRunnerRestartSignalRequest } from './types';
+import { requestConnectedServiceSessionRestartSignal } from '../connectedServices/sessionAuthSwitch/requestConnectedServiceSessionRestartSignal';
 
 function makeTracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
   return {
@@ -449,5 +454,248 @@ describe('requestPlannedRunnerRestart', () => {
 
     await expect(restart).resolves.toEqual({ signaled: true });
     expect(requestSignal).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('requestPlannedRunnerRestart shared refresh completion', () => {
+  function makeHandoff() {
+    return createVersionRuntimeRefreshAttemptHandoff<RestartSessionRunnerCompletion>({
+      timeoutMs: 60_000,
+      timeoutCompletion: { ok: false, status: 'partial_failure' },
+      supersededCompletion: { ok: false, status: 'partial_failure', diagnostics: { reason: 'superseded' } },
+      cancelledCompletion: { ok: false, status: 'partial_failure', diagnostics: { reason: 'cancelled' } },
+    });
+  }
+
+  it('joins equivalent requests without replacing the original completion or signaling again', async () => {
+    const tracked = makeTracked();
+    const handoff = makeHandoff();
+    const restartRequestedPids = new Set<number>();
+    const pidToTrackedSession = new Map([[tracked.pid, tracked]]);
+    const requestSignal = vi.fn(async (input: PlannedRunnerRestartSignalRequest) => ({
+      status: await input.shouldSignal() ? 'requested' as const : 'skipped_stale_owner' as const,
+    }));
+    const target = { sessionId: 'sess-1', previousPid: tracked.pid, tracked, transientSpawnOptions: tracked.spawnOptions };
+    const completion = {
+      hasPending: () => handoff.has('sess-1', tracked.pid),
+      join: () => handoff.join({ ...target, transientSpawnOptions: { ...tracked.spawnOptions! } }),
+      create: () => handoff.create(target),
+    };
+    const request = {
+      sessionId: 'sess-1', tracked, deferral: { kind: 'none' as const },
+      restartRequestedPids, pidToTrackedSession, requestSignal,
+      isProcessSafeToSignal: async () => true, completion,
+    };
+    const first = requestPlannedRunnerRestart(request);
+    const replay = requestPlannedRunnerRestart(request);
+    await vi.waitFor(() => expect(requestSignal).toHaveBeenCalledOnce());
+    const outcome = { ok: true, next: { pid: 4343 } } as const;
+    handoff.settle('sess-1', tracked.pid, outcome);
+
+    await expect(first).resolves.toEqual({ signaled: true, completion: outcome });
+    await expect(replay).resolves.toEqual({ signaled: true, completion: outcome });
+    expect(restartRequestedPids.has(tracked.pid)).toBe(true);
+  });
+
+  it('keeps differing transient spawn targets busy without cancelling the accepted request', async () => {
+    const tracked = makeTracked();
+    const handoff = makeHandoff();
+    const restartRequestedPids = new Set<number>();
+    const pidToTrackedSession = new Map([[tracked.pid, tracked]]);
+    const requestSignal = vi.fn(async (input: PlannedRunnerRestartSignalRequest) => ({
+      status: await input.shouldSignal() ? 'requested' as const : 'skipped_stale_owner' as const,
+    }));
+    const originalTarget = { sessionId: 'sess-1', previousPid: tracked.pid, tracked, transientSpawnOptions: tracked.spawnOptions };
+    const request = {
+      sessionId: 'sess-1', tracked, deferral: { kind: 'none' as const },
+      restartRequestedPids, pidToTrackedSession, requestSignal,
+      isProcessSafeToSignal: async () => true,
+    };
+    const first = requestPlannedRunnerRestart({ ...request, completion: {
+      hasPending: () => handoff.has('sess-1', tracked.pid),
+      join: () => handoff.join(originalTarget),
+      create: () => handoff.create(originalTarget),
+    } });
+    const differentTarget = { ...originalTarget, transientSpawnOptions: { ...tracked.spawnOptions!, resume: 'vendor-other' } };
+    await expect(requestPlannedRunnerRestart({ ...request, completion: {
+      hasPending: () => handoff.has('sess-1', tracked.pid),
+      join: () => handoff.join(differentTarget),
+      create: () => handoff.create(differentTarget),
+    } })).resolves.toEqual({ signaled: false, notSignaledReason: 'restart_already_running' });
+    expect(handoff.takeTransientSpawnOptions('sess-1', tracked.pid)).toEqual(tracked.spawnOptions);
+    const outcome = { ok: true } as const;
+    handoff.settle('sess-1', tracked.pid, outcome);
+    await expect(first).resolves.toEqual({ signaled: true, completion: outcome });
+    expect(restartRequestedPids.has(tracked.pid)).toBe(true);
+  });
+
+  it('retains the original completion and reservation when a deferred auth switch overlaps it', async () => {
+    const tracked = makeTracked();
+    const handoff = makeHandoff();
+    const restartRequestedPids = new Set<number>();
+    const pidToTrackedSession = new Map([[tracked.pid, tracked]]);
+    const requestSignal = vi.fn(async (input: PlannedRunnerRestartSignalRequest) => ({
+      status: await input.shouldSignal() ? 'requested' as const : 'skipped_stale_owner' as const,
+    }));
+    const target = { sessionId: 'sess-1', previousPid: tracked.pid, tracked };
+    const request = {
+      sessionId: 'sess-1', tracked, restartRequestedPids, pidToTrackedSession, requestSignal,
+      isProcessSafeToSignal: async () => true,
+    };
+    const first = requestPlannedRunnerRestart({ ...request, deferral: { kind: 'none' }, completion: {
+      hasPending: () => handoff.has('sess-1', tracked.pid),
+      join: () => handoff.join(target), create: () => handoff.create(target),
+    } });
+    const turnDeferralQueue = createConnectedServiceSwitchDeferralQueue({ timeoutMs: 60_000, disableDeferral: false });
+    turnDeferralQueue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'prompt_or_steer' });
+    const overlap = requestPlannedRunnerRestart({ ...request, deferral: {
+      kind: 'connected_service_switch', source: 'manual', policy: 'defer_until_turn_boundary',
+      target: { serviceId: 'svc', profileId: 'profile', groupId: 'group', generation: 2 }, turnDeferralQueue,
+    } });
+    await Promise.resolve();
+    turnDeferralQueue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'assistant_message_end' });
+    await expect(overlap).resolves.toEqual({ signaled: false, notSignaledReason: 'restart_already_running' });
+    const outcome = { ok: true } as const;
+    handoff.settle('sess-1', tracked.pid, outcome);
+    await expect(first).resolves.toEqual({ signaled: true, completion: outcome });
+    expect(requestSignal).toHaveBeenCalledOnce();
+    expect(restartRequestedPids.has(tracked.pid)).toBe(true);
+  });
+
+  it('observes a slow adopted runner through physical exit for the refresh completion lifetime', async () => {
+    vi.useFakeTimers();
+    try {
+      const tracked = makeTracked();
+      const handoff = makeHandoff();
+      const startedAtMs = Date.now();
+      const target = { sessionId: 'sess-1', previousPid: tracked.pid, tracked };
+      const result = requestPlannedRunnerRestart({
+        sessionId: 'sess-1', tracked, deferral: { kind: 'none' },
+        restartRequestedPids: new Set<number>(), pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        isProcessSafeToSignal: async () => true,
+        requestSignal: async (input) => ({
+          status: await input.shouldSignal() ? 'requested' : 'skipped_stale_owner',
+        }),
+        completion: {
+          hasPending: () => handoff.has('sess-1', tracked.pid),
+          join: () => handoff.join(target),
+          create: () => handoff.create(target),
+        },
+        observeRunnerRetirement: () => {
+          // Process-state reading is the OS boundary; the physical-exit wait and handoff stay real.
+          void waitForTrackedRunnerProcessesExit({
+            runners: [{ pid: tracked.pid }], timeoutMs: 60_000, pollIntervalMs: 500,
+            readRunState: async () => Date.now() - startedAtMs >= 45_000 ? 'dead' : 'servable',
+            onExitObserved: () => handoff.settle('sess-1', tracked.pid, { ok: true, next: { pid: 4343 } }),
+          });
+        },
+      });
+      await vi.advanceTimersByTimeAsync(45_000);
+      await expect(result).resolves.toEqual({ signaled: true, completion: { ok: true, next: { pid: 4343 } } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+});
+
+
+describe('requestPlannedRunnerRestart selected deferral outcome', () => {
+  it('reports the selected signal to same-target callers even when retirement precedes their continuation', async () => {
+    const tracked = makeTracked();
+    const restartRequestedPids = new Set<number>();
+    const pidToTrackedSession = new Map([[tracked.pid, tracked]]);
+    const turnDeferralQueue = createConnectedServiceSwitchDeferralQueue({ timeoutMs: 60_000, disableDeferral: false });
+    const requestSignal = vi.fn(async () => {
+      // The real exit/respawn owner can retire the reservation before deferred callers resume.
+      restartRequestedPids.delete(tracked.pid);
+      return { status: 'requested' as const };
+    });
+    const request = {
+      sessionId: 'sess-1', tracked, restartRequestedPids, pidToTrackedSession,
+      isProcessSafeToSignal: async () => true, requestSignal,
+      deferral: {
+        kind: 'connected_service_switch' as const, source: 'manual' as const,
+        policy: 'defer_until_turn_boundary' as const,
+        target: { serviceId: 'svc', profileId: 'profile', groupId: 'group', generation: 2 }, turnDeferralQueue,
+      },
+    };
+    turnDeferralQueue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'prompt_or_steer' });
+    const first = requestPlannedRunnerRestart(request);
+    const replay = requestPlannedRunnerRestart(request);
+    turnDeferralQueue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'assistant_message_end' });
+
+    await expect(first).resolves.toEqual({ signaled: true });
+    await expect(replay).resolves.toEqual({ signaled: true });
+    expect(requestSignal).toHaveBeenCalledOnce();
+  });
+
+  it('retains the selected signal when session_restarting arrives while its callback finishes', async () => {
+    const tracked = makeTracked();
+    const turnDeferralQueue = createConnectedServiceSwitchDeferralQueue({ timeoutMs: 60_000, disableDeferral: false });
+    const requestSignal = vi.fn(async () => {
+      await turnDeferralQueue.cancelSession('sess-1', 'session_restarting');
+      return { status: 'requested' as const };
+    });
+    turnDeferralQueue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'prompt_or_steer' });
+    const result = requestPlannedRunnerRestart({
+      sessionId: 'sess-1', tracked, restartRequestedPids: new Set<number>(),
+      pidToTrackedSession: new Map([[tracked.pid, tracked]]), requestSignal,
+      isProcessSafeToSignal: async () => true,
+      deferral: {
+        kind: 'connected_service_switch', source: 'manual', policy: 'defer_until_turn_boundary',
+        target: { serviceId: 'svc', profileId: 'profile', groupId: 'group', generation: 2 }, turnDeferralQueue,
+      },
+    });
+    turnDeferralQueue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'assistant_message_end' });
+    await expect(result).resolves.toEqual({ signaled: true });
+  });
+});
+
+
+describe('requestPlannedRunnerRestart cancelled signal admission', () => {
+  it.each(['delay', 'process_identity', 'activity'] as const)('does not signal after the owning queue times out during %s', async (boundary) => {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      const tracked = makeTracked();
+      const restartRequestedPids = new Set<number>();
+      const queue = createConnectedServiceSwitchDeferralQueue({ timeoutMs: 1_000, disableDeferral: false });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      queue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'prompt_or_steer' });
+      const result = requestPlannedRunnerRestart({
+        sessionId: 'sess-1', tracked, restartRequestedPids,
+        pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+        deferral: { kind: 'connected_service_switch', source: 'manual', policy: 'defer_until_turn_boundary',
+          target: { serviceId: 'svc', profileId: 'profile', groupId: 'group', generation: 2 }, turnDeferralQueue: queue },
+        isProcessSafeToSignal: async () => {
+          if (boundary === 'process_identity') await held;
+          return true;
+        },
+        canSignal: async () => {
+          if (boundary === 'activity') await held;
+          return true;
+        },
+        requestSignal: (input) => requestConnectedServiceSessionRestartSignal({
+          pid: tracked.pid, delayMs: boundary === 'delay' ? 1_500 : 0,
+          shouldSignal: input.shouldSignal, onSignalFailure: input.onSignalFailure,
+          onProcessAlreadyMissing: input.onProcessAlreadyMissing,
+        }),
+      });
+      const rejected = expect(result).rejects.toMatchObject({ code: 'switch_execution_timeout' });
+      queue.recordTurnLifecycleEvent({ sessionId: 'sess-1', event: 'assistant_message_end' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await rejected;
+      expect(restartRequestedPids.has(tracked.pid)).toBe(false);
+      release();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(kill).not.toHaveBeenCalled();
+      await queue.cancelAll('daemon_shutdown');
+    } finally {
+      kill.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

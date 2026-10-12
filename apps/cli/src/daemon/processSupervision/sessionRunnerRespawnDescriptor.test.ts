@@ -65,6 +65,33 @@ const REMOTE_DEV_NATIVE_RESPAWN_DESCRIPTOR_V1 = {
 };
 
 describe('sessionRunnerRespawnDescriptor', () => {
+  it('folds predecessor MCP selection into the canonical carrier and preserves both kinds on restart', () => {
+    const mcp = { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['linear'], forceExcludeServerIds: [] };
+    const skills = { v: 1, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: ['native-review'] };
+    const legacy = SessionRunnerRespawnDescriptorV1Schema.parse({ version: 1, directory: '/workspace', mcpSelection: mcp });
+    expect(buildSpawnSessionOptionsFromRespawnDescriptorV1(legacy)).toMatchObject({ capabilitySelection: { mcp } });
+    const canonical = SessionRunnerRespawnDescriptorV1Schema.parse({ version: 1, directory: '/workspace', capabilitySelection: { mcp, skills } });
+    const persisted = writeSessionRunnerRespawnDescriptorForPersistence(canonical);
+    const resumed = buildSpawnSessionOptionsFromRespawnDescriptorV1(SessionRunnerRespawnDescriptorV1Schema.parse(persisted));
+    expect(resumed).toMatchObject({ capabilitySelection: { mcp, skills } });
+    expect(persisted).not.toHaveProperty('mcpSelection');
+  });
+  it('round-trips configured Agent restart identity through persisted descriptor bytes', () => {
+    const descriptor = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions({
+      directory: '/tmp/repo',
+      backendTarget: { kind: 'backend', backendId: 'my-acp', configuredBackendId: 'my-acp', sourceKind: 'configured' },
+    });
+    expect(descriptor).not.toBeNull();
+    const persisted = writeSessionRunnerRespawnDescriptorForPersistence(descriptor!);
+    const restored = SessionRunnerRespawnDescriptorV1Schema.parse(JSON.parse(JSON.stringify(persisted)));
+    expect(restored.agentTarget).toEqual({
+      kind: 'agent',
+      identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+      definitionId: 'my-acp',
+    });
+    expect(buildSpawnSessionOptionsFromRespawnDescriptorV1(restored).agentTarget).toEqual(restored.agentTarget);
+  });
+
   it('retains managed directory classification across daemon restart without retaining recreation consent', () => {
     const descriptor = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions({
       directory: '/private/chat', directoryKind: 'managed', approvedNewDirectoryCreation: true,
@@ -424,7 +451,7 @@ describe('sessionRunnerRespawnDescriptor', () => {
     expect(descriptor).not.toHaveProperty('backendTargetV2');
   });
 
-  it('keeps an old-reader-compatible V1 target while preserving unequal configured V2 identity', () => {
+  it('normalizes configured runtime carriers to the same executable definition', () => {
     const descriptor = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions({
       directory: '/tmp/repo',
       backendTarget: {
@@ -447,12 +474,6 @@ describe('sessionRunnerRespawnDescriptor', () => {
     expect(descriptor).toMatchObject({
       version: 1,
       backendTarget: { kind: 'configuredAcpBackend', backendId: 'kiro' },
-      backendTargetV2: {
-        kind: 'backend',
-        backendId: 'customAcpRuntimeCarrier',
-        configuredBackendId: 'kiro',
-        sourceKind: 'configured',
-      },
       modelId: 'native-configured',
       modelUpdatedAt: 10,
     });
@@ -460,19 +481,19 @@ describe('sessionRunnerRespawnDescriptor', () => {
     expect(buildSpawnSessionOptionsFromRespawnDescriptorV1(descriptor!)).toMatchObject({
       backendTarget: {
         kind: 'backend',
-        backendId: 'customAcpRuntimeCarrier',
+        backendId: 'kiro',
         configuredBackendId: 'kiro',
         sourceKind: 'configured',
       },
       modelSelection: {
         ref: {
-          agentTargetKey: 'backend:customAcpRuntimeCarrier:configured:kiro',
+          agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:kiro',
         },
       },
     });
   });
 
-  it('fails closed on missing, invalid, or contradictory native V2 target shadows', () => {
+  it('imports equivalent configured target carriers and rejects contradictory definitions', () => {
     const backendTarget = { kind: 'configuredAcpBackend' as const, backendId: 'kiro' };
     const backendTargetV2 = {
       kind: 'backend' as const,
@@ -497,11 +518,20 @@ describe('sessionRunnerRespawnDescriptor', () => {
       backendTargetV2,
       modelSelection,
     }).success).toBe(true);
-    expect(SessionRunnerRespawnDescriptorV1Schema.safeParse({
+    expect(SessionRunnerRespawnDescriptorV1Schema.parse({
       version: 1,
       directory: '/tmp/repo',
       backendTarget,
       modelSelection,
+    }).modelSelection?.ref.agentTargetKey).toBe('agent:happier.agent.custom-acp/custom-acp:definition:kiro');
+    expect(SessionRunnerRespawnDescriptorV1Schema.safeParse({
+      version: 1,
+      directory: '/tmp/repo',
+      backendTarget,
+      modelSelection: {
+        ...modelSelection,
+        ref: { ...modelSelection.ref, agentTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot' },
+      },
     }).success).toBe(false);
     expect(SessionRunnerRespawnDescriptorV1Schema.safeParse({
       version: 1,

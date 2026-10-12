@@ -1,6 +1,13 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import type { TrackedSession } from '../types';
 
 type Attempt<TCompletion> = Readonly<{
+  promise: Promise<TCompletion>;
+  tracked: TrackedSession;
+  timeoutMs: number | null;
+  transientSpawnOptions: SpawnSessionOptions | undefined;
   settle: (completion: TCompletion) => void;
   takeTransientSpawnOptions: () => SpawnSessionOptions | undefined;
   transferToPid: (pid: number) => void;
@@ -26,6 +33,7 @@ export function createVersionRuntimeRefreshAttemptHandoff<TCompletion>(params: R
   const create = (input: Readonly<{
     sessionId: string;
     previousPid: number;
+    tracked: TrackedSession;
     transientSpawnOptions?: SpawnSessionOptions;
     /**
      * `null` delegates completion exclusively to the canonical respawn owner.
@@ -68,6 +76,10 @@ export function createVersionRuntimeRefreshAttemptHandoff<TCompletion>(params: R
     const attemptKey = key(input.sessionId, input.previousPid);
     attemptsBySessionAndPid.get(attemptKey)?.settle(params.supersededCompletion);
     attemptsBySessionAndPid.set(attemptKey, {
+      promise,
+      tracked: input.tracked,
+      timeoutMs,
+      transientSpawnOptions: input.transientSpawnOptions,
       settle: settleAttempt,
       takeTransientSpawnOptions: () => {
         const value = pendingTransientSpawnOptions;
@@ -93,6 +105,23 @@ export function createVersionRuntimeRefreshAttemptHandoff<TCompletion>(params: R
   return {
     create,
     settle,
+    has: (sessionId: string, pid: number): boolean => attemptsBySessionAndPid.has(key(sessionId, pid)),
+    join: (input: Readonly<{
+      sessionId: string;
+      previousPid: number;
+      tracked: TrackedSession;
+      transientSpawnOptions?: SpawnSessionOptions;
+      timeoutMs?: number | null;
+    }>): Promise<TCompletion> | null => {
+      const timeoutMs = input.timeoutMs === undefined ? params.timeoutMs : input.timeoutMs;
+      const attempt = attemptsBySessionAndPid.get(key(input.sessionId, input.previousPid));
+      // Source cutovers carry callback-owned currentness beyond a spawn target. Their existing
+      // pending-cutover owner decides equivalence; a public refresh cannot acknowledge that work.
+      if (timeoutMs === null || !attempt || attempt.timeoutMs !== timeoutMs) return null;
+      if (attempt.tracked !== input.tracked) return null;
+      if (!isDeepStrictEqual(attempt.transientSpawnOptions, input.transientSpawnOptions)) return null;
+      return attempt.promise;
+    },
     takeTransientSpawnOptions: (sessionId: string, pid: number): SpawnSessionOptions | undefined => {
       return attemptsBySessionAndPid.get(key(sessionId, pid))?.takeTransientSpawnOptions();
     },
