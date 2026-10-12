@@ -1166,6 +1166,7 @@ await withJsonOwnerFileLock({
         pid: 999_999,
         providerId: 'claude',
         acquiredAt: '1970-01-01T00:00:01.000Z',
+        retired: true,
       }), 'utf8');
 
       await expect(withJsonOwnerFileLock({

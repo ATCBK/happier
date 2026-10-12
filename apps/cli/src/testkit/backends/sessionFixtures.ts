@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { configuration } from '@/configuration';
 import { registerPluginCatalogSignal } from '@/api/session/client/registerPluginCatalogSignal';
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 
@@ -152,18 +153,25 @@ export function createApiSessionClientFixture(options?: {
 
 export function createMutableApiSessionClientFixture<TMetadata extends Record<string, unknown> = Metadata>(options?: {
     sessionId?: string;
+    serverBinding?: ReturnType<ApiSessionClient['getServerBinding']>;
     metadata?: TMetadata | null;
     metadataPermissionMode?: PermissionMode;
     agentState?: AgentState;
     overrides?: Partial<ApiSessionClient>;
 }): MutableApiSessionClientFixture<TMetadata> {
     const sessionId = options?.sessionId ?? 'test-session-id';
+    // Mirror the ApiSessionClient transport boundary's immutable construction
+    // binding; later ambient configuration cannot move this Session's Home.
+    const serverBinding = Object.freeze({
+        ...(options?.serverBinding ?? { serverId: configuration.activeServerId, serverUrl: configuration.serverUrl }),
+    });
     let metadata = options?.metadata
         ?? ((options?.metadataPermissionMode
             ? createTestMetadata({ permissionMode: options.metadataPermissionMode })
             : null) as TMetadata | null);
     let agentState = options?.agentState ?? {};
     const events = new EventEmitter();
+    let closed = false;
     const rpcHandlerManager = createRpcHandlerManager({
         scopePrefix: sessionId,
         encryptionKey: new Uint8Array(32),
@@ -174,6 +182,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
 
     const fixture = {
         sessionId,
+        getServerBinding: () => serverBinding,
         rpcHandlerManager,
         subscribeDaemonPluginCatalogChanges: registerPluginCatalogSignal({ rpcHandlerManager, events }),
         getEphemeralStreamConnectionEpoch: () => 0,
@@ -206,8 +215,23 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
         shouldAttemptPendingMaterialization() {
             return true;
         },
-        async waitForMetadataUpdate() {
-            return false;
+        waitForMetadataUpdate(abortSignal?: AbortSignal): Promise<boolean> {
+            if (closed || abortSignal?.aborted) return Promise.resolve(false);
+            // Mirror the real Session interaction port's offline lifecycle:
+            // metadata wakes the reader; caller abort or local close releases it.
+            return new Promise((resolve) => {
+                const settle = (updated: boolean) => {
+                    events.off('metadata-updated', onUpdate);
+                    events.off('local-closed', onClosed);
+                    abortSignal?.removeEventListener('abort', onClosed);
+                    resolve(updated);
+                };
+                const onUpdate = () => settle(true);
+                const onClosed = () => settle(false);
+                events.on('metadata-updated', onUpdate);
+                events.on('local-closed', onClosed);
+                abortSignal?.addEventListener('abort', onClosed, { once: true });
+            });
         },
         async refreshSessionSnapshotFromServerBestEffort() {},
         observeProviderInputSettlement() {},
@@ -219,6 +243,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             return agentState;
         },
         async close() {
+            closed = true;
             events.emit('local-closed');
         },
         on(event: string, listener: (...args: unknown[]) => void) {

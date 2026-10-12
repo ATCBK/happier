@@ -1,3 +1,5 @@
+import { readPreferredHostName } from '@happier-dev/cli-common/process';
+
 import type { Metadata } from '@/api/types';
 
 export function createTestMetadata(overrides?: Partial<Metadata>): Metadata {
@@ -11,4 +13,9 @@ export function createTestMetadata(overrides?: Partial<Metadata>): Metadata {
     flavor: 'codex',
     ...overrides,
   };
+}
+
+/** Session locality on this test worker, rather than the generic foreign host. */
+export async function createLocalTestMetadata(overrides?: Partial<Metadata>): Promise<Metadata> {
+  return createTestMetadata({ host: await readPreferredHostName(), ...overrides });
 }

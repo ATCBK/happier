@@ -8,6 +8,9 @@
   "references": [
     {
       "path": "./tsconfig.source.json"
+    },
+    {
+      "path": "../ui/tsconfig.source.json"
     }
   ],
   "include": [
@@ -20,7 +23,6 @@
   ],
   "exclude": [
     "node_modules",
-    "src/**/*.tmp.test.ts",
-    "**/*.composed.*"
+    "src/**/*.tmp.test.ts"
   ]
 }

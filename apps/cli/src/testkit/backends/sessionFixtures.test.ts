@@ -150,6 +150,35 @@ describe('session fixtures', () => {
         expect(session.sessionId).toBe('session-port-1');
     });
 
+    it('waits for mutable Session metadata and releases waits on abort or close', async () => {
+        const mod = await import('./sessionFixtures');
+        const session = mod.createMutableApiSessionClientFixture({ metadata: createTestMetadata() });
+        const changed = session.waitForMetadataUpdate();
+        session.updateMetadata((current) => current);
+        await expect(changed).resolves.toBe(true);
+
+        const abort = new AbortController();
+        const aborted = session.waitForMetadataUpdate(abort.signal);
+        abort.abort();
+        await expect(aborted).resolves.toBe(false);
+        await expect(session.waitForMetadataUpdate(abort.signal)).resolves.toBe(false);
+
+        const closed = session.waitForMetadataUpdate();
+        await session.close();
+        await expect(closed).resolves.toBe(false);
+        await expect(session.waitForMetadataUpdate()).resolves.toBe(false);
+    });
+
+    it('retains the immutable server binding captured when the Session is constructed', async () => {
+        const mod = await import('./sessionFixtures');
+        const binding = { serverId: 'fixture-home', serverUrl: 'https://fixture-home.example' };
+        const session = mod.createMutableApiSessionClientFixture({ serverBinding: binding });
+        binding.serverUrl = 'https://another-home.example';
+
+        expect(session.getServerBinding()).toEqual({ serverId: 'fixture-home', serverUrl: 'https://fixture-home.example' });
+        expect(Object.isFrozen(session.getServerBinding())).toBe(true);
+    });
+
     it('creates basic session clients with selective overrides', async () => {
         const mod = await import('./sessionFixtures');
         const seen: string[] = [];

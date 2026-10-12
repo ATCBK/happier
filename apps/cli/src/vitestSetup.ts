@@ -3,6 +3,16 @@ import { join } from 'node:path';
 import { afterAll } from 'vitest';
 import { createTestTempDirectory } from '../../../scripts/testing/process/temporaryDirectories.mjs';
 
+// A stack-launched test worker must not borrow that stack's selected Home or
+// process identity. Cases that exercise these inputs set them after setup.
+for (const key of Object.keys(process.env)) {
+  if (key === 'HAPPIER_ACTIVE_SERVER_ID' || key === 'HAPPIER_SERVER_ID'
+    || key === 'HAPPIER_LOCAL_SERVER_URL' || key === 'HAPPIER_PUBLIC_SERVER_URL'
+    || key === 'HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID' || key.startsWith('HAPPIER_STACK_')) {
+    delete process.env[key];
+  }
+}
+
 // Many CLI tests touch persistence under `HAPPIER_HOME_DIR`. Our `.env.integration-test`
 // sets a shared value, which can cause cross-process races when Vitest runs with multiple
 // workers. Provide a per-process default home directory instead; individual tests may

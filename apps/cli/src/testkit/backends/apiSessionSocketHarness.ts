@@ -161,6 +161,7 @@ export function createSessionTurnMutationAppliedHttpResponse(mutation: SessionTu
 export function createSessionRuntimeActivityHomeStub(options: Readonly<{
     machineId: string;
     committedFenceMs?: number;
+    publisherGeneration?: string;
     now?: () => number;
 }>): Readonly<{ answer(event: string, payload: unknown): unknown | null }> {
     const projections = new Map<string, SessionRuntimeActivityProjection>();
@@ -223,6 +224,7 @@ export function createSessionRuntimeActivityHomeStub(options: Readonly<{
                     publisherPrecondition: {
                         machineId: options.machineId,
                         committedFenceMs: options.committedFenceMs ?? 1,
+                        publisherGeneration: options.publisherGeneration ?? '1',
                     },
                 });
             }
