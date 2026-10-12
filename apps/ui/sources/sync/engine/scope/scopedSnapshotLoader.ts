@@ -123,10 +123,6 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                             const incumbent = incumbentMaintenance;
                             if (incumbent?.result.isMaintenanceCurrent() !== true
                                 || maintenance.get(target.key) !== incumbent) return false;
-                            // This read can include newly activated rows or source roots.
-                            // Resume their cleanup after the incumbent settles rather than
-                            // treating its older proof as completion for the newer read.
-                            incumbent.reloadAfterMaintenance = true;
                             return true;
                         };
                         const result = await Promise.resolve().then(async () => await params.load(observed.get(target.key)?.target ?? target, {
@@ -156,7 +152,8 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                         // captured Account. Its short completion must not replace the
                         // original, still-running cleanup promise.
                         if (result && maintenance.get(target.key)?.result.isMaintenanceCurrent() !== true) {
-                            const entry = { result, reloadAfterMaintenance: false };
+                            // A wake can precede early publication and registration here.
+                            const entry = { result, reloadAfterMaintenance: reloadAfterInFlight.has(target.key) };
                             maintenance.set(target.key, entry);
                             void result.maintenance.catch(() => {}).finally(() => {
                                 if (maintenance.get(target.key) !== entry) return;
@@ -194,6 +191,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
     }
 
     function requestReload(target: TTarget): void {
+        requireMaintenanceReload(target);
         if (inFlight.has(target.key)) {
             reloadAfterInFlight.add(target.key);
             return;
@@ -205,12 +203,22 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
         const observedTarget = observed.get(target.key);
         if (observedTarget) observedTarget.target = target;
         params.invalidateTarget(target);
+        requireMaintenanceReload(target);
         const existing = inFlight.get(target.key);
         if (existing) {
             reloadAfterInFlight.add(target.key);
             return existing;
         }
         return loadOnce(target);
+    }
+
+    function requireMaintenanceReload(target: TTarget): void {
+        const incumbent = maintenance.get(target.key);
+        if (incumbent?.result.isMaintenanceCurrent() === true) {
+            // A changed demand can reveal new source/authority after this cleanup
+            // started. Ordinary reads joining it do not schedule another pass.
+            incumbent.reloadAfterMaintenance = true;
+        }
     }
 
     function handleWake(serverId: string): void {
@@ -266,6 +274,7 @@ export function createScopedSnapshotLoader<TTarget extends ScopedLoadTarget>(par
                 // Retained rows remain useful, but their mutation decisions are
                 // withdrawn synchronously before the remounted surface renders.
                 params.invalidateTarget(target);
+                requireMaintenanceReload(target);
             }
             if (returnedAfterObserverGap && inFlight.has(target.key)) {
                 // Joining a read that began before the observer-free interval

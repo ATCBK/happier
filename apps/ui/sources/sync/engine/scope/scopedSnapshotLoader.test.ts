@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { createScopedSnapshotLoader } from './scopedSnapshotLoader';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
+import { loadMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
+import { normalizeAccountSettingsHistoryClientV1 } from '@happier-dev/protocol/account/settings/accountSettingsHistoryClientV1';
+import { AccountEncryptionCurrentnessResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
+import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 
 type HomeCredentialMutationListener = (event: Readonly<{
     kind: 'credentials_set' | 'credentials_removed';
@@ -37,6 +44,120 @@ vi.mock('@/auth/storage/tokenStorage', () => ({
 }));
 
 describe('createScopedSnapshotLoader', () => {
+    it.each(['refresh', 'invalidate', 'wake', 'early-wake', 'observer-gap', 'retired'] as const)(
+        'only repeats MCP history maintenance for a changed demand (%s)', async demand => {
+            const target = { key: 'mcp:home-account', serverId: 'home' };
+            let accountCurrent = true;
+            let revision = 4;
+            let publication: McpServerCatalogSnapshotV1 = { status: 'loading' };
+            const detailRequests: string[] = [];
+            const completedPasses: string[] = [];
+            let earlyWakeSent = false;
+            let releaseDetail!: () => void;
+            const heldDetail = new Promise<void>(resolve => { releaseDetail = resolve; });
+            const loader = createScopedSnapshotLoader({
+                load: async (_target, context) => context.readWithMaintenance({
+                    read: ({ onReady, hasPendingCleanup }) => loadMcpServerCatalogV1({ mode: 'plain', material: null,
+                        readRow: async () => ({ status: 'deleted', revision }), hasPendingCleanup,
+                        onReadyBeforeCleanup: async snapshot => {
+                            if (demand === 'early-wake' && !earlyWakeSent) {
+                                earlyWakeSent = true;
+                                revision = 5;
+                                publishHomeAccountChange(target.serverId);
+                            }
+                            onReady(snapshot, () => accountCurrent);
+                        },
+                        transfer: {
+                            readSourceSnapshot: async () => ({ raw: {}, version: 503 }),
+                            initializeCatalog: async () => { throw new Error('Active MCP authority must not initialize'); },
+                            replaceSource: async () => { throw new Error('No retained source needs rewriting'); },
+                            normalizeHistory: async destinationAuthority => {
+                                // The catalog and history owners stay real; only the captured
+                                // Home HTTP transport holds/fails this retained detail response.
+                                const result = await normalizeAccountSettingsHistoryClientV1({ destinationAuthority, ports: {
+                                    isCurrent: () => accountCurrent,
+                                    readCurrentness: async () => AccountEncryptionCurrentnessResponseSchema.parse({
+                                        mode: 'plain', version: 1, settingsVersion: 503, updatedAt: 1,
+                                        signingKeyFingerprint: null, contentKeyFingerprint: null,
+                                    }),
+                                    resolveTransferMaterial: () => null,
+                                    openSnapshot: () => { throw new Error('The failed detail cannot be opened'); },
+                                    resealSnapshot: () => { throw new Error('The failed detail cannot be rewritten'); },
+                                    unavailable: (_status, message): never => { throw new Error(message); },
+                                    request: async path => {
+                                        if (path === PROFILE_TRANSFER_ROUTE_V1) return { status: 200, data: { status: 'absent' } };
+                                        if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [] } };
+                                        if (path === MCP_SERVER_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: { status: 'deleted', revision } };
+                                        if (path.startsWith('/v1/account/entity-rows/') || path === NOTIFICATION_CHANNELS_ROUTE_V1) return { status: 404, data: { error: 'not_found' } };
+                                        if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [{
+                                            version: 502, createdAt: '2026-01-01T00:00:00.000Z', contentKind: 'plain', byteLength: 20,
+                                        }] } };
+                                        if (path === '/v2/account/settings/history/502') {
+                                            detailRequests.push(path);
+                                            await heldDetail;
+                                            return { status: 503, data: { error: 'unavailable' } };
+                                        }
+                                        throw new Error(`Unexpected Home request: ${path}`);
+                                    },
+                                } });
+                                completedPasses.push(result.status);
+                                return result;
+                            },
+                        },
+                    }),
+                    publish: value => { publication = value; },
+                    getPublication: () => publication,
+                }),
+                shouldLoadOnObserve: () => true,
+                invalidateServer: () => {},
+                invalidateTarget: () => {},
+            });
+            let release = loader.observe(target);
+            try {
+                await loader.refresh(target);
+                await vi.waitFor(() => expect(detailRequests).toHaveLength(1));
+                expect(publication).toMatchObject({ status: 'ready', revision: demand === 'early-wake' ? 5 : 4, authority: 'active' });
+                if (demand === 'refresh') await loader.refresh(target);
+                else if (demand === 'wake') {
+                    revision = 5;
+                    publishHomeAccountChange(target.serverId);
+                    await loader.refresh(target);
+                } else if (demand === 'observer-gap') {
+                    release();
+                    revision = 5;
+                    release = loader.observe(target);
+                    await loader.refresh(target);
+                } else if (demand !== 'early-wake') {
+                    revision = 5;
+                    await loader.invalidate(target);
+                    if (demand === 'retired') accountCurrent = false;
+                }
+                releaseDetail();
+                // Drain transport/normalizer/loader continuations, including an automatic
+                // follow-up if one was queued. No additional caller demand is introduced.
+                await new Promise<void>(resolve => setImmediate(resolve));
+                const expectedPasses = demand === 'refresh' || demand === 'retired' ? 1 : 2;
+                expect(detailRequests).toHaveLength(expectedPasses);
+                if (demand !== 'retired') {
+                    expect(completedPasses).toEqual(Array(expectedPasses).fill('cleanup-pending'));
+                    expect(publication).toMatchObject({ status: 'ready', revision: demand === 'refresh' ? 4 : 5, authority: 'active' });
+                }
+                if (demand === 'refresh') {
+                    // Incomplete privacy maintenance remains retryable on a later
+                    // deliberate demand; no completion cache suppresses it.
+                    await loader.refresh(target);
+                    await new Promise<void>(resolve => setImmediate(resolve));
+                    expect(detailRequests).toHaveLength(2);
+                    expect(completedPasses).toEqual(['cleanup-pending', 'cleanup-pending']);
+                    expect(publication).toMatchObject({ cleanup: { status: 'cleanup-pending', reason: 'history-incomplete' } });
+                }
+            } finally {
+                releaseDetail();
+                release();
+                loader.resetForTests();
+            }
+        },
+    );
     it('uses the newly admitted context on the same target trailing read and subsequent wakes', async () => {
         type Target = Readonly<{ key: string; serverId: string; machineId: string | null }>;
         const reads: Array<string | null> = [];
