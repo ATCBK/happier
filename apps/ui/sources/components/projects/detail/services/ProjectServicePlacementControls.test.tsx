@@ -92,6 +92,12 @@ async function setup(options: Readonly<{
     'https://service-placement-ui.test',
     {
       handleRequest: async (path, init) => {
+        // Binding observation now reads the real Machine inventory to qualify child
+        // topology. These are ordinary Machines; a missing HTTP fixture is not
+        // evidence that their native service custody is unavailable.
+        if (path === '/v1/machines') return json(['devbox', 'hz-build-1', 'pool-worker'].map(id => ({
+          id, revokedAt: null, replacedByMachineId: null,
+        })));
         if (path === '/v1/projects/execution/config/read' && placementReadsFail) return json({ error: 'unavailable' }, 503);
         if (path === '/v1/projects/execution/config/read')
           return json(options.saved
