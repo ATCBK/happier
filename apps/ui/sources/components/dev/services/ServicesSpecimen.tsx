@@ -21,6 +21,11 @@ import {
     createLocalServiceLauncherState,
     type LocalServiceLaunchTarget,
 } from '@/sync/domains/local/services/launch';
+import {
+    applyLocalServicePublicPreviewSnapshot,
+    createLocalServicePublicPreviewState,
+} from '@/sync/domains/local/services/publicPreview/store';
+import type { LocalServicePublicPreviewActions } from '@/components/sessions/localServices/publicPreviewActions';
 import { t } from '@/text';
 
 /**
@@ -32,7 +37,7 @@ import { t } from '@/text';
  */
 const MACHINE = 'machine-specimen';
 const SESSION = 'session-specimen';
-const NOOP = async () => undefined;
+const NOOP = async () => ({ status: 'succeeded' as const });
 
 function inventoryRow(id: string, port: number, command: string): LocalServiceInventoryRow {
     return {
@@ -60,6 +65,7 @@ function runningTarget(id: string, title: string, port: number, sessionId: strin
     return {
         id: `inventory:${id}`,
         source: 'inventory_entry',
+        sourceClass: { kind: 'inventory_entry', inventoryEntryId: id },
         machineId: MACHINE,
         ...(sessionId ? { sessionId } : {}),
         title,
@@ -67,9 +73,10 @@ function runningTarget(id: string, title: string, port: number, sessionId: strin
         state: 'available',
         actions: ['open', 'terminate_detected'],
         browserTarget: {
-            kind: 'externalUrl',
-            targetId: `inventory-loopback:${id}`,
-            url: `http://127.0.0.1:${port}/`,
+            kind: 'localServicePreview',
+            targetId: `preview-${id}`,
+            machineId: MACHINE,
+            ...(sessionId ? { sessionId } : {}),
             display: { title, addressLabel: `localhost:${port}` },
         },
     } as LocalServiceLaunchTarget;
@@ -92,9 +99,45 @@ const LAUNCHER = applyLocalServiceLauncherSnapshot(createLocalServiceLauncherSta
     targets: [
         runningTarget('web', 'web', 5173, SESSION),
         runningTarget('storybook', 'storybook', 6006, undefined),
-        { id: 'package:docs:dev', source: 'package_script', sourceClass: { kind: 'package_script', runTargetId: 'docs:dev', packageName: 'docs', scriptName: 'dev' }, machineId: MACHINE, title: 'docs', confidence: 'medium', state: 'available', actions: ['start'], commandPreview: 'yarn docs:dev' } as LocalServiceLaunchTarget,
+        { id: 'package:docs:dev', source: 'package_script', sourceClass: { kind: 'package_script', runTargetId: 'docs:dev', packageName: 'docs', scriptName: 'dev' }, machineId: MACHINE, workspace: { serverId: 'home-specimen', machineId: MACHINE, workspaceId: 'checkout', rootPath: '/work/happier' }, declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'docs' } }, title: 'docs', confidence: 'medium', state: 'available', actions: [], commandPreview: 'yarn docs:dev' } as LocalServiceLaunchTarget,
     ],
 });
+
+/** The server allows both link types and up to a day; `web` already has a live link, `storybook` has none. */
+const PREVIEW_NOW_MS = Date.now();
+const PUBLIC_PREVIEW = applyLocalServicePublicPreviewSnapshot(createLocalServicePublicPreviewState(), {
+    v: 1,
+    machineId: MACHINE,
+    generatedAt: PREVIEW_NOW_MS,
+    refreshState: 'idle',
+    policy: {
+        enabled: true,
+        allowedModes: ['secret_link', 'authenticated'],
+        maxTtlMs: 24 * 60 * 60 * 1000,
+        maxConcurrentExposures: 3,
+        dnsTlsRequired: true,
+        auditRequired: true,
+        rateLimitProfileIds: ['default'],
+    },
+    exposures: [{
+        exposureId: 'exposure-web',
+        previewId: 'preview-web',
+        machineId: MACHINE,
+        mode: 'secret_link',
+        state: 'active',
+        publicUrl: 'https://p-7f3a9c.preview.happier.dev',
+        issuedAt: PREVIEW_NOW_MS,
+        expiresAt: PREVIEW_NOW_MS + 42 * 60 * 1000,
+        auditEventIds: [],
+        rateLimitProfileId: 'default',
+    }],
+    diagnostics: [],
+});
+const PUBLIC_PREVIEW_ACTIONS: LocalServicePublicPreviewActions = {
+    create: async () => undefined,
+    copyUrl: async () => true,
+    revoke: async () => undefined,
+};
 
 const MACHINE_ONLINE = { name: 'MacBook Pro', homeDir: null, reachability: 'reachable' as const };
 
@@ -119,6 +162,7 @@ export function ServicesSpecimen(props: Readonly<{ phone: boolean }>): React.Rea
             severity: 'info',
             undo: { label: t('sessionBoard.companion.actions.undo'), run: () => undefined },
         });
+        return { status: 'succeeded' as const };
     }, []);
     return (
         <SurfaceStateSizeProvider size={props.phone ? 'phone' : 'pane'}>
@@ -139,6 +183,8 @@ export function ServicesSpecimen(props: Readonly<{ phone: boolean }>): React.Rea
                                 onTerminateDetectedService={NOOP}
                                 onForgetDetectedService={onForget}
                                 onCopyServiceUrl={async () => true}
+                                publicPreviewState={PUBLIC_PREVIEW}
+                                publicPreviewActions={PUBLIC_PREVIEW_ACTIONS}
                                 onRefresh={() => undefined}
                                 testID="services-specimen-pane"
                             />
