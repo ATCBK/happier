@@ -1,4 +1,5 @@
 import { NonBlankOpaqueIdentifierSchema } from '@happier-dev/protocol/strings/opaqueIdentifier';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
@@ -62,8 +63,8 @@ const StoredLocalAgentResumeRecordV1Schema = z.object({
      * conversation already covers, so a later return replays only what happened
      * while it was away (`AM-26`).
      *
-     * REQUIRED. The schema is `.strict()`, so no record written before this
-     * field existed parses at all; an optional bound would add a second meaning
+     * REQUIRED. No record written before this field existed parses at all;
+     * an optional bound would add a second meaning
      * with no producer. A record that fails to parse degrades to a fresh target
      * with the FULL replay — one switch per (Session, Agent), self-healing on
      * the next departure.
@@ -117,7 +118,7 @@ export function createLocalSessionHandoffMetadataStore(params: Readonly<{
             return null;
         }
 
-        const parsed = StoredLocalAgentResumeRecordV1Schema.safeParse(parsedJson);
+        const parsed = createStoredReadSchema(StoredLocalAgentResumeRecordV1Schema).safeParse(parsedJson);
         if (!parsed.success) return null;
 
         // The filename is a hash, so the plaintext keys are the only thing that

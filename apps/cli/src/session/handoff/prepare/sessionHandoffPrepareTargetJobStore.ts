@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rename } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { SessionHandoffPrepareTargetRequestSchema, SessionHandoffPrepareTargetResultGetSuccessResponseSchema } from '@happier-dev/protocol/sessions/control/handoff/handoffSchemas';
 import { SessionHandoffStatusSchema } from '@happier-dev/protocol/sessions/control/handoff/handoffStatus';
@@ -210,6 +211,26 @@ const SessionHandoffPrepareTargetJobRecordSchema = z.union([
 
 export type SessionHandoffPrepareTargetJobRecord = z.output<typeof SessionHandoffPrepareTargetJobRecordSchema>;
 export type SessionHandoffPrepareTargetJobRecordV2 = z.output<typeof SessionHandoffPrepareTargetJobRecordV2Schema>;
+
+/** Terminal receipts, not elapsed time or failure, close retained transfer custody. */
+function readSessionHandoffStorageState(record: SessionHandoffPrepareTargetJobRecord | null): 'closed' | 'in_use' | 'unknown' {
+  if (!record) return 'unknown';
+  if (record.schemaVersion === SESSION_HANDOFF_PREPARE_TARGET_JOB_SCHEMA_VERSION_V2) {
+    if (record.terminal.status === 'completed' || record.terminal.status === 'aborted') return 'closed';
+    if (record.terminal.status === 'aborting') return 'in_use';
+  } else if (record.status.status === 'completed' || record.status.status === 'aborted') {
+    return 'closed';
+  }
+  switch (record.status.status) {
+    case 'pending':
+    case 'ready_for_cutover':
+    case 'in_progress':
+    case 'awaiting_user_resume':
+      return 'in_use';
+    default:
+      return 'unknown';
+  }
+}
 export type SessionHandoffPrepareTargetJobRecordInput = Omit<
   z.output<typeof SessionHandoffPrepareTargetJobRecordV1Schema>,
   'schemaVersion'
@@ -591,18 +612,18 @@ async function quarantineInvalidPrepareTargetJobFile(filePath: string): Promise<
  * aside once so one torn job cannot block recovery of every valid job after
  * each daemon restart. The exact bytes remain available for diagnosis.
  */
-async function readPrepareTargetJobFileUnlocked(filePath: string): Promise<SessionHandoffPrepareTargetJobRecord | null> {
+async function readPrepareTargetJobFileUnlocked(filePath: string, quarantineInvalid = true): Promise<SessionHandoffPrepareTargetJobRecord | null> {
   try {
     const raw = await readFile(filePath, 'utf8');
     let decoded: unknown;
     try {
       decoded = JSON.parse(raw) as unknown;
     } catch {
-      await quarantineInvalidPrepareTargetJobFile(filePath);
+      if (quarantineInvalid) await quarantineInvalidPrepareTargetJobFile(filePath);
       return null;
     }
     const value = normalizePredecessorV2RecoveryActions(decoded);
-    const parsed = SessionHandoffPrepareTargetJobRecordSchema.safeParse(value);
+    const parsed = createStoredReadSchema(SessionHandoffPrepareTargetJobRecordSchema).safeParse(value);
     return parsed.success ? parsed.data : null;
   } catch (error) {
     const nodeError = error as NodeJS.ErrnoException;
@@ -611,6 +632,39 @@ async function readPrepareTargetJobFileUnlocked(filePath: string): Promise<Sessi
     }
     throw error;
   }
+}
+
+function selectHandoffJob(records: readonly SessionHandoffPrepareTargetJobRecord[], handoffId: string): SessionHandoffPrepareTargetJobRecord | null {
+  let latestPrepare: SessionHandoffPrepareTargetJobRecord | null = null;
+  let latestSource: SessionHandoffPrepareTargetJobRecord | null = null;
+  let latestFallback: SessionHandoffPrepareTargetJobRecord | null = null;
+  for (const record of records) {
+    if (record.handoffId !== handoffId) continue;
+    if (record.jobId.startsWith('prepare_')) {
+      if (!latestPrepare || record.updatedAtMs > latestPrepare.updatedAtMs) latestPrepare = record;
+    } else if (record.jobId.startsWith('source_')) {
+      if (!latestSource || record.updatedAtMs > latestSource.updatedAtMs) latestSource = record;
+    } else if (!latestFallback || record.updatedAtMs > latestFallback.updatedAtMs) {
+      latestFallback = record;
+    }
+  }
+  return latestPrepare ?? latestSource ?? latestFallback;
+}
+
+/** Observational read: do not acquire mutation locks, create directories or quarantine bytes. */
+export async function readSessionHandoffStorageStates(input: Readonly<{ activeServerDir: string }>): Promise<ReadonlyMap<string, 'closed' | 'in_use' | 'unknown'>> {
+  const directory = join(input.activeServerDir, 'session-handoff', 'prepare-target-jobs');
+  const directoryStat = await lstat(directory).catch(() => null);
+  if (!directoryStat?.isDirectory() || directoryStat.isSymbolicLink()) return new Map();
+  const records: SessionHandoffPrepareTargetJobRecord[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) continue;
+    const record = await readPrepareTargetJobFileUnlocked(join(directory, entry.name), false);
+    if (record && entry.name === `${record.jobId}.json`) records.push(record);
+  }
+  return new Map([...new Set(records.map(record => record.handoffId))].map(handoffId => [
+    handoffId, readSessionHandoffStorageState(selectHandoffJob(records, handoffId)),
+  ]));
 }
 
 async function readPrepareTargetJobFile(filePath: string): Promise<SessionHandoffPrepareTargetJobRecord | null> {
@@ -705,36 +759,13 @@ export function createSessionHandoffPrepareTargetJobStore(input: Readonly<{
     async findByHandoffId(handoffId) {
       await mkdir(jobsDirectory, { recursive: true });
       const entries = await readdir(jobsDirectory);
-      let latestPrepareMatch: SessionHandoffPrepareTargetJobRecord | null = null;
-      let latestSourceMatch: SessionHandoffPrepareTargetJobRecord | null = null;
-      let latestFallbackMatch: SessionHandoffPrepareTargetJobRecord | null = null;
+      const records: SessionHandoffPrepareTargetJobRecord[] = [];
       for (const entry of entries) {
         if (!entry.endsWith('.json')) continue;
         const record = await readPrepareTargetJobFile(join(jobsDirectory, entry));
-        if (!record || record.handoffId !== handoffId) continue;
-        const bucket =
-          record.jobId.startsWith('prepare_')
-            ? 'prepare'
-            : record.jobId.startsWith('source_')
-              ? 'source'
-              : 'fallback';
-        if (bucket === 'prepare') {
-          if (!latestPrepareMatch || record.updatedAtMs > latestPrepareMatch.updatedAtMs) {
-            latestPrepareMatch = record;
-          }
-          continue;
-        }
-        if (bucket === 'source') {
-          if (!latestSourceMatch || record.updatedAtMs > latestSourceMatch.updatedAtMs) {
-            latestSourceMatch = record;
-          }
-          continue;
-        }
-        if (!latestFallbackMatch || record.updatedAtMs > latestFallbackMatch.updatedAtMs) {
-          latestFallbackMatch = record;
-        }
+        if (record) records.push(record);
       }
-      return latestPrepareMatch ?? latestSourceMatch ?? latestFallbackMatch;
+      return selectHandoffJob(records, handoffId);
     },
     async list(input) {
       await mkdir(jobsDirectory, { recursive: true });

@@ -106,6 +106,18 @@ describe('localSessionHandoffMetadataStore — inactive Agent native record', ()
     })).resolves.toBeNull();
   });
 
+  it('reads the native resume identity and boundary despite retired stored fields', async () => {
+    const { store } = await createStore();
+    const key = { happierSessionId: 'session-1', agentId: 'claude' } as const;
+    await store.writeAgentNativeResumeRecord({ ...key, identity: CLAUDE_IDENTITY, departureSeqInclusive: DEPARTURE_SEQ });
+    const path = store.resolveAgentNativeResumeRecordPath(key);
+    const record: unknown = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, JSON.stringify({ ...(record as Record<string, unknown>), retiredField: true }));
+    await expect(store.readAgentNativeResumeRecord(key)).resolves.toEqual({
+      identity: CLAUDE_IDENTITY, departureSeqInclusive: DEPARTURE_SEQ,
+    });
+  });
+
   it('overwrites an outgoing record instead of accumulating generations', async () => {
     const { store } = await createStore();
     await store.writeAgentNativeResumeRecord({

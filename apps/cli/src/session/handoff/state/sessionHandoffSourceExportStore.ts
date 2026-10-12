@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join, posix, relative, resolve, sep, win32 } from 'node:path';
 
@@ -17,6 +17,7 @@ import { writeSessionHandoffAgentBundleArtifact } from '../agentBundle/file';
 import { buildSessionHandoffAgentBundleTransferId } from '../agentBundle/transferPublication';
 import { disposeTransferPayloadSource, resolveTransferPayloadManifestHash, resolveTransferPayloadSizeBytes } from '@/machines/transfer/transferPayloadSource';
 import type { createWorkspaceSyncSeedExport } from '@/workspaces/sync/workspaceSyncSeedTransfer';
+import { readSessionHandoffStorageStates } from '../prepare/sessionHandoffPrepareTargetJobStore';
 
 const SOURCE_EXPORT_SCHEMA_VERSION = 1 as const;
 
@@ -151,6 +152,32 @@ async function readPersistedSourceExportRecord(
     throw new Error('Invalid session handoff requester credential reference');
   }
   return parsed.data;
+}
+
+/** Reads the artifact namespace without treating durable job records as transfer bytes. */
+export async function readStorageSessionHandoffFacts(input: Readonly<{ activeServerDir: string }>): Promise<readonly Readonly<{
+  path: string;
+  state: 'closed' | 'in_use' | 'unknown';
+}>[]> {
+  const root = join(input.activeServerDir, 'session-handoff');
+  const rootStat = await lstat(root).catch(() => null);
+  if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) return [];
+  const states = await readSessionHandoffStorageStates(input);
+  const exports = createSessionHandoffSourceExportStore(input);
+  const facts: { path: string; state: 'closed' | 'in_use' | 'unknown' }[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name === 'prepare-target-jobs') continue;
+    let path: string;
+    try { path = resolveHandoffDirectory(input.activeServerDir, entry.name); } catch { continue; }
+    let record: SessionHandoffSourceExportRecord | null;
+    try { record = await exports.load(entry.name); }
+    catch { facts.push({ path, state: 'unknown' }); continue; }
+    // Receivers have a job but no source export. Only actual enumerated artifact
+    // directories qualify; corrupt or mismatched source custody remains unknown.
+    const state = !record || record.handoffId === entry.name ? states.get(entry.name) ?? 'unknown' : 'unknown';
+    facts.push({ path, state });
+  }
+  return facts;
 }
 
 export function createSessionHandoffSourceExportStore(input: Readonly<{ activeServerDir: string; happyHomeDir?: string }>) {

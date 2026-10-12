@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, open, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import { join } from 'node:path';
 
@@ -6,13 +6,67 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { SessionHandoffAgentBundle } from '../types';
 import { readSessionHandoffAgentBundleFile } from '../agentBundle/file';
-import { createSessionHandoffSourceExportStore } from './sessionHandoffSourceExportStore';
+import { createSessionHandoffSourceExportStore, readStorageSessionHandoffFacts } from './sessionHandoffSourceExportStore';
 import { createSessionHandoffStatusGetActionHandler } from '@/api/machine/sessionHandoff/statusGet';
 import { createSessionHandoffPrepareTargetJobStore } from '../prepare/sessionHandoffPrepareTargetJobStore';
 import { buildStartPendingStatus, invalidRequest, readPersistedPrepareJob } from '@/api/machine/sessionHandoff/prepareTargetState';
 import { createRequesterSessionCredentialCustody, requesterSessionCredentialPath } from '@/daemon/sessionEncryption/requesterSessionCredentials';
 
 describe('sessionHandoffSourceExportStore', () => {
+  it('projects a receiver artifact directory from its retained canonical job without a source export', async () => {
+    const activeServerDir = await mkdtemp(join(os.tmpdir(), 'happier-handoff-received-storage-'));
+    try {
+      const handoffId = 'received-handoff';
+      const store = createSessionHandoffSourceExportStore({ activeServerDir });
+      const artifactPath = await store.prepareReceivedAgentBundleFilePath(handoffId);
+      await writeFile(artifactPath, 'received bytes');
+      const jobId = 'prepare_received-handoff';
+      await createSessionHandoffPrepareTargetJobStore({ activeServerDir }).write({
+        jobId, handoffId, createdAtMs: 1, updatedAtMs: 2, completedAtMs: 2,
+        status: { handoffId, jobId, status: 'completed', phase: 'cutover', recoveryActions: [] },
+      });
+      expect(await readStorageSessionHandoffFacts({ activeServerDir })).toEqual([
+        { path: join(activeServerDir, 'session-handoff', handoffId), state: 'closed' },
+      ]);
+      const artifact = await store.writeAgentBundleFile({ handoffId,
+        agentBundle: { agentId: 'codex', remoteSessionId: 'remote', files: [] } });
+      await store.save({ handoffId, exportedAtMs: 1, agentBundle: artifact });
+      const recordPath = join(activeServerDir, 'session-handoff', handoffId, 'source-export.json');
+      const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown> & { agentBundle: Record<string, unknown> };
+      await writeFile(recordPath, JSON.stringify({ ...record, agentBundle: { ...record.agentBundle, filePath: '../escape.bin' } }));
+      expect(await readStorageSessionHandoffFacts({ activeServerDir })).toEqual([
+        { path: join(activeServerDir, 'session-handoff', handoffId), state: 'unknown' },
+      ]);
+    } finally { await rm(activeServerDir, { recursive: true, force: true }); }
+  });
+  it('reads retained handoff artifact paths against the canonical job lifecycle, not export age', async () => {
+    const activeServerDir = await mkdtemp(join(os.tmpdir(), 'happier-handoff-storage-facts-'));
+    try {
+      const exports = createSessionHandoffSourceExportStore({ activeServerDir });
+      const jobs = createSessionHandoffPrepareTargetJobStore({ activeServerDir });
+      const handoffId = 'storage-handoff';
+      const artifact = await exports.writeAgentBundleFile({ handoffId,
+        agentBundle: { agentId: 'codex', remoteSessionId: 'remote', files: [] } });
+      await exports.save({ handoffId, exportedAtMs: 1, agentBundle: artifact });
+      const path = join(activeServerDir, 'session-handoff', handoffId);
+      expect(await readStorageSessionHandoffFacts({ activeServerDir })).toEqual([{ path, state: 'unknown' }]);
+      const jobId = 'prepare_storage-handoff';
+      await jobs.write({ jobId, handoffId, createdAtMs: 1, updatedAtMs: 2,
+        status: { handoffId, jobId, status: 'in_progress', phase: 'staging_target', recoveryActions: [] } });
+      expect(await readStorageSessionHandoffFacts({ activeServerDir })).toEqual([{ path, state: 'in_use' }]);
+      await jobs.update(jobId, record => ({ ...record, updatedAtMs: 3,
+        status: { ...record.status, status: 'failed' } }));
+      expect(await readStorageSessionHandoffFacts({ activeServerDir })).toEqual([{ path, state: 'unknown' }]);
+      await jobs.update(jobId, record => ({ ...record, updatedAtMs: 4, completedAtMs: 4,
+        status: { ...record.status, status: 'completed' } }));
+      expect(await readStorageSessionHandoffFacts({ activeServerDir })).toEqual([{ path, state: 'closed' }]);
+      expect((await stat(artifact.filePath)).isFile()).toBe(true);
+      const jobPath = join(activeServerDir, 'session-handoff', 'prepare-target-jobs', `${jobId}.json`);
+      await writeFile(jobPath, '{"schemaVersion":');
+      expect(await readStorageSessionHandoffFacts({ activeServerDir })).toEqual([{ path, state: 'unknown' }]);
+      expect(await readFile(jobPath, 'utf8')).toBe('{"schemaVersion":');
+    } finally { await rm(activeServerDir, { recursive: true, force: true }); }
+  });
   it('holds the existing requester credential reference until export release without copying its bearer', async () => {
     const happyHomeDir = await mkdtemp(join(os.tmpdir(), 'happier-handoff-existing-custody-'));
     try {

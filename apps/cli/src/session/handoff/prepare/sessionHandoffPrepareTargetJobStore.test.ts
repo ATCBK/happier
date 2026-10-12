@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createSessionHandoffPrepareTargetJobStore,
+  readSessionHandoffStorageStates,
   recoverSessionHandoffPrepareTargetJobsAfterRestart,
 } from './sessionHandoffPrepareTargetJobStore';
 
@@ -35,6 +36,12 @@ describe('sessionHandoffPrepareTargetJobStore', () => {
           failure: { code },
         },
       });
+
+      const path = join(activeServerDir, 'session-handoff', 'prepare-target-jobs', `${jobId}.json`);
+      const retained = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+      await writeFile(path, JSON.stringify({ ...retained, retiredField: true,
+        status: { ...(retained.status as Record<string, unknown>), retiredField: true,
+          failure: { code, retiredField: true } } }));
 
       await expect(store.read(jobId)).resolves.toMatchObject({
         failedAtMs: 2,
@@ -756,6 +763,14 @@ describe('sessionHandoffPrepareTargetJobStore', () => {
         },
       });
       expect(await readFile(jobPath)).toEqual(predecessorBytes);
+      expect((await readSessionHandoffStorageStates({ activeServerDir })).get(handoffId)).toBe('in_use');
+      await store.transitionPredecessorV2(jobId, record => ({ ...record,
+        transitionRevision: record.transitionRevision + 1,
+        terminal: { status: 'aborted', operationId: 'abort-predecessor-cleanup',
+          completedRevision: record.transitionRevision + 1 },
+      }));
+      // The terminal receipt is authoritative even while the recoverable status mirror remains old.
+      expect((await readSessionHandoffStorageStates({ activeServerDir })).get(handoffId)).toBe('closed');
     } finally {
       await rm(activeServerDir, { recursive: true, force: true }).catch(() => undefined);
     }

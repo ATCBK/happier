@@ -109,12 +109,12 @@ export function resolveSessionHandoffExportMetadata(input: Readonly<{
     const runtimeLocalMetadata = localSplit?.runtimeLocalMetadata;
 
     if (!runtimeLocalMetadata) {
-        return normalizeLinkedExternalSessionMetadataV1(exportMetadata) ?? exportMetadata;
+        return normalizeLinkedExternalSessionMetadataV1(exportMetadata, 'stored') ?? exportMetadata;
     }
 
     const mergedMetadata = {
         ...exportMetadata,
         ...cloneSessionRuntimeLocalMetadata(runtimeLocalMetadata),
     };
-    return normalizeLinkedExternalSessionMetadataV1(mergedMetadata) ?? mergedMetadata;
+    return normalizeLinkedExternalSessionMetadataV1(mergedMetadata, 'stored') ?? mergedMetadata;
 }
