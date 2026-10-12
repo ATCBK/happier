@@ -3,6 +3,15 @@ import { PromptLibraryRecordV1Schema, PromptLibraryRowMutationV1Schema, PromptLi
 import { PromptFoldersV1WriteSchema } from './promptFoldersV1.js';
 
 describe('Prompt library Account catalog rows', () => {
+  it('admits skill rules and rejects duplicate item/place/agent rules while reading additive stored fields', () => {
+    const rule = { id: 'rule', skillId: 'skill', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 1 };
+    const record = { key: 'skill-rules', value: { v: 1, rules: [rule] } };
+    expect(PromptLibraryRecordV1Schema.safeParse(record).success).toBe(true);
+    expect(PromptLibraryRecordV1Schema.safeParse({ ...record, value: { v: 1, rules: [rule, { ...rule, id: 'other' }] } } }).success).toBe(false);
+    expect(PromptLibraryRecordV1Schema.safeParse({ ...record, value: { v: 1, rules: [rule, { ...rule, id: 'other', agentId: 'codex' }] } } }).success).toBe(true);
+    expect(StoredPromptLibraryRecordV1Schema.parse({ ...record, future: true, value: { ...record.value, future: true,
+      rules: [{ ...rule, future: true, target: { ...rule.target, future: true } }] } })).toEqual(record);
+  });
   it('rejects uncaptured first writes, including an absent tombstone', () => {
     const content = { t: 'plain', v: { key: 'folders', value: { v: 1, folders: [] } } };
     expect(PromptLibraryRowMutationV1Schema.safeParse({ expectedRevision: 'absent', content }).success).toBe(false);

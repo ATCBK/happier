@@ -4,6 +4,32 @@ import { PromptLibraryCatalogKeyV1Schema, sealPromptLibraryContentV1, type Promp
 import { retainLegacyRoleArtifactsV1, type RoleArtifactStoreV1 } from '../roles/accountRoleActions.js';
 
 describe('Prompt library destination authority', () => {
+  it('initializes the root-less skills row once without retiring a nonexistent Settings root or reseeding deletion', async () => {
+    const rows: Extract<ReturnType<typeof PromptLibraryRowsListResponseV1Schema.parse>, { status: 'listed' }>['rows'] =
+      PromptLibraryCatalogKeyV1Schema.options.filter(key => String(key) !== 'skill-rules').map(key => ({ key, revision: 1,
+        content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } }));
+    const initialized: unknown[] = [];
+    let retired: readonly string[] = [];
+    const load = () => loadPromptLibraryCatalogV1({ mode: 'plain', material: null, readRows: async () => ({ status: 'listed', rows }), transfer: {
+      readSourceSnapshot: async () => ({ raw: { undefined: 'keep', null: 'keep' }, version: 7 }),
+      initializeRecord: async input => {
+        initialized.push(input.record);
+        rows.push({ key: input.record.key, revision: 1, content: { t: 'plain', v: input.record } });
+        return { status: 'updated', revision: 1, cursor: 1 };
+      },
+      replaceSource: async () => { throw new Error('No retained root changed'); },
+      normalizeHistory: async input => { retired = input.activeTransferredRoots; return { status: 'complete' }; },
+    } });
+    expect(await load()).toMatchObject({ status: 'ready', rows: expect.arrayContaining([
+      { record: { key: 'skill-rules', value: { v: 1, rules: [] } }, revision: 1 },
+    ]) });
+    expect(initialized).toEqual([{ key: 'skill-rules', value: { v: 1, rules: [] } }]);
+    expect(retired.every(root => typeof root === 'string' && root !== 'undefined' && root !== 'null')).toBe(true);
+    const index = rows.findIndex(row => String(row.key) === 'skill-rules');
+    rows[index] = { ...rows[index]!, revision: 2, content: null };
+    expect(await load()).toMatchObject({ status: 'ready', tombstones: expect.arrayContaining([{ key: 'skill-rules', revision: 2 }]) });
+    expect(initialized).toHaveLength(1);
+  });
   it('publishes complete destination authority before a pending retained-source maintenance read', async () => {
     let releaseSource!: () => void;
     const source = new Promise<void>(resolve => { releaseSource = resolve; });
