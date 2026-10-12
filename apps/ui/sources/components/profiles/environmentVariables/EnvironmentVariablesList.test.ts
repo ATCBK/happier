@@ -135,6 +135,17 @@ describe('EnvironmentVariablesList', () => {
         expect(options?.serverId).toBe('server-profile-b');
     });
 
+    it('offers one add row inside its sheet while there are no variables, and a section action once cards exist', async () => {
+        const { screen: empty } = await renderList({ environmentVariables: [] });
+        const emptyAdds = empty.findAll((node) => node.props?.testID === 'profile-environment-add');
+        expect(emptyAdds.length).toBeGreaterThan(0);
+        expect(emptyAdds.every((node) => node.props.title === 'profiles.environmentVariables.addVariable' && node.props.icon === undefined)).toBe(true);
+        expect(empty.findAll((node) => node.props?.action != null && node.props?.title === 'profiles.environmentVariables.title')).toHaveLength(0);
+
+        const { screen: filled } = await renderList({ environmentVariables: [{ name: 'SAFE_FLAG', value: '1' }] });
+        expect(filled.findAll((node) => node.props?.action != null && node.props?.title === 'profiles.environmentVariables.title').length).toBeGreaterThan(0);
+    });
+
     describe('inline add interaction', () => {
         it('adds a variable via the inline expander', async () => {
             const { screen, onChange } = await renderList({ environmentVariables: [] });

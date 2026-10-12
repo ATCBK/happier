@@ -215,20 +215,24 @@ export function EnvironmentVariablesList({
     const secretOnlyRequirements = allowSourceRequirements ? Object.entries(sourceRequirementsByName)
         .filter(([name, requirement]) => requirement?.useSecretVault && !representedRequirements.has(name)) : [];
 
+    // Variables render as their own cards; until there is one, the section is one sheet whose only
+    // row adds the first (like every other "add" in a settings sheet), not an action above nothing.
+    const hasCards = environmentVariables.length > 0 || secretOnlyRequirements.length > 0;
+
     return (
         <View style={styles.container}>
             <ItemGroup
                 title={t('profiles.environmentVariables.title')}
                 description={t('profilesPage.environmentDescription')}
-                surface="none"
+                surface={hasCards ? 'none' : undefined}
                 actionLayout="adaptive"
-                action={<SectionActionButton
+                action={hasCards ? <SectionActionButton
                     testID="profile-environment-add"
                     title={t('profiles.environmentVariables.addVariable')}
                     icon="plus"
                     expanded={isAddExpanded}
                     onPress={() => setIsAddExpanded((current) => !current)}
-                />}
+                /> : undefined}
             >
                 {secretOnlyRequirements.map(([name]) => (
                     <Item
@@ -299,7 +303,8 @@ export function EnvironmentVariablesList({
                     isOpen={isAddExpanded}
                     onOpenChange={setIsAddExpanded}
                     title={t('profiles.environmentVariables.addVariable')}
-                    trigger={null}
+                    trigger={hasCards ? null : undefined}
+                    triggerTestID="profile-environment-add"
                     onCancel={resetAddDraft}
                     onSave={handleAddVariable}
                     saveDisabled={!newVarName.trim()}
