@@ -21,7 +21,7 @@ export async function completeAccountDeletion(params: Readonly<{
     target: ServerAccountScopeLifetime;
     deleteCurrentAccount(options?: DeleteCurrentAccountOptions): Promise<Readonly<{ status: 'deleted' }>>;
     logout(options?: Readonly<{ beforeMutation?: () => void | Promise<void> }>): Promise<AuthCredentialLifecycleResult>;
-    replace(path: '/'): void;
+    replace(path: '/'): void | Promise<void>;
 }>): Promise<AuthCredentialLifecycleResult> {
     let confirmed = false;
     const abortError = () => {
@@ -56,7 +56,7 @@ export async function completeAccountDeletion(params: Readonly<{
                         }
                     }
                     await removeRunnerCreatorCustodyForAccount(params.target.scope);
-                    params.replace('/');
+                    await params.replace('/');
                 },
             });
         } catch (cause) {
