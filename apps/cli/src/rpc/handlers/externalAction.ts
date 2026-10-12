@@ -1,5 +1,6 @@
 import { createExternalActionDaemonDispatchResponse, ExternalActionDaemonDispatchRequestSchema, EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, prepareExternalActionResponseEnvelopeV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import type { ActionExecuteResult, ExternalActionDaemonDispatchRequest, ExternalActionDaemonDispatchResultV1 } from '@happier-dev/protocol';
+import type { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { isSocketRpcActionApiServerOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 
@@ -23,7 +24,7 @@ export type ExternalActionRpcRegistrationOptions = Readonly<{
   resolveInstallationId: () => string | null;
   verifyExecutionAuthorization: VerifyExternalActionExecutionAuthorization;
   resolveTarget: ResolveExternalActionTarget;
-  executor: ExternalActionExecutor;
+  executor: ExternalActionExecutor & Partial<Pick<ReturnType<typeof createActionExecutor>, 'replayApprovedApprovalRequest'>>;
   resolveEncryption?: ResolveExternalActionEncryption;
   prepareRequesterAccountContext?: PrepareExternalActionRequesterAccountContext;
   externalActionMachineRequestPrivateKey?: string | Uint8Array;
