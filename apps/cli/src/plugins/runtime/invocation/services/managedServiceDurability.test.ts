@@ -1,14 +1,18 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, stat, utimes, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import * as processBoundary from '@happier-dev/cli-common/process';
+import { readProcessIdentityByPid } from '@/daemon/processIdentity';
+import { createStorageCategoryCatalog } from '@/storage/categoryCatalog';
+import { storageLogRoots } from '@/utils/logs/logRetention';
 
 import type {
     ManagedServiceEndpointProjectionInputV1,
 } from './managedServiceEndpointProjection';
 import {
-    createManagedServiceDurabilityOwner,
+    createManagedServiceDurabilityOwner as createDurabilityOwner,
     observeManagedServiceProcessStartIdentity,
 } from './managedServiceDurability';
 
@@ -28,6 +32,16 @@ type ManagedServiceProjectionFacts = Readonly<{
 
 function processIdentity(pid: number, occurrenceId = 1): string {
     return `${pid}:${occurrenceId * 1_000}`;
+}
+
+function createManagedServiceDurabilityOwner(params: Parameters<typeof createDurabilityOwner>[0]) {
+    // The shared exact-generation scenarios model Linux numeric identities and absent owned
+    // process groups, not the test host's PID 41. Platform-specific cases override these facts.
+    return createDurabilityOwner({
+        platform: 'linux',
+        observeProcessGroupPresence: async () => 'absent',
+        ...params,
+    });
 }
 
 function record(instanceId: string, pid = 41): ManagedServiceProjectionFacts {
@@ -233,6 +247,45 @@ describe('managed server durability owner', () => {
             code: 'plugin_managed_server_log_keep_count_invalid',
         });
         expect(await readdir(join(root, 'logs'))).toEqual([]);
+    });
+
+    it('exempts only open captures and protected current managed-instance logs across durability owners', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-managed-current-logs-'));
+        const runner = createManagedServiceDurabilityOwner({ rootDir: root });
+        const daemon = createManagedServiceDurabilityOwner({ rootDir: root, observeProcessStartIdentity: async () => processIdentity(41) });
+        const current = await runner.openLog({ instanceId: 'live', serverId: 'sidecar', keepCount: 50, secretValues: [], nowMs: 1_000 });
+        const old = await runner.openLog({ instanceId: 'old', serverId: 'sidecar', keepCount: 50, secretValues: [], nowMs: 2_000 });
+        expect(await runner.getCurrentLogPaths()).toEqual(expect.arrayContaining([current.path, old.path]));
+        await old.close();
+        expect(await runner.getCurrentLogPaths()).toEqual([current.path]);
+        const projection = endpointProjection(record('live'));
+        const token = await daemon.publishEndpointProjection(projection);
+        expect(await daemon.getCurrentLogPaths()).toEqual([current.path]);
+        await daemon.releaseEndpointProjection({ instanceId: projection.instanceId, projectionToken: token, sessionId: projection.sessionId, pluginId: projection.pluginId });
+        expect(await daemon.getCurrentLogPaths()).toEqual([]);
+        await current.close();
+        expect(await runner.getCurrentLogPaths()).toEqual([]);
+    });
+
+    it('protects a cross-process current managed capture in the real asynchronous storage catalog', async () => {
+        const home = await mkdtemp(join(tmpdir(), 'happier-managed-catalog-logs-'));
+        const roots = storageLogRoots(home);
+        const root = join(roots[roots.length - 1], '..');
+        const runner = createManagedServiceDurabilityOwner({ rootDir: root });
+        const daemon = createManagedServiceDurabilityOwner({ rootDir: root, observeProcessStartIdentity: async () => processIdentity(41) });
+        const capture = await runner.openLog({ instanceId: 'live', serverId: 'sidecar', keepCount: 50, secretValues: [], nowMs: 1_000 });
+        capture.write('stdout', 'current bytes\n');
+        await capture.close();
+        await utimes(capture.path, 1, 1);
+        const projection = endpointProjection(record('live'));
+        const token = await runner.publishEndpointProjection(projection);
+        try {
+            const catalog = createStorageCategoryCatalog({ happyHomeDir: home, activeServerDir: home,
+                currentLogPaths: () => daemon.getCurrentLogPaths(), now: () => Date.now() });
+            expect((await catalog.discover()).find(item => item.path === capture.path)).toMatchObject({ verdict: 'keep', reason: { code: 'in_use' } });
+            await runner.releaseEndpointProjection({ instanceId: projection.instanceId, projectionToken: token, sessionId: projection.sessionId, pluginId: projection.pluginId });
+            expect((await catalog.discover()).find(item => item.path === capture.path)).toMatchObject({ verdict: 'safe', reason: { code: 'old' } });
+        } finally { await rm(home, { recursive: true, force: true }); }
     });
 
     it('distinguishes confirmed process absence from unavailable start-identity observation', async () => {
@@ -950,15 +1003,32 @@ describe('managed server durability owner', () => {
         expect(await readdir(join(root, 'endpoint-projections'))).toHaveLength(1);
     });
 
+    it('retains tagged Windows custody when fresh native membership cannot be read', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-managed-win32-unavailable-'));
+        let jobLive = true;
+        const owner = createManagedServiceDurabilityOwner({
+            rootDir: root, platform: 'win32',
+            observeProcessCustodyJob: async () => jobLive ? 'live' : 'absent',
+            processTreeSystemBoundary: { platform: 'win32',
+                censusDependencies: { platform: 'win32', helperExecutablePath: '/native-helper',
+                    execFile: async () => { throw new Error('native membership unavailable'); } },
+            },
+        });
+        await owner.publishEndpointProjection(endpointProjection({ ...record('win32-unavailable', 42),
+            processStartIdentity: 'winjob:Local\\happier-svc09-fixture' }));
+        await expect(owner.retireSessionRunnerOwnedProjections({ sessionId: 'session-one' })).resolves.toEqual([]);
+        expect(await readdir(join(root, 'endpoint-projections'))).toHaveLength(1);
+    });
+
     it('observes and retires tagged Windows job custody through the job, never the pid', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-managed-win32-job-'));
         const terminateProcessTree = vi.fn(async () => undefined);
         let jobLive = true;
         let terminationProven = true;
         const observeProcessCustodyJob = vi.fn(async () => (jobLive ? 'live' : 'absent') as 'live' | 'absent');
-        const terminateProcessCustodyJob = vi.fn(async () => {
+        const terminateWindowsJob = vi.fn(async () => {
             if (terminationProven) jobLive = false;
-            return terminationProven;
+            return terminationProven ? 'absent' : 'members-remaining';
         });
         const owner = createManagedServiceDurabilityOwner({
             rootDir: root,
@@ -967,7 +1037,18 @@ describe('managed server durability owner', () => {
                 throw new Error('job custody never asks for a pid birth witness');
             },
             observeProcessCustodyJob,
-            terminateProcessCustodyJob,
+            processTreeSystemBoundary: { platform: 'win32', terminateWindowsJob,
+                censusDependencies: { platform: 'win32', helperExecutablePath: '/native-helper',
+                    execFile: async () => ({ stdout: JSON.stringify({ v: 1, capturedAtMs: Date.now(), logicalCpus: 1,
+                        rows: [process.pid, ...(jobLive ? [42] : [])].map(pid => ({ pid, ppid: 1, name: 'fixture',
+                            start: { startTimeMs: pid }, principal: { kind: 'sid', value: 'S-1-5-21-1000' },
+                            memory: null, cpuTimeUs: null,
+                            ...(pid === 42 ? { jobs: ['Local\\happier-svc09-fixture'] } : {}) })), partial: [],
+                        jobObservations: [{ name: 'Local\\happier-svc09-fixture',
+                            ...(jobLive ? { state: 'live', pids: [42] } : { state: 'absent' }) }],
+                    }), stderr: '' }),
+                },
+            },
             terminateProcessTree,
         });
         const jobIdentity = 'winjob:Local\\happier-svc09-fixture';
@@ -991,7 +1072,7 @@ describe('managed server durability owner', () => {
         await expect(owner.retireSessionRunnerOwnedProjections({
             sessionId: 'session-one',
         })).resolves.toEqual([42]);
-        expect(terminateProcessCustodyJob).toHaveBeenCalledWith('Local\\happier-svc09-fixture');
+        expect(terminateWindowsJob).toHaveBeenCalledWith({ jobName: 'Local\\happier-svc09-fixture', timeoutMs: 5000 });
         expect(terminateProcessTree).not.toHaveBeenCalled();
         expect(await readdir(join(root, 'endpoint-projections'))).toEqual([]);
 
@@ -1046,32 +1127,29 @@ describe('managed server durability owner', () => {
     });
 
     it('captures the tagged Darwin native identity when the witness proves it and falls back to legacy otherwise', async () => {
-        const resolveProcessCustodyRuntimeExecutableFn = vi.fn(() => '/staged/happier-process-custody');
-        const observeNativeDarwinProcessStartIdentityFn = vi.fn(async () => ({ sec: 1754041400, usec: 123456 }));
-        await expect(observeManagedServiceProcessStartIdentity(41, {
+        const snapshot = (native?: string) => JSON.stringify({ v: 1, capturedAtMs: 1000, logicalCpus: 8, rows: [
+            { pid: process.pid, ppid: 1, start: { startTimeMs: 1000 },
+                principal: { kind: 'uid', value: '1000' }, name: 'daemon', memory: null, cpuTimeUs: null },
+            { pid: 41, ppid: 1, start: { startTimeMs: 1754041400000, ...(native ? { native } : {}) },
+                principal: { kind: 'uid', value: '1000' }, name: 'server', argv: ['server'], memory: null, cpuTimeUs: null },
+        ] });
+        // Mock the helper execution boundary, retaining both real identity views and census decoding.
+        const helper = vi.spyOn(processBoundary, 'execFileWithDeadline').mockResolvedValue({
+            stdout: snapshot('darwin-proc:41:1754041400:123456'), stderr: '',
+        });
+        const dependencies = {
             platform: 'darwin',
-            resolveProcessCustodyRuntimeExecutableFn,
-            observeNativeDarwinProcessStartIdentityFn,
-            readProcessIdentityByPidFn: async () => {
-                throw new Error('native witness present: ps must not be consulted');
-            },
-        })).resolves.toBe('darwin-proc:41:1754041400:123456');
-        observeNativeDarwinProcessStartIdentityFn.mockClear();
-
-        const helperUnavailable = vi.fn(() => null);
-        const readProcessIdentityByPidFn = vi.fn(async () => ({
-            pid: 41,
-            processStartTimeMs: 1754041400000,
-            command: 'server',
-        }));
-        await expect(observeManagedServiceProcessStartIdentity(41, {
-            platform: 'darwin',
-            resolveProcessCustodyRuntimeExecutableFn: helperUnavailable,
-            observeNativeDarwinProcessStartIdentityFn: vi.fn(async () => {
-                throw new Error('helper unavailable: no witness call');
+            resolveProcessCustodyRuntimeExecutableFn: () => '/staged/happier-process-custody',
+            readProcessIdentityByPidFn: (pid, deps) => readProcessIdentityByPid(pid, {
+                ...deps, helperExecutablePath: '/staged/happier-process-custody',
             }),
-            readProcessIdentityByPidFn,
-        })).resolves.toBe('41:1754041400000');
-        expect(observeNativeDarwinProcessStartIdentityFn).not.toHaveBeenCalled();
+        } satisfies NonNullable<Parameters<typeof observeManagedServiceProcessStartIdentity>[1]>;
+        try {
+            await expect(observeManagedServiceProcessStartIdentity(41, dependencies)).resolves.toBe('darwin-proc:41:1754041400:123456');
+            helper.mockResolvedValue({ stdout: snapshot(), stderr: '' });
+            await expect(observeManagedServiceProcessStartIdentity(41, dependencies)).resolves.toBe('41:1754041400000');
+        } finally {
+            helper.mockRestore();
+        }
     });
 });

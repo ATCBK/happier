@@ -1,6 +1,9 @@
+import { findCatalogEntry } from '@/agent/catalog/registry';
+import type { PluginAgentCliReadinessServiceForHost } from '../../context/agents';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { realpath } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
+import { configuration } from '@/configuration';
 import type { ManagedExecutableRef } from '@happier-dev/plugin-sdk/managed-services';
 import type { AgentCliReadinessService as PluginAgentCliReadinessService, ExecService, PluginProcessHandle, SystemToolsService as PluginSystemToolsService } from '@happier-dev/plugin-sdk/exec';
 import type { PluginFramedBytesClient, PluginJsonRpcClient, PluginJsonStreamClient, PluginLoopbackWebSocketJsonClient, PluginProtocolClientHandle, PluginProtocolClientSpec, PluginProtocolClientSpecByKind, ProtocolClientsService } from '@happier-dev/plugin-sdk/exec/protocol-clients';
@@ -35,9 +38,14 @@ import {
     type PluginFileSystemScope,
 } from './filesystem';
 import type { HostRuntimeLimitMeasurementRecorder } from '@/agent/runtime/state/runtimeLimitMeasurement';
+import { classifySpawnFailure, spawnFailureMessage, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 import { validateEnvVarRecordStrict } from '@/terminal/runtime/envVarSanitization';
 import type { ProjectNativeEnvironmentInput, ProjectNativeEnvironmentIo, ProjectNativePluginAdapterInput } from '@/workspaces/environment/produceProjectNativeEnvironment';
 import type { ProjectSecretReferenceEnvironmentInput } from '@/settings/secrets/secretReferenceOverlay';
+import { formatProcessOwnerTag, readHostProcessOwnerTag, withHostProcessOwnerEnvironment, withProcessOwnerEnvironment, type ProcessOwnerRef } from '@/processes/ownerTag';
+import { buildCgroupProcessLaunchSpec, prepareCgroupProcessLaunchScope, type LinuxProcessLaunchScope } from '@/daemon/platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
+import { createHappierLinuxScopeName } from '@/daemon/platform/linux/systemdUserResourceGovernor';
+import type { OwnerRemainderPort } from '@/daemon/processes/endOwnerRemainder';
 
 /** Prepared by the host Project owner, never accepted from an SDK Exec request. */
 export type HostProjectNativeLaunchAdmission =
@@ -96,6 +104,7 @@ type ManagedPluginExecLifetimeForHost = Readonly<{
 type ManagedPluginExecCustodyForHost = Readonly<{
     processCustody: ProcessCustodySpawnSpec | null;
     lifetime?: ManagedPluginExecLifetimeForHost;
+    processOwnerTag?: string;
 }>;
 
 const INTERNAL_MANAGED_PROCESS_CUSTODY = new WeakMap<
@@ -103,11 +112,21 @@ const INTERNAL_MANAGED_PROCESS_CUSTODY = new WeakMap<
     WeakMap<object, ManagedPluginExecCustodyForHost>
 >();
 
+const INTERNAL_OWNER_REBINDERS = new WeakMap<ExecService, (owner: ProcessOwnerRef, signal?: AbortSignal) => ExecService>();
+
+/** A retained Session service must not lend its owner to a finite Run. */
+export function bindPluginExecProcessOwnerForHost(service: ExecService, owner: ProcessOwnerRef, signal?: AbortSignal): ExecService {
+    const rebind = INTERNAL_OWNER_REBINDERS.get(service);
+    if (!rebind) return fail('plugin_exec_owner_binding_unavailable', 'Host process ownership binding is unavailable');
+    return rebind(owner, signal);
+}
+
 export function installManagedProcessCustodyForHost(
     service: Pick<ExecService, 'spawn' | 'run'>,
     request: Parameters<ExecService['spawn']>[0],
     processCustody: ProcessCustodySpawnSpec | null,
     lifetime?: ManagedPluginExecLifetimeForHost,
+    processOwner?: ProcessOwnerRef,
 ): Readonly<{ dispose(): void }> {
     let authorizations = INTERNAL_MANAGED_PROCESS_CUSTODY.get(service);
     if (!authorizations) {
@@ -123,6 +142,7 @@ export function installManagedProcessCustodyForHost(
     const custody: ManagedPluginExecCustodyForHost = Object.freeze({
         processCustody,
         ...(lifetime ? { lifetime } : {}),
+        ...(processOwner ? { processOwnerTag: formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir, owner: processOwner }) } : {}),
     });
     authorizations.set(request, custody);
     return Object.freeze({
@@ -192,6 +212,10 @@ export type HostAuthorizedPluginExecLaunch = Readonly<{
     maxStdoutBytes?: number;
     maxStderrBytes?: number;
     windowsVerbatimArguments?: boolean;
+    /** Native activation cleanup must finish before descendant termination. Host-only. */
+    waitForGracefulRootExitBeforeTreeStop?: true;
+    /** Host-private ownership, retained across all native and provider env layers. */
+    processOwnerTag?: string;
     release(): void | Promise<void>;
 }>;
 
@@ -201,30 +225,39 @@ export function spawnAuthorizedHostExecLaunchForHost(
     options: Readonly<{
         signal?: AbortSignal;
         processCustody?: ProcessCustodySpawnSpec;
+        linuxProcessLaunchScope?: LinuxProcessLaunchScope | null;
         recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
+        readSpawnFailureLimits?: SpawnFailureLimitsReader;
         /** Transfer the final capture to the existing service's physical-settlement cleanup. */
         retainLaunch?: (release: HostAuthorizedPluginExecLaunch['release']) => void;
     }> = {},
 ): SupervisedPluginProcess {
     const custody = options.processCustody;
+    const environment = withHostProcessOwnerEnvironment(launch.env, launch.processOwnerTag ?? readHostProcessOwnerTag());
     let supervised: SupervisedPluginProcess;
     // The service cleanup must retain even a no-launch capture: native
     // preparation may already own resources when the final spawn fails.
     options.retainLaunch?.(launch.release);
     try {
+        const unit = createHappierLinuxScopeName(launch.processOwnerTag ?? readHostProcessOwnerTag());
+        const scopedLaunch = options.linuxProcessLaunchScope && unit
+            ? buildCgroupProcessLaunchSpec({ scope: options.linuxProcessLaunchScope, unit,
+                launchSpec: { filePath: launch.command, args: [...launch.args], env: { ...environment } } })
+            : null;
         supervised = spawnSupervisedPluginProcess({
-            command: custody ? custody.executablePath : launch.command,
+            command: custody ? custody.executablePath : scopedLaunch?.filePath ?? launch.command,
             args: custody ? [
                 'run', `--job=${custody.jobName}`, `--handshake=${custody.handshakePath}`,
                 ...(launch.windowsVerbatimArguments ? ['--target-windows-verbatim'] : []),
                 '--', launch.command, ...launch.args,
-            ] : launch.args,
+            ] : scopedLaunch?.args ?? launch.args,
             ...(launch.cwd ? { cwd: launch.cwd } : {}),
-            env: launch.env,
+            env: scopedLaunch?.env ?? environment,
             ...(launch.stdin ? { stdin: launch.stdin } : {}),
             ...(launch.timeoutMs === undefined ? {} : { timeoutMs: launch.timeoutMs }),
             ...(launch.maxStdoutBytes === undefined ? {} : { maxStdoutBytes: launch.maxStdoutBytes }),
             ...(launch.maxStderrBytes === undefined ? {} : { maxStderrBytes: launch.maxStderrBytes }),
+            ...(launch.waitForGracefulRootExitBeforeTreeStop ? { waitForGracefulRootExitBeforeTreeStop: true } : {}),
             signals: options.signal ? [options.signal] : [],
             ...(custody ? { processCustody: custody } : {}),
             spawnOptions: {
@@ -234,10 +267,12 @@ export function spawnAuthorizedHostExecLaunchForHost(
             ...(options.recordRuntimeLimitMeasurement
                 ? { recordRuntimeLimitMeasurement: options.recordRuntimeLimitMeasurement }
                 : {}),
+            readSpawnFailureLimits: options.readSpawnFailureLimits,
         });
     } catch (error) {
         if (!options.retainLaunch) void launch.release();
-        return fail('plugin_exec_spawn_failed', 'Process could not be started', error);
+        const spawnFailure = classifySpawnFailure(error, { syscall: 'spawn', limits: options.readSpawnFailureLimits?.() });
+        throw new PluginError({ code: 'plugin_exec_spawn_failed', message: spawnFailureMessage(spawnFailure, 'Process could not be started'), details: { spawnFailure } }, { cause: error });
     }
     if (!options.retainLaunch) void supervised.waitForSettlement().then(() => launch.release());
     return supervised;
@@ -295,6 +330,7 @@ export async function authorizePluginExecLaunchForHost(
 
 export function createStableRunnerPluginExecService(
     params: Readonly<{
+        processOwner?: ProcessOwnerRef;
         signal: AbortSignal;
         isOccurrenceCurrent(): boolean;
         agentCli: PluginAgentCliReadinessService;
@@ -319,12 +355,15 @@ export function createStableRunnerPluginExecService(
         ): Readonly<Record<string, string>>;
         recordRuntimeLimitMeasurement?:
             HostRuntimeLimitMeasurementRecorder;
+        readSpawnFailureLimits?: SpawnFailureLimitsReader;
     }>,
 ): ExecService {
     const systemToolResolutionIds = new WeakMap<object, string>();
     const base = createStablePluginExecService({
+        ...(params.processOwner ? { processOwner: params.processOwner } : {}),
         allowedExecutables: [],
         signal: params.signal,
+        readSpawnFailureLimits: params.readSpawnFailureLimits,
         isOccurrenceCurrent: params.isOccurrenceCurrent,
         authorizeLaunch: (request, options) =>
             params.authorizeLaunch(
@@ -374,11 +413,14 @@ export function createStableRunnerPluginExecService(
             return resolved.result;
         },
     });
-    return Object.freeze({
+    const service: ExecService = Object.freeze({
         ...base,
         agentCli: params.agentCli,
         systemTools,
     });
+    INTERNAL_OWNER_REBINDERS.set(service, (owner, signal) => createStableRunnerPluginExecService({ ...params,
+        processOwner: owner, signal: signal ? AbortSignal.any([params.signal, signal]) : params.signal }));
+    return service;
 }
 
 const INTERNAL_EXECUTABLE_RESOLVERS = new WeakMap<
@@ -688,6 +730,7 @@ function createNativeProcessCustodyForHost() {
 }
 
 export function createProjectNativeEnvironmentIoForHost(input: Readonly<{
+    ownerRemainder?: OwnerRemainderPort;
     resolveTool(tool: string, signal: AbortSignal | undefined, scopedIo: ProjectNativeEnvironmentIo): ReturnType<ProjectNativeEnvironmentIo['resolveTool']>;
 }>): ProjectNativeEnvironmentIoForHost {
     const create = (invocation?: Parameters<ProjectNativeEnvironmentIoForHost['createInvocation']>[0]): ProjectNativeEnvironmentIoForHost => {
@@ -711,10 +754,13 @@ export function createProjectNativeEnvironmentIoForHost(input: Readonly<{
                 if (signal?.aborted) fail('plugin_exec_aborted', 'Process operation was aborted');
                 const supervised = spawnSupervisedPluginProcess({
                     ...request,
+                    env: withProcessOwnerEnvironment(request.env, { kind: 'happier' }),
+                    ...(input.ownerRemainder ? { rootExitObservation: {
+                        ownerRemainder: input.ownerRemainder, owner: { kind: 'happier' as const },
+                    } } : {}),
                     signals: signal ? [signal] : [],
-                    // The incumbent supervisor can prove this owned containment
-                    // even after the launcher exits and reparents native children.
-                    // Escaped-descendant cancellation remains covered separately.
+                    // Abort/timeout cleans this spawner's live tree. After root
+                    // exit, exact observed descendants belong to Happier remainder.
                     spawnOptions: { detached: process.platform !== 'win32' },
                 });
                 retain(supervised);
@@ -776,6 +822,7 @@ export function adaptStablePluginExecLegacyProcessHandle(
             throw new PluginExecClientError(
                 observed.diagnostic.code,
                 observed.diagnostic.message ?? 'Plugin process failed',
+                { details: observed.diagnostic.details },
             );
         }
         return Object.freeze({
@@ -802,6 +849,8 @@ export function adaptStablePluginExecLegacyProcessHandle(
 }
 
 export function createStablePluginExecService(params: Readonly<{
+    /** Prepared by the host invocation owner, never an Exec request field. */
+    processOwner?: ProcessOwnerRef;
     allowedExecutables: readonly ManagedExecutableRef[];
     allowedEnvKeys?: readonly string[];
     environment?: Readonly<Record<string, string>>;
@@ -817,7 +866,7 @@ export function createStablePluginExecService(params: Readonly<{
     observeProcessOutput?: (output: import('@happier-dev/plugin-sdk/exec').PluginProcessOutput) => void;
     invocationTimeoutMs?: number | null;
     resolvePath(path: PluginPath): Promise<string>;
-    agentCli?: PluginAgentCliReadinessService;
+    agentCli?: PluginAgentCliReadinessServiceForHost;
     systemTools?: ExecSystemToolServiceV1;
     authorizeLaunch?(
         request: Parameters<ExecService['spawn']>[0]
@@ -829,7 +878,11 @@ export function createStablePluginExecService(params: Readonly<{
     ): Readonly<Record<string, string>>;
     recordDisclosureMismatch?(mismatch: PluginExecDisclosureMismatch): void;
     recordRuntimeLimitMeasurement?: HostRuntimeLimitMeasurementRecorder;
+    readSpawnFailureLimits?: SpawnFailureLimitsReader;
 }>): ExecService {
+    const processOwnerTag = params.processOwner
+        ? formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir, owner: params.processOwner })
+        : readHostProcessOwnerTag();
     const { custody, retain, assertOpen } = createNativeProcessCustodyForHost();
     const allowedExecutables = new Set(params.allowedExecutables.map(executableKey));
     const preResolvedSystemTools = new WeakMap<object, Readonly<{
@@ -882,7 +935,37 @@ export function createStablePluginExecService(params: Readonly<{
             if (params.agentCli === undefined) {
                 fail('plugin_exec_agent_cli_readiness_unavailable', 'Agent CLI readiness is unavailable in this invocation host');
             }
-            const result = await params.agentCli.checkReadiness(request);
+            const result = await params.agentCli.checkReadiness(request, request.includeVersion === true ? {
+                async runVersionCommand(input) {
+                    guard(input.signal);
+                    const toolId = findCatalogEntry(input.agentId)?.agentCliSystemTool?.toolId;
+                    if (!toolId) fail('plugin_exec_agent_cli_version_unavailable', 'Agent CLI has no declared system-tool execution binding');
+                    const resolved = await resolvePluginExecSystemToolForHost(service, {
+                        toolId,
+                        purpose: 'Read the installed Agent CLI version',
+                        preferredPath: input.launch.resolvedPath,
+                        signal: input.signal,
+                    });
+                    if (resolved.command !== input.launch.command
+                        || (resolved.args ?? []).length !== input.launch.args.length
+                        || !(resolved.args ?? []).every((arg, index) => arg === input.launch.args[index])) {
+                        fail('plugin_exec_agent_cli_version_unavailable', 'Authorized Agent CLI launch does not match the resolved CLI');
+                    }
+                    const processResult = await service.run({
+                        executable: resolved.executable,
+                        args: input.args,
+                        timeoutMs: input.timeoutMs,
+                    }, { signal: input.signal });
+                    guard(input.signal);
+                    if (processResult.termination.observed.kind !== 'exit' || processResult.termination.observed.exitCode !== 0) {
+                        fail('plugin_exec_agent_cli_version_failed', 'Agent CLI version execution did not finish successfully');
+                    }
+                    return {
+                        stdout: Buffer.from(processResult.stdout).toString('utf8'),
+                        stderr: Buffer.from(processResult.stderr).toString('utf8'),
+                    };
+                },
+            } : undefined);
             guard(request.signal);
             return Object.freeze({ launchable: Object.freeze([...result.launchable]) });
         },
@@ -1093,9 +1176,16 @@ export function createStablePluginExecService(params: Readonly<{
             await launch.release();
             return fail('plugin_exec_spawn_failed', 'Process could not be started', error);
         }
-        const supervised = spawnAuthorizedHostExecLaunchForHost({ ...launch, env: environment }, {
+        const linuxProcessLaunchScope = process.platform === 'linux' && managedCustody
+            ? await prepareCgroupProcessLaunchScope() : null;
+        try { guard(options?.signal, lifetime); }
+        catch (error) { await launch.release(); throw error; }
+        const supervised = spawnAuthorizedHostExecLaunchForHost({ ...launch, env: environment,
+            processOwnerTag: managedCustody?.processOwnerTag ?? processOwnerTag }, {
+            readSpawnFailureLimits: params.readSpawnFailureLimits,
             ...(lifetime ? { signal: lifetime.signal } : options?.signal ? { signal: options.signal } : {}),
             ...(managedCustody?.processCustody ? { processCustody: managedCustody.processCustody } : {}),
+            ...(linuxProcessLaunchScope ? { linuxProcessLaunchScope } : {}),
             ...(params.recordRuntimeLimitMeasurement
                 ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
                 : {}),
@@ -1180,13 +1270,11 @@ export function createStablePluginExecService(params: Readonly<{
             },
             dispose: () => protocol.dispose(),
         });
-        let disposePromise: Promise<void> | null = null;
-        const dispose = (): Promise<void> => {
-            disposePromise ??= (async () => {
-                protocol.dispose();
-                await supervised.dispose('caller');
-            })();
-            return disposePromise;
+        const dispose = async (): Promise<void> => {
+            protocol.dispose();
+            // The supervisor owns joining and re-observing explicit cleanup.
+            // Do not turn its failed observation into a permanent client latch.
+            await supervised.dispose('caller');
         };
         void supervised.handle.wait().then((result) => {
             protocol.settleExit(new PluginExecClientError(
@@ -1250,13 +1338,9 @@ export function createStablePluginExecService(params: Readonly<{
             },
             dispose: () => protocol.dispose(),
         });
-        let disposePromise: Promise<void> | null = null;
-        const dispose = (): Promise<void> => {
-            disposePromise ??= (async () => {
-                protocol.dispose();
-                await supervised.dispose('caller');
-            })();
-            return disposePromise;
+        const dispose = async (): Promise<void> => {
+            protocol.dispose();
+            await supervised.dispose('caller');
         };
         void supervised.handle.wait().then((result) => {
             const observed = result.termination.observed;
@@ -1295,13 +1379,9 @@ export function createStablePluginExecService(params: Readonly<{
             },
             dispose: () => protocol.dispose(),
         });
-        let disposePromise: Promise<void> | null = null;
-        const dispose = (): Promise<void> => {
-            disposePromise ??= (async () => {
-                protocol.dispose();
-                await supervised.dispose('caller');
-            })();
-            return disposePromise;
+        const dispose = async (): Promise<void> => {
+            protocol.dispose();
+            await supervised.dispose('caller');
         };
         void supervised.handle.wait().then(() => {
             protocol.settleExit(new PluginExecClientError('PLUGIN_EXEC_CLIENT_EXITED', 'Plugin process terminated'));
@@ -1314,6 +1394,11 @@ export function createStablePluginExecService(params: Readonly<{
         options?: { signal?: AbortSignal },
     ): Promise<PluginProtocolClientHandle<'loopbackWebSocketJson'>> {
         const supervised = await launchProcess(spec.launch, options, true);
+        const process = {
+            child: { stdin: supervised.child.stdin, stdout: supervised.child.stdout },
+            handle: adaptStablePluginExecLegacyProcessHandle(supervised),
+            readStderrPreview: () => Buffer.from(supervised.readBufferedStderr()).toString('utf8'),
+        };
         let protocol: Awaited<ReturnType<typeof createLoopbackWebSocketJsonClient>>;
         try {
             if (spec.handshake) {
@@ -1332,14 +1417,7 @@ export function createStablePluginExecService(params: Readonly<{
                         buildHeaders: (endpoint) => endpoint.headers ?? [],
                     },
                     limits: { maxMessageBytes: spec.maxFrameBytes },
-                    process: {
-                        child: {
-                            stdin: supervised.child.stdin,
-                            stdout: supervised.child.stdout,
-                        },
-                        handle: adaptStablePluginExecLegacyProcessHandle(supervised),
-                        readStderrPreview: () => Buffer.from(supervised.readBufferedStderr()).toString('utf8'),
-                    },
+                    process,
                     ...(options?.signal ? { optionsSignal: options.signal } : {}),
                     ...(params.recordRuntimeLimitMeasurement
                         ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
@@ -1347,6 +1425,7 @@ export function createStablePluginExecService(params: Readonly<{
                 });
             } else {
                 protocol = await createLoopbackWebSocketJsonClient({
+                    process,
                     endpoint: {
                         host: spec.endpoint.host,
                         port: spec.endpoint.port,
@@ -1374,13 +1453,9 @@ export function createStablePluginExecService(params: Readonly<{
             },
             dispose: () => protocol.dispose(),
         });
-        let disposePromise: Promise<void> | null = null;
-        const dispose = (): Promise<void> => {
-            disposePromise ??= (async () => {
-                protocol.dispose();
-                await supervised.dispose('caller');
-            })();
-            return disposePromise;
+        const dispose = async (): Promise<void> => {
+            protocol.dispose();
+            await supervised.dispose('caller');
         };
         void supervised.handle.wait().then(() => {
             protocol.settleExit(new PluginExecClientError('PLUGIN_EXEC_CLIENT_EXITED', 'Plugin process terminated'));
@@ -1456,6 +1531,8 @@ export function createStablePluginExecService(params: Readonly<{
         clients,
     });
     INTERNAL_PREAUTHORIZED_SPAWNS.set(service, preauthorizedSpawns);
+    INTERNAL_OWNER_REBINDERS.set(service, (owner, signal) => createStablePluginExecService({ ...params,
+        processOwner: owner, signal: signal ? AbortSignal.any([params.signal, signal]) : params.signal }));
     INTERNAL_LAUNCH_AUTHORIZERS.set(service, authorizeLaunch);
     INTERNAL_PROCESS_CUSTODY.set(service, custody);
     INTERNAL_EXECUTABLE_RESOLVERS.set(service, async (executable, options) => {

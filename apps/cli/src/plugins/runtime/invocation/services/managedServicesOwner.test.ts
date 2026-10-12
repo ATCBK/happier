@@ -50,6 +50,7 @@ import { registerDaemonLocalServicePreviewSnapshotHandler } from '@/rpc/handlers
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
 import { createLocalServiceActionConfirmationNonceV1 } from '@happier-dev/protocol/local/services/actions/v1';
+import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
@@ -71,7 +72,7 @@ import {
     readPluginExecProcessCustodyForHost,
 } from './exec';
 import { associateSupervisedPluginProcessHandleForHost, readSupervisedPluginProcessIdForHost } from '../../exec/processSupervisor';
-import * as processTreeBoundary from '@/agent/runtime/process/killProcessTree';
+import * as processTreeBoundary from '@/processes/terminate/terminateProcessTree';
 import { waitForProcessExit } from '@/testkit/process/spawn';
 import {
     createLoggerAndEventsAvailablePluginInvocationServiceBinding,
@@ -789,6 +790,9 @@ describe('managed-services SVC09 owner', () => {
             expect(harness.exec.spawn).toHaveBeenCalledOnce();
             expect(harness.owner.readSharedProviderGatewayRuntime(gateway)).toEqual({ status: 'running', reachability: 'not_checked' });
             expect(harness.owner.readSharedProviderGatewayRuntime({ ...gateway, accountId: 'other-account' })).toEqual({ status: 'idle', reachability: 'not_checked' });
+            expect(harness.owner.readSharedProviderGatewayRuntime({ ...gateway, homeId: 'other-home' }).status).toBe('idle');
+            expect(harness.owner.readSharedProviderGatewayRuntime({ ...gateway, connectionId: 'other-connection' }).status).toBe('idle');
+            expect(harness.owner.readSharedProviderGatewayRuntime({ ...gateway, machineId: 'other-machine' }).status).toBe('idle');
             const registryPath = harness.exec.spawn.mock.calls[0]?.[0].env?.CONSUMER_ACCESS_PATH;
             expect(registryPath).toBeTypeOf('string');
             const registry = JSON.parse(await readFile(registryPath!, 'utf8'));
@@ -822,6 +826,9 @@ describe('managed-services SVC09 owner', () => {
             expect(harness.owner.readSharedProviderGatewayRuntime(gateway).status).toBe('running');
             await third.dispose();
             expect(restarted.dispose).toHaveBeenCalledOnce();
+            expect(harness.owner.readSharedProviderGatewayRuntime(gateway).status).toBe('idle');
+            await harness.owner.dispose();
+            expect(harness.owner.readSharedProviderGatewayRuntime(gateway)).toEqual({ status: 'not_checked', reachability: 'not_checked' });
         } finally {
             await harness.owner.dispose();
             await rm(directory, { recursive: true, force: true });
@@ -840,8 +847,8 @@ describe('managed-services SVC09 owner', () => {
         const settlement = deferred<void>();
         let cleanupStarted = false;
         let establishmentFinished = false;
-        const terminate = processTreeBoundary.killProcessTree;
-        const boundary = vi.spyOn(processTreeBoundary, 'killProcessTree').mockImplementation(async (...args) => {
+        const terminate = processTreeBoundary.terminateProcessTree;
+        const boundary = vi.spyOn(processTreeBoundary, 'terminateProcessTree').mockImplementation(async (...args) => {
             if (args[0].pid === pid) { cleanupStarted = true; await settlement.promise; }
             await terminate(...args);
         });
@@ -947,6 +954,7 @@ describe('managed-services SVC09 owner', () => {
         const { workspace, declaration, requester } = input;
         try {
             const handle = await owner.superviseProject(input);
+            expect(owner.readProcessRoots()[0]?.owner).toMatchObject({ kind: 'service', serviceId: handle.instanceId });
             expect(handle).toMatchObject({
                 instanceId: 'owner-lifecycle-1', serviceId: input.serviceId,
                 workspace, declaration, requester, cwd: workspace.rootPath,
@@ -985,6 +993,61 @@ describe('managed-services SVC09 owner', () => {
             expect(owner.readRetainedSemanticCustodyCount()).toBe(0);
             expect(owner.resolveProjectService(target)).toEqual({ status: 'unknown' });
         } finally {
+            await owner.dispose();
+        }
+    });
+
+    it('captures a Project service original Start Action before its process custody ends', async () => {
+        const { owner } = createLifecycleHarness([], 'daemon');
+        const input = { ...createProjectLifecycleInput(), specIdentity: 'a'.repeat(64) };
+        try {
+            const handle = await owner.superviseProject(input);
+            const target = owner.readResourceTargets()[0];
+            expect(target?.root.owner).toEqual({ kind: 'service', serviceId: handle.instanceId, workspaceId: input.workspace.id });
+            expect(target?.project).toEqual({ workspace: input.workspace, cwd: input.cwd, requester: input.requester });
+            expect(target?.wayBack).toEqual([{ label: 'start_again', actionId: 'localServices.launcher.start', input: {
+                machineId: input.workspace.machineId, targetId: input.serviceId,
+                workspace: { serverId: input.workspace.serverId, machineId: input.workspace.machineId,
+                    workspaceId: input.workspace.id, rootPath: input.workspace.rootPath },
+                declaration: input.declaration,
+                expectedEffectDigest: input.specIdentity,
+            } }]);
+            expect(DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(target?.wayBack?.[0]?.input).success).toBe(true);
+            await target?.root.stop?.();
+            expect(handle.snapshot().state).toBe('stopped');
+            expect(owner.readResourceTargets()).toEqual([]);
+            // The captured Action survives removal of the exact stopped handle.
+            expect(target?.wayBack?.[0]?.input.targetId).toBe(input.serviceId);
+            expect(target?.project).toEqual({ workspace: input.workspace, cwd: input.cwd, requester: input.requester });
+        } finally { await owner.dispose(); }
+    });
+
+    it('refuses an unconfirmed Stop from retained service process custody', async () => {
+        const { owner } = createLifecycleHarness([], 'daemon');
+        let admitted = true;
+        let stopAllowed = false;
+        const input = createProjectLifecycleInput({ isCurrent: () => admitted });
+        const terminate = processTreeBoundary.terminateProcessTree;
+        // Process-tree termination is OS IO; supervisor and semantic custody remain real.
+        const boundary = vi.spyOn(processTreeBoundary, 'terminateProcessTree').mockImplementation(async (...args) => {
+            if (!stopAllowed) throw new PluginError({ code: 'plugin_managed_server_termination_incomplete', message: 'OS retained the process' });
+            return await terminate(...args);
+        });
+        const unsubscribe = owner.activity.subscribe(() => {
+            if (owner.readProcessRoots().some(root => root.stop)) admitted = false;
+        });
+        try {
+            await expect(owner.superviseProject(input)).rejects.toBeInstanceOf(Error);
+            const root = owner.readProcessRoots()[0];
+            expect(root?.live).toBe(true);
+            expect(root?.stop).toBeTypeOf('function');
+            await expect(root!.stop!()).rejects.toMatchObject({ code: 'plugin_managed_server_termination_incomplete' });
+            stopAllowed = true;
+            await expect(root!.stop!()).resolves.toBeUndefined();
+        } finally {
+            unsubscribe();
+            stopAllowed = true;
+            boundary.mockRestore();
             await owner.dispose();
         }
     });
@@ -1191,17 +1254,27 @@ describe('managed-services SVC09 owner', () => {
     });
 
     it('supervises a URL-less worker through the public owner and refuses HTTP-only operations', async () => {
-        const { owner, exec: lifecycleExec } = createLifecycleHarness([createLifecycleProcess(77)], 'daemon');
-        const services = owner.bindScope(lifecycleScope({ occurrenceId: 'worker' }), lifecycleExec);
-        const handle = await services.supervise({
+        const replacementProcess = createLifecycleProcess(77);
+        const { owner, exec: lifecycleExec } = createLifecycleHarness([createLifecycleProcess(77), replacementProcess], 'sessionRunner');
+        const services = owner.bindScope(lifecycleScope({ occurrenceId: 'worker', sessionId: 'worker-session' }), lifecycleExec);
+        const spec = {
             id: 'worker',
             mode: { kind: 'spawn', launch: { executable: { kind: 'systemTool', id: 'fixture.server' } }, endpoint: { kind: 'none' } },
-        });
+        } as const;
+        const handle = await services.supervise(spec);
+        const captured = owner.readResourceTargets()[0];
+        expect(captured?.root.owner).toMatchObject({ kind: 'service', sessionId: 'worker-session' });
+        expect(captured?.wayBack).toBeUndefined();
+        expect(captured?.project).toBeUndefined();
         expect(handle.snapshot()).toMatchObject({ state: 'running', mode: 'spawn', baseUrl: null, lastHealthyAtMs: null });
         await expect(handle.request({ pathAndQuery: '/health' })).rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
         await expect(handle.waitUntilHealthy()).rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
         expect(await handle.stop()).toEqual({ status: 'stopped' });
         expect(handle.snapshot().state).toBe('stopped');
+        const replacement = await services.supervise(spec);
+        await captured?.root.stop?.();
+        expect(replacement.snapshot().state).toBe('running');
+        expect(replacementProcess.dispose).not.toHaveBeenCalled();
         await owner.dispose();
     });
 

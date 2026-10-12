@@ -12,6 +12,7 @@ import {
     authorizeResolvedProjectExecLaunchForHost,
     createStableRunnerPluginExecService,
     createStablePluginExecService,
+    bindPluginExecProcessOwnerForHost,
     installManagedProcessCustodyForHost,
     createProjectNativeEnvironmentIoForHost,
     produceProjectLaunchEnvironmentForHost,
@@ -26,6 +27,13 @@ import { createProjectNativeIo } from '@/workspaces/projectSetup/projectNativeIo
 import { ProjectNativeEnvironmentUncertainError } from '@/workspaces/environment/produceProjectNativeEnvironment';
 import { waitForProcessExit } from '@/testkit/process/spawn';
 import { resolvePluginPathWithinRoots } from './filesystem';
+import { parseProcessOwnerTag } from '@/processes/ownerTag';
+import { createEndOwnerRemainder } from '@/daemon/processes/endOwnerRemainder';
+import { createProcessOwnershipRuntime } from '@/daemon/processes/ownership/processOwnershipRuntime';
+import { readProcessCensus } from '@/processes/census/processCensus';
+import { resolveProcessOwnership } from '@/daemon/processes/ownership/resolveProcessOwnership';
+import type { HappierProcessRoot } from '@/daemon/processes/ownership/types';
+import { captureProcessTree, terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import type { PluginFileSystemRoots } from './types';
 
 const executable = Object.freeze({ kind: 'systemTool', id: 'fixture.node' } as const satisfies ManagedExecutableRef);
@@ -52,6 +60,73 @@ function createService(options?: Readonly<{ current?: () => boolean; controller?
 }
 
 describe('createStablePluginExecService', () => {
+    it('attributes generic native IO to Happier instead of borrowing the invoking Session owner', async () => {
+        vi.stubEnv('HAPPIER_PROCESS_OWNER', 'v1.0123456789ab.session.session-caller');
+        try {
+            const io = createProjectNativeEnvironmentIoForHost({ resolveTool: async () => null });
+            const observed = await io.run({ command: process.execPath,
+                args: ['-e', 'process.stdout.write(process.env.HAPPIER_PROCESS_OWNER || "absent")'],
+                cwd: process.cwd(), env: { HAPPIER_PROCESS_OWNER: 'forged-native-owner' } });
+            expect(parseProcessOwnerTag(observed.stdout)?.owner).toEqual({ kind: 'happier' });
+        } finally { vi.unstubAllEnvs(); }
+    });
+    it('keeps finite Run and managed Service owners separate from retained Session services', async () => {
+        const retained = createStablePluginExecService({
+            processOwner: { kind: 'session', sessionId: 'session-retained' },
+            allowedExecutables: [executable], signal: new AbortController().signal,
+            isOccurrenceCurrent: () => true, resolveExecutable: async () => ({ command: process.execPath }),
+            resolvePath: async () => process.cwd(), transformAgentChildLaunchEnvironment: () => ({}),
+        });
+        const args = ['-e', 'process.stdout.write(process.env.HAPPIER_PROCESS_OWNER || "absent")'];
+        const run = bindPluginExecProcessOwnerForHost(retained, { kind: 'run', runId: 'run-finite', sessionId: 'session-retained' });
+        expect(parseProcessOwnerTag(Buffer.from((await run.run({ executable, args })).stdout).toString())?.owner)
+            .toEqual({ kind: 'run', runId: 'run-finite' });
+        const request = { executable, args };
+        const authorization = installManagedProcessCustodyForHost(retained, request, null, undefined,
+            { kind: 'service', serviceId: 'service-managed', sessionId: 'session-retained' });
+        try {
+            const handle = await retained.spawn(request);
+            expect(parseProcessOwnerTag(Buffer.from((await handle.wait()).stdout).toString())?.owner)
+                .toEqual({ kind: 'service', serviceId: 'service-managed' });
+        } finally { authorization.dispose(); }
+        expect(parseProcessOwnerTag(Buffer.from((await retained.run({ executable, args })).stdout).toString())?.owner)
+            .toEqual({ kind: 'session', sessionId: 'session-retained' });
+    });
+    it('retires Run execution when its lifetime ends without retiring the retained Session service', async () => {
+        const retained = createService();
+        const lifetime = new AbortController();
+        const run = bindPluginExecProcessOwnerForHost(retained, { kind: 'run', runId: 'run-cancelled' }, lifetime.signal);
+        lifetime.abort();
+        await expect(run.spawn({ executable })).rejects.toMatchObject({ code: 'plugin_exec_aborted' });
+        const sessionLaunch = await authorizePluginExecLaunchForHost(retained, { executable });
+        expect(sessionLaunch.command).toBe(process.execPath);
+        await sessionLaunch.release();
+    });
+    it('restores the host owner after a plugin forges it or the final environment replaces it', async () => {
+        const hostTag = 'v1.0123456789ab.run.run-host';
+        vi.stubEnv('HAPPIER_PROCESS_OWNER', hostTag);
+        try {
+            const service = createStablePluginExecService({
+                allowedExecutables: [executable], allowedEnvKeys: ['HAPPIER_PROCESS_OWNER'],
+                signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+                resolveExecutable: async () => ({ command: process.execPath }),
+                resolvePath: async () => process.cwd(),
+                transformAgentChildLaunchEnvironment: () => ({ HAPPIER_PROCESS_OWNER: 'forged-provider-owner' }),
+            });
+            const child = await service.spawn({ executable, env: { HAPPIER_PROCESS_OWNER: 'forged-plugin-owner' },
+                args: ['-e', 'process.stdout.write(process.env.HAPPIER_PROCESS_OWNER || "absent")'] });
+            const result = await child.wait();
+            expect(Buffer.from(result.stdout).toString()).toBe(hostTag);
+            const omitted = createStablePluginExecService({
+                allowedExecutables: [executable], signal: new AbortController().signal,
+                isOccurrenceCurrent: () => true, resolveExecutable: async () => ({ command: process.execPath }),
+                resolvePath: async () => process.cwd(), transformAgentChildLaunchEnvironment: () => ({}),
+            });
+            const second = await omitted.spawn({ executable,
+                args: ['-e', 'process.stdout.write(process.env.HAPPIER_PROCESS_OWNER || "absent")'] });
+            expect(Buffer.from((await second.wait()).stdout).toString()).toBe(hostTag);
+        } finally { vi.unstubAllEnvs(); }
+    });
     it('executes a selected absolute process cwd outside plugin filesystem roots through the canonical owner', async () => {
         await withTempDir('happier selected machine cwd ünicode ', async root => {
             const mismatches: unknown[] = [];
@@ -224,14 +299,25 @@ describe('createStablePluginExecService', () => {
         });
     });
 
-    it.skipIf(process.platform === 'win32')('does not complete built-in native IO from launcher exit while its owned descendant remains live', async () => {
+    it.skipIf(process.platform === 'win32')('settles generic native IO and observes its known survivor without sweeping shared Happier peers', async () => {
         await withTempDir('happier builtin native root exit ', async root => {
             const pidsPath = join(root, 'owned-pids.json');
-            const io = createProjectNativeEnvironmentIoForHost({ resolveTool: async () => null });
+            const owner = { kind: 'happier' } as const;
+            const initial = await readProcessCensus({ freshness: 'fresh', scope: 'all' });
+            if (initial.status !== 'ok') throw new Error('Native census unavailable');
+            const self = initial.rows.find(row => row.pid === process.pid)!;
+            const roots: HappierProcessRoot[] = [{ owner, pid: self.pid, start: self.start, live: true, ownerCreatedAtMs: 0 }];
+            const runtime = createProcessOwnershipRuntime({ daemonScopeKey: '123456789abc', listRoots: () => roots });
+            let observed = false;
+            const ownerRemainder = createEndOwnerRemainder({ processOwnershipRuntime: runtime, daemonScopeKey: '123456789abc',
+                retainEndedRoots: ended => { roots.push(...ended); }, firstPass: () => { observed = true; } });
+            const io = createProjectNativeIo({ ownerRemainder }).environmentIo;
             const pending = io.run({ command: process.execPath, cwd: root, env: {}, args: ['-e', [
                 'const cp=require("node:child_process"),fs=require("node:fs");',
                 'const child=cp.spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});child.unref();',
+                'process.on("SIGTERM",()=>setTimeout(()=>process.exit(0),1000));',
                 'fs.writeFileSync(process.argv[1],JSON.stringify([process.pid,child.pid]));process.stdout.write("{}");process.stderr.write("native-stderr");',
+                'setInterval(()=>{},1000);',
             ].join(''), pidsPath] });
             // Observe rejection even when an earlier assertion fails, without
             // changing the real IO/process owner outcome.
@@ -242,22 +328,18 @@ describe('createStablePluginExecService', () => {
                     pids = JSON.parse(await readFile(pidsPath, 'utf8'));
                     expect(pids).toHaveLength(2);
                 });
+                process.kill(pids[0]!, 'SIGTERM');
                 await expect(waitForProcessExit(pids[0]!)).resolves.toBe(true);
                 const result = await pending;
                 expect(result).toEqual({ exitCode: 0, stdout: '{}', stderr: 'native-stderr' });
-                // A successful native result must follow full owned-resource
-                // cleanup; an already-dead launcher is not its proof.
-                if (process.platform === 'linux') {
-                    const stat = await readFile(`/proc/${pids[1]!}/stat`, 'utf8').catch(error => {
-                        if (error.code === 'ENOENT') return null;
-                        throw error;
-                    });
-                    // An orphaned zombie cannot execute, even if init has not
-                    // yet reaped its numeric PID (the existing native IO rule).
-                    expect(stat === null || stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z ')).toBe(true);
-                } else {
-                    expect(() => process.kill(pids[1]!, 0)).toThrow();
-                }
+                expect(observed).toBe(true);
+                expect(() => process.kill(pids[1]!, 0)).not.toThrow();
+                expect(roots.some(candidate => candidate.pid === process.pid && candidate.live)).toBe(true);
+                const current = await runtime.readOwners({ freshness: 'fresh' });
+                if (current.status !== 'ok') throw new Error('Native census unavailable');
+                const rows = resolveProcessOwnership({ snapshot: current.snapshot, roots,
+                    daemonScopeKey: '123456789abc', daemonPrincipal: self.principal });
+                expect(rows.find(row => row.pid === pids[1])?.level).toBe('left_behind');
             } finally {
                 for (const pid of pids) {
                     try { process.kill(pid, 'SIGKILL'); } catch { /* Already absent on success. */ }
@@ -265,7 +347,7 @@ describe('createStablePluginExecService', () => {
                 await pending.catch(() => undefined);
             }
         });
-    });
+    }, 15_000);
 
     it('authorizes an admitted already-resolved host command through the same final environment owner', async () => {
         await withTempDir('happier resolved Project launch ', async (root) => {
@@ -368,8 +450,12 @@ describe('createStablePluginExecService', () => {
             try {
                 const observed = await processOwner.handle.wait();
                 expect(observed.termination.observed).toEqual({ kind: 'exit', exitCode: 0 });
-                expect(JSON.parse(Buffer.from(observed.stdout).toString('utf8'))).toEqual({
-                    cwd: root, args: ['--session', 'opaque "resume" \\'],
+                // This controlled OS fixture emits its actual cwd and environment.
+                const actual: { cwd: string; args: string[]; env: Record<string, string> } =
+                    JSON.parse(Buffer.from(observed.stdout).toString('utf8'));
+                if (process.platform === 'darwin') delete actual.env.__CF_USER_TEXT_ENCODING;
+                expect(actual).toEqual({
+                    cwd: await realpath(root), args: ['--session', 'opaque "resume" \\'],
                     env: { KEEP: 'native', NATIVE: 'active', PROJECT_KEY: 'exact-project-key' },
                 });
             } finally {
@@ -1263,7 +1349,7 @@ describe('createStablePluginExecService', () => {
         });
     });
 
-    it('holds a managed executable lease after root exit until owned tree settlement', async () => {
+    it.each([false, true])('settles a managed executable lease without claiming cleanup of unobserved descendants (pre-exit opportunity=%s)', async (preExitOpportunity) => {
         await withTempDir('happier managed executable custody ', async root => {
         const release = vi.fn();
         const service = createStablePluginExecService({
@@ -1275,11 +1361,17 @@ describe('createStablePluginExecService', () => {
         });
 
         const childPidPath = join(root, 'child.pid');
+        const peer = await service.spawn({ executable, args: ['-e', 'setInterval(()=>{},1000)'] });
+        const peerPid = readSupervisedPluginProcessIdForHost(peer);
+        if (peerPid === null) throw new Error('Expected a live shared-owner peer');
+        const peerCapture = await captureProcessTree({ pid: peerPid });
+        if (peerCapture.status !== 'ok') throw new Error('Expected the peer native identity');
+        const peerIdentity = peerCapture.capturedTargets.find(target => target.pid === peerPid)!;
         const source = process.platform === 'win32' ? 'process.stdout.write("root output");' : [
             'const {spawn}=require("node:child_process"),fs=require("node:fs");',
             'const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});child.unref();',
             `fs.writeFileSync(${JSON.stringify(childPidPath)},String(child.pid));`,
-            'process.stdout.write("root output");',
+            ...(preExitOpportunity ? ['process.stdout.write("root output");setTimeout(()=>process.exit(0),1000);'] : []),
         ].join('');
         const handle = await service.spawn({
             executable,
@@ -1288,7 +1380,7 @@ describe('createStablePluginExecService', () => {
         try {
             expect(release).not.toHaveBeenCalled();
             const result = await handle.wait();
-            expect(new TextDecoder().decode(result.stdout)).toBe('root output');
+            expect(new TextDecoder().decode(result.stdout)).toBe(preExitOpportunity || process.platform === 'win32' ? 'root output' : '');
             expect(result.termination.observed).toEqual({ kind: 'exit', exitCode: 0 });
             const childPid = process.platform === 'win32' ? undefined : Number(await readFile(childPidPath, 'utf8'));
             if (childPid !== undefined) {
@@ -1296,12 +1388,36 @@ describe('createStablePluginExecService', () => {
                 expect(process.kill(childPid, 0)).toBe(true);
             }
             expect(release).not.toHaveBeenCalled();
+            const wrongGeneration = await terminateProcessTree({ targets: [{ pid: peerPid, start: {
+                startTimeMs: peerIdentity.start.startTimeMs + 1,
+                ...(peerIdentity.start.native ? { native: `${peerIdentity.start.native}:different-generation` } : {}),
+            } }], tree: false });
+            expect(wrongGeneration.outcomes).toContainEqual({ pid: peerPid, outcome: 'refused', reason: 'identity_changed' });
+            expect(() => process.kill(peerPid, 0)).not.toThrow();
             await handle.dispose();
-            if (childPid !== undefined) await expect(waitForProcessExit(childPid)).resolves.toBe(true);
+            if (childPid !== undefined) {
+                if (preExitOpportunity) await expect(waitForProcessExit(childPid)).resolves.toBe(true);
+                else expect(() => process.kill(childPid, 0)).not.toThrow();
+            }
             await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+            expect(() => process.kill(peerPid, 0)).not.toThrow();
             // Output/terminal facts stay usable after resource settlement.
             expect(await handle.wait()).toBe(result);
-        } finally { await handle.dispose(); }
+        } finally {
+            // The probe owns this exact child. Preserve native identity during
+            // cleanup even when production truthfully refuses a missing root.
+            if (process.platform !== 'win32') {
+                const pid = Number(await readFile(childPidPath, 'utf8').catch(() => ''));
+                if (Number.isSafeInteger(pid) && pid > 0) {
+                    const captured = await captureProcessTree({ pid });
+                    if (captured.status === 'ok') await terminateProcessTree({
+                        targets: captured.capturedTargets, tree: false, firstSignal: 'SIGKILL', graceMs: 100,
+                    });
+                }
+            }
+            await handle.dispose().catch(() => undefined);
+            await peer.dispose();
+        }
         });
     });
 
@@ -1328,6 +1444,51 @@ describe('createStablePluginExecService', () => {
             launch: { executable },
             maxFrameBytes: 0,
         })).rejects.toMatchObject({ code: 'plugin_exec_invalid_limit' });
+    });
+
+    it.skipIf(process.platform === 'win32')('rechecks protocol process cleanup after an unconfirmed disposal instead of retaining the failed observation', async () => {
+        await withTempDir('happier protocol cleanup recovery ', async root => {
+            const pidPath = join(root, 'survivor.pid');
+            const service = createStablePluginExecService({
+                processOwner: { kind: 'run', runId: 'protocol-cleanup-recovery' },
+                allowedExecutables: [executable], signal: new AbortController().signal,
+                isOccurrenceCurrent: () => true,
+                resolveExecutable: async () => ({ command: process.execPath }),
+                resolvePath: async () => root,
+            });
+            const handle = await service.clients.spawn({
+                kind: 'jsonStream', maxFrameBytes: 4096,
+                launch: { executable, args: ['-e', [
+                    'const cp=require("node:child_process"),fs=require("node:fs");',
+                    'const child=cp.spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});',
+                    'child.unref();fs.writeFileSync(process.argv[1],String(child.pid));',
+                ].join(''), pidPath] },
+            });
+            let survivor: number | undefined;
+            let survivorCapture: Extract<Awaited<ReturnType<typeof captureProcessTree>>, { status: 'ok' }> | undefined;
+            try {
+                await handle.wait();
+                survivor = Number(await readFile(pidPath, 'utf8'));
+                expect(Number.isSafeInteger(survivor)).toBe(true);
+                const capture = await captureProcessTree({ pid: survivor });
+                if (capture.status !== 'ok') throw new Error('Fixture survivor identity could not be captured');
+                survivorCapture = capture;
+                await expect(handle.dispose()).rejects.toMatchObject({ code: 'plugin_exec_termination_incomplete' });
+                // The original observation must stay failed while the survivor
+                // exists. Only this fixture's real process is stopped here.
+                expect(() => process.kill(survivor!, 0)).not.toThrow();
+                await expect(terminateProcessTree({ targets: capture.capturedTargets,
+                    tree: false, firstSignal: 'SIGKILL', graceMs: 100 })).resolves.toMatchObject({ status: 'complete' });
+                await expect(waitForProcessExit(survivor!)).resolves.toBe(true);
+                await expect(handle.dispose()).resolves.toBeUndefined();
+                await expect(service.run({ executable, args: ['-e', 'process.stdout.write("next turn")'] }))
+                    .resolves.toMatchObject({ termination: { observed: { kind: 'exit', exitCode: 0 } } });
+            } finally {
+                if (survivorCapture) await terminateProcessTree({ targets: survivorCapture.capturedTargets,
+                    tree: false, firstSignal: 'SIGKILL', graceMs: 100 });
+                await handle.process.dispose();
+            }
+        });
     });
 
     it('returns the JSON-RPC client selected by the literal protocol spec kind', async () => {
@@ -1366,11 +1527,9 @@ describe('createStablePluginExecService', () => {
             maxFrameBytes: 4096,
         });
         try {
-            const result = await Promise.race([
-                handle.wait(),
-                new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1_000)),
-            ]);
-            expect(result).not.toBe('hung');
+            // Real OS cleanup uses the package harness budget, not a shorter
+            // phase-local stopwatch that fails while native census is pending.
+            const result = await handle.wait();
             expect(result).toMatchObject({
                 termination: { requestedBy: { kind: 'dispose', reason: 'runtimeRecovery' } },
             });

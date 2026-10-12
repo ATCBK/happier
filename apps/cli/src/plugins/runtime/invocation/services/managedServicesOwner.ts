@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { LocalServiceLaunchTargetV1 } from '@happier-dev/protocol/local/services/launcher/v1';
+import type { DaemonLocalServiceLauncherStartRequestV1, LocalServiceLaunchTargetV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { Buffer } from 'node:buffer';
 import { isAbsolute, join } from 'node:path';
 import { isWorkspacePathWithin } from '@/daemon/local/services/inventory/provenance';
@@ -18,6 +18,7 @@ import {
     type RequesterWorkAttributionV1,
 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import type { LiveWorkProducerV1, LiveWorkInventoryV1, LiveWorkItemV1 } from '@/daemon/lifecycle/managedActivity';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
 
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
 import type {
@@ -74,7 +75,9 @@ import type {
     ManagedServiceCredentialFileCleanup,
     ManagedServicesInvocationBindingContext,
     ManagedServicesInvocationOwner,
+    SharedManagedProviderGatewayIdentity,
 } from './managedServicesAdapter';
+import type { DaemonProviderConnectionViewV1 } from '@happier-dev/protocol/rpc';
 import type {
     DeclaredPluginSecretReadPort,
     DeclaredPluginSecretReadResult,
@@ -104,6 +107,27 @@ export type ProjectManagedServiceWitness = Readonly<{
     serviceId: string;
     /** Declaration execution class captured by the admitted native start. */
     execution?: 'primary' | 'portable';
+}>;
+
+/** Re-enters the original declaration's Start owner, which freshly reviews effect and placement. */
+export function buildProjectManagedServiceStartRequest(witness: ProjectManagedServiceWitness): DaemonLocalServiceLauncherStartRequestV1 {
+    return {
+        machineId: witness.workspace.machineId,
+        targetId: witness.serviceId,
+        workspace: { serverId: witness.workspace.serverId, machineId: witness.workspace.machineId,
+            workspaceId: witness.workspace.id, rootPath: witness.workspace.rootPath },
+        declaration: witness.declaration,
+    };
+}
+
+export type ManagedServiceResourceTarget = Readonly<{
+    root: HappierProcessRootSource;
+    project?: Pick<ProjectManagedServiceWitness, 'workspace' | 'cwd' | 'requester'>;
+    wayBack?: readonly Readonly<{
+        label: 'start_again';
+        actionId: 'localServices.launcher.start';
+        input: DaemonLocalServiceLauncherStartRequestV1;
+    }>[];
 }>;
 export type ProjectManagedServiceHandle = ManagedServiceHandle & ProjectManagedServiceWitness & Readonly<{
     instanceId: string;
@@ -2760,6 +2784,10 @@ type SessionManagedServiceIdentity = Readonly<{
     | Readonly<{ instanceId: string; occurrenceId?: never }>
 );
 
+function sharedProviderGatewayOperationId(gateway: SharedManagedProviderGatewayIdentity): string {
+    return `sharedGateway:${JSON.stringify([gateway.homeId, gateway.accountId, gateway.connectionId, gateway.machineId])}`;
+}
+
 export type ManagedServicesOwnerInput = Readonly<{
     processSupervisorHost: ManagedServiceProcessSupervisorHost;
     sharedGatewayAccessDirectory?: string;
@@ -2795,6 +2823,10 @@ export type ManagedServicesOwnerInput = Readonly<{
 }>;
 
 export function createManagedServicesOwner(input: ManagedServicesOwnerInput): ManagedServicesInvocationOwner & Readonly<{
+    /** Host-private read of incumbent supervisor records; no root registry is retained. */
+    readProcessRoots(): readonly HappierProcessRootSource[];
+    /** Captures exact incumbent Stop custody and its supported original Start Action. */
+    readResourceTargets(): readonly ManagedServiceResourceTarget[];
     /** Private daemon projection of the same retained supervisor custody. */
     activity: LiveWorkProducerV1;
     dispose(options?: Readonly<{ preserveProjectServices?: boolean; preserveSharedProviderServices?: boolean }>): Promise<void>;
@@ -2804,6 +2836,8 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
     retireProjectServices(): Promise<void>;
     /** Host-private visibility for bounded custody diagnostics and owner-level tests. */
     readRetainedSemanticCustodyCount(): number;
+    /** Exact physical custody only; endpoint health never establishes peer reachability. */
+    readSharedProviderGatewayRuntime(input: SharedManagedProviderGatewayIdentity): NonNullable<DaemonProviderConnectionViewV1['runtime']['gateway']>;
     superviseProject(input: ProjectManagedServiceSupervisionInput): Promise<ProjectManagedServiceHandle>;
     stopForAccessLoss(requester: RequesterWorkAttributionV1, options?: Readonly<{
         /** Host-private frozen signed request; never a plugin/public service input. */
@@ -3369,7 +3403,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                     }
                     assertScopeCurrent(scope);
                     validateCredentialBindings(normalizedSpec, requestAuth, context);
-                    const physicalOperationId = `sharedGateway:${JSON.stringify([gateway.homeId, gateway.accountId, gateway.connectionId, gateway.machineId])}`;
+                    const physicalOperationId = sharedProviderGatewayOperationId(gateway);
                     scope = {
                         occurrenceId: scope.occurrenceId,
                         ...(scope.sourceCustody ? { sourceCustody: scope.sourceCustody } : {}),
@@ -4267,9 +4301,57 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         }
         return entry.project.handle;
     };
+    const readResourceTargets = (): readonly ManagedServiceResourceTarget[] => {
+        return [...semanticEntries.values()].flatMap(entry => {
+            if (!isManagedServiceSemanticEntry(entry)) return [];
+            const snapshot = entry.readProcessSnapshot?.();
+            if (!snapshot || snapshot.pid === null || snapshot.mode === 'externalAttach') return [];
+            const owner = { kind: 'service' as const, serviceId: snapshot.instanceId,
+                ...(entry.authority === 'plugin' ? { pluginId: entry.pluginId,
+                    ...(entry.scope.sessionId ? { sessionId: entry.scope.sessionId } : {}) }
+                    : { workspaceId: entry.project.workspace.id }) };
+            const stopHandle = entry.processHandle ?? (entry.authority === 'project' ? entry.project.handle : undefined);
+            const capturedEstablishment = entry.establishmentSettled ? entry.establishment : undefined;
+            const stop = stopHandle || capturedEstablishment ? async () => {
+                const handle = stopHandle ?? await capturedEstablishment!;
+                const result = await handle.stop();
+                if (result.status !== 'stopped') {
+                    throw new PluginError({
+                        code: result.status === 'termination_incomplete' ? 'plugin_managed_server_termination_incomplete' : 'plugin_managed_service_unavailable',
+                        message: 'Managed server termination could not be verified',
+                        retryable: true,
+                    });
+                }
+            } : undefined;
+            const root: HappierProcessRootSource = { owner, pid: snapshot.pid, ownerCreatedAtMs: snapshot.startedAtMs ?? undefined,
+                live: snapshot.state !== 'stopped',
+                ...(entry.authority === 'project' ? { requesterWorkAttributionV1: entry.project.requester } : {}),
+                ...(entry.authority === 'project' ? { workspacePath: entry.project.cwd } : {}),
+                ...(stop ? { stop } : {}) };
+            return [{ root, ...(entry.authority === 'project' ? {
+                project: { workspace: entry.project.workspace, cwd: entry.project.cwd, requester: entry.project.requester },
+                wayBack: [{ label: 'start_again' as const,
+                actionId: 'localServices.launcher.start' as const, input: {
+                    ...buildProjectManagedServiceStartRequest(entry.project), expectedEffectDigest: entry.specIdentity,
+                } }] } : {}) }];
+        });
+    };
     return Object.freeze({
         activity,
+        readResourceTargets,
+        readProcessRoots: () => readResourceTargets().map(target => target.root),
         readRetainedSemanticCustodyCount: () => semanticEntries.size,
+        readSharedProviderGatewayRuntime(gateway) {
+            if (permanentRetirementStarted) return { status: 'not_checked', reachability: 'not_checked' };
+            const operationId = sharedProviderGatewayOperationId(gateway);
+            const entries = [...semanticEntries.values()].filter(isPluginManagedServiceSemanticEntry)
+                .filter(entry => entry.sharedConsumers && entry.scope.operationId === operationId);
+            const states = entries.map(entry => entry.readProcessSnapshot?.().state);
+            // Starting and failed/uncertain custody do not prove running or idle.
+            const status = states.some(state => state === 'running' || state === 'healthy') ? 'running'
+                : states.every(state => state === 'stopped') ? 'idle' : 'not_checked';
+            return { status, reachability: 'not_checked' };
+        },
         superviseProject,
         listProjectServices,
         resolveProjectService(target: Extract<LocalServiceActionTargetV1, { kind: 'managed_service' }>) {

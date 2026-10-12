@@ -586,10 +586,15 @@ describe('plugin terminal-host creation rollback', () => {
             const operations = createClaudeUnifiedTerminalTurnOperations({
                 ctx: createPluginContextFixture(service, createEventsFixture().service),
                 directory: tmpdir(), happierSessionId: sessionId, hostPreference: 'herdr',
-                launchEnv: { HAPPIER_CLAUDE_PATH: process.execPath }, permissionMode: 'default',
+                launchEnv: { HAPPIER_CLAUDE_PATH: process.execPath, CLAUDE_CODE_ENTRYPOINT: 'happier', CLAUDECODE: '1' }, permissionMode: 'default',
             });
             try {
                 await expect(operations.startProviderSession()).resolves.toMatchObject({ hostKind: 'herdr', hostSessionName: 'default' });
+                const layout = api.requests.find((request) => request.method === 'layout.apply');
+                const root = layout?.params.root as { command?: string[] } | undefined;
+                const launchSpec: unknown = JSON.parse(await readFile(root!.command![2]!, 'utf8'));
+                expect(launchSpec).toMatchObject({ env: { CLAUDE_CODE_ENTRYPOINT: 'happier' } });
+                expect(launchSpec).not.toMatchObject({ env: { CLAUDECODE: '1' } });
                 expect(inventory.startedServers).toEqual([]);
                 expect(api.requests.find((request) => request.method === 'layout.apply')?.params).toMatchObject({
                     tab_label: `happier-claude-${sessionId}`, root: { label: `happier-claude-${sessionId}` },

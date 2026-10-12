@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { link, open, readdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { pruneLogs } from '@/utils/logs/pruneLogs';
 
 import {
     probeProcessGroupLiveness,
@@ -21,7 +22,7 @@ import {
     readPrivateOwnerFile,
     replacePrivateBearerFile,
 } from '@/daemon/privateBearerFile';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { createProcessTreeTerminator, terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { readProcessIdentityByPid, compareProcessGenerationIdentities } from '@/daemon/processIdentity';
 import {
     formatDarwinNativeStartIdentity,
@@ -29,7 +30,6 @@ import {
     parseProcessCustodyStartIdentity,
     queryProcessCustodyJob,
     resolveProcessCustodyRuntimeExecutable,
-    terminateProcessCustodyByJob,
 } from '@/subprocess/supervision/processCustody';
 import {
     MANAGED_SERVICE_NUMERIC_CONTRACT,
@@ -72,6 +72,8 @@ export interface ManagedServiceProcessDurabilityOwner {
 
 export interface ManagedServiceDurabilityOwner
     extends ManagedServiceProcessDurabilityOwner {
+    /** Exact open logs, including retained logs of current protected Session-runner instances. */
+    getCurrentLogPaths(): Promise<readonly string[]>;
     resolveEndpointProjection(
         query: ManagedServiceEndpointProjectionResolveQuery,
     ): Promise<ManagedServiceEndpointProjectionV1 | null>;
@@ -254,8 +256,8 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
     observeProcessGroupPresence?: (processGroupId: number) => Promise<ProcessLiveness>;
     /** Windows job-custody witness; injected only by tests. */
     observeProcessCustodyJob?: (jobName: string) => Promise<'absent' | 'live' | 'unknown'>;
-    /** Windows job-custody terminator; injected only by tests. */
-    terminateProcessCustodyJob?: (jobName: string) => Promise<boolean>;
+    /** Genuine OS census/signal boundaries for the single process-tree owner. */
+    processTreeSystemBoundary?: Parameters<typeof createProcessTreeTerminator>[0];
     /** Native-custody runtime resolution; injected only by tests. */
     resolveProcessCustodyRuntimeExecutable?: () => string | null;
     /** The canonical cross-platform process-tree terminator; injected only by tests. */
@@ -267,6 +269,7 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
     platform?: NodeJS.Platform;
 }>): ManagedServiceDurabilityOwner {
     const platform = params.platform ?? process.platform;
+    const terminateTargets = createProcessTreeTerminator({ platform, ...params.processTreeSystemBoundary });
     const endpointProjectionsDir = join(params.rootDir, 'endpoint-projections');
     const logsDir = join(params.rootDir, 'logs');
     const maxEndpointProjections = resolvePositiveBound(
@@ -274,6 +277,7 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
         DEFAULT_MAX_ENDPOINT_PROJECTIONS,
     );
     const maxLogBytes = resolvePositiveBound(params.maxLogBytes, DEFAULT_MAX_LOG_BYTES);
+    const openLogPaths = new Set<string>();
     let stateQueue = Promise.resolve();
 
     function runExclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -364,12 +368,8 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
     }
 
     async function terminateWindowsJobCustody(jobName: string): Promise<boolean> {
-        const executablePath = (
-            params.resolveProcessCustodyRuntimeExecutable
-            ?? resolveProcessCustodyRuntimeExecutable
-        )('win32');
-        if (!executablePath) return false;
-        return await terminateProcessCustodyByJob({ executablePath, jobName }) === 'absent';
+        const result = await terminateTargets({ targets: [], containment: { kind: 'windows_job', name: jobName }, policy: 'kill' });
+        return result.status === 'complete';
     }
 
     async function observeManagedSpawnProjectionState(
@@ -586,15 +586,6 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
         });
     }
 
-    async function pruneLogs(keepCount: number, keepName: string): Promise<void> {
-        const entries = (await readdir(logsDir)).filter((entry) => entry.endsWith('.log')).sort().reverse();
-        const keep = new Set(entries.slice(0, keepCount));
-        keep.add(keepName);
-        await Promise.all(entries
-            .filter((entry) => !keep.has(entry))
-            .map(async (entry) => await rm(join(logsDir, entry), { force: true })));
-    }
-
     async function openLog(input: Parameters<ManagedServiceDurabilityOwner['openLog']>[0]): Promise<ManagedServiceDurableLogCapture> {
         await ensureDirs();
         const nowMs = Number.isSafeInteger(input.nowMs) && (input.nowMs ?? 0) >= 0 ? input.nowMs as number : Date.now();
@@ -622,6 +613,7 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
         ].join('\n'), 'utf8').subarray(0, maxLogBytes);
         let writtenBytes = header.byteLength;
         let queue = atomicWrite(path, header.toString('utf8'));
+        openLogPaths.add(path);
         let closed = false;
         const secrets = normalizeSecretValues(input.secretValues);
         const streams = {
@@ -670,8 +662,13 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
                     appendRedacted(source, streams[source].end(), false);
                 }
                 appendRedacted('stdout', '', true);
-                await queue;
-                await runExclusive(async () => await pruneLogs(keepCount, name));
+                try {
+                    await queue;
+                    await runExclusive(async () => {
+                        const result = await pruneLogs({ dir: logsDir, suffix: '.log', keepCount, keepPaths: [path, ...await getCurrentLogPaths()] });
+                        if (result.failures[0]) throw result.failures[0].error;
+                    });
+                } finally { openLogPaths.delete(path); }
             },
         });
     }
@@ -702,7 +699,7 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
                             ? parseProcessCustodyStartIdentity(projection.process.startIdentity)
                             : null;
                         const terminated = taggedCustody?.kind === 'win32-job'
-                            ? await (params.terminateProcessCustodyJob ?? terminateWindowsJobCustody)(
+                            ? await terminateWindowsJobCustody(
                                 taggedCustody.jobName,
                             ).catch(() => false)
                             : await (params.terminateProcessTree
@@ -710,7 +707,7 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
                                     pid: number;
                                     exitCode?: number | null;
                                 }>) =>
-                                    killProcessTree(target, {
+                                    terminateProcessTree(target, {
                                         ownedProcessGroup: platform !== 'win32',
                                     })))({
                                 pid: projection.process.pid,
@@ -738,11 +735,32 @@ export function createManagedServiceDurabilityOwner(params: Readonly<{
         });
     }
 
+    async function getCurrentLogPaths(): Promise<readonly string[]> {
+        const paths = new Set(openLogPaths);
+        const currentInstances = new Set<string>();
+        for (const projection of readManagedServiceEndpointProjectionCandidates(params.rootDir)) {
+            if (projection.mode === 'managedSpawn' && await observeManagedSpawnProjectionState(projection) !== 'stale') {
+                currentInstances.add(digest(projection.instanceId));
+            }
+        }
+        if (currentInstances.size) {
+            try {
+                for (const name of await readdir(logsDir)) {
+                    // The durable writer above owns this exact filename; no external paths are inferred.
+                    const match = /^\d{16}-([a-f0-9]{64})\.log$/u.exec(name);
+                    if (match && currentInstances.has(match[1]!)) paths.add(join(logsDir, name));
+                }
+            } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        }
+        return [...paths];
+    }
+
     return Object.freeze({
         publishEndpointProjection,
         releaseEndpointProjection,
         resolveEndpointProjection,
         retireSessionRunnerOwnedProjections,
         openLog,
+        getCurrentLogPaths,
     });
 }

@@ -26,6 +26,7 @@ import type {
     HostCurrentSessionUiServices,
 } from '@/agent/runtime/state/currentSessionUiTypes';
 import type { PluginSessionAccessScope } from '@/session/services/pluginSessionsInventory';
+import type { ProcessOwnerRef } from '@/processes/ownerTag';
 export type AgentInvocationTurnAdmissionWitness = Readonly<{
     inputId: string;
     turnId: string;
@@ -56,6 +57,8 @@ export type PluginExternalActionContext = Readonly<{
 }>;
 
 export type PluginInvocationServicesSeed = Readonly<{
+    /** Host invocation identity; never projected into the public plugin context. */
+    processOwner?: ProcessOwnerRef;
     /** Exact host-admitted managed row; never plugin input or SDK context. */
     managedBootstrapCredential?: ManagedBootstrapCredentialInvocationBinding;
     /** Canonical invocation owner retains private material cleanup. */
@@ -240,6 +243,7 @@ export type CreatePluginInvocationServices = (
 
 export type CreateAgentInvocationServices = (
     params: Readonly<{
+        processOwner?: ProcessOwnerRef;
         pluginId: string;
         pluginVersion: string;
         agentId: string;

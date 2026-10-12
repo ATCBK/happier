@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
+import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 
 import type { DaemonDatabaseValue } from '@happier-dev/plugin-sdk/storage';
 
@@ -280,6 +281,7 @@ export function createDaemonDatabaseWorkerClient(filePath: string): DaemonDataba
 
     const createSession = async (): Promise<WorkerSession> => {
         const child = spawnHappyCLI([...WORKER_SUBCOMMAND], {
+            env: withProcessOwnerEnvironment(process.env, { kind: 'happier', component: 'plugin_database_worker' }),
             stdio: ['pipe', 'pipe', 'inherit'],
             windowsHide: true,
         });

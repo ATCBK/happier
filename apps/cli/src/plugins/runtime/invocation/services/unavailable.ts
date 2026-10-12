@@ -221,6 +221,7 @@ export type PluginInvocationServicesFactoryParams = Readonly<{
     ) => PluginFileSystemRoots | null;
     now?: () => number;
     exec?: Readonly<{
+        readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
         resolveExecutable: (
             executable: Parameters<Parameters<typeof createStablePluginExecService>[0]['resolveExecutable']>[0],
             pluginId: string,
@@ -944,6 +945,9 @@ export function createPluginInvocationServicesFromDescriptors(
     const execAvailable = binding.processExecutables !== undefined && params.exec !== undefined;
     const exec = execAvailable
         ? createStablePluginExecService({
+            readSpawnFailureLimits: params.exec?.readSpawnFailureLimits,
+            ...(seed.processOwner ? { processOwner: seed.processOwner }
+                : seed.session ? { processOwner: { kind: 'session', sessionId: seed.session.id } } : {}),
             allowedExecutables: binding.processExecutables!,
             allowedEnvKeys: binding.processEnvKeys,
             allowedCwdScopes: binding.filesystemScopes,

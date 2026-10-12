@@ -61,6 +61,10 @@ import {
 import { readCredentialRedactionValues } from './credentialRedactionValues';
 import { clonePluginPlainData } from '../../plainData';
 import { sanitizeExecDiagnosticText } from '../../exec/errors';
+import { prepareCgroupProcessLaunchScope } from '@/daemon/platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
+import { configuration } from '@/configuration';
+import { formatProcessOwnerTag, type ProcessOwnerRef } from '@/processes/ownerTag';
+import { classifySpawnFailure, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 
 export type ManagedServiceProcessCredential =
     | Readonly<{
@@ -907,6 +911,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export function createManagedServiceProcessSupervisorHost(params: Readonly<{
+    readSpawnFailureLimits?: SpawnFailureLimitsReader;
     fetch?: typeof fetch;
     now?: () => number;
     createInstanceId?: () => string;
@@ -1012,6 +1017,10 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
         if (!instanceId) {
             return fail('plugin_managed_server_identity_failed', 'Host could not issue a managed server identity');
         }
+        const processOwner: ProcessOwnerRef = { kind: 'service', serviceId: instanceId,
+            ...(scope.pluginId ? { pluginId: scope.pluginId } : {}),
+            ...(scope.sessionId ? { sessionId: scope.sessionId } : {}) };
+        const processOwnerTag = formatProcessOwnerTag({ happierHomeDir: configuration.happyHomeDir, owner: processOwner });
 
         let process: PluginProcessHandle | null = null;
         let retainedLaunchRelease: HostAuthorizedPluginExecLaunch['release'] | null = null;
@@ -1116,7 +1125,9 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                 }
                 lifecycleProbeController.abort();
                 stopWatchdog();
-                setUnhealthy('plugin_managed_server_process_exited');
+                const observed = result.termination.observed;
+                setUnhealthy('plugin_managed_server_process_exited', observed.kind === 'failed'
+                    ? observed.diagnostic : { details: { spawnFailure: classifySpawnFailure(undefined) } });
             }).catch(() => {
                 processTerminal = Object.freeze({ kind: 'failed' });
                 if (spec.mode.kind === 'native') {
@@ -1133,8 +1144,27 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             if (processTerminal.kind === 'failed') {
                 return fail('plugin_managed_server_process_failed', 'Managed server process observation failed');
             }
-            return fail('plugin_managed_server_process_exited',
-                `Managed server process exited (${processExitCode(processTerminal.result)})`);
+            const observed = processTerminal.result.termination.observed;
+            if (observed.kind === 'failed') {
+                throw new PluginError({ code: 'plugin_managed_server_process_exited',
+                    message: observed.diagnostic.message, details: observed.diagnostic.details });
+            }
+            throw new PluginError({ code: 'plugin_managed_server_process_exited',
+                message: `Managed server process exited (${processExitCode(processTerminal.result)})`,
+                // A launcher exit supplies no target exec errno (notably systemd-run).
+                details: { spawnFailure: classifySpawnFailure(undefined) } });
+        };
+        const rejectUnstartedProjectProcess = async (code: string): Promise<void> => {
+            if (scope.kind !== 'project' || !process || readSupervisedPluginProcessIdForHost(process) !== null) return;
+            // Node reports an OS spawn failure asynchronously without assigning a PID.
+            // This authorized root never started, so it owns no descendant tree to stop.
+            const result = await process.wait();
+            await processTerminalObservation;
+            if (result.termination.observed.kind !== 'failed') return;
+            const diagnostic = result.termination.observed.diagnostic;
+            process = null;
+            processContainmentTerminated = true;
+            throw new PluginError({ code, message: diagnostic.message, details: diagnostic.details });
         };
         const isGenerationUsable = (): boolean => {
             try {
@@ -1253,9 +1283,10 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             await endpointProjectionRelease;
         }
 
-        const setUnhealthy = (code: string): void => {
+        const setUnhealthy = (code: string, diagnostic?: Pick<PluginDiagnosticData, 'message' | 'details'>): void => {
             if (snapshot.state === 'stopped') return;
             const retained = retainManagedServiceDiagnostic(snapshot, {
+                ...diagnostic,
                 code,
                 severity: 'error',
             });
@@ -1765,19 +1796,36 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                 }
                 assertGenerationUsable();
                 assertNotAborted(entry.lifecycle.signal);
-                if (startRequired) process = spawnAuthorizedHostExecLaunchForHost(launch, { signal: entry.lifecycle.signal, retainLaunch }).handle;
+                if (startRequired) {
+                    const linuxProcessLaunchScope = hostPlatform === 'linux' ? await prepareCgroupProcessLaunchScope() : null;
+                    assertGenerationUsable();
+                    assertNotAborted(entry.lifecycle.signal);
+                    process = spawnAuthorizedHostExecLaunchForHost({ ...launch, processOwnerTag }, {
+                        readSpawnFailureLimits: params.readSpawnFailureLimits,
+                        signal: entry.lifecycle.signal, retainLaunch, linuxProcessLaunchScope,
+                    }).handle;
+                }
             } else if (scope.exec && spec.launch) {
-                process = await scope.exec.spawn(spec.launch, { signal: entry.lifecycle.signal });
+                const ownerInstall = installManagedProcessCustodyForHost(scope.exec, spec.launch, null, undefined, processOwner);
+                try { process = await scope.exec.spawn(spec.launch, { signal: entry.lifecycle.signal }); }
+                finally { ownerInstall.dispose(); }
             } else {
                 return fail('plugin_managed_service_unavailable', 'Native launch admission is unavailable');
             }
             observeSpawnedProcessTerminal();
+            await rejectUnstartedProjectProcess('native_service_start_failed');
             if (spec.mode.builtinLifecycle && process) {
                 // Detached up is a finite starter. Its exit does not decide resource death;
                 // join it before the first post-launch native observation instead.
                 const result = await waitWithAbort(process.wait(), entry.lifecycle.signal);
                 if (result.termination.observed.kind !== 'exit' || result.termination.observed.exitCode !== 0) {
-                    return fail('native_service_start_failed', 'Native starter failed');
+                    if (result.termination.observed.kind === 'failed') {
+                        throw new PluginError({ code: 'native_service_start_failed',
+                            message: result.termination.observed.diagnostic.message,
+                            details: result.termination.observed.diagnostic.details });
+                    }
+                    throw new PluginError({ code: 'native_service_start_failed', message: 'Native starter failed',
+                        details: { spawnFailure: classifySpawnFailure(undefined) } });
                 }
                 await process.dispose();
                 processContainmentTerminated = true;
@@ -1990,9 +2038,16 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                         await authorized.release();
                         throw error;
                     }
-                    return spawnAuthorizedHostExecLaunchForHost(authorized, {
+                    const linuxProcessLaunchScope = hostPlatform === 'linux' ? await prepareCgroupProcessLaunchScope() : null;
+                    try {
+                        assertGenerationUsable();
+                        assertNotAborted(entry.lifecycle.signal);
+                    } catch (error) { await authorized.release(); throw error; }
+                    return spawnAuthorizedHostExecLaunchForHost({ ...authorized, processOwnerTag }, {
+                        readSpawnFailureLimits: params.readSpawnFailureLimits,
                         signal: entry.lifecycle.signal,
                         retainLaunch,
+                        linuxProcessLaunchScope,
                         ...(managedProcessCustody ? { processCustody: managedProcessCustody } : {}),
                     }).handle;
                 }
@@ -2016,8 +2071,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                         supervisionLaunch,
                     )
                     : null;
-                const custodyInstall = managedProcessCustody || scope.independentInvocation
-                    ? installManagedProcessCustodyForHost(
+                const custodyInstall = installManagedProcessCustodyForHost(
                         scope.exec,
                         authorizedLaunchRequest,
                         managedProcessCustody,
@@ -2028,8 +2082,8 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
                                 resolveManagedExecutable: scope.resolveManagedExecutable,
                             } : {}),
                         } : undefined,
-                    )
-                    : null;
+                        processOwner,
+                    );
                 try {
                     return await scope.exec.spawn(
                         authorizedLaunchRequest,
@@ -2049,6 +2103,7 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             // Custody begins at spawn return. Start terminal observation before
             // any later log, projection, endpoint, or health setup can fail.
             observeSpawnedProcessTerminal();
+            await rejectUnstartedProjectProcess('plugin_managed_server_process_exited');
             let custodyFacts: SupervisedPluginProcessCustody | null = null;
             if (managedProcessCustody) {
                 // The helper writes the handshake only after the target was

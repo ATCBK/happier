@@ -22,7 +22,7 @@ import type {
 } from './managedProcessSupervisor';
 import type { ManagedServiceProcessDurabilityOwner } from './managedServiceDurability';
 import { associateSupervisedPluginProcessHandleForHost } from '../../exec/processSupervisor';
-import * as processTree from '@/agent/runtime/process/killProcessTree';
+import * as processTree from '@/processes/terminate/terminateProcessTree';
 import * as localServiceScan from '@/daemon/local/services/inventory/platform/scan';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { createManagedServicesOwner } from './managedServicesOwner';
@@ -280,7 +280,7 @@ describe('createManagedServiceProcessSupervisorHost', () => {
                 const routes = createLocalServiceActionRoutes({ machineId: workspace.machineId,
                     inventoryRegistry: createLocalServiceInventoryRegistry(), projectManagedServices: owner,
                     verifyConfirmationNonce: isLocalServiceActionConfirmationNonceV1 });
-                const terminateTree = processTree.killProcessTree;
+                const terminateTree = processTree.terminateProcessTree;
                 let restoreTerminationBoundary = () => {};
                 try {
                     let childPid = 0;
@@ -290,7 +290,7 @@ describe('createManagedServiceProcessSupervisorHost', () => {
                         expect(childPid).toBeGreaterThan(0);
                     });
                     // Automatic root-exit cleanup and explicit Stop share the real owner; only OS termination refuses.
-                    const terminationBoundary = vi.spyOn(processTree, 'killProcessTree').mockRejectedValue(new PluginError({
+                    const terminationBoundary = vi.spyOn(processTree, 'terminateProcessTree').mockRejectedValue(new PluginError({
                         code: 'plugin_exec_termination_incomplete', message: 'Owned process tree remains live',
                     }));
                     restoreTerminationBoundary = () => terminationBoundary.mockRestore();
@@ -319,6 +319,26 @@ describe('createManagedServiceProcessSupervisorHost', () => {
             });
         },
     );
+
+    it.skipIf(process.platform === 'win32')('preserves observed failure facts when a URL-less managed service target cannot start', async () => {
+        const supervisor = createProductionManagedServiceProcessSupervisorHost({}).bind({ kind: 'project', isOccurrenceCurrent: () => true });
+        const outcome = await supervisor.supervise({ id: 'missing-managed-executable',
+            watchdog: { intervalMs: 5_000, missedIntervals: 2 }, mode: { kind: 'managedSpawn', endpointNone: true },
+            authorizeLaunch: async () => ({ command: '/happier-nonexistent/managed-executable', args: [], env: {}, release: async () => undefined }),
+        }).then(handle => ({ handle }), (error: unknown) => ({ error }));
+        if ('handle' in outcome) {
+            try {
+                // A Linux scope helper can start successfully and then fail its
+                // target exec. Its exit is observed, but supplies no target errno.
+                await vi.waitFor(() => expect(outcome.handle.snapshot()).toMatchObject({ state: 'unhealthy',
+                    diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'plugin_managed_server_process_exited',
+                        details: { spawnFailure: { reason: 'other' } } })]) }));
+            } finally { await outcome.handle.dispose().catch(() => undefined); }
+        } else {
+            expect(outcome).toMatchObject({ error: { code: 'plugin_managed_server_process_exited',
+                details: { spawnFailure: { reason: 'other', errno: 'ENOENT' } } } });
+        }
+    });
 
     it('releases the Project launch capture when cancellation prevents process acquisition', async () => {
         const cancellation = new AbortController();

@@ -1,6 +1,15 @@
 import type { AgentCliReadinessService as PluginAgentCliReadinessService } from '@happier-dev/plugin-sdk/exec';
 
+import { PluginError } from '@happier-dev/plugin-sdk';
+import { probeResolvedAgentCliVersion, type RunResolvedAgentCliVersionCommand } from '@/capabilities/snapshots/cliSnapshot';
 import { resolveAgentCliLaunchSpec } from '@/packagedRuntime/managedTools/requireAgentCliLaunchSpec';
+
+export type PluginAgentCliReadinessServiceForHost = Readonly<{
+    checkReadiness(
+        request: Parameters<PluginAgentCliReadinessService['checkReadiness']>[0],
+        options?: Readonly<{ runVersionCommand: RunResolvedAgentCliVersionCommand }>,
+    ): ReturnType<PluginAgentCliReadinessService['checkReadiness']>;
+}>;
 
 export type CreatePluginAgentCliReadinessServiceParams = Readonly<{
     processEnv?: NodeJS.ProcessEnv;
@@ -30,28 +39,48 @@ function uniqueCandidates(candidates: readonly string[]): readonly string[] {
     return Object.freeze(normalized);
 }
 
-function hasCurrentLaunchableAgentCli(agentId: string, processEnv: NodeJS.ProcessEnv): boolean {
+function resolveCurrentLaunchableAgentCli(agentId: string, processEnv: NodeJS.ProcessEnv) {
     try {
-        return resolveAgentCliLaunchSpec(agentId, { processEnv }) !== null;
+        return resolveAgentCliLaunchSpec(agentId, { processEnv });
     } catch {
         // An installed Agent without current runtime metadata is not launchable. Keep
         // the readiness boundary fail-closed instead of substituting another Agent.
-        return false;
+        return null;
     }
 }
 
 export function createPluginAgentCliReadinessService(
     params: CreatePluginAgentCliReadinessServiceParams = {},
-): PluginAgentCliReadinessService {
+): PluginAgentCliReadinessServiceForHost {
     const processEnv = params.processEnv ?? process.env;
     return Object.freeze({
         async checkReadiness(
             request: Parameters<PluginAgentCliReadinessService['checkReadiness']>[0],
+            options?: Readonly<{ runVersionCommand: RunResolvedAgentCliVersionCommand }>,
         ) {
             assertNotAborted(request.signal);
-            const launchable = uniqueCandidates(request.candidates)
-                .filter((agentId) => hasCurrentLaunchableAgentCli(agentId, processEnv))
-                .map((agentId) => Object.freeze({ agentId }));
+            const launchable: Array<Readonly<{ agentId: string; version?: string }>> = [];
+            for (const agentId of uniqueCandidates(request.candidates)) {
+                assertNotAborted(request.signal);
+                const launch = resolveCurrentLaunchableAgentCli(agentId, processEnv);
+                if (!launch) continue;
+                if (request.includeVersion === true && !options?.runVersionCommand) {
+                    throw new PluginError({
+                        code: 'plugin_exec_agent_cli_version_unavailable',
+                        message: 'Authorized Agent CLI version execution is unavailable',
+                    });
+                }
+                const version = request.includeVersion === true && options?.runVersionCommand
+                    ? await probeResolvedAgentCliVersion({
+                        agentId,
+                        launch,
+                        runVersionCommand: options.runVersionCommand,
+                        env: processEnv,
+                        signal: request.signal,
+                    })
+                    : null;
+                launchable.push(Object.freeze({ agentId, ...(version ? { version } : {}) }));
+            }
             assertNotAborted(request.signal);
             return Object.freeze({ launchable: Object.freeze(launchable) });
         },

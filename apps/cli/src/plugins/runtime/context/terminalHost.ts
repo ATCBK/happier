@@ -200,6 +200,7 @@ function mergeLaunchEnv(
             explicitEnv: pluginEnv,
             unsetEnvKeys,
         }),
+        explicitEnvironment: pluginEnv,
         canonicalSessionControlEnvironment: selectTrustedSessionControlEnvironment(hostEnv ?? {}),
         enableCgroupSelfMigration: false,
         stackProcessKind: null,

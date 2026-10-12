@@ -77,11 +77,16 @@ export type SharedManagedProviderGatewayBinding = Readonly<{
     consumerId: string;
 }>;
 
-export type ResolveSharedManagedProviderGatewayBinding = (input: Readonly<{
+export type SharedManagedProviderGatewayIdentity = Omit<SharedManagedProviderGatewayBinding, 'consumerId'>;
+
+export type ResolveSharedManagedProviderGatewayBinding = ((input: Readonly<{
     connectionId: string;
     consumerId: string;
     signal?: AbortSignal;
-}>) => Promise<SharedManagedProviderGatewayBinding | null>;
+}>) => Promise<SharedManagedProviderGatewayBinding | null>) & Readonly<{
+    /** Read-only physical identity, with no consumer access claim. */
+    readIdentity?(input: Readonly<{ connectionId: string; signal?: AbortSignal }>): Promise<SharedManagedProviderGatewayIdentity>;
+}>;
 
 export type ManagedProviderRuntimeInvocationBinding = Readonly<{
     realm: 'managedProviderStart';
