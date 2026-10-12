@@ -2,6 +2,7 @@ import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 
 import { parse, stringify, TomlError, type TomlTable, type TomlValue } from 'smol-toml';
+import type { AgentConnectedAccountSharedStateFileMergeV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import type { ConnectedServiceStateSharingDescriptor, ConnectedServiceStateSharingDescriptorEntry } from '@/agent/catalog/types';
 import type { ConnectedServicesMaterializationDiagnostic } from '@/daemon/connectedServices/materialization/materializer';
@@ -14,10 +15,12 @@ import type {
 
 import {
   copyConnectedServiceHomeEntry,
+  isConnectedServiceHomeEntryLinkedToSource,
   linkConnectedServiceHomeEntry,
   moveConnectedServiceHomeEntryAside,
   prepareManagedConnectedServiceHomeDestination,
   removeLinkedConnectedServiceHomeEntries,
+  tryLstatConnectedServiceHomeEntry,
   tryStatConnectedServiceHomeEntry,
 } from './connectedServiceHomeEntrySync';
 import { createConnectedServiceSharedStateLink, ConnectedServiceSharedStateLinkUnavailableError } from './createSharedStateLink';
@@ -62,6 +65,7 @@ export type ApplyConnectedServiceStateSharingDescriptorInput = Readonly<{
   copyTransformByEntry?: Readonly<Record<string, (content: string) => string>>;
   forceCopiedEntries?: readonly string[];
   sessionImportRoots?: readonly ConnectedServiceSessionFileImportRoot[];
+  mergeSharedStateFile?: AgentConnectedAccountSharedStateFileMergeV1;
   resolveVendorResumeIdFromImportedFile?: (detail: ConnectedServiceSessionFileImportDetail) => string | null;
   providerLabel?: string;
 }>;
@@ -160,6 +164,8 @@ function isAllowedMigrationSource(params: Readonly<{
 function assertNativeSourceRootInvariant(input: ApplyConnectedServiceStateSharingDescriptorInput): void {
   const sourceRoot = resolvePathForComparison(input.nativeSourceContext.sourceRoot);
   const targetRoot = resolvePathForComparison(input.target.targetMaterializedRoot);
+  if (sourceRoot === targetRoot
+    && input.requestedStateMode === 'isolated' && input.effectiveStateMode === 'isolated') return;
   if (!isPathWithin(sourceRoot, targetRoot)) return;
   if (isAllowedMigrationSource({ sourceRoot, existingMaterializedStateContext: input.existingMaterializedStateContext })) return;
   throw new Error('nativeSourceContext.sourceRoot must not be nested under target.targetMaterializedRoot');
@@ -225,19 +231,29 @@ async function copyEntryWithOptionalTransform(params: Readonly<{
   sourcePath: string;
   destinationPath: string;
   transform?: ((content: string) => string) | undefined;
+  removeMissingDestinationEntries?: boolean;
 }>): Promise<void> {
   if (!params.transform) {
-    await copyConnectedServiceHomeEntry(params.sourcePath, params.destinationPath);
+    await copyConnectedServiceHomeEntry(params.sourcePath, params.destinationPath, params);
     return;
   }
   const sourceStat = await tryStatConnectedServiceHomeEntry(params.sourcePath);
   if (!sourceStat || !sourceStat.isFile()) {
-    await copyConnectedServiceHomeEntry(params.sourcePath, params.destinationPath);
+    await copyConnectedServiceHomeEntry(params.sourcePath, params.destinationPath, params);
     return;
   }
   const content = await readFile(params.sourcePath, 'utf8');
-  await mkdir(dirname(params.destinationPath), { recursive: true });
-  await writeFile(params.destinationPath, params.transform(content), { encoding: 'utf8', mode: 0o600 });
+  await writeConfigContentIfChanged(params.destinationPath, params.transform(content));
+}
+
+async function writeConfigContentIfChanged(destinationPath: string, content: string): Promise<void> {
+  try {
+    if (await readFile(destinationPath, 'utf8') === content) return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+  }
+  await mkdir(dirname(destinationPath), { recursive: true });
+  await writeFile(destinationPath, content, { encoding: 'utf8', mode: 0o600 });
 }
 
 async function preflightStateLink(params: Readonly<{
@@ -275,11 +291,13 @@ async function materializeLinkedStateEntry(params: Readonly<{
 }>): Promise<boolean> {
   const sourceStat = await tryStatConnectedServiceHomeEntry(params.sourcePath);
   if (!sourceStat) {
-    if (!params.preserveDestinationWhenSourceMissing) {
+    const destinationStat = await tryLstatConnectedServiceHomeEntry(params.destinationPath);
+    if (!params.preserveDestinationWhenSourceMissing && destinationStat?.isSymbolicLink()) {
       await prepareManagedConnectedServiceHomeDestination(params.destinationPath);
     }
     return false;
   }
+  if (await isConnectedServiceHomeEntryLinkedToSource(params.sourcePath, params.destinationPath)) return true;
   await prepareManagedConnectedServiceHomeDestination(params.destinationPath);
   await mkdir(dirname(params.destinationPath), { recursive: true });
   const tempLinkPath = `${params.destinationPath}.happier-link-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -462,7 +480,8 @@ async function buildDescriptorCopyTransformByEntry(
 function dedupeManifestEntries(entries: readonly string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const entry of entries) {
+  for (const relativeEntry of entries) {
+    const entry = relativeEntry.replaceAll('\\', '/');
     if (!entry || seen.has(entry)) continue;
     seen.add(entry);
     result.push(entry);
@@ -503,12 +522,19 @@ export async function applyConnectedServiceStateSharingDescriptor(
   const providerLabel = input.providerLabel ?? input.descriptor.providerId;
   const targetRoot = resolve(input.target.targetMaterializedRoot);
   const sourceRoot = resolve(input.nativeSourceContext.sourceRoot);
+  // An already-selected private home has no external configuration source. Preserve config
+  // while the normal state owner detaches borrowed entries before private adoption.
+  const selfSource = resolvePathForComparison(sourceRoot) === resolvePathForComparison(targetRoot);
   const envOverrides: Record<string, string> = {};
   const diagnostics: ConnectedServicesMaterializationDiagnostic[] = [];
-  const descriptorCopyTransformByEntry = await buildDescriptorCopyTransformByEntry(input, diagnostics);
-  const previousManifest = input.existingManifest;
-  const configEntryNames = input.configEntryNames ?? input.descriptor.config.entries.map((entry) => entry.path);
-  const stateEntryNames = input.stateEntryNames ?? input.descriptor.state.entries.map((entry) => entry.path);
+  const descriptorCopyTransformByEntry = selfSource ? {} : await buildDescriptorCopyTransformByEntry(input, diagnostics);
+  const previousManifest = input.existingManifest ? {
+    ...input.existingManifest,
+    configEntries: dedupeManifestEntries(input.existingManifest.configEntries),
+    stateEntries: dedupeManifestEntries(input.existingManifest.stateEntries),
+  } : undefined;
+  const configEntryNames = dedupeManifestEntries(input.configEntryNames ?? input.descriptor.config.entries.map((entry) => entry.path));
+  const stateEntryNames = dedupeManifestEntries(input.stateEntryNames ?? input.descriptor.state.entries.map((entry) => entry.path));
   const configRemovalCandidates = dedupeManifestEntries([
     ...(previousManifest?.configEntries ?? []),
     ...input.descriptor.config.entries.map((entry) => entry.path),
@@ -519,17 +545,20 @@ export async function applyConnectedServiceStateSharingDescriptor(
     ...input.descriptor.state.entries.map((entry) => entry.path),
     ...stateEntryNames,
   ]);
-  const configEntries: string[] = [];
+  const configEntries: string[] = selfSource ? [...(previousManifest?.configEntries ?? [])] : [];
   let stateEntries: string[] = [];
   let effectiveStateMode = input.effectiveStateMode;
   let importedSessionFileMappings: ConnectedServiceStateSharingSessionFileMappingV1[] = [];
 
   await mkdir(targetRoot, { recursive: true });
 
-  await removeConnectedServiceStateSharingManifestEntries(targetRoot, previousManifest?.configEntries ?? []);
-  await removeLinkedConnectedServiceHomeEntries(targetRoot, configRemovalCandidates);
+  const activeConfigEntries = input.configMode === 'isolated' ? [] : configEntryNames;
+  if (!selfSource) await removeConnectedServiceStateSharingManifestEntries(targetRoot,
+    (previousManifest?.configEntries ?? []).filter((entry) => !activeConfigEntries.includes(entry)));
+  if (!selfSource) await removeLinkedConnectedServiceHomeEntries(targetRoot,
+    configRemovalCandidates.filter((entry) => !activeConfigEntries.some((active) => active === entry || active.startsWith(`${entry}/`))));
 
-  if (input.configMode !== 'isolated') {
+  if (!selfSource && input.configMode !== 'isolated') {
     for (const entryName of configEntryNames) {
       const descriptorEntry = resolveDescriptorEntryForPath(input.descriptor, 'config', entryName);
       if (!descriptorEntry) continue;
@@ -548,37 +577,55 @@ export async function applyConnectedServiceStateSharingDescriptor(
       const sourceStat = await tryStatConnectedServiceHomeEntry(sourcePath);
       if (!sourceStat) {
         const transform = descriptorCopyTransformByEntry[entryName];
-        if (!transform) continue;
-        await prepareManagedConnectedServiceHomeDestination(destinationPath);
-        await mkdir(dirname(destinationPath), { recursive: true });
-        await writeFile(destinationPath, transform(''), { encoding: 'utf8', mode: 0o600 });
+        if (!transform) {
+          if (previousManifest?.configEntries.includes(entryName)) {
+            await removeConnectedServiceStateSharingManifestEntries(targetRoot, [entryName]);
+          }
+          continue;
+        }
+        const destinationStat = await tryLstatConnectedServiceHomeEntry(destinationPath);
+        if (!previousManifest?.configEntries.includes(entryName) || (destinationStat && !destinationStat.isFile())) {
+          await prepareManagedConnectedServiceHomeDestination(destinationPath);
+        }
+        await writeConfigContentIfChanged(destinationPath, transform(''));
         configEntries.push(entryName);
         continue;
       }
-      await prepareManagedConnectedServiceHomeDestination(destinationPath);
+      if (entryMode === 'linked' && await isConnectedServiceHomeEntryLinkedToSource(sourcePath, destinationPath)) {
+        configEntries.push(entryName);
+        continue;
+      }
+      const destinationStat = await tryLstatConnectedServiceHomeEntry(destinationPath);
+      const destinationNeedsReplacement = destinationStat && (
+        destinationStat.isSymbolicLink() || destinationStat.isDirectory() !== sourceStat.isDirectory()
+      );
+      const replaceManagedDestination = entryMode === 'linked' && Boolean(destinationStat)
+        && !destinationNeedsReplacement && previousManifest?.configEntries.includes(entryName);
+      if (destinationNeedsReplacement || !previousManifest?.configEntries.includes(entryName)) {
+        await prepareManagedConnectedServiceHomeDestination(destinationPath);
+      }
       if (entryMode === 'copied') {
         await copyEntryWithOptionalTransform({
           sourcePath,
           destinationPath,
           transform: input.copyTransformByEntry?.[entryName] ?? descriptorCopyTransformByEntry[entryName],
+          removeMissingDestinationEntries: true,
         });
       } else {
         try {
-          await linkConnectedServiceHomeEntry(sourcePath, destinationPath, sourceStat);
+          await linkConnectedServiceHomeEntry(sourcePath, destinationPath, sourceStat, { replaceManagedDestination });
         } catch {
           await copyEntryWithOptionalTransform({
             sourcePath,
             destinationPath,
             transform: input.copyTransformByEntry?.[entryName] ?? descriptorCopyTransformByEntry[entryName],
+            removeMissingDestinationEntries: true,
           });
         }
       }
       configEntries.push(entryName);
     }
   }
-
-  await removeConnectedServiceStateSharingManifestEntries(targetRoot, previousManifest?.stateEntries ?? []);
-  await removeLinkedConnectedServiceHomeEntries(targetRoot, stateRemovalCandidates);
 
   if (input.requestedStateMode === 'shared' && effectiveStateMode === 'shared') {
     const resolveStateSourceRoot = input.resolveStateSourceRoot ?? (() => sourceRoot);
@@ -587,6 +634,9 @@ export async function applyConnectedServiceStateSharingDescriptor(
       for (const entryName of stateEntryNames) {
         const descriptorEntry = resolveDescriptorEntryForPath(input.descriptor, 'state', entryName);
         if (!descriptorEntry || (descriptorEntry.mode !== 'linked' && descriptorEntry.mode !== 'linked_or_copied')) continue;
+        if (await isConnectedServiceHomeEntryLinkedToSource(
+          join(resolve(resolveStateSourceRoot(entryName)), entryName), join(targetRoot, entryName),
+        )) continue;
         await preflightStateLink({
           providerLabel,
           entryName,
@@ -613,9 +663,27 @@ export async function applyConnectedServiceStateSharingDescriptor(
     }
   }
 
+  // The manifest tracks sharing, not ownership of provider-written private state. Retain real
+  // entries until the existing importer has adopted them; only obsolete links are detached.
+  const activeStateEntries = input.requestedStateMode === 'shared' && effectiveStateMode === 'shared' ? stateEntryNames : [];
+  const inactiveStateEntries = stateRemovalCandidates.filter((entry) => !activeStateEntries.includes(entry));
+  await removeLinkedConnectedServiceHomeEntries(targetRoot, inactiveStateEntries);
+  for (const entryName of inactiveStateEntries) {
+    if (!previousManifest?.stateEntries.includes(entryName)) continue;
+    const sourcePath = join(resolve(input.resolveStateSourceRoot?.(entryName) ?? sourceRoot), entryName);
+    if (resolvePathForComparison(sourcePath) === resolvePathForComparison(join(targetRoot, entryName))) continue;
+    if (await isConnectedServiceHomeEntryLinkedToSource(sourcePath, join(targetRoot, entryName))) {
+      await rm(join(targetRoot, entryName), { force: true });
+    }
+  }
+
   if (input.requestedStateMode === 'shared' && effectiveStateMode === 'shared') {
     if (input.sessionImportRoots && input.sessionImportRoots.length > 0) {
-      const importResult = await importConnectedServiceSessionFiles({ roots: input.sessionImportRoots });
+      const importResult = await importConnectedServiceSessionFiles({ roots: input.sessionImportRoots.map(root => ({
+        ...root,
+        ...(input.mergeSharedStateFile && !root.mergeSharedStateFile
+          ? { mergeSharedStateFile: input.mergeSharedStateFile } : {}),
+      })) });
       importedSessionFileMappings = buildSessionFileMappings({
         details: importResult.details,
         resolveVendorResumeIdFromImportedFile: input.resolveVendorResumeIdFromImportedFile,
@@ -639,7 +707,6 @@ export async function applyConnectedServiceStateSharingDescriptor(
       }
       if (descriptorEntry.mode === 'copied') {
         const sourceStat = await tryStatConnectedServiceHomeEntry(sourcePath);
-        await prepareManagedConnectedServiceHomeDestination(destinationPath);
         if (!sourceStat) continue;
         await copyConnectedServiceHomeEntry(sourcePath, destinationPath);
         stateEntries.push(entryName);
@@ -672,6 +739,7 @@ export async function applyConnectedServiceStateSharingDescriptor(
     lastSyncAtMs: Date.now(),
     configEntries: dedupeManifestEntries(configEntries),
     stateEntries: dedupeManifestEntries(stateEntries),
+    resumeStateEntries: dedupeManifestEntries(stateEntryNames),
     sessionFileMappings: importedSessionFileMappings,
     diagnostics: diagnostics
       .map((entry) => (typeof entry.reason === 'string' && entry.reason.trim().length > 0 ? entry.reason : entry.code))
