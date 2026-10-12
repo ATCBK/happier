@@ -1,20 +1,17 @@
 import * as React from 'react';
+import type { MachineVitalsNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import { happierPageTextMetrics, type HappierSceneId } from '@happier-dev/plugin-ui/presentation';
 import { Platform, Pressable, View } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { ApprovalInboxCard } from '@/components/inbox/cards/ApprovalInboxCard';
 import { UsageNoticeInboxRow } from '@/components/inbox/cards/UsageNoticeInboxRow';
+import { MachineVitalsNoticeInboxRow, readMachineVitalsNotice } from '@/components/inbox/cards/MachineVitalsNoticeInboxRow';
 import { InboxReadySessionRow } from '@/components/inbox/InboxReadySessionRow';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { Item } from '@/components/ui/lists/Item';
-import { formatAutomationRunCauseLabel, formatAutomationRunStateLabel } from '@/components/automations/list/automationListFormatting';
-import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
-import { useAutomation } from '@/sync/domains/state/storage';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -22,13 +19,12 @@ import { Text } from '@/components/ui/text/Text';
 import { UserCard } from '@/components/ui/cards/UserCard';
 import { Typography } from '@/constants/Typography';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
-import { isFocusedInboxApproval, readInboxApprovalServerId, type InboxItemFocus } from './inboxItemFocus';
+import { type InboxItemFocus } from './inboxItemFocus';
 import { t } from '@/text';
 import { trackFriendsProfileView } from '@/track';
 import { buildServerScopedSessionKey } from '@/sync/domains/session/navigation/sessionNavigationOrder';
 import { useSessionListIdentityDisplay } from '@/components/sessions/shell/SessionListIdentity';
 import type { InboxWorkGroup } from '@/activity/presentation/buildInboxWorkGroups';
-import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListIdentityDisplay } from '@/components/sessions/shell/SessionListIdentity';
 
@@ -45,19 +41,6 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 export type InboxView = 'needs_you' | 'updates';
 
 const OTHER_GROUP = Object.freeze<InboxWorkGroup>({ key: 'other', root: { kind: 'other' }, items: [] });
-
-const BoundApprovalRow = React.memo(function BoundApprovalRow(props: Readonly<{
-    artifact: DecryptedArtifact; selected: boolean; showHome: boolean; inlineActionLabel?: string;
-    navigate: (route: string) => void; onSelectItem?: (focus: InboxItemFocus) => void;
-}>) {
-    const serverId = readInboxApprovalServerId(props.artifact.header as Readonly<Record<string, unknown>> | undefined);
-    const { navigate, onSelectItem } = props;
-    const id = props.artifact.id;
-    const open = React.useCallback(() => onSelectItem ? onSelectItem({ kind: 'approval', serverId, id })
-        : navigate(`/inbox/approvals/${encodeURIComponent(id)}${serverId ? `?serverId=${encodeURIComponent(serverId)}` : ''}`), [id, navigate, onSelectItem, serverId]);
-    return <ApprovalInboxCard artifact={props.artifact} selected={props.selected} showHome={props.showHome}
-        inlineActionLabel={props.inlineActionLabel} onPress={open} />;
-});
 
 const BoundReadyRow = React.memo(function BoundReadyRow(props: Readonly<{
     session: Session; serverId: string | null; identityDisplay: SessionListIdentityDisplay; title: string; subtitle?: string;
@@ -130,13 +113,23 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
         if (entry) model.resolveActionOperation(entry);
     }, [model.resolveActionOperation, operationsByProjection]);
     const openUsage = React.useCallback(() => navigate('/settings/usage'), [navigate]);
+    const notices = React.useMemo(() => {
+        const usage: InboxModel['openUsageNotices'][number][] = [];
+        const machines: { entry: InboxModel['openUsageNotices'][number]; notice: MachineVitalsNotificationV1 }[] = [];
+        for (const entry of model.openUsageNotices) {
+            const notice = readMachineVitalsNotice(entry);
+            if (notice) machines.push({ entry, notice });
+            else usage.push(entry);
+        }
+        return { usage, machines };
+    }, [model.openUsageNotices]);
 
     const rootGroups = React.useMemo(
         () => groupInboxWorkSheets(model.workGroups.filter((group) => group.root.kind !== 'other')),
         [model.workGroups],
     );
     const otherGroup = model.workGroups.find((group) => group.root.kind === 'other') ?? OTHER_GROUP;
-    const otherExtraCount = model.openApprovals.length + model.actionOperationEntries.length;
+    const otherExtraCount = model.actionOperationEntries.length;
     const hasOther = otherGroup.items.length > 0 || otherExtraCount > 0;
     // The popover keeps "Other sessions" to one line when work roots are shown (lab `inbox-I2`);
     // with no roots, the other rows are the popover's content.
@@ -155,20 +148,6 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
 
     const otherExtra = (
         <>
-            {model.openApprovals.map((artifact) => {
-                const approvalServerId = readInboxApprovalServerId(artifact.header as Readonly<Record<string, unknown>> | undefined);
-                return (
-                    <BoundApprovalRow
-                        key={artifact.id}
-                        artifact={artifact}
-                        selected={isFocusedInboxApproval(artifact.id, approvalServerId, props.focusedItem ?? null)}
-                        navigate={navigate}
-                        onSelectItem={props.onSelectItem}
-                        showHome={model.spansHomes}
-                        inlineActionLabel={page ? undefined : t('inbox.work.rows.review')}
-                    />
-                );
-            })}
             {operations.length > 0 ? (
                 <ActionOperationRows
                     operations={operations}
@@ -261,16 +240,11 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                         </View>
                     ) : null}
 
-                    {model.automationAttentionItems.length > 0 || model.automationAttention.hasMore ? (
+                    {model.automationAttention.hasMore ? (
                         <InboxSection testID="inbox.section.automations" title={t('navigation.automations')} surface={sectionSurface}>
-                            {model.automationAttentionItems.map(item => (
-                                <AutomationAttentionRow key={item.key} item={item} onOpen={() => navigate(item.route)} />
-                            ))}
-                            {model.automationAttention.hasMore ? (
-                                <SectionActionButton testID="inbox.automation_more" icon="caret-down"
-                                    title={model.automationAttention.loadMoreFailed ? t('common.retry') : t('automations.detail.loadMoreRuns')}
-                                    disabled={model.automationAttention.loadingMore} onPress={model.automationAttention.loadMore} />
-                            ) : null}
+                            <SectionActionButton testID="inbox.automation_more" icon="caret-down"
+                                title={model.automationAttention.loadMoreFailed ? t('common.retry') : t('automations.detail.loadMoreRuns')}
+                                disabled={model.automationAttention.loadingMore} onPress={model.automationAttention.loadMore} />
                         </InboxSection>
                     ) : null}
 
@@ -303,10 +277,21 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                         />
                     ) : null}
 
-                    {model.openUsageNotices.length > 0 ? (
-                        <InboxSection testID="inbox.section.usage" title={t('settings.usage')}
+                    {notices.machines.length > 0 ? (
+                        <InboxSection testID="inbox.section.machines" title={t('settings.machines')}
                             surface={sectionSurface} spacingBefore={rootGroups.length > 0 || hasOther ? 'separated' : undefined}>
-                            {model.openUsageNotices.map((entry) => (
+                            {notices.machines.map(({ entry, notice }) => (
+                                <MachineVitalsNoticeInboxRow key={entry.artifact.id} entry={entry} notice={notice}
+                                    navigate={navigate}
+                                    onDismiss={model.dismissUsageNotice} />
+                            ))}
+                        </InboxSection>
+                    ) : null}
+
+                    {notices.usage.length > 0 ? (
+                        <InboxSection testID="inbox.section.usage" title={t('settings.usage')}
+                            surface={sectionSurface} spacingBefore={rootGroups.length > 0 || hasOther || notices.machines.length > 0 ? 'separated' : undefined}>
+                            {notices.usage.map((entry) => (
                                 <UsageNoticeInboxRow key={entry.artifact.id} entry={entry}
                                     onOpen={openUsage}
                                     onDismiss={model.dismissUsageNotice} />
@@ -419,19 +404,6 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
     );
 });
 
-function AutomationAttentionRow(props: Readonly<{
-    item: InboxModel['automationAttentionItems'][number]; onOpen: () => void;
-}>) {
-    const { run } = props.item;
-    const automation = useAutomation(run.automationId);
-    const state = formatAutomationRunStateLabel(run.state);
-    const cause = formatAutomationRunCauseLabel(run.cause);
-    return <Item testID={`inbox.automation_run.${run.id}`} title={automation?.name ?? state}
-        subtitle={automation?.name ? `${state} · ${cause}` : cause}
-        detail={formatShortRelativeTime(run.finishedAt ?? run.startedAt ?? run.createdAt)}
-        icon={<Icon name="timer" size={16} />} density="compact" onPress={props.onOpen} />;
-}
-
 const styles = StyleSheet.create((theme) => ({
     container: {
         width: '100%',
@@ -443,8 +415,8 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: 240,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 40,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s40,
     },
     loadingContainer: {
         flexGrow: 1,
@@ -453,14 +425,14 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
     freshnessPage: {
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     freshnessFlat: {
-        paddingHorizontal: 12,
-        paddingTop: 6,
+        paddingHorizontal: theme.space.s12,
+        paddingTop: theme.space.s6,
     },
     moreLines: {
-        marginTop: 6,
+        marginTop: theme.space.s6,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.surface,
     },
@@ -470,9 +442,9 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 8,
-        paddingLeft: 16,
-        paddingRight: 12,
+        gap: theme.space.s8,
+        paddingLeft: theme.space.s16,
+        paddingRight: theme.space.s12,
     },
     moreLabel: {
         ...Typography.default('regular'),
@@ -482,7 +454,7 @@ const styles = StyleSheet.create((theme) => ({
     sectionAction: {
         height: 14,
         justifyContent: 'center',
-        paddingLeft: 10,
+        paddingLeft: theme.space.s10,
     },
     sectionActionPressed: {
         opacity: motionTokens.press.opacity,
@@ -491,9 +463,7 @@ const styles = StyleSheet.create((theme) => ({
         opacity: 0.42,
     },
     sectionActionLabel: {
-        fontSize: 11,
-        lineHeight: 14,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.text.secondary,
     },
 }));

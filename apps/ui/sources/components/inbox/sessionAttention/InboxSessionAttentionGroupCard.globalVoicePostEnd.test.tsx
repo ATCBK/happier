@@ -1,13 +1,17 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import {
     createSessionFixture,
+    createMachineFixture,
     pressTestInstanceAsync,
     renderScreen,
+    standardCleanup,
 } from '@/dev/testkit';
+import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
+import { storage } from '@/sync/domains/state/storage';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { buildActivityOverviewFromSource } from '@/activity/source/buildActivityOverviewFromSource';
@@ -18,12 +22,14 @@ import { InboxSessionAttentionGroupCard } from './InboxSessionAttentionGroupCard
 const NOW_MS = 1_000_000;
 const SESSION_ID = 'global-voice-after-end';
 const REQUEST_ID = 'permission-after-end';
-const permissionRpc = vi.hoisted(() => vi.fn());
-const storageState = vi.hoisted(() => ({
-    sessions: {} as Record<string, unknown>,
-    sessionListRowsByServerId: {} as Record<string, Record<string, unknown>>,
-}));
+const permissionRpc = vi.hoisted(() => vi.fn(async (
+    _params: Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc')['sessionRpcWithServerScope']>[0],
+) => undefined));
 const routerPush = vi.hoisted(() => vi.fn());
+const initialState = storage.getState();
+let home: Awaited<ReturnType<typeof serveSessionActionHome>>;
+let serverIdA: string;
+let serverIdB: string;
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -56,61 +62,24 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key) => key });
 });
-vi.mock('@/sync/domains/state/storage', async () => {
-    const {
-        createStorageModuleStub,
-        createUseSettingMock,
-    } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useMachine: (machineId: string) => machineId === 'shared-machine'
-            ? { id: machineId, metadata: { displayName: 'Home A machine' } }
-            : null,
-        useServerScopedMachine: (serverId: string | null | undefined, machineId: string) => (
-            serverId === 'server-b' && machineId === 'shared-machine'
-                ? { id: machineId, metadata: { displayName: 'Home B machine' } }
-                : null
-        ),
-        useSetting: createUseSettingMock({
-            values: {
-                toolViewDetailLevelDefault: 'title',
-            },
-        }),
-        storage: {
-            getState: () => ({
-                sessions: storageState.sessions,
-                sessionListRowsByServerId: storageState.sessionListRowsByServerId,
-                ordinarySessionListMembershipByServerId: {},
-                sessionListIndexByServerId: {
-                    // Hidden system sessions are intentionally absent from the ordinary list.
-                    'server-a': [],
-                },
-                concurrentSessionListCacheByServerId: {},
-                clearSessionOptimisticThinking: vi.fn(),
-                clearSessionThinkingGrace: vi.fn(),
-                applySessions: vi.fn(),
-                updateSessionPermissionMode: vi.fn(),
-            }),
+// Keep the store, scope resolution and Action admission real; replace only socket transport.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', async (importOriginal) => {
+    const { installServerScopedSessionRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return installServerScopedSessionRpcModuleMock({
+        sessionRpcWithServerScope: async <R,>(params: Parameters<typeof permissionRpc>[0]): Promise<R> => {
+            if (params.method !== RPC_METHODS.SESSION_PERMISSION_RESPOND) throw new Error('Unexpected request in Inbox fixture');
+            await permissionRpc(params);
+            // This external RPC acknowledges without a payload; R is selected by the caller.
+            return undefined as R;
         },
-    });
+    })(importOriginal);
 });
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/sessionRpcWithPreferredSessionScope', () => ({
-    sessionRpcWithPreferredSessionScope: (args: unknown) => permissionRpc(args),
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: 'server-a',
-        serverUrl: 'https://a.example.test',
-        generation: 1,
-    }),
-}));
 
 function createPendingPostEndSession(): Session {
     return createSessionFixture({
         id: SESSION_ID,
         encryptionMode: 'plain',
-        serverId: 'server-a',
+        serverId: serverIdA,
         seq: 4,
         lastViewedSessionSeq: 4,
         active: true,
@@ -154,12 +123,12 @@ function createActivitySource(session: Session): ActivityAttentionSource {
         ordinarySessionListMembershipByServerId: {},
         sessionListIndexByServerId: {
             // Hidden system sessions are intentionally absent from the ordinary list.
-            'server-a': [],
+            [serverIdA]: [],
         },
         concurrentSessionListCacheByServerId: {},
         serverProfilesById: {
-            'server-a': {
-                id: 'server-a',
+            [serverIdA]: {
+                id: serverIdA,
                 name: 'Server A',
                 serverUrl: 'https://a.example.test',
                 createdAt: 1,
@@ -169,7 +138,7 @@ function createActivitySource(session: Session): ActivityAttentionSource {
             },
         },
         activeServer: {
-            serverId: 'server-a',
+            serverId: serverIdA,
             serverUrl: 'https://a.example.test',
             generation: 1,
         },
@@ -177,12 +146,36 @@ function createActivitySource(session: Session): ActivityAttentionSource {
 }
 
 describe('global Voice post-End permission custody', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         vi.clearAllMocks();
-        storageState.sessions = {};
-        storageState.sessionListRowsByServerId = {};
+        home = await serveSessionActionHome({
+            homes: [
+                { key: 'b', serverUrl: 'https://b.example.test', accountId: 'account-b', currentAccount: true },
+                { key: 'a', serverUrl: 'https://a.example.test', accountId: 'account-a', currentAccount: true },
+            ],
+            route: () => undefined,
+        });
+        serverIdA = home.homes.a!.id;
+        serverIdB = home.homes.b!.id;
+        const machineA = createMachineFixture({ id: 'shared-machine', metadata: {
+            ...createMachineFixture().metadata!, displayName: 'Home A machine',
+        } });
+        const machineB = createMachineFixture({ ...machineA, metadata: {
+            ...machineA.metadata!, displayName: 'Home B machine',
+        } });
+        storage.setState({
+            sessions: {}, sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {},
+            sessionListIndexByServerId: { [serverIdA]: [] }, concurrentSessionListCacheByServerId: {},
+            machines: { [machineA.id]: machineA },
+            machineListByServerId: { [serverIdA]: [machineA], [serverIdB]: [machineB] },
+        });
         permissionRpc.mockResolvedValue(undefined);
         routerPush.mockResolvedValue(undefined);
+    });
+    afterEach(standardCleanup);
+    afterEach(() => {
+        home.dispose();
+        act(() => storage.setState(initialState));
     });
 
     it('shows a stopped pending-approval row with a resume action instead of an empty group', async () => {
@@ -192,7 +185,7 @@ describe('global Voice post-End permission custody', () => {
                 identityDisplay="none"
                 connected={false}
                 session={session}
-                serverId="server-a"
+                serverId={serverIdA}
                 permissionRequests={[{
                     id: REQUEST_ID,
                     tool: 'Bash',
@@ -219,7 +212,7 @@ describe('global Voice post-End permission custody', () => {
                 identityDisplay="none"
                 connected={false}
                 session={session}
-                serverId="server-a"
+                serverId={serverIdA}
                 permissionRequests={[{
                     id: REQUEST_ID,
                     tool: 'Bash',
@@ -263,13 +256,13 @@ describe('global Voice post-End permission custody', () => {
     });
 
     it('opens a stopped secondary-Home session before resuming with Home-scoped settings', async () => {
-        const session = { ...createPendingPostEndSession(), active: false, presence: 0, serverId: 'server-b' };
+        const session = { ...createPendingPostEndSession(), active: false, presence: 0, serverId: serverIdB };
         const screen = await renderScreen(
             <InboxSessionAttentionGroupCard
                 identityDisplay="none"
                 connected={false}
                 session={session}
-                serverId="server-b"
+                serverId={serverIdB}
                 permissionRequests={[{
                     id: REQUEST_ID,
                     tool: 'Bash',
@@ -281,7 +274,7 @@ describe('global Voice post-End permission custody', () => {
             />,
         );
         await screen.pressByTestIdAsync('inbox.session_attention.resume');
-        expect(routerPush).toHaveBeenCalledWith(`/session/${SESSION_ID}?serverId=server-b`);
+        expect(routerPush).toHaveBeenCalledWith(`/session/${SESSION_ID}?serverId=${serverIdB}`);
     });
 
     it.each([
@@ -301,10 +294,7 @@ describe('global Voice post-End permission custody', () => {
         'keeps the post-End hidden-session permission actionable for $decision',
         async ({ actionTestId, approved, rpcDecision }) => {
             const session = createPendingPostEndSession();
-            storageState.sessions = { [session.id]: session };
-            storageState.sessionListRowsByServerId = {
-                'server-a': { [session.id]: buildSessionListRenderableFromSession(session) },
-            };
+            storage.getState().applySessions([session]);
             const activity = buildActivityOverviewFromSource({
                 source: createActivitySource(session),
                 nowMs: NOW_MS,
@@ -315,7 +305,7 @@ describe('global Voice post-End permission custody', () => {
             expect(activity.candidates).toEqual([
                 expect.objectContaining({
                     sessionId: SESSION_ID,
-                    route: `/session/${SESSION_ID}?serverId=server-a`,
+                    route: `/session/${SESSION_ID}?serverId=${serverIdA}`,
                 }),
             ]);
             expect(inbox.sessionsNeedingAttention).toHaveLength(1);
@@ -339,35 +329,36 @@ describe('global Voice post-End permission custody', () => {
 
             expect(routerPush).toHaveBeenCalledTimes(1);
             expect(routerPush).toHaveBeenCalledWith(
-                `/session/${SESSION_ID}?serverId=server-a`,
+                `/session/${SESSION_ID}?serverId=${serverIdA}`,
             );
 
             await screen.pressByTestIdAsync(actionTestId);
 
             expect(screen.findByTestId('permission-footer.action-error')).toBeNull();
             expect(permissionRpc).toHaveBeenCalledTimes(1);
-            expect(permissionRpc).toHaveBeenCalledWith({
+            expect(permissionRpc).toHaveBeenCalledWith(expect.objectContaining({
                 sessionId: SESSION_ID,
-                serverId: 'server-a',
+                serverId: serverIdA,
                 method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
                 payload: {
                     id: REQUEST_ID,
                     approved,
                     decision: rpcDecision,
+                    answeringClientCategory: 'web',
                 },
-            });
+            }));
             expect(routerPush).toHaveBeenCalledTimes(1);
         },
     );
 
     it('sends a secondary Home approval with its qualified scope when the active Home has the same session id', async () => {
         const activeSession = createPendingPostEndSession();
-        const secondarySession = { ...activeSession, serverId: 'server-b' };
-        storageState.sessions = { [activeSession.id]: activeSession };
-        storageState.sessionListRowsByServerId = {
-            'server-a': { [activeSession.id]: buildSessionListRenderableFromSession(activeSession) },
-            'server-b': { [secondarySession.id]: buildSessionListRenderableFromSession(secondarySession) },
-        };
+        const secondarySession = { ...activeSession, serverId: serverIdB };
+        storage.getState().applySessions([activeSession]);
+        storage.setState({ sessionListRowsByServerId: {
+            [serverIdA]: { [activeSession.id]: buildSessionListRenderableFromSession(activeSession) },
+            [serverIdB]: { [secondarySession.id]: buildSessionListRenderableFromSession(secondarySession) },
+        } });
         const activity = buildActivityOverviewFromSource({
             source: createActivitySource(secondarySession),
             nowMs: NOW_MS,
@@ -380,7 +371,7 @@ describe('global Voice post-End permission custody', () => {
                 identityDisplay="none"
                 connected={false}
                 session={attention.candidate.session}
-                serverId="server-b"
+                serverId={serverIdB}
                 permissionRequests={attention.pendingPermissions}
                 userActionRequests={attention.pendingUserActions}
             />,
@@ -388,15 +379,15 @@ describe('global Voice post-End permission custody', () => {
 
         const { SessionTranscriptSourceProvider } = await import('@/components/sessions/transcript/source/SessionTranscriptSourceContext');
         expect(screen.findAllByType(SessionTranscriptSourceProvider).map((root) => root.props.source)).toEqual([
-            expect.objectContaining({ kind: 'app', sessionId: SESSION_ID, serverId: 'server-b' }),
+            expect.objectContaining({ kind: 'app', sessionId: SESSION_ID, serverId: serverIdB }),
         ]);
         await screen.pressByTestIdAsync('permission-footer.allow');
 
         expect(permissionRpc).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: SESSION_ID,
-            serverId: 'server-b',
+            serverId: serverIdB,
             method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
-            payload: { id: REQUEST_ID, approved: true, decision: 'approved' },
+            payload: { id: REQUEST_ID, approved: true, decision: 'approved', answeringClientCategory: 'web' },
         }));
     });
 
@@ -404,7 +395,7 @@ describe('global Voice post-End permission custody', () => {
         const session = createSessionFixture({
             id: 'same-session',
             encryptionMode: 'plain',
-            serverId: 'server-b',
+            serverId: serverIdB,
             metadata: {
                 name: 'Secondary Home session',
                 host: 'home-b-host',
@@ -419,7 +410,7 @@ describe('global Voice post-End permission custody', () => {
                 identityDisplay="none"
                 connected={false}
                 session={session}
-                serverId="server-b"
+                serverId={serverIdB}
                 contextLine="Home B"
                 permissionRequests={[]}
                 userActionRequests={[]}

@@ -16,7 +16,8 @@ describe('Home-qualified Inbox focus', () => {
         }));
         const presentation = buildInboxSessionPresentation({ overview: buildActivityOverviewSnapshot({ sessions, nowMs: 1_000 }) });
         const items = buildInboxWorkGroups({ sessionEntries: presentation.sessionsNeedingAttention,
-            workflowRuns: [], stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null,
+            workflowRuns: [], automationRuns: [], automationServerId: null, openApprovals: [],
+            stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null,
         }).flatMap((group) => group.items);
         expect(items).toHaveLength(2);
         const focus = readInboxItemFocus(createInboxItemRoute({ kind: 'session', serverId: 'home-b', id: 'same-session' }).params.item);
@@ -44,7 +45,8 @@ describe('Home-qualified Inbox focus', () => {
 
     it('compares the workflow Run focus against the Home that serves the Inbox window', () => {
         const row = workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'same-run' }), null);
-        const item = { kind: 'workflow_run', key: 'run:same-run', runId: 'same-run', row } as const;
+        const item = { kind: 'workflow_run', key: 'run:same-run', runId: 'same-run', row,
+            heldStepLabel: null, heldStepLaneLabel: null } as const;
         const focus = readInboxItemFocus(createInboxItemRoute({ kind: 'workflow_run', serverId: 'home-b', id: 'same-run' }).params.item);
         expect(isFocusedInboxWorkItem(item, focus, 'home-a')).toBe(false);
         expect(isFocusedInboxWorkItem(item, focus, 'home-b')).toBe(true);

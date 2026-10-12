@@ -3,15 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderScreen } from '@/dev/testkit';
+import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const capture = vi.hoisted(() => ({
     contentProps: null as Record<string, unknown> | null,
 }));
-const inboxModel = vi.hoisted(() => ({
+const inboxModel = {
     sessionPresentation: {
         markAllReadTargets: [],
+        pendingRequestHydrationTargets: [],
         sessionsNeedingAttention: [] as unknown[],
         readySessions: [] as unknown[],
     },
@@ -21,9 +23,9 @@ const inboxModel = vi.hoisted(() => ({
     openUsageNotices: [],
     actionOperationEntries: [],
     friendRequests: [],
-    workflowAttention: { runIds: [] as string[] },
+    ...createInboxAttentionFixture(),
     workGroups: [],
-}));
+};
 const boundaryState = vi.hoisted(() => ({ mounts: 0 }));
 
 vi.mock('@/hooks/inbox/useInboxModel', () => ({
@@ -72,7 +74,7 @@ describe('InboxPopoverContent (lab inbox-I2)', () => {
 
     it('shows the same count as the rail badge that opened it: what needs you plus the updates', async () => {
         inboxModel.openApprovals = [{}];
-        inboxModel.workflowAttention.runIds = ['run-1'];
+        inboxModel.workflowAttention = { ...inboxModel.workflowAttention, runIds: ['run-1'] };
         inboxModel.sessionPresentation.readySessions = [{}, {}];
         try {
             const { InboxPopoverContent } = await import('./InboxPopover');
@@ -80,7 +82,7 @@ describe('InboxPopoverContent (lab inbox-I2)', () => {
             expect(screen.findByTestId('inbox.popover.count')?.props.children).toBe('4');
         } finally {
             inboxModel.openApprovals = [];
-            inboxModel.workflowAttention.runIds = [];
+            inboxModel.workflowAttention = { ...inboxModel.workflowAttention, runIds: [] };
             inboxModel.sessionPresentation.readySessions = [];
         }
     });

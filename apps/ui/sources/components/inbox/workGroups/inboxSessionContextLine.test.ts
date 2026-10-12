@@ -53,6 +53,20 @@ function readyCandidate() {
 }
 
 describe('Inbox session row line', () => {
+  it.each([
+    { total: 2, working: 0, needsYou: 0, stalled: 2 },
+    { total: 2, working: 0, needsYou: 2, stalled: 0 },
+    { total: 6, working: 2, needsYou: 1, stalled: 3 },
+  ])('labels only server-bucketed working reports as still working: %j', (reports) => {
+    const candidate = readyCandidate();
+    const line = buildInboxSessionContextLine({ ...candidate, session: { ...candidate.session, reports } }) ?? '';
+    if (reports.working === 0) {
+      expect(line).not.toContain(t('sessionWork.strip.stillWorking', { count: reports.total }));
+    } else {
+      expect(line).toContain(t('sessionWork.strip.stillWorking', { count: reports.working }));
+      expect(line).not.toContain(t('sessionWork.strip.stillWorking', { count: reports.total }));
+    }
+  });
   it('says what the session needs first, as the start of a sentence, before where it runs', () => {
     const line =
       buildInboxSessionContextLine(readyCandidate(), { showHome: true }) ?? '';

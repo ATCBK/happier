@@ -34,19 +34,6 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
-// The row primitive is a boundary here, but its accessory slots must still
-// render: a passthrough that leaves `leftElement`/`rightElement` as inert props
-// would hide the very control this suite is about.
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: ({ children, leftElement, rightElement, ...props }: any) => React.createElement(
-        'Item',
-        props,
-        leftElement,
-        rightElement,
-        children,
-    ),
-}));
-vi.mock('@/components/ui/icons/Icon', () => ({ Icon: 'Icon' }));
 vi.mock('@/components/sessions/shell/SessionListIdentity', () => ({ SessionListIdentity: 'SessionListIdentity' }));
 vi.mock('@/components/sessions/shell/resolveSessionListDensityViewState', () => ({
     SESSION_LIST_ROW_IDENTITY_METRICS: { compact: { slotSize: 30, agentLogoSize: 23 } },

@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
+import { happierPageRowDividerWidth, useHappierPageSection, HAPPIER_WORK_PAGE_ROW_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { useRouter } from 'expo-router';
 
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -18,6 +19,7 @@ import { InboxSessionAttentionHeader } from './InboxSessionAttentionHeader';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { storage } from '@/sync/domains/state/storage';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
@@ -43,6 +45,8 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
     onBeforeNavigate?: () => void;
 }>) {
     const router = useRouter();
+    // On the Inbox page the card is one of the sheet's rows: it draws the sheet's own full-width hairline.
+    const pageSection = useHappierPageSection();
     const statusOnly = isInboxSessionStatusOnly(props.session);
     const ownerMetadata = statusOnly ? null : readSessionOwnerMetadataView(props.session);
     const machineId = statusOnly ? '' : readDisplayMachineIdForSession({
@@ -131,7 +135,9 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
                 onOpenSession={openSession}
             />
 
-            <View style={styles.items}>
+            {/* A card whose requests cannot be shown yet is its header row alone, with no empty band under it. */}
+            {stoppedWithPendingRequests || (!statusOnly && (props.permissionRequests.length > 0 || props.userActionRequests.length > 0)) ? (
+            <View style={[styles.items, pageSection ? styles.pageSheetItems : null]}>
                 {stoppedWithPendingRequests ? (
                     <View testID="inbox.session_attention.stopped" style={styles.stoppedRow}>
                         <Text style={styles.stoppedText}>{t('inbox.stoppedResumeToAnswer')}</Text>
@@ -157,6 +163,8 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
                         metadata={ownerMetadata}
                         canApprovePermissions={transcriptInteraction.canApprovePermissions}
                         disabledReason={transcriptInteraction.permissionDisabledReason}
+                        // In a page sheet the request is part of its row (lab `phone-P4`), not a card inside a card.
+                        chrome={pageSection ? 'inline' : undefined}
                     />
                 ))}
 
@@ -171,10 +179,17 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
                         metadata={ownerMetadata}
                         canApprovePermissions={transcriptInteraction.canApprovePermissions}
                         disabledReason={transcriptInteraction.permissionDisabledReason}
+                        // In a page sheet the request is part of its row (lab `phone-P4`), not a card inside a card.
+                        chrome={pageSection ? 'inline' : undefined}
                     />
                 ))}
             </View>
-            {props.showDivider ? <View style={styles.divider} /> : null}
+            ) : null}
+            {props.showDivider ? (
+                <View style={pageSection
+                    ? { height: happierPageRowDividerWidth(), backgroundColor: pageSection.rowDividerColor }
+                    : styles.divider} />
+            ) : null}
         </View>
         </AppSessionTranscriptSourceProvider>
     );
@@ -182,17 +197,25 @@ export const InboxSessionAttentionGroupCard = React.memo(function InboxSessionAt
 
 const styles = StyleSheet.create((theme) => ({
     items: {
-        gap: 12,
-        paddingHorizontal: 16,
-        paddingBottom: 16,
+        gap: theme.space.s12,
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s16,
     },
-    stoppedRow: { gap: 8, minHeight: 44 },
-    stoppedText: { color: theme.colors.text.secondary, fontSize: 14 },
+    // In a page sheet the row's requests are part of the row (lab `phone-P4`): their inline prompt's own
+    // icon column (the approval chrome's medium inset) lands on the row's text column.
+    pageSheetItems: {
+        paddingLeft: HAPPIER_WORK_PAGE_ROW_METRICS.textInsetPx - theme.space.s12,
+        paddingRight: Math.max(0, HAPPIER_WORK_PAGE_ROW_METRICS.trailingInsetPx - theme.space.s12),
+        // The inline prompt closes with its own inset; a second one would leave a band under the decision.
+        paddingBottom: 0,
+    },
+    stoppedRow: { gap: theme.space.s8, minHeight: 44 },
+    stoppedText: { color: theme.colors.text.secondary, ...Typography.variant('label', 'regular') },
     resumeButton: { alignSelf: 'flex-start' },
-    errorText: { color: theme.colors.status.error, fontSize: 14 },
+    errorText: { color: theme.colors.status.error, ...Typography.variant('label', 'regular') },
     divider: {
         height: 1,
-        marginLeft: 16,
+        marginLeft: theme.space.s16,
         backgroundColor: theme.colors.border.default,
     },
 }));

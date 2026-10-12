@@ -8,6 +8,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { useUnistyles } from 'react-native-unistyles';
 import { Icon } from '@/components/ui/icons/Icon';
 import { formatRelativeTime } from '@/utils/time/formatShortRelativeTime';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 
 interface FeedItemCardProps {
     item: FeedItem;
@@ -39,7 +40,7 @@ export const FeedItemCard = React.memo(({ item }: FeedItemCardProps) => {
             
             return (
                 <Item
-                    title={t('feed.friendRequestFrom', { name: user!.firstName || user!.username })}
+                    title={t('feed.friendRequestFrom', { name: formatAccountDisplayName(user!) ?? t('accountDisplay.unnamed') })}
                     subtitle={formatRelativeTime(item.createdAt)}
                     leftElement={avatarElement}
                     onPress={() => router.push(`/user/${user!.id}`)}
@@ -61,7 +62,7 @@ export const FeedItemCard = React.memo(({ item }: FeedItemCardProps) => {
             
             return (
                 <Item
-                    title={t('feed.friendAccepted', { name: user!.firstName || user!.username })}
+                    title={t('feed.friendAccepted', { name: formatAccountDisplayName(user!) ?? t('accountDisplay.unnamed') })}
                     subtitle={formatRelativeTime(item.createdAt)}
                     leftElement={avatarElement}
                     onPress={() => router.push(`/user/${user!.id}`)}

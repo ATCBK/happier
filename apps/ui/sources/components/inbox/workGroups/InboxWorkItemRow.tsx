@@ -11,7 +11,7 @@ import {
 } from '@/components/sessions/shell/SessionListIdentity';
 import { SESSION_LIST_ROW_IDENTITY_METRICS } from '@/components/sessions/shell/resolveSessionListDensityViewState';
 import { formatSessionAttentionReminderDateTime } from '@/components/sessions/shell/row/actionMenu/sessionAttentionReminderAction';
-import { describeWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
+import { describeWorkflowRunState, isTerminalWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import {
     formatWorkflowRunDisplayName,
     resolveWorkflowRunDisplayName,
@@ -21,7 +21,11 @@ import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { InboxWorkRow } from '../InboxWorkRow';
 import { InboxRelativeTime } from '../InboxRelativeTime';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
-import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { createWorkflowInvocationRoute, createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
+import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { resolveWorkflowProblemPresentation } from '@/components/workflows/presentation/workflowProblemPresentation';
+import { Modal } from '@/modal';
 import { resolveSessionListRenderableMeaningfulActivityAt } from '@/sync/domains/session/listing/sessionListRenderableSorting';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
@@ -30,10 +34,15 @@ import { getSessionStatus } from '@/utils/sessions/sessionUtils';
 import { resolveWorkStatusTone, type WorkStatusPresentation } from '@/components/work/status/resolveWorkStatusTone';
 import { readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
 import { readInboxSessionTitle } from '@/components/inbox/sessionAttention/inboxSessionPrivacy';
+import { ApprovalInboxCard } from '@/components/inbox/cards/ApprovalInboxCard';
+import { formatAutomationRunCauseLabel, formatAutomationRunStateLabel } from '@/components/automations/list/automationListFormatting';
+import { useAutomation } from '@/sync/domains/state/storage';
+import { readInboxApprovalServerId } from '../inboxItemFocus';
 
 import type { InboxItemFocus } from '../inboxItemFocus';
 import { InboxSessionRowMenu } from './InboxSessionRowMenu';
 import { buildInboxSessionContextLine } from './inboxSessionContextLine';
+import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
 export function requiresInboxPromptCard(entry: InboxSessionAttentionEntry): boolean {
     return entry.candidate.personalAttention.reasons.some(
@@ -52,6 +61,106 @@ function sessionServerId(session: Session): string | null {
     return session.serverId ?? null;
 }
 
+/** Resolve the current held invocation on intent, never with a per-row background read. */
+function InboxWorkflowRunRow(props: Readonly<{
+    item: Extract<InboxWorkItem, { kind: 'workflow_run' }>;
+    serverId: string | null;
+    statusColumn: boolean;
+    showReview: boolean;
+    kindInHeader?: boolean;
+    focused?: boolean;
+    showDivider?: boolean;
+    navigate: RowProps['navigate'];
+    onSelectItem?: RowProps['onSelectItem'];
+}>) {
+    const { theme } = useUnistyles();
+    const { item, serverId } = props;
+    const pending = React.useRef<AbortController | null>(null);
+    React.useEffect(() => () => { pending.current?.abort(); pending.current = null; }, [item.runId, serverId]);
+    const open = async () => {
+        if (pending.current !== null) return;
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime || !selectActiveServerAccountScopeForServer(lifetime.scope, serverId)) return;
+        const controller = new AbortController();
+        pending.current = controller;
+        const retirement = lifetime.onRetire(() => controller.abort());
+        try {
+            const result = await workflowRunDetailActions.listInvocations({
+                runId: item.runId, lifecycles: ['waiting_for_review'], limit: 1, includeContent: false,
+            }, controller.signal);
+            if (controller.signal.aborted || !lifetime.isCurrent()) return;
+            const invocationId = result.invocations[0]?.id;
+            const focus: InboxItemFocus = { kind: 'workflow_run', serverId: lifetime.scope.serverId, id: item.runId,
+                ...(invocationId ? { invocationId } : {}) };
+            if (props.onSelectItem) props.onSelectItem(focus);
+            else props.navigate(invocationId ? createWorkflowInvocationRoute(item.runId, invocationId) : createWorkflowRunRoute(item.runId));
+        } catch (error) {
+            if (!controller.signal.aborted && lifetime.isCurrent()) {
+                const problem = resolveWorkflowProblemPresentation(error);
+                await Modal.alert(problem.title, problem.message);
+            }
+        } finally {
+            retirement.dispose();
+            if (pending.current === controller) pending.current = null;
+        }
+    };
+    const summary = item.row.summary;
+    const status = summary ? resolveWorkStatusTone({ kind: 'workflow_run', facts: {
+        state: summary.state, word: describeWorkflowRunState(summary.state, {
+            inAttentionWindow: true, workflowCustodyState: summary.workflowCustodyState,
+        }).label, inAttentionWindow: true, workflowCustodyState: summary.workflowCustodyState,
+    } }) : null;
+    // Only a Run that still waits is reviewed; a stopped or finished one is opened, and says which by its
+    // own state mark (the same ended glyph the Run page draws), never the hold's hand (DESIGN-14 D8).
+    const settled = summary !== undefined && summary !== null && isTerminalWorkflowRunState(summary.state);
+    const settledMarker = settled && summary ? describeWorkflowRunState(summary.state).marker : null;
+    // A wide row says its state in the status column and nothing more under the title: "Workflow run"
+    // under every sibling repeated one word down the list. A narrow row (no state column, lab
+    // `inbox-I2`) keeps the kind on its line beneath, with its age.
+    // A held Run names what waits and where (lab `inbox-I1`, DESIGN-15 R5): "Write changelog is
+    // waiting for you · Changelog", the same sentence the Run page's Needs-you rows use.
+    const heldStep = !settled && item.heldStepLabel ? item.heldStepLabel : null;
+    // Several holds read as the first and how many more (DESIGN-17 R4), from the server's held count.
+    const moreHeld = Math.max(0, (summary?.heldCount ?? 1) - 1);
+    const facts = heldStep !== null
+        ? [moreHeld > 0
+            ? t('workflows.run.attentionWaitRowMore', { step: heldStep, count: moreHeld })
+            : t('workflows.run.attentionWaitRow', { step: heldStep }), ...(item.heldStepLaneLabel ? [item.heldStepLaneLabel] : [])]
+        // Under the "Workflow runs" header the kind is already said; a narrow row says its state instead.
+        : props.statusColumn ? [] : props.kindInHeader === true ? status ? [status.word] : [] : [t('inbox.work.rows.workflowRun')];
+    return <InboxWorkRow testID={`inbox.run.${item.runId}`} selected={props.focused === true} showDivider={props.showDivider}
+        title={formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(item.row.metadata))}
+        facts={facts}
+        // A held line already says it waits for you, so the state column does not say it again (DESIGN-16 D8).
+        time={<InboxRelativeTime timestamp={item.row.updatedAt} />} status={heldStep !== null ? null : status} narrow={!props.statusColumn}
+        // A failed run says so by its mark, like a failed session; a hold keeps the hand.
+        mark={status?.tone === 'danger'
+            ? <Icon name="warning" size={18} color={theme.colors.status.error} />
+            : settledMarker?.kind === 'icon'
+                ? <Icon name={settledMarker.icon} size={18} color={theme.colors.text.secondary} />
+                : <Icon name="hand" size={18} color={theme.colors.text.secondary} />}
+        trailingAccessory={props.showReview ? <RoundButton testID={`inbox.run.${item.runId}.review`}
+            size="small" display="secondary" title={settled ? t('inbox.work.groups.openRun') : t('inbox.work.rows.review')} action={open} /> : undefined}
+        onPress={() => { void open(); }} />;
+}
+
+function InboxAutomationRunRow(props: Readonly<{
+    item: Extract<InboxWorkItem, { kind: 'automation_run' }>;
+    navigate: RowProps['navigate'];
+    focused?: boolean;
+    showDivider?: boolean;
+}>) {
+    const run = props.item.row.automation!;
+    const automation = useAutomation(run.automationId);
+    const state = formatAutomationRunStateLabel(run.state);
+    const cause = formatAutomationRunCauseLabel(run.cause);
+    return <InboxWorkRow testID={`inbox.automation_run.${run.id}`} selected={props.focused === true} showDivider={props.showDivider}
+        title={automation?.name ?? state} facts={automation?.name ? [state, cause] : [cause]}
+        time={<InboxRelativeTime timestamp={run.finishedAt ?? run.startedAt ?? run.createdAt} />}
+        mark={<Icon name="timer" size={16} />}
+        onPress={() => props.navigate({ pathname: '/automations/[id]/runs/[runId]', params: { id: run.automationId, runId: run.id } })} />;
+}
+
 type RowProps = Readonly<{
     item: InboxWorkItem;
     spansHomes: boolean;
@@ -60,12 +169,16 @@ type RowProps = Readonly<{
     setReminder: InboxModel['setReminder'];
     identityDisplay: SessionListIdentityDisplay;
     presentation: 'screen' | 'popover';
-    navigate: (route: string) => void;
+    navigate: (route: string | { pathname: '/automations/[id]/runs/[runId]'; params: { id: string; runId: string } }) => void;
     onBeforeNavigate?: () => void;
     /** The item the person came to see (`/inbox?item=`): its row is drawn selected. */
     focused?: boolean;
     /** Beside the Inbox's detail pane a row selects its item there instead of leaving the Inbox. */
     onSelectItem?: (focus: InboxItemFocus) => void;
+    /** Passed by the Inbox page's sheet: the row hairline under every row but the last. */
+    showDivider?: boolean;
+    /** The group header already names this row's kind ("Workflow runs"). */
+    kindInHeader?: boolean;
 }>;
 
 /**
@@ -113,6 +226,7 @@ export const InboxWorkItemRow = React.memo(function InboxWorkItemRow(props: RowP
                         contextLine={candidate.context?.contextLine ?? null}
                         permissionRequests={entry.pendingPermissions}
                         userActionRequests={entry.pendingUserActions}
+                        showDivider={props.showDivider}
                         onBeforeNavigate={props.onBeforeNavigate}
                     />
                 );
@@ -123,6 +237,7 @@ export const InboxWorkItemRow = React.memo(function InboxWorkItemRow(props: RowP
                 <InboxWorkRow
                     testID={`inbox.session.${candidate.sessionId}`}
                     selected={props.focused === true}
+                    showDivider={props.showDivider}
                     title={candidate.title}
                     facts={[
                         item.foldedUnderRunId ? t('inbox.work.rows.step') : null,
@@ -130,7 +245,7 @@ export const InboxWorkItemRow = React.memo(function InboxWorkItemRow(props: RowP
                     ]}
                     time={<InboxRelativeTime timestamp={resolveSessionListRenderableMeaningfulActivityAt(candidate.session)} />}
                     status={status}
-                    inlineStatus={!statusColumn}
+                    narrow={!statusColumn}
                     mark={failed
                         ? glyph('warning', theme.colors.status.error)
                         : props.identityDisplay !== 'none' ? (
@@ -151,45 +266,22 @@ export const InboxWorkItemRow = React.memo(function InboxWorkItemRow(props: RowP
             );
         }
         case 'workflow_run': {
-            const summary = item.row.summary;
-            const name = formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(item.row.metadata));
-            // Every row here is in the server attention window; that membership sets the tone.
-            const status = summary ? resolveWorkStatusTone({
-                kind: 'workflow_run',
-                facts: { state: summary.state, word: describeWorkflowRunState(summary.state).label, inAttentionWindow: true },
-            }) : null;
-            const runServerId = props.workflowServerId;
-            const open = () => openItem(
-                runServerId ? { kind: 'workflow_run', serverId: runServerId, id: item.runId } : null,
-                createWorkflowRunRoute(item.runId),
-            );
-            // The row is titled by the run; its state is the row's one status: in the status column on
-            // the wide page, otherwise leading the line under the title in place of the kind label, so
-            // the line stays one line and its time is never orphaned on a second.
-            return (
-                <InboxWorkRow
-                    testID={`inbox.run.${item.runId}`}
-                    selected={props.focused === true}
-                    title={name}
-                    facts={statusColumn || !status ? [t('inbox.work.rows.workflowRun')] : []}
-                    time={<InboxRelativeTime timestamp={item.row.updatedAt} />}
-                    status={status}
-                    inlineStatus={!statusColumn}
-                    mark={glyph('hand')}
-                    // The inline answer (lab `inbox-I2`): a bordered Review wherever there is room for
-                    // one beside the title; a phone page keeps the row press.
-                    trailingAccessory={!page || wide ? (
-                        <RoundButton
-                            testID={`inbox.run.${item.runId}.review`}
-                            size="small"
-                            display="secondary"
-                            title={t('inbox.work.rows.review')}
-                            onPress={open}
-                        />
-                    ) : undefined}
-                    onPress={open}
-                />
-            );
+            return <InboxWorkflowRunRow item={item} serverId={props.workflowServerId}
+                // The open item needs no Review: it is already beside the list (lab `inbox-I1`).
+                statusColumn={statusColumn} showReview={(!page || wide) && props.focused !== true} focused={props.focused} showDivider={props.showDivider}
+                kindInHeader={props.kindInHeader} navigate={props.navigate} onSelectItem={props.onSelectItem} />;
+        }
+        case 'automation_run':
+            return <InboxAutomationRunRow item={item} navigate={props.navigate} focused={props.focused} showDivider={props.showDivider} />;
+        case 'approval': {
+            const serverId = readInboxApprovalServerId(item.artifact.header as Readonly<Record<string, unknown>> | undefined);
+            const open = () => props.onSelectItem
+                ? props.onSelectItem({ kind: 'approval', serverId, id: item.artifact.id })
+                : props.navigate(`/inbox/approvals/${encodeURIComponent(item.artifact.id)}${serverId ? `?serverId=${encodeURIComponent(serverId)}` : ''}`);
+            return <ApprovalInboxCard artifact={item.artifact}
+                selected={props.focused === true} showDivider={props.showDivider} narrow={!statusColumn}
+                showHome={props.spansHomes} inlineActionLabel={(!page || wide) && props.focused !== true ? t('inbox.work.rows.review') : undefined}
+                onPress={open} />;
         }
         case 'stalled': {
             const session = item.session;
@@ -198,10 +290,11 @@ export const InboxWorkItemRow = React.memo(function InboxWorkItemRow(props: RowP
                 <InboxWorkRow
                     testID={`inbox.stalled.${session.id}`}
                     selected={props.focused === true}
+                    showDivider={props.showDivider}
                     title={readInboxSessionTitle(session, sessionServerId(session))}
                     facts={[t('inbox.work.rows.stalled'), t('inbox.work.rows.stalledReason')]}
                     status={status}
-                    inlineStatus={!statusColumn}
+                    narrow={!statusColumn}
                     mark={glyph('cloud-slash', theme.colors.state.warning.foreground)}
                     trailingAccessory={page ? <InboxSessionRowMenu session={session} settle={props.settle} setReminder={props.setReminder} /> : undefined}
                     onPress={() => openItem(sessionFocus(session.id, sessionServerId(session)), createActivitySurfaceSessionRoute(session.id, sessionServerId(session)))}
@@ -210,12 +303,18 @@ export const InboxWorkItemRow = React.memo(function InboxWorkItemRow(props: RowP
         }
         case 'landing': {
             const { session, link } = item;
+            const stateWord = link.state === 'open' ? t('files.sourceControl.pullRequests.states.open')
+                : link.state === 'merged' ? t('files.sourceControl.pullRequests.states.merged')
+                : link.state === 'closed' ? t('files.sourceControl.pullRequests.states.closed') : '—';
             return (
                 <InboxWorkRow
                     testID={`inbox.landing.${session.id}`}
                     selected={props.focused === true}
+                    showDivider={props.showDivider}
                     title={link.title ? `#${link.number} ${link.title}` : `#${link.number}`}
-                    facts={[t('inbox.work.rows.landing'), readInboxSessionTitle(session, sessionServerId(session))]}
+                    narrow={!statusColumn}
+                    status={{ word: stateWord, tone: 'neutral' }}
+                    facts={[t('inbox.work.rows.landing'), ...(!statusColumn ? [stateWord] : []), readInboxSessionTitle(session, sessionServerId(session))]}
                     mark={glyph('git-pull-request')}
                     trailingAccessory={(
                         <RoundButton
@@ -226,7 +325,7 @@ export const InboxWorkItemRow = React.memo(function InboxWorkItemRow(props: RowP
                             action={() => props.settle(session)}
                         />
                     )}
-                    onPress={() => openItem(sessionFocus(session.id, sessionServerId(session)), createActivitySurfaceSessionRoute(session.id, sessionServerId(session)))}
+                    onPress={() => { props.onBeforeNavigate?.(); void openExternalUrl(link.url); }}
                 />
             );
         }
@@ -236,6 +335,7 @@ export const InboxWorkItemRow = React.memo(function InboxWorkItemRow(props: RowP
                 <InboxWorkRow
                     testID={`inbox.snoozed.${session.id}`}
                     selected={props.focused === true}
+                    showDivider={props.showDivider}
                     title={readInboxSessionTitle(session, sessionServerId(session))}
                     phase="finished"
                     facts={[t('inbox.work.rows.snoozedUntil', {

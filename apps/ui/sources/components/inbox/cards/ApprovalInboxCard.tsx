@@ -11,6 +11,9 @@ import { t } from '@/text';
 import { Icon } from '@/components/ui/icons/Icon';
 import { resolveApprovalHomeServerId } from '@/components/approvals/approvalHomeServerId';
 import { resolveApprovalRequestTitle } from '@/components/approvals/approvalRequestTitle';
+import { readResourceProposalApproval } from '@/components/approvals/resourceProposal/readResourceProposalApproval';
+import { describeResourceProposalInboxFacts } from '@/components/approvals/resourceProposal/resourceProposalLabels';
+import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import {
   describeUnnamedApprovalSession,
   resolveApprovalHomeName,
@@ -31,6 +34,8 @@ export const ApprovalInboxCard = React.memo((props: Readonly<{
   /** The request whose detail is open beside the list. */
   selected?: boolean;
   density?: 'comfortable' | 'cozy' | 'compact' | 'tight';
+  /** A phone or the rail popover: kind and age on the line beneath, no time column (`InboxWorkRow`). */
+  narrow?: boolean;
   /**
    * The rail popover's inline answer (lab `inbox-I2`): one bordered action that opens the request.
    * An approval is never decided from a row; the page shows what would run first.
@@ -74,8 +79,15 @@ export const ApprovalInboxCard = React.memo((props: Readonly<{
   const isFact = (value: string | null | undefined): value is string => typeof value === 'string' && value.trim().length > 0;
   const homeName = resolveApprovalHomeName(serverId);
   const askingSession = sessionTitle ?? (sessionId ? describeUnnamedApprovalSession(homeName) : null);
+  // An agent's cleanup or stop proposal says what it holds (lab `ra` A5): "7 items, all safe · …".
+  const proposalFacts = React.useMemo(() => {
+    const parsed = approvalArtifactBodyMatchesHeaderV1(props.artifact.header ?? {}, 'body' in props.artifact && typeof props.artifact.body === 'string' ? props.artifact.body : null);
+    const model = parsed?.family === 'built_in' ? readResourceProposalApproval(parsed.request) : null;
+    return model ? describeResourceProposalInboxFacts(model) : null;
+  }, [props.artifact]);
   const distinguishingFacts = [
-    actionTitle && actionTitle !== title ? actionTitle : null,
+    proposalFacts,
+    actionTitle && actionTitle !== title && !proposalFacts ? actionTitle : null,
     askingSession,
     props.showHome === true && sessionTitle ? homeName : null,
   ].filter(isFact);
@@ -102,6 +114,8 @@ export const ApprovalInboxCard = React.memo((props: Readonly<{
         />
       ) : undefined}
       selected={props.selected === true}
+      showDivider={props.showDivider}
+      narrow={props.narrow}
     />
   );
 });

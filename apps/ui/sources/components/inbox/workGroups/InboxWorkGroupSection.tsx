@@ -22,6 +22,7 @@ import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRout
 import { t } from '@/text';
 import { readInboxSessionTitle } from '@/components/inbox/sessionAttention/inboxSessionPrivacy';
 import { Typography } from '@/constants/Typography';
+import { useAutomation } from '@/sync/domains/state/storage';
 
 import { InboxWorkItemRow } from './InboxWorkItemRow';
 
@@ -31,12 +32,13 @@ type GroupHeader = Readonly<{
     title: string;
     leading: React.ReactNode;
     meta: string | null;
-    open: Readonly<{ label: string; route: string }> | null;
+    open: Readonly<{ label: string; route: string | { pathname: '/automations/[id]/runs/[runId]'; params: { id: string; runId: string } } }> | null;
 }>;
 
 function useGroupHeader(group: InboxWorkGroup, identityDisplay: SessionListIdentityDisplay, workflowServerId: string | null): GroupHeader {
     const { theme } = useUnistyles();
     const root = group.root;
+    const automation = useAutomation(root.kind === 'automation' ? root.automationId : '');
     switch (root.kind) {
         case 'lead': {
             const session = root.session;
@@ -66,6 +68,15 @@ function useGroupHeader(group: InboxWorkGroup, identityDisplay: SessionListIdent
                 leading: <Icon name="tree-structure" size={MARK_SIZE} color={theme.colors.text.secondary} />,
                 meta: t('inbox.work.groups.runMeta'),
                 open: { label: t('inbox.work.groups.openRun'), route: createWorkflowRunRoute(root.runId, workflowServerId) },
+            };
+        case 'automation':
+            return {
+                title: automation?.name ?? t('navigation.automations'),
+                leading: <Icon name="timer" size={MARK_SIZE} color={theme.colors.text.secondary} />,
+                meta: t('navigation.automations'),
+                open: { label: t('inbox.work.groups.openRun'), route: {
+                    pathname: '/automations/[id]/runs/[runId]', params: { id: root.automationId, runId: root.runId },
+                } },
             };
         case 'other':
             return {
@@ -103,8 +114,8 @@ export function groupInboxWorkSheets(groups: readonly InboxWorkGroup[]): InboxWo
 
 /**
  * One work root and everything under it that needs the person (lab `inbox-I1`): the root's mark,
- * name and one quiet fact, "Open session"/"Open run", then its rows. `extra` carries rows that
- * belong only to "Other sessions" (approvals, operations).
+ * name and one quiet fact, "Open session"/"Open run", then its rows. `extra` carries operations
+ * that belong only to "Other sessions"; approvals are already grouped by the canonical builder.
  */
 export const InboxWorkGroupSection = React.memo(function InboxWorkGroupSection(props: Readonly<{
     group: InboxWorkGroup;
@@ -112,7 +123,7 @@ export const InboxWorkGroupSection = React.memo(function InboxWorkGroupSection(p
     identityDisplay: SessionListIdentityDisplay;
     presentation: 'screen' | 'popover';
     spacingBefore?: 'following' | 'separated';
-    navigate: (route: string) => void;
+    navigate: (route: string | { pathname: '/automations/[id]/runs/[runId]'; params: { id: string; runId: string } }) => void;
     onBeforeNavigate?: () => void;
     /** The item the person came to see, drawn selected. */
     focusedItem?: InboxItemFocus | null;
@@ -124,14 +135,16 @@ export const InboxWorkGroupSection = React.memo(function InboxWorkGroupSection(p
     const page = props.presentation === 'screen';
     // A run that is its own work root leads its group with its own row (titled by the run, opening
     // it): a header naming the run again above that row, with a second "Open run", says it twice.
+    // The sheet of such runs is still a group like its siblings, so it carries the kind's own
+    // sentence-case header (DESIGN-17 R4) rather than starting headless between titled sections.
     const rootIsOwnRow = isHeaderlessRunGroup(props.group);
     return (
         <InboxSection
             testID={`inbox.group.${props.group.key}`}
-            title={rootIsOwnRow ? undefined : header.title}
+            title={rootIsOwnRow ? t('inbox.work.groups.runsTitle') : header.title}
             surface={page ? 'page' : 'flat'}
             spacingBefore={props.spacingBefore}
-            leading={rootIsOwnRow ? undefined : header.leading}
+            leading={header.leading}
             meta={!rootIsOwnRow && header.meta ? <Text style={styles.meta}>{header.meta}</Text> : undefined}
             rightAccessory={page && header.open && !rootIsOwnRow ? (
                 <SectionActionButton
@@ -155,6 +168,7 @@ export const InboxWorkGroupSection = React.memo(function InboxWorkGroupSection(p
                     navigate={props.navigate}
                     onBeforeNavigate={props.onBeforeNavigate}
                     focused={isFocusedInboxWorkItem(item, props.focusedItem ?? null, props.model.workflowAttention.serverId)}
+                    kindInHeader={rootIsOwnRow}
                     onSelectItem={props.onSelectItem}
                 />
             ))}

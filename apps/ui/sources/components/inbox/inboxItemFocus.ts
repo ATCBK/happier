@@ -47,6 +47,10 @@ export function isFocusedInboxWorkItem(item: InboxWorkItem, focus: InboxItemFocu
     if (!focus) return false;
     const sameHome = (serverId: string | null | undefined) => Boolean(serverId)
         && areServerProfileIdentifiersEquivalent(serverId, focus.serverId);
+    if (item.kind === 'approval') {
+        return isFocusedInboxApproval(item.artifact.id,
+            readInboxApprovalServerId(item.artifact.header as Readonly<Record<string, unknown>> | undefined), focus);
+    }
     if (focus.kind === 'approval') return false;
     switch (item.kind) {
         case 'session':
@@ -54,6 +58,8 @@ export function isFocusedInboxWorkItem(item: InboxWorkItem, focus: InboxItemFocu
                 && sameHome(item.entry.candidate.address?.serverId ?? item.entry.candidate.serverId);
         case 'workflow_run':
             return focus.kind === 'workflow_run' && item.runId === focus.id && sameHome(servedRunServerId);
+        case 'automation_run':
+            return false;
         case 'stalled':
         case 'landing':
         case 'snoozed':

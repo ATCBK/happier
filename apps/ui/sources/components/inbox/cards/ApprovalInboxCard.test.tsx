@@ -339,7 +339,7 @@ describe('ApprovalInboxCard', () => {
     // One Home: naming it on every row would only repeat it.
     expect(text).not.toContain('Home B');
     expect(
-      screen.findByTestId(`inbox.approval.${artifact.id}`)?.props.subtitleLines,
+      screen.findHostByTestId(`inbox.approval.${artifact.id}.summary:facts`)?.props.numberOfLines,
     ).toBe(1);
   });
 

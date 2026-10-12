@@ -30,9 +30,7 @@ export function buildInboxSessionContextLine(
   const rowStatus = readSessionAwarenessPresentationV1(candidate.awareness);
   const statusSaysNotCurrent = rowStatus === 'unknown' || rowStatus === 'disconnected';
   const reports = candidate.session.reports;
-  const outstandingReports = reports
-    ? reports.working + reports.needsYou + reports.stalled
-    : 0;
+  const workingReports = reports?.working ?? 0;
   const need = options.showNeed !== false ? readInboxSessionNeed(candidate) : null;
   const context = candidate.context
     ? (resolveSessionContextLine(
@@ -48,8 +46,8 @@ export function buildInboxSessionContextLine(
   return (
     joinHappierFacts(
       need,
-      outstandingReports > 0
-        ? t('sessionWork.strip.stillWorking', { count: outstandingReports })
+      workingReports > 0
+        ? t('sessionWork.strip.stillWorking', { count: workingReports })
         : null,
       context,
     ) || undefined

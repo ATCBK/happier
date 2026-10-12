@@ -8,23 +8,28 @@ import type { InboxModel } from '@/hooks/inbox/useInboxModel';
 import { EMPTY_WORKFLOW_ATTENTION_SOURCE } from '@/hooks/inbox/useWorkflowAttentionSource';
 import { createUsageNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
 import { UsageNoticeArtifactHeaderV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ pathname: () => '/inbox' }).module;
 });
 
-function createModel(): InboxModel {
+function createModel(includeApproval = true): InboxModel {
+    const openApprovals = includeApproval ? [{ id: 'voice-start', title: 'Start Voice', isDecrypted: true as const,
+        header: { title: 'Start Voice', actionId: 'ui.voice_global.start', serverIdentityId: 'voice-home' },
+        headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }] : [];
     return {
         source: { isDataReady: true, sessionsById: {}, sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
-        openApprovals: [{ id: 'voice-start', title: 'Start Voice', isDecrypted: true,
-            header: { title: 'Start Voice', actionId: 'ui.voice_global.start', serverIdentityId: 'voice-home' },
-            headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }],
-        friendRequests: [], sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [] },
+        openApprovals,
+        friendRequests: [], sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
         targetBySessionAddress: new Map(), actionOperationEntries: [], pendingReadKeys: new Set(),
         markAllPending: false, isLoading: false, hasPrimaryAttention: true, hasContent: true, showCaughtUp: false,
-        workGroups: [], spansHomes: false, workflowAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE,
+        workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [], automationRuns: [],
+            automationServerId: null, openApprovals: openApprovals as InboxModel['openApprovals'],
+            stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null }),
+        spansHomes: false, workflowAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE,
         automationAttention: EMPTY_WORKFLOW_ATTENTION_SOURCE, automationAttentionItems: [],
         openUsageNotices: [], dismissUsageNotice: async () => {},
         markRead: async () => {}, resolveActionOperation: () => {}, settle: async () => {}, setReminder: async () => {},
@@ -54,7 +59,7 @@ it('opens an approval in the workspace hosting the Inbox, retaining its exact Ho
 it('opens Usage in the Inbox workspace and dismisses a notice without opening another destination', async () => {
     const artifact = createUsageNoticeArtifactFixture();
     const dismiss = vi.fn(async (_entry: InboxModel['openUsageNotices'][number]) => {});
-    const model = { ...createModel(), openApprovals: [],
+    const model = { ...createModel(false),
         openUsageNotices: [{ artifact, header: UsageNoticeArtifactHeaderV1Schema.parse(artifact.rawHeader) }], dismissUsageNotice: dismiss,
     };
     const screen = await renderHostedInbox(model);
@@ -63,4 +68,28 @@ it('opens Usage in the Inbox workspace and dismisses a notice without opening an
     expect(screen.findByTestId(`inbox.usage-notice.${artifact.id}`)).not.toBeNull();
     await screen.pressByTestIdAsync(`inbox.usage-notice.${artifact.id}`);
     expect(screen.findByTestId('opened-destination')?.props.children).toBe('/settings/usage');
+});
+
+it('files a machine alert under Machines, opens the tab its push would, and dismisses through the notice owner', async () => {
+    const notice = {
+        topic: 'resource_limit', phase: 'started', kind: 'memory_pressure', machineId: 'edge-1-id', machineName: 'edge-1',
+        at: 2_000_000, since: 1_700_000, guardEnabled: false,
+        evidence: { level: 'critical', sustainMs: 300_000, swapUsedBytes: 1.8 * 2 ** 30, swapTotalBytes: 2 * 2 ** 30 },
+    } as const;
+    const header = { v: 1, kind: 'usage_notice.v1', title: 'edge-1 is short on memory', status: 'open', notice } as const;
+    const artifact = createUsageNoticeArtifactFixture({ id: 'notice-machine', header, rawHeader: header,
+        body: JSON.stringify({ v: 1, notice }) });
+    const dismiss = vi.fn(async (_entry: InboxModel['openUsageNotices'][number]) => {});
+    const model = { ...createModel(false),
+        openUsageNotices: [{ artifact, header: UsageNoticeArtifactHeaderV1Schema.parse(artifact.rawHeader) }], dismissUsageNotice: dismiss,
+    };
+    const screen = await renderHostedInbox(model);
+    expect(screen.findByTestId('inbox.section.machines')).not.toBeNull();
+    expect(screen.findByTestId('inbox.section.usage')).toBeNull();
+    expect(screen.getTextContent()).toContain('edge-1 is short on memory');
+    expect(screen.getTextContent()).toContain('Critical for 5 min · swap 1.8 of 2 GB');
+    await screen.pressByTestIdAsync('inbox.machine-notice.dismiss.notice-machine');
+    expect(dismiss.mock.calls[0]?.[0]).toEqual(model.openUsageNotices[0]);
+    await screen.pressByTestIdAsync('inbox.machine-notice.notice-machine');
+    expect(screen.findByTestId('opened-destination')?.props.children).toBe('/machines/edge-1-id?tab=processes&sort=memory');
 });
