@@ -149,7 +149,6 @@ class Configuration {
   public readonly currentCliVersion: string
 
   public readonly isExperimentalEnabled: boolean
-  public readonly disableCaffeinate: boolean
   public readonly socketForceWebsocketOnly: boolean
   public readonly socketIoTransports: string[]
 
@@ -453,7 +452,6 @@ class Configuration {
     this.filesZipExcludedTopLevelDirs = zipExcludedOut;
 
     this.isExperimentalEnabled = ['true', '1', 'yes'].includes(process.env.HAPPIER_EXPERIMENTAL?.toLowerCase() || '');
-    this.disableCaffeinate = ['true', '1', 'yes'].includes(process.env.HAPPIER_DISABLE_CAFFEINATE?.toLowerCase() || '');
     const forceWebsocketRaw = (process.env.HAPPIER_SOCKET_FORCE_WEBSOCKET ?? '').toString().trim().toLowerCase();
     this.socketForceWebsocketOnly = ['true', '1', 'yes', 'on'].includes(forceWebsocketRaw);
 

@@ -26,6 +26,7 @@ import { installTerminalAuthorityCeiling } from '@/api/client/terminalAuthorityC
 import { refreshTerminalPresentUserPolicy } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
 import { readStoredCredentials } from '@/persistence';
 import { fail } from '@happier-dev/cli-common/output';
+import { joinCurrentWindowsSessionProcessCustody } from '@/subprocess/supervision/processCustody';
 
 const isCliDistIntegrityProbe = process.env.HAPPIER_CLI_DIST_INTEGRITY_PROBE === '1';
 
@@ -34,6 +35,8 @@ if (!isCliDistIntegrityProbe) {
   // referenced until async command dispatch (including install cleanup) settles.
   const cliLifetimeKeepAlive = setInterval(() => undefined, 60_000);
   void (async () => {
+    const custody = await joinCurrentWindowsSessionProcessCustody();
+    if (custody?.state === 'unavailable') logger.debug('[process-custody] session Job join unavailable');
     applyStackSessionPriority();
     // Best-effort Windows console hardening for Unicode output (workaround for upstream reports of mojibake when
     // launching via npm-generated wrappers). Opt-out via HAPPIER_WINDOWS_UTF8_CODEPAGE=0.
