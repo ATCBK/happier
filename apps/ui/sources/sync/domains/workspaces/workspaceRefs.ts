@@ -1,11 +1,11 @@
 import { randomUUID } from '@/platform/randomUUID';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { WorkspaceRefV1WriteSchema, type WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import { resolveWorkspaceRefV1, enrichWorkspaceRefV1, resolveWorkspaceProjectKeyV1, projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { resolveWorkspaceRefV1, enrichWorkspaceRefV1, resolveWorkspaceProjectKeyV1, projectWorkspaceRefV1, normalizeWorkspaceRootPathV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { resolveProjectAccountWorkspaceRefRemovalV1 } from '@happier-dev/protocol/projects/projectAccountSnapshotV1';
 
 import type { WorkspaceScopeBase } from './workspaceScope';
-import { normalizeWorkspaceRootPath, normalizeWorkspaceScopeBase } from './workspaceScope';
+import { normalizeWorkspaceScopeBase } from './workspaceScope';
 import type { WorkspaceRefV1 } from './workspaceRefModel';
 
 function normalizeOptionalLabel(raw: unknown): string | null {
@@ -25,7 +25,7 @@ export function findWorkspaceRefByScope(
 
 export const workspaceRefResolutionContextV1 = {
     normalizeServerId: resolveServerProfileScopeIdForIdentifier,
-    normalizeRootPath: (path: string) => normalizeWorkspaceRootPath(path),
+    normalizeRootPath: (path: string) => normalizeWorkspaceRootPathV1(path),
 };
 
 const resolutionContext = workspaceRefResolutionContextV1;
