@@ -209,6 +209,45 @@ That same approval model applies across the main action surfaces, including:
 
 For the broader model, see [Happier tools & actions](/extending/happier-tools) and [Inbox and approvals](/sessions/inbox-and-approvals).
 
+In **unreleased 0.3 development source**, a Session action that needs approval
+also needs its originating daemon or Agent Session to run it. A standalone CLI
+request without that origin cannot apply the change after approval. The CLI
+states the prerequisite when it requests approval, including on stderr with
+JSON output. Approving such a request settles it as failed with
+`approval_origin_unavailable` and a "Cannot run: origin unavailable" message.
+Request the action again from the originating Session; approving the old
+request again does not retry the change.
+
+### Agent HTML network in development
+
+In **unreleased 0.3 development source**, **Network for agent HTML** is an
+Account setting (`agentHtmlNetworkPolicy`), separate from Agent permissions and
+Action availability. It controls new caller-authored HTML in the agent's own
+Session:
+
+- **Allowed** (default) honors the declared network policy.
+- **Ask** requires approval when creation requests network access.
+- **Off** creates a no-network visual and reports `agent_html_network_off` when
+  requested network was removed.
+
+An unavailable or malformed setting fails closed to Ask. No network declaration
+means no network; `networkOrigins` names exact allowed origins and
+`network: 'open'` requests open network. Changing this preference does not rewrite saved
+visuals. Changing an existing visual's network consequence defaults to approval
+through the existing Actions policy, including explicit per-Action user choices.
+Unknown or foreign creator facts do not receive the own-created exception.
+
+Network approval is not permission to call host Actions or read Resources.
+Every bridge request is checked using the current viewer's ordinary authority.
+Installed plugins remain trusted installed code with their manifest/grant
+admission; an explicit widget override can narrow, never widen, that ceiling.
+For a public Session share, network off applies only to viewers of that share
+and leaves the Session visuals unchanged. For an Artifact public link, network
+off is saved on the Artifact copy before link creation and also applies to its
+private previews; the source Session visual is unchanged. See
+[Artifact sharing](/organize/artifacts#share-access) for recovery if link creation
+fails after that policy save.
+
 ### Set defaults for new sessions
 
 Go to **Settings → Session → Permissions** and set your default permission mode per backend choice.

@@ -11,9 +11,10 @@ Workflows, Roles and launch profiles you reuse.
 
 This guide describes the **0.3 development version**, not a shipped release.
 The browser and history described here require a Home running the current 0.3
-Artifacts implementation and schema. The HTML viewer additionally requires the
-Home's isolated HTTPS preview host. This is development-only behavior, not
-released availability.
+Artifacts implementation and schema. Private HTML previews additionally require
+the Home's isolated HTTPS preview host. Public links can use the Home's HTTPS
+hostname only when its owner enables the option described below. This is
+development-only behavior, not released availability.
 
 ## Browse and open
 
@@ -31,14 +32,24 @@ preview on the isolated host, not inside the app's document origin. If the host
 or content is unavailable, the preview offers **Retry**. It does not make the
 document public.
 
-Agents can create or publish an HTML document through the existing Artifact
-Actions and receive a private preview link after approval. They can also publish
-a bundle containing the document and its local images, styles and classic
-JavaScript. External assets and JavaScript module/import-map declarations are
-not supported by this viewer; publish a self-contained classic-script bundle.
-References in HTML and CSS resolve from that bundle. Scripts cannot fetch bundle
-files or load dynamically named assets; embed that data in the document or script.
-The sandbox cannot use the app's cookies, storage or authenticated API.
+In current 0.3 development source, agents create or publish HTML through the
+existing Artifact Actions using `ArtifactHtmlBundleV1`: an entrypoint and a map
+of relative files, each with a MIME type and base64 bytes. A one-file document
+uses the same bundle. Workspace file or directory acquisition uses the existing
+publication path, with confinement and symlink refusal; it is not a preview
+server. Private preview links carry access secrets, not the document bytes.
+
+The shared document owner resolves local HTML/CSS assets, classic scripts,
+modules and import maps, and runtime reads of declared bundle files. External
+fetches and assets require an admitted network policy; a bundle alone grants
+none. The opaque sandbox cannot use the app's cookies, storage or authenticated
+API. Caller-authored Actions and Resources, when available in a private mounted
+surface, still use the current viewer's ordinary authority on every request.
+See [HTML network and approval](/sessions/permissions#agent-html-network-in-development).
+
+Copying a Session visual into an Artifact creates independent saved content;
+later edits to either original do not update the other. It uses normal Artifact
+access and approval, not the source Session's audience or creator authority.
 
 ## Save a document
 
@@ -70,6 +81,33 @@ A copied app link points at the artifact; it does not grant access by itself.
 The recipient must already have access. Granting Account or Team access does
 not make the artifact public. See [Sharing and Teams](/accounts/session-sharing) for
 the surrounding Account and Team model.
+
+Public links disclose stored content to anyone who has the link. In the
+**unreleased 0.3 development version**, an isolated share domain is preferred.
+When it is unavailable, the Home owner can enable **Allow public links on this
+hostname** in **Home administration → Reach**. This default-off setting needs a
+configured HTTPS public address and a working public-link rate limiter. Public
+HTML uses the same restricted opaque sandbox on either host; it receives no
+Account credentials or authenticated app bridge. PDFs are download-only on the
+Home's hostname and can preview inline on an isolated share host. The setting
+does not make private HTML previews available on the main hostname or change
+which Artifact kinds may be published. See the
+[public-link hosting prerequisites](/self-hosting/local-service-previews#stored-content-public-links-in-03-development).
+
+Before sharing network-enabled HTML, review the disclosure: it can send visible
+content elsewhere, reveal the viewer's IP address and load changing remote code
+or assets. The development sharing flow offers sharing with network off. For an
+Artifact link, this saves a no-network policy on the Artifact before creating
+the link, so private previews of that saved copy also use the narrowed policy.
+If the Artifact was copied from a Session visual, the source visual is unchanged.
+For a public Session share, network off applies only to viewers of that share
+and leaves the Session visuals unchanged. Public viewers never receive
+authenticated Actions or Resources.
+
+If the policy save succeeds but link creation fails, the saved Artifact keeps
+the no-network policy. Retry link creation from its **Share** controls; you do
+not need to save another copy. If saving the policy requires approval, link
+creation cannot proceed until that save succeeds.
 
 ## Storage and failed saves
 

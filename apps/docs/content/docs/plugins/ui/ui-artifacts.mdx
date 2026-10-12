@@ -33,11 +33,14 @@ react-native-reanimated
 @happier-dev/plugin-ui/components
 @happier-dev/plugin-ui/hostApi
 @happier-dev/plugin-ui/data
-@happier-dev/plugin-ui/presentation
+@happier-dev/plugin-ui/declarative
 @happier-dev/plugin-ui/environment
 @happier-dev/plugin-ui/advanced
 @happier-dev/plugin-sdk/ui/client
 ```
+
+The build rejects imports from the host-internal `presentation` implementation
+and its subpaths. Use the author exports from `components` or the package root.
 
 The loader does not use prefix matching. `zod`, Happier Protocol, AJV,
 semver, the Plugin SDK root, and every other plugin dependency are bundled into
@@ -92,3 +95,32 @@ development/drop-in UI.
 
 Artifact paths must be relative, non-traversing, and portable. Authors never
 write final digests or select a client-side loader.
+
+## Session visual authoring in development
+
+Caller-authored Session visuals are not installed plugin artifact trees. In the
+unreleased 0.3 SDK, use the public producer-derived
+`PluginUiActionInputFor<'session.board.item.upsert'>` from
+`@happier-dev/plugin-sdk/ui` and the ordinary host `executeAction` API. The input
+supports declarative documents, an HTML bundle or a configured widget instance;
+new visuals default to transcript. Board/both needs explicit placement. Pin and
+Unpin change the same item through the layout Action, not a duplicate widget.
+
+`ArtifactHtmlBundleV1`, `artifactHtmlBundleFromBodyV1` and
+`buildArtifactHtmlDocumentV1` are available from that public SDK entry. The
+single-body convenience helper produces the same entrypoint/files bundle; do
+not send a string as `source`. Include local assets and use the admitted network
+policy rather than a remote client bootstrap. No host-internal imports or
+invented installed-plugin identity are needed.
+
+Reuse public `@happier-dev/plugin-ui/components` components, including
+`StackedSeriesChart`, for trusted native presentation, and
+`@happier-dev/plugin-ui/declarative` for the shared declarative rendering
+contract. Multi-series **declarative** authoring remains pending the widgets
+platform contract; the public chart component does not authorize inventing a
+second document schema. Live Usage widgets consume ordinary Resources and the
+platform's declared input bindings, not copied query implementations.
+
+See [Session visuals](/sessions/session-board#session-visuals-in-development),
+[Hosted HTML](/plugins/ui/hosted-web#inline-html-in-development) and
+[network and approval](/sessions/permissions#agent-html-network-in-development).

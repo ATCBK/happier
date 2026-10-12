@@ -331,13 +331,25 @@ Public links are for **view-only** access.
 
 They are useful when you want to share the session with someone who does not need a normal collaborative share.
 
-In 0.3 development, public links for Sessions and documents need an isolated
-HTTPS host and a configured rate limiter on the Home. A public-sharing feature
-switch alone does not supply them. Self-hosters should follow the
+This describes **development-only, unreleased 0.3 behavior**. Public links for
+Sessions and documents need HTTPS hosting and a configured public-link rate
+limiter on the Home. An isolated share domain is preferred. When it is unavailable,
+the Home owner can enable **Allow public links on this hostname** in
+**Home administration → Reach** to use the Home's configured HTTPS address.
+The option is off by default and applies live. A public-sharing feature switch
+or the hostname option alone does not supply the limiter. Self-hosters should follow
+the
 [public-link prerequisites](/self-hosting/local-service-previews#stored-content-public-links-in-03-development).
 If this Home cannot provide them, creating a link is refused and the link stays
-Off. Ask the Home administrator to configure public-link hosting before trying
-again.
+Off. Ask the Home owner to configure an isolated share domain or allow links on
+this hostname, and to configure public-link rate limiting.
+
+On the Home's hostname, HTML content remains in a restricted sandbox and PDFs
+offer download only. Isolated share hosts retain inline PDF preview. Turning
+the hostname option off blocks main-hostname links without deleting their shares;
+turning it back on restores access under the existing expiry, revocation and
+use-limit checks. The option does not change existing legacy token links or make
+local-service and private Artifact previews available on this hostname.
 
 ### Public-link options
 
@@ -346,6 +358,15 @@ When you create or regenerate a public link, Happier can configure:
 - **expiration**: 7 days, 30 days, or never
 - **max uses**: unlimited, 10, or 50
 - **consent requirement**: whether the viewer must explicitly consent before opening
+
+In current 0.3 development source, Session public links can also use a
+**no-network visual view** (`networkOff`). The choice narrows that public
+viewer's HTML policy without changing the saved Session items. Without it,
+network-enabled visuals can send visible content elsewhere, reveal the viewer's
+IP address and load changing remote code or assets; review that consequence
+before publishing. Public viewers receive no Account credentials or authenticated
+Action/Resource bridge. A visible transcript visual is loaded lazily under the
+same link admission and transcript cutoff, not by disclosing the whole Board.
 
 ### Public-link management
 

@@ -62,8 +62,11 @@ same representation, not a separate string source. There is no independent
 
 The shared document builder resolves local scripts, module imports, styles,
 images, fonts and runtime resource reads inside the opaque frame. External
-network stays closed until the caller's admitted network policy is wired;
-declaring an origin alone does not open it. The packaged `hostedWeb` form below
+network follows the effective policy admitted by the host: none, exact origins
+or open network. Declaring an origin alone does not bypass admission. For
+caller-authored Session visuals, the creation setting and existing-item approval
+policy are described under [HTML network and approval](/sessions/permissions#agent-html-network-in-development).
+The packaged `hostedWeb` form below
 remains the separate installed-asset build workflow.
 
 The host supplies bootstrap configuration, not a second client runtime. Do not

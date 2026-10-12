@@ -84,6 +84,11 @@ copies the admitted definition into shared content rather than granting access
 to its private Account document. This publication uses the shared Board's
 approval policy; pending approval does not mean the item has been saved.
 
+For supported Session widgets, **Add to…** also saves a library definition before
+placing an independent instance. If placement fails or waits for approval after
+saving, the library copy remains. Native built-in widgets, including Usage widgets,
+currently cannot be saved or shared as library definitions from a Session.
+
 Credentialed shared widgets use each viewer's own existing Connected Account
 purpose selection, qualified to the declared Resource consumer. A missing
 connection gives that viewer a Connect state. There is no per-copy viewer
@@ -105,15 +110,31 @@ content with a freshness notice. Losing the read's identity or access removes
 private prior output. These are development-source behaviors; package and
 loaded-platform validation are still being completed.
 
-## When the agent puts something on the Board
+## Session visuals in development
 
-When an agent creates or updates a Board item through a Board Action, the
-transcript row for that call shows the resulting widget in place, with an **Open
-Board** action that opens it on the Board. That inline card is a mirror of the
-shared item, not a second copy: it reads the same record and shows the same
-loading, encrypted, unreadable, removed, and unavailable states. Interactive
-content runs in one placement at a time, so the inline card stays a preview while
-the Board, Details, or your Companion is running it.
+The current 0.3 source contract lets an agent show a typed declarative document,
+an HTML bundle, or a live widget through `session.board.item.upsert`. New visuals
+default to the **transcript**, without a Board placement. A `board` or `both`
+destination requires a first placement; Board placement still depends on the
+Home's Board capability. Transcript-only creation does not enable the Board.
+
+The transcript stores a small reference to the shared Session item, not its
+HTML or a second copy. Pin and Unpin change that same item's Board placements;
+Unpin does not delete a transcript visual. Loading, encrypted, unreadable,
+removed and unavailable states come from the same record. Executable content
+runs in one host at a time; other placements remain references. Visual layout
+and loaded-platform QA are still being completed, so this is not a released
+cross-platform availability claim.
+
+Usage widgets reuse the ordinary `usage.query` Resource admission and configured
+inputs; they do not get a private agent data path. Prefer typed charts and tables
+for data, and HTML bundles for other authored views. Agents should not repeat a
+successful visual's contents in prose. In 0.3 development, typed multi-series
+charts map rows through declared x, series and numeric value fields. Bars and
+areas stack the series; lines draw them independently. Missing observations
+remain missing, and the exact-value alternative retains every displayed value.
+Existing single-series x/y charts use the same renderer. This describes
+development source, not released cross-platform availability.
 
 Actions can ask Happier to change the Board, but confirmation and authorization
 remain separate. Requiring or skipping a confirmation never supplies missing
@@ -147,7 +168,7 @@ covering chat.
 
 Installed first-party and external plugins are trusted installed code and use
 the same public Plugin SDK path under equivalent grants. HTML authored directly
-into a Board item is different: it has no plugin identity or ambient plugin
+into a Session visual is different: it has no plugin identity or ambient plugin
 authority, receives only the caller-hosted method ceiling, and still passes each
 Resource and Action's normal checks. Rendering it uses a per-platform frame on
 web, desktop, iOS and Android; where a renderer is unavailable, the item is kept
@@ -155,6 +176,13 @@ and offered with a recovery action rather than deleted or rewritten.
 
 Plugin authors can declare embedded Session content with
 `container: 'widget'` and `target: { kind: 'session' }`; see [Embedded Session widgets](/plugins/ui#embedded-session-widgets).
+
+Caller-authored HTML uses `ArtifactHtmlBundleV1` (entrypoint and local files), not
+an HTML-string item. Its network declaration and the person's creation setting
+are separate; see [HTML network and approval](/sessions/permissions#agent-html-network-in-development).
+Public sharing can disable network for the viewer without modifying the saved
+visual. Copying to another Session or to an Artifact creates independent content
+under the destination's audience and normal approval policy.
 
 ## Related
 
