@@ -60,8 +60,6 @@ import type {
 import {
     ComposerSnapshotV1Schema,
     CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
-    CURRENT_UI_CONTEXT_MAX_COMMANDS_V1,
-    CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1,
 } from './hostApi.js';
 import type {
     PluginUiSemanticExecuteActionCommandV1,
@@ -136,9 +134,7 @@ describe('PluginUiHostApi initial public contract', () => {
         expectTypeOf<PluginUiHostApi['publishCurrentUiContext']>().returns.toEqualTypeOf<void>();
     });
 
-    it('lets an SDK-only UI author consume the canonical current-context bounds', () => {
-        expect(CURRENT_UI_CONTEXT_MAX_COMMANDS_V1).toBe(32);
-        expect(CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1).toBe(8_192);
+    it('lets an SDK-only UI author consume the explicit current-context incompleteness marker', () => {
         expect(CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1).toEqual({ incomplete: true });
     });
 

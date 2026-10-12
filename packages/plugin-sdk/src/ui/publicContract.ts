@@ -654,12 +654,13 @@ export type PluginUiRendererV2 =
         /**
          * The reach a self-contained document asks for beyond its host methods.
          * Requesting is not receiving: the host still admits each Resource and
-         * Action, and egress is limited to these exact approved HTTPS origins.
+         * Action, and egress follows the admitted network declaration.
          */
         requestedCapabilities?: {
             resources?: { pluginId: string; localId: string }[];
             actions?: (string | { pluginId: string; localId: string })[];
             networkOrigins?: string[];
+            network?: 'none' | 'open';
         };
     }
     | {

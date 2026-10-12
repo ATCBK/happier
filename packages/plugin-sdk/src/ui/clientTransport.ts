@@ -196,10 +196,17 @@ function readResourceWatchAdmittedDigest(
         : undefined;
 }
 
-let generatedId = 0;
+const HOST_API_CORRELATION_SEQUENCE_KEY = Symbol.for('happier.pluginUi.hostApiCorrelationSequence.v1');
 function defaultId(prefix: string): string {
-    generatedId += 1;
-    return `${prefix}-${Date.now()}-${generatedId}`;
+    // These ids address one host transport, even when its local clients were
+    // loaded from independent SDK bundles during the same clock tick.
+    let sequence = Reflect.get(globalThis, HOST_API_CORRELATION_SEQUENCE_KEY) as { value: number } | undefined;
+    if (sequence === undefined) {
+        sequence = { value: 0 };
+        Object.defineProperty(globalThis, HOST_API_CORRELATION_SEQUENCE_KEY, { value: sequence });
+    }
+    sequence.value += 1;
+    return `${prefix}-${Date.now()}-${sequence.value}`;
 }
 function isAdvertisableHostMethod(
     method: ProtocolPluginUiHostMethodV1,

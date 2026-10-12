@@ -201,6 +201,7 @@ export async function buildUniversalPluginUiArtifacts(
             requestedExports: declaration.requestedExports,
             exportConditions: options.exportConditions,
             resolveSourceImport: options.resolveSourceImport,
+            collectionMigrationManifest: declaration.collectionMigrationManifest,
         }));
     }
 

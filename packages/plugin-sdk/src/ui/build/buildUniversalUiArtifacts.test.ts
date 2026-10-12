@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { runInNewContext } from 'node:vm';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -45,8 +46,13 @@ describe('buildUniversalPluginUiArtifacts hosted static staging', () => {
                 './happier-plugin-ui/collection-migrations': './src/collectionMigrations.ts',
             },
         }), 'utf8');
-        await writeFile(join(root, '.happier-plugin/plugin.json'), JSON.stringify({
+        const capturedManifest = {
+            id: 'fixture.collections',
+            version: '2.0.0',
             contributes: {
+                actions: [{ execution: { target: 'client', client: {
+                    artifactId: 'collection-migrations', exportName: 'default',
+                } } }],
                 accountCollections: [{
                     id: 'tasks',
                     migrations: [{ id: 'tasks-v1-to-v2', fromSchemaVersion: 1, toSchemaVersion: 2 }],
@@ -59,10 +65,12 @@ describe('buildUniversalPluginUiArtifacts hosted static staging', () => {
                     renderers: [{ id: 'panel', kind: 'reactNative', artifact: 'panel' }],
                 },
             },
-        }), 'utf8');
+        };
+        const manifestPath = join(root, '.happier-plugin/captured.json');
+        await writeFile(manifestPath, JSON.stringify(capturedManifest), 'utf8');
         await writeFile(
             join(root, 'src/collectionMigrations.ts'),
-            'export function collectionMigrations() { return { manifest: {}, collectionMigrations: {} }; }',
+            'export function collectionMigrations() { return { tasks: [{ id: "tasks-v1-to-v2", fromSchemaVersion: 1, toSchemaVersion: 2, migrate: value => ({ ...value, migrated: true }) }] }; } export function sharedExport() { return "shared"; } export default function clientAction() { return "client-action"; }',
             'utf8',
         );
         await writeFile(
@@ -75,18 +83,37 @@ describe('buildUniversalPluginUiArtifacts hosted static staging', () => {
         packageJson.exports['./happier-plugin-ui/panel'] = './src/panel.ts';
         await writeFile(packageJsonPath, JSON.stringify(packageJson), 'utf8');
 
-        const result = await buildUniversalPluginUiArtifacts(root);
+        const result = await buildUniversalPluginUiArtifacts(root, manifestPath);
 
         expect(result.manifest.entries).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 artifactId: 'collection-migrations',
-                executable: { exports: ['collectionMigrations'] },
+                executable: { exports: ['collectionMigrations', 'default'] },
             }),
             expect.objectContaining({
                 artifactId: 'panel',
                 executable: { exports: ['renderSurface'] },
             }),
         ]));
+        const artifact = result.manifest.entries.find((entry) => entry.artifactId === 'collection-migrations')!;
+        const module = { exports: {} as Record<string, unknown> };
+        runInNewContext(await readFile(join(result.artifactsRoot, artifact.entry), 'utf8'), {
+            module, exports: module.exports,
+        });
+        const factory = module.exports.collectionMigrations;
+        if (typeof factory !== 'function') throw new Error('Missing migration factory');
+        const payload = factory();
+        expect(payload.manifest).toEqual(capturedManifest);
+        expect(payload.collectionMigrations.tasks[0].migrate({ retained: 'value' })).toEqual({
+            retained: 'value', migrated: true,
+        });
+        // Other exports on the authored module retain their ordinary behavior.
+        const sharedExport = module.exports.sharedExport;
+        if (typeof sharedExport !== 'function') throw new Error('Missing neighboring export');
+        expect(sharedExport()).toBe('shared');
+        const clientAction = module.exports.default;
+        if (typeof clientAction !== 'function') throw new Error('Missing declared client Action');
+        expect(clientAction()).toBe('client-action');
     });
 
     it('does not infer Collection migration authority from a renderer export', async () => {

@@ -1,8 +1,8 @@
-import { readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { builtinModules, createRequire } from 'node:module';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import { build, version as esbuildVersion, type Plugin } from 'esbuild';
+import { build, version as esbuildVersion, type Metafile, type Plugin } from 'esbuild';
 
 import { PLUGIN_UI_HOST_RUNTIME_EXTERNAL_SPECIFIERS } from '@happier-dev/protocol/plugins/ui';
 
@@ -25,6 +25,7 @@ export type UniversalPluginUiCommonJsCompileResult = Readonly<{
     exports: readonly string[];
     externalSpecifiers: readonly string[];
     esbuildVersion: string;
+    metafile: Metafile;
     outputFiles: readonly Readonly<{ path: string; bytes: Uint8Array }>[];
 }>;
 
@@ -104,7 +105,15 @@ function compilerPolicyPlugin(artifactId: string, resolveSourceImport?: (specifi
     return {
         name: 'happier-plugin-ui-universal-cjs-policy',
         setup(pluginBuild) {
-            pluginBuild.onResolve({ filter: /.*/ }, (args) => {
+            pluginBuild.onResolve({ filter: /.*/ }, async (args) => {
+                if (args.path === '@happier-dev/plugin-ui/presentation'
+                    || args.path.startsWith('@happier-dev/plugin-ui/presentation/')) {
+                    throw new PluginUiUniversalCompilerError(
+                        'host_private_import_unsupported',
+                        artifactId,
+                        `Executable Plugin UI artifact "${artifactId}" imports host-private "${args.path}"; use @happier-dev/plugin-ui/components`,
+                    );
+                }
                 if (args.path === 'react-native-web' && args.kind !== 'entry-point') {
                     throw new PluginUiUniversalCompilerError(
                         'direct_react_native_web_import',
@@ -137,7 +146,13 @@ function compilerPolicyPlugin(artifactId: string, resolveSourceImport?: (specifi
                 }
                 if (/^[^./#]/u.test(args.path)) {
                     const sourcePath = resolveSourceImport?.(args.path);
-                    if (sourcePath) return { path: sourcePath };
+                    if (sourcePath) {
+                        // Let esbuild retain package-owned sideEffects metadata
+                        // when authoring builds redirect a package to its source.
+                        return pluginBuild.resolve(sourcePath, {
+                            kind: args.kind, resolveDir: args.resolveDir, importer: args.importer,
+                        });
+                    }
                 }
                 return null;
             });
@@ -154,6 +169,45 @@ function packageNodeModulesPath(): string {
     return dirname(dirname(require.resolve('react/package.json')));
 }
 
+async function reportBundledHostModules(projectRoot: string, artifactId: string, metafile: Metafile): Promise<void> {
+    const packages = new Map<string, Readonly<{ name: string; root: string }> | null>();
+    async function packageAt(directory: string): Promise<Readonly<{ name: string; root: string }> | null> {
+        if (packages.has(directory)) return packages.get(directory)!;
+        let owner = null;
+        try {
+            const manifest: unknown = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'));
+            if (manifest && typeof manifest === 'object' && 'name' in manifest && typeof manifest.name === 'string') {
+                owner = { name: manifest.name, root: directory };
+            }
+        } catch (cause) {
+            if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+            const parent = dirname(directory);
+            if (parent !== directory) owner = await packageAt(parent);
+        }
+        packages.set(directory, owner);
+        return owner;
+    }
+    const modules = new Set<string>();
+    for (const output of Object.values(metafile.outputs)) {
+        for (const [path, contribution] of Object.entries(output.inputs)) {
+            if (contribution.bytesInOutput === 0) continue;
+            const absolutePath = resolve(projectRoot, path);
+            const owner = await packageAt(dirname(absolutePath));
+            if (!owner) continue;
+            if (hostExternalSpecifiers.has(owner.name)) modules.add(owner.name);
+            else if (owner.name === '@happier-dev/plugin-sdk'
+                && /^(?:src|dist)[/\\]ui[/\\]client[/\\]/u.test(relative(owner.root, absolutePath))) {
+                modules.add('@happier-dev/plugin-sdk/ui/client');
+            }
+        }
+    }
+    if (modules.size > 0) {
+        console.warn('[bundled_host_module] Plugin UI artifact includes host-provided module code', {
+            artifactId, modules: [...modules].sort(),
+        });
+    }
+}
+
 export async function compileUniversalPluginUiCommonJs(input: Readonly<{
     projectRoot: string;
     entryPath: string;
@@ -161,16 +215,36 @@ export async function compileUniversalPluginUiCommonJs(input: Readonly<{
     requestedExports: readonly string[];
     exportConditions?: readonly string[];
     resolveSourceImport?: (specifier: string) => string | undefined;
+    collectionMigrationManifest?: Readonly<Record<string, unknown>>;
 }>): Promise<UniversalPluginUiCommonJsCompileResult> {
     const projectRoot = resolve(input.projectRoot);
     const entryPath = isAbsolute(input.entryPath) ? input.entryPath : resolve(projectRoot, input.entryPath);
     const relativePath = `react-native/${input.artifactId}/entry.cjs.bundle` as const;
     const outputPath = join(projectRoot, relativePath);
+    // Discovery supplies the same captured declaration used to select this
+    // artifact. Its authored entry returns only callbacks, so portable code
+    // never has to evaluate the daemon's full plugin definition.
+    const entry = input.collectionMigrationManifest
+        ? { stdin: {
+            contents: [
+                `export * from ${JSON.stringify(entryPath)};`,
+                ...(input.requestedExports.includes('default')
+                    ? [`export { default } from ${JSON.stringify(entryPath)};`]
+                    : []),
+                `import { collectionMigrations as callbacks } from ${JSON.stringify(entryPath)};`,
+                `const manifest = JSON.parse(${JSON.stringify(JSON.stringify(input.collectionMigrationManifest))});`,
+                'export function collectionMigrations() { return { manifest, collectionMigrations: callbacks() }; }',
+            ].join('\n'),
+            resolveDir: projectRoot,
+            sourcefile: 'collection-migration-artifact.js',
+            loader: 'js' as const,
+        } }
+        : { entryPoints: [entryPath] };
     let result;
     try {
         result = await build({
             absWorkingDir: projectRoot,
-            entryPoints: [entryPath],
+            ...entry,
             outfile: outputPath,
             bundle: true,
             packages: 'bundle',
@@ -233,8 +307,11 @@ export async function compileUniversalPluginUiCommonJs(input: Readonly<{
             `Executable Plugin UI artifact "${input.artifactId}" retained unexpected external import "${unexpectedExternal}"`,
         );
     }
+    await reportBundledHostModules(projectRoot, input.artifactId, result.metafile);
     const exportAnalysis = await build({
         absWorkingDir: projectRoot,
+        // Check the authored entry too: the wrapper must not fabricate an
+        // export that the plugin failed to provide.
         entryPoints: [entryPath],
         outfile: join(projectRoot, '.happier-plugin-ui-export-analysis.mjs'),
         bundle: false,
@@ -264,6 +341,7 @@ export async function compileUniversalPluginUiCommonJs(input: Readonly<{
         exports: Object.freeze(requestedExports),
         externalSpecifiers: Object.freeze(externalSpecifiers),
         esbuildVersion,
+        metafile: result.metafile,
         outputFiles: Object.freeze([Object.freeze({
             path: output.path,
             bytes: new Uint8Array(output.contents),

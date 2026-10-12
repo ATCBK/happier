@@ -1,14 +1,18 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { runInNewContext } from 'node:vm';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { compileUniversalPluginUiCommonJs } from './universalCommonJsCompiler.js';
+import { packageNameOfSpecifier, readWorkspacePackages, resolveWorkspaceSource } from '../../../../cli-common/sourceRuntimeEntries.mjs';
+import { resolve } from 'node:path';
 
 const roots: string[] = [];
 
 afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -41,6 +45,91 @@ async function compileFixture(root: string, entry: string, artifactId: string) {
 }
 
 describe('compileUniversalPluginUiCommonJs', () => {
+    it.each([
+        ['sessions', 'AgentPermissionIntentV1Schema', '"default"', '"default"'],
+        ['manifest', 'PluginContributionIdentityV1Schema', '{ pluginId: "happier.triage", localId: "entries" }', '{ pluginId: "happier.triage", localId: "entries" }'],
+    ])('bundles a narrow %s parser without unrelated catalog, compilation or signing', async (subpath, schema, value, expected) => {
+        const { root, entry } = await fixture(`import { ${schema} } from '@happier-dev/plugin-sdk/${subpath}'; export const renderSurface = () => ${schema}.parse(${value});`);
+        const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../..'));
+        const result = await compileUniversalPluginUiCommonJs({
+            projectRoot: root, entryPath: entry, artifactId: `parser-${subpath}`, requestedExports: ['renderSurface'],
+            resolveSourceImport: (specifier) => packages.has(packageNameOfSpecifier(specifier))
+                ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native'] }) : undefined,
+        });
+        const retained = Object.values(result.metafile.outputs).flatMap(output => Object.entries(output.inputs)
+            .filter(([, input]) => input.bytesInOutput > 0).map(([path]) => path));
+        expect(retained.filter(path => /[/\\](?:ajv|ajv-formats|semver|tweetnacl|@noble)[/\\]/u.test(path))).toEqual([]);
+        const module = { exports: {} as Record<string, unknown> };
+        runInNewContext(new TextDecoder().decode(result.bytes), { module, exports: module.exports, TextEncoder, TextDecoder });
+        if (typeof module.exports.renderSurface !== 'function') throw new Error('Missing renderSurface');
+        expect(module.exports.renderSurface()).toEqual(runInNewContext(`(${expected})`));
+    });
+
+    it('bundles Action validation without the unused host catalog, JSON Schema compiler or signing', async () => {
+        const { root, entry } = await fixture([
+            "import { readActionInputOptionValue, readInputTypePickerLaunchInput, isPluginActionApprovalRequestCreated } from '@happier-dev/plugin-sdk/actions';",
+            'export const renderSurface = () => ({ value: readActionInputOptionValue({ label: "portable" }), picker: readInputTypePickerLaunchInput({ inputType: { pluginId: "happier.triage", localId: "entries" }, semantic: "entries" }), deferred: isPluginActionApprovalRequestCreated(null) });',
+        ].join('\n'));
+        const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../..'));
+        const result = await compileUniversalPluginUiCommonJs({
+            projectRoot: root, entryPath: entry, artifactId: 'action-option',
+            requestedExports: ['renderSurface'], exportConditions: ['happier-source'],
+            resolveSourceImport: (specifier) => packages.has(packageNameOfSpecifier(specifier))
+                ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native'] }) : undefined,
+        });
+        const retained = Object.values(result.metafile.outputs).flatMap(output =>
+            Object.entries(output.inputs).filter(([, input]) => input.bytesInOutput > 0).map(([path]) => path));
+        expect(retained.filter(path => /[/\\](?:ajv|ajv-formats|semver|tweetnacl|@noble)[/\\]/u.test(path))).toHaveLength(0);
+        expect(retained.filter(path => /[/\\]actions[/\\]actionSpecs\.(?:ts|js)$/u.test(path))).toHaveLength(0);
+        const module = { exports: {} as Record<string, unknown> };
+        runInNewContext(new TextDecoder().decode(result.bytes), { module, exports: module.exports, TextEncoder, TextDecoder });
+        if (typeof module.exports.renderSurface !== 'function') throw new Error('Missing renderSurface');
+        expect(module.exports.renderSurface()).toEqual({ value: { label: 'portable' },
+            picker: { inputType: { pluginId: 'happier.triage', localId: 'entries' }, semantic: 'entries' }, deferred: false });
+    });
+
+    it('keeps a real Triage text projection free of unused schema and crypto implementations', async () => {
+        const { root, entry } = await fixture([
+            "import { formatTriageCountV1 } from '@happier-dev/triage-protocol/v1';",
+            "export const renderSurface = () => formatTriageCountV1('en-US', 1200, 'compact');",
+        ].join('\n'));
+        const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../..'));
+        const result = await compileUniversalPluginUiCommonJs({
+            projectRoot: root, entryPath: entry, artifactId: 'triage-text',
+            requestedExports: ['renderSurface'], exportConditions: ['happier-source'],
+            resolveSourceImport: (specifier) => packages.has(packageNameOfSpecifier(specifier))
+                ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native'] }) : undefined,
+        });
+        const retained = Object.values(result.metafile.outputs).flatMap(output =>
+            Object.entries(output.inputs).filter(([, input]) => input.bytesInOutput > 0).map(([path]) => path));
+        expect(retained.filter(path => /[/\\](?:protocol|zod|ajv|ajv-formats|semver|tweetnacl|@noble)[/\\]/u.test(path))).toEqual([]);
+        const module = { exports: {} as Record<string, unknown> };
+        runInNewContext(new TextDecoder().decode(result.bytes), { module, exports: module.exports });
+        expect(module.exports.renderSurface).toBeTypeOf('function');
+        if (typeof module.exports.renderSurface !== 'function') throw new Error('Missing renderSurface');
+        expect(module.exports.renderSurface()).toBe('1.2K');
+    });
+
+    it('reports a bundled host dependency bypass without refusing a valid artifact', async () => {
+        const { root, entry } = await fixture("import { marker } from './node_modules/react/index.js'; export const renderSurface = () => marker;");
+        await installFixturePackage(root, 'react', 'duplicated-react-instance');
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const result = await compileFixture(root, entry, 'bundled-host');
+        expect(new TextDecoder().decode(result.bytes)).toContain('duplicated-react-instance');
+        expect(warning).toHaveBeenCalledWith(expect.stringContaining('[bundled_host_module]'), expect.objectContaining({
+            artifactId: 'bundled-host', modules: ['react'],
+        }));
+    });
+
+    it('does not report host inputs whose code was removed by tree-shaking', async () => {
+        const { root, entry } = await fixture("import { marker } from './node_modules/react/index.js'; export const renderSurface = () => 'portable';");
+        await installFixturePackage(root, 'react', 'unused-react-instance');
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const result = await compileFixture(root, entry, 'removed-host');
+        expect(new TextDecoder().decode(result.bytes)).not.toContain('unused-react-instance');
+        expect(warning).not.toHaveBeenCalled();
+    });
+
     it('selects actual workspace source when source preparation explicitly requests its condition', async () => {
         const { root, entry } = await fixture("import { marker } from '@happier-dev/source-fixture'; export const renderSurface = () => marker;");
         const packageRoot = join(root, 'node_modules/@happier-dev/source-fixture');
@@ -70,6 +159,27 @@ describe('compileUniversalPluginUiCommonJs', () => {
         expect(new TextDecoder().decode(published.bytes)).toContain('stale-dist-ui');
     });
 
+    it.each([
+        '@happier-dev/plugin-ui/presentation',
+        '@happier-dev/plugin-ui/presentation/typeScale',
+    ])('rejects host-private presentation import %s before source resolution', async (specifier) => {
+        const { root, entry } = await fixture(`import { marker } from '${specifier}'; export const renderSurface = () => marker;`);
+        const privateSource = join(root, 'host-private.ts');
+        await writeFile(privateSource, "export const marker = 'host-private-presentation';", 'utf8');
+
+        await expect(compileUniversalPluginUiCommonJs({
+            projectRoot: root,
+            entryPath: entry,
+            artifactId: 'private-presentation',
+            requestedExports: ['renderSurface'],
+            resolveSourceImport: (requested) => requested === specifier ? privateSource : undefined,
+        })).rejects.toMatchObject({
+            code: 'host_private_import_unsupported',
+            artifactId: 'private-presentation',
+            message: expect.stringContaining('@happier-dev/plugin-ui/components'),
+        });
+    });
+
     it('emits one minified neutral CommonJS file and keeps only the exact host family external', async () => {
         const { root, entry } = await fixture([
             "import React from 'react';",
@@ -83,12 +193,11 @@ describe('compileUniversalPluginUiCommonJs', () => {
             "import * as Components from '@happier-dev/plugin-ui/components';",
             "import * as HostApi from '@happier-dev/plugin-ui/hostApi';",
             "import { usePluginData } from '@happier-dev/plugin-ui/data';",
-            "import * as Presentation from '@happier-dev/plugin-ui/presentation';",
             "import * as Environment from '@happier-dev/plugin-ui/environment';",
             "import * as Advanced from '@happier-dev/plugin-ui/advanced';",
             "import * as Client from '@happier-dev/plugin-sdk/ui/client';",
             'export function renderSurface() {',
-            '  return [React, jsx, jsxDEV, View, Navigation, NavigationStack, Reanimated, PluginUiProvider, Components, HostApi, usePluginData, Presentation, Environment, Advanced, Client];',
+            '  return [React, jsx, jsxDEV, View, Navigation, NavigationStack, Reanimated, PluginUiProvider, Components, HostApi, usePluginData, Environment, Advanced, Client];',
             '}',
         ].join('\n'));
 
@@ -109,7 +218,6 @@ describe('compileUniversalPluginUiCommonJs', () => {
             '@happier-dev/plugin-ui/data',
             '@happier-dev/plugin-ui/environment',
             '@happier-dev/plugin-ui/hostApi',
-            '@happier-dev/plugin-ui/presentation',
             '@react-navigation/native',
             '@react-navigation/native-stack',
             'react',

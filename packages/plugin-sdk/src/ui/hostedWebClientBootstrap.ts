@@ -3,7 +3,8 @@ import { PLUGIN_UI_HOST_API_WIRE_VERSION_V1, PluginHostedWebBridgeBootstrapEnvel
 import { PluginHostedWebBridgeBootstrapConfigV1Schema, PluginHostedWebBridgeEnvelopeV1Schema, PluginHostedWebBridgeResponseEnvelopeV1Schema } from '@happier-dev/protocol/plugins/ui/hostedWebBridge';
 import type { PluginHostedWebAccountDataBridgeChangeV1, PluginHostedWebAccountDataBridgeOperationV1, PluginHostedWebAccountDataBridgeResponseV1, PluginHostedWebBridgeBootstrapPayloadV1, PluginHostedWebBridgeBootstrapConfigV1, PluginHostedWebBridgeEnvelopeV1, PluginUiHostApiWireEnvelopeV1, PluginUiHostApiWireIdentityV1 } from '@happier-dev/protocol/plugins/ui/client';
 
-import { PluginUiHostApiClientError } from './clientTransport.js';
+import { createPluginUiHostApiClientFromTransport, PluginUiHostApiClientError } from './clientTransport.js';
+import { applyPluginUiThemeCssVariables, type PluginUiThemeVariableTarget } from './themeCssVariables.js';
 import {
     PLUGIN_UI_HOST_API_CLIENT_BOOTSTRAP_KEY,
     readPluginUiHostApiClientBootstrap,
@@ -39,8 +40,14 @@ export interface HostedWebPluginUiClientRealm {
         postMessage(message: string): void;
     }>;
     readonly document?: Readonly<{
+        documentElement?: PluginUiThemeVariableTarget & Readonly<{ getBoundingClientRect(): Readonly<{ height: number }> }>;
+        body?: Readonly<{ scrollHeight: number }> | null;
         addEventListener(type: 'click', listener: (event: unknown) => void, options?: unknown): void;
         removeEventListener(type: 'click', listener: (event: unknown) => void, options?: unknown): void;
+    }>;
+    readonly ResizeObserver?: new (callback: () => void) => Readonly<{
+        observe(target: unknown): void;
+        disconnect(): void;
     }>;
     addEventListener(type: 'message', listener: (event: unknown) => void): void;
     removeEventListener(type: 'message', listener: (event: unknown) => void): void;
@@ -48,6 +55,11 @@ export interface HostedWebPluginUiClientRealm {
 
 export type AwaitHostedWebPluginUiHostApiClientBootstrapOptions = Readonly<{
     signal?: AbortSignal;
+}>;
+
+type InstallHostedWebPluginUiHostApiClientBootstrapOptions = Readonly<{
+    /** Host-owned plain HTML needs presentation without an authored SDK import. */
+    callerPresentation?: boolean;
 }>;
 
 type HostedWebBootstrapConfig = Readonly<PluginHostedWebBridgeBootstrapConfigV1>;
@@ -58,7 +70,15 @@ type HostedWebBootstrapController = Readonly<{
     awaitReady(options?: AwaitHostedWebPluginUiHostApiClientBootstrapOptions): Promise<PluginUiHostApiClientBootstrap>;
 }>;
 
-const controllers = new WeakMap<object, HostedWebBootstrapController>();
+// Shared by independently bundled SDK copies in this browsing realm. V1's
+// private contract is awaitReady(options?) -> the accepted client bootstrap.
+const HOSTED_WEB_GUEST_CONTROLLER_KEY = Symbol.for('happier.pluginUi.hostedWebGuestController.v1');
+
+function readHostedWebBootstrapController(realm: HostedWebPluginUiClientRealm): HostedWebBootstrapController | undefined {
+    const value: unknown = Reflect.get(realm, HOSTED_WEB_GUEST_CONTROLLER_KEY);
+    if (!value || typeof value !== 'object' || typeof Reflect.get(value, 'awaitReady') !== 'function') return undefined;
+    return value as HostedWebBootstrapController;
+}
 
 /**
  * Private guest-side Data transport. It is intentionally not exported from a
@@ -83,8 +103,12 @@ type PendingAccountDataRequest = Readonly<{
     reject(error: PluginUiHostApiClientError): void;
 }>;
 
-const accountDataTransports = new WeakMap<object, HostedWebAccountDataTransport>();
-const hostedWebAccountDataCapabilityKnown = new WeakSet<object>();
+// The accepted bootstrap carries its owner's live private Data lookup, rather
+// than relying on module identity. Absence means non-hosted, not Data denial.
+const HOSTED_WEB_GUEST_ACCOUNT_DATA_KEY = Symbol.for('happier.pluginUi.hostedWebGuestAccountData.v1');
+type HostedWebBootstrapWithAccountData = PluginUiHostApiClientBootstrap & Readonly<{
+    [HOSTED_WEB_GUEST_ACCOUNT_DATA_KEY]?: () => HostedWebAccountDataTransport | undefined;
+}>;
 
 /**
  * Internal carrier for `createPluginUiRenderContext`; it is not part of the
@@ -93,7 +117,7 @@ const hostedWebAccountDataCapabilityKnown = new WeakSet<object>();
 export function readHostedWebAccountDataTransport(
     bootstrap: PluginUiHostApiClientBootstrap,
 ): HostedWebAccountDataTransport | undefined {
-    return accountDataTransports.get(bootstrap);
+    return (bootstrap as HostedWebBootstrapWithAccountData)[HOSTED_WEB_GUEST_ACCOUNT_DATA_KEY]?.();
 }
 
 /**
@@ -103,7 +127,7 @@ export function readHostedWebAccountDataTransport(
 export function isHostedWebAccountDataCapabilityKnown(
     bootstrap: PluginUiHostApiClientBootstrap,
 ): boolean {
-    return hostedWebAccountDataCapabilityKnown.has(bootstrap);
+    return Object.hasOwn(bootstrap, HOSTED_WEB_GUEST_ACCOUNT_DATA_KEY);
 }
 
 function readRequiredQueryValue(url: URL, key: string): string | null {
@@ -160,15 +184,16 @@ function addressesThisSurface(
 function asBootstrap(
     payload: PluginHostedWebBridgeBootstrapPayloadV1,
     transport: PluginUiHostApiClientBootstrap['transport'],
+    readAccountDataTransport: () => HostedWebAccountDataTransport | undefined,
 ): PluginUiHostApiClientBootstrap {
-    return Object.freeze({
+    return Object.freeze(Object.defineProperty({
         identity: payload.identity,
         ...(payload.authorPlugin === undefined ? {} : { authorPlugin: payload.authorPlugin }),
         transport,
         ...(payload.launchInput === undefined ? {} : { launchInput: payload.launchInput }),
         ...(payload.subPath === undefined ? {} : { subPath: payload.subPath }),
         ...(payload.composerRef === undefined ? {} : { composerRef: payload.composerRef }),
-    });
+    }, HOSTED_WEB_GUEST_ACCOUNT_DATA_KEY, { value: readAccountDataTransport }));
 }
 
 function readAccountDataCapability(payload: unknown): boolean {
@@ -213,6 +238,7 @@ function awaitWithAbort(
 function createHostedWebBootstrapController(
     realm: HostedWebPluginUiClientRealm,
     config: HostedWebBootstrapConfig,
+    options: InstallHostedWebPluginUiHostApiClientBootstrapOptions,
 ): HostedWebBootstrapController | null {
     const nativePostMessage = realm.ReactNativeWebView?.postMessage;
     const parent = realm.parent;
@@ -230,6 +256,9 @@ function createHostedWebBootstrapController(
     let documentPort: HostedWebMessagePort | null = null;
     const sentSequences = new Set<number>();
     const listeners = new Set<(message: unknown) => void>();
+    const negotiatedListeners = new Set<(message: unknown) => void>();
+    let negotiationRequest: Extract<PluginUiHostApiWireEnvelopeV1, { kind: 'negotiate' }> | undefined;
+    let negotiationReply: Extract<PluginUiHostApiWireEnvelopeV1, { kind: 'negotiated' }> | undefined;
     const accountDataListeners = new Set<(
         change: PluginHostedWebAccountDataBridgeChangeV1,
     ) => void>();
@@ -244,6 +273,13 @@ function createHostedWebBootstrapController(
 
     const removeListener = () => realm.removeEventListener('message', handleMessage);
     let removeExternalLinkCarrier: () => void = () => {};
+    const presentationLifetime = new AbortController();
+    let presentationObserver: InstanceType<NonNullable<HostedWebPluginUiClientRealm['ResizeObserver']>> | null = null;
+    const removeCallerPresentation = () => {
+        presentationLifetime.abort();
+        presentationObserver?.disconnect();
+        presentationObserver = null;
+    };
     const sendEnvelope = (envelope: PluginHostedWebBridgeEnvelopeV1): void => {
         if (typeof nativePostMessage === 'function') {
             Reflect.apply(nativePostMessage, realm.ReactNativeWebView, [JSON.stringify(envelope)]);
@@ -258,7 +294,17 @@ function createHostedWebBootstrapController(
     const deliver = (wire: PluginUiHostApiWireEnvelopeV1): void => {
         const expected = identity;
         if (!expected || !pluginUiHostApiWireIdentitiesEqual(expected, wire.identity)) return;
-        for (const listener of listeners) listener(wire);
+        if (wire.kind === 'negotiated') {
+            if (negotiationReply) {
+                fail('invalid_negotiation', 'The hosted plugin UI received a duplicate negotiation reply.');
+                return;
+            }
+            negotiationReply = wire;
+        }
+        for (const listener of listeners) {
+            if (wire.kind === 'negotiated') negotiatedListeners.add(listener);
+            listener(wire);
+        }
     };
     const disconnectAccountData = (error: PluginUiHostApiClientError): void => {
         for (const pending of [...accountDataPending.values()]) pending.reject(error);
@@ -273,6 +319,7 @@ function createHostedWebBootstrapController(
         state = 'disconnected';
         removeListener();
         removeExternalLinkCarrier();
+        removeCallerPresentation();
         documentPort?.close();
         documentPort = null;
         const error = new PluginUiHostApiClientError(code, message);
@@ -292,6 +339,8 @@ function createHostedWebBootstrapController(
         if (state === 'disconnected') return;
         state = 'disconnected';
         removeListener();
+        removeExternalLinkCarrier();
+        removeCallerPresentation();
         documentPort?.close();
         documentPort = null;
         const error = new PluginUiHostApiClientError(
@@ -302,6 +351,7 @@ function createHostedWebBootstrapController(
         rejectReadiness(error);
         disconnectAccountData(error);
     };
+    let accountDataTransport: HostedWebAccountDataTransport | undefined;
     const installAccountDataTransport = (): void => {
         const currentBootstrap = bootstrap;
         const createTransport = createAccountDataTransport;
@@ -310,8 +360,8 @@ function createHostedWebBootstrapController(
             || !accountDataCapability
             || !currentBootstrap
             || !createTransport
-            || accountDataTransports.has(currentBootstrap)) return;
-        accountDataTransports.set(currentBootstrap, createTransport());
+            || accountDataTransport) return;
+        accountDataTransport = createTransport();
     };
     const acceptBootstrap = (payload: PluginHostedWebBridgeBootstrapPayloadV1): void => {
         if (state !== 'readySent') {
@@ -335,6 +385,24 @@ function createHostedWebBootstrapController(
                 if (!pluginUiHostApiWireIdentitiesEqual(identity, wire.identity)) {
                     throw new TypeError('Plugin UI host wire identity does not match the hosted surface.');
                 }
+                // Independently bundled local clients share one opening wire
+                // negotiation. Each still validates the host's reply itself.
+                if (wire.kind === 'negotiate') {
+                    if (negotiationRequest) {
+                        if (wire.apiRange !== negotiationRequest.apiRange) {
+                            throw new PluginUiHostApiClientError('invalid_negotiation', 'The hosted plugin UI clients requested different API ranges.');
+                        }
+                        if (negotiationReply) {
+                            for (const listener of listeners) {
+                                if (negotiatedListeners.has(listener)) continue;
+                                negotiatedListeners.add(listener);
+                                listener(negotiationReply);
+                            }
+                        }
+                        return;
+                    }
+                    negotiationRequest = wire;
+                }
                 sequence += 1;
                 sentSequences.add(sequence);
                 sendEnvelope(PluginHostedWebBridgeEnvelopeV1Schema.parse({
@@ -353,6 +421,7 @@ function createHostedWebBootstrapController(
                         if (disposed) return;
                         disposed = true;
                         listeners.delete(listener);
+                        negotiatedListeners.delete(listener);
                     },
                 });
             },
@@ -459,7 +528,7 @@ function createHostedWebBootstrapController(
                 });
             },
         });
-        const acceptedBootstrap = asBootstrap(payload, transport);
+        const acceptedBootstrap = asBootstrap(payload, transport, () => accountDataTransport);
         bootstrap = acceptedBootstrap;
         state = 'bootstrapped';
         const installed = Reflect.defineProperty(realm, PLUGIN_UI_HOST_API_CLIENT_BOOTSTRAP_KEY, {
@@ -472,9 +541,48 @@ function createHostedWebBootstrapController(
             fail('ui_host_bootstrap_invalid', 'The hosted plugin UI bootstrap could not be installed.');
             return;
         }
-        hostedWebAccountDataCapabilityKnown.add(acceptedBootstrap);
         installAccountDataTransport();
         resolveReadiness(acceptedBootstrap);
+        if (options.callerPresentation) {
+            const root = realm.document?.documentElement;
+            if (root) {
+                let lastHeight: number | undefined;
+                const reportHeight = () => {
+                    if (state !== 'bootstrapped') return;
+                    // scrollHeight on the root is viewport-floored and would
+                    // prevent a previously tall auto-height frame shrinking.
+                    const height = Math.ceil(Math.max(root.getBoundingClientRect().height, realm.document?.body?.scrollHeight ?? 0));
+                    if (!Number.isFinite(height) || height <= 0 || height === lastHeight) return;
+                    lastHeight = height;
+                    sequence += 1;
+                    sendEnvelope(PluginHostedWebBridgeEnvelopeV1Schema.parse({ version: 1, identity: config.identity, sequence, kind: 'heightChanged', payload: { height } }));
+                };
+                if (realm.ResizeObserver) {
+                    presentationObserver = new realm.ResizeObserver(reportHeight);
+                    presentationObserver.observe(root);
+                }
+                reportHeight();
+                void (async () => {
+                    const api = await createPluginUiHostApiClientFromTransport({
+                        identity: acceptedBootstrap.identity,
+                        transport: acceptedBootstrap.transport,
+                        signal: presentationLifetime.signal,
+                    });
+                    const applyContext = (context: Awaited<ReturnType<typeof api.context>>) => {
+                        if (state !== 'bootstrapped') return;
+                        applyPluginUiThemeCssVariables(context.theme, root);
+                        reportHeight();
+                    };
+                    applyContext(await api.context());
+                    await api.watchContext(applyContext, { signal: presentationLifetime.signal });
+                })().catch(() => {
+                    if (state !== 'bootstrapped') return;
+                    sequence += 1;
+                    sendEnvelope(PluginHostedWebBridgeEnvelopeV1Schema.parse({ version: 1, identity: config.identity, sequence, kind: 'error', payload: { code: 'caller_presentation_failed' } }));
+                    fail('caller_presentation_failed', 'The caller HTML presentation could not be established.');
+                });
+            }
+        }
     };
     const handleHostData = (data: unknown): void => {
         const hostMessage = PluginHostedWebBridgeHostMessageEnvelopeV1Schema.safeParse(data);
@@ -533,9 +641,12 @@ function createHostedWebBootstrapController(
             collectionPending.resolve(payload.data);
             return;
         }
-        if (!sentSequences.delete(response.data.requestSequence) || response.data.kind !== 'result') return;
+        if (!sentSequences.has(response.data.requestSequence) || response.data.kind !== 'result') return;
         const wire = PluginUiHostApiWireEnvelopeV1Schema.safeParse(response.data.payload);
-        if (wire.success) deliver(wire.data);
+        if (wire.success && identity && pluginUiHostApiWireIdentitiesEqual(identity, wire.data.identity)) {
+            sentSequences.delete(response.data.requestSequence);
+            deliver(wire.data);
+        }
     };
     const handleMessage = (rawEvent: unknown): void => {
         const event = rawEvent && typeof rawEvent === 'object' ? rawEvent as HostedWebMessageEvent : {};
@@ -546,11 +657,10 @@ function createHostedWebBootstrapController(
     };
 
     realm.addEventListener('message', handleMessage);
-    if (typeof nativePostMessage !== 'function'
-        && Reflect.get(realm, '__HAPPIER_UI_FRAME_EXTERNAL_LINKS_V1__') === true
+    if (Reflect.get(realm, '__HAPPIER_UI_FRAME_EXTERNAL_LINKS_V1__') === true
         && realm.document) {
         const handleClick = (rawEvent: unknown): void => {
-            if (!rawEvent || typeof rawEvent !== 'object' || Reflect.get(rawEvent, 'isTrusted') !== true) return;
+            if (!rawEvent || typeof rawEvent !== 'object' || state === 'disconnected') return;
             if (Reflect.get(rawEvent, 'defaultPrevented') === true
                 || Reflect.get(rawEvent, 'button') !== 0
                 || Reflect.get(rawEvent, 'metaKey') === true
@@ -560,24 +670,30 @@ function createHostedWebBootstrapController(
             const target = Reflect.get(rawEvent, 'target');
             const closest = target && typeof target === 'object' ? Reflect.get(target, 'closest') : null;
             const anchor = typeof closest === 'function' ? Reflect.apply(closest, target, ['a[href]']) : null;
-            const href = anchor && typeof anchor === 'object' ? Reflect.get(anchor, 'href') : null;
+            if (!anchor || typeof anchor !== 'object') return;
+            const href = Reflect.get(anchor, 'href');
+            let parsed: URL | null = null;
+            if (typeof href === 'string') {
+                try { parsed = new URL(href); } catch { /* Malformed anchors stay inside this document. */ }
+            }
+            const externalUrl = parsed && (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : null;
+            const trusted = Reflect.get(rawEvent, 'isTrusted') === true;
+            // Native messages have no activation receipt. Preserve the existing
+            // WebView gesture-validated navigation handoff instead of sending
+            // a bridge request that the host must deny.
+            if (trusted && externalUrl !== null && typeof nativePostMessage === 'function') return;
             const preventDefault = Reflect.get(rawEvent, 'preventDefault');
             if (typeof preventDefault === 'function') Reflect.apply(preventDefault, rawEvent, []);
-            if (typeof href !== 'string') return;
-            let parsed: URL;
-            try {
-                parsed = new URL(href);
-            } catch {
-                return;
-            }
-            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
+            // Synthetic anchor activation must not replace the live document.
+            // Only a genuine browser activation may request an external open.
+            if (!trusted || externalUrl === null) return;
             sequence += 1;
             sendEnvelope(PluginHostedWebBridgeEnvelopeV1Schema.parse({
                 version: 1,
                 identity: config.identity,
                 sequence,
                 kind: 'openExternal',
-                payload: { url: parsed.href },
+                payload: { url: externalUrl },
             }));
         };
         realm.document.addEventListener('click', handleClick, true);
@@ -623,13 +739,14 @@ function createHostedWebBootstrapController(
  */
 export function installHostedWebPluginUiHostApiClientBootstrap(
     realm: HostedWebPluginUiClientRealm,
+    options: InstallHostedWebPluginUiHostApiClientBootstrapOptions = {},
 ): boolean {
-    if (Reflect.has(realm, PLUGIN_UI_HOST_API_CLIENT_BOOTSTRAP_KEY) || controllers.has(realm)) return false;
+    if (readHostedWebBootstrapController(realm) || Reflect.has(realm, PLUGIN_UI_HOST_API_CLIENT_BOOTSTRAP_KEY)) return false;
     const config = readHostedWebBootstrapConfig(realm);
     if (!config) return false;
-    const controller = createHostedWebBootstrapController(realm, config);
+    const controller = createHostedWebBootstrapController(realm, config, options);
     if (!controller) return false;
-    controllers.set(realm, controller);
+    Object.defineProperty(realm, HOSTED_WEB_GUEST_CONTROLLER_KEY, { value: controller });
     return true;
 }
 
@@ -637,8 +754,8 @@ export function awaitHostedWebPluginUiHostApiClientBootstrap(
     realm: HostedWebPluginUiClientRealm,
     options: AwaitHostedWebPluginUiHostApiClientBootstrapOptions = {},
 ): Promise<PluginUiHostApiClientBootstrap> {
-    if (!controllers.has(realm)) installHostedWebPluginUiHostApiClientBootstrap(realm);
-    const controller = controllers.get(realm);
+    if (!readHostedWebBootstrapController(realm)) installHostedWebPluginUiHostApiClientBootstrap(realm);
+    const controller = readHostedWebBootstrapController(realm);
     if (controller) return controller.awaitReady(options);
     return Promise.reject(new PluginUiHostApiClientError(
         'ui_host_bootstrap_missing',

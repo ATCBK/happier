@@ -15,6 +15,7 @@ export type DiscoveredExecutablePluginUiArtifact = Readonly<{
   artifactId: string;
   entryPath: string;
   requestedExports: readonly string[];
+  collectionMigrationManifest?: UnknownRecord;
 }>;
 
 export type DiscoveredHostedStaticPluginUiArtifact = Readonly<{
@@ -48,7 +49,7 @@ function addReference(
   references.set(artifactId, exports);
 }
 
-function discoverReferences(manifest: UnknownRecord): Map<string, Set<string>> {
+function discoverReferences(manifest: UnknownRecord) {
   const references = new Map<string, Set<string>>();
   const contributes = asRecord(manifest.contributes);
   const ui = asRecord(contributes?.ui);
@@ -111,7 +112,7 @@ function discoverReferences(manifest: UnknownRecord): Map<string, Set<string>> {
       migrationArtifact.exportName,
     );
   }
-  return references;
+  return { references, migrationArtifact };
 }
 
 function collectRelevantExportTargets(value: unknown): readonly string[] {
@@ -177,7 +178,7 @@ export async function discoverExecutablePluginUiArtifacts(
   const manifest = JSON.parse(
     await readFile(manifestPath, 'utf8'),
   ) as UnknownRecord;
-  const references = discoverReferences(manifest);
+  const { references, migrationArtifact } = discoverReferences(manifest);
   const exportsMap = asRecord(packageJson.exports);
   for (const exportKey of Object.keys(exportsMap ?? {})) {
     const packagedArtifactId =
@@ -240,6 +241,9 @@ export async function discoverExecutablePluginUiArtifacts(
         artifactId,
         entryPath,
         requestedExports: Object.freeze([...requestedExports].sort()),
+        ...(migrationArtifact?.artifactId === artifactId
+          ? { collectionMigrationManifest: manifest }
+          : {}),
       }),
     );
   }

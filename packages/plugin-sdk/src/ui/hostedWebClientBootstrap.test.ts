@@ -5,6 +5,8 @@ import type {
     PluginUiHostApiWireEnvelopeV1,
     PluginUiHostApiWireIdentityV1,
 } from '@happier-dev/protocol/plugins/ui';
+import { PluginHostedWebBridgeEnvelopeV1Schema } from '@happier-dev/protocol/plugins/ui/hostedWebBridge';
+import { PluginUiHostApiWireEnvelopeV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 
 import {
     awaitHostedWebPluginUiHostApiClientBootstrap,
@@ -12,6 +14,13 @@ import {
     readHostedWebAccountDataTransport,
     type HostedWebPluginUiClientRealm,
 } from './hostedWebClientBootstrap.js';
+import { createSurfaceContextFixture } from './surfaceContext.fixture.js';
+
+// Load the second real SDK graph during collection. Cold graph loading is
+// setup, rather than part of the timed guest-lifecycle behavior below.
+vi.resetModules();
+const authoredBootstrap = await import('./hostedWebClientBootstrap.js');
+const authoredClient = await import('./client.js');
 
 const identity = { instanceId: 'mount-1', mountNonce: 'nonce-1' } as const;
 
@@ -92,6 +101,156 @@ function readyAcknowledgementMessage(input: Readonly<{
 }
 
 describe('hosted-web UI client bootstrap', () => {
+    it.each([false, true])('shares one guest lifecycle across independent SDK copies (Account Data: %s)', async (accountData) => {
+        // The realm and ports model browser boundaries; both SDK module graphs
+        // and the public RenderContext factory execute their real logic.
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(1_791_719_100_000);
+        onTestFinished(() => clock.mockRestore());
+        const harness = createRealm('', 'about:srcdoc');
+        const surface = createSurfaceContextFixture();
+        const properties = new Map<string, string>();
+        Object.defineProperty(harness.realm, 'document', { value: {
+            documentElement: {
+                style: { setProperty: (key: string, value: string) => properties.set(key, value) },
+                getBoundingClientRect: () => ({ height: 137 }),
+            },
+            addEventListener() {}, removeEventListener() {},
+        } });
+        Object.defineProperty(harness.realm, '__HAPPIER_UI_FRAME_BOOTSTRAP_V1__', {
+            value: { identity, frameOrigin: 'null', hostOrigin: 'https://host.test' },
+        });
+        const { hostPort } = installDocumentChannel(harness.realm);
+        const wireMessages: PluginUiHostApiWireEnvelopeV1[] = [];
+        const subscriptions = new Set<string>();
+        hostPort.onmessage = ({ data }) => queueMicrotask(() => {
+            const envelope = PluginHostedWebBridgeEnvelopeV1Schema.parse(data);
+            if (envelope.kind !== 'hostApi') return;
+            const wire = PluginUiHostApiWireEnvelopeV1Schema.parse(envelope.payload);
+            wireMessages.push(wire);
+            if (wire.kind === 'negotiate') hostPort.postMessage({
+                version: 1, direction: 'hostToFrame', sequence: envelope.sequence, identity, kind: 'hostApi',
+                payload: { wireVersion: 1, identity, kind: 'negotiated', apiVersion: '1.0.0', methods: ['context', 'watchContext'], surface },
+            });
+            if (wire.kind === 'request' && wire.method === 'context') hostPort.postMessage({
+                version: 1, direction: 'hostToFrame', sequence: envelope.sequence, identity, kind: 'hostApi',
+                payload: { wireVersion: 1, identity, kind: 'result', requestId: wire.requestId, method: 'context', result: { surface, activity: { active: true } } },
+            });
+            if (wire.kind === 'subscribe') {
+                // The real host refuses duplicate live subscription ids
+                // (hostedWebAdapter.ts); a clock tick is not an SDK namespace.
+                const duplicate = subscriptions.has(wire.subscriptionId);
+                subscriptions.add(wire.subscriptionId);
+                hostPort.postMessage({
+                    version: 1, direction: 'hostToFrame', sequence: envelope.sequence, identity, kind: 'hostApi',
+                    payload: duplicate
+                        ? { wireVersion: 1, identity, kind: 'error', requestId: wire.requestId, method: wire.method, error: { name: 'PluginError', code: 'invalid_payload' } }
+                        : { wireVersion: 1, identity, kind: 'result', requestId: wire.requestId, method: wire.method },
+                });
+            }
+        });
+        expect(installHostedWebPluginUiHostApiClientBootstrap(harness.realm, { callerPresentation: true })).toBe(true);
+        expect(authoredBootstrap.installHostedWebPluginUiHostApiClientBootstrap).not.toBe(installHostedWebPluginUiHostApiClientBootstrap);
+        const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+        Object.defineProperty(globalThis, 'window', { configurable: true, value: harness.realm });
+        onTestFinished(() => {
+            if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+            else Reflect.deleteProperty(globalThis, 'window');
+        });
+
+        const acceptBootstrap = () => {
+            hostPort.postMessage(readyAcknowledgementMessage({ accountData }));
+            hostPort.postMessage(bootstrapMessage({ origin: 'null', payload: {
+                ...bootstrapMessage().payload, authorPlugin: { id: 'com.acme.fixture', version: '1.0.0' },
+            } }));
+        };
+        // Cover a late authored copy and one attaching while bootstrap is
+        // pending, without giving either copy a second ready/port lifecycle.
+        if (!accountData) acceptBootstrap();
+        expect(authoredBootstrap.installHostedWebPluginUiHostApiClientBootstrap(harness.realm)).toBe(false);
+        const pendingContext = authoredClient.createPluginUiRenderContext();
+        if (accountData) acceptBootstrap();
+        await expect(pendingContext).resolves.toMatchObject({ plugin: { id: 'com.acme.fixture', version: '1.0.0' }, surface });
+        const context = await pendingContext;
+        const bootstrap = await awaitHostedWebPluginUiHostApiClientBootstrap(harness.realm);
+        await expect(authoredBootstrap.awaitHostedWebPluginUiHostApiClientBootstrap(harness.realm)).resolves.toBe(bootstrap);
+        expect(authoredBootstrap.readHostedWebAccountDataTransport(bootstrap)).toBe(readHostedWebAccountDataTransport(bootstrap));
+        expect(Reflect.get(context, Symbol.for('happier.pluginUi.privateHostedWebAccountDataTransport.v1'))).toMatchObject({
+            kind: accountData ? 'available' : 'unavailable',
+        });
+        await expect(context.hostApi.watchContext(() => {})).resolves.toBeDefined();
+        const laterContext = await authoredClient.createPluginUiRenderContext();
+        expect(laterContext.surface).toEqual(surface);
+        clock.mockRestore();
+        await vi.waitFor(() => expect(properties.get('--happier-plugin-color-text')).toBe(surface.theme.colors.text));
+        expect(wireMessages.filter(message => message.kind === 'negotiate')).toHaveLength(1);
+        expect(harness.posted.map(({ message }) => PluginHostedWebBridgeEnvelopeV1Schema.parse(message).kind)).toEqual(['ready']);
+        hostPort.postMessage({ version: 1, direction: 'hostToFrame', sequence: 10, identity, kind: 'hostApi', payload: accountData
+            ? { wireVersion: 1, identity, kind: 'disconnected', reason: 'retired' }
+            : { wireVersion: 1, identity, kind: 'negotiated', apiVersion: '1.0.0', methods: ['context', 'watchContext'], surface },
+        });
+        expect(context.signal.aborted).toBe(true);
+        expect(laterContext.signal.aborted).toBe(true);
+        await expect(authoredClient.createPluginUiRenderContext()).rejects.toMatchObject({
+            code: accountData ? 'ui_host_bridge_disconnected' : 'invalid_negotiation',
+        });
+        expect(authoredBootstrap.installHostedWebPluginUiHostApiClientBootstrap(harness.realm)).toBe(false);
+        expect(harness.posted).toHaveLength(1);
+    });
+
+    it('caller presentation applies context themes, reports resizing and retires native observers and links', async () => {
+        const harness = createRealm();
+        const surface = createSurfaceContextFixture();
+        const properties = new Map<string, string>();
+        const clicks = new Set<(event: unknown) => void>();
+        let height = 137;
+        let resized = () => {};
+        const observer = { observe: vi.fn(), disconnect: vi.fn() };
+        Object.defineProperty(harness.realm, 'document', { value: {
+            documentElement: { style: { setProperty: (key: string, value: string) => properties.set(key, value) }, getBoundingClientRect: () => ({ height }) },
+            body: { get scrollHeight() { return height; } },
+            addEventListener: (_type: string, listener: (event: unknown) => void) => clicks.add(listener),
+            removeEventListener: (_type: string, listener: (event: unknown) => void) => clicks.delete(listener),
+        } });
+        Object.defineProperty(harness.realm, 'ResizeObserver', { value: class { constructor(callback: () => void) { resized = callback; } observe = observer.observe; disconnect = observer.disconnect; } });
+        Object.defineProperty(harness.realm, '__HAPPIER_UI_FRAME_EXTERNAL_LINKS_V1__', { value: true });
+        const sent: Array<{ kind: string; payload?: unknown }> = [];
+        let subscriptionId = '';
+        const push = (kind: string, payload: unknown) => harness.dispatch({ data: { version: 1, direction: 'hostToFrame', sequence: 1, identity, kind, ...(kind === 'bootstrap' ? { origin: 'https://plugin.test' } : {}), payload } });
+        Object.defineProperty(harness.realm, 'ReactNativeWebView', { value: { postMessage(raw: string) {
+            const envelope = JSON.parse(raw); sent.push(envelope);
+            queueMicrotask(() => {
+                if (envelope.kind === 'ready') { push('bootstrap', bootstrapMessage().payload); return; }
+                if (envelope.kind !== 'hostApi') return;
+                const wire = envelope.payload;
+                if (wire.kind === 'negotiate') push('hostApi', { wireVersion: 1, identity, kind: 'negotiated', apiVersion: '1.0.0', methods: ['context', 'watchContext'], surface });
+                else if (wire.kind === 'request' || wire.kind === 'subscribe') {
+                    if (wire.kind === 'subscribe') subscriptionId = wire.subscriptionId;
+                    push('hostApi', { wireVersion: 1, identity, kind: 'result', requestId: wire.requestId, method: wire.method, ...(wire.method === 'context' ? { result: { surface, activity: { active: true } } } : {}) });
+                }
+            });
+        } } });
+        expect(installHostedWebPluginUiHostApiClientBootstrap(harness.realm, { callerPresentation: true })).toBe(true);
+        await vi.waitFor(() => expect(properties.get('--happier-plugin-color-text')).toBe('#f0f0f0'));
+        await vi.waitFor(() => expect(subscriptionId).not.toBe(''));
+        expect(sent).toContainEqual(expect.objectContaining({ kind: 'heightChanged', payload: { height: 137 } }));
+        push('hostApi', { wireVersion: 1, identity, kind: 'subscription', subscriptionId, event: { surface: { ...surface, theme: { ...surface.theme, colors: { ...surface.theme.colors, text: '#123456' } } }, activity: { active: true } } });
+        expect(properties.get('--happier-plugin-color-text')).toBe('#123456');
+        height = 211; resized();
+        expect(sent).toContainEqual(expect.objectContaining({ kind: 'heightChanged', payload: { height: 211 } }));
+        const preventNativeNavigation = vi.fn();
+        for (const listener of clicks) listener({ isTrusted: true, button: 0, target: { closest: () => ({ href: 'https://external.test/read' }) }, preventDefault: preventNativeNavigation });
+        // Native WebView navigation owns the real gesture receipt; native JS
+        // bridge messages intentionally cannot manufacture that authority.
+        expect(preventNativeNavigation).not.toHaveBeenCalled();
+        expect(sent.some(message => message.kind === 'openExternal')).toBe(false);
+        for (const listener of clicks) listener({ isTrusted: false, button: 0, target: { closest: () => ({ href: 'https://external.test/read' }) }, preventDefault: preventNativeNavigation });
+        expect(preventNativeNavigation).toHaveBeenCalledOnce();
+        push('hostApi', { wireVersion: 1, identity, kind: 'disconnected', reason: 'retired' });
+        expect(observer.disconnect).toHaveBeenCalled();
+        expect(clicks.size).toBe(0);
+        const before = sent.length; height = 333; resized();
+        expect(sent.length).toBe(before);
+    });
     it('keeps one document pending beyond the former cutoff and cancels only the abandoned waiter', async () => {
         vi.useFakeTimers();
         onTestFinished(() => { vi.useRealTimers(); });
@@ -158,6 +317,11 @@ describe('hosted-web UI client bootstrap', () => {
         click('data:text/html,hello', true);
         click('https://example.test/synthetic', false);
         expect(guestPort.postMessage).toHaveBeenCalledTimes(sentCount);
+        const preventControlDefault = vi.fn();
+        for (const listener of clickListeners) listener({
+            isTrusted: true, button: 0, target: { closest: () => null }, preventDefault: preventControlDefault,
+        });
+        expect(preventControlDefault).not.toHaveBeenCalled();
     });
 
     it('offers the guest-owned document port with ready and retires the WindowProxy listener', async () => {
@@ -343,12 +507,6 @@ describe('hosted-web UI client bootstrap', () => {
             apiRange: '^1.0.0',
         });
         const staleAnswerSequence = (harness.posted.at(-1)?.message as Readonly<{ sequence: number }>).sequence;
-        await bootstrap.transport.send({
-            wireVersion: 1,
-            kind: 'negotiate',
-            identity,
-            apiRange: '^1.0.0',
-        });
         const currentAnswerSequence = (harness.posted.at(-1)?.message as Readonly<{ sequence: number }>).sequence;
 
         // Outer correlation still matches, but an inner answer from a retired
