@@ -21,6 +21,19 @@ function modeInput(extra: Partial<SessionAuthoringControlsInput> = {}): SessionA
 }
 
 describe('useSessionAuthoringControls session modes', () => {
+    it('renders unresolved retained Agent targets without claiming an applied model', async () => {
+        for (const agentId of ['custom-acp', '', 'bad:target']) {
+            const hook = await renderHook(() => useSessionAuthoringControls(modeInput({
+                agentId,
+                canChangeModel: true,
+                modelOptionsOverride: [{ value: 'default', label: 'Default', description: '' }],
+            })));
+            expect(hook.getCurrent().effectiveModelPolicy.appliedModelId).toBeNull();
+            expect(hook.getCurrent().effectiveModelPolicy.selectedModelId).toBe('default');
+            await hook.unmount();
+        }
+    });
+
     it.each([null, 'default'] as const)('distinguishes preflight unset from native Default (%s)', async (modeId) => {
         const hook = await renderHook(() => useSessionAuthoringControls(modeInput({
             acpSessionModeOptionsOverride: modeOptions,
