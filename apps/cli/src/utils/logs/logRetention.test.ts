@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  DEFAULT_DAEMON_LOG_KEEP_COUNT,
-  DEFAULT_SESSION_LOG_KEEP_COUNT,
+  resolveLogRetention,
   resolveDaemonLogKeepCount,
   resolveSessionLogKeepCount,
 } from './logRetention';
 
 describe('logRetention', () => {
-  it('uses defaults when env keep counts are absent or invalid', () => {
-    expect(resolveDaemonLogKeepCount({})).toBe(DEFAULT_DAEMON_LOG_KEEP_COUNT);
-    expect(resolveSessionLogKeepCount({ HAPPIER_SESSION_LOG_KEEP_COUNT: 'nope' })).toBe(DEFAULT_SESSION_LOG_KEEP_COUNT);
+  it('only caps counts when the operator explicitly supplies a valid override', () => {
+    expect(resolveDaemonLogKeepCount({})).toBeUndefined();
+    expect(resolveSessionLogKeepCount({ HAPPIER_SESSION_LOG_KEEP_COUNT: 'nope' })).toBeUndefined();
+    expect(resolveSessionLogKeepCount({ HAPPIER_SESSION_LOG_KEEP_COUNT: '' })).toBeUndefined();
+    expect(resolveLogRetention({ settings: { logRetentionDays: null }, env: {} })).toMatchObject({ days: null, crashedSessionKeepCount: 20 });
   });
 
   it('accepts zero and integer env keep counts', () => {

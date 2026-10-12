@@ -6,7 +6,6 @@
  */
 
 import chalk from 'chalk'
-import { isPidPresent } from '@happier-dev/cli-common/process'
 import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 import { configuration } from '../configuration'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync, watch, type FSWatcher } from 'node:fs'
@@ -21,11 +20,12 @@ import {
 import { writeConsoleErrorBestEffort, writeConsoleLogBestEffort } from '../utils/writeConsoleBestEffort'
 import { BufferedFileAppender } from './logFileAppender'
 import { isFileLogLevelEnabled, resolveFileLogLevel, type FileLogLevel } from './logFileLevel'
-import { pruneLogsByCount } from '@/utils/logs/pruneLogsByCount'
+import { pruneLogs } from '@/utils/logs/pruneLogs'
 import {
   DAEMON_LOG_SUFFIX,
   LOG_FILE_SUFFIX,
-  resolveCrashedSessionLogKeepCount,
+  resolveCrashedSessionLogKeepPaths,
+  resolveLiveSessionLogKeepPaths,
   resolveDaemonLogKeepCount,
   resolveSessionLogKeepCount,
 } from '@/utils/logs/logRetention'
@@ -226,17 +226,20 @@ function getSessionLogPath(): string {
 async function pruneCurrentProcessLogsBestEffort(currentLogPath: string): Promise<void> {
   const logsDir = resolveLogsDir()
   if (configuration.isDaemonProcess) {
-    await pruneLogsByCount({
+    const keepCount = resolveDaemonLogKeepCount()
+    if (keepCount === undefined) return
+    await pruneLogs({
       dir: logsDir,
       suffix: DAEMON_LOG_SUFFIX,
-      keepCount: resolveDaemonLogKeepCount(),
+      keepCount,
       keepPath: currentLogPath,
     })
     return
   }
 
   const keepCount = resolveSessionLogKeepCount()
-  await pruneLogsByCount({
+  if (keepCount === undefined) return
+  await pruneLogs({
     dir: logsDir,
     suffix: LOG_FILE_SUFFIX,
     excludeSuffix: DAEMON_LOG_SUFFIX,
@@ -247,89 +250,6 @@ async function pruneCurrentProcessLogsBestEffort(currentLogPath: string): Promis
       ...resolveLiveSessionLogKeepPaths(logsDir, keepCount),
     ],
   })
-}
-
-type CrashedSessionExitReportReference = Readonly<{
-  pid: number;
-  observedAt: number;
-}>
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function isNonZeroSessionExitReport(report: Readonly<Record<string, unknown>>): boolean {
-  return (typeof report.code === 'number' && report.code !== 0)
-    || (typeof report.signal === 'string' && report.signal.trim().length > 0)
-}
-
-function readNonZeroSessionExitReportReference(reportPath: string): CrashedSessionExitReportReference | null {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(reportPath, 'utf8'))
-    if (!isRecord(parsed) || !isNonZeroSessionExitReport(parsed)) return null
-    const pid = typeof parsed.pid === 'number' && Number.isSafeInteger(parsed.pid) && parsed.pid > 0
-      ? parsed.pid
-      : null
-    if (pid === null) return null
-    const observedAt = typeof parsed.observedAt === 'number' && Number.isFinite(parsed.observedAt)
-      ? parsed.observedAt
-      : statSync(reportPath).mtimeMs
-    return { pid, observedAt }
-  } catch {
-    return null
-  }
-}
-
-function resolveCrashedSessionLogKeepPaths(logsDir: string): string[] {
-  const keepCount = resolveCrashedSessionLogKeepCount()
-  if (keepCount <= 0) return []
-  try {
-    const sessionExitDir = join(logsDir, 'session-exit')
-    const crashedPids = new Set(
-      readdirSync(sessionExitDir)
-        .filter((file) => file.endsWith('.json'))
-        .map((file) => readNonZeroSessionExitReportReference(join(sessionExitDir, file)))
-        .filter((entry): entry is CrashedSessionExitReportReference => entry !== null)
-        .sort((a, b) => b.observedAt - a.observedAt)
-        .slice(0, keepCount)
-        .map((entry) => entry.pid),
-    )
-    if (crashedPids.size === 0) return []
-    return readdirSync(logsDir)
-      .filter((file) => file.endsWith(LOG_FILE_SUFFIX) && !file.endsWith(DAEMON_LOG_SUFFIX))
-      .filter((file) => {
-        const match = /-pid-(\d+)\.log$/.exec(file)
-        if (!match) return false
-        return crashedPids.has(Number(match[1]))
-      })
-      .map((file) => join(logsDir, file))
-  } catch {
-    return []
-  }
-}
-
-function resolveLiveSessionLogKeepPaths(logsDir: string, keepCount: number): string[] {
-  try {
-    const livenessByPid = new Map<number, boolean>()
-    return readdirSync(logsDir)
-      .filter((file) => file.endsWith(LOG_FILE_SUFFIX) && !file.endsWith(DAEMON_LOG_SUFFIX))
-      .sort((a, b) => a < b ? 1 : a > b ? -1 : 0)
-      .slice(Math.max(0, keepCount))
-      .filter((file) => {
-        const match = /-pid-(\d+)\.log$/.exec(file)
-        if (!match) return false
-        const pid = Number(match[1])
-        if (!Number.isSafeInteger(pid) || pid <= 0) return false
-        const cached = livenessByPid.get(pid)
-        if (cached !== undefined) return cached
-        const alive = isPidPresent(pid)
-        livenessByPid.set(pid, alive)
-        return alive
-      })
-      .map((file) => join(logsDir, file))
-  } catch {
-    return []
-  }
 }
 
 export class Logger {
