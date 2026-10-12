@@ -4,12 +4,15 @@ import { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } from '../account/settings/sessi
 import { AutomationRunCauseSchema } from '../automations/automationRunCause.js';
 import type { ActionCaller } from '../actions/executor/types.js';
 import { getActionSpec } from '../actions/actionSpecs.js';
+import { createActionExecutor } from '../actions/actionExecutor.js';
+import { ActionDefinitionV1Schema } from '../actions/actionDefinitionV1.js';
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import { compilePluginJsonSchema } from '../plugins/actions/jsonSchemaValidation.js';
 import { LaunchProfileV2Schema } from '../profiles/v2/schema.js';
 import { REVIEW_AND_CONVERGE_WORKFLOW_V1 } from './builtins/reviewAndConverge.js';
 import { PLAN_WITH_A_PANEL_WORKFLOW_V1 } from './builtins/planWithAPanel.js';
-import { materializeWorkflowAcceptedSnapshotV1, materializeWorkflowDefinitionAuthorityV1, readWorkflowAcceptedAgentStartLeavesV1, type MaterializeWorkflowAcceptedSnapshotV1Input } from './materializeWorkflowAcceptedSnapshotV1.js';
+import { materializeWorkflowAcceptedSnapshotV1, materializeWorkflowDefinitionAuthorityV1, readWorkflowAcceptedAgentStartLeavesV1, readWorkflowRunLeafStartRequestV1, type MaterializeWorkflowAcceptedSnapshotV1Input } from './materializeWorkflowAcceptedSnapshotV1.js';
 import { WorkflowAcceptedSnapshotV1Schema } from './workflowDefinitionV1.js';
 import { validateWorkflowDefinition } from './workflowValidationV1.js';
 
@@ -47,6 +50,35 @@ const policyContext: AgentStartContextV1 = {
 };
 
 describe('materializeWorkflowAcceptedSnapshotV1', () => {
+  it('admits a sequential For-each Action using the discovered native Action contract', async () => {
+    const executor = createActionExecutor({ isActionApprovalRequired: () => false });
+    const discovered = await executor.execute('action.spec.get', { id: 'workflow.starters.list' }, {
+      surface: 'cli', authority: 'account_automation',
+    });
+    expect(discovered.ok).toBe(true);
+    if (!discovered.ok) throw new Error(discovered.errorCode);
+    const action = ActionDefinitionV1Schema.parse(discovered.result.actionSpec);
+    const actionContract = {
+      inputSchema: StrictJsonValueSchema.parse(action.inputSchema),
+      outputSchema: StrictJsonValueSchema.parse(action.outputSchema),
+    };
+    const result = await materialize({
+      definition: { version: 1, inputs: [], defaults: {}, blocks: [{
+        kind: 'loop', id: 'loop-1',
+        repetition: { kind: 'items', items: { kind: 'literal', value: ['first', 'second'] }, execution: 'sequential', failurePolicy: 'fail_stop' },
+        body: [{ kind: 'action', id: 'action-1', name: 'Read templates', actionId: 'workflow.starters.list', input: {} }],
+      }] },
+      effects: { resolveTargetAvailability: available, readActionContract: async () => actionContract },
+    });
+    expect(result).toMatchObject({ ok: true, snapshot: { materializedLeaves: [{
+      blockId: 'action-1', actionId: 'workflow.starters.list', actionInput: {}, actionContract,
+    }] } });
+    const listed = await executor.execute('workflow.starters.list', {}, { surface: 'cli', authority: 'account_automation' });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) throw new Error(listed.errorCode);
+    expect(compilePluginJsonSchema(action.outputSchema!)(listed.result)).toBe(true);
+  });
+
   it.each(['projects.script.run', 'projects.compute.exec'] as const)('freezes the accepted Machine into %s without implicit pool reselection', async (actionId) => {
     const acceptedMachine = 'machine-a';
     const result = await materialize({
@@ -579,6 +611,13 @@ describe('materializeWorkflowAcceptedSnapshotV1', () => {
   it('freezes an explicit origin Session binding and refuses the same binding without an origin', async () => {
     const authored = { version: 1, blocks: [{ kind: 'action', id: 'goal', actionId: 'session.goal.set',
       input: { objective: { kind: 'literal', value: 'Finish' }, sessionId: { kind: 'origin_session_id' } } }] };
+    const spec = getActionSpec('session.goal.set');
+    const authoringEffects = { resolveTargetAvailability: available, readActionContract: async () => ({
+      inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
+      outputSchema: {},
+    }) };
+    expect(await materializeWorkflowDefinitionAuthorityV1({ definition: authored, context, effects: authoringEffects }))
+      .toMatchObject({ ok: true, materializedLeaves: [{ actionInput: { objective: 'Finish', sessionId: { kind: 'unresolved' } } }] });
     const effects = { resolveTargetAvailability: available, readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }) };
     expect(await materialize({ definition: authored, context: { ...context, origin: { kind: 'direct', originSessionId: 'origin' } }, effects }))
       .toMatchObject({ ok: true, snapshot: { materializedLeaves: [{ actionInput: { objective: 'Finish', sessionId: 'origin' } }] } });
@@ -639,6 +678,31 @@ describe('materializeWorkflowAcceptedSnapshotV1', () => {
         ...policyContext, allowLists: { v: 1, allowedRoleIds: null, allowedAgentTargetKeys: ['agent:happier.agent.codex/codex'] },
       }) } });
     expect(result).toMatchObject({ ok: false, error: { code: 'policy_denied_field', field: 'agentTarget', blockId: 'review' } });
+  });
+
+  it('retains a known Action fan-out member beside its future selection across accepted snapshot reads', async () => {
+    const result = await materialize({ definition: { ...definition, blocks: [definition.blocks[0],
+      { kind: 'action', id: 'review', actionId: 'review.start', input: {
+        instructions: { kind: 'literal', value: 'Review the changes' }, engineIds: { kind: 'list', items: [
+          { kind: 'literal', value: 'agent:happier.agent.codex/codex' },
+          { kind: 'result', producer: { blockId: 'work', scope: { kind: 'current' } }, path: [] },
+        ] },
+      } }] }, effects: { resolveTargetAvailability: available,
+        readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }) },
+      admission: { kind: 'agent', admitLeaf: async (leaf) => admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
+        readWorkflowRunLeafStartRequestV1(leaf), { ...policyContext,
+          allowLists: { v: 1, allowedRoleIds: null, allowedAgentTargetKeys: ['agent:happier.agent.codex/codex'] },
+        }) },
+    });
+    expect(result).toMatchObject({ ok: true, snapshot: { workDepth: 2 } });
+    if (!result.ok) throw new Error(result.error.code);
+    const expected = [
+      { kind: 'workflow_run_leaf', leaf: { engine: { agentTargetKey: 'agent:happier.agent.codex/codex' }, facts: { agentTarget } } },
+      { kind: 'workflow_run_leaf', selection: 'deferred', leaf: { facts: { agentTarget: { kind: 'unresolved' } } } },
+    ];
+    expect(result.agentStartLeaves.filter(leaf => leaf.blockId === 'review').map(readWorkflowRunLeafStartRequestV1)).toMatchObject(expected);
+    expect((await readWorkflowAcceptedAgentStartLeavesV1(result.snapshot)).filter(leaf => leaf.blockId === 'review')
+      .map(readWorkflowRunLeafStartRequestV1)).toMatchObject(expected);
   });
 
   it('defers human dynamic Action selections but refuses agent authority that cannot be proved', async () => {

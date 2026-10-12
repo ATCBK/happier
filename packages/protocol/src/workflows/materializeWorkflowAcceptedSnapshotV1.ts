@@ -1,5 +1,5 @@
 import { buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
-import type { AgentStartAdmissionV1, AgentStartRefusalV1, MaterializedWorkflowLeafV1, Unresolved } from '../account/settings/admitAgentStartV1.js';
+import type { AgentStartAdmissionV1, AgentStartRefusalV1, AgentStartRequestV1, MaterializedWorkflowLeafV1, Unresolved } from '../account/settings/admitAgentStartV1.js';
 import { isAgentStartActionV1, resolveActionAgentStartRequestsV1 } from '../actions/executor/agentStartAdmission.js';
 import { MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES } from '../automations/automationStoredContentEnvelopeV1.js';
 import type { JsonValue } from '../json/strictJsonValue.js';
@@ -25,6 +25,7 @@ import { WorkflowStepExecutionSelectionSchema, type WorkflowBlock, type Workflow
 import type { WorkflowAcceptedWorkspaceTargetV1 } from './workflowWorkspaceV1.js';
 import { collectWorkflowConditionValueReferences, readWorkflowValuePathV1, type WorkflowValueReference } from './workflowReferenceV1.js';
 import { collectWorkflowLeavesV1 as leavesOf, deriveWorkflowDestinationsV1, readWorkflowLeafTargetSessionIdsV1 } from './workflowDestinationsV1.js';
+import type { WorkflowTargetUnavailableDetailsV1 } from './workflowProgressV1.js';
 
 export type WorkflowMaterializationContextV1 = Readonly<{
   /** Host-stamped admitting caller; private input, never authored Workflow content. */
@@ -55,7 +56,7 @@ export type WorkflowMaterializationEffectsV1 = Readonly<{
   resolveTargetAvailability: (leaf: Readonly<{
     blockId: string; selection: WorkflowResolvedStepSelectionV1;
     executionTarget: WorkflowRunExecutionTargetV1; actionId?: string; kind?: WorkflowMaterializedLeafV1['kind'];
-  }>, context: Readonly<{ sessionIds: readonly string[] }>) => Promise<boolean>;
+  }>, context: Readonly<{ sessionIds: readonly string[] }>) => Promise<boolean | WorkflowTargetUnavailableDetailsV1>;
   readActionContract?: (actionId: string) => Promise<NonNullable<WorkflowMaterializedLeafV1['actionContract']> | null>;
 }>;
 export type WorkflowMaterializationAdmissionV1 =
@@ -72,7 +73,7 @@ export type MaterializeWorkflowAcceptedSnapshotV1Input = Readonly<{
   roleSelection?: Omit<ResolveRoleSelectionV1Input, 'roleId' | 'workflowRoles' | 'runOverrides'>;
   admission: WorkflowMaterializationAdmissionV1; effects: WorkflowMaterializationEffectsV1;
 }>;
-export type WorkflowMaterializationErrorV1 = AgentStartRefusalV1 | (WorkflowStepSelectionRefusalV1 & Readonly<{ blockId: string }>) | Readonly<{
+export type WorkflowMaterializationErrorV1 = AgentStartRefusalV1 | WorkflowTargetUnavailableDetailsV1 | (WorkflowStepSelectionRefusalV1 & Readonly<{ blockId: string }>) | Readonly<{
   code: 'invalid_input' | 'source_unavailable' | 'target_unavailable'; blockId?: string; issues?: readonly WorkflowValidationIssue[];
 }>;
 export type WorkflowReadyAcceptedSnapshotV1 = WorkflowAcceptedSnapshotV1;
@@ -111,8 +112,8 @@ function usesSessionContext(definition: WorkflowDefinitionV1): boolean {
   }
   return false;
 }
-function unavailable(blockId: string): MaterializeWorkflowAcceptedSnapshotV1Result {
-  return { ok: false, error: { code: 'target_unavailable', blockId } };
+function unavailable(blockId: string, details?: WorkflowTargetUnavailableDetailsV1): MaterializeWorkflowAcceptedSnapshotV1Result {
+  return { ok: false, error: { code: 'target_unavailable', reason: 'selection_unavailable', ...details, blockId } };
 }
 function invalidDefinition(issues: readonly WorkflowValidationIssue[], blockId?: string): MaterializeWorkflowAcceptedSnapshotV1Result {
   const targetIssue = issues.find((issue) => issue.code === 'target_unavailable' && issue.blockId !== undefined);
@@ -176,7 +177,7 @@ function agentLeaf(snapshot: Pick<WorkflowAcceptedSnapshotV1, 'machineId' | 'wor
       ...(selection.launchEnvironment === undefined ? {} : { hasEnvironmentVariables:
         Object.keys(selection.launchEnvironment.values).length > 0 || selection.launchEnvironment.unset.length > 0 }),
       ...(selection.connectedServices !== undefined ? { connectedServices: selection.connectedServices } : {}),
-      ...(selection.mcpSelection !== undefined ? { mcpSelection: selection.mcpSelection } : {}),
+      ...(selection.capabilitySelection !== undefined ? { capabilitySelection: selection.capabilitySelection } : {}),
       ...(selection.transcriptStorage ? { transcriptStorage: selection.transcriptStorage } : {}),
       ...(selection.sessionConfigOptionOverrides !== undefined ? { configOptions: selection.sessionConfigOptionOverrides === null ? null
         : Object.fromEntries(Object.entries(selection.sessionConfigOptionOverrides.overrides)
@@ -233,19 +234,7 @@ function projectActionStart(snapshot: Pick<WorkflowAcceptedSnapshotV1, 'machineI
   const requested = resolveActionAgentStartRequestsV1({ actionId: leaf.actionId, input: actionInput,
     context: { executionRunTargetMachineId: snapshot.machineId }, baseline,
     effectiveSelection: { selection, overrideEngine } });
-  if (!requested.ok) {
-    if (deferAuthorityErrors && requested.errorCode === 'target_unavailable') return { leaves: [{ sourceKey: leaf.sourceKey, blockId: leaf.blockId, kind: 'action', actionId: leaf.actionId,
-      ...(leaf.role ? { roleId: leaf.role.roleId, engine: leaf.role.engine } : {}),
-      runsAs: { kind: 'background_run', intent: 'delegate' }, workspaceWrites: leaf.role?.workspaceWrites ?? 'allow',
-      facts: { ...requested.knownFacts, permissionMode: requested.knownFacts?.permissionMode ?? 'default', agentTarget: { kind: 'unresolved' } },
-    }] };
-    throw new WorkflowMaterializationFailureV1({
-      code: requested.errorCode === 'invalid_parameters' ? 'invalid_input' : requested.errorCode, blockId: leaf.blockId,
-    });
-  }
-  const effectiveInput = WorkflowMaterializedLeafV1Schema.shape.actionInput.safeParse(requested.effectiveInput);
-  if (!effectiveInput.success || effectiveInput.data === undefined) throw new WorkflowMaterializationFailureV1({ code: 'invalid_input', blockId: leaf.blockId });
-  const leaves = requested.requests.flatMap((request): MaterializedWorkflowLeafV1[] => {
+  const projectRequest = (request: AgentStartRequestV1): MaterializedWorkflowLeafV1[] => {
     if (request.kind !== 'spawn_new' && request.kind !== 'execution_run') return [];
     const facts = { ...request.facts,
       machineId: request.facts.machineId ?? baseline.machineId, directory: request.facts.directory ?? baseline.directory,
@@ -261,8 +250,23 @@ function projectActionStart(snapshot: Pick<WorkflowAcceptedSnapshotV1, 'machineI
       runsAs: request.kind === 'spawn_new' ? { kind: 'session' } : { kind: 'background_run', intent: request.intent },
       workspaceWrites: leaf.role?.workspaceWrites ?? 'allow', facts,
     }];
-  });
-  return { leaves, effectiveInput: effectiveInput.data };
+  };
+  if (!requested.ok) {
+    if (deferAuthorityErrors && requested.errorCode === 'target_unavailable') return { leaves: [
+      ...(requested.knownRequests ?? []).flatMap(projectRequest),
+      { sourceKey: leaf.sourceKey, blockId: leaf.blockId, kind: 'action', actionId: leaf.actionId,
+        ...(leaf.role ? { roleId: leaf.role.roleId, engine: leaf.role.engine } : {}),
+        runsAs: { kind: 'background_run', intent: 'delegate' }, workspaceWrites: leaf.role?.workspaceWrites ?? 'allow',
+        facts: { ...requested.knownFacts, permissionMode: requested.knownFacts?.permissionMode ?? 'default', agentTarget: { kind: 'unresolved' } },
+      },
+    ] };
+    throw new WorkflowMaterializationFailureV1({
+      code: requested.errorCode === 'invalid_parameters' ? 'invalid_input' : requested.errorCode, blockId: leaf.blockId,
+    });
+  }
+  const effectiveInput = WorkflowMaterializedLeafV1Schema.shape.actionInput.safeParse(requested.effectiveInput);
+  if (!effectiveInput.success || effectiveInput.data === undefined) throw new WorkflowMaterializationFailureV1({ code: 'invalid_input', blockId: leaf.blockId });
+  return { leaves: requested.requests.flatMap(projectRequest), effectiveInput: effectiveInput.data };
 }
 
 type WorkflowBoundItem = Readonly<{ value: JsonValue; index: number; position: number; count: number }>;
@@ -355,6 +359,15 @@ function hasUnresolvedValue(value: unknown): boolean {
     }
   }
   return false;
+}
+
+/** Host-only Run admission; concrete Action children still require ordinary admission at the frozen Run depth. */
+export function readWorkflowRunLeafStartRequestV1(leaf: MaterializedWorkflowLeafV1): Extract<AgentStartRequestV1, { kind: 'workflow_run_leaf' }> {
+  if (leaf.kind === 'action' && Object.values(leaf.facts).some(value =>
+    value !== null && typeof value === 'object' && 'kind' in value && value.kind === 'unresolved')) {
+    return { kind: 'workflow_run_leaf', leaf, selection: 'deferred' };
+  }
+  return { kind: 'workflow_run_leaf', leaf };
 }
 
 /** Freezes a frame's declared round bounds before its first leaf can admit input. */
@@ -523,8 +536,10 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
         const bindingContext = sourceKey === '$root' ? input.context : { ...input.context, inputs: {} };
         const hasDeferredBinding = Object.values(leaf.input).some((binding) =>
           (binding.kind === 'list' ? binding.items : [binding]).some((reference) =>
-            reference.kind !== 'literal' && reference.kind !== 'origin_session_id'
-            && (reference.kind !== 'input' || !Object.hasOwn(bindingContext.inputs, reference.name))));
+            reference.kind === 'origin_session_id'
+              ? purpose === 'definition' && !bindingContext.origin?.originSessionId
+              : reference.kind !== 'literal'
+                && (reference.kind !== 'input' || !Object.hasOwn(bindingContext.inputs, reference.name))));
         try {
           // Child frame inputs bind at invocation. Keep its already-projected
           // Action engine rather than rebuilding it from the concrete carrier.
@@ -595,18 +610,21 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
   const requiredOriginSessionId = purpose === 'run' ? input.context.origin?.originSessionId : undefined;
   for (const leaf of materializedLeaves) {
     const sessionIds = readWorkflowLeafTargetSessionIdsV1(leaf.selection, requiredOriginSessionId);
-    if ((leaf.kind === 'step' || leaf.kind === 'action' || sessionIds.length > 0)
-      && !await input.effects.resolveTargetAvailability(leaf, { sessionIds })) return unavailable(leaf.blockId);
+    if (leaf.kind === 'step' || leaf.kind === 'action' || sessionIds.length > 0) {
+      const availability = await input.effects.resolveTargetAvailability(leaf, { sessionIds });
+      if (availability !== true) return unavailable(leaf.blockId, availability === false ? undefined : availability);
+    }
   }
   for (const leaf of agentStartLeaves) {
     if (leaf.kind !== 'action' || !leaf.facts.agentTarget || leaf.facts.agentTarget.kind === 'unresolved') continue;
     if (leaf.facts.agentTarget.kind !== 'agent') return unavailable(leaf.blockId);
     const selected = materializedLeaves.find((sidecar) => sidecar.sourceKey === leaf.sourceKey && sidecar.blockId === leaf.blockId && sidecar.kind === 'action');
     if (!selected) return unavailable(leaf.blockId);
-    if (!await input.effects.resolveTargetAvailability({ blockId: leaf.blockId,
+    const availability = await input.effects.resolveTargetAvailability({ blockId: leaf.blockId,
       selection: { ...selected.selection, agentTarget: leaf.facts.agentTarget },
       executionTarget: leaf.runsAs.kind === 'session' ? { kind: 'session' } : { kind: 'detached_run' },
-    }, { sessionIds: [] })) return unavailable(leaf.blockId);
+    }, { sessionIds: [] });
+    if (availability !== true) return unavailable(leaf.blockId, availability === false ? undefined : availability);
   }
   if (purpose === 'definition') return { ok: true, agentStartLeaves, materializedLeaves };
   const { origin, resultDelivery, actionCaller, ...sharedContext } = input.context;

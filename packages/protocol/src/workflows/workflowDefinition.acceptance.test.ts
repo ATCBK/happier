@@ -46,12 +46,12 @@ describe('workflow definition acceptance contract', () => {
         agentTarget: AGENT_TARGET,
         modelSelection: null,
         permissionMode: 'default',
-        mcpSelection: {
+        capabilitySelection: { mcp: {
           v: 1,
           managedServersEnabled: false,
           forceIncludeServerIds: ['review-tools'],
           forceExcludeServerIds: [],
-        },
+        } },
         connectedServices: { v: 1, bindingsByServiceId: {} },
         transcriptStorage: 'direct',
         terminal: null,

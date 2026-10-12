@@ -32,7 +32,7 @@ export function buildWorkflowSelectionFromServerStartSpawnDraftV1(
     ...(spawn.permissionMode === undefined ? {} : { permissionMode: spawn.permissionMode }),
     ...(spawn.agentModeId === undefined ? {} : { acpSessionModeId: spawn.agentModeId }),
     ...(overrides === null ? {} : { sessionConfigOptionOverrides: overrides }),
-    ...(spawn.mcpSelection === undefined ? {} : { mcpSelection: spawn.mcpSelection }),
+    ...(spawn.capabilitySelection === undefined ? {} : { capabilitySelection: spawn.capabilitySelection }),
     ...(spawn.connectedServices === undefined ? {} : { connectedServices: spawn.connectedServices }),
     ...(spawn.transcriptStorage === undefined ? {} : { transcriptStorage: spawn.transcriptStorage }),
     ...(spawn.terminal === undefined ? {} : { terminal: spawn.terminal }),
