@@ -5,8 +5,11 @@ import type { Message } from '@happier-dev/session-core/messages';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { createTranscriptFindModel } from '../../../find/useTranscriptFind';
+import { revealTranscriptFindMatch } from '../../../find/revealTranscriptFindMatch';
 import type { ChatTranscriptListItem, TranscriptViewportChangeState } from '../../../chatListTypes';
 import type { TranscriptJumpHostDeps } from './useTranscriptJumpHost';
+import type { TranscriptJumpResult } from '../transcriptJumpTargetTypes';
 import {
     createTranscriptJumpHostTestHarness, createTranscriptJumpWebMetrics, emptyTranscriptJumpPage,
     restoreTranscriptJumpEnvironment, transcriptJumpPage,
@@ -28,6 +31,129 @@ let read: (url: URL) => Response | Promise<Response>;
 const initialReads: URL[] = [];
 
 describe('useTranscriptJumpHost actual owner lifetime and identity', () => {
+    it('reveals a counted loaded Find match outside the partly loaded rendered window', async () => {
+        const message: Message = { kind: 'user-text', id: 'message-50', realID: 'message-50',
+            localId: null, seq: 50, createdAt: 50, text: 'needle' };
+        const tail: Message = { kind: 'user-text', id: 'message-100', realID: 'message-100',
+            localId: null, seq: 100, createdAt: 100, text: 'latest' };
+        const items = [row(50), row(100)];
+        getStorage().setState(state => ({ sessionMessages: { ...state.sessionMessages,
+            s1: createSessionMessagesFixture({ messagesById: { [message.id]: message, [tail.id]: tail },
+                messageIdsOldestFirst: [message.id, tail.id], isLoaded: true }),
+        } }));
+        const harness = createTranscriptJumpHostTestHarness({ rows: [items[1]!],
+            messages: { [message.id]: message, [tail.id]: tail } });
+        harness.metrics.current = createTranscriptJumpWebMetrics({ rows: [{ id: 'row-100', top: 0 }], scrollTop: 1500 });
+        const element = harness.metrics.current.element;
+        // HTTP and renderer geometry are system boundaries. The real source activates the target
+        // window; its commit and recycler mount are represented by advancing these boundary facts.
+        read = () => {
+            harness.rows.current = [items[0]!];
+            const item = element.ownerDocument.createElement('div');
+            item.dataset.testid = 'transcript-item-row-50';
+            item.getBoundingClientRect = () => ({ top: 500 - element.scrollTop, bottom: 600 - element.scrollTop,
+                height: 100, width: 800, left: 0, right: 800, x: 0, y: 500 - element.scrollTop, toJSON() {} });
+            element.appendChild(item);
+            return Response.json(transcriptJumpPage(50));
+        };
+        const hook = await harness.render({ platformOS: 'web', hasMoreOlderRef: { current: true },
+            itemsRef: { current: items }, resolveWebScrollMetrics: () => ({
+                ...harness.metrics.current!, scrollTop: element.scrollTop,
+            }) });
+        const outcomes: TranscriptJumpResult[] = [];
+        const model = createTranscriptFindModel({
+            readCorpus: () => ({ messages: [message, tail],
+                history: { isLoaded: true, hasOlder: true, isLoadingOlder: false } }),
+            loadPage: null, jumpToTarget: hook.getCurrent().jumpToTranscriptTarget,
+            reveal: (match, context) => revealTranscriptFindMatch(match, { items,
+                setToolCallsGroupExpanded() {}, setThinkingExpanded() {}, waitForVisualUpdate: async () => {},
+                readClearancePx: () => 96,
+                jumpToTarget: async (target, options) => {
+                    const result = await hook.getCurrent().jumpToTranscriptTarget(target, options);
+                    outcomes.push(result);
+                    return result;
+                } }, context),
+        });
+        await act(async () => { model.setQuery('needle'); });
+        await vi.waitFor(() => expect(outcomes[0]).toMatchObject({ status: 'window-rendered' }));
+        await model.settled();
+        expect(model.status).toMatchObject({ current: 1, total: 1, coverage: 'loaded' });
+        expect(element.scrollTop).toBe(404);
+        expect(element.querySelector('[data-testid="transcript-item-row-50"]')).not.toBeNull();
+        model.dispose();
+        await hook.unmount();
+    });
+    it('reveals a tall tool mark below the capsule and note despite a stale short row estimate', async () => {
+        const message: Message = { kind: 'user-text', id: 'internal-tall', realID: 'persisted-tall',
+            localId: null, seq: 50, createdAt: 1, text: 'needle' };
+        getStorage().setState(state => ({ sessionMessages: { ...state.sessionMessages,
+            s1: createSessionMessagesFixture({ messagesById: { [message.id]: message },
+                messageIdsOldestFirst: [message.id], isLoaded: true }),
+        } }));
+        const items: ChatTranscriptListItem[] = [{ kind: 'message', id: 'tall-row',
+            messageId: message.id, seq: 50, createdAt: 1 }];
+        const harness = createTranscriptJumpHostTestHarness({ rows: items, messages: { [message.id]: message } });
+        harness.metrics.current = createTranscriptJumpWebMetrics({ rows: [{ id: 'tall-row', top: -1000, height: 1400 }],
+            scrollTop: 1500, scrollHeight: 3000 });
+        const element = harness.metrics.current.element;
+        const item = element.querySelector('[data-testid="transcript-item-tall-row"]')!;
+        const rect = (y: number, height: number) => ({ top: y - element.scrollTop, bottom: y + height - element.scrollTop,
+            height, width: 800, left: 0, right: 800, x: 0, y: y - element.scrollTop, toJSON() {} });
+        item.getBoundingClientRect = () => rect(500, 1400);
+        const mark = element.ownerDocument.createElement('span');
+        mark.dataset.testid = 'find-match-current';
+        mark.getBoundingClientRect = () => rect(1500, 20);
+        item.appendChild(mark);
+        const hook = await harness.render({ platformOS: 'web', resolveWebScrollMetrics: () => ({
+            ...harness.metrics.current!, scrollTop: element.scrollTop,
+        }) });
+        const model = createTranscriptFindModel({
+            readCorpus: () => ({ messages: [message], history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } }),
+            loadPage: null, jumpToTarget: hook.getCurrent().jumpToTranscriptTarget,
+            reveal: (match, context) => revealTranscriptFindMatch(match, { items,
+                setToolCallsGroupExpanded() {}, setThinkingExpanded() {}, waitForVisualUpdate: async () => {},
+                readClearancePx: () => 96,
+                jumpToTarget: hook.getCurrent().jumpToTranscriptTarget }, context),
+        });
+        await act(async () => { model.setQuery('needle'); await model.settled(); });
+        expect(mark.getBoundingClientRect().top).toBe(96);
+        expect(mark.getBoundingClientRect().bottom).toBeLessThan(element.clientHeight);
+        expect(initialReads).toEqual([]);
+        model.dispose();
+        await hook.unmount();
+    });
+    it('centres an already mounted Find result by its persisted route identity when no capsule covers the top', async () => {
+        const message: Message = { kind: 'user-text', id: 'internal-find', realID: 'persisted-find',
+            localId: null, seq: 50, createdAt: 1, text: 'needle' };
+        getStorage().setState(state => ({ sessionMessages: { ...state.sessionMessages,
+            s1: createSessionMessagesFixture({ messagesById: { [message.id]: message },
+                messageIdsOldestFirst: [message.id], isLoaded: true }),
+        } }));
+        const items: ChatTranscriptListItem[] = [{ kind: 'message', id: 'find-row',
+            messageId: message.id, seq: 50, createdAt: 1 }];
+        const harness = createTranscriptJumpHostTestHarness({ rows: items, messages: { [message.id]: message } });
+        harness.metrics.current = createTranscriptJumpWebMetrics({ rows: [{ id: 'find-row', top: -1000 }], scrollTop: 1500 });
+        const element = harness.metrics.current.element;
+        const item = element.querySelector('[data-testid="transcript-item-find-row"]')!;
+        item.getBoundingClientRect = () => ({ top: 500 - element.scrollTop, bottom: 600 - element.scrollTop,
+            height: 100, width: 800, left: 0, right: 800, x: 0, y: 500 - element.scrollTop, toJSON() {} });
+        const hook = await harness.render({ platformOS: 'web', resolveWebScrollMetrics: () => ({
+            ...harness.metrics.current!, scrollTop: element.scrollTop,
+        }) });
+        const model = createTranscriptFindModel({
+            readCorpus: () => ({ messages: [message], history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } }),
+            loadPage: null, jumpToTarget: hook.getCurrent().jumpToTranscriptTarget,
+            reveal: (match, context) => revealTranscriptFindMatch(match, { items,
+                setToolCallsGroupExpanded() {}, setThinkingExpanded() {}, waitForVisualUpdate: async () => {},
+                readClearancePx: () => 0, jumpToTarget: hook.getCurrent().jumpToTranscriptTarget }, context),
+        });
+        await act(async () => { model.setQuery('needle'); await model.settled(); });
+        expect(model.status).toMatchObject({ current: 1, total: 1 });
+        expect(element.scrollTop).toBe(300);
+        expect(initialReads).toEqual([]);
+        model.dispose();
+        await hook.unmount();
+    });
     beforeEach(async () => {
         initialReads.length = 0;
         read = () => Response.json(emptyTranscriptJumpPage());

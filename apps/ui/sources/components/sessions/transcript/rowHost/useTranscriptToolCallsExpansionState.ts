@@ -1,11 +1,29 @@
 import * as React from 'react';
 import type { TranscriptRowLayoutMutation } from '@/components/sessions/transcript/measurement/TranscriptRowLayoutMutationContext';
+import type { ChatTranscriptListItem } from '@/components/sessions/transcript/chatListTypes';
 
 export type ToolCallsGroupExpansionRequest = Readonly<{
     toolCallsGroupId: string;
     toolMessageIds: readonly string[];
     expanded: boolean;
 }>;
+
+/** Find and pending-request navigation reveal through the same group disclosure owner. */
+export function expandTranscriptToolCallGroupsForMessage(messageId: string, items: readonly ChatTranscriptListItem[],
+    setExpanded: (request: ToolCallsGroupExpansionRequest) => void): void {
+    for (const item of items) {
+        if (item.kind === 'turn') {
+            for (const content of item.turn.content) {
+                if (content.kind === 'tool_calls' && content.toolMessageIds.includes(messageId)) {
+                    setExpanded({ toolCallsGroupId: content.id, toolMessageIds: content.toolMessageIds, expanded: true });
+                }
+            }
+        } else if ('toolMessageIds' in item && item.toolMessageIds.includes(messageId)) {
+            setExpanded({ toolCallsGroupId: 'groupId' in item ? item.groupId : item.id,
+                toolMessageIds: item.toolMessageIds, expanded: true });
+        }
+    }
+}
 
 /** One disclosure owner for the main and Chain transcript hosts. */
 export function useTranscriptToolCallsExpansionState(params: Readonly<{

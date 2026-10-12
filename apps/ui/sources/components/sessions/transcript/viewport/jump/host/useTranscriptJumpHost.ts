@@ -304,7 +304,7 @@ export type TranscriptJumpHostDeps = Readonly<{
     promotedJumpSeqViewportProtectionRef: MutableRef<PromotedJumpSeqViewportProtection | null>;
     readCurrentNativeDistanceFromBottom(): number | null;
     resolveJumpToSeqIndexForCommandRef: MutableRef<(
-        seq: number,
+        seq: number | null,
         routeMessageId?: string | null,
         transcriptBlockIndex?: number | null,
         role?: TranscriptJumpTargetRole | null,
@@ -504,13 +504,12 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
     }, [sessionId]);
 
     const resolveJumpToSeqIndexFromLoadedItems = React.useCallback((
-        targetSeq: number,
+        targetSeq: number | null,
         routeMessageId?: string | null,
         transcriptBlockIndex?: number | null,
         role?: TranscriptJumpTargetRole | null,
     ): number | null => {
-        if (typeof targetSeq !== 'number' || !Number.isFinite(targetSeq) || targetSeq < 0) return null;
-        const normalizedSeq = Math.trunc(targetSeq);
+        const normalizedSeq = typeof targetSeq === 'number' && Number.isFinite(targetSeq) && targetSeq >= 0 ? Math.trunc(targetSeq) : null;
         const normalizedRouteMessageId = typeof routeMessageId === 'string' && routeMessageId.trim().length > 0
             ? routeMessageId.trim()
             : null;
@@ -533,6 +532,7 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
             });
             return result.status === 'found' ? result.index : null;
         }
+        if (normalizedSeq === null) return null;
         return resolveTranscriptJumpSeqIndex({
             targetSeq: normalizedSeq,
             items: itemsRef.current,
@@ -1013,6 +1013,8 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         if (!targetRequest) return { status: 'not-found', reason: 'invalid-target' };
         const { normalizedTargetSeq, routeMessageId, transcriptBlockIndex, role } = targetRequest;
         if (!sessionId) return { status: 'not-found', reason: 'unavailable' };
+        // Both viewport drivers center ordinary jumps; alignment observation must use the same default.
+        const align: TranscriptViewportJumpAlignment = options?.align ?? { kind: 'center' };
         const operationId: TranscriptExplicitJumpOperationId = Symbol('transcript-explicit-jump');
         let takeoverReleased = false;
         let rendererTakeoverRelease: (() => void) | undefined;
@@ -1060,11 +1062,11 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
                 routeMessageId,
                 transcriptBlockIndex,
                 role,
-                ...(options?.align ? { align: options.align } : {}),
+                align,
             });
             const applied = executeViewportCommandWithAnimation(command, true);
             if (!isCurrentOperation()) return false;
-            if (applied && platformOS === 'web') {
+            if (applied && platformOS === 'web' && normalizedTargetSeq !== null) {
                 pendingJumpSeqViewportPromotionRef.current = {
                     emitViewportChange: onViewportChangeRef.current,
                     seq: normalizedTargetSeq,
@@ -1095,18 +1097,18 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         };
         try {
             const result = await executeTranscriptTargetWindowJump({
-                align: options?.align,
+                align,
                 // A forked transcript is not a lesser transcript: its own segment is an
                 // ordinary session numbered in an ordinary seq range, and the window loader
                 // is session-and-seq scoped, so it can serve one exactly as it serves any
                 // other. What a fork does change is that the RENDERED item list concatenates
                 // segments from several sessions — so the window's seq axis is defined by
                 // `resolveTargetWindowItemSeq`, which places only this session's rows on it.
-                canRenderTargetWindow: options?.preferTargetWindow === true,
-                forceTargetWindow: options?.preferTargetWindow === true,
+                canRenderTargetWindow: options?.preferTargetWindow === true && normalizedTargetSeq !== null,
+                forceTargetWindow: options?.preferTargetWindow === true && normalizedTargetSeq !== null,
                 isCurrentOperation,
                 isTargetAligned: platformOS === 'web'
-                    ? () => isWebTranscriptTargetAligned(target, options?.align)
+                    ? () => isWebTranscriptTargetAligned(target, align)
                     : undefined,
                 isTargetInRenderedWindow: () => isTranscriptJumpTargetInRenderedWindow(target),
                 isTargetMounted: () => platformOS === 'web'
@@ -1116,6 +1118,7 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
                     ? isTargetOwnedByRenderer
                     : undefined,
                 loadTargetWindow: async ({ target: windowTarget, direction }) => {
+                    if (normalizedTargetSeq === null) return null;
                     const loadTarget = resolveTranscriptTargetWindowLoadTarget(windowTarget, normalizedTargetSeq);
                     const result = await transcriptSource.history.loadTargetWindow?.(loadTarget, {
                         direction: direction ?? 'initial',

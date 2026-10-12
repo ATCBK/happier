@@ -159,13 +159,10 @@ export function createTranscriptFindModel(input: TranscriptFindModelInput) {
         revealRequest += 1;
         publishRows();
         const match = current;
-        const token = operation;
         const context = startNavigation();
-        pending = input.reveal(match, context).catch(() => {
-            if (context.signal.aborted || !snapshot.open || token !== operation || !sameMatch(current, match)) return;
-            partialErrors = true;
-            recompute(false);
-        });
+        // Revealing is navigation, not search: a match that cannot be scrolled to was still searched and
+        // counted, so a failed reveal never claims that content went unsearched.
+        pending = input.reveal(match, context).catch(() => {});
         return pending;
     }
     function select(match: TranscriptFindMatch | null) {
@@ -211,14 +208,14 @@ export function createTranscriptFindModel(input: TranscriptFindModelInput) {
         setQuery(query) {
             if (snapshot.query === query && snapshot.open) return;
             seedTarget = null;
-            invalidateOperation(); searching = false; stopped = false; current = null;
+            invalidateOperation(); searching = false; stopped = false; partialErrors = false; current = null;
             snapshot = { ...snapshot, query, open: true };
             recompute(true); revealSelected();
         },
         setOptions(options) {
             if (snapshot.options.matchCase === options.matchCase && snapshot.options.regex === options.regex) return;
             seedTarget = null;
-            invalidateOperation(); searching = false; stopped = false; current = null;
+            invalidateOperation(); searching = false; stopped = false; partialErrors = false; current = null;
             snapshot = { ...snapshot, options }; recompute(true); revealSelected();
         },
         step(direction) {
@@ -232,20 +229,27 @@ export function createTranscriptFindModel(input: TranscriptFindModelInput) {
             if (coverage(history) === 'complete' && matches.length) select(direction === 1 ? matches[0] : matches.at(-1) ?? null);
         },
         stop() { invalidateOperation(); searching = false; stopped = true; seedTarget = null; recompute(false); },
-        close() { invalidateOperation(); searching = false; stopped = false; seedTarget = null; snapshot = { ...snapshot, open: false }; matches = []; current = null; projections.clear(); clearRows(); emit({ kind: 'idle' }); },
+        close() { invalidateOperation(); searching = false; stopped = false; partialErrors = false; seedTarget = null; snapshot = { ...snapshot, open: false }; matches = []; current = null; projections.clear(); clearRows(); emit({ kind: 'idle' }); },
     };
     return {
         get query() { return controller.query; }, get options() { return controller.options; }, get status() { return controller.status; }, get capabilities() { return controller.capabilities; },
         setQuery: controller.setQuery, setOptions: controller.setOptions, step: controller.step, stop: controller.stop, close: controller.close,
         open() { snapshot = { ...snapshot, open: true }; recompute(true); },
+        /** Re-seat the selected result after the inline capsule changes the usable viewport. */
+        revealCurrent() {
+            return snapshot.open && !searching && !stopped ? revealSelected() : Promise.resolve();
+        },
         refresh() {
             const pendingSeed = seedTarget !== null;
+            const hadCurrent = current !== null;
             recompute(true);
-            if (pendingSeed && current && !searching) revealSelected();
+            // A query can arrive before its corpus hydrates. Reveal its first selected result
+            // through the same navigation owner; later appends keep the existing selection seated.
+            if (current && !searching && !stopped && (pendingSeed || !hadCurrent)) revealSelected();
         },
         searchOlder() { seedTarget = null; search('older', matches[0] ?? null); },
         applySeed(seed: Readonly<{ query: string; options: FindOptions; target: TranscriptJumpTarget }>) {
-            invalidateOperation(); searching = false; stopped = false; current = null;
+            invalidateOperation(); searching = false; stopped = false; partialErrors = false; current = null;
             seedTarget = seed.target;
             snapshot = { ...snapshot, query: seed.query, options: seed.options, open: true };
             const targetLoaded = input.readCorpus().messages.some((message) => messageMatchesTarget(message, seed.target));

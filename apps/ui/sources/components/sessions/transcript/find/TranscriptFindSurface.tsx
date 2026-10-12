@@ -1,10 +1,10 @@
 import * as React from 'react';
-import { Platform, TextInput, View } from 'react-native';
+import { Platform, TextInput, View, type LayoutChangeEvent } from 'react-native';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
 import { resolveHistoricalAgentIdAtSeq, type Message } from '@happier-dev/session-core/messages';
 
 import { FindBar } from '@/components/ui/find/FindBar';
-import { FindBarPlacement, useFindBarPresentation } from '@/components/ui/find/FindBarPlacement';
+import { FindBarPlacement, useFindBarPresence, useFindBarPresentation } from '@/components/ui/find/FindBarPlacement';
 import { useFindSurfaceFocusReturn } from '@/components/ui/find/useFindSurfaceFocusReturn';
 import { ChatFindSeedHost } from '@/components/appShell/panes/fileFindSeedHost';
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
@@ -22,6 +22,7 @@ import type { TranscriptFindCorpus, TranscriptFindModel } from './useTranscriptF
 import { TranscriptFindProvider } from './TranscriptFindContext';
 import { TranscriptFindRuler, type TranscriptFindMessageLayout } from './TranscriptFindRuler';
 import type { TranscriptFindTextContext } from './transcriptFindText';
+import { TRANSCRIPT_TOP_GUTTER_PX } from '../_constants';
 
 type Props = Readonly<{
     model: TranscriptFindModel;
@@ -35,6 +36,8 @@ type Props = Readonly<{
     /** Where a message's row sits in the list content (the list's own layout; no row is mounted). */
     measureMessage: TranscriptFindMessageLayout;
     contentHeight: number;
+    /** Reports the top band the open inline capsule covers (0 when closed or seated on a phone). */
+    onClearanceChange?(clearancePx: number): void;
     children: React.ReactNode;
 }>;
 
@@ -71,14 +74,28 @@ export function TranscriptFindSurface(props: Props) {
         focusReturn.capture(model.getSnapshot().open);
         model.open(); input.current?.focus();
     };
-    useFindSurfaceRegistration({
+    useFindSurfaceRegistration(eligible ? {
         surfaceId: `transcript:${props.serverId ?? ''}:${props.sessionId}`,
         containsFocus, open: openFind, isOpen: () => open, isInputFocused: () => inputFocused,
         controller,
-    });
-    return <TranscriptFindProvider store={model.rowStore} enabled={open}>
+    } : null);
+    const [measuredClearance, setMeasuredClearance] = React.useState(0);
+    const clearance = open ? measuredClearance : 0;
+    const onClearanceChange = props.onClearanceChange;
+    const publishedClearance = React.useRef(0);
+    React.useEffect(() => {
+        const changed = publishedClearance.current !== clearance;
+        publishedClearance.current = clearance;
+        onClearanceChange?.(clearance);
+        // Header growth preserves the old visible position. Re-seat through the same jump
+        // owner after publishing the new band, rather than leaving the first result covered.
+        if (changed && clearance > 0 && eligible) void model.revealCurrent();
+    }, [clearance, onClearanceChange, model, eligible]);
+    // The bar stays through its exit; the model is already closed and focus already returned.
+    const presence = useFindBarPresence(open);
+    return <TranscriptFindProvider store={model.rowStore} enabled={open} clearancePx={clearance}>
         {props.children}
-        {open ? <TranscriptFindActive {...props} controller={controller} inputRef={input}
+        {presence.present ? <TranscriptFindActive {...props} visible={open} controller={controller} inputRef={input} onClearance={setMeasuredClearance}
             onInputFocus={() => setInputFocused(true)} onInputBlur={() => setInputFocused(false)} /> : null}
         {props.serverId ? <ChatFindSeedHost sessionId={props.sessionId} serverId={props.serverId} active={eligible}>
             {({ findSeed, consumeFindSeed }) => <TranscriptFindSeed model={model} seed={findSeed} consume={consumeFindSeed} open={openFind} />}
@@ -116,6 +133,9 @@ function WorkflowFindObservation(props: Readonly<{
 function TranscriptFindActive(props: Props & Readonly<{
     controller: FindController; inputRef: React.RefObject<TextInput | null>;
     onInputFocus(): void; onInputBlur(): void;
+    onClearance(clearancePx: number): void;
+    /** False while the bar leaves after Find closed: nothing is published or measured any more. */
+    visible: boolean;
 }>) {
     const snapshot = React.useSyncExternalStore(props.model.subscribe, props.model.getSnapshot, props.model.getSnapshot);
     const history = props.source.history.useState();
@@ -188,10 +208,22 @@ function TranscriptFindActive(props: Props & Readonly<{
         hasUnreadableText: workflowMessages.some((message) => workflowDetails.get(message.id)?.state === 'missing')
             || reviewRunIds.some((id) => reviewComments.get(id)?.status === 'failed'),
     }), [messages, history, displayContexts, workflowDetails, workflowMessages, reviewRunIds, reviewComments]);
-    React.useLayoutEffect(() => { props.publishCorpus(corpus); props.model.refresh(); }, [corpus, props.model, props.publishCorpus]);
+    const visible = props.visible;
+    React.useLayoutEffect(() => {
+        if (!visible) return;
+        props.publishCorpus(corpus); props.model.refresh();
+    }, [corpus, props.model, props.publishCorpus, visible]);
     const phone = useFindBarPresentation() === 'keyboardSeated';
     const coverage = snapshot.status.kind === 'results' ? snapshot.status.coverage : null;
-    const bar = <FindBarPlacement>{(presentation) =>
+    const onClearance = props.onClearance;
+    // The capsule floats over the transcript: its bottom edge plus one gutter is the band content keeps clear.
+    const measureClearance = React.useCallback((event: LayoutChangeEvent) => {
+        const { y, height } = event.nativeEvent.layout;
+        onClearance(Math.ceil(y + height + TRANSCRIPT_TOP_GUTTER_PX));
+    }, [onClearance]);
+    React.useEffect(() => { if (phone) onClearance(0); }, [onClearance, phone]);
+    React.useEffect(() => () => onClearance(0), [onClearance]);
+    const bar = <FindBarPlacement visible={visible} onLayout={phone ? undefined : measureClearance}>{(presentation) =>
         <FindBar query={snapshot.query} options={snapshot.options} status={snapshot.status}
             capabilities={props.controller.capabilities} surfaceLabel={t('find.surface.chat')}
             presentation={presentation} autoFocus inputRef={props.inputRef}
@@ -212,10 +244,10 @@ function TranscriptFindActive(props: Props & Readonly<{
                 : coverage === 'olderRemaining' ? { icon: 'history', text: t('transcriptFind.olderRemaining') } : undefined} />
     }</FindBarPlacement>;
     return <>
-        {workflowMessages.map((message) => <WorkflowFindObservation key={message.id} message={message}
-            source={props.source} metadata={metadata} publish={publishWorkflow} />)}
+        {visible ? workflowMessages.map((message) => <WorkflowFindObservation key={message.id} message={message}
+            source={props.source} metadata={metadata} publish={publishWorkflow} />) : null}
         {/* The phone bar sits on the keyboard and has no ruler (lab F1p); wide surfaces mark the scroll edge. */}
-        {phone ? null : <TranscriptFindRuler model={props.model} measureMessage={props.measureMessage}
+        {phone || !visible ? null : <TranscriptFindRuler model={props.model} measureMessage={props.measureMessage}
             contentHeight={props.contentHeight}
             olderRemaining={history.hasOlder && snapshot.query !== '' && snapshot.status.kind !== 'invalidPattern'} />}
         {bar}

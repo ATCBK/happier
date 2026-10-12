@@ -12,6 +12,31 @@ function message(id: string, text: string, seq = 1): Message {
 const noJump = async (): Promise<TranscriptJumpResult> => ({ status: 'not-found', reason: 'unsupported' });
 
 describe('transcript Find model', () => {
+    it('re-seats the current selection without stepping and leaves stopped or closed Find alone', async () => {
+        const landed: string[] = [];
+        const model = createTranscriptFindModel({
+            readCorpus: () => ({ messages: [message('first', 'needle'), message('second', 'needle', 2)],
+                history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } }),
+            loadPage: null, jumpToTarget: noJump,
+            reveal: (match, context) => revealTranscriptFindMatch(match, {
+                items: [], setToolCallsGroupExpanded() {}, setThinkingExpanded() {}, waitForVisualUpdate: async () => {},
+                readClearancePx: () => 0,
+                jumpToTarget: async target => {
+                    if (target.kind === 'route-message-id') landed.push(target.routeMessageId);
+                    return { status: 'scrolled', target };
+                },
+            }, context),
+        });
+        model.setQuery('needle'); await model.settled();
+        model.step(1); await model.settled();
+        await model.revealCurrent();
+        expect(model.status).toMatchObject({ current: 2, total: 2 });
+        expect(model.query).toBe('needle');
+        model.stop(); await model.revealCurrent();
+        model.close(); await model.revealCurrent();
+        expect(landed).toEqual(['first', 'second', 'second']);
+        model.dispose();
+    });
     it.each(['close', 'stop', 'query', 'options', 'step'] as const)('does not start an obsolete chat reveal jump after %s during its visual wait', async (intent) => {
         const frame = createDeferred<void>();
         const landed: string[] = [];
@@ -21,7 +46,7 @@ describe('transcript Find model', () => {
             loadPage: null, jumpToTarget: noJump,
             reveal: (match, context) => revealTranscriptFindMatch(match, {
                 items: [], setToolCallsGroupExpanded() {}, setThinkingExpanded() {},
-                waitForVisualUpdate: () => frame.promise,
+                waitForVisualUpdate: () => frame.promise, readClearancePx: () => 0,
                 jumpToTarget: async (target) => {
                     if (target.kind === 'route-message-id') landed.push(target.routeMessageId);
                     return { status: 'scrolled', target };
@@ -36,6 +61,22 @@ describe('transcript Find model', () => {
         frame.resolve();
         await model.settled();
         expect(landed).toEqual(intent === 'step' ? ['second'] : intent === 'query' || intent === 'options' ? ['first'] : []);
+    });
+    it('asks the jump host once to reveal the current mark below the capsule as it is now', async () => {
+        let clearance = 64;
+        const aligns: unknown[] = [];
+        const reveal = () => revealTranscriptFindMatch({ messageId: 'm', message: message('m', 'needle') } as never, {
+            items: [], setToolCallsGroupExpanded() {}, setThinkingExpanded() {}, waitForVisualUpdate: async () => {},
+            readClearancePx: () => clearance,
+            jumpToTarget: async (target, options) => { aligns.push(options.align); return { status: 'scrolled', target }; },
+        }, { signal: new AbortController().signal });
+        await reveal();
+        clearance = 102;
+        await reveal();
+        expect(aligns).toEqual([
+            { kind: 'reveal', clearancePx: 64, focusTestId: 'find-match-current' },
+            { kind: 'reveal', clearancePx: 102, focusTestId: 'find-match-current' },
+        ]);
     });
     it('excludes diagrams without making transcript text coverage incomplete', () => {
         const model = createTranscriptFindModel({
@@ -193,6 +234,7 @@ describe('transcript Find model', () => {
         messages = [...messages, message('append', 'needle', 3)];
         model.refresh();
         expect(model.status).toMatchObject({ current: 1, total: 2 });
+        expect(revealed).toEqual(['offscreen']);
         model.step(1);
         await model.settled();
         expect(revealed.at(-1)).toBe('append');
@@ -335,5 +377,32 @@ describe('transcript Find model', () => {
         expect(model.getOverview()).toEqual({ messageIds: ['a', 'c'], currentMessageId: 'c' });
         model.close();
         expect(model.getOverview().messageIds).toEqual([]);
+    });
+
+    it('keeps coverage truthful: a match that cannot be scrolled to was still searched, and a paging error belongs to its own search', async () => {
+        const model = createTranscriptFindModel({
+            readCorpus: () => ({ messages: [message('a', 'needle'), message('b', 'needle', 2)],
+                history: { isLoaded: true, hasOlder: false, isLoadingOlder: false } }),
+            loadPage: null, jumpToTarget: noJump,
+            reveal: async () => { throw new Error('row not mounted'); },
+        });
+        model.setQuery('needle');
+        await model.settled();
+        expect(model.status).toMatchObject({ kind: 'results', current: 1, total: 2, coverage: 'complete' });
+
+        let failing = true;
+        const paged = createTranscriptFindModel({
+            readCorpus: () => ({ messages: [message('a', 'needle')], history: { isLoaded: true, hasOlder: failing, isLoadingOlder: false } }),
+            loadPage: async () => ({ loaded: 0, hasMore: true, status: 'retryable_error' }),
+            jumpToTarget: noJump, reveal: async () => {},
+        });
+        paged.setQuery('needle');
+        paged.searchOlder();
+        await paged.settled();
+        expect(paged.status).toMatchObject({ coverage: 'partialErrors' });
+        failing = false;
+        paged.close();
+        paged.setQuery('needle');
+        expect(paged.status).toMatchObject({ kind: 'results', total: 1, coverage: 'complete' });
     });
 });

@@ -15,6 +15,7 @@ import type {
     TranscriptNavigationJumpRequest,
 } from '../../navigation/transcriptNavigationTypes';
 import type { TranscriptViewportJumpAlignment } from '../transcriptViewportTypes';
+import { resolveWebTranscriptJumpTargetScrollTop } from '../jump/transcriptJumpPlacement';
 import type { WebTranscriptScrollMetrics } from '../../webTranscriptScrollMetrics';
 import { resolveTranscriptTargetWindowDisplay } from './resolveTranscriptTargetWindowDisplay';
 import type {
@@ -208,7 +209,7 @@ export function useTranscriptTargetWindowHostAdapter<TItem extends TranscriptTar
 }
 
 export type TranscriptJumpTargetRequest = Readonly<{
-    normalizedTargetSeq: number;
+    normalizedTargetSeq: number | null;
     role: TranscriptJumpTargetRole | null | undefined;
     routeMessageId: string | null;
     transcriptBlockIndex: number | null | undefined;
@@ -216,9 +217,10 @@ export type TranscriptJumpTargetRequest = Readonly<{
 
 export function resolveTranscriptJumpTargetRequest(target: TranscriptJumpTarget): TranscriptJumpTargetRequest | null {
     const targetSeq = target.kind === 'seq' ? target.seq : target.seqHint;
-    if (typeof targetSeq !== 'number' || !Number.isFinite(targetSeq) || targetSeq < 0) return null;
+    const hasSequence = typeof targetSeq === 'number' && Number.isFinite(targetSeq) && targetSeq >= 0;
+    if (!hasSequence && (target.kind === 'seq' || targetSeq != null || !target.routeMessageId.trim())) return null;
     return {
-        normalizedTargetSeq: Math.trunc(targetSeq),
+        normalizedTargetSeq: hasSequence ? Math.trunc(targetSeq) : null,
         routeMessageId: target.kind === 'route-message-id' ? target.routeMessageId : null,
         transcriptBlockIndex: target.kind === 'route-message-id' ? target.transcriptBlockIndex : null,
         role: target.kind === 'route-message-id' ? target.role : null,
@@ -306,24 +308,23 @@ export function resolveTranscriptNavigationPaneJumpRequest(
 
 export function isTranscriptTargetObservedAtAlignment(params: Readonly<{
     align?: TranscriptViewportJumpAlignment;
-    item: Pick<Element, 'getBoundingClientRect'>;
+    item: Pick<Element, 'getBoundingClientRect'> & Partial<Pick<Element, 'querySelectorAll'>>;
     metrics: Pick<WebTranscriptScrollMetrics, 'clientHeight' | 'element' | 'scrollHeight' | 'scrollTop'>;
     tolerancePx?: number;
 }>): boolean {
     if (!params.align) return true;
-    const containerRect = params.metrics.element.getBoundingClientRect();
-    const itemRect = params.item.getBoundingClientRect();
-    const itemTop = itemRect.top - containerRect.top;
-    const itemHeight = Number.isFinite(itemRect.height)
-        ? Math.max(0, itemRect.height)
-        : Math.max(0, itemRect.bottom - itemRect.top);
-    const rawTarget = params.align.kind === 'center'
-        ? params.metrics.scrollTop + itemTop + itemHeight / 2 - params.metrics.clientHeight / 2
-        : params.metrics.scrollTop + itemTop - params.align.itemOffsetPx;
-    if (!Number.isFinite(rawTarget)) return false;
+    // The same placement geometry the web driver writes, read back from the live DOM.
+    const landing = resolveWebTranscriptJumpTargetScrollTop({
+        align: params.align,
+        item: params.item,
+        scroller: params.metrics.element,
+        scrollTop: params.metrics.scrollTop,
+        clientHeight: params.metrics.clientHeight,
+    });
+    if (!landing) return false;
     const expectedScrollTop = Math.max(
         0,
-        Math.min(Math.trunc(rawTarget), Math.max(0, params.metrics.scrollHeight - params.metrics.clientHeight)),
+        Math.min(Math.trunc(landing.targetScrollTop), Math.max(0, params.metrics.scrollHeight - params.metrics.clientHeight)),
     );
     return Math.abs(params.metrics.scrollTop - expectedScrollTop) <= (params.tolerancePx ?? 1);
 }
@@ -386,7 +387,7 @@ export async function executeTranscriptTargetWindowJump(params: Readonly<{
     resolveTargetIndex: () => TranscriptJumpTargetIndexResult;
     scrollToTarget: () => boolean;
     target: TranscriptJumpTarget;
-    targetSeq: number;
+    targetSeq: number | null;
     /** Resolves only after the target is present in the committed renderer window. */
     waitForTargetRender?: () => Promise<boolean>;
     waitForNextLandingFrame?: () => Promise<void>;
@@ -401,10 +402,13 @@ export async function executeTranscriptTargetWindowJump(params: Readonly<{
 }>): Promise<TranscriptJumpResult> {
     const isCurrentOperation = (): boolean => params.isCurrentOperation?.() !== false;
     if (!isCurrentOperation()) return { status: 'aborted' };
-    const scrollToTarget = (options: Readonly<{ allowVirtualizedRenderedTarget?: boolean }> = {}): boolean => {
+    const scrollToTarget = (options: Readonly<{ allowVirtualizedRenderedTarget?: boolean; approach?: boolean }> = {}): boolean => {
         if (!isCurrentOperation()) return false;
         const applied = params.scrollToTarget();
         if (!applied) return false;
+        // A target in the loaded data but virtualized out of the DOM is approached by the
+        // renderer; the web landing below waits for it to mount and places it exactly.
+        if (options.approach && params.platformOS === 'web') return true;
         if (params.canRenderTargetWindow && params.platformOS === 'web') {
             const targetInRenderedWindow = params.isTargetInRenderedWindow?.() ?? params.isTargetMounted();
             if (!targetInRenderedWindow) return false;
@@ -523,7 +527,7 @@ export async function executeTranscriptTargetWindowJump(params: Readonly<{
 
     if (!isCurrentOperation()) return { status: 'aborted' };
     const resolvedTargetIndex = params.resolveTargetIndex();
-    const strategy = params.forceTargetWindow === true && params.canRenderTargetWindow && resolvedTargetIndex.status !== 'found'
+    const strategy = params.forceTargetWindow === true && params.canRenderTargetWindow && params.targetSeq !== null && resolvedTargetIndex.status !== 'found'
         ? {
             status: 'render-target-window' as const,
             target: params.target,
@@ -542,7 +546,7 @@ export async function executeTranscriptTargetWindowJump(params: Readonly<{
     const result = await applyTranscriptJumpResult({
         strategy,
         adapters: {
-            scrollToIndex: () => scrollToTarget(),
+            scrollToIndex: () => scrollToTarget({ approach: true }),
             renderTargetWindow: params.canRenderTargetWindow
                 ? ({ target, targetSeq, direction }) => renderTargetWindow({ target, targetSeq, direction })
                 : undefined,
@@ -559,18 +563,23 @@ export async function executeTranscriptTargetWindowJump(params: Readonly<{
     });
 
     if (!isCurrentOperation()) return { status: 'aborted' };
+    const canFallBackToTargetWindow = params.canRenderTargetWindow && params.targetSeq !== null && strategy.status === 'scroll-mounted';
     if (result.status === 'scrolled') {
         if (params.platformOS === 'web') {
             const landed = await performWebWindowLanding(result);
             if (!isCurrentOperation()) return { status: 'aborted' };
-            return landed ? result : { status: 'not-found', reason: 'unavailable' };
+            if (landed) return result;
+            // The renderer never mounted the target (a recycler pinned after a data
+            // replacement): materialize its window instead.
+            if (!canFallBackToTargetWindow) return { status: 'not-found', reason: 'unavailable' };
+        } else {
+            if (!isCurrentOperation()) return { status: 'aborted' };
+            if (params.isTargetMounted() && params.isTargetAligned?.() !== false) {
+                params.onJumpLanded?.(result);
+                return result;
+            }
+            return { status: 'not-found', reason: 'unavailable' };
         }
-        if (!isCurrentOperation()) return { status: 'aborted' };
-        if (params.isTargetMounted() && params.isTargetAligned?.() !== false) {
-            params.onJumpLanded?.(result);
-            return result;
-        }
-        return { status: 'not-found', reason: 'unavailable' };
     }
     if (result.status === 'window-rendered' && params.waitForTargetRender && !(await params.waitForTargetRender())) {
         return isCurrentOperation() ? { status: 'not-found', reason: 'unavailable' } : { status: 'aborted' };
@@ -589,11 +598,7 @@ export async function executeTranscriptTargetWindowJump(params: Readonly<{
         if (!isCurrentOperation()) return { status: 'aborted' };
         return landed ? result : { status: 'not-found', reason: 'unavailable' };
     }
-    if (
-        params.canRenderTargetWindow &&
-        strategy.status === 'scroll-mounted' &&
-        result.status === 'not-found'
-    ) {
+    if (canFallBackToTargetWindow && params.targetSeq !== null && (result.status === 'not-found' || result.status === 'scrolled')) {
         const fallbackResult = await applyTranscriptJumpResult({
             strategy: {
                 status: 'render-target-window',

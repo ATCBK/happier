@@ -47,7 +47,12 @@ export type TranscriptViewportRestoreAnchorTarget = Readonly<{
 
 export type TranscriptViewportJumpAlignment =
     | Readonly<{ kind: 'center' }>
-    | Readonly<{ kind: 'top-with-item-offset'; itemOffsetPx: number }>;
+    | Readonly<{ kind: 'top-with-item-offset'; itemOffsetPx: number }>
+    /**
+     * Show the item below a top clearance (a floating capsule). An item taller than the
+     * remaining viewport places its first mounted `focusTestId` element there instead.
+     */
+    | Readonly<{ kind: 'reveal'; clearancePx: number; focusTestId?: string }>;
 
 export type TranscriptViewportCommand =
     | Readonly<{ kind: 'none'; sessionId: string; reason: string; mode: TranscriptViewportMode }>
@@ -56,7 +61,7 @@ export type TranscriptViewportCommand =
     | Readonly<{ kind: 'apply-history-correction'; sessionId: string; reason: 'prepend-restore'; mode: 'restore-anchor'; targetDistanceFromHistoryStartPx: number; animated?: boolean }>
     | Readonly<{ kind: 'restore-anchor'; sessionId: string; reason: TranscriptViewportScrollReason; mode: 'restore-anchor'; target: TranscriptViewportRestoreAnchorTarget; animated?: boolean }>
     | Readonly<{ kind: 'restore-visible-anchor'; sessionId: string; reason: Extract<TranscriptViewportScrollReason, 'content-size-change' | 'entry-restore'>; mode: 'restore-anchor'; target: TranscriptViewportRestoreAnchorTarget; animated?: boolean }>
-    | Readonly<{ kind: 'jump-to-seq'; sessionId: string; reason: 'jump-to-seq'; mode: 'jump-to-seq'; seq: number; routeMessageId?: string | null; transcriptBlockIndex?: number | null; role?: TranscriptJumpTargetRole | null; align?: TranscriptViewportJumpAlignment; animated?: boolean }>
+    | Readonly<{ kind: 'jump-to-seq'; sessionId: string; reason: 'jump-to-seq'; mode: 'jump-to-seq'; seq: number | null; routeMessageId?: string | null; transcriptBlockIndex?: number | null; role?: TranscriptJumpTargetRole | null; align?: TranscriptViewportJumpAlignment; animated?: boolean }>
     | Readonly<{ kind: 'recover-jump-to-seq'; sessionId: string; reason: 'jump-to-seq'; mode: 'jump-to-seq'; failedRenderedIndex: number; averageItemLengthPx: number; animated?: boolean }>;
 
 export type TranscriptViewportControllerInput =
@@ -120,7 +125,7 @@ export type TranscriptViewportControllerInput =
     | Readonly<{
         type: 'jump-to-seq';
         sessionId: string;
-        seq: number;
+        seq: number | null;
         routeMessageId?: string | null;
         transcriptBlockIndex?: number | null;
         role?: TranscriptJumpTargetRole | null;

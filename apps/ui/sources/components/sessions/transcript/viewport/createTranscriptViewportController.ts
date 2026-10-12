@@ -274,9 +274,14 @@ function normalizeJumpAlignment(
     }
     if (align?.kind === 'top-with-item-offset') {
         const itemOffsetPx = typeof align.itemOffsetPx === 'number' && Number.isFinite(align.itemOffsetPx)
-            ? Math.max(0, Math.trunc(align.itemOffsetPx))
+            // A Find mark deep inside a tall item needs the item top above the viewport.
+            ? Math.trunc(align.itemOffsetPx)
             : 0;
         return { align: { kind: 'top-with-item-offset', itemOffsetPx } };
+    }
+    if (align?.kind === 'reveal') {
+        const clearancePx = Number.isFinite(align.clearancePx) ? Math.max(0, Math.trunc(align.clearancePx)) : 0;
+        return { align: { kind: 'reveal', clearancePx, ...(align.focusTestId ? { focusTestId: align.focusTestId } : {}) } };
     }
     return null;
 }

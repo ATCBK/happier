@@ -19,10 +19,6 @@ export type TranscriptViewportDriverWriteResult =
     | Readonly<{ ok: true; landedScrollTop: number; targetScrollTop: number }>
     | Readonly<{ ok: false; reason: 'invalid_geometry' | 'not_found' | 'write_failed' }>;
 
-export type WebDomTranscriptItemAlignment =
-    | Readonly<{ kind: 'center' }>
-    | Readonly<{ kind: 'top-with-item-offset'; itemOffsetPx: number }>;
-
 export type WebDomMeasuredItemLayout = Readonly<{
     height: number;
     y: number;

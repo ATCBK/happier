@@ -164,14 +164,14 @@ describe('transcript viewport controller', () => {
         expect(controller.getMode()).toBe('jump-to-seq');
     });
 
-    it('preserves explicit jump-to-seq alignment as a semantic command option', () => {
+    it.each([24, -936])('preserves explicit jump-to-seq alignment offset %s as a semantic command option', (itemOffsetPx) => {
         const controller = createTranscriptViewportController();
 
         const command = controller.resolve({
             type: 'jump-to-seq',
             sessionId: 'session-a',
             seq: 34,
-            align: { kind: 'top-with-item-offset', itemOffsetPx: 24 },
+            align: { kind: 'top-with-item-offset', itemOffsetPx },
         });
 
         expect(command).toEqual({
@@ -180,7 +180,7 @@ describe('transcript viewport controller', () => {
             reason: 'jump-to-seq',
             mode: 'jump-to-seq',
             seq: 34,
-            align: { kind: 'top-with-item-offset', itemOffsetPx: 24 },
+            align: { kind: 'top-with-item-offset', itemOffsetPx },
         });
         expect(controller.getMode()).toBe('jump-to-seq');
     });

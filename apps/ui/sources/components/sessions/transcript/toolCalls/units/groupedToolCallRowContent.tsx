@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { TranscriptVisualContextProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import { TranscriptFindMessageProvider } from '@/components/sessions/transcript/find/TranscriptFindContext';
 
 import type { ToolCallMessage } from "@happier-dev/session-core/messages";
 import type { PersistedSessionMessagePinV1 } from "@happier-dev/session-core/pins";
@@ -65,8 +66,14 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
         );
     }
 
+    // Plain grouped tools bypass MessageView, which normally provides the row identity.
+    const withToolIdentity = (content: React.ReactNode) => withVisualOrigin(
+        <TranscriptFindMessageProvider messageId={params.message.id} routeMessageId={params.nestedMessageId}>
+            {content}
+        </TranscriptFindMessageProvider>,
+    );
     if (params.chromeMode === 'activity_feed') {
-        return withVisualOrigin(
+        return withToolIdentity(
             <ToolTimelineRow
                 tool={params.message.tool}
                 metadata={params.metadata}
@@ -84,7 +91,7 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
         );
     }
 
-    return withVisualOrigin(
+    return withToolIdentity(
         <ToolView
             tool={params.message.tool}
             metadata={params.metadata}

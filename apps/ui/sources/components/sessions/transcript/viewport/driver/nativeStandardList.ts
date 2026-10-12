@@ -1,3 +1,4 @@
+import { resolveTranscriptJumpPlacement } from '@/components/sessions/transcript/viewport/jump/transcriptJumpPlacement';
 import {
     type TranscriptViewportTelemetryScrollWriter,
     resolveTranscriptViewportTelemetryPlatform,
@@ -154,18 +155,22 @@ function performNativeStandardIndexCommand(
                 : {}),
         });
     } else {
-        const jumpAlignment = command.align;
+        // Native has no mounted focus geometry: the renderer layout decides whether the row fits.
+        const layout = command.align?.kind === 'reveal' ? node.getLayout?.(index) : undefined;
+        const placement = resolveTranscriptJumpPlacement({
+            align: command.align ?? { kind: 'center' },
+            itemHeight: layout && Number.isFinite(layout.height) ? layout.height : null,
+            viewportHeight: deps.listLayoutHeightRef.current,
+        });
         deps.lastNativeRestoreIndexCommandRef.current = {
             index,
             issuedAtMs: Date.now(),
             reason: command.reason,
             sessionId: command.sessionId,
-            ...(jumpAlignment?.kind === 'top-with-item-offset'
-                ? { viewOffset: jumpAlignment.itemOffsetPx }
-                : {}),
+            ...(placement.kind === 'item-offset' ? { viewOffset: placement.itemOffsetPx } : {}),
         };
-        node.scrollToIndex(jumpAlignment?.kind === 'top-with-item-offset'
-            ? { index, animated: command.animated ?? true, viewOffset: jumpAlignment.itemOffsetPx }
+        node.scrollToIndex(placement.kind === 'item-offset'
+            ? { index, animated: command.animated ?? true, viewOffset: placement.itemOffsetPx }
             : { index, animated: command.animated ?? true, viewPosition: 0.5 });
     }
 

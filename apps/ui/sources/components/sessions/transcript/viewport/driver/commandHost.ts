@@ -155,7 +155,7 @@ function resolveRejectedViewportCommandTelemetryTargetOffsetY(
         case 'apply-history-correction':
             return command.targetDistanceFromHistoryStartPx;
         case 'jump-to-seq':
-            return command.seq;
+            return command.seq ?? undefined;
         case 'recover-jump-to-seq':
             return command.failedRenderedIndex * command.averageItemLengthPx;
         case 'restore-visible-anchor':

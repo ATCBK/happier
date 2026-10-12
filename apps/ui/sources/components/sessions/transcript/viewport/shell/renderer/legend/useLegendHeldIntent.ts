@@ -1,7 +1,9 @@
 import * as React from 'react';
 import type { LegendListRef } from '@legendapp/list/react-native';
 
-import { resolveWebTranscriptViewportAnchorAlignment } from '@/components/sessions/transcript/viewport/prepend/webTranscriptPrependAnchor';
+import { resolveWebTranscriptViewportAnchorAlignment, TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX } from '@/components/sessions/transcript/viewport/prepend/webTranscriptPrependAnchor';
+import { queryExactWebTranscriptDataTestId } from '@/components/sessions/transcript/webTranscriptDomTestId';
+import { resolveWebTranscriptJumpTargetScrollTop } from '@/components/sessions/transcript/viewport/jump/transcriptJumpPlacement';
 import type { WebDomScrollObservation } from '@/components/sessions/transcript/viewport/driver/webDomObservation';
 import type { TranscriptExplicitJumpOperationId } from '@/components/sessions/transcript/viewport/jump/transcriptJumpTargetTypes';
 import type { WebTranscriptScrollMetrics } from '@/components/sessions/transcript/webTranscriptScrollMetrics';
@@ -571,7 +573,7 @@ export function useLegendHeldIntent<TItem>(params: Readonly<{
             if (!metrics) return null;
             const alignment = resolveWebTranscriptViewportAnchorAlignment({
                 container: metrics.element,
-                anchor: intent.anchor,
+                anchor: resolveLiveAnchorPlacement(intent.anchor, metrics),
                 tolerancePx: LEGEND_HELD_INTENT_ALIGNMENT_EPSILON_PX - 1,
             });
             if (alignment.status === 'not_found') {
@@ -1279,7 +1281,10 @@ export function useLegendHeldIntent<TItem>(params: Readonly<{
         // make the jump defer to its own bootstrap and never write the landing.
         if (held?.kind !== 'anchor') return false;
         if (Date.now() > held.identityExpiresAtMs) return false;
-        return target.itemId === undefined || held.anchor.itemId === target.itemId;
+        if (target.itemId !== undefined && held.anchor.itemId !== target.itemId) return false;
+        // A different placement of the same item is a new landing, not this hold's correction.
+        return target.itemOffsetPx === undefined
+            || Math.abs(held.anchor.itemOffsetPx - target.itemOffsetPx) <= LEGEND_HELD_INTENT_ALIGNMENT_EPSILON_PX;
     }, []);
 
     const holdWebEntryAnchor = React.useCallback((anchor: TranscriptRendererEntryAnchorHold) => {
@@ -1418,4 +1423,15 @@ export function useLegendHeldIntent<TItem>(params: Readonly<{
         scrollRendererToEnd,
         tryAcknowledgeInitialPresentationSettlement,
     };
+}
+
+/** An anchor that holds a jump placement re-resolves its item offset from the live row. */
+function resolveLiveAnchorPlacement(anchor: TranscriptRendererEntryAnchorHold, metrics: WebTranscriptScrollMetrics): TranscriptRendererEntryAnchorHold {
+    if (!anchor.align) return anchor;
+    const item = queryExactWebTranscriptDataTestId(metrics.element, `${TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX}${anchor.itemId}`).element;
+    if (!item) return anchor;
+    const landing = resolveWebTranscriptJumpTargetScrollTop({
+        align: anchor.align, item, scroller: metrics.element, scrollTop: metrics.scrollTop, clientHeight: metrics.clientHeight,
+    });
+    return landing ? { ...anchor, itemOffsetPx: Math.round(landing.itemOffsetPx) } : anchor;
 }

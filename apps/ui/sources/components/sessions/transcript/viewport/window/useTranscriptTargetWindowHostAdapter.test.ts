@@ -467,10 +467,10 @@ describe('transcript target-window host adapter', () => {
         expect(onJumpLanded).not.toHaveBeenCalled();
     });
 
-    it('lands the web viewport on the target after a scroll-mounted fallback materialization', async () => {
-        // RG1 in-app class: strategy resolves scroll-mounted (item-space found), the write-time
-        // mounted gate refutes it, the fallback materializes a target window — the landing must
-        // then scroll onto the mounted target instead of leaving the viewport parked wrong-space.
+    it('lands a loaded target the renderer mounts during its approach without materializing a window', async () => {
+        // A Find or rail target in the loaded data is often virtualized out of the DOM. The
+        // renderer's approach mounts it within frames; a network target-window load for data
+        // the client already holds only delays (and on #16 broke) the landing.
         const onJumpLanded = vi.fn();
         const isTargetMounted = vi.fn(() => true).mockReturnValueOnce(false);
         const scrollToTarget = vi.fn(() => true);
@@ -491,11 +491,8 @@ describe('transcript target-window host adapter', () => {
             waitForNextLandingFrame: () => Promise.resolve(),
         });
 
-        expect(result).toEqual({
-            status: 'window-rendered',
-            target: { kind: 'seq', seq: 331 },
-            windowId: 'window-331',
-        });
+        expect(result).toEqual({ status: 'scrolled', target: { kind: 'seq', seq: 331 } });
+        expect(loadTargetWindow).not.toHaveBeenCalled();
         expect(scrollToTarget.mock.calls.length).toBeGreaterThanOrEqual(2);
         expect(onJumpLanded).toHaveBeenCalledTimes(1);
         expect(onJumpLanded).toHaveBeenCalledWith(result);

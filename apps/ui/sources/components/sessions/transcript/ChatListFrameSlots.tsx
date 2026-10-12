@@ -1,18 +1,43 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Animated, View } from 'react-native';
 import { ComposerKeyboardScrollInset } from '@/components/sessions/keyboardAvoidance';
 import { ChatFooter, type ChatFooterExternalControlState } from './ChatFooter';
 import type { ChatListBottomNotice } from '@/components/sessions/transcript/chatListTypes';
 import { TRANSCRIPT_TOP_GUTTER_PX } from '@/components/sessions/transcript/_constants';
+import { useTranscriptFindClearance } from '@/components/sessions/transcript/find/TranscriptFindContext';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useSessionChatFooterState } from '@/sync/domains/state/storage';
 import { TranscriptSessionActivityLine } from './TranscriptSessionActivityLine';
 import { ProjectSetupSessionReturn } from '@/components/projects/projectSetup/ProjectSetupReturn';
 import { ProjectSetupSessionReviews } from '@/components/projects/projectSetup/ProjectSetupSessionReview';
 
 export const ListHeader = React.memo(() => {
+    // While the inline Find capsule floats over the transcript, the first row starts below it. The band
+    // opens and closes with the capsule (its overlay popover timing), not as a jump; at once under
+    // reduced motion (a height cannot cross-fade).
+    const findClearance = useTranscriptFindClearance();
+    const target = Math.max(TRANSCRIPT_TOP_GUTTER_PX, findClearance);
+    const reducedMotion = useReducedMotionPreference();
+    const height = React.useRef(new Animated.Value(target)).current;
+    const previous = React.useRef(target);
+    React.useLayoutEffect(() => {
+        if (previous.current === target) return;
+        const opening = target > previous.current;
+        previous.current = target;
+        if (reducedMotion) { height.setValue(target); return; }
+        const animation = Animated.timing(height, {
+            toValue: target,
+            duration: opening ? motionTokens.overlay.popover.enterMs : motionTokens.overlay.popover.exitMs,
+            easing: motionTokens.easing.standard,
+            useNativeDriver: false,
+        });
+        animation.start();
+        return () => animation.stop();
+    }, [height, reducedMotion, target]);
     return (
         <View>
-            <View style={{ height: TRANSCRIPT_TOP_GUTTER_PX }} />
+            <Animated.View testID="transcript-top-gutter" style={{ height }} />
         </View>
     );
 });

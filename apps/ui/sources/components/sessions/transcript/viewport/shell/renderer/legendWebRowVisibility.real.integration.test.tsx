@@ -322,13 +322,13 @@ describe('Legend web row visibility contract', () => {
                 <DemandRow item={item} />
             </TranscriptRendererRowContentDemandProvider>
         );
-        const render = (enabled: boolean) => (
+        const render = (enabled: boolean, defaultViewability = false) => (
             <TranscriptContentDemandProvider enabled={enabled}>
             <TranscriptRendererContentDemandProvider demand={contentDemand}>
                 <div id={HOST_ID} style={{ height: VIEWPORT_HEIGHT }}>
                     <LegendList data={DATA} estimatedItemSize={ROW_HEIGHT}
                         keyExtractor={keyExtractor} recycleItems={false}
-                        viewabilityConfig={{ itemVisiblePercentThreshold: 1 }}
+                        viewabilityConfig={defaultViewability ? undefined : { itemVisiblePercentThreshold: 1 }}
                         onViewableItemsChanged={(info) => contentDemand.publish(info.viewableItems.map((token) => token.key))}
                         renderItem={renderDemandRow} />
                 </div>
@@ -371,6 +371,15 @@ describe('Legend web row visibility contract', () => {
         expect(demanded.has('row-15')).toBe(true);
         await act(async () => { root.render(<DemandRow item={{ id: 'standalone' }} />); });
         expect([...demanded]).toEqual(['standalone']);
+        await act(async () => { root.render(render(true, true)); });
+        for (let pass = 0; pass < 12; pass += 1) {
+            await act(async () => {
+                flushResizeObservers();
+                await vi.runOnlyPendingTimersAsync();
+            });
+        }
+        expect(demanded.has('row-0')).toBe(true);
+        expect(countMountedRows()).toBeGreaterThan(demanded.size);
     });
 
     it('keeps painted rows visible when a one-pixel footer measurement arrives after onLoad', async () => {

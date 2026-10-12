@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { JSDOM } from 'jsdom';
-import { onTestFinished } from 'vitest';
+import { onTestFinished, vi } from 'vitest';
 import { SessionMessagesPageV1Schema, SessionMessageV1Schema, FeaturesResponseSchema } from '@happier-dev/protocol';
 import type { Message } from '@happier-dev/session-core/messages';
 import { createSessionFixture, createSessionMessagesFixture, renderHook } from '@/dev/testkit';
@@ -49,6 +49,7 @@ export function emptyTranscriptJumpPage() {
 
 export async function restoreTranscriptJumpEnvironment(
     requestMessages: (url: URL) => Response | Promise<Response> = () => Response.json(emptyTranscriptJumpPage()),
+    requestSession?: (sessionId: string) => Response | Promise<Response>,
 ) {
     const boundary = createHomeHubArtifactHttpBoundary('jump-account');
     const connection = await restoreServerAccountForTest({
@@ -57,6 +58,8 @@ export async function restoreTranscriptJumpEnvironment(
         request: async (input, init) => {
             const url = new URL(String(input));
             if (url.pathname.endsWith('/messages')) return requestMessages(url);
+            const snapshot = /^\/v2\/sessions\/([^/]+)$/.exec(url.pathname);
+            if (snapshot && requestSession) return requestSession(decodeURIComponent(snapshot[1]!));
             if (url.pathname === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
                 features: { encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
             }));
@@ -81,6 +84,7 @@ export function createTranscriptJumpWebMetrics(params: Readonly<{
     scrollTop?: number; scrollHeight?: number; clientHeight?: number;
 }> = {}): WebTranscriptScrollMetrics {
     const dom = new JSDOM('<!doctype html><html><body></body></html>');
+    vi.stubGlobal('HTMLElement', dom.window.HTMLElement);
     onTestFinished(() => { dom.window.close(); });
     // The repository's jsdom declaration is untyped; narrow its genuine external document here.
     const document: Document = dom.window.document;
@@ -184,7 +188,9 @@ export function createTranscriptJumpHostTestHarness(options: Readonly<{
             });
             return projection.indexMap.resolveRendererTargetForItemId(rows.current[index]!.id);
         },
-        resolveWebScrollMetrics: () => metrics.current,
+        resolveWebScrollMetrics: () => metrics.current
+            ? { ...metrics.current, scrollTop: metrics.current.element.scrollTop }
+            : null,
         recordViewportTelemetryEvent: emptyEffects, recordRestoreDecisionTelemetry: emptyEffects,
         resolveWebViewportTelemetryDiagnostics: () => ({}),
     };
@@ -222,7 +228,7 @@ export function createTranscriptJumpHostTestHarness(options: Readonly<{
             const row = rows.current.find(candidate => candidate.id === item.id);
             return row && 'seq' in row ? row.seq : null;
         },
-        resolveViewportCommand: controller.resolve, resolveWebScrollMetrics: () => metrics.current,
+        resolveViewportCommand: controller.resolve, resolveWebScrollMetrics: driver.resolveWebScrollMetrics,
         scrollPin: scrollPin.current, scrollPinRef: scrollPin, sessionId,
         stampViewportAnchorForEmit: anchor => stampViewportAnchorForEmit({
             anchor, items: rows.current, messagesById: messages.current,
@@ -270,6 +276,6 @@ export function createTranscriptJumpHostTestHarness(options: Readonly<{
             return hook.rerender(next);
         } };
     }
-    return { base, props, render, rows, messages, native, renderer, listRef, metrics, lifecycleHost,
+    return { base, props, render, useOwner, rows, messages, native, renderer, listRef, metrics, lifecycleHost,
         viewport, settledRoutes, bottomFollow, scrollPin, scheduler, currentSessionId, wantsPinned, isPinned };
 }

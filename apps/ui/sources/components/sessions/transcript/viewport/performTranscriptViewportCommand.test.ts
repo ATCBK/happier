@@ -110,6 +110,8 @@ type FakeWebAnchor = Readonly<{
     bottom: number;
     testId: string;
     top: number;
+    /** A mounted descendant focus element (e.g. the current Find mark), in viewport coordinates. */
+    focus?: Readonly<{ testId: string; top: number; bottom: number }>;
 }>;
 
 const TestHTMLElement = (globalThis.HTMLElement ?? class TestHTMLElement {}) as typeof HTMLElement;
@@ -170,6 +172,11 @@ function createFakeWebScrollMetrics(
                         height: Math.max(0, anchor.bottom - anchor.top),
                     };
                 },
+                querySelectorAll(focusSelector: string) {
+                    const focus = anchor.focus;
+                    if (!focus || focusSelector !== `[data-testid="${focus.testId}"]`) return [];
+                    return [{ getBoundingClientRect: () => ({ top: focus.top, bottom: focus.bottom, height: focus.bottom - focus.top, width: 40 }) }];
+                },
             }));
         },
     } as unknown as WebElementWithLanding);
@@ -210,7 +217,7 @@ type DepsOverrides = {
         }>
         | null;
     telemetryPlatform?: 'web' | 'ios' | 'android' | 'native-other';
-    resolveJumpToSeqIndex?: (seq: number) => number | null;
+    resolveJumpToSeqIndex?: (seq: number | null) => number | null;
 };
 
 type DepsBundle = {
@@ -1144,8 +1151,11 @@ describe('performTranscriptViewportCommand', () => {
             );
 
             expect(result).toBe(true);
-            expect(node.indexCalls).toEqual([{ index: 0, animated: false }]);
-            expect(bundle.webDomObservation.getState().observedScrollTop).toBe(0);
+            // The renderer alone knows where its unmounted rows sit: it owns the approach at the
+            // requested placement, and the driver writes no competing DOM estimate.
+            expect(node.indexCalls).toEqual([{ index: 0, animated: false, viewOffset: 24 }]);
+            expect(bundle.webDomObservation.getState().observedScrollTop).toBeNull();
+            expect(bundle.recorded.filter((event) => event.type === 'scroll-write')).toHaveLength(0);
             expect(holdWebEntryAnchor).not.toHaveBeenCalled();
         });
 
@@ -1154,8 +1164,8 @@ describe('performTranscriptViewportCommand', () => {
             // renderer anchor hold owns the target, those re-writes must stand down or
             // the two verifiers fight (same live capture as above).
             const node = createFakeScrollNode();
-            (node as unknown as { hasLiveWebHold: (target: { kind: string; itemId?: string }) => boolean }).hasLiveWebHold =
-                (target) => target.kind === 'item' && target.itemId === 'row-3';
+            (node as unknown as { hasLiveWebHold: (target: { kind: string; itemId?: string; itemOffsetPx?: number }) => boolean }).hasLiveWebHold =
+                (target) => target.kind === 'item' && target.itemId === 'row-3' && target.itemOffsetPx === 140;
             const resolveJumpToSeqIndex = vi.fn(() => 3);
             const bundle = buildDeps({
                 node,
@@ -1188,6 +1198,46 @@ describe('performTranscriptViewportCommand', () => {
             // No write happened: the renderer hold owns the landing.
             expect(bundle.webDomObservation.getState().observedScrollTop).not.toBe(400);
             expect(bundle.recorded.filter((event) => event.type === 'scroll-write')).toHaveLength(0);
+        });
+
+        it('re-lands a held target when the jump asks for a different placement', () => {
+            // A Find step refines its landing once the current mark is measurable. The renderer
+            // hold from the previous landing names another offset, so it must not swallow the jump.
+            const node = createFakeScrollNode();
+            const holdWebEntryAnchor = vi.fn();
+            (node as unknown as { holdWebEntryAnchor: typeof holdWebEntryAnchor }).holdWebEntryAnchor = holdWebEntryAnchor;
+            (node as unknown as { hasLiveWebHold: (target: { kind: string; itemId?: string; itemOffsetPx?: number }) => boolean }).hasLiveWebHold =
+                (target) => target.kind === 'item' && target.itemId === 'row-3' && target.itemOffsetPx === 140;
+            const bundle = buildDeps({
+                node,
+                webMetrics: createFakeWebScrollMetrics({
+                    anchors: [{ testId: 'transcript-item-row-3', top: 100, bottom: 1300,
+                        focus: { testId: 'find-match-current', top: 1100, bottom: 1118 } }],
+                    scrollTop: 1000,
+                    scrollHeight: 4000,
+                    clientHeight: 600,
+                }),
+                listData: [{ id: 'row-0' }, { id: 'row-1' }, { id: 'row-2' }, { id: 'row-3' }],
+                shouldUseWebHotColdSplit: true,
+                coldItemCount: 4,
+                resolveJumpToSeqIndex: () => 3,
+            });
+            const result = performTranscriptViewportCommand(
+                {
+                    kind: 'jump-to-seq',
+                    sessionId: BASE_SESSION,
+                    reason: 'jump-to-seq',
+                    mode: 'jump-to-seq',
+                    seq: 42,
+                    align: { kind: 'reveal', clearancePx: 96, focusTestId: 'find-match-current' },
+                },
+                bundle.deps,
+            );
+            expect(result).toBe(true);
+            // The 1200px item cannot fit below the clearance: its mark (1000px into it) lands at 96.
+            expect(bundle.webDomObservation.getState().observedScrollTop).toBe(2004);
+            expect(holdWebEntryAnchor).toHaveBeenCalledWith(expect.objectContaining({ itemId: 'row-3', itemOffsetPx: -904,
+                align: { kind: 'reveal', clearancePx: 96, focusTestId: 'find-match-current' } }));
         });
 
         it('jump-to-seq cold target can align near the top for navigation user-turn jumps', () => {
@@ -1230,7 +1280,7 @@ describe('performTranscriptViewportCommand', () => {
             expect(write.targetOffsetY).toBe(516);
         });
 
-        it('jump-to-seq cold target uses list layout fallback when the row is virtualized out of the DOM', () => {
+        it('hands the approach to a virtualized jump target to the renderer instead of writing a DOM estimate', () => {
             const getLayout = vi.fn((index: number) => (
                 index === 3 ? { x: 0, y: 1200, width: 0, height: 140 } : undefined
             ));
@@ -1270,17 +1320,11 @@ describe('performTranscriptViewportCommand', () => {
 
             expect(result).toBe(true);
             expect(resolveJumpToSeqIndex).toHaveBeenCalledWith(42);
-            expect(getLayout).toHaveBeenCalledWith(3);
-            // The unmounted-target render-window re-anchor nudge is allowed; the DOM write below stays the offset owner.
-            expect(node.indexCalls).toEqual([{ index: 3, animated: false }]);
-            expect(bundle.webDomObservation.getState()).toMatchObject({
-                observedScrollHeight: 2200,
-                observedScrollTop: 1070,
-            });
-            expect(lastWrite(bundle.recorded)).toMatchObject({
-                writer: 'web-dom-restore',
-                targetOffsetY: 1070,
-            });
+            // Virtualized out of the DOM: the renderer approaches the row at the requested
+            // placement; the exact DOM landing follows once the row mounts.
+            expect(node.indexCalls).toEqual([{ index: 3, animated: false, viewPosition: 0.5 }]);
+            expect(bundle.webDomObservation.getState().observedScrollTop).toBeNull();
+            expect(bundle.recorded.filter((event) => event.type === 'scroll-write')).toHaveLength(0);
         });
     });
 

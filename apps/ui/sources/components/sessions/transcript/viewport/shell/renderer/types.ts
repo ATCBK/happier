@@ -7,6 +7,7 @@ import type { TranscriptExplicitJumpOperationId } from '@/components/sessions/tr
 import type { TranscriptListShellFrame } from '@/components/sessions/transcript/viewport/shell/transcriptListShellCapabilities';
 import type { WebTranscriptKeyboardVerticalDirection } from '@/components/sessions/transcript/viewport/lifecycle/webTranscriptKeyboardOwner';
 import type { TranscriptViewportTelemetryScrollReason } from '@/components/sessions/transcript/scroll/transcriptViewportTelemetry';
+import type { TranscriptViewportJumpAlignment } from '@/components/sessions/transcript/viewport/transcriptViewportTypes';
 
 export type TranscriptListRendererOrientation = 'standard' | 'frame-resolved';
 
@@ -155,6 +156,8 @@ export type TranscriptRendererWebHoldTarget =
         kind: 'item';
         /** Omit to query whether any keyed anchor currently owns the viewport. */
         itemId?: string;
+        /** When given, the hold must own this exact placement of the item (±1px). */
+        itemOffsetPx?: number;
     }>;
 
 export type TranscriptRendererEntryAnchorHold = Readonly<{
@@ -163,6 +166,11 @@ export type TranscriptRendererEntryAnchorHold = Readonly<{
     messageId: string | null;
     itemOffsetPx: number;
     reason?: TranscriptViewportTelemetryScrollReason;
+    /**
+     * A jump placement the hold keeps re-resolving from the live row (a Find reveal whose row
+     * grows as its content renders); `itemOffsetPx` is its value at landing time.
+     */
+    align?: TranscriptViewportJumpAlignment;
 }>;
 
 export type TranscriptRendererScrollToIndexParams = Readonly<{
