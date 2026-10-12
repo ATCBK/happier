@@ -69,6 +69,8 @@ function AllowListField(props: Readonly<{
                 rightElement={renderDropdownItemTriggerRightElement({
                     detail, open, detailColor: theme.colors.text.primary, chevronColor: theme.colors.text.secondary,
                     field: resolveFieldBoxColors(theme),
+                    // The page select's own column span, as the Permission limit select above takes through `DropdownMenu`.
+                    fieldSpan: 'column',
                 })} />
             {open ? roles ? <RoleAllowListMenu {...menuProps} /> : <AgentAllowListMenu {...menuProps} /> : null}
         </View>
@@ -78,6 +80,7 @@ function AllowListField(props: Readonly<{
 function RoleAllowListMenu(props: MenuProps) {
     const catalog = useRoleCatalog();
     return <AllowListMenu {...props} choices={catalog.entries.map((entry) => ({ id: entry.roleId, title: entry.role.name }))}
+        choicesComplete={catalog.status === 'ready'}
         emptyLabel={catalog.status === 'loading' ? t('common.loading') : catalog.status === 'failed' ? t('roles.settings.loadFailed') : null}
         onRetry={catalog.status === 'failed' ? catalog.refresh : undefined} />;
 }
@@ -87,16 +90,19 @@ function AgentAllowListMenu(props: MenuProps) {
     return <AllowListMenu {...props} choices={entries.map((entry) => ({ id: entry.backendTargetKey, title: entry.title,
         icon: <AgentCatalogIdentityIcon entry={entry.agentCatalogEntry} machineId={null} serverId={null} current={false} />,
     }))}
+        choicesComplete={ready}
         emptyLabel={ready ? null : !snapshot || snapshot.catalog.status === 'loading' ? t('common.loading') : t('common.unavailable')}
         onRetry={snapshot && snapshot.catalog.status !== 'ready' && snapshot.catalog.status !== 'loading'
             ? () => { void refreshAcpCatalog(snapshot.scope); } : undefined} />;
 }
 
-function AllowListMenu(props: MenuProps & Readonly<{ choices: readonly Choice[]; emptyLabel?: string | null; onRetry?: () => void; disabled?: boolean }>) {
+function AllowListMenu(props: MenuProps & Readonly<{ choices: readonly Choice[]; choicesComplete: boolean; emptyLabel?: string | null; onRetry?: () => void; disabled?: boolean }>) {
+    // All includes identities not yet read. Only a complete catalog can replace it with a finite list.
+    const cannotExpandAll = props.selected === null && !props.choicesComplete;
     const items: DropdownMenuItem[] = [
         { id: 'all', title: t('common.all'), checked: props.selected === null },
         { id: 'none', title: t('settingsActions.spawnPolicy.allowLists.none'), checked: props.selected?.length === 0 },
-        ...props.choices.map((choice) => ({ ...choice, id: `choice:${choice.id}`, checked: props.selected === null || props.selected.includes(choice.id) })),
+        ...props.choices.map((choice) => ({ ...choice, id: `choice:${choice.id}`, checked: props.selected === null || props.selected.includes(choice.id), disabled: cannotExpandAll })),
         ...(props.selected ?? []).filter((id) => !props.choices.some((choice) => choice.id === id))
             .map((id) => ({ id: `choice:${id}`, title: t('common.unavailable'), checked: true })),
         ...(props.emptyLabel ? [{ id: 'status', title: props.emptyLabel, disabled: true }] : []),
@@ -111,6 +117,7 @@ function AllowListMenu(props: MenuProps & Readonly<{ choices: readonly Choice[];
             if (id === 'status') return;
             if (id === 'all' || id === 'none') { props.onChange(id === 'all' ? null : []); return; }
             if (!id.startsWith('choice:')) return;
+            if (cannotExpandAll) return;
             const choiceId = id.slice('choice:'.length);
             const selected = props.selected ?? props.choices.map((choice) => choice.id);
             props.onChange(selected.includes(choiceId) ? selected.filter((value) => value !== choiceId) : [...selected, choiceId]);

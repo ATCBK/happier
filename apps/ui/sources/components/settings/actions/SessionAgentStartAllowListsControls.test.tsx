@@ -46,6 +46,7 @@ describe('session start Agent allow-list catalog readiness', () => {
         expect(menu().props.items.find((item: { id: string }) => item.id === 'none').disabled).not.toBe(true);
         const bundledChoice = menu().props.items.find((item: { id: string }) => item.id.startsWith('choice:agent:'));
         expect(bundledChoice).toBeDefined();
+        expect(bundledChoice.disabled).toBe(true);
         await act(async () => { menu().props.onSelect(bundledChoice.id); });
         // null means every Agent, including configured IDs that have not been read.
         // A partial list of rendered choices cannot author that finite replacement.
