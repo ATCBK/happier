@@ -55,10 +55,15 @@ function sameFacts(left: ProjectsTreeCheckoutFacts | undefined, right: ProjectsT
  */
 export function createProjectsTreeCheckoutFactsSelector(refs: readonly WorkspaceRefV1[]): ProjectsTreeCheckoutFactsSelector {
     let previous: ReadonlyMap<string, ProjectsTreeCheckoutFacts> = new Map();
+    let previousInputs: readonly unknown[] | null = null;
     let nextWakeAtMs: number | null = null;
     const refScopes = new Set(refs.map(ref => buildWorkspaceCacheKey(ref)));
     const serverIds = new Set(refs.map(ref => ref.serverId));
     const select = (state: ProjectsTreeCheckoutFactsState, nowMs: number): ReadonlyMap<string, ProjectsTreeCheckoutFacts> => {
+        const inputs = [state.sessions, state.sessionListRowsByServerId, state.machines, state.machineListByServerId,
+            state.profileScope, state.getWorkspaceScmSnapshot,
+            state.localSettings.projectLastMobileSurfaceByWorkspaceRefId, nowMs] as const;
+        if (previousInputs?.every((input, index) => Object.is(input, inputs[index]))) return previous;
         const summaries = new Map<string, { attention: ProjectsTreeCheckoutFacts['attention']; hasSession: boolean; snapshot: ScmWorkingSnapshot | null }>();
         nextWakeAtMs = null;
         for (const serverId of serverIds) {
@@ -122,6 +127,7 @@ export function createProjectsTreeCheckoutFactsSelector(refs: readonly Workspace
             if (stable !== old) unchanged = false;
         }
         if (!unchanged) previous = next;
+        previousInputs = inputs;
         return previous;
     };
     return Object.assign(select, { getNextWakeAtMs: () => nextWakeAtMs });

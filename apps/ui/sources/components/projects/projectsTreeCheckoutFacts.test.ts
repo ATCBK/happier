@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
@@ -7,7 +7,7 @@ import { buildRealmQualifiedMobileSurfaceStorageKey } from '@/sync/domains/setti
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 import { createProjectsTreeCheckoutFactsSelector, type ProjectsTreeCheckoutFactsState } from './projectsTreeCheckoutFacts';
-import { projectsTreeCheckoutKey } from './projectsTreeRows';
+import { buildProjectsTreeProjects, buildProjectsTreeRows, projectsTreeCheckoutKey } from './projectsTreeRows';
 
 const ref = (id: string, serverId = 'home-a', rootPath = '/repo'): WorkspaceRefV1 => ({
     id, serverId, machineId: 'machine-1', rootPath, createdAtMs: 1,
@@ -33,6 +33,34 @@ const state = (): ProjectsTreeCheckoutFactsState => ({
 afterEach(() => projectManager.clear());
 
 describe('Projects tree checkout facts', () => {
+    it('does not rescan Session placement when the store publishes unchanged selector inputs', () => {
+        const source = state();
+        source.getWorkspaceScmSnapshot = vi.fn(source.getWorkspaceScmSnapshot);
+        const select = createProjectsTreeCheckoutFactsSelector([ref('workspace')]);
+        const before = select(source, 1_100);
+        const callsAfterFirstSelection = vi.mocked(source.getWorkspaceScmSnapshot).mock.calls.length;
+
+        expect(select(source, 1_100)).toBe(before);
+        expect(source.getWorkspaceScmSnapshot).toHaveBeenCalledTimes(callsAfterFirstSelection);
+    });
+
+    it('keeps a cached branch in an offline checkout row without a live Session', () => {
+        const checkoutRef = ref('workspace');
+        projectManager.updateWorkspaceScmSnapshot(checkoutRef, snapshot());
+        const facts = createProjectsTreeCheckoutFactsSelector([checkoutRef])(state(), 1_100);
+        const projects = buildProjectsTreeProjects({
+            groups: [{ projectKey: { projectKey: 'project' }, items: [checkoutRef] }],
+            projectName: () => 'Project',
+            machine: () => ({ name: 'devbox', homeDir: null, online: false }),
+            checkoutFacts: ref => facts.get(projectsTreeCheckoutKey({ refId: ref.id, workspaceAddress: {
+                serverId: ref.serverId, workspaceId: ref.id, machineId: ref.machineId, rootPath: ref.rootPath,
+            } })) ?? null,
+        });
+        expect(projects[0]?.checkouts[0]).toMatchObject({ branch: 'feature', offline: true });
+        expect(buildProjectsTreeRows({ projects, openRefId: null, expandedKeys: new Set() })[0])
+            .toMatchObject({ subtitle: 'devbox · feature' });
+    });
+
     it('projects nested accepted Session awareness through the canonical SCM root and keeps equal ids on another Home separate', () => {
         const refs = [ref('same-id'), ref('same-id', 'home-b')];
         const source = state();
