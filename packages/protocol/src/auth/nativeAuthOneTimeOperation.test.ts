@@ -30,6 +30,13 @@ const reset: NativeAuthOneTimeOperationV1 = {
 const bearer = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 describe('native auth one-time operation codec', () => {
+    it('decodes retained operation annotations while leaving new operation encoding closed', () => {
+        const annotated = { ...verify, retired: true, consumer: { ...verify.consumer, retired: true } };
+        expect(decodeNativeAuthOneTimeOperationV1(JSON.stringify(annotated))).toEqual(verify);
+        expect(() => encodeNativeAuthOneTimeOperationV1(annotated)).toThrow();
+        expect(decodeNativeAuthOneTimeOperationV1(JSON.stringify({ ...annotated, normalizedEmail: 'Alice@Example.com' })))
+            .toBeNull();
+    });
     it('round-trips every closed verification consumer and password reset', () => {
         expect(decodeNativeAuthOneTimeOperationV1(encodeNativeAuthOneTimeOperationV1(verify))).toEqual(verify);
         for (const consumer of [
@@ -45,9 +52,8 @@ describe('native auth one-time operation codec', () => {
         expect(decodeNativeAuthOneTimeOperationV1(encodeNativeAuthOneTimeOperationV1(reset))).toEqual(reset);
     });
 
-    it('rejects unknown purposes, unknown fields, and denormalized email facts', () => {
+    it('rejects unknown purposes and denormalized email facts', () => {
         expect(decodeNativeAuthOneTimeOperationV1('{"v":1,"purpose":"verify_team_invitation"}')).toBeNull();
-        expect(decodeNativeAuthOneTimeOperationV1(JSON.stringify({ ...verify, extra: 1 }))).toBeNull();
         expect(decodeNativeAuthOneTimeOperationV1(JSON.stringify({ ...verify, normalizedEmail: 'Alice@Example.com' }))).toBeNull();
         expect(decodeNativeAuthOneTimeOperationV1(JSON.stringify({ ...reset, credentialRevision: 0 }))).toBeNull();
         expect(decodeNativeAuthOneTimeOperationV1('not json')).toBeNull();

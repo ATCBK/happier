@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
 import { normalizeVerifiedEmail, VERIFIED_EMAIL_MAX_SCALARS } from './verifiedEmail.js';
 
@@ -83,7 +84,7 @@ export function decodeNativeAuthOneTimeOperationV1(raw: string): NativeAuthOneTi
     } catch {
         return null;
     }
-    const result = NativeAuthOneTimeOperationV1Schema.safeParse(parsed);
+    const result = createStoredReadSchema(NativeAuthOneTimeOperationV1Schema).safeParse(parsed);
     return result.success ? result.data : null;
 }
 
