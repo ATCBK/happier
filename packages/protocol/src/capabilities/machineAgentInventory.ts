@@ -68,15 +68,16 @@ export function buildMachineAgentInventoryDescriptors(
     .map(([agentId, agent]) => ({ agentId, title: agent.title?.trim() || agentId }));
 }
 
-/** All inventory readers request the same complete, non-interactive snapshot. */
+/** Inventory readers share non-interactive facts; launch admission needs no vendor update lookup. */
 export function buildMachineAgentsDetectRequest(input: Readonly<{
   agents: readonly MachineAgentInventoryDescriptor[];
   refresh?: boolean;
+  includeLatestVersion?: boolean;
 }>): CapabilitiesDetectRequest {
   return {
     requests: input.agents.map(({ agentId }) => ({
       id: `cli.${agentId}`,
-      params: { includeLoginStatus: true, includeLatestVersion: true },
+      params: { includeLoginStatus: true, ...(input.includeLatestVersion === false ? {} : { includeLatestVersion: true }) },
     })),
     ...(input.refresh === true ? { bypassCache: true } : {}),
   };

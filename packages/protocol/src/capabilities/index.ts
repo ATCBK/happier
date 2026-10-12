@@ -2,6 +2,7 @@ import { parseQualifiedPluginContributionKey } from '../plugins/contributionIden
 
 export * from './probedCatalogOption.js';
 export * from './agentProbeObservation.js';
+export * from './pluginMarketplace.js';
 
 export type CapabilityKind = 'cli' | 'tool' | 'dep';
 
