@@ -29,7 +29,7 @@ export async function friendRemove(ctx: Context, uid: string): Promise<UserProfi
             return null;
         }
         const identities = toSocialIdentities(targetUser.AccountIdentity);
-        const presentation = await describeIdentityPresentation(identities);
+        const presentation = await describeIdentityPresentation(identities, tx);
 
         // Read relationship status
         const currentUserRelationship = await relationshipGet(tx, currentUser.id, targetUser.id);

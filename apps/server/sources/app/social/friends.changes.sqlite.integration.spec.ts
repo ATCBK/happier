@@ -39,18 +39,51 @@ describe('Friend relationship and AccountChange publication (SQLite integration)
 
     it('publishes both sides of request and acceptance through the real notification and cursor owners', async () => {
         const [first, second] = await accounts();
+        await db.accountIdentity.create({ data: {
+            accountId: first.id,
+            provider: 'github',
+            providerUserId: first.id,
+            providerLogin: 'acct-friend',
+            profile: { login: 'acct-friend' },
+            showOnProfile: true,
+        } });
         // Reverse caller order relative to the Account ids. Notifications also
         // allocate feed cursors before the bilateral friends projection.
-        expect(await friendAdd(Context.create(second.id), first.id)).toMatchObject({ id: first.id, status: 'requested' });
+        expect(await friendAdd(Context.create(second.id), first.id)).toMatchObject({
+            id: first.id,
+            status: 'requested',
+            badges: [{ id: 'github', label: '@acct-friend', url: 'https://github.com/acct-friend' }],
+        });
         const requested = await friendChanges([first.id, second.id]);
+        expect(await db.userFeedItem.findMany({ select: { userId: true, body: true } })).toEqual([
+            { userId: first.id, body: { kind: 'friend_request', uid: second.id } },
+        ]);
+        const requestFeedChange = await db.accountChange.findUniqueOrThrow({ where: {
+            accountId_kind_entityId: { accountId: first.id, kind: 'feed', entityId: 'self' },
+        } });
+        expect(requestFeedChange.cursor).toBeLessThan(requested[0].cursor);
         expect(await db.userRelationship.findMany({ orderBy: { fromUserId: 'asc' },
             select: { fromUserId: true, toUserId: true, status: true } })).toEqual([
             { fromUserId: first.id, toUserId: second.id, status: 'pending' },
             { fromUserId: second.id, toUserId: first.id, status: 'requested' },
         ]);
+        expect(await friendAdd(Context.create(second.id), first.id)).toMatchObject({ id: first.id, status: 'requested' });
+        expect(await friendChanges([first.id, second.id])).toEqual(requested);
+        expect(await db.userFeedItem.count()).toBe(1);
         expect(await friendAdd(Context.create(first.id), second.id)).toMatchObject({ id: second.id, status: 'friend' });
         const accepted = await friendChanges([first.id, second.id]);
         expect(accepted.every((change, index) => change.cursor > requested[index].cursor)).toBe(true);
+        // The requester receives acceptance; the receiver's request notification
+        // is still inside the existing notification cooldown.
+        expect(await db.userFeedItem.findMany({ orderBy: { userId: 'asc' },
+            select: { userId: true, body: true } })).toEqual([
+            { userId: first.id, body: { kind: 'friend_request', uid: second.id } },
+            { userId: second.id, body: { kind: 'friend_accepted', uid: first.id } },
+        ]);
+        const acceptanceFeedChange = await db.accountChange.findUniqueOrThrow({ where: {
+            accountId_kind_entityId: { accountId: second.id, kind: 'feed', entityId: 'self' },
+        } });
+        expect(acceptanceFeedChange.cursor).toBeLessThan(accepted[1].cursor);
         expect(await db.userRelationship.findMany({ select: { status: true } })).toEqual([
             { status: 'friend' }, { status: 'friend' },
         ]);

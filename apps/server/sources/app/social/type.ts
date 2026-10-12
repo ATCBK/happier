@@ -1,12 +1,14 @@
 import { getPublicUrl, ImageRef } from "@/storage/blob/files";
 import type { RelationshipStatus } from "@/storage/prisma";
 import * as privacyKit from "privacy-kit";
-import type { UserProfile } from "@happier-dev/protocol";
+import { projectAccountNameToLegacyFieldsV1, type UserProfile } from "@happier-dev/protocol";
 import {
     describeLinkedIds,
+    describeLinkedIdsInTx,
     type ProviderPresentation,
 } from "@/app/auth/providers/identityProviderCatalog";
 import { isAccountIdentityEligibleForGenericPresentation } from "@/app/auth/methods/registry";
+import type { Tx } from "@/storage/inTx";
 
 export type { UserProfile };
 
@@ -18,11 +20,15 @@ export type IdentityPresentationMap = ReadonlyMap<string, ProviderPresentation>;
 
 export async function describeIdentityPresentation(
     identities: readonly SocialIdentity[],
+    tx?: Tx,
 ): Promise<IdentityPresentationMap> {
-    return await describeLinkedIds({
+    const input = {
         env: process.env,
         providerIds: identities.map((identity) => identity.provider),
-    });
+    };
+    // Relationship mutations already own their transaction. Resolve catalog
+    // presentation through it rather than waiting for another SQLite writer.
+    return tx ? await describeLinkedIdsInTx(tx, input) : await describeLinkedIds(input);
 }
 
 export type SocialIdentity = Readonly<{
@@ -87,6 +93,7 @@ function resolveBadgesFromIdentities(
 export function buildUserProfile(
     account: {
         id: string;
+        name: string | null;
         firstName: string | null;
         lastName: string | null;
         username: string | null;
@@ -115,6 +122,8 @@ export function buildUserProfile(
 
     const social = resolveSocialProfileFromIdentities(identities, presentation);
     const badges = resolveBadgesFromIdentities(identities, presentation);
+    const name = account.name;
+    const legacyName = projectAccountNameToLegacyFieldsV1(name);
 
     const profileStatus: UserProfile["status"] = (() => {
         const raw = status?.toString?.().trim?.() ?? "";
@@ -132,8 +141,9 @@ export function buildUserProfile(
 
     return {
         id: account.id,
-        firstName: account.firstName || '',
-        lastName: account.lastName,
+        name,
+        firstName: legacyName.firstName ?? '',
+        lastName: legacyName.lastName,
         avatar,
         username: account.username || social.suggestedUsername || '',
         bio: social.bio,

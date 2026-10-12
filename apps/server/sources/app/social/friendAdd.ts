@@ -119,7 +119,7 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
             // Return the target user profile
             const identities = toSocialIdentities(targetUser.AccountIdentity);
             return buildUserProfile(targetUser as any, RelationshipStatus.friend, identities,
-                await describeIdentityPresentation(identities));
+                await describeIdentityPresentation(identities, tx));
         }
 
         // Case 2: If status is none or rejected, create a new request (since other side is not in requested state)
@@ -141,12 +141,12 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
             // Return the target user profile
             const identities = toSocialIdentities(targetUser.AccountIdentity);
             return buildUserProfile(targetUser as any, RelationshipStatus.requested, identities,
-                await describeIdentityPresentation(identities));
+                await describeIdentityPresentation(identities, tx));
         }
 
         // Do not change anything and return the target user profile
         const identities = toSocialIdentities(targetUser.AccountIdentity);
         return buildUserProfile(targetUser as any, currentUserRelationship, identities,
-            await describeIdentityPresentation(identities));
+            await describeIdentityPresentation(identities, tx));
     }, { isolationLevel: "Serializable" });
 }
