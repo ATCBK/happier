@@ -144,6 +144,17 @@ function hideOverlay(target: TreeDropOverlaySharedValues): void {
     target.overlayKind.value = TREE_DROP_OVERLAY_KIND_NONE;
 }
 
+/**
+ * Builds the drag gesture and lift/translate style for one session-list row
+ * (session, folder, or project header).
+ *
+ * The pan resolves a drop result on every move, writes its geometry into the
+ * shared list-level overlay, and commits or cancels through the callbacks.
+ * With `activateAfterLongPressMs` (native) the drag starts only after a hold,
+ * so taps on child Pressables and list scrolling keep working; a parallel
+ * LongPress gesture drives `onLongPressActivated`. Returns no gesture when
+ * `enabled` is false.
+ */
 export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSessionInlineDragResult {
     const {
         sessionKey,
