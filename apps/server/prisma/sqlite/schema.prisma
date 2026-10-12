@@ -81,6 +81,7 @@ model Account {
     preferredHomeServerIdentityId String?
 
     // Profile
+    name      String?
     firstName String?
     lastName  String?
     username  String? @unique

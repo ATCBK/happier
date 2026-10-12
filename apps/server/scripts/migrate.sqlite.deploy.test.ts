@@ -5,9 +5,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PGlite } from "@electric-sql/pglite";
 
 import { runSqliteMigrationDeploy } from "./migrate.sqlite.deploy";
-import { applySqliteMigrations } from "./prismaMigrations";
+import { applyPostgresMigrations, applySqliteMigrations } from "./prismaMigrations";
 
 type NodeSqliteDatabase = Readonly<{
     exec: (sql: string) => void;
@@ -28,6 +29,16 @@ const SESSION_SYSTEM_RECORD_EXPAND_MIGRATION =
     "20260731170000_expand_session_system_record_addresses";
 const SESSION_SYSTEM_RECORD_CONTRACT_MIGRATION =
     "20260810120000_contract_session_system_record_addresses";
+const ACCOUNT_NAME_MIGRATION = "20261011120000_add_account_name";
+const accountNameFixtures = [
+    { id: "both", firstName: "  Ada  ", lastName: " Lovelace ", name: "Ada Lovelace" },
+    { id: "first", firstName: "\tGrace\n", lastName: null, name: "Grace" },
+    { id: "last", firstName: "\u00a0", lastName: "\u00a0Hopper\u00a0", name: "Hopper" },
+    { id: "blank", firstName: "\t \n", lastName: "  ", name: null },
+    { id: "unset", firstName: null, lastName: null, name: null },
+    { id: "interior", firstName: "  Mary  Jane ", lastName: " Watson ", name: "Mary  Jane Watson" },
+    { id: "long", firstName: "a".repeat(191), lastName: "b".repeat(191), name: `${"a".repeat(191)} ${"b".repeat(191)}` },
+];
 
 async function copyRealSqliteMigrationsThrough(params: Readonly<{
     sourceDir: string;
@@ -132,6 +143,85 @@ describe("migrate.sqlite.deploy.ts", () => {
                 runSchemaSync: async () => {},
             }),
         ).rejects.toThrow(/requires DATABASE_URL=file:/i);
+    });
+
+    it("backfills Account.name from retained profile parts without changing those parts", async () => {
+        const sourceMigrationsDir = fileURLToPath(new URL("../prisma/sqlite/migrations/", import.meta.url));
+        await copyRealSqliteMigrationsThrough({
+            sourceDir: sourceMigrationsDir,
+            destinationDir: migrationsDir,
+            throughMigration: "20261010100000_message_surface_reference_and_share_network",
+        });
+        const databasePath = join(lightDataDir, "happier-server-light.sqlite");
+        await applySqliteMigrations({ databasePath, migrationsDir });
+        const legacyDb = new DatabaseSync(databasePath);
+        try {
+            for (const fixture of accountNameFixtures) {
+                legacyDb.prepare(
+                    'INSERT INTO "Account" ("id", "firstName", "lastName", "updatedAt") VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                ).run(fixture.id, fixture.firstName, fixture.lastName);
+            }
+        } finally {
+            legacyDb.close();
+        }
+        await applySqliteMigrations({ databasePath, migrationsDir: sourceMigrationsDir });
+        await expect(applySqliteMigrations({ databasePath, migrationsDir: sourceMigrationsDir }))
+            .resolves.toEqual({ applied: [] });
+        const upgradedDb = new DatabaseSync(databasePath);
+        try {
+            for (const fixture of accountNameFixtures) {
+                expect(upgradedDb.prepare(
+                    'SELECT "firstName", "lastName", "name" FROM "Account" WHERE "id" = ?',
+                ).get(fixture.id)).toEqual({
+                    firstName: fixture.firstName,
+                    lastName: fixture.lastName,
+                    name: fixture.name,
+                });
+            }
+            expect(upgradedDb.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+            expect(upgradedDb.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        } finally {
+            upgradedDb.close();
+        }
+    });
+
+    it("backfills the same retained Account profile on PostgreSQL and deploys twice", async () => {
+        const sourceMigrationsDir = fileURLToPath(new URL("../prisma/migrations/", import.meta.url));
+        const postgresMigrationsDir = join(tmpDir, "postgres-migrations");
+        const stageMigration = async (name: string) => {
+            await mkdir(join(postgresMigrationsDir, name), { recursive: true });
+            await copyFile(join(sourceMigrationsDir, name, "migration.sql"), join(postgresMigrationsDir, name, "migration.sql"));
+        };
+        const postgres = new PGlite();
+        try {
+            // Real immutable migration sources establish the retained nullable profile columns.
+            await stageMigration("20250713002718_initial");
+            await stageMigration("20250827044624_add_user_profile_fields");
+            await applyPostgresMigrations({ db: postgres, migrationsDir: postgresMigrationsDir });
+            for (const fixture of accountNameFixtures) {
+                await postgres.query(
+                    'INSERT INTO "Account" ("id", "publicKey", "firstName", "lastName", "updatedAt") VALUES ($1, $1, $2, $3, CURRENT_TIMESTAMP)',
+                    [fixture.id, fixture.firstName, fixture.lastName],
+                );
+            }
+            await stageMigration(ACCOUNT_NAME_MIGRATION);
+            await expect(applyPostgresMigrations({ db: postgres, migrationsDir: postgresMigrationsDir }))
+                .resolves.toEqual({ applied: [ACCOUNT_NAME_MIGRATION] });
+            await expect(applyPostgresMigrations({ db: postgres, migrationsDir: postgresMigrationsDir }))
+                .resolves.toEqual({ applied: [] });
+            for (const fixture of accountNameFixtures) {
+                expect((await postgres.query(
+                    'SELECT "firstName", "lastName", "name" FROM "Account" WHERE "id" = $1',
+                    [fixture.id],
+                )).rows).toEqual([{
+                    firstName: fixture.firstName,
+                    lastName: fixture.lastName,
+                    name: fixture.name,
+                }]);
+            }
+        } finally {
+            await postgres.close();
+        }
     });
 
     it("upgrades a real pre-EXPAND legacy record through backfill before CONTRACT", async () => {

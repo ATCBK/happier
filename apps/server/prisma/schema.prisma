@@ -80,6 +80,7 @@ model Account {
     preferredHomeServerIdentityId String?
 
     // Profile
+    name      String? @db.Text
     firstName String?
     lastName  String?
     username  String? @unique
