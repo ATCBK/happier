@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
 
-function openBytes(data: Uint8Array) {
+function openBytes(data: Uint8Array, maxReadBytes = Number.POSITIVE_INFINITY) {
   let offset = 0;
   return {
     readBytes(length: number) {
+      if (length > maxReadBytes) throw new Error('read_exceeds_js_heap_budget');
       const chunk = data.slice(offset, offset + length);
       offset += chunk.length;
       return chunk;
@@ -269,6 +270,13 @@ describe('modelPacks installer (native)', () => {
                 sha256: expectedSha,
                 sizeBytes: bytes.length,
               },
+              {
+                // A malformed percent-escape is a valid URL and must not reject the whole manifest.
+                path: 'notes%ZZ.txt',
+                url: 'https://github.com/happier/happier-assets/releases/download/model-packs/example__notes%ZZ.txt?v=1',
+                sha256: expectedSha,
+                sizeBytes: bytes.length,
+              },
             ],
           }),
         } as any;
@@ -315,6 +323,7 @@ describe('modelPacks installer (native)', () => {
     expect(requestedFileUrls).toEqual([
       `${expectedDownloadPrefix}example__model.onnx`,
       `${expectedDownloadPrefix}example__espeak-ng-data__voices__.v__Alex`,
+      `${expectedDownloadPrefix}example__notes%ZZ.txt`,
     ]);
   });
 
@@ -370,11 +379,21 @@ describe('modelPacks installer (native)', () => {
           });
         }
         open() {
-          return openBytes(files.get(this.uri) ?? new Uint8Array());
+          return openBytes(files.get(this.uri) ?? new Uint8Array(), MAX_BOUNDED_READ_BYTES);
         }
       }
 
       return { Directory, File, Paths: { document: 'file:///docs/' } };
+    }
+
+    // Generous stand-in for "a read the JS heap can afford"; test files span several of these so the
+    // hash must be computed across chunk boundaries.
+    const MAX_BOUNDED_READ_BYTES = 4 * 1024 * 1024;
+
+    function multiChunkBytes(seed: number) {
+      const bytes = new Uint8Array(MAX_BOUNDED_READ_BYTES * 2 + 12345);
+      for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31 + seed) & 0xff;
+      return bytes;
     }
 
     function streamingResponse(bytes: Uint8Array) {
@@ -403,8 +422,8 @@ describe('modelPacks installer (native)', () => {
     }
 
     it('verifies existing and downloaded files without whole-file reads', async () => {
-      const existing = new Uint8Array([1, 2, 3]);
-      const downloaded = new Uint8Array([4, 5, 6, 7]);
+      const existing = multiChunkBytes(1);
+      const downloaded = multiChunkBytes(2);
       const files = new Map<string, Uint8Array>([['file:///docs/modelPacks/example/existing.bin', existing]]);
       const requested: string[] = [];
 
@@ -442,7 +461,7 @@ describe('modelPacks installer (native)', () => {
       );
 
       expect(requested).toEqual(['https://example.com/downloaded.bin']);
-      expect(files.get('file:///docs/modelPacks/example/downloaded.bin')).toEqual(downloaded);
+      expect(Buffer.from(files.get('file:///docs/modelPacks/example/downloaded.bin') ?? []).equals(Buffer.from(downloaded))).toBe(true);
     });
 
     it('still rejects a downloaded file whose sha256 does not match', async () => {

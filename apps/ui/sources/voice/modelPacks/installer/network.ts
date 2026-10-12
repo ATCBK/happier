@@ -54,10 +54,11 @@ function rewriteGithubReleaseManifestFileUrls(manifest: ModelPackManifest, manif
 
   // Only the release location is rewritten; the asset name comes from the manifest's own URL because
   // GitHub sanitizes uploaded asset names (e.g. `!` becomes `.`), so it cannot be re-derived from `path`.
+  // The URL pathname segment is already percent-encoded, so it is reused as-is.
   const files = manifest.files.map((f) => {
-    const assetName = decodeURIComponent(new URL(f.url).pathname.split('/').pop() ?? '');
+    const assetName = new URL(f.url).pathname.split('/').pop();
     if (!assetName) return f;
-    const rewritten = `${base}${encodeURIComponent(assetName)}${version ? `?v=${encodeURIComponent(version)}` : ''}`;
+    const rewritten = `${base}${assetName}${version ? `?v=${encodeURIComponent(version)}` : ''}`;
     return { ...f, url: rewritten };
   });
 
