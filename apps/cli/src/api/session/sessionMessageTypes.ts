@@ -76,7 +76,7 @@ export type SessionEventMessage =
   | Extract<TranscriptRawAgentEventV1, { type: 'prompt-composition' }>
   | Extract<TranscriptRawAgentEventV1, { type: 'worker-update' | 'worker-report' }>
   | (TranscriptEventLifecycle & { type: 'switch'; mode: 'local' | 'remote' })
-  | (TranscriptEventLifecycle & { type: 'message'; message: string })
+  | (TranscriptEventLifecycle & Extract<TranscriptRawAgentEventV1, { type: 'message' }>)
   | (TranscriptEventLifecycle & { type: 'context-compaction' } & ContextCompactionEventFields)
   | ConnectedServiceRuntimeAuthRecoverySessionEventMessage
   | { type: 'permission-mode-changed'; mode: import('../types').PermissionMode }
