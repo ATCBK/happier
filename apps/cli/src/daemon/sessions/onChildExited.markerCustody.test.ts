@@ -12,6 +12,30 @@ import { readProcessIdentityByPid } from '../processIdentity';
 
 let temporaryHome: string | undefined;
 
+it('settles the exact guard receipt before requester resource retirement and retains failed publication for retry', async () => {
+  temporaryHome = await mkdtemp(join(tmpdir(), 'happier-guard-exit-'));
+  vi.stubEnv('HAPPIER_HOME_DIR', temporaryHome); reloadConfiguration();
+  const pid = 54321;
+  const order: string[] = [];
+  let unavailable = true;
+  const tracked: TrackedSession = { pid, happySessionId: `PID-${pid}`, startedBy: 'terminal',
+    guardStopReceipt: { settle: async status => {
+      order.push(status);
+      if (unavailable) throw new Error('Record publication unavailable');
+    } } };
+  const sessions = new Map([[pid, tracked]]);
+  const exit = createOnChildExited({ pidToTrackedSession: sessions,
+    spawnResourceCleanupByPid: new Map([[pid, () => { order.push('cleanup'); }]]),
+    sessionAttachCleanupByPid: new Map(), getApiMachineForSessions: () => null });
+  await exit(pid, { reason: 'process-missing', code: null, signal: null });
+  expect(order).toEqual(['stopped']);
+  expect(sessions.get(pid)).toBe(tracked);
+  unavailable = false;
+  await exit(pid, { reason: 'process-missing', code: null, signal: null });
+  expect(order).toEqual(['stopped', 'stopped', 'cleanup']);
+  expect(sessions.has(pid)).toBe(false);
+});
+
 afterEach(async () => {
   vi.unstubAllEnvs();
   reloadConfiguration();

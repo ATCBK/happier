@@ -1,6 +1,4 @@
 
-import { windowsSystemToolCommand, spawnBackgroundSync } from '@happier-dev/cli-common/process';
-
 import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
 import type { TerminalHostAdapter } from '@happier-dev/agents';
@@ -22,7 +20,9 @@ import {
 import { buildLegacyTerminalAttachmentHostHandle } from '@/terminal/attachment/legacyTerminalAttachmentHandle';
 import type { TerminalMode } from '@/terminal/runtime/terminalConfig';
 import { probeTerminalHostForRecovery } from '@/integrations/terminal/host/recoveryLiveness';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { createProcessTreeTerminator, type ProcessTreeTerminationInput, type ProcessTreeTerminationResult } from '@/processes/terminate/terminateProcessTree';
+import type { ProcessCensusDependencies } from '@/processes/census/processCensus';
+import type { OwnerRemainderPort } from '../processes/endOwnerRemainder';
 
 import { isPidSafeHappySessionProcess } from '../pidSafety';
 import type { TrackedSession } from '../types';
@@ -117,46 +117,6 @@ function readActualTerminalMode(
     : undefined;
 }
 
-async function taskkillWindowsDaemonChild(params: Readonly<{
-  pid: number;
-  session: TrackedSession;
-  normalizedSessionId: string;
-  logPidReuseRefusal: (message: string) => void;
-  claimSignalAuthority(): Promise<boolean>;
-  isSignalAuthorityCurrent(): boolean;
-}>): Promise<boolean> {
-  if (!isTrackedChildStillLiveForPid(params.session, params.pid)) {
-    params.logPidReuseRefusal(
-      `[DAEMON RUN] Refusing to taskkill PID ${params.pid} for session ${params.normalizedSessionId} (tracked child is no longer live)`,
-    );
-    return false;
-  }
-
-  if (!await params.claimSignalAuthority()) return false;
-  const safe = await isPidSafeHappySessionProcess({
-    pid: params.pid,
-    expectedProcessCommandHash: params.session.processCommandHash,
-    expectedProcessStartTimeMs: params.session.processStartTimeMs,
-  });
-  if (!safe) {
-    params.logPidReuseRefusal(
-      `[DAEMON RUN] Refusing to taskkill PID ${params.pid} for session ${params.normalizedSessionId} (PID reuse safety)`,
-    );
-    return false;
-  }
-  if (!params.isSignalAuthorityCurrent() || !isTrackedChildStillLiveForPid(params.session, params.pid)) return false;
-
-  const result = spawnBackgroundSync(windowsSystemToolCommand('taskkill.exe'), ['/F', '/T', '/PID', String(params.pid)], { stdio: 'ignore' });
-  if ((result.status ?? 1) !== 0) {
-    logger.debug(`[DAEMON RUN] taskkill failed for daemon-spawned session ${params.normalizedSessionId} (pid=${params.pid})`);
-    return false;
-  }
-
-  params.session.stopRequestedAtMs = Date.now();
-  logger.debug(`[DAEMON RUN] taskkill requested for daemon-spawned session process tree ${params.normalizedSessionId} (pid=${params.pid})`);
-  return true;
-}
-
 async function forceKillTrackedRunner(params: Readonly<{
   pid: number;
   expectedSession: TrackedSession;
@@ -164,6 +124,7 @@ async function forceKillTrackedRunner(params: Readonly<{
   claimSignalAuthority(): Promise<boolean>;
   isSignalAuthorityCurrent(): boolean;
   logPidReuseRefusal: (message: string) => void;
+  terminateTargets(input: ProcessTreeTerminationInput): Promise<ProcessTreeTerminationResult>;
 }>): Promise<boolean> {
   if (!await params.claimSignalAuthority()) return false;
   const safe = await isPidSafeHappySessionProcess({
@@ -180,12 +141,11 @@ async function forceKillTrackedRunner(params: Readonly<{
   if (!params.isSignalAuthorityCurrent()) return false;
 
   try {
-    if (params.expectedSession.startedBy === 'daemon' && params.expectedSession.childProcess) {
-      if (!isTrackedChildStillLiveForPid(params.expectedSession, params.pid)) return false;
-      await killProcessTree(params.expectedSession.childProcess, { graceMs: 1 });
-    } else {
-      await killProcessTree({ pid: params.pid }, { graceMs: 1 });
-    }
+    if (params.expectedSession.startedBy === 'daemon' && params.expectedSession.childProcess
+      && !isTrackedChildStillLiveForPid(params.expectedSession, params.pid)) return false;
+    const result = await params.terminateTargets({ targets: [{ pid: params.pid,
+      ...(params.expectedSession.processStartTimeMs === undefined ? {} : { start: { startTimeMs: params.expectedSession.processStartTimeMs } }) }], graceMs: 1 });
+    if (result.outcomes.some(outcome => outcome.outcome === 'refused' || outcome.outcome === 'survived')) return false;
     logger.debug(
       `[DAEMON RUN] Forced session runner termination for ${params.normalizedSessionId} (pid=${params.pid})`,
     );
@@ -201,6 +161,8 @@ async function forceKillTrackedRunner(params: Readonly<{
 
 export function createStopSession(params: Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
+  ownerRemainder?: OwnerRemainderPort;
+  processCensusDependencies?: ProcessCensusDependencies;
   logPidReuseRefusal?: (message: string) => void;
   logWarning?: (message: string, ...args: unknown[]) => void;
   terminalHostAdapters?: Readonly<Partial<Record<TerminalHostAdapter['kind'], TerminalHostAdapter>>>;
@@ -245,6 +207,8 @@ export function createStopSession(params: Readonly<{
   options?: StopSessionOptions,
 ) => Promise<StopSessionResult> {
   const { pidToTrackedSession } = params;
+  const terminateTargets = createProcessTreeTerminator({ censusDependencies: params.processCensusDependencies,
+    platform: params.processCensusDependencies?.platform });
   const logPidReuseRefusal = params.logPidReuseRefusal ?? ((message: string): void => logger.warn(message));
   const logWarning = params.logWarning ?? ((message: string, ...args: unknown[]): void => logger.warn(message, ...args));
 
@@ -578,6 +542,13 @@ export function createStopSession(params: Readonly<{
       )) continue;
       signalEligiblePids.push(pid);
     }
+    const remainderOwner = { kind: 'session', sessionId: normalizedSessionId } as const;
+    const capturedRemainder = params.ownerRemainder && pidsToStop.length > 0
+      ? await params.ownerRemainder.capture(remainderOwner)
+      : undefined;
+    if (capturedRemainder) {
+      for (const session of expectedTrackedSessionsByPid.values()) session.ownerRemainderCapture = capturedRemainder;
+    }
     let stoppedAny = false;
     const signaledPids: number[] = [];
     const confirmedExitedPids: number[] = runnersAlreadyExited ? [...pidsToStop] : [];
@@ -606,99 +577,29 @@ export function createStopSession(params: Readonly<{
         );
       };
 
-      if (session.startedBy === 'daemon' && session.childProcess) {
-        if (process.platform === 'win32') {
-          if (await taskkillWindowsDaemonChild({
-            pid,
-            session,
-            normalizedSessionId,
-            logPidReuseRefusal,
-            claimSignalAuthority,
-            isSignalAuthorityCurrent,
-          })) {
-            stoppedAny = true;
-            signaledPids.push(pid);
-          }
+      try {
+        if (!await claimSignalAuthority()) continue;
+        const safe = await isPidSafeHappySessionProcess({
+          pid, expectedProcessCommandHash: session.processCommandHash,
+          expectedProcessStartTimeMs: session.processStartTimeMs,
+        });
+        if (!safe) {
+          logPidReuseRefusal(`[DAEMON RUN] Refusing to signal PID ${pid} for session ${normalizedSessionId} (PID reuse safety)`);
           continue;
         }
-
-        try {
-          if (!await claimSignalAuthority()) continue;
-          const safe = await isPidSafeHappySessionProcess({
-            pid,
-            expectedProcessCommandHash: session.processCommandHash,
-            expectedProcessStartTimeMs: session.processStartTimeMs,
-          });
-          if (!safe) {
-            logPidReuseRefusal(
-              `[DAEMON RUN] Refusing to SIGTERM daemon-child PID ${pid} for session ${normalizedSessionId} (PID reuse safety)`,
-            );
-            continue;
-          }
-          if (!isSignalAuthorityCurrent() || !isTrackedChildStillLiveForPid(session, pid)) continue;
-          try {
-            // Prefer killing the full process group when the daemon spawned a detached session runner.
-            process.kill(-pid, 'SIGTERM');
-            session.stopRequestedAtMs = Date.now();
-            logger.debug(
-              `[DAEMON RUN] Sent SIGTERM to daemon-spawned session process group ${normalizedSessionId} (pid=${pid})`,
-            );
-            stoppedAny = true;
-            signaledPids.push(pid);
-            continue;
-          } catch {
-            // fall through
-          }
-
-          if (pidToTrackedSession.get(pid) !== session || !await claimSignalAuthority()) continue;
-          const fallbackSafe = await isPidSafeHappySessionProcess({
-            pid,
-            expectedProcessCommandHash: session.processCommandHash,
-            expectedProcessStartTimeMs: session.processStartTimeMs,
-          });
-          if (!fallbackSafe) {
-            logPidReuseRefusal(
-              `[DAEMON RUN] Refusing to SIGTERM daemon-child PID ${pid} fallback for session ${normalizedSessionId} (PID reuse safety)`,
-            );
-            continue;
-          }
-          if (
-            pidToTrackedSession.get(pid) !== session
-            || !isSignalAuthorityCurrent()
-            || !isTrackedChildStillLiveForPid(session, pid)
-          ) continue;
-          session.childProcess.kill('SIGTERM');
-          session.stopRequestedAtMs = Date.now();
-          logger.debug(`[DAEMON RUN] Sent SIGTERM to daemon-spawned session ${normalizedSessionId} (pid=${pid})`);
-          stoppedAny = true;
-          signaledPids.push(pid);
-        } catch (error) {
-          logger.debug(`[DAEMON RUN] Failed to kill session ${normalizedSessionId} (pid=${pid}):`, error);
-        }
-        continue;
-      }
-
-      // PID reuse safety: verify the PID still looks like a Happy session process (and matches hash if known).
-      if (!await claimSignalAuthority()) continue;
-      const safe = await isPidSafeHappySessionProcess({
-        pid,
-        expectedProcessCommandHash: session.processCommandHash,
-        expectedProcessStartTimeMs: session.processStartTimeMs,
-      });
-      if (!safe) {
-        logPidReuseRefusal(`[DAEMON RUN] Refusing to SIGTERM PID ${pid} for session ${normalizedSessionId} (PID reuse safety)`);
-        continue;
-      }
-      if (!isSignalAuthorityCurrent()) continue;
-
-      try {
-        process.kill(pid, 'SIGTERM');
-        session.stopRequestedAtMs = Date.now();
-        logger.debug(`[DAEMON RUN] Sent SIGTERM to external session PID ${pid} (${normalizedSessionId})`);
+        if (!isSignalAuthorityCurrent()
+          || (session.startedBy === 'daemon' && session.childProcess && !isTrackedChildStillLiveForPid(session, pid))) continue;
+        session.stopRequestedAtMs ??= Date.now();
+        // The runner lifecycle owns its established exit wait; one terminator owns every signal.
+        const result = await terminateTargets({
+          targets: [{ pid, ...(session.processStartTimeMs === undefined ? {} : { start: { startTimeMs: session.processStartTimeMs } }) }],
+          tree: false, waitForExit: false,
+        });
+        if (result.outcomes.some(outcome => outcome.outcome === 'refused')) continue;
         stoppedAny = true;
         signaledPids.push(pid);
       } catch (error) {
-        logger.debug(`[DAEMON RUN] Failed to kill external session PID ${pid}:`, error);
+        logger.debug(`[DAEMON RUN] Failed to signal session ${normalizedSessionId} (pid=${pid}):`, error);
       }
     }
 
@@ -765,6 +666,7 @@ export function createStopSession(params: Readonly<{
           isSignalAuthorityCurrent: () => pidToTrackedSession.get(pid) === expectedSession
             && isExactTrackedRunner(pid, expectedSession, options?.expectedTrackedRunner),
           logPidReuseRefusal,
+          terminateTargets,
         }) || forceSignaledAny;
       }
 
@@ -793,6 +695,13 @@ export function createStopSession(params: Readonly<{
       elapsedMs: Date.now() - stopStartedAtMs,
       trackedRunnerCount: pidsToStop.length,
     });
+    if (params.ownerRemainder && pidsToStop.length > 0) {
+      const remainder = await params.ownerRemainder.end(remainderOwner, capturedRemainder);
+      if (remainder.status !== 'complete') {
+        logWarning(`[DAEMON RUN] Session remainder cleanup was incomplete for ${normalizedSessionId}`, remainder);
+        return incompleteStopSession('runner_signal_incomplete');
+      }
+    }
     const retirementStartedAtMs = Date.now();
     if (legacyRecoveryEvidence) {
       return await retireLegacyAttachmentAfterPositiveDeath(legacyRecoveryEvidence, {

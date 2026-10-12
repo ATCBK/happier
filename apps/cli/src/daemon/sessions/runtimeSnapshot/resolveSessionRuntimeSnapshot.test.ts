@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PermissionMode } from '@/api/types';
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
-import type { ConnectedServiceBindingsV2, ProviderBoundModelRef, SessionMcpSelectionV1 } from '@happier-dev/protocol';
+import type { ConnectedServiceBindingsV2, ProviderBoundModelRef, SessionCapabilitySelectionV1 } from '@happier-dev/protocol';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 type RuntimeSnapshotValue<T> = Readonly<{ value: T; updatedAt: number }>;
@@ -20,7 +20,7 @@ type RuntimeSnapshotModule = Readonly<{
       sessionId: string | null;
       connectedServices: ConnectedServiceBindingsV2 | null;
       connectedServicesUpdatedAt: number | null;
-      mcpSelection: SessionMcpSelectionV1 | null;
+      capabilitySelection: SessionCapabilitySelectionV1 | null;
       permissionMode: RuntimeSnapshotValue<PermissionMode> | null;
       agentModeId: RuntimeSnapshotValue<string> | null;
       modelSelection: RuntimeSnapshotValue<ProviderBoundModelRef | null> | null;
@@ -171,17 +171,17 @@ describe('resolveSessionRuntimeSnapshot', () => {
       persistedMetadata: { mcpSelectionV1: persistedSelection },
       trackedSpawnOptions: {
         directory: '/tmp/repo',
-        mcpSelection: {
+        capabilitySelection: { mcp: {
           v: 1,
           managedServersEnabled: false,
           forceIncludeServerIds: [],
           forceExcludeServerIds: [],
-        },
+        } },
       },
     });
 
-    expect(result.snapshot.mcpSelection).toEqual(persistedSelection);
-    expect(result.spawnOptions.mcpSelection).toEqual(persistedSelection);
+    expect(result.snapshot.capabilitySelection?.mcp).toEqual(persistedSelection);
+    expect(result.spawnOptions.capabilitySelection?.mcp).toEqual(persistedSelection);
   });
 
   it('restores persisted runtime controls over stale incoming defaults', async () => {

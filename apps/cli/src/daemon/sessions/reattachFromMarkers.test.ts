@@ -51,7 +51,8 @@ function readObservedLinuxProcess(pid: number, command: string) {
     linuxBoundary: {
       readFile: async (path) => path.endsWith('/stat')
         ? `${pid} (runner) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 12345 22`
-        : path.endsWith('/cmdline') ? command : '',
+        : path.endsWith('/status') ? 'Uid: 1000 1000 1000 1000'
+          : path.endsWith('/cmdline') ? command : '',
       readdir: async () => [],
       readlink: async () => '/workspace',
     },
@@ -508,6 +509,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
         attachmentId,
         handle,
         terminalMode: 'zellij',
+        metadata: marker.metadata,
         controlDescriptorAvailable: true,
       }],
       connectedServiceRestartIntents: [],

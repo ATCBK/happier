@@ -778,6 +778,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
             happySessionId: marker.happySessionId,
             startedBy: marker.startedBy,
             cwd: marker.cwd,
+            linuxLaunchUnit: marker.linuxLaunchUnit,
             processCommandHash:
               marker.processCommandHash,
             processStartTimeMs:

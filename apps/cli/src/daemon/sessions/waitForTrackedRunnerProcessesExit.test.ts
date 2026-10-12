@@ -10,7 +10,7 @@ import { readProcessRunState } from '../processRunState';
 import { waitForExistingSessionExitIfStopRequested } from './waitForExistingSessionExitIfStopRequested';
 import { isSessionRunnerActive } from './isSessionRunnerActive';
 
-import { waitForTrackedRunnerProcessesExit } from './waitForTrackedRunnerProcessesExit';
+import { observePlannedRunnerRetirement, waitForTrackedRunnerProcessesExit } from './waitForTrackedRunnerProcessesExit';
 
 describe('waitForTrackedRunnerProcessesExit', () => {
   it.skipIf(process.platform === 'win32')('preserves custody for a real paused live child', async () => {
@@ -124,5 +124,29 @@ describe('waitForTrackedRunnerProcessesExit', () => {
       pollIntervalMs: 0,
       readRunState: vi.fn(async () => 'servable' as const),
     })).resolves.toBe(false);
+  });
+});
+
+
+describe('observePlannedRunnerRetirement', () => {
+  it('limits adopted restart process scans to twice per second within the existing completion budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAtMs = Date.now();
+      const tracked: TrackedSession = { pid: 101, startedBy: 'daemon', happySessionId: 'sess-1' };
+      const exits: number[] = [];
+      // OS process-state probes and the clock are the boundaries; the physical-exit owner runs for real.
+      const readRunState = vi.fn(async () => Date.now() - startedAtMs >= 1_000 ? 'dead' as const : 'servable' as const);
+      const waiting = observePlannedRunnerRetirement({
+        tracked, timeoutMs: 1_000, pollIntervalMs: 50, readRunState,
+        onExitObserved: (pid) => { exits.push(pid); },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await waiting;
+      expect(exits).toEqual([101]);
+      expect(readRunState.mock.calls.length).toBeLessThanOrEqual(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

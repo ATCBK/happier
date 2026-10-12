@@ -39,6 +39,17 @@ describe('managed directory reattach', () => {
                 metadata: { path: allocation.directory, sessionDirectoryV1: { v: 1, kind: 'managed' } },
                 respawn,
             });
+            expect((await listSessionMarkers({ requireComplete: true })).find((marker) => marker.pid === process.pid)).toMatchObject({
+                happySessionId: sessionId,
+                processStartTimeMs: identity.processStartTimeMs,
+                respawn: {
+                    agentTarget: {
+                        kind: 'agent',
+                        identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+                        definitionId: 'my-acp',
+                    },
+                },
+            });
             await rm(allocation.directory, { recursive: true });
             const tracked = new Map<number, TrackedSession>();
             const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession: tracked });

@@ -36,8 +36,8 @@ import {
   readAllWindowsProcessFacts,
 } from '../platform/windows/windowsProcessCustody';
 import type {
-  WindowsProcessInventoryFact,
-} from '../platform/windows/windowsProcessInventory';
+  ProcessCensusProcessFact,
+} from '@/processes/census/processFacts';
 import type { DeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
 
 export function resolveSessionWebhookPath(
@@ -246,13 +246,13 @@ export function createOnHappySessionWebhook(params: Readonly<{
   findHappyProcessByPidFn?: typeof findHappyProcessByPid;
   readProcessIdentityByPidFn?: typeof readProcessIdentityByPid;
   readAllWindowsProcessFactsFn?: () => Promise<
-    ReadonlyMap<number, WindowsProcessInventoryFact>
+    ReadonlyMap<number, ProcessCensusProcessFact>
   >;
   listSessionMarkersFn?: typeof listSessionMarkers;
   writeSessionMarkerFn?: typeof writeSessionMarker;
   promoteSessionMarkerFn?: typeof promoteSessionMarkerPid;
   removeSessionMarkerIfOwnedFn?: typeof removeSessionMarkerIfOwned;
-  getParentPidFn?: (pid: number) => number | null;
+  getParentPidFn?: (pid: number) => number | null | Promise<number | null>;
   readCredentialsFn?: typeof readStoredCredentials;
   onTrackedSessionReady?: (tracked: TrackedSession) => Promise<void>;
   onTrackedSessionReported?: (tracked: TrackedSession) => Promise<void> | void;
@@ -440,7 +440,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
           );
         }
       } else {
-        const ordinaryParent = resolveOrdinaryDaemonParentCorrelation({
+        const ordinaryParent = await resolveOrdinaryDaemonParentCorrelation({
           metadata: normalizedMetadata, pid, pidToTrackedSession, pidToAwaiter, getParentPidFn,
         });
         const ordinaryParentPid = ordinaryParent.parentPid;
@@ -504,7 +504,7 @@ export function createOnHappySessionWebhook(params: Readonly<{
         // Heuristic: only attempt PPID correlation when at least one
         // ordinary daemon spawn is in flight.
         } else if (pidToAwaiter.size === 0) {
-          const parentPid = normalizedMetadata.startedBy === 'daemon' ? getParentPidFn(pid) : null;
+          const parentPid = normalizedMetadata.startedBy === 'daemon' ? await getParentPidFn(pid) : null;
           if (didDaemonWebhookParentTimeOut({ parentPid, metadata: normalizedMetadata, pidToTrackedSession })) {
             logger.debug(`[DAEMON RUN] Ignoring late child webhook for timed-out daemon wrapper PID ${parentPid}: ${sessionId}`);
             return;

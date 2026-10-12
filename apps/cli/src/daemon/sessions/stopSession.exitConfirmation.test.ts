@@ -5,6 +5,9 @@ import { readProcessRunState } from '../processRunState';
 import { readProcessIdentityByPid } from '../processIdentity';
 import { createStopSession } from './stopSession';
 import { waitForTrackedRunnerProcessesExit } from './waitForTrackedRunnerProcessesExit';
+import type { TrackedSession } from '../types';
+import { createSessionProcessActionLifecycle } from './sessionProcessActionLifecycle';
+import { createSessionRunnerRespawnManager } from '../processSupervision/sessionRunnerRespawn';
 
 const procfsGate = vi.hoisted(() => ({
   beforeRead: null as ((path: unknown) => Promise<void>) | null,
@@ -12,7 +15,10 @@ const procfsGate = vi.hoisted(() => ({
 // Only the OS read is gated; PID classification, safety, and exit observation stay real.
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, readFile: async (...args: Parameters<typeof actual.readFile>) => {
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    await procfsGate.beforeRead?.(args[0]);
+    return await actual.open(...args);
+  }, readFile: async (...args: Parameters<typeof actual.readFile>) => {
     await procfsGate.beforeRead?.(args[0]);
     return await actual.readFile(...args);
   } };
@@ -21,6 +27,45 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 afterEach(() => { procfsGate.beforeRead = null; });
 
 describe.skipIf(process.platform !== 'linux')('Stop exit confirmation', () => {
+  it('publishes the existing stopping fact before the first native signal', async () => {
+    const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 100)); process.send('ready'); setInterval(() => {}, 1000)"],
+      { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+    const exited = once(child, 'exit');
+    await once(child, 'message');
+    const pid = child.pid!;
+    const identity = await readProcessIdentityByPid(pid);
+    if (!identity) throw new Error('fixture native identity unavailable');
+    const tracked: TrackedSession = { pid, startedBy: 'daemon', happySessionId: 'native-first-signal',
+      processStartTimeMs: identity.processStartTimeMs, childProcess: child,
+      vendorResumeId: 'native-resume', spawnOptions: { directory: '/fixture' } };
+    const sessions = new Map([[pid, tracked]]);
+    let timestampAtSignal: number | undefined;
+    const originalKill = process.kill.bind(process);
+    const kill = vi.spyOn(process, 'kill').mockImplementation((targetPid, signal) => {
+      if (targetPid === pid && signal === 'SIGTERM') timestampAtSignal = tracked.stopRequestedAtMs;
+      return originalKill(targetPid, signal);
+    });
+    try {
+      const stop = createStopSession({ pidToTrackedSession: sessions,
+        readHostAttachmentState: async () => ({ status: 'absent' }),
+        waitForTrackedRunnersExit: async () => { await exited; return true; } });
+      const respawn = createSessionRunnerRespawnManager({ enabled: true, maxRestarts: 2, baseDelayMs: 0,
+        maxDelayMs: 0, jitterMs: 0, random: () => 0, isSessionAlreadyRunning: () => false,
+        spawnSession: async () => { throw new Error('Intentional Process Stop must not respawn'); },
+        logDebug: () => {}, logWarn: () => {} });
+      const lifecycle = createSessionProcessActionLifecycle({ pidToTrackedSession: sessions,
+        markStopRequested: respawn.markStopRequested, stopSession: stop });
+      await expect(lifecycle.stopExactSession({ sessionId: tracked.happySessionId!, pid,
+        start: { startTimeMs: identity.processStartTimeMs } })).resolves.toEqual({ status: 'stopped' });
+      expect(timestampAtSignal).toEqual(expect.any(Number));
+      expect(respawn.handleUnexpectedExit(tracked, { reason: 'process-exited', code: null, signal: 'SIGTERM' })).toBe('ignored');
+    } finally {
+      kill.mockRestore();
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await exited;
+    }
+  });
+
   it('confirms runner death during guarded escalation without signaling an unverified PID', async () => {
     // Development-only owned child. It ignores graceful Stop until the identity probe starts.
     const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); process.send('ready'); setInterval(() => {}, 1000)"],

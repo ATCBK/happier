@@ -13,12 +13,13 @@ import {
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
 import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { SessionCapabilitySelectionV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
+import { readAppliedSessionCapabilitySelectionFromMetadataV1, readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
 import { sessionModelSelectionV2TeamBindingIntent } from '@happier-dev/protocol/providers/selection/v2';
-import type { ProviderBoundModelRef, ConnectedServiceMaterializationIdentityV1, SessionModelSelectionV2, ConnectedServiceBindingsV2, SessionMcpSelectionV1 } from '@happier-dev/protocol';
+import type { ProviderBoundModelRef, ConnectedServiceMaterializationIdentityV1, SessionModelSelectionV2, ConnectedServiceBindingsV2, SessionCapabilitySelectionV1 } from '@happier-dev/protocol';
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import {
@@ -54,7 +55,7 @@ export type SessionRuntimeSnapshot = Readonly<{
   connectedServices: ConnectedServiceBindingsV2 | null;
   connectedServicesUpdatedAt: number | null;
   connectedServiceMaterializationIdentityV1: ConnectedServiceMaterializationIdentityV1 | null;
-  mcpSelection: SessionMcpSelectionV1 | null;
+  capabilitySelection: SessionCapabilitySelectionV1 | null;
   runtimeDescriptorV1: SpawnSessionOptions['runtimeDescriptorV1'] | null;
   permissionMode: SnapshotValue<PermissionMode> | null;
   agentModeId: SnapshotValue<string> | null;
@@ -137,9 +138,9 @@ function parseConnectedServices(value: unknown): ConnectedServiceBindingsV2 | nu
   return parsed.success ? parsed.data : null;
 }
 
-function parseMcpSelection(value: unknown): SessionMcpSelectionV1 | null {
+function parseCapabilitySelection(value: unknown): SessionCapabilitySelectionV1 | null {
   if (value === undefined || value === null) return null;
-  const parsed = SessionMcpSelectionV1Schema.safeParse(value);
+  const parsed = SessionCapabilitySelectionV1Schema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 
@@ -383,8 +384,8 @@ function applySnapshotToSpawnOptions(
     next.connectedServiceMaterializationIdentityV1 = snapshot.connectedServiceMaterializationIdentityV1;
   }
 
-  if (snapshot.mcpSelection) {
-    next.mcpSelection = snapshot.mcpSelection;
+  if (snapshot.capabilitySelection) {
+    next.capabilitySelection = snapshot.capabilitySelection;
   }
 
   if (snapshot.runtimeDescriptorV1) {
@@ -500,10 +501,12 @@ export function resolveSessionRuntimeSnapshot(
     connectedServices: connectedServices?.value ?? null,
     connectedServicesUpdatedAt: connectedServices?.updatedAt ?? null,
     connectedServiceMaterializationIdentityV1: chooseConnectedServiceMaterializationIdentity(params),
-    mcpSelection:
-      parseMcpSelection(params.persistedMetadata?.mcpSelectionV1)
-      ?? parseMcpSelection(params.incomingOptions.mcpSelection)
-      ?? parseMcpSelection(params.trackedSpawnOptions?.mcpSelection),
+    capabilitySelection:
+      (params.persistedMetadata && (params.persistedMetadata.mcpSelectionV1 !== undefined || params.persistedMetadata.skillSelectionV1 !== undefined)
+        ? (retainedLiveRuntimeOptions ? readAppliedSessionCapabilitySelectionFromMetadataV1 : readSessionCapabilitySelectionFromMetadataV1)(params.persistedMetadata)
+        : null)
+      ?? parseCapabilitySelection(params.incomingOptions.capabilitySelection)
+      ?? parseCapabilitySelection(params.trackedSpawnOptions?.capabilitySelection),
     runtimeDescriptorV1: resolveRuntimeDescriptorSelection(params),
     permissionMode: chooseTimestamped([
       readPermissionFromMetadata(params.persistedMetadata),

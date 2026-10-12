@@ -12,6 +12,10 @@ import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/session
 import type { AdmittedRequesterSessionBootstrap } from '../sessionEncryption/requesterSessionCredentials';
 import type { SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { SpawnFailureSpawnErrorDetailSchema } from '@happier-dev/protocol/spawnSession';
+import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
+import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
+import type { PendingActivationFailureDetailsV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 
 type PendingInactiveSessionActivationResult =
   | Readonly<{ status: 'activated' }>
@@ -26,6 +30,7 @@ type PendingInactiveSessionActivationResult =
     }>
   | Readonly<{
       status: 'rejected';
+      failureDetails?: PendingActivationFailureDetailsV1;
       reason:
         | 'ineligible'
         | 'identity-unavailable'
@@ -33,6 +38,13 @@ type PendingInactiveSessionActivationResult =
         | 'session-directory-missing'
         | 'spawn-rejected';
     }>;
+
+export type PendingInactiveSessionActivationRejected = Readonly<{
+  sessionId: string;
+  reason: Extract<PendingInactiveSessionActivationResult, { status: 'rejected' }>['reason'];
+  requester?: RequesterWorkAttributionV1;
+  failure?: SpawnFailureV1;
+}>;
 
 type PendingInactiveSessionActivationParams = Readonly<{
   credentials: StoredCredentials;
@@ -45,6 +57,7 @@ type PendingInactiveSessionActivationParams = Readonly<{
   requester?: Pick<AdmittedRequesterSessionBootstrap, 'attribution' | 'serverHttpBaseUrl' | 'isCurrent'>;
   expectedTarget?: SessionInputMachineTargetV1;
   resolveCurrentMachineExecutionOriginContext?: () => Promise<CurrentMachineExecutionOriginContext | null>;
+  onActivationRejected?: (event: PendingInactiveSessionActivationRejected) => Promise<void>;
 }>;
 
 export async function activatePendingInactiveSession(params: PendingInactiveSessionActivationParams): Promise<PendingInactiveSessionActivationResult> {
@@ -95,18 +108,25 @@ async function activateAtAdmittedHome(params: PendingInactiveSessionActivationPa
   // it adopts a serviceable runner and spawns only after proving one absent.
   const rejectTerminal = async (
     reason: Extract<PendingInactiveSessionActivationResult, { status: 'rejected' }>['reason'],
+    failure?: SpawnFailureV1,
+    spawnErrorCode?: PendingActivationFailureDetailsV1['spawnErrorCode'],
+    runtimeReason?: PendingActivationFailureDetailsV1['runtimeReason'],
   ): Promise<PendingInactiveSessionActivationResult> => {
     if (!await isCurrent()) return { status: 'not-needed', reason: 'authorization-stale' };
+    const failureDetails: PendingActivationFailureDetailsV1 = { reason, ...(spawnErrorCode ? { spawnErrorCode } : {}),
+      ...(runtimeReason ? { runtimeReason } : {}) };
     const report = await reportPendingSessionActivationFailure({
       token: params.credentials.token,
       sessionId: params.sessionId,
       requestId: params.requestId,
       requestedAt: authorization.requestedAt,
       failureCode: 'runtime_start_failed',
+      failureDetails,
     });
-    return report.didFail
-      ? { status: 'rejected', reason }
-      : { status: 'not-needed', reason: 'authorization-stale' };
+    if (!report.didFail) return { status: 'not-needed', reason: 'authorization-stale' };
+    if (await isCurrent()) await params.onActivationRejected?.({ sessionId: params.sessionId, reason,
+      ...(params.requester ? { requester: params.requester.attribution } : {}), ...(failure ? { failure } : {}) });
+    return { status: 'rejected', reason, failureDetails };
   };
   if (rawSession.archivedAt !== null && rawSession.archivedAt !== undefined) {
     return await rejectTerminal('ineligible');
@@ -215,6 +235,8 @@ async function activateAtAdmittedHome(params: PendingInactiveSessionActivationPa
     requesterWorkAttributionV1: params.requester.attribution,
     verifyRequesterMachineAdmissionCurrent: isCurrent,
   } : options);
+  const failureDetail = result.type === 'error' ? SpawnFailureSpawnErrorDetailSchema.safeParse(result.errorDetail).data : undefined;
+  const failure = failureDetail ? { reason: failureDetail.reason, ...(failureDetail.errno ? { errno: failureDetail.errno } : {}) } : undefined;
   if (
     (result.type === 'error' && result.errorCode === SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT)
     || (result.type === 'success' && result.sessionId !== params.sessionId)
@@ -222,8 +244,9 @@ async function activateAtAdmittedHome(params: PendingInactiveSessionActivationPa
     return { status: 'not-needed', reason: 'spawn-ambiguous' };
   }
   if (result.type === 'error' && result.errorCode === SPAWN_SESSION_ERROR_CODES.SESSION_DIRECTORY_MISSING) {
-    return await rejectTerminal('session-directory-missing');
+    return await rejectTerminal('session-directory-missing', failure, result.errorCode, result.runtimeFailureReason);
   }
-  if (result.type !== 'success') return await rejectTerminal('spawn-rejected');
+  if (result.type !== 'success') return await rejectTerminal('spawn-rejected', failure, result.type === 'error' ? result.errorCode : undefined,
+    result.type === 'error' ? result.runtimeFailureReason : undefined);
   return { status: 'activated' };
 }

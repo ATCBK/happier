@@ -4,6 +4,7 @@ import { logger } from '@/ui/logger';
 import { writeSessionExitReport } from '@/session/diagnostics/sessionExitReport';
 
 import type { TrackedSession } from '../types';
+import type { OwnerRemainderPort } from '../processes/endOwnerRemainder';
 import {
   promoteSessionMarkerPid,
   removeSessionMarker,
@@ -110,6 +111,8 @@ async function settleNoTurnFinalExit(params: Readonly<{
 
 export function createOnChildExited(params: Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
+  ownerRemainder?: OwnerRemainderPort;
+  observeSessionScopeExit?: (tracked: TrackedSession) => Promise<void>;
   processPresenceDependencies?: Readonly<{
     readProcessRunState?: typeof readProcessRunState;
     readProcessIdentityByPid?: typeof readProcessIdentityByPid;
@@ -259,6 +262,15 @@ export function createOnChildExited(params: Readonly<{
       if (markerCustody) await markerCustody.pending;
       if (startupCustody) await startupCustody.finalization;
       const isCurrentPidOwner = (): boolean => pidToTrackedSession.get(pid) === tracked;
+      if (!isCurrentPidOwner()) return;
+      try {
+        await params.observeSessionScopeExit?.(tracked);
+        await tracked.guardStopReceipt?.settle('stopped');
+      } catch (error) {
+        logger.warn('[DAEMON RUN] Session exit evidence settlement unavailable; retaining exit custody', { pid, error });
+        return;
+      }
+      if (!isCurrentPidOwner()) return;
       const resourceCleanupStartedAtMs = Date.now();
       const cleanupComplete = await cleanupPidSessionResources({
         pid,
@@ -280,7 +292,9 @@ export function createOnChildExited(params: Readonly<{
         exit.reason === 'process-error' ||
         (typeof exit.code === 'number' && exit.code !== 0) ||
         (typeof exit.signal === 'string' && exit.signal.length > 0 && !['SIGTERM', 'SIGINT'].includes(exit.signal));
-      const isUnexpected = typeof override === 'boolean' ? override : isUnexpectedBase;
+      const personRequestedKill = tracked.stopRequestedReason === 'user_process_kill'
+        && typeof tracked.stopRequestedAtMs === 'number';
+      const isUnexpected = !personRequestedKill && (typeof override === 'boolean' ? override : isUnexpectedBase);
 
       if (liveReplacement) {
         logger.debug('[DAEMON RUN] Skipping session-end for exited PID because another live PID owns the same session', {
@@ -291,9 +305,18 @@ export function createOnChildExited(params: Readonly<{
       }
 
       const finalSessionId = normalizeSessionId(tracked.happySessionId);
+      if (shouldReportSessionEnd && finalSessionId && params.ownerRemainder) {
+        const remainder = await params.ownerRemainder.end({ kind: 'session', sessionId: finalSessionId }, tracked.ownerRemainderCapture);
+        if (!isCurrentPidOwner()) return;
+        if (remainder.status !== 'complete') {
+          logger.warn('[DAEMON RUN] Runner remainder cleanup incomplete; survivors retained for left-behind observation', {
+            sessionId: finalSessionId, status: remainder.status, outcomes: remainder.outcomes,
+          });
+        }
+      }
       const hasServerBackedSession = Boolean(finalSessionId) && isServerBackedSessionId(finalSessionId);
       const actionableUnexpectedExit = shouldReportSessionEnd && isUnexpected && hasServerBackedSession;
-      const shouldPreserveMarker = hasServerBackedSession && await shouldPreserveSessionMarkerOnExit?.({
+      const shouldPreserveMarker = !personRequestedKill && hasServerBackedSession && await shouldPreserveSessionMarkerOnExit?.({
         pid,
         trackedSession: tracked,
         exit,
@@ -439,7 +462,11 @@ export function createOnChildExited(params: Readonly<{
         report: {
           observedAt,
           observedBy: 'daemon',
-          reason: exit.reason,
+          reason: personRequestedKill ? 'killed_by_person' : exit.reason,
+          ...(personRequestedKill ? {
+            terminationKind: 'kill', terminationReason: 'user_request',
+            terminationRequestedAt: tracked.stopRequestedAtMs,
+          } : {}),
           code: exit.code,
           signal: exit.signal,
           stderrTail: exit.stderrTail ?? null,

@@ -14,6 +14,54 @@ function tracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
 }
 
 describe('applyTrackedSessionTurnLifecycle', () => {
+  it('reconciles a completed exact reattached turn so retained marker custody does not keep the runner busy', async () => {
+    const current = tracked({
+      reattachedInterruptedTurnId: 'settled-turn',
+      agentRuntimeDaemonServiceAdmittedTurnId: 'settled-turn',
+      agentRuntimeDaemonServiceAdmittedInputId: 'settled-input',
+    });
+    const updateSessionMarkerActiveTurn = vi.fn(async () => true);
+    await expect(applyTrackedSessionTurnLifecycle({
+      trackedSessions: [current], sessionId: 'session-1', event: 'reconcile_reattached',
+      readReattachedTurnSnapshot: async () => ({ id: 'session-1', latestTurnId: 'settled-turn', latestTurnStatus: 'completed' }),
+      updateSessionMarkerActiveTurn,
+    })).resolves.toEqual({ status: 'recorded', activeTurnId: null });
+    expect(current.reattachedInterruptedTurnId).toBeUndefined();
+    expect(current.agentRuntimeDaemonServiceAdmittedTurnId).toBeUndefined();
+    expect(updateSessionMarkerActiveTurn).toHaveBeenCalledWith({
+      pid: 42, sessionId: 'session-1', activeTurnId: null, expectedActiveTurnId: 'settled-turn',
+    });
+  });
+
+  it.each([
+    { id: 'session-1', latestTurnId: 'settled-turn', latestTurnStatus: 'in_progress' },
+    { id: 'session-1', latestTurnId: 'other-turn', latestTurnStatus: 'completed' },
+    { id: 'other-session', latestTurnId: 'settled-turn', latestTurnStatus: 'completed' },
+    null,
+  ] as const)('retains the reattached witness without an exact terminal snapshot (%j)', async snapshot => {
+    const current = tracked({ reattachedInterruptedTurnId: 'settled-turn' });
+    const updateSessionMarkerActiveTurn = vi.fn(async () => true);
+    await applyTrackedSessionTurnLifecycle({
+      trackedSessions: [current], sessionId: 'session-1', event: 'reconcile_reattached',
+      readReattachedTurnSnapshot: async () => snapshot, updateSessionMarkerActiveTurn,
+    });
+    expect(current.reattachedInterruptedTurnId).toBe('settled-turn');
+    expect(updateSessionMarkerActiveTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not clear a fresh turn that arrives during recovered terminal observation', async () => {
+    const current = tracked({ reattachedInterruptedTurnId: 'settled-turn' });
+    const updateSessionMarkerActiveTurn = vi.fn(async () => true);
+    await applyTrackedSessionTurnLifecycle({
+      trackedSessions: [current], sessionId: 'session-1', event: 'reconcile_reattached',
+      readReattachedTurnSnapshot: async () => {
+        current.activeTurnId = 'fresh-turn';
+        return { id: 'session-1', latestTurnId: 'settled-turn', latestTurnStatus: 'completed' };
+      }, updateSessionMarkerActiveTurn,
+    });
+    expect(current.activeTurnId).toBe('fresh-turn');
+    expect(updateSessionMarkerActiveTurn).not.toHaveBeenCalled();
+  });
   it('records one exact open turn and clears it only for the matching terminal event', async () => {
     const current = tracked();
     const updateSessionMarkerActiveTurn = vi.fn(async () => true);

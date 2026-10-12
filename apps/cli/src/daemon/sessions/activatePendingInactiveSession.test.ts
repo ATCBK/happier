@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createPlainSessionOwnerMetadataEnvelopeV1,
@@ -11,6 +14,11 @@ import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 
 import { activatePendingInactiveSession } from './activatePendingInactiveSession';
+import { createActivityLog } from '../guard/activityLog';
+import { createMachineVitalsSampler } from '../vitals/createMachineVitalsSampler';
+import { createMinuteHistoryStore } from '../vitals/history/minuteHistoryStore';
+import { createMachineResourceSummary } from '../resources/machineResourceSummary';
+import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
 type ResumeOptions = Parameters<Parameters<typeof activatePendingInactiveSession>[0]['spawnSession']>[0];
 
 vi.mock('@/session/transport/http/sessionsHttp', () => ({
@@ -71,6 +79,64 @@ function createSession(active: boolean) {
 }
 
 describe('activatePendingInactiveSession', () => {
+  it('retains the exact typed spawn refusal without copying its private message', async () => {
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
+    vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
+    const result = await activatePendingInactiveSession({ credentials: tokenOnlyCredentials, machineId: 'machine-1',
+      sessionId: 'session-1', requestId: 'pending-after-ui-death', pendingVersion: 9,
+      spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+        runtimeFailureReason: 'transport_unavailable',
+        errorMessage: 'secret credential and transcript' }) });
+    expect(result).toMatchObject({ status: 'rejected', reason: 'spawn-rejected',
+      failureDetails: { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED', runtimeReason: 'transport_unavailable' } });
+    expect(reportPendingSessionActivationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      failureCode: 'runtime_start_failed', failureDetails: { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED', runtimeReason: 'transport_unavailable' } }));
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
+  it('records a rejected Guard-stopped wake with its native cause, then folds actual runner restoration without changing resume options', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-guard-wake-'));
+    let now = Date.now();
+    const attribution = { serverId: 'home', accountId: 'owner', machineId: 'machine-1', installationId: 'installation' };
+    const sampler = createMachineVitalsSampler({ historyStore: await createMinuteHistoryStore({ directory: join(directory, 'minutes') }),
+      readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) } });
+    const summary = createMachineResourceSummary({ sampler, nowMs: () => now, readNearlyFull: () => null, onError: error => { throw error; } });
+    const activity = await createActivityLog({ activeServerDir: directory, nowMs: () => now, resourceSummary: summary });
+    try {
+      await activity.append({ v: 1, id: 'guard-stop', at: now, kind: 'stopped_session', rule: 'idle_sessions', outcome: 'done', attribution,
+        subject: { kind: 'session', sessionId: 'session-1', title: 'Session' },
+        wayBack: [{ label: 'resume', actionId: 'session.open', input: { sessionId: 'session-1', intent: 'resume' } }] });
+      const session = createSession(false);
+      session.metadata = JSON.stringify({ ...JSON.parse(session.metadata), permissionMode: 'read-only', permissionModeUpdatedAt: 5 });
+      vi.mocked(fetchSessionByIdCompat).mockResolvedValue(session);
+      vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
+      const spawnSession = vi.fn(async (_options: ResumeOptions): Promise<SpawnSessionResult> => ({ type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: 'native launch failed',
+        errorDetail: { kind: 'spawn_failure', reason: 'too_many_open_files', errno: 'EMFILE' } }));
+      const params = { credentials: tokenOnlyCredentials, machineId: 'machine-1', sessionId: 'session-1', requestId: 'pending-after-ui-death',
+        pendingVersion: 9, spawnSession,
+        onActivationRejected: async (event: Readonly<{ sessionId: string; reason: string; failure?: SpawnFailureV1 }>) => {
+          const { createGuardSessionRestoration } = await import('../guard/sessionRestoration');
+          await createGuardSessionRestoration({ activity, nowMs: () => now }).onActivationRejected({ ...event, attribution });
+        } };
+      expect(await activatePendingInactiveSession(params)).toMatchObject({ status: 'rejected', reason: 'spawn-rejected' });
+      expect((await activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'start_failed', rule: 'idle_sessions', ref: 'guard-stop', note: expect.stringContaining('Could not resume'),
+          failure: { reason: 'too_many_open_files', errno: 'EMFILE' }, nextStep: 'review_processes', attribution })]));
+      expect(spawnSession.mock.calls[0]?.[0]).toMatchObject({ existingSessionId: 'session-1', directory: '/repo',
+        permissionMode: 'read-only', permissionModeUpdatedAt: 5, initialTranscriptAfterSeq: 12,
+        executionAuthorization: { provenance: 'user_request', requestId: 'pending-after-ui-death', requestedAt: 10 } });
+      const { createGuardSessionRestoration } = await import('../guard/sessionRestoration');
+      const restoration = createGuardSessionRestoration({ activity, nowMs: () => now });
+      await restoration.onSessionRunnerStarted({ pid: 42, happySessionId: 'session-1', startedBy: 'daemon',
+        requesterWorkAttributionV1: { ...attribution, accountId: 'other' } });
+      expect((await activity.read('guard-stop'))?.undoneAt).toBeUndefined();
+      now++;
+      await restoration.onSessionRunnerStarted({ pid: 42, happySessionId: 'session-1', startedBy: 'daemon', requesterWorkAttributionV1: attribution });
+      expect((await activity.read('guard-stop'))?.undoneAt).toBe(now);
+      await restoration.onSessionRunnerStarted({ pid: 42, happySessionId: 'session-1', startedBy: 'daemon', requesterWorkAttributionV1: attribution });
+      expect((await activity.list({ range: 'today' })).entries.filter(row => row.kind === 'start_failed')).toHaveLength(1);
+    } finally { summary.stop(); await sampler.stop(); await rm(directory, { recursive: true, force: true }); }
+  });
   it('retains requester pending custody without reporting failure or spawning after Machine admission is lost', async () => {
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
@@ -85,6 +151,23 @@ describe('activatePendingInactiveSession', () => {
     expect(await activatePendingInactiveSession(params)).toEqual({ status: 'not-needed', reason: 'authorization-stale' });
     expect(spawnSession).not.toHaveBeenCalled();
     expect(reportPendingSessionActivationFailure).not.toHaveBeenCalled();
+  });
+
+  it('does not publish a Guard wake failure to a requester whose admission changed while the failure CAS was in flight', async () => {
+    let current = true;
+    const events: unknown[] = [];
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
+    vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('ineligible');
+    vi.mocked(reportPendingSessionActivationFailure).mockImplementationOnce(async () => { current = false; return { didFail: true }; });
+    const params = { credentials: tokenOnlyCredentials, machineId: 'machine-1', sessionId: 'session-1',
+      requestId: 'pending-after-ui-death', pendingVersion: 9,
+      spawnSession: async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'session-1' }),
+      requester: { serverHttpBaseUrl: 'https://owner-home.test',
+        attribution: { serverId: 'home', accountId: 'owner', machineId: 'machine-1', installationId: 'installation' },
+        isCurrent: async () => current },
+      onActivationRejected: async (event: unknown) => { events.push(event); } };
+    expect(await activatePendingInactiveSession(params)).toMatchObject({ status: 'rejected', reason: 'ineligible' });
+    expect(events).toEqual([]);
   });
 
   it('preserves exact requester/Home custody on inactive resume and rechecks admission before spawn', async () => {
@@ -103,7 +186,9 @@ describe('activatePendingInactiveSession', () => {
       verifyRequesterMachineAdmissionCurrent: expect.any(Function) }));
     const options = spawnSession.mock.calls[0]?.[0];
     current = false;
-    expect(await options?.verifyRequesterMachineAdmissionCurrent()).toBe(false);
+    const verifyAdmission = options?.verifyRequesterMachineAdmissionCurrent;
+    if (!verifyAdmission) throw new Error('Expected the resume launch to retain its requester admission verifier');
+    expect(await verifyAdmission()).toBe(false);
   });
 
   it('leaves the queued prompt in custody when the managed session directory is missing', async () => {
@@ -123,10 +208,11 @@ describe('activatePendingInactiveSession', () => {
     await expect(activatePendingInactiveSession({
       credentials: tokenOnlyCredentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
-    })).resolves.toEqual({ status: 'rejected', reason: 'session-directory-missing' });
+    })).resolves.toMatchObject({ status: 'rejected', reason: 'session-directory-missing' });
     expect(reportPendingSessionActivationFailure).toHaveBeenCalledWith({
       token: 'token-only', sessionId: 'session-1', requestId: 'pending-after-ui-death',
       requestedAt: 10, failureCode: 'runtime_start_failed',
+      failureDetails: { reason: 'session-directory-missing', spawnErrorCode: 'SESSION_DIRECTORY_MISSING' },
     });
   });
 
@@ -300,7 +386,7 @@ describe('activatePendingInactiveSession', () => {
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
       spawnSession,
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       status: 'rejected',
       reason: 'identity-unavailable',
     });
@@ -368,7 +454,7 @@ describe('activatePendingInactiveSession', () => {
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
       spawnSession,
-    })).resolves.toEqual({ status: 'rejected', reason: 'takeover-required' });
+    })).resolves.toMatchObject({ status: 'rejected', reason: 'takeover-required' });
 
     expect(spawnSession).not.toHaveBeenCalled();
     expect(reportPendingSessionActivationFailure).toHaveBeenCalledOnce();
@@ -391,12 +477,13 @@ describe('activatePendingInactiveSession', () => {
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
       spawnSession,
-    })).resolves.toEqual({ status: 'rejected', reason: 'takeover-required' });
+    })).resolves.toMatchObject({ status: 'rejected', reason: 'takeover-required' });
 
     expect(spawnSession).not.toHaveBeenCalled();
     expect(reportPendingSessionActivationFailure).toHaveBeenCalledWith({
       token: 'token-only', sessionId: 'session-1', requestId: 'pending-after-ui-death',
       requestedAt: 10, failureCode: 'runtime_start_failed',
+      failureDetails: { reason: 'takeover-required' },
     });
   });
 
@@ -477,7 +564,7 @@ describe('activatePendingInactiveSession', () => {
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
       spawnSession,
-    })).resolves.toEqual({ status: 'rejected', reason: 'ineligible' });
+    })).resolves.toMatchObject({ status: 'rejected', reason: 'ineligible' });
 
     expect(reportPendingSessionActivationFailure).toHaveBeenCalledWith({
       token: 'token',
@@ -485,6 +572,7 @@ describe('activatePendingInactiveSession', () => {
       requestId: 'pending-after-ui-death',
       requestedAt: 10,
       failureCode: 'runtime_start_failed',
+      failureDetails: { reason: 'ineligible' },
     });
     expect(spawnSession).not.toHaveBeenCalled();
   });

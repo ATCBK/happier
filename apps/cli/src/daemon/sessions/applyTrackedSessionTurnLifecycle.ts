@@ -5,6 +5,7 @@ import {
 } from '@/daemon/agentRuntime/clearTrackedRunnerAgentDaemonServiceAdmission';
 import { updateSessionMarkerActiveTurn } from '../sessionRegistry';
 import type { TrackedSession } from '../types';
+import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 
 type TurnLifecycleEvent = 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
 
@@ -26,9 +27,11 @@ export type TrackedSessionTurnLifecycleResult =
 export async function applyTrackedSessionTurnLifecycle(input: Readonly<{
   trackedSessions: Iterable<TrackedSession>;
   sessionId: string;
-  event: TurnLifecycleEvent;
+  event: TurnLifecycleEvent | 'reconcile_reattached';
   turnId?: string;
   activeTurnIdWitness?: string | null;
+  readReattachedTurnSnapshot?: (sessionId: string) => Promise<Pick<RawSessionRecord,
+    'id' | 'latestTurnId' | 'latestTurnStatus'> | null>;
   updateSessionMarkerActiveTurn?: typeof updateSessionMarkerActiveTurn;
 }>): Promise<TrackedSessionTurnLifecycleResult> {
   const matches = Array.from(input.trackedSessions).filter(
@@ -47,6 +50,24 @@ export async function applyTrackedSessionTurnLifecycle(input: Readonly<{
     tracked.reattachedInterruptedTurnId ?? null;
   const retainedActiveTurnId =
     currentActiveTurnId ?? reattachedInterruptedTurnId;
+  let recoveredTerminalTurnId: string | null = null;
+  if (input.event === 'reconcile_reattached') {
+    if (currentActiveTurnId || !reattachedInterruptedTurnId || !input.readReattachedTurnSnapshot) {
+      return { status: 'ignored_missing_exact_turn', activeTurnId: currentActiveTurnId };
+    }
+    const runnerPid = tracked.sessionRunnerPid ?? tracked.pid;
+    const runnerStart = tracked.processStartTimeMs;
+    const runnerCommandHash = tracked.processCommandHash;
+    const snapshot = await input.readReattachedTurnSnapshot(input.sessionId).catch(() => null);
+    if ((tracked.sessionRunnerPid ?? tracked.pid) !== runnerPid
+      || tracked.processStartTimeMs !== runnerStart || tracked.processCommandHash !== runnerCommandHash
+      || tracked.activeTurnId || tracked.reattachedInterruptedTurnId !== reattachedInterruptedTurnId
+      || snapshot?.id !== input.sessionId || snapshot.latestTurnId !== reattachedInterruptedTurnId
+      || !['completed', 'failed', 'cancelled'].includes(snapshot.latestTurnStatus ?? '')) {
+      return { status: 'ignored_turn_mismatch', activeTurnId: tracked.activeTurnId ?? null };
+    }
+    recoveredTerminalTurnId = reattachedInterruptedTurnId;
+  }
   const hasRunnerPromptWitness =
     input.event === 'prompt_or_steer'
     && input.activeTurnIdWitness !== undefined;
@@ -100,12 +121,12 @@ export async function applyTrackedSessionTurnLifecycle(input: Readonly<{
     };
   }
 
-  const turnId = typeof input.turnId === 'string' ? input.turnId.trim() : '';
+  const turnId = recoveredTerminalTurnId ?? (typeof input.turnId === 'string' ? input.turnId.trim() : '');
   if (!turnId) {
     return { status: 'ignored_missing_exact_turn', activeTurnId: currentActiveTurnId };
   }
 
-  const isTerminal = input.event === 'assistant_message_end' || input.event === 'turn_cancelled';
+  const isTerminal = recoveredTerminalTurnId !== null || input.event === 'assistant_message_end' || input.event === 'turn_cancelled';
   if (
     input.event === 'task_started'
     && tracked
@@ -157,6 +178,7 @@ export async function applyTrackedSessionTurnLifecycle(input: Readonly<{
     pid: tracked.sessionRunnerPid ?? tracked.pid,
     sessionId: input.sessionId,
     activeTurnId: nextActiveTurnId,
+    ...(recoveredTerminalTurnId ? { expectedActiveTurnId: recoveredTerminalTurnId } : {}),
     ...(retainedAdmission
       ? {
           agentRuntimeDaemonServiceActiveAdmission:
@@ -166,6 +188,10 @@ export async function applyTrackedSessionTurnLifecycle(input: Readonly<{
   });
   if (!markerUpdated) {
     return { status: 'ignored_marker_not_updated', activeTurnId: currentActiveTurnId };
+  }
+
+  if (recoveredTerminalTurnId && (tracked.activeTurnId || tracked.reattachedInterruptedTurnId !== recoveredTerminalTurnId)) {
+    return { status: 'ignored_turn_mismatch', activeTurnId: tracked.activeTurnId ?? null };
   }
 
   if (nextActiveTurnId) {

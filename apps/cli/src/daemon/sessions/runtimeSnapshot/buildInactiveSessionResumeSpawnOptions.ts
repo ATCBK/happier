@@ -25,7 +25,7 @@ import { resolveSessionRuntimeSnapshot, SessionRuntimeDescriptorSelectionError }
 export type InactiveSessionResumeRuntimeOptions = Partial<Pick<SpawnSessionOptions,
   'permissionMode' | 'permissionModeUpdatedAt' | 'modelSelection' | 'resume' | 'environmentVariables'
   | 'profileId' | 'terminal' | 'windowsRemoteSessionLaunchMode' | 'windowsRemoteSessionConsole' | 'windowsTerminalWindowName'
-  | 'agentModeId' | 'mcpSelection' | 'connectedServices' | 'transcriptStorage' | 'runtimeDescriptorV1' | 'sessionConfigOptionOverrides'>>;
+  | 'agentModeId' | 'capabilitySelection' | 'connectedServices' | 'transcriptStorage' | 'runtimeDescriptorV1' | 'sessionConfigOptionOverrides'>>;
 
 export type BuildInactiveSessionResumeSpawnOptionsParams = Readonly<{
   fallbackMachineId?: string | null;
@@ -93,7 +93,7 @@ export function resolveSessionPersistedRuntimeIdentity(metadata: Record<string, 
   const correspondence = SessionCreationCorrespondenceV1ReadSchema.safeParse(
     metadata.sessionCreationCorrespondenceV1,
   );
-  const linked = resolveLinkedExternalSessionMetadataV1(metadata);
+  const linked = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
   const parsedAgentTarget = AgentExecutionTargetV1Schema.safeParse(
     correspondence.success
       ? correspondence.data.recipe.agentTarget

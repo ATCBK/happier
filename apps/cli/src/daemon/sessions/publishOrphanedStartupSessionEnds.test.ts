@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { publishOrphanedStartupSessionEnds } from './publishOrphanedStartupSessionEnds';
+import { isSessionRunnerActive } from './isSessionRunnerActive';
 
 describe('publishOrphanedStartupSessionEnds', () => {
   it('awaits exact terminal staging before releasing the orphan marker', async () => {
@@ -272,7 +273,11 @@ describe('publishOrphanedStartupSessionEnds', () => {
         activeTurnId: 'turn-exact-failed',
       }],
       removeSessionMarkerFn,
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual([{
+      sessionId: 'sess-orphaned-failed',
+      pid: 6482,
+      activeTurnId: 'turn-exact-failed',
+    }]);
     expect(captureMachineSessionTerminal).toHaveBeenCalledWith('sess-orphaned-failed');
     expect(removeSessionMarkerFn).not.toHaveBeenCalled();
   });
@@ -390,8 +395,13 @@ describe('publishOrphanedStartupSessionEnds', () => {
     const removeSessionMarkerIfOwnedFn = vi.fn(async () => true);
     const apiMachine = {
       enqueueDaemonTerminalExactTurnEnd: vi.fn(async () => undefined),
-      captureMachineSessionTerminal: vi.fn(),
-      finalizeMachineSessionTerminal: vi.fn(),
+      captureMachineSessionTerminal: vi.fn(async () => ({
+        v: 1 as const, status: 'captured' as const, sessionId: 'sess-live-recovered',
+        authority: { kind: 'generation' as const, publisherGeneration: '52' },
+      })),
+      finalizeMachineSessionTerminal: vi.fn(async () => ({
+        v: 1 as const, status: 'closed' as const, sessionId: 'sess-live-recovered',
+      })),
     };
     await publishOrphanedStartupSessionEnds({
       apiMachine,
@@ -415,5 +425,40 @@ describe('publishOrphanedStartupSessionEnds', () => {
       processStartTimeMs: 123,
       isStillOwned: expect.any(Function),
     });
+    removeSessionMarkerIfOwnedFn.mockClear();
+    // This Session acquired a live runner after the original startup scan.
+    // Exercise the real live-runner owner, including its OS liveness reader.
+    const liveTrackedSessions = [{ startedBy: 'daemon', happySessionId: 'sess-live-recovered', pid: process.pid }];
+    const remaining = await publishOrphanedStartupSessionEnds({
+      apiMachine,
+      orphanedDeadDaemonSessions: [{ sessionId: 'sess-live-recovered', pid: 6493, activeTurnId: 'turn-old-retry' }],
+      isSessionAlreadyRunning: async (sessionId: string) =>
+        await isSessionRunnerActive({ sessionId, trackedSessions: liveTrackedSessions }),
+      removeSessionMarkerIfOwnedFn,
+    });
+    expect(remaining).toEqual([]);
+    expect(apiMachine.captureMachineSessionTerminal).not.toHaveBeenCalled();
+    expect(apiMachine.finalizeMachineSessionTerminal).not.toHaveBeenCalled();
+    expect(removeSessionMarkerIfOwnedFn).toHaveBeenCalledWith(expect.objectContaining({ pid: 6493 }));
+
+    liveTrackedSessions.length = 0;
+    apiMachine.captureMachineSessionTerminal.mockImplementation(async () => {
+      liveTrackedSessions.push({ startedBy: 'daemon', happySessionId: 'sess-live-recovered', pid: process.pid });
+      return {
+        v: 1 as const, status: 'captured' as const, sessionId: 'sess-live-recovered',
+        authority: { kind: 'generation' as const, publisherGeneration: '52' },
+      };
+    });
+    // A successor can appear while capture is in flight, not only before retry.
+    expect(await publishOrphanedStartupSessionEnds({
+      apiMachine,
+      orphanedDeadDaemonSessions: [{ sessionId: 'sess-live-recovered', pid: 6494, activeTurnId: 'turn-capture-retry' }],
+      isSessionAlreadyRunning: async (sessionId: string) =>
+        await isSessionRunnerActive({ sessionId, trackedSessions: liveTrackedSessions }),
+      removeSessionMarkerIfOwnedFn,
+    })).toEqual([]);
+    expect(apiMachine.captureMachineSessionTerminal).toHaveBeenCalledTimes(1);
+    expect(apiMachine.finalizeMachineSessionTerminal).not.toHaveBeenCalled();
+    expect(removeSessionMarkerIfOwnedFn).toHaveBeenCalledWith(expect.objectContaining({ pid: 6494 }));
   });
 });

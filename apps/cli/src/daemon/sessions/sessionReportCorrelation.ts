@@ -3,24 +3,12 @@ import { logger } from '@/ui/logger';
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
 import type { Metadata } from '@/api/types';
 import type { TrackedSession } from '../types';
-import { execFileSync } from 'node:child_process';
+import { readProcessCensus } from '@/processes/census/processCensus';
 import { processIdentityMatches } from '@happier-dev/cli-common/processInstance';
 import { readProcessIdentityByPid } from '../processIdentity';
 import { captureExactWindowsTerminalLaunchProcess, readAllWindowsProcessFacts, type ExactWindowsProcessCancellationIdentity } from '../platform/windows/windowsProcessCustody';
-import type { WindowsProcessInventoryFact } from '../platform/windows/windowsProcessInventory';
+import type { ProcessCensusProcessFact } from '@/processes/census/processFacts';
 import { resolveWindowsHostedIdentity } from '../platform/windows/windowsHostedSessionRuntime';
-
-const DEFAULT_PARENT_PID_LOOKUP_TIMEOUT_MS = 1000;
-const PARENT_PID_LOOKUP_TIMEOUT_ENV_KEY = 'HAPPIER_DAEMON_PARENT_PID_LOOKUP_TIMEOUT_MS';
-
-function resolveParentPidLookupTimeoutMs(): number {
-  const raw = String(process.env[PARENT_PID_LOOKUP_TIMEOUT_ENV_KEY] ?? '').trim();
-  if (!raw) return DEFAULT_PARENT_PID_LOOKUP_TIMEOUT_MS;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_PARENT_PID_LOOKUP_TIMEOUT_MS;
-  // Keep this intentionally small: this runs on a webhook path.
-  return Math.max(50, Math.min(parsed, 5000));
-}
 
 /**
  * Get the parent PID of a process.
@@ -29,19 +17,15 @@ function resolveParentPidLookupTimeoutMs(): number {
  * (e.g. Node.js entrypoint) that in turn spawns the actual session binary.
  * Returns null on Windows or if the lookup fails.
  */
-export function getParentPid(pid: number): number | null {
+export async function getParentPid(pid: number): Promise<number | null> {
   if (process.platform === 'win32') return null;
   if (!Number.isInteger(pid) || pid <= 0) return null;
 
   try {
-    const stdout = execFileSync(
-      'ps',
-      ['-o', 'ppid=', '-p', String(pid)],
-      { encoding: 'utf-8', timeout: resolveParentPidLookupTimeoutMs(), stdio: ['ignore', 'pipe', 'ignore'] },
-    );
-    const ppid = Number.parseInt(stdout.trim(), 10);
-    if (!Number.isInteger(ppid) || ppid <= 0) return null;
-    return ppid;
+    const snapshot = await readProcessCensus({ freshness: 'fresh', pids: [pid], fields: [] });
+    if (snapshot.status !== 'ok') return null;
+    const ppid = snapshot.rows.find(row => row.pid === pid)?.ppid;
+    return typeof ppid === 'number' && Number.isInteger(ppid) && ppid > 0 ? ppid : null;
   } catch {
     return null;
   }
@@ -73,7 +57,7 @@ export async function findPendingWindowsTerminalTrackedSession(params: Readonly<
   metadata: Metadata;
   readProcessIdentityByPidFn: typeof readProcessIdentityByPid;
   readAllWindowsProcessFactsFn: () => Promise<
-    ReadonlyMap<number, WindowsProcessInventoryFact>
+    ReadonlyMap<number, ProcessCensusProcessFact>
   >;
 }>): Promise<PendingWindowsTerminalMatch> {
   if (params.metadata.startedBy !== 'daemon') {
@@ -117,7 +101,7 @@ export async function findPendingWindowsTerminalTrackedSession(params: Readonly<
   if (matches.length === 0) return { kind: 'refused' };
 
   let inventory:
-    ReadonlyMap<number, WindowsProcessInventoryFact>;
+    ReadonlyMap<number, ProcessCensusProcessFact>;
   try {
     inventory =
       await params.readAllWindowsProcessFactsFn();
@@ -171,15 +155,15 @@ export async function findPendingWindowsTerminalTrackedSession(params: Readonly<
 }
 
 
-export function resolveOrdinaryDaemonParentCorrelation(params: Readonly<{
+export async function resolveOrdinaryDaemonParentCorrelation(params: Readonly<{
   metadata: Metadata;
   pid: number;
   pidToTrackedSession: ReadonlyMap<number, TrackedSession>;
   pidToAwaiter: ReadonlyMap<number, unknown>;
-  getParentPidFn: (pid: number) => number | null;
+  getParentPidFn: (pid: number) => number | null | Promise<number | null>;
 }>) {
   const parentPid = params.metadata.startedBy === 'daemon' && params.pidToAwaiter.size > 0
-    ? params.getParentPidFn(params.pid) : null;
+    ? await params.getParentPidFn(params.pid) : null;
   const tracked = typeof parentPid === 'number' ? params.pidToTrackedSession.get(parentPid) ?? null : null;
   const hasAwaiter = typeof parentPid === 'number' && params.pidToAwaiter.has(parentPid);
   const hasChildHandle = typeof parentPid === 'number' && tracked?.childProcess?.pid === parentPid;
@@ -192,9 +176,9 @@ export async function resolveSessionReportTrackedCorrelation(params: Readonly<{
   pid: number;
   pidToTrackedSession: ReadonlyMap<number, TrackedSession>;
   pidToAwaiter: ReadonlyMap<number, unknown>;
-  getParentPidFn?: (pid: number) => number | null;
+  getParentPidFn?: (pid: number) => number | null | Promise<number | null>;
   readProcessIdentityByPidFn?: typeof readProcessIdentityByPid;
-  readAllWindowsProcessFactsFn?: () => Promise<ReadonlyMap<number, WindowsProcessInventoryFact>>;
+  readAllWindowsProcessFactsFn?: () => Promise<ReadonlyMap<number, ProcessCensusProcessFact>>;
 }>) {
   const direct = params.pidToTrackedSession.get(params.pid);
   if (direct) return { kind: 'matched' as const, tracked: direct };
@@ -202,7 +186,7 @@ export async function resolveSessionReportTrackedCorrelation(params: Readonly<{
   if (runner && (!runner.windowsTerminalLaunchCustody || runner.pid === params.pid)) {
     return { kind: 'matched' as const, tracked: runner };
   }
-  const parent = resolveOrdinaryDaemonParentCorrelation({
+  const parent = await resolveOrdinaryDaemonParentCorrelation({
     ...params, getParentPidFn: params.getParentPidFn ?? getParentPid,
   });
   if (!runner && parent.eligible && parent.tracked) return { kind: 'matched' as const, tracked: parent.tracked };

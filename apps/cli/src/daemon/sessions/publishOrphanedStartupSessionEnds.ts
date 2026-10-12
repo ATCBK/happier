@@ -22,11 +22,12 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
     ) => Promise<MachineSessionTerminalFinalizeResponseV1>;
   };
   orphanedDeadDaemonSessions: ReadonlyArray<OrphanedDeadDaemonSession>;
+  isSessionAlreadyRunning?: (sessionId: string) => Promise<boolean>;
   isShuttingDown?: () => boolean;
   now?: () => number;
   removeSessionMarkerFn?: typeof removeSessionMarker;
   removeSessionMarkerIfOwnedFn?: typeof removeSessionMarkerIfOwned;
-}>): Promise<void> {
+}>): Promise<ReadonlyArray<OrphanedDeadDaemonSession>> {
   const now = params.now ?? (() => Date.now());
   const isShuttingDown = (): boolean => params.isShuttingDown?.() === true;
   const groups = new Map<string, OrphanedDeadDaemonSession[]>();
@@ -71,11 +72,16 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
     return true;
   };
 
+  const settledSessionIds = new Set<string>();
   await Promise.all(Array.from(groups, async ([sessionId, evidence]) => {
     try {
-      if (evidence.some((marker) => marker.recoveredLiveSession === true)) {
+      if (isShuttingDown()) return;
+      // Retained evidence can outlive startup and a subsequent Session resume.
+      // Reuse the current runner owner before capturing terminal authority.
+      if (evidence.some((marker) => marker.recoveredLiveSession === true)
+        || await params.isSessionAlreadyRunning?.(sessionId)) {
         if (!await stageEvidence(evidence)) return;
-        await removeEvidence(evidence);
+        if (await removeEvidence(evidence)) settledSessionIds.add(sessionId);
         return;
       }
       if (isShuttingDown()) return;
@@ -93,7 +99,12 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
       }
       if (!await stageEvidence(evidence)) return;
       if (captured.status === 'already_inactive') {
-        await removeEvidence(evidence);
+        if (await removeEvidence(evidence)) settledSessionIds.add(sessionId);
+        return;
+      }
+      if (isShuttingDown()) return;
+      if (await params.isSessionAlreadyRunning?.(sessionId)) {
+        if (await removeEvidence(evidence)) settledSessionIds.add(sessionId);
         return;
       }
       if (isShuttingDown()) return;
@@ -111,7 +122,7 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
         return;
       }
       if (isShuttingDown()) return;
-      await removeEvidence(evidence);
+      if (await removeEvidence(evidence)) settledSessionIds.add(sessionId);
     } catch (error) {
       logger.debug('[DAEMON] Startup orphan settlement failed; retaining marker evidence', {
         sessionId,
@@ -120,4 +131,5 @@ export async function publishOrphanedStartupSessionEnds(params: Readonly<{
       });
     }
   }));
+  return params.orphanedDeadDaemonSessions.filter((marker) => !settledSessionIds.has(marker.sessionId));
 }

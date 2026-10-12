@@ -1,5 +1,6 @@
 import { readProcessRunState, type ProcessRunState } from '@/daemon/processRunState';
 import { logger } from '@/ui/logger';
+import type { TrackedSession } from '../types';
 
 type TrackedRunnerPid = Readonly<{ pid: number }>;
 
@@ -7,13 +8,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
 
-export async function waitForTrackedRunnerProcessesExit(params: Readonly<{
+type PhysicalExitWaitParams = Readonly<{
   runners: readonly TrackedRunnerPid[];
   timeoutMs: number;
   pollIntervalMs: number;
   readRunState?: (pid: number) => Promise<ProcessRunState>;
   onExitObserved?: (pid: number, exit: Readonly<{ reason: 'process-missing'; code: null; signal: null }>) => void | Promise<void>;
-}>): Promise<boolean> {
+}>;
+
+export async function waitForTrackedRunnerProcessesExit(params: PhysicalExitWaitParams): Promise<boolean> {
   const readRunState = params.readRunState ?? readProcessRunState;
   const remaining = new Set(
     params.runners
@@ -53,4 +56,19 @@ export async function waitForTrackedRunnerProcessesExit(params: Readonly<{
     remainingRunnerCount: remaining.size, elapsedMs: Date.now() - startedAtMs, timeoutMs,
   });
   return false;
+}
+
+
+export async function observePlannedRunnerRetirement(
+  params: Omit<PhysicalExitWaitParams, 'runners'> & Readonly<{ tracked: TrackedSession }>,
+): Promise<void> {
+  const { tracked, ...waitOptions } = params;
+  if (tracked.childProcess) return;
+  // Adopted restart observation can span the full completion window. Avoid repeated process
+  // listings more than twice a second while retaining an explicitly slower configured cadence.
+  await waitForTrackedRunnerProcessesExit({
+    ...waitOptions,
+    runners: [{ pid: tracked.pid }],
+    pollIntervalMs: Math.max(params.pollIntervalMs, 500),
+  });
 }
