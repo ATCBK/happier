@@ -436,6 +436,18 @@ describe('AcpBackendEditorScreen', () => {
             auth: expect.objectContaining({ loginCommand: { command: 'kiro-cli', args: loginArgs } }),
         })]);
     });
+    it('asks for sign-in details only when the agent has a sign-in method', async () => {
+        const fresh = await renderEditor(null);
+        for (const field of ['loginCommand', 'loginArgs', 'docsUrl', 'machineLoginKey']) {
+            expect(fresh.findByTestId(`${EDITOR}.${field}`)).toBeFalsy();
+        }
+        shared.settingsState.value = { v: 2, backends: [{ ...existingKiro,
+            auth: { support: 'login_terminal', loginCommand: { command: 'kiro-cli', args: ['login'] } },
+        }] };
+        const withSignIn = await renderEditor('kiro');
+        expect(input(withSignIn, `${EDITOR}.loginCommand`).props.value).toBe('kiro-cli');
+        expect(withSignIn.findByTestId(`${EDITOR}.docsUrl`)).toBeTruthy();
+    });
     it('retains the authored draft and does not write when public UI Action policy disables upsert', async () => {
         shared.accountSettings = { actionsSettingsV1: { v: 1, actions: {
             'agents.acp.backends.upsert': { disabledSurfaces: ['ui'] },

@@ -552,6 +552,8 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
                     value={auth.support}
                     onChange={(support) => updateAuth(null, { support })}
                 />
+                {/* Sign-in details only mean something once the agent has a sign-in method. */}
+                {auth.support === 'unsupported' ? null : (<>
                 <Item
                     title={t('settingsAgents.customAcp.loginCommandTitle')}
                     accessoryLayout="adaptive"
@@ -620,6 +622,7 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
                         />
                     )}
                 />
+                </>)}
             </ItemGroup>
 
             <ItemGroup
