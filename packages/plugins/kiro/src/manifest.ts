@@ -63,6 +63,7 @@ export const KIRO_PLUGIN = definePlugin({
           vendorResume: { support: AGENT_DEFINITION.core.resume.vendorResume },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           sessions: {
             open: ['create', 'resume'],
             delivery: ['newTurn', 'followUp'],
