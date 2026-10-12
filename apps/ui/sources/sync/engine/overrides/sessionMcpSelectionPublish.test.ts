@@ -59,4 +59,32 @@ describe('computeNextSessionMcpSelectionMetadata', () => {
         });
         expect(inactive.mcpSelectionRestartRequiredV1).toBeUndefined();
     });
+
+    it('preserves the desired skill selection and its pending applied baseline', () => {
+        const skills = {
+            v: 1 as const,
+            forceIncludeSkillIds: ['skill-new'],
+            forceExcludeSkillIds: [],
+            excludeNativeSkillNames: ['native-removed'],
+        };
+        const skillMarker = {
+            v: 1 as const,
+            appliedSelection: { ...skills, forceIncludeSkillIds: [] },
+        };
+        const next = computeNextSessionMcpSelectionMetadata({
+            path: '/repo',
+            host: 'qa-host',
+            skillSelectionV1: skills,
+            skillSelectionRestartRequiredV1: skillMarker,
+        }, {
+            v: 1,
+            managedServersEnabled: true,
+            forceIncludeServerIds: ['server-new'],
+            forceExcludeServerIds: [],
+        }, { sessionActive: true });
+
+        expect(next.skillSelectionV1).toEqual(skills);
+        expect(next.skillSelectionRestartRequiredV1).toEqual(skillMarker);
+        expect(next.mcpSelectionRestartRequiredV1).toBeDefined();
+    });
 });
