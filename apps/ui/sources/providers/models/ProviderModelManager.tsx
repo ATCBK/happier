@@ -1,15 +1,26 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
-import { serializeModelVisibilityRefV1, type ModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
+import { serializeModelVisibilityRefV1, type ModelVisibilityRefV1, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import type {
     DaemonProviderModelProjectionGroupV1,
     DaemonProviderModelProjectionRowV1,
 } from '@happier-dev/protocol/rpc';
 
 import { Switch } from '@/components/ui/forms/Switch';
+import { FavoriteToggleButton } from '@/components/ui/buttons/FavoriteToggleButton';
+import type { FavoriteProviderDisplaySnapshot } from '@/sync/domains/models/favoriteModelSelections';
+import { formatTokenCount } from '@/utils/format/usageNumbers';
+import { useDeviceType } from '@/utils/platform/responsive';
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { Icon } from '@/components/ui/icons/Icon';
+import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { StatusPill } from '@/components/ui/status/StatusPill';
+import { useItemRowHovered } from '@/components/ui/lists/ItemRowHover';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import {
     SelectionListScreen,
@@ -19,16 +30,17 @@ import {
 import { useEventCallback } from '@/hooks/ui/useEventCallback';
 import { t } from '@/text';
 import { providerModelRowKey } from './modelRowKey';
-import { ProviderModelManagerPage, type ProviderModelManagerPageHost } from './ProviderModelManagerPage';
-import { presentProviderModelRow } from './presentProviderModelRow';
+import { MODEL_ROWS_PER_SEGMENT, ProviderModelManagerPage, type ProviderModelManagerPageHost } from './ProviderModelManagerPage';
+import { presentProviderModelRow, presentProviderSourceStatus } from './presentProviderModelRow';
 import { providerModelConnectionTitle } from './providerModelConnectionTitle';
 
 type ProviderModelManagerRow = Readonly<{
     ref: Pick<DaemonProviderModelProjectionRowV1['ref'], 'modelId'>;
-    descriptor: Pick<DaemonProviderModelProjectionRowV1['descriptor'], 'id' | 'name' | 'description'>;
+    descriptor: Pick<DaemonProviderModelProjectionRowV1['descriptor'], 'id' | 'name' | 'description' | 'contextWindowTokens'>;
     sources: DaemonProviderModelProjectionRowV1['sources'];
     compatibility?: DaemonProviderModelProjectionRowV1['compatibility'];
     endpointHealth?: DaemonProviderModelProjectionRowV1['endpointHealth'];
+    confidence?: DaemonProviderModelProjectionRowV1['confidence'];
     catalog: DaemonProviderModelProjectionRowV1['catalog'];
     loadState: DaemonProviderModelProjectionRowV1['loadState'];
     visibility: DaemonProviderModelProjectionRowV1['visibility'];
@@ -54,8 +66,12 @@ function ModelVisibilityAccessory(props: Readonly<{
     label: string;
     visible: boolean;
     disabled: boolean;
-    /** New sessions start on this model. */
-    isDefault?: boolean;
+    isFavorite?: boolean;
+    /** What the catalog says about the model's context window; never estimated. */
+    contextLabel?: string;
+    /** The star. Without it a favorite is only drawn, never toggled. */
+    onToggleFavorite?: () => void;
+    onSetDefault?: () => void;
     onVisibleChange: (visible: boolean) => void;
     onRemove?: () => void;
     onShowOnly?: () => void;
@@ -63,10 +79,69 @@ function ModelVisibilityAccessory(props: Readonly<{
     onCancelLoad?: () => void;
     loading?: boolean;
 }>): React.ReactElement {
+    const { theme } = useUnistyles();
+    // On a phone the star and the switch keep the room; the context size drops out.
+    const showContext = useDeviceType() !== 'phone';
+    // The row menu holds rare operations: with a pointer it appears when the row (or the menu itself,
+    // or keyboard focus inside it) is engaged; on touch it is always there.
+    const rowHovered = useItemRowHovered();
+    const [menuEngaged, setMenuEngaged] = React.useState(false);
+    const revealMenu = Platform.OS !== 'web' || rowHovered || menuEngaged;
+    const menuEngagement = Platform.OS === 'web' ? {
+        onMouseEnter: () => setMenuEngaged(true),
+        onMouseLeave: () => setMenuEngaged(false),
+        onFocus: () => setMenuEngaged(true),
+        onBlur: () => setMenuEngaged(false),
+    } : undefined;
     const actionLabel = (action: string) => `${props.label}, ${action}`;
+    // Three intentions, three controls: the star pins, the switch shows or hides, the Default tag
+    // (beside the name) marks where new sessions start. Rare operations share one row menu.
+    const menuActions: PageHeaderMenuAction[] = [
+        ...(props.onSetDefault ? [{
+            id: 'setDefault',
+            testID: 'provider-model-manager.set-default',
+            title: t('connectedServices.detail.actions.setDefault'),
+            onSelect: props.onSetDefault,
+        }] : []),
+        ...(props.onShowOnly ? [{
+            id: 'showOnly',
+            testID: 'provider-model-manager.show-only',
+            title: t('settingsProviders.models.showOnly'),
+            onSelect: props.onShowOnly,
+        }] : []),
+        ...(props.onRemove ? [{
+            id: 'remove',
+            testID: 'provider-model-manager.remove',
+            title: t('settingsProviders.models.remove'),
+            destructive: true,
+            onSelect: props.onRemove,
+        }] : []),
+    ];
     return (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            {props.isDefault ? <ModelDefaultTag /> : null}
+            {showContext && props.contextLabel ? (
+                <Text testID="provider-model-manager.context" style={[styles.contextLabel, { color: theme.colors.text.secondary }]}>
+                    {props.contextLabel}
+                </Text>
+            ) : null}
+            {props.onToggleFavorite ? (
+                <FavoriteToggleButton
+                    testID="provider-model-manager.favorite"
+                    id={props.label}
+                    isFavorite={props.isFavorite === true}
+                    addLabel={actionLabel(t('profiles.actions.addToFavorites'))}
+                    removeLabel={actionLabel(t('profiles.actions.removeFromFavorites'))}
+                    onToggle={props.onToggleFavorite}
+                />
+            ) : props.isFavorite ? (
+                <View
+                    testID="provider-model-manager.favorite"
+                    accessible
+                    accessibilityLabel={t('settingsAgents.detailPage.modelsLegendFavorite')}
+                >
+                    <Icon name="star" weight="fill" size={14} color={theme.colors.state.warning.foreground} />
+                </View>
+            ) : null}
             {props.onCancelLoad ? (
                 <IconButton
                     testID="provider-model-manager.cancel-load"
@@ -92,30 +167,14 @@ function ModelVisibilityAccessory(props: Readonly<{
                     onPress={props.onLoad}
                 />
             ) : null}
-            {props.onShowOnly ? (
-                <IconButton
-                    testID="provider-model-manager.show-only"
-                    iconName="dots-three"
-                    accessibilityLabel={actionLabel(t('settingsProviders.models.showOnly'))}
-                    tooltip={t('settingsProviders.models.showOnly')}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                    interactiveTargetGapPx={6}
-                    variant="plain"
-                    onPress={props.onShowOnly}
-                />
-            ) : null}
-            {props.onRemove ? (
-                <IconButton
-                    testID="provider-model-manager.remove"
-                    iconName="trash"
-                    accessibilityLabel={actionLabel(t('settingsProviders.models.remove'))}
-                    tooltip={t('settingsProviders.models.remove')}
-                    minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
-                    interactiveTargetGapPx={6}
-                    variant="plain"
-                    tone="danger"
-                    onPress={props.onRemove}
-                />
+            {menuActions.length > 0 ? (
+                <View {...menuEngagement} style={revealMenu ? undefined : styles.menuQuiet}>
+                    <PageHeaderMenu
+                        testID="provider-model-manager.row-menu"
+                        accessibilityLabel={actionLabel(t('common.moreActions'))}
+                        actions={menuActions}
+                    />
+                </View>
             ) : null}
             <Switch
                 compact
@@ -134,6 +193,26 @@ function ModelDefaultTag(): React.ReactElement {
 }
 
 /**
+ * In a source hidden from the picker, the one model the picker still offers says why, where its
+ * switch would be: it is a favorite (the star stays), or it is where new sessions start.
+ */
+function ModelStaysVisible(props: Readonly<{ favorite: boolean }>): React.ReactElement {
+    const { theme } = useUnistyles();
+    return (
+        <View testID="provider-model-manager.stays-visible" style={styles.staysVisible}>
+            <Text style={[styles.staysVisibleText, { color: theme.colors.text.secondary }]}>
+                {t(props.favorite
+                    ? 'settingsAgents.detailPage.modelsStaysVisibleFavorite'
+                    : 'settingsAgents.detailPage.modelsStaysVisibleDefault')}
+            </Text>
+            {props.favorite ? (
+                <Icon name="star" weight="fill" size={14} color={theme.colors.state.warning.foreground} />
+            ) : null}
+        </View>
+    );
+}
+
+/**
  * One sheet per model source, in picker order (Agent → Models): the agent's own models, then each
  * Provider connection. Hidden models stay listed in their source with their switch off.
  */
@@ -143,17 +222,37 @@ export type ProviderModelManagerSourceGrouping = Readonly<{
     connectionDescription: string;
     /** The agent's default model, tagged where it is listed. */
     defaultRef: Readonly<{ providerConnectionId: string | null; modelId: string }> | null;
+    favoriteRefs?: readonly ProviderBoundModelRef[];
+    /** Pins or unpins a model; the page that owns Account favorites supplies it. */
+    onToggleFavorite?: (input: Readonly<{
+        ref: ProviderBoundModelRef;
+        modelLabel: string;
+        providerDisplaySnapshot: FavoriteProviderDisplaySnapshot | null;
+    }>) => void;
+    onSetDefault?: (ref: ProviderBoundModelRef) => void;
     /**
      * A source's own control in its header: the Account-wide "Show in model picker" switch that the
      * R1 owner supplies. Nothing is drawn for a source it does not answer.
      */
     renderSourceAccessory?: (connectionId: string) => React.ReactNode;
+    /** The identity marks that lead each source's header: the agent's own, then each Provider's. */
+    nativeMark?: React.ReactNode;
+    renderSourceMark?: (connectionId: string) => React.ReactNode;
+    /**
+     * Whether the picker shows a source (its "Show in model picker" switch). A hidden source collapses
+     * to its header, the favorites and default the picker still offers, and a way to browse it.
+     * Unanswered (null or absent) reads as shown.
+     */
+    isSourceShown?: (connectionId: string) => boolean | null;
 }>;
 
 /** A section as the page draws it: a source sheet may lead with its description and control. */
 export type ProviderModelManagerSection = SelectionListSection & Readonly<{
     description?: string;
+    mark?: React.ReactNode;
     headerAccessory?: React.ReactNode;
+    /** A destination closing the source's sheet ("Browse 312 models"). */
+    footerAction?: Readonly<{ label: string; onPress: () => void }>;
 }>;
 
 export type ProviderModelManagerScope =
@@ -164,6 +263,7 @@ export type ProviderModelManagerNativeModel = Readonly<{
     id: string;
     name: string;
     description?: string;
+    contextWindowTokens?: number;
     hidden: boolean;
 }>;
 
@@ -282,6 +382,7 @@ export function buildProviderModelManagerSections(input: Readonly<{
     nativeModels: readonly ProviderModelManagerNativeModel[];
     groups: readonly ProviderModelManagerGroup[];
     showHidden: boolean;
+    readOnly?: boolean;
     onSetVisibility: (ref: ModelVisibilityRefV1, hidden: boolean) => void;
     onRemoveManualModel?: (connectionId: string, modelId: string) => void;
     onShowOnly?: (ref: ModelVisibilityRefV1) => void;
@@ -299,6 +400,11 @@ export function buildProviderModelManagerSections(input: Readonly<{
     const isDefault = (providerConnectionId: string | null, modelId: string) => defaultRef !== null
         && defaultRef.providerConnectionId === providerConnectionId
         && defaultRef.modelId === modelId;
+    const favoriteKeys = new Set(grouping?.favoriteRefs?.filter(ref => ref.agentTargetKey === agentScope?.agentTargetKey)
+        .map(ref => providerModelRowKey(ref.providerConnectionId ?? '', ref.modelId)));
+    const isFavorite = (providerConnectionId: string | null, modelId: string) => favoriteKeys.has(
+        providerModelRowKey(providerConnectionId ?? '', modelId),
+    );
     const nativeOptions: SelectionListOption[] = [];
     const sourceSections: ProviderModelManagerSection[] = [];
     const availableOptions: SelectionListOption[] = [];
@@ -314,21 +420,33 @@ export function buildProviderModelManagerSections(input: Readonly<{
             const option = {
                 id: `native:${model.id}`,
                 label: model.name,
-                subtitle: model.description ?? model.id,
+                ...(isDefault(null, model.id) ? { titleAccessory: <ModelDefaultTag /> } : {}),
+                disabled: input.readOnly === true,
+                // Grouped by source, a row is one line: the name, tags and controls.
+                ...(grouping ? {} : { subtitle: model.description ?? model.id }),
                 accessibilityLabel: `${model.name}, ${modelVisibilityActionLabel(model.hidden)}`,
                 rightAccessoryOutsidePressable: true,
                 rightAccessory: (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        {isDefault(null, model.id) ? <ModelDefaultTag /> : null}
-                        <Switch
-                            compact
-                            value={!model.hidden}
-                            accessibilityLabel={model.name}
-                            onValueChange={(visible) => input.onSetVisibility(ref, !visible)}
-                        />
-                    </View>
+                    <ModelVisibilityAccessory
+                        label={model.name}
+                        visible={!model.hidden}
+                        disabled={input.readOnly === true}
+                        isFavorite={isFavorite(null, model.id)}
+                        contextLabel={model.contextWindowTokens ? formatTokenCount(model.contextWindowTokens) : undefined}
+                        onToggleFavorite={!input.readOnly && grouping?.onToggleFavorite
+                            ? () => grouping.onToggleFavorite?.({
+                                ref: { agentTargetKey: agentScope.agentTargetKey, providerConnectionId: null, modelId: model.id },
+                                modelLabel: model.name,
+                                providerDisplaySnapshot: null,
+                            })
+                            : undefined}
+                        onSetDefault={!input.readOnly && !isDefault(null, model.id) && grouping?.onSetDefault
+                            ? () => grouping.onSetDefault?.({ agentTargetKey: agentScope.agentTargetKey, providerConnectionId: null, modelId: model.id })
+                            : undefined}
+                        onVisibleChange={(visible) => input.onSetVisibility(ref, !visible)}
+                    />
                 ),
-                onSelect: () => input.onSetVisibility(ref, !model.hidden),
+                onSelect: input.readOnly ? undefined : () => input.onSetVisibility(ref, !model.hidden),
             };
             if (grouping) nativeOptions.push(option);
             else (model.hidden ? hiddenOptions : availableOptions).push(option);
@@ -339,11 +457,15 @@ export function buildProviderModelManagerSections(input: Readonly<{
         if (input.scope.kind === 'connection' && group.connectionId !== input.scope.connectionId) continue;
         const connectionId = ProviderConnectionIdSchema.parse(group.connectionId);
         const groupOptions: SelectionListOption[] = [];
+        const sourceHidden = grouping?.isSourceShown?.(group.connectionId) === false;
+        // A source too long for one page segment lists only what the picker pins (favorites and
+        // the default) and leads to the rest; its own page owns filtering.
+        const collapsedSource = sourceHidden || (grouping !== undefined && group.rows.length > MODEL_ROWS_PER_SEGMENT);
         for (const row of group.rows) {
             const hiddenForScope = input.scope.kind === 'agent'
                 ? row.visibility === 'hidden_agent' || row.visibility === 'hidden_all_agents' || row.visibility === 'hidden_current_selection'
                 : row.visibility === 'hidden_all_agents';
-            if (hiddenForScope && !showHidden) continue;
+            if (hiddenForScope && (!showHidden || sourceHidden)) continue;
             const lockedByConnectionScope = input.scope.kind === 'agent' && row.visibility === 'hidden_all_agents';
             const ref: ModelVisibilityRefV1 = agentScope
                 ? {
@@ -358,23 +480,47 @@ export function buildProviderModelManagerSections(input: Readonly<{
                 // A connection's own list already names it; only the agent-wide list needs it per row,
                 // and a list grouped by source says it once, in the source's header.
                 contextLabel: input.scope.kind === 'agent' && !grouping ? providerModelConnectionTitle(group) : undefined,
-                authorization: group.authorization,
+                statusOnly: grouping !== undefined,
+                // Grouped by source, a source that cannot be used says so once in its header.
+                authorization: grouping ? undefined : group.authorization,
                 compatibility: row.compatibility,
                 endpointHealth: row.endpointHealth,
                 stale: row.catalog.stale,
                 loadState: row.loadState,
+                confidence: row.confidence,
                 visibility: lockedByConnectionScope
-                    ? 'hidden_for_all_agents'
+                    ? 'hidden_all_agents'
                     : hiddenForScope
-                        ? 'hidden'
+                        ? 'hidden_agent'
                         : 'visible',
             });
             const loading = input.loadingModelKey === providerModelRowKey(group.connectionId, row.ref.modelId);
+            if (collapsedSource) {
+                // The picker keeps a hidden source's favorites and default; nothing else is listed here.
+                const favorite = isFavorite(group.connectionId, row.ref.modelId);
+                if (!favorite && !isDefault(group.connectionId, row.ref.modelId)) continue;
+            }
+            if (sourceHidden) {
+                const favorite = isFavorite(group.connectionId, row.ref.modelId);
+                groupOptions.push({
+                    id: providerModelRowKey(group.connectionId, row.ref.modelId),
+                    label: presentation.label,
+                    ...(isDefault(group.connectionId, row.ref.modelId) ? { titleAccessory: <ModelDefaultTag /> } : {}),
+                    subtitle: presentation.description,
+                    accessibilityLabel: `${row.descriptor.name || row.ref.modelId}, ${group.connectionName}, ${t(favorite
+                        ? 'settingsAgents.detailPage.modelsStaysVisibleFavorite'
+                        : 'settingsAgents.detailPage.modelsStaysVisibleDefault')}`,
+                    rightAccessoryOutsidePressable: true,
+                    rightAccessory: <ModelStaysVisible favorite={favorite} />,
+                });
+                continue;
+            }
             const option = {
                 id: providerModelRowKey(group.connectionId, row.ref.modelId),
                 label: presentation.label,
+                ...(isDefault(group.connectionId, row.ref.modelId) ? { titleAccessory: <ModelDefaultTag /> } : {}),
                 subtitle: presentation.description,
-                disabled: lockedByConnectionScope && !input.onOpenConnection,
+                disabled: input.readOnly === true || (lockedByConnectionScope && !input.onOpenConnection),
                 accessibilityLabel: lockedByConnectionScope
                     ? `${row.descriptor.name || row.ref.modelId}, ${group.connectionName}, ${t('settingsProviders.models.hiddenForAllAgents')}`
                     : `${row.descriptor.name || row.ref.modelId}, ${group.connectionName}, ${modelVisibilityActionLabel(hiddenForScope)}`,
@@ -383,13 +529,31 @@ export function buildProviderModelManagerSections(input: Readonly<{
                     <ModelVisibilityAccessory
                         label={`${presentation.label}, ${providerModelConnectionTitle(group)}`}
                         visible={!hiddenForScope}
-                        disabled={lockedByConnectionScope}
-                        isDefault={isDefault(group.connectionId, row.ref.modelId)}
+                        disabled={input.readOnly === true || lockedByConnectionScope}
+                        isFavorite={isFavorite(group.connectionId, row.ref.modelId)}
+                        contextLabel={grouping && row.descriptor.contextWindowTokens
+                            ? formatTokenCount(row.descriptor.contextWindowTokens)
+                            : undefined}
+                        onToggleFavorite={!input.readOnly && agentScope && grouping?.onToggleFavorite
+                            ? () => grouping.onToggleFavorite?.({
+                                ref: { agentTargetKey: agentScope.agentTargetKey, providerConnectionId: connectionId, modelId: row.ref.modelId },
+                                modelLabel: row.descriptor.name || row.ref.modelId,
+                                providerDisplaySnapshot: {
+                                    providerName: group.providerName,
+                                    connectionName: group.connectionName,
+                                    connectionRole: group.connectionRole,
+                                    connectionDisplayNameMode: group.connectionDisplayNameMode,
+                                },
+                            })
+                            : undefined}
+                        onSetDefault={!input.readOnly && agentScope && !isDefault(group.connectionId, row.ref.modelId) && grouping?.onSetDefault
+                            ? () => grouping.onSetDefault?.({ agentTargetKey: agentScope.agentTargetKey, providerConnectionId: connectionId, modelId: row.ref.modelId })
+                            : undefined}
                         onVisibleChange={(visible) => input.onSetVisibility(ref, !visible)}
-                        onShowOnly={!lockedByConnectionScope && input.onShowOnly
+                        onShowOnly={!input.readOnly && !lockedByConnectionScope && input.onShowOnly
                             ? () => input.onShowOnly?.(ref)
                             : undefined}
-                        onLoad={!loading
+                        onLoad={!input.readOnly && !loading
                             && group.modelLoadAction === 'available'
                             && row.loadState === 'unloaded'
                             && input.onLoadModel
@@ -397,12 +561,12 @@ export function buildProviderModelManagerSections(input: Readonly<{
                             : undefined}
                         onCancelLoad={loading ? input.onCancelModelLoad : undefined}
                         loading={loading}
-                        onRemove={row.sources.manual && input.onRemoveManualModel
+                        onRemove={!input.readOnly && row.sources.manual && input.onRemoveManualModel
                             ? () => input.onRemoveManualModel?.(group.connectionId, row.ref.modelId)
                             : undefined}
                     />
                 ),
-                onSelect: lockedByConnectionScope
+                onSelect: input.readOnly ? undefined : lockedByConnectionScope
                     ? () => input.onOpenConnection?.(group.connectionId)
                     : () => input.onSetVisibility(ref, !hiddenForScope),
             };
@@ -416,11 +580,26 @@ export function buildProviderModelManagerSections(input: Readonly<{
             target.push(option);
         }
         if (grouping) {
+            const onOpenConnection = input.onOpenConnection;
+            const sourceStatus = presentProviderSourceStatus(group);
             sourceSections.push({
                 id: `source:${group.connectionId}`,
                 title: providerModelConnectionTitle(group),
-                description: grouping.connectionDescription,
+                description: sourceHidden
+                    ? t('settingsAgents.detailPage.modelsSourceHiddenDescription', { count: group.rows.length })
+                    : [
+                        grouping.connectionDescription,
+                        sourceStatus.experimental ? t('settingsProviders.models.experimental') : null,
+                        sourceStatus.needsComputer
+                            ? t('settingsAgents.detailPage.modelsNeedsComputer')
+                            : sourceStatus.errorTitleKey ? t(sourceStatus.errorTitleKey) : null,
+                    ].filter(Boolean).join(' · '),
+                mark: grouping.renderSourceMark?.(group.connectionId),
                 headerAccessory: grouping.renderSourceAccessory?.(group.connectionId),
+                ...(collapsedSource && onOpenConnection ? { footerAction: {
+                    label: t('settingsAgents.detailPage.modelsBrowseSource', { count: group.rows.length }),
+                    onPress: () => onOpenConnection(group.connectionId),
+                } } : {}),
                 options: groupOptions,
                 count: groupOptions.length,
                 virtualization: 'auto',
@@ -428,17 +607,21 @@ export function buildProviderModelManagerSections(input: Readonly<{
         }
     }
     if (grouping) {
-        return [
+        const sections: ProviderModelManagerSection[] = [
             {
                 id: 'source:native',
                 title: grouping.nativeTitle,
                 description: grouping.nativeDescription,
+                mark: grouping.nativeMark,
                 options: nativeOptions,
                 count: nativeOptions.length,
                 virtualization: 'auto',
             },
             ...sourceSections,
-        ].filter((section) => section.options.length > 0);
+        // A hidden source keeps its sheet even with nothing listed: its switch turns it back on.
+        ];
+        return sections.filter((section) => section.options.length > 0 || section.footerAction !== undefined
+            || (section.id !== 'source:native' && grouping.isSourceShown?.(section.id.slice('source:'.length)) === false));
     }
     return [
         { id: 'available', title: t('settingsProviders.models.available'), options: availableOptions },
@@ -456,6 +639,7 @@ export function ProviderModelManager(props: Readonly<{
     nativeModels: readonly ProviderModelManagerNativeModel[];
     groups: readonly ProviderModelManagerGroup[];
     showHidden: boolean;
+    readOnly?: boolean;
     onSetVisibility: (ref: ModelVisibilityRefV1, hidden: boolean) => void;
     onRemoveManualModel?: (connectionId: string, modelId: string) => void;
     onShowOnly?: (ref: ModelVisibilityRefV1) => void;
@@ -491,7 +675,7 @@ export function ProviderModelManager(props: Readonly<{
     const canCancelModelLoad = props.onCancelModelLoad !== undefined;
     const canOpenConnection = props.onOpenConnection !== undefined;
     const onSetVisibility = useEventCallback((ref: ModelVisibilityRefV1, hidden: boolean) => {
-        props.onSetVisibility(ref, hidden);
+        if (!props.readOnly) props.onSetVisibility(ref, hidden);
     });
     const onRemoveManualModel = useEventCallback((connectionId: string, modelId: string) => {
         props.onRemoveManualModel?.(connectionId, modelId);
@@ -513,6 +697,7 @@ export function ProviderModelManager(props: Readonly<{
         nativeModels,
         groups,
         showHidden: props.showHidden,
+        readOnly: props.readOnly,
         onSetVisibility,
         ...(canRemoveManualModel ? { onRemoveManualModel } : {}),
         ...(canShowOnly ? { onShowOnly } : {}),
@@ -531,6 +716,7 @@ export function ProviderModelManager(props: Readonly<{
         groups,
         props.loadingModelKey,
         props.showHidden,
+        props.readOnly,
         nativeModels,
         onLoadModel,
         onCancelModelLoad,
@@ -548,13 +734,16 @@ export function ProviderModelManager(props: Readonly<{
                 modelCount={groups.reduce((count, group) => count + group.rows.length, nativeModels.length)}
                 actions={props.headerActions}
                 grouped={props.grouping !== undefined && props.scope.kind === 'agent'}
-                onShowAll={props.onShowAll}
-                onHideAll={props.onHideAll}
-                onResetVisibility={props.onResetVisibility}
+                onShowAll={props.readOnly ? undefined : props.onShowAll}
+                onHideAll={props.readOnly ? undefined : props.onHideAll}
+                onResetVisibility={props.readOnly ? undefined : props.onResetVisibility}
             />
         );
     }
-    return <ProviderModelManagerScreen {...props} sections={sections} />;
+    return <ProviderModelManagerScreen {...props} sections={sections}
+        onShowAll={props.readOnly ? undefined : props.onShowAll}
+        onHideAll={props.readOnly ? undefined : props.onHideAll}
+        onResetVisibility={props.readOnly ? undefined : props.onResetVisibility} />;
 }
 
 function ProviderModelManagerScreen(props: Readonly<{
@@ -593,3 +782,29 @@ function ProviderModelManagerScreen(props: Readonly<{
         />
     );
 }
+
+const styles = StyleSheet.create(() => ({
+    // Kept mounted so keyboard focus can reach it and the row never shifts.
+    menuQuiet: {
+        opacity: 0,
+    },
+    contextLabel: {
+        ...Typography.default('regular'),
+        ...happierPageTextMetrics('rowDescription'),
+        fontVariant: ['tabular-nums'],
+    },
+    sourceAccessory: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    staysVisible: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    staysVisibleText: {
+        ...Typography.default('regular'),
+        ...happierPageTextMetrics('rowDescription'),
+    },
+}));

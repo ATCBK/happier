@@ -4,7 +4,7 @@ import type {
     DaemonProviderModelProjectionRowV1,
 } from '@happier-dev/protocol/rpc';
 
-import { t } from '@/text';
+import { t, type TranslationKeyNoParams } from '@/text';
 import { presentProviderError } from '@/providers/connection/errorPresentation';
 
 export type ProviderModelRowPrimaryStatusKind =
@@ -15,15 +15,12 @@ export type ProviderModelRowPrimaryStatusKind =
     | 'load'
     | 'visibility';
 
-export type ProviderModelRowVisibilityPresentation =
-    | 'visible'
-    | 'hidden'
-    | 'hidden_for_all_agents'
-    | 'hidden_current_selection';
+export type ProviderModelRowVisibilityPresentation = DaemonProviderModelProjectionRowV1['visibility'];
 
 type ProviderModelProjectionAuthorization = DaemonProviderModelProjectionGroupV1['authorization'];
 type ProviderModelProjectionCompatibility = DaemonProviderModelProjectionRowV1['compatibility'];
 type ProviderModelProjectionEndpointHealth = DaemonProviderModelProjectionRowV1['endpointHealth'];
+type ProviderModelProjectionConfidence = DaemonProviderModelProjectionRowV1['confidence'];
 type ProviderModelProjectionLoadState = DaemonProviderModelProjectionRowV1['loadState'];
 
 export type ProviderModelRowPresentation = Readonly<{
@@ -61,9 +58,9 @@ function visibilityStatusLabel(
         case undefined:
         case 'visible':
             return null;
-        case 'hidden_for_all_agents':
+        case 'hidden_all_agents':
             return t('settingsProviders.models.hiddenForAllAgents');
-        case 'hidden':
+        case 'hidden_agent':
         case 'hidden_current_selection':
             return t('settingsProviders.models.hidden');
     }
@@ -86,17 +83,32 @@ export function presentProviderModelRow(input: Readonly<{
     stale?: boolean;
     loadState?: ProviderModelProjectionLoadState;
     visibility?: ProviderModelRowVisibilityPresentation;
+    confidence?: ProviderModelProjectionConfidence;
+    /**
+     * A one-line row: the description keeps only facts that need the user (authorization,
+     * compatibility, health, staleness, load state). The id, catalog description and source
+     * context are not repeated under a name the row already shows.
+     */
+    statusOnly?: boolean;
 }>): ProviderModelRowPresentation {
     const label = input.name || input.modelId;
     const authorizationError = input.authorization?.authorized === false
         ? input.authorization.error
         : null;
-    const compatibilityStatus = input.compatibility?.result.status;
+    // An Account view has no computer to confirm against, so its unconfirmed "experimental" and
+    // "not checked" are facts about the whole source (see presentProviderSourceStatus), not each row.
+    const compatibility = input.confidence === 'account_unverified'
+        && input.compatibility?.result.status === 'experimental'
+        ? undefined
+        : input.compatibility;
+    const compatibilityStatus = compatibility?.result.status;
     const compatibilityBlocksSelection = compatibilityStatus === 'incompatible'
         || (compatibilityStatus === 'experimental'
-            && input.compatibility?.confirmed !== true
+            && compatibility?.confirmed !== true
             && input.canConfirmExperimental !== true);
-    const endpointLabel = endpointStatusLabel(input.endpointHealth);
+    const endpointLabel = input.confidence === 'account_unverified' && input.endpointHealth === 'not_checked'
+        ? null
+        : endpointStatusLabel(input.endpointHealth);
     const visibilityLabel = visibilityStatusLabel(input.visibility);
 
     const primaryStatus: ProviderModelRowPresentation['primaryStatus'] = authorizationError
@@ -128,9 +140,11 @@ export function presentProviderModelRow(input: Readonly<{
         const normalized = value?.trim();
         if (normalized && normalized !== label && !details.includes(normalized)) details.push(normalized);
     };
-    pushDetail(input.contextLabel);
-    if (label !== input.modelId) pushDetail(input.modelId);
-    pushDetail(input.description);
+    if (input.statusOnly !== true) {
+        pushDetail(input.contextLabel);
+        if (label !== input.modelId) pushDetail(input.modelId);
+        pushDetail(input.description);
+    }
     pushDetail(primaryStatus?.label);
     if (compatibilityStatus === 'experimental') pushDetail(t('settingsProviders.models.experimental'));
     if (input.stale) pushDetail(t('settingsProviders.models.stale'));
@@ -143,5 +157,35 @@ export function presentProviderModelRow(input: Readonly<{
         selectionDisabled: authorizationError !== null
             || compatibilityBlocksSelection
             || input.visibility === 'hidden_current_selection',
+    };
+}
+
+export type ProviderSourceStatusPresentation = Readonly<{
+    /** Some model of the source is experimental for this Agent: said once, as a quiet pill. */
+    experimental: boolean;
+    /** The Account view cannot confirm this source: it needs a computer, stated once in the header. */
+    needsComputer: boolean;
+    /** A source that cannot be used says why, once in its header. */
+    errorTitleKey: TranslationKeyNoParams | null;
+}>;
+
+/**
+ * Presents the facts that hold for a whole source rather than one of its rows. An Account
+ * projection marks every source unavailable and every row unconfirmed because it has no
+ * computer to ask; that is "needs a computer", not a broken machine.
+ */
+export function presentProviderSourceStatus(group: Readonly<{
+    authorization?: DaemonProviderModelProjectionGroupV1['authorization'];
+    modelLoadAction: DaemonProviderModelProjectionGroupV1['modelLoadAction'];
+    rows: readonly Readonly<{ compatibility?: ProviderModelProjectionCompatibility }>[];
+}>): ProviderSourceStatusPresentation {
+    const error = group.authorization?.authorized === false ? group.authorization.error : null;
+    const needsComputer = error !== null
+        && error.code === 'provider_machine_unavailable'
+        && group.modelLoadAction === 'machine_required';
+    return {
+        experimental: group.rows.some(row => row.compatibility?.result.status === 'experimental'),
+        needsComputer,
+        errorTitleKey: error && !needsComputer ? presentProviderError(error).titleKey : null,
     };
 }

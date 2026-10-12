@@ -7,19 +7,22 @@ import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import type { mutateProviderConnection as MutateProviderConnection } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { CustomProviderTemplateV1 } from '@happier-dev/protocol/providers/connections/customTemplateV1';
+import type { ProviderConnectionRefreshScope } from './useProviderConnections';
 
 type ProviderConnectionMutationResult = Awaited<ReturnType<typeof MutateProviderConnection>> | null;
 type ProviderConnectionExecutionTarget = Readonly<{ machineId: string; serverId: string }>;
-type ProviderConnectionMutationScope = Readonly<{
+type ProviderConnectionMutationScope = {
     resolveTarget: () => ProviderConnectionExecutionTarget | null;
-    refresh: () => Promise<void>;
+    machineRevision: number;
+    refresh: (scope?: ProviderConnectionRefreshScope) => Promise<void>;
     mutate: ReturnType<typeof useProviderActionClient>['mutateProviderConnection'];
-    serverId: string | null;
-    accountLifetime: ActiveServerAccountScopeLifetime | null;
-    revision: number;
-}>;
+    readonly serverId: string | null;
+    readonly accountLifetime: ActiveServerAccountScopeLifetime | null;
+    readonly revision: number;
+};
 type PendingMutationState = Readonly<{
     scope: ProviderConnectionMutationScope;
     countByKey: ReadonlyMap<string, number>;
@@ -35,14 +38,15 @@ type PendingMutationState = Readonly<{
 export function useProviderConnectionMutation(input: Readonly<{
     resolveTarget: () => ProviderConnectionExecutionTarget | null;
     serverId?: string | null;
-    refresh: () => Promise<void>;
+    refresh: (scope?: ProviderConnectionRefreshScope) => Promise<void>;
 }>) {
     const capturedServerId = React.useMemo(() => input.serverId ?? input.resolveTarget()?.serverId ?? null, [input.resolveTarget, input.serverId]);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
-    const { mutateProviderConnection } = useProviderActionClient(capturedServerId);
+    const { mutateProviderConnection, pendingApproval } = useProviderActionClient(capturedServerId);
     const [failure, setFailure] = React.useState<Readonly<{
         error: ProviderErrorV1;
         retry?: () => Promise<void>;
+        machineRevision?: number;
     }> | null>(null);
     const activeScope = React.useRef<ProviderConnectionMutationScope>({
         resolveTarget: input.resolveTarget,
@@ -51,6 +55,7 @@ export function useProviderConnectionMutation(input: Readonly<{
         serverId: capturedServerId,
         accountLifetime,
         revision: 0,
+        machineRevision: 0,
     });
     const [pending, setPending] = React.useState<PendingMutationState>(() => ({
         scope: activeScope.current,
@@ -59,8 +64,7 @@ export function useProviderConnectionMutation(input: Readonly<{
     const inFlightByRequestKey = React.useRef(new Map<string, Readonly<{
         promise: Promise<ProviderConnectionMutationResult> | null;
     }>>());
-    if (activeScope.current.resolveTarget !== input.resolveTarget || activeScope.current.refresh !== input.refresh
-        || activeScope.current.mutate !== mutateProviderConnection || activeScope.current.accountLifetime !== accountLifetime
+    if (activeScope.current.accountLifetime !== accountLifetime
         || activeScope.current.serverId !== capturedServerId) {
         activeScope.current = {
             resolveTarget: input.resolveTarget,
@@ -69,22 +73,34 @@ export function useProviderConnectionMutation(input: Readonly<{
             serverId: capturedServerId,
             accountLifetime,
             revision: activeScope.current.revision + 1,
+            machineRevision: 0,
         };
+    } else {
+        if (activeScope.current.resolveTarget !== input.resolveTarget) {
+            activeScope.current.machineRevision += 1;
+            activeScope.current.resolveTarget = input.resolveTarget;
+        }
+        // Callback refreshes do not retire an admitted Account operation. Keep
+        // current presentation callbacks without dropping its approval result.
+        activeScope.current.refresh = input.refresh;
+        activeScope.current.mutate = mutateProviderConnection;
     }
-    // The scope this render belongs to. A request built by this render must be
-    // decided by this render's resolver: the target owner rebuilds the resolver
+    // Account writes keep their Home/Account scope as machines change. Machine
+    // writes must still be decided by this render's resolver: the target owner rebuilds the resolver
     // only when the selected `{ serverIdentityId, machineId }` actually moves,
     // so reading the latest scope instead would let a request captured for one
     // Account be authorized by whichever Account is selected when a modal
     // finally closes — including another profile exposing the same machine id.
     const boundScope = activeScope.current;
+    const boundMachineRevision = boundScope.machineRevision;
+    const boundResolveTarget = input.resolveTarget;
     React.useEffect(() => {
         const scope = activeScope.current;
         setPending((current) => current.scope === scope
             ? current
             : { scope, countByKey: new Map() });
         setFailure(null);
-    }, [accountLifetime, capturedServerId, input.refresh, input.resolveTarget, mutateProviderConnection]);
+    }, [accountLifetime, capturedServerId]);
     const updatePending = React.useCallback((
         scope: ProviderConnectionMutationScope,
         key: string,
@@ -134,26 +150,29 @@ export function useProviderConnectionMutation(input: Readonly<{
             }
             return Promise.resolve(null);
         }
-        const requestKey = stableJsonStringify([scope.revision, key, parsedRequest]);
+        const pendingKey = requiresMachine ? stableJsonStringify([boundMachineRevision, key]) : key;
+        const requestKey = stableJsonStringify([scope.revision, pendingKey, parsedRequest]);
         const existing = inFlightByRequestKey.current.get(requestKey);
         if (existing?.promise) return existing.promise;
-        const isCurrentScope = () => activeScope.current === scope && (scope.accountLifetime?.isCurrent() ?? true);
+        const isCurrentScope = () => activeScope.current === scope && (scope.accountLifetime?.isCurrent() ?? true)
+            && (!requiresMachine || scope.machineRevision === boundMachineRevision);
         const errorContext = {
             machineId: parsedRequest.machineId,
             ...('connectionId' in parsedRequest ? { connectionId: parsedRequest.connectionId } : {}),
         };
+        const failureScope = requiresMachine ? { machineRevision: boundMachineRevision } : {};
         const operation: { promise: Promise<ProviderConnectionMutationResult> | null } = { promise: null };
         inFlightByRequestKey.current.set(requestKey, operation);
         operation.promise = (async () => {
-            updatePending(scope, key, 1);
+            updatePending(scope, pendingKey, 1);
             if (isCurrentScope()) setFailure(null);
             try {
                 // Re-resolve the canonical target immediately before the write.
                 // A rendered snapshot, or a request a modal delayed, may name a
                 // machine the user has since moved away from.
-                const target = requiresMachine ? scope.resolveTarget() : null;
+                const target = requiresMachine ? boundResolveTarget() : null;
                 if (!(scope.accountLifetime?.isCurrent() ?? true)
-                    || requiresMachine && (!target || target.machineId !== parsedRequest.machineId)) {
+                    || requiresMachine && (scope.machineRevision !== boundMachineRevision || !target || target.machineId !== parsedRequest.machineId)) {
                     // The user asked for this write, so the refusal is reported
                     // even when the selection has already moved on: a silently
                     // dropped destructive action is indistinguishable from one
@@ -169,7 +188,7 @@ export function useProviderConnectionMutation(input: Readonly<{
                     const nextError = providerErrorFromRpcFailure(caught, errorContext);
                     if (nextError.code === 'provider_rpc_mutation_outcome_unknown') {
                         try {
-                            await scope.refresh();
+                            await scope.refresh(requiresMachine ? 'machine' : 'account');
                         } catch {
                             // The mutation outcome remains unknown. Recovery must review
                             // current state rather than replacing it with a read failure.
@@ -177,6 +196,7 @@ export function useProviderConnectionMutation(input: Readonly<{
                         if (!isCurrentScope()) return null;
                     }
                     setFailure({
+                        ...failureScope,
                         error: nextError,
                         ...providerRetryRecoveryForError(nextError, async () => {
                             await run(parsedRequest, key);
@@ -187,6 +207,7 @@ export function useProviderConnectionMutation(input: Readonly<{
                 if (!isCurrentScope()) return null;
                 if (result.status === 'error') {
                     setFailure({
+                        ...failureScope,
                         error: result.error,
                         ...providerRetryRecoveryForError(result.error, async () => {
                             await run(parsedRequest, key);
@@ -194,25 +215,28 @@ export function useProviderConnectionMutation(input: Readonly<{
                     });
                     return result;
                 }
-                try {
-                    await scope.refresh();
-                } catch (caught) {
-                    if (!isCurrentScope()) return result;
-                    const refreshError = providerErrorFromRpcFailure(caught, errorContext);
-                    setFailure({ error: refreshError, retry: scope.refresh });
-                }
+                // The Account writer has already published the acknowledged row.
+                // Machine/runtime presentation revalidation has its own recovery.
+                fireAndForget(scope.refresh(requiresMachine ? 'machine' : 'account'), {
+                    onError: caught => {
+                        if (!isCurrentScope()) return;
+                        const refreshError = providerErrorFromRpcFailure(caught, errorContext);
+                        setFailure({ ...failureScope, error: refreshError, retry: () => scope.refresh(requiresMachine ? 'machine' : 'account') });
+                    },
+                });
                 return result;
             } finally {
                 if (inFlightByRequestKey.current.get(requestKey) === operation) {
                     inFlightByRequestKey.current.delete(requestKey);
                 }
-                updatePending(scope, key, -1);
+                updatePending(scope, pendingKey, -1);
             }
         })();
         return operation.promise;
-    }, [boundScope, updatePending]);
+    }, [boundScope, boundMachineRevision, boundResolveTarget, updatePending]);
     const isPending = React.useCallback((key: string): boolean => (
-        pending.scope === activeScope.current && (pending.countByKey.get(key) ?? 0) > 0
+        pending.scope === activeScope.current && ((pending.countByKey.get(key) ?? 0) > 0
+            || (pending.countByKey.get(stableJsonStringify([activeScope.current.machineRevision, key])) ?? 0) > 0)
     ), [pending]);
     const clearError = React.useCallback(() => {
         setFailure(null);
@@ -223,12 +247,15 @@ export function useProviderConnectionMutation(input: Readonly<{
         template: CustomProviderTemplateV1;
         displayName?: string;
     }>, key = `update:${edit.connectionId}`) => run({ action: 'update', ...edit }, key), [run]);
+    const visibleFailure = failure?.machineRevision === undefined || failure.machineRevision === boundMachineRevision ? failure : null;
     return {
         run,
         updateCustomTemplate,
         isPending,
-        error: failure?.error ?? null,
-        retry: failure?.retry,
+        /** The approval a write is waiting for, while it waits (its page can be reopened). */
+        pendingApproval,
+        error: visibleFailure?.error ?? null,
+        retry: visibleFailure?.retry,
         clearError,
     };
 }

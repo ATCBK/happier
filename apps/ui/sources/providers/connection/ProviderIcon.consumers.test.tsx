@@ -25,6 +25,7 @@ const rpc = createProviderSettingsHarness();
 installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 const { ProviderIcon } = await import('./ProviderIcon');
+const { Icon } = await import('@/components/ui/icons/Icon');
 const { SessionModelSourceBrowseHandoffContext } = await import('@/components/sessions/modelPicker/SessionModelSourceBrowseHandoff');
 const { useSessionRouteSourceSections } = await import('@/components/sessions/new/components/useSessionRouteSourceSections');
 const { UsageWorkProviderMark } = await import('@/components/settings/usage/widgets/UsageWorkProviderMark');
@@ -40,7 +41,8 @@ beforeEach(async () => {
     const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
         connections: [{ v: 1, id: 'pc_a', source: { kind: 'contribution', contributionKey },
             role: 'default', displayName: 'DeepSeek', displayNameMode: 'automatic', revision: 1, createdAt: 1, updatedAt: 1 }] });
-    serverId = (await account.restore({ serverIdentityId: 'srv_provider_mark_consumers', catalog, machines: rpc.state.machines })).serverId;
+    serverId = (await account.restore({ serverIdentityId: 'srv_provider_mark_consumers', catalog, machines: rpc.state.machines,
+        waivedActions: ['providers.connections.describe'] })).serverId;
 });
 afterEach(async () => { standardCleanup(); await account.reset(); });
 
@@ -67,6 +69,29 @@ describe('packaged Provider marks through admitted consumers', () => {
         </SessionModelSourceBrowseHandoffContext.Provider>);
         await waitForHomeGovernance(() => expect(screen.findAllByType(ProviderIcon)).toHaveLength(1));
         expect(screen.findAllByType('Image').some(node => node.props.source?.uri?.startsWith('data:image/png;base64,'))).toBe(true);
+    });
+
+    it('renders the gateway source glyph resolved by the connection owner', async () => {
+        const gatewayKey = 'happier.provider.cliproxyapi/cliproxyapi';
+        rpc.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async () => createProviderConnectionsDescribeFixture({
+            connections: [createProviderConnectionViewFixture({ connectionId: 'pc_gateway', contributionKey: gatewayKey,
+                icon: 'cloud', deployment: { kind: 'managedLocal', targetMachineId: null, effects: null } })],
+        }));
+        const sources = { machineId: 'machine-a', serverId, agentTargetKey,
+            shownSources: [{ connectionId: 'pc_gateway', rows: [{}] }], hiddenSources: [] };
+        function Probe() {
+            const sections = useSessionRouteSourceSections(sources);
+            return <>{sections.flatMap(section => section.kind === 'static' ? section.options.map(option =>
+                <React.Fragment key={option.id}>{option.icon}</React.Fragment>) : [])}</>;
+        }
+        const screen = await renderScreen(<SessionModelSourceBrowseHandoffContext.Provider value={{ request: null, browse: () => {} }}>
+            <Probe />
+        </SessionModelSourceBrowseHandoffContext.Provider>);
+        await waitForHomeGovernance(() => expect(rpc.state.requests.some(request =>
+            request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE)).toBe(true));
+        await waitForHomeGovernance(() => expect(screen.findAllByType(Icon)).toHaveLength(1));
+        expect(screen.findAllByType(Icon).map(node => node.props.name)).toContain('cloud');
+        expect(screen.findAllByType(Icon).map(node => node.props.name)).not.toContain('path');
     });
 
     it('renders the packaged Usage mark from the admitted projection identity without a definition or another read', async () => {

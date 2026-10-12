@@ -16,7 +16,7 @@ export function useProviderConnectionModels(input: Readonly<{
     serverId: string | null;
     connectionId: string;
 }>) {
-    const { describeProviderConnectionModels, ready } = useProviderActionClient(input.serverId);
+    const { describeProviderConnectionModels, ready, pendingApproval } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const [models, setModels] = React.useState<readonly DaemonProviderModelRowV1[]>([]);
     const [connectionRevision, setConnectionRevision] = React.useState<number | null>(null);
@@ -168,5 +168,6 @@ export function useProviderConnectionModels(input: Readonly<{
         loading: input.active !== false && scopeEnabled && (!ready || !stateMatchesScope || loading),
         refresh,
         refreshWithResult,
+        pendingApproval,
     };
 }

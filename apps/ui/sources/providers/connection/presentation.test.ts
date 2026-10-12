@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DaemonProviderConnectionViewV1Schema } from '@happier-dev/protocol/rpc';
 
 import { presentProviderConnection } from './presentation';
+import { providerModelConnectionTitle } from '@/providers/models/providerModelConnectionTitle';
 
 const base = DaemonProviderConnectionViewV1Schema.parse({
     connectionId: 'pc_a', contributionKey: 'acme/a', displayName: 'Acme', providerName: 'Acme', icon: null,
@@ -19,7 +20,16 @@ describe('provider connection presentation', () => {
         expect(presentProviderConnection(base).title).toBe('Acme');
         expect(presentProviderConnection({ ...base, role: 'named', displayName: 'Work' }).subtitle)
             .toContain('Acme');
-        expect(presentProviderConnection(base).modelCount).toBe(3);
+    });
+
+    it('keeps a custom source identity once while distinguishing separately named connections', () => {
+        const custom = { ...base, role: 'named' as const, displayNameMode: 'custom' as const };
+        expect(presentProviderConnection(custom)).toMatchObject({ title: 'Acme', subtitle: '' });
+        expect(providerModelConnectionTitle({ providerName: 'Acme', connectionName: 'Acme',
+            connectionRole: 'named', connectionDisplayNameMode: 'custom' })).toBe('Acme');
+        expect(providerModelConnectionTitle({ providerName: 'Acme', connectionName: 'Work',
+            connectionRole: 'named', connectionDisplayNameMode: 'custom' })).toBe('Acme · Work');
+        expect(presentProviderConnection({ ...custom, displayName: 'Work' })).toMatchObject({ title: 'Work', subtitle: 'Acme' });
     });
 
     it('keeps source availability and endpoint health distinct', () => {

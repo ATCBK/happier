@@ -5,7 +5,8 @@ import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createProviderSettingsAccountHarness, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
@@ -23,6 +24,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
 let otherServerId = '';
+let row: ReturnType<typeof installProviderConnectionsCatalogHttpBoundary>;
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -40,24 +42,46 @@ const confirmation = {
     modelName: 'Experimental model',
 } as const;
 
+const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+    connections: [{ v: 1, id: confirmation.connectionId, source: { kind: 'contribution',
+        contributionKey: 'happier.provider.deepseek/deepseek' }, role: 'named', displayName: 'DeepSeek',
+        displayNameMode: 'custom', revision: confirmation.expectedConnectionRevision, createdAt: 1, updatedAt: 1 }],
+});
+function installRow(reply?: Parameters<typeof installProviderConnectionsCatalogHttpBoundary>[0]['reply']) {
+    row = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId, catalog, reply });
+    return row;
+}
+
 // Warm the real Sync module after the transport leaves are installed, not inside a test hook's budget.
 await loadSyncSingletonForTests();
 
 describe('useConfirmExperimentalProviderModel', () => {
+    it('honors an experimental-confirm Action waiver without a second unwaivable modal', async () => {
+        confirmSpy.mockResolvedValue(false);
+        const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
+        const hook = await renderHook(() => useConfirmExperimentalProviderModel({ enabled: true, machineId: null,
+            serverId, agentTargetKey: confirmation.agentTargetKey, refresh: async () => {} }));
+        let result = false;
+        await act(async () => { result = await hook.getCurrent().confirm(confirmation, commitSelectionSpy); });
+        expect(result).toBe(true);
+        expect(row.catalog.experimentalBindingConfirmations).toHaveLength(1);
+        expect(confirmSpy).not.toHaveBeenCalled();
+    });
     beforeEach(async () => {
         confirmSpy.mockReset();
         alertSpy.mockReset();
         machineRpcWithServerScope.mockReset();
         commitSelectionSpy.mockReset();
-        serverId = (await account.restore({ waivedActions: ['providers.models.experimental.confirm'] })).serverId;
+        serverId = (await account.restore({ catalog, waivedActions: ['providers.models.experimental.confirm'] })).serverId;
+        installRow();
         otherServerId = await account.addHome({ name: 'Other Provider Home', serverUrl: 'https://provider-settings-other.test', accountId: 'account-a', active: false });
     });
     afterEach(async () => { standardCleanup(); await account.reset(); });
 
     it('keeps authoring pending until the confirmed selection is committed', async () => {
         confirmSpy.mockResolvedValueOnce(true);
-        const mutationResult = createDeferred<{ status: 'success'; action: 'confirmExperimental' }>();
-        machineRpcWithServerScope.mockReturnValueOnce(mutationResult.promise);
+        const mutationResult = createDeferred<void>();
+        installRow(() => ({ respondAfter: mutationResult.promise, body: { status: 'updated', revision: 2, cursor: 2 } }));
         const refresh = vi.fn(async () => {});
         const commitSelection = vi.fn();
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
@@ -75,139 +99,50 @@ describe('useConfirmExperimentalProviderModel', () => {
             await Promise.resolve();
         });
 
+        await waitForHomeGovernance(() => expect(row.writes).toBe(1));
         expect(hook.getCurrent().pending).toBe(true);
         expect(commitSelection).not.toHaveBeenCalled();
 
         await act(async () => {
-            mutationResult.resolve({ status: 'success', action: 'confirmExperimental' });
+            mutationResult.resolve();
             await confirmationResult;
         });
 
         expect(commitSelection).toHaveBeenCalledOnce();
         expect(refresh).toHaveBeenCalledOnce();
         expect(hook.getCurrent().pending).toBe(false);
-    });
-
-    it('does not mutate the old machine after the scope changes while confirmation is open', async () => {
-        const modalResult = createDeferred<boolean>();
-        confirmSpy.mockReturnValueOnce(modalResult.promise);
-        const refresh = vi.fn(async () => {});
-        const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
-        const hook = await renderHook(
-            (props: { machineId: string; serverId: string }) => useConfirmExperimentalProviderModel({
-                enabled: true,
-                machineId: props.machineId,
-                serverId: props.serverId,
-                agentTargetKey: 'agent:happier.agent.codex/codex',
-                refresh,
-            }),
-            { initialProps: { machineId: 'machine-a', serverId } },
-        );
-
-        let pending!: Promise<boolean>;
-        act(() => {
-            pending = hook.getCurrent().confirm(confirmation, commitSelectionSpy);
-        });
-        await hook.rerender({ machineId: 'machine-b', serverId: otherServerId });
-        await act(async () => modalResult.resolve(true));
-
-        await expect(pending).resolves.toBe(false);
+        expect(row.writes).toBe(1);
         expect(machineRpcWithServerScope).not.toHaveBeenCalled();
-        expect(refresh).not.toHaveBeenCalled();
     });
 
-    it('does not dispatch Account A confirmation after Account B mounts with identical routing ids', async () => {
-        const modalResult = createDeferred<boolean>();
-        confirmSpy.mockReturnValueOnce(modalResult.promise);
-        const refresh = vi.fn(async () => {});
+    it('commits the acknowledged selection while presentation refresh is pending', async () => {
+        confirmSpy.mockResolvedValueOnce(true);
+        const revalidation = createDeferred<void>();
+        const refresh = vi.fn(() => revalidation.promise);
+        const commitSelection = vi.fn();
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(() => useConfirmExperimentalProviderModel({
-            enabled: true,
-            machineId: 'machine-a',
-            serverId,
-            agentTargetKey: 'agent:happier.agent.codex/codex',
-            refresh,
+            enabled: true, machineId: 'machine-a', serverId,
+            agentTargetKey: confirmation.agentTargetKey, refresh,
         }));
-
-        let pending!: Promise<boolean>;
-        act(() => { pending = hook.getCurrent().confirm(confirmation, commitSelectionSpy); });
-        await act(async () => {
-            await account.restore({ accountId: 'account-b' });
-            await hook.rerender();
-        });
-        await act(async () => modalResult.resolve(true));
-
-        await expect(pending).resolves.toBe(false);
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
-        expect(refresh).not.toHaveBeenCalled();
-        expect(commitSelectionSpy).not.toHaveBeenCalled();
-        expect(hook.getCurrent().pending).toBe(false);
+        let operation!: Promise<boolean>;
+        await act(async () => { operation = hook.getCurrent().confirm(confirmation, commitSelection); });
+        try {
+            await waitForHomeGovernance(() => expect(refresh).toHaveBeenCalled());
+            expect(row.catalog.experimentalBindingConfirmations).toHaveLength(1);
+            await act(async () => { await Promise.resolve(); });
+            expect(commitSelection).toHaveBeenCalledOnce();
+            expect(hook.getCurrent().pending).toBe(false);
+        } finally {
+            await act(async () => { revalidation.resolve(); await operation; });
+        }
     });
 
-    it('does not mutate after the exact Agent target scope changes while confirmation is open', async () => {
-        const modalResult = createDeferred<boolean>();
-        confirmSpy.mockReturnValueOnce(modalResult.promise);
-        machineRpcWithServerScope.mockResolvedValueOnce({ status: 'success', action: 'confirmExperimental' });
-        const refresh = vi.fn(async () => {});
-        const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
-        const hook = await renderHook(
-            (props: { agentTargetKey: string }) => useConfirmExperimentalProviderModel({
-                enabled: true,
-                machineId: 'machine-a',
-                serverId,
-                agentTargetKey: props.agentTargetKey,
-                refresh,
-            }),
-            { initialProps: { agentTargetKey: 'agent:happier.agent.codex/codex' } },
-        );
-
-        let pending!: Promise<boolean>;
-        act(() => {
-            pending = hook.getCurrent().confirm(confirmation, commitSelectionSpy);
-        });
-        await hook.rerender({ agentTargetKey: 'agent:happier.agent.claude/claude' });
-        await act(async () => modalResult.resolve(true));
-
-        await expect(pending).resolves.toBe(false);
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
-        expect(refresh).not.toHaveBeenCalled();
-    });
-
-    it('does not mutate after the Providers feature is disabled while confirmation is open', async () => {
-        const modalResult = createDeferred<boolean>();
-        confirmSpy.mockReturnValueOnce(modalResult.promise);
-        machineRpcWithServerScope.mockResolvedValueOnce({ status: 'success', action: 'confirmExperimental' });
-        const refresh = vi.fn(async () => {});
-        const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
-        const hook = await renderHook(
-            (props: { enabled: boolean }) => useConfirmExperimentalProviderModel({
-                enabled: props.enabled,
-                machineId: 'machine-a',
-                serverId,
-                agentTargetKey: 'agent:happier.agent.codex/codex',
-                refresh,
-            }),
-            { initialProps: { enabled: true } },
-        );
-
-        let pending!: Promise<boolean>;
-        act(() => {
-            pending = hook.getCurrent().confirm(confirmation, commitSelectionSpy);
-        });
-        await hook.rerender({ enabled: false });
-        await act(async () => modalResult.resolve(true));
-
-        await expect(pending).resolves.toBe(false);
-        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
-        expect(refresh).not.toHaveBeenCalled();
-        expect(hook.getCurrent().error).toBeNull();
-        expect(hook.getCurrent().retry).toBeNull();
-    });
 
     it('does not refresh or select the old scope after an in-flight mutation crosses a scope change', async () => {
         confirmSpy.mockResolvedValueOnce(true);
-        const mutationResult = createDeferred<{ status: 'success' }>();
-        machineRpcWithServerScope.mockReturnValueOnce(mutationResult.promise);
+        const mutationResult = createDeferred<void>();
+        installRow(() => ({ respondAfter: mutationResult.promise, body: { status: 'updated', revision: 2, cursor: 2 } }));
         const refresh = vi.fn(async () => {});
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(
@@ -225,22 +160,23 @@ describe('useConfirmExperimentalProviderModel', () => {
         act(() => {
             pending = hook.getCurrent().confirm(confirmation, commitSelectionSpy);
         });
-        await waitForHomeGovernance(() => expect(machineRpcWithServerScope).toHaveBeenCalledTimes(1));
+        await waitForHomeGovernance(() => expect(row.writes).toBe(1));
         await hook.rerender({ machineId: 'machine-b', serverId: otherServerId });
-        await act(async () => mutationResult.resolve({ status: 'success' }));
+        await act(async () => mutationResult.resolve());
 
         await expect(pending).resolves.toBe(false);
         expect(refresh).not.toHaveBeenCalled();
         expect(alertSpy).not.toHaveBeenCalled();
+        expect(commitSelectionSpy).not.toHaveBeenCalled();
+        expect(row.writes).toBe(1);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
     });
 
-    it('exposes an exact typed daemon failure to the picker instead of flattening it into a modal', async () => {
+    it('exposes an exact typed Account revision failure to the picker instead of flattening it into a modal', async () => {
         confirmSpy.mockResolvedValueOnce(true);
-        const expectedError = createProviderErrorV1('provider_authorization_changed', {
+        const expectedError = createProviderErrorV1('provider_connection_changed', {
             connectionId: confirmation.connectionId,
-            machineId: 'machine-a',
         });
-        machineRpcWithServerScope.mockResolvedValueOnce({ status: 'error', error: expectedError });
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(() => useConfirmExperimentalProviderModel({
             enabled: true,
@@ -251,17 +187,18 @@ describe('useConfirmExperimentalProviderModel', () => {
         }));
 
         await act(async () => {
-            await expect(hook.getCurrent().confirm(confirmation, commitSelectionSpy)).resolves.toBe(false);
+            await expect(hook.getCurrent().confirm({ ...confirmation, expectedConnectionRevision: 2 }, commitSelectionSpy)).resolves.toBe(false);
         });
 
         expect(hook.getCurrent().error).toEqual(expectedError);
-        expect(hook.getCurrent().retry).toBeTypeOf('function');
+        expect(hook.getCurrent().retry).toBeNull();
+        expect(row.writes).toBe(0);
         expect(alertSpy).not.toHaveBeenCalled();
     });
 
     it('reconciles a commit-then-reject outcome and never exposes the stored mutation for replay', async () => {
         confirmSpy.mockResolvedValueOnce(true);
-        machineRpcWithServerScope.mockRejectedValueOnce(new Error('acknowledgement lost after dispatch'));
+        installRow(() => ({ dispatchThenFail: true }));
         const refresh = vi.fn(async () => {});
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(() => useConfirmExperimentalProviderModel({
@@ -279,8 +216,10 @@ describe('useConfirmExperimentalProviderModel', () => {
             connectionId: confirmation.connectionId,
             machineId: 'machine-a',
         }));
-        expect(confirmSpy).toHaveBeenCalledTimes(1);
-        expect(machineRpcWithServerScope).toHaveBeenCalledOnce();
+        expect(confirmSpy).not.toHaveBeenCalled();
+        expect(row.writes).toBe(1);
+        expect(row.catalog.experimentalBindingConfirmations).toHaveLength(1);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
         expect(refresh).toHaveBeenCalledOnce();
         expect(commitSelectionSpy).not.toHaveBeenCalled();
         expect(hook.getCurrent().error?.action).toBe('review_current_state');
@@ -290,7 +229,6 @@ describe('useConfirmExperimentalProviderModel', () => {
 
     it('does not repeat a successful confirmation mutation when only the presentation refresh fails', async () => {
         confirmSpy.mockResolvedValueOnce(true);
-        machineRpcWithServerScope.mockResolvedValueOnce({ status: 'success', action: 'confirmExperimental' });
         const refresh = vi.fn(async () => { throw new Error('refresh failed'); });
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(() => useConfirmExperimentalProviderModel({
@@ -305,7 +243,8 @@ describe('useConfirmExperimentalProviderModel', () => {
             await expect(hook.getCurrent().confirm(confirmation, commitSelectionSpy)).resolves.toBe(true);
         });
 
-        expect(machineRpcWithServerScope).toHaveBeenCalledOnce();
+        expect(row.writes).toBe(1);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
         expect(refresh).toHaveBeenCalledOnce();
         expect(commitSelectionSpy).toHaveBeenCalledOnce();
         expect(hook.getCurrent().error).toBeNull();
@@ -314,13 +253,6 @@ describe('useConfirmExperimentalProviderModel', () => {
 
     it('refuses a captured retry after the machine/server scope changes', async () => {
         confirmSpy.mockResolvedValueOnce(true);
-        machineRpcWithServerScope.mockResolvedValueOnce({
-            status: 'error',
-            error: createProviderErrorV1('provider_authorization_changed', {
-                connectionId: confirmation.connectionId,
-                machineId: 'machine-a',
-            }),
-        });
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(
             (props: { machineId: string; serverId: string }) => useConfirmExperimentalProviderModel({
@@ -330,7 +262,7 @@ describe('useConfirmExperimentalProviderModel', () => {
                 agentTargetKey: 'agent:happier.agent.codex/codex',
                 refresh: vi.fn(async () => {}),
             }),
-            { initialProps: { machineId: 'machine-a', serverId } },
+            { initialProps: { machineId: 'machine-a', serverId: 'missing-home' } },
         );
         await act(async () => {
             await hook.getCurrent().confirm(confirmation, commitSelectionSpy);
@@ -343,18 +275,11 @@ describe('useConfirmExperimentalProviderModel', () => {
             await expect(capturedRetry?.()).resolves.toBe(false);
         });
 
-        expect(machineRpcWithServerScope).toHaveBeenCalledOnce();
+        expect(row.writes).toBe(0);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
     });
 
-    it('clears a previous failure when a new confirmation attempt is cancelled', async () => {
-        confirmSpy.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-        machineRpcWithServerScope.mockResolvedValueOnce({
-            status: 'error',
-            error: createProviderErrorV1('provider_authorization_changed', {
-                connectionId: confirmation.connectionId,
-                machineId: 'machine-a',
-            }),
-        });
+    it('clears a previous failure when a new admitted confirmation succeeds', async () => {
         const { useConfirmExperimentalProviderModel } = await import('./useConfirmExperimentalProviderModel');
         const hook = await renderHook(() => useConfirmExperimentalProviderModel({
             enabled: true,
@@ -363,13 +288,14 @@ describe('useConfirmExperimentalProviderModel', () => {
             agentTargetKey: 'agent:happier.agent.codex/codex',
             refresh: vi.fn(async () => {}),
         }));
-        await act(async () => { await hook.getCurrent().confirm(confirmation, commitSelectionSpy); });
+        await act(async () => { await hook.getCurrent().confirm({ ...confirmation, expectedConnectionRevision: 2 }, commitSelectionSpy); });
         expect(hook.getCurrent().error).not.toBeNull();
 
         await act(async () => { await hook.getCurrent().confirm(confirmation, commitSelectionSpy); });
 
         expect(hook.getCurrent().error).toBeNull();
         expect(hook.getCurrent().retry).toBeNull();
-        expect(machineRpcWithServerScope).toHaveBeenCalledOnce();
+        expect(row.writes).toBe(1);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
     });
 });

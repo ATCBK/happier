@@ -249,7 +249,7 @@ describe('useProviderBindingStatus', () => {
         expect(value.current).toMatchObject({
             status: null,
             loading: false,
-            error: createProviderErrorV1('agent_error', {
+            error: createProviderErrorV1('machine_offline', {
                 connectionId: 'pc_launch',
                 machineId: 'machine-a',
             }),

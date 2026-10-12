@@ -1,6 +1,7 @@
 import { CUSTOM_PROVIDER_AUTHORING_PROTOCOLS_V1, defaultCustomProviderCatalogParserV1, normalizeCustomProviderAdvancedTemplateV1, normalizeCustomProviderTemplateV1, type CustomProviderCredentialStyleV1, type CustomProviderSimpleFormV1 } from '@happier-dev/protocol/providers/connections/normalizeCustomTemplateV1';
-import type { BundledProviderCatalogParserV1 } from '@happier-dev/protocol/providers/catalog/descriptorV1';
+import { isBundledProviderCatalogParserV1, type BundledProviderCatalogParserV1 } from '@happier-dev/protocol/providers/catalog/descriptorV1';
 import type { CustomProviderTemplateV1 } from '@happier-dev/protocol/providers/connections/customTemplateV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type CustomProviderPreset = CustomProviderSimpleFormV1['protocol'];
 
@@ -198,4 +199,75 @@ export function buildCustomProviderTemplate(draft: CustomProviderDraft): CustomP
         catalog: draft.catalog,
         ...(draft.catalog === 'probe' ? { modelsPath: draft.modelsPath } : {}),
     });
+}
+
+function isCustomProviderPreset(protocol: string): protocol is CustomProviderPreset {
+    return (CUSTOM_PROTOCOLS as readonly string[]).includes(protocol);
+}
+
+/** The form's credential shorthand for a stored header destination (the inverse of the normalizer's). */
+function credentialStyleFromDestination(destination: Readonly<{ name: string; format: 'raw' | 'bearer' }>): Pick<
+    CustomProviderAdvancedEndpointDraft, 'credentialStyle' | 'credentialHeader'
+> {
+    const name = destination.name.toLowerCase();
+    if (destination.format === 'bearer' && name === 'authorization') return { credentialStyle: 'bearer', credentialHeader: '' };
+    if (destination.format === 'raw' && name === 'x-api-key') return { credentialStyle: 'x-api-key', credentialHeader: '' };
+    if (destination.format === 'raw' && name === 'api-key') return { credentialStyle: 'api-key', credentialHeader: '' };
+    return {
+        credentialStyle: destination.format === 'bearer' ? 'custom-header-bearer' : 'custom-header',
+        credentialHeader: destination.name,
+    };
+}
+
+function sameTemplate(draft: CustomProviderDraft, template: CustomProviderTemplateV1): boolean {
+    try {
+        return sameStrictJsonValue(buildCustomProviderTemplate(draft), template);
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Reopens a saved custom template in the authoring form (F08): the simple form when it can express
+ * it, otherwise the advanced one. Null when neither form can — the editor is offered only where
+ * saving it back without changes writes exactly the template it showed, so editing never drops a
+ * header, probe or credential the form has no field for.
+ */
+export function createCustomProviderDraftFromTemplate(template: CustomProviderTemplateV1): CustomProviderDraft | null {
+    const endpoints = new Map(template.endpointTemplates.map((endpoint) => [endpoint.protocol, endpoint] as const));
+    const first = template.endpointTemplates[0];
+    if (!first || !isCustomProviderPreset(first.protocol)) return null;
+    if (template.endpointTemplates.some((endpoint) => !isCustomProviderPreset(endpoint.protocol))) return null;
+    const probes = template.catalog.source === 'probe' ? template.catalog.probes : [];
+    const endpointDrafts: CustomProviderAdvancedEndpointDraft[] = [];
+    for (const protocol of CUSTOM_PROTOCOLS) {
+        const endpoint = endpoints.get(protocol);
+        if (!endpoint) {
+            endpointDrafts.push(endpointDraft(protocol, false));
+            continue;
+        }
+        const transport = template.credential?.transports.find((candidate) => candidate.protocols.includes(protocol));
+        const ownProbes = probes.filter((probe) => probe.endpointTemplateId === endpoint.id);
+        const parser = ownProbes[0]?.parser ?? defaultCustomProviderCatalogParserV1(protocol);
+        if (!isBundledProviderCatalogParserV1(parser)) return null;
+        endpointDrafts.push({
+            ...endpointDraft(protocol, true, endpoint.baseUrl),
+            requiresApiKey: transport !== undefined,
+            ...(transport ? credentialStyleFromDestination(transport.destination) : {}),
+            publicHeadersText: Object.entries(endpoint.publicHeaders ?? {}).map(([name, value]) => `${name}: ${value}`).join('\n'),
+            probePathsText: ownProbes.map((probe) => probe.path).join('\n'),
+            probeParser: parser,
+        });
+    }
+    const advanced: CustomProviderDraft = {
+        ...createCustomProviderDraft(first.protocol),
+        name: template.name,
+        advanced: true,
+        endpoints: endpointDrafts,
+    };
+    if (template.endpointTemplates.length === 1) {
+        const simple = updateCustomProviderDraftAdvanced(advanced, false);
+        if (sameTemplate(simple, template)) return simple;
+    }
+    return sameTemplate(advanced, template) ? advanced : null;
 }

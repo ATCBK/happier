@@ -41,7 +41,7 @@ export function useProviderModelPickerVisibility(connectionId: string | null, ow
         setOperation(null);
     }, []);
     const accountLifetime = useRetireProviderStateOnAccountChange(retire);
-    const { setProviderModelPickerVisibility, ready } = useProviderActionClient(serverId ?? null, accountLifetime);
+    const { setProviderModelPickerVisibility, ready, pendingApproval } = useProviderActionClient(serverId ?? null, accountLifetime);
     const scope = React.useMemo(() => ({ accountLifetime, connectionId, serverId }), [accountLifetime, connectionId, serverId]);
     const currentScope = React.useRef<typeof scope | null>(scope);
     currentScope.current = scope;
@@ -79,5 +79,5 @@ export function useProviderModelPickerVisibility(connectionId: string | null, ow
         modelPickerVisibilityByConnectionId: catalog.data.modelPickerVisibilityByConnectionId });
     return { shown: policy.shown, defaultReason: policy.defaultReason,
         busy: !ready || (operation?.scope === scope && operation.busy),
-        error: operation?.scope === scope ? operation.error : null, setShown, reviewCurrentState };
+        error: operation?.scope === scope ? operation.error : null, setShown, reviewCurrentState, pendingApproval };
 }

@@ -205,7 +205,7 @@ describe('useProviderConnectionModels', () => {
         expect(value.current).toMatchObject({
             models: [{ id: 'a' }],
             connectionRevision: 2,
-            error: createProviderErrorV1('agent_error', {
+            error: createProviderErrorV1('machine_offline', {
                 connectionId: 'pc_a',
                 machineId: 'machine-a',
             }),

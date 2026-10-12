@@ -8,6 +8,7 @@ import type { PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins
 import { resolveSavedSecretSlotBindingIdV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
 import { t } from '@/text';
 import type { DaemonProviderModelProjectionGroupV1 } from '@happier-dev/protocol/rpc';
+import { presentProviderConnectionIdentity } from '@/providers/connection/presentation';
 
 export type RouteSelection = ProviderBoundModelRef | SessionModelRefV2 | null;
 export type ProviderRouteSource = Readonly<{
@@ -78,15 +79,9 @@ export function readProviderConnectionDisclosureSource(input: Readonly<{
 }
 
 export function providerConnectionSourceLabel(source: Omit<ProviderRouteSource, 'connectionId'>): string {
-    return source.connectionRole === 'default' && source.connectionDisplayNameMode === 'automatic'
-        ? source.providerName : `${source.providerName} · ${source.connectionName}`;
+    return presentProviderConnectionIdentity({ providerName: source.providerName, displayName: source.connectionName,
+        role: source.connectionRole, displayNameMode: source.connectionDisplayNameMode }).sourceLabel;
 }
-/**
- * The composer chip's words for a route (D6). The native case keeps the incumbent account label,
- * which follows the user's account choice as they make it. A running session with a requested change
- * names what still applies ("Now via …") and flags the change; without applied evidence there is no
- * route to name, so it returns `null` and the caller keeps its incumbent label.
- */
 /**
  * The model picker's heading for the Agent's own models: the account or pool it signs in with.
  * Null while it uses only its own sign-in (or that is unknown), where the picker keeps "Built-in".
@@ -107,36 +102,38 @@ function routeSourceLabel(route: SessionRoute, nativeLabel: string): string | nu
 }
 
 /**
- * The popover's Now / Next lines while a requested route waits on a restart (RT3): each names its
- * source and model. Null unless both ends are known, so the block never states a guessed route.
+ * The source a running session continues through once the next message is sent (D15): a route or
+ * model picked while it runs is armed for that message, like an Agent switch. Null when nothing is
+ * armed or the armed source cannot be named.
  */
-export function presentSessionRouteChange(
-    presentation: Readonly<{ applied: SessionRoute; pending: SessionRoute | null }>,
+export function presentArmedSessionRouteSource(
+    presentation: Readonly<{ pending: SessionRoute | null }>,
     native: Readonly<{ label: string }>,
-): Readonly<{ now: string; next: string; nowSource: string }> | null {
-    const pending = presentation.pending;
-    if (!pending) return null;
-    const nowSource = routeSourceLabel(presentation.applied, native.label);
-    const nextSource = routeSourceLabel(pending, native.label);
-    if (!nowSource || !nextSource || pending.kind === 'unknown' || presentation.applied.kind === 'unknown') return null;
-    const line = (source: string, modelId: string | null) => modelId ? `${source} · ${modelId}` : source;
-    return { now: line(nowSource, presentation.applied.modelId), next: line(nextSource, pending.modelId), nowSource };
+): string | null {
+    return presentation.pending ? routeSourceLabel(presentation.pending, native.label) : null;
 }
 
+/**
+ * The composer chip's words for a route (D6). The native case keeps the incumbent account label,
+ * which follows the user's account choice as they make it. An armed change is named as what comes
+ * next ("Next via …") — a choice already made, not something that needs attention. Without applied
+ * evidence or an armed source there is no route to name, so it returns `null` and the caller keeps
+ * its incumbent label.
+ */
 export function presentSessionRouteChip(
     presentation: Readonly<{ applied: SessionRoute; pending: SessionRoute | null }>,
     native: Readonly<{ label: string; authSource: 'native' | 'connected' | 'mixed' | 'unknown' }>,
-): Readonly<{ label: string; changePending: boolean }> | null {
+): Readonly<{ label: string }> | null {
+    const armed = presentArmedSessionRouteSource(presentation, native);
+    if (armed) return { label: t('connectedServices.authChip.nextVia', { source: armed }) };
     const applied = presentation.applied;
     if (applied.kind === 'native' && native.authSource === 'unknown') return null;
     const source = routeSourceLabel(applied, native.label);
     if (!source) return null;
-    if (presentation.pending) return { label: t('connectedServices.authChip.nowVia', { source }), changePending: true };
     return {
         label: applied.kind === 'native' && native.authSource === 'native'
             ? t('connectedServices.authChip.runsThroughOwnSignIn')
             : t('connectedServices.authChip.runsThrough', { source }),
-        changePending: false,
     };
 }
 

@@ -13,6 +13,11 @@ const binding: SessionProviderBindingMetadataV1 = {
 };
 
 describe('presentSessionProviderBinding', () => {
+    it('names a same-name source once from the applied snapshot', () => {
+        expect(presentSessionProviderBinding({ binding: { ...binding, displaySnapshot: {
+            ...binding.displaySnapshot, providerName: 'QA custom live', connectionName: ' qa custom live ',
+        } }, status: null }).launchLabel).toBe('QA custom live');
+    });
     it('uses the immutable launch snapshot and stays quiet while current', () => {
         expect(presentSessionProviderBinding({ binding, status: { status: 'current' } })).toEqual({
             launchLabel: 'Gateway · Work', banner: null,

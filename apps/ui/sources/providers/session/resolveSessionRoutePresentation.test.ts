@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { t } from '@/text';
-import { presentNativeRouteSourceLabel, presentSessionRouteChange, presentSessionRouteChip, resolveSessionRoutePresentation } from './resolveSessionRoutePresentation';
+import { presentArmedSessionRouteSource, presentNativeRouteSourceLabel, presentSessionRouteChip, resolveSessionRoutePresentation } from './resolveSessionRoutePresentation';
 
 describe('session route presentation', () => {
+    it('names a same-name source once in the model picker route', () => {
+        expect(resolveSessionRoutePresentation({ phase: 'draft',
+            selection: { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_a', modelId: 'model' },
+            native: { label: 'Native', authSource: 'native', connectedCount: 0 },
+            sources: [{ connectionId: 'pc_a', providerName: 'QA custom live', connectionName: ' qa custom live ',
+                connectionRole: 'named', connectionDisplayNameMode: 'custom' }],
+        }).applied).toMatchObject({ sourceLabel: 'QA custom live' });
+    });
     it('names only the selected Provider credential and omits an auth-free selected route', async () => {
         const { projectProviderRouteSignInPurposes } = await import('./resolveSessionRoutePresentation');
         const route = resolveSessionRoutePresentation({ phase: 'draft',
@@ -55,32 +63,40 @@ describe('session route presentation', () => {
             native: { label: 'Account pool', authSource: 'connected', connectedCount: 1 } }).applied)
             .toMatchObject({ kind: 'native', sourceLabel: 'Account pool', authSource: 'connected' });
     });
-    it('names the chip after the route that actually applies, and marks a requested change as pending', () => {
+    it('names the chip after the route that applies, or the armed route as next', () => {
         const source = { connectionId: 'pc_a', providerName: 'DeepSeek', connectionName: 'DeepSeek',
             connectionRole: 'default' as const, connectionDisplayNameMode: 'automatic' as const };
         const pool = { label: 'Claude: Work pool', authSource: 'connected' as const };
         const provider = { agentTargetKey: 'agent:claude', providerConnectionId: 'pc_a', modelId: 'deepseek-v4' };
         const draft = resolveSessionRoutePresentation({ phase: 'draft', selection: provider, sources: [source],
             native: { ...pool, connectedCount: 1 } });
-        expect(presentSessionRouteChip(draft, pool)).toEqual({ label: t('connectedServices.authChip.runsThrough', { source: 'DeepSeek' }), changePending: false });
+        expect(presentSessionRouteChip(draft, pool)).toEqual({ label: t('connectedServices.authChip.runsThrough', { source: 'DeepSeek' }) });
         const nativeDraft = resolveSessionRoutePresentation({ phase: 'draft', selection: null, native: { ...pool, connectedCount: 1 } });
         expect(presentSessionRouteChip(nativeDraft, pool).label).toBe(t('connectedServices.authChip.runsThrough', { source: 'Claude: Work pool' }));
         expect(presentSessionRouteChip(nativeDraft, { label: 'Native', authSource: 'native' }).label)
             .toBe(t('connectedServices.authChip.runsThroughOwnSignIn'));
-        const running = resolveSessionRoutePresentation({ phase: 'running', selection: provider, appliedSelection: null,
-            transitionPending: true, sources: [source], native: { ...pool, connectedCount: 1 } });
+        const unread = resolveSessionRoutePresentation({ phase: 'running', selection: null, appliedSelection: null,
+            sources: [source], native: { ...pool, connectedCount: 1 } });
         // Without applied evidence the chip keeps the incumbent label instead of guessing the route.
-        expect(presentSessionRouteChip(running, pool)).toBeNull();
+        expect(presentSessionRouteChip(unread, pool)).toBeNull();
+        // D15: a route picked in a running session is armed for the next message, like an Agent switch.
+        // The chip names it as next — the armed route, not the one still running — with no warning mark.
         const switching = resolveSessionRoutePresentation({ phase: 'running', selection: provider,
             appliedSelection: { agentTargetKey: 'agent:claude', providerConnectionId: null, modelId: 'opus' },
             transitionPending: true, sources: [source], native: { ...pool, connectedCount: 1 } });
         expect(presentSessionRouteChip(switching, pool)).toEqual({
-            label: t('connectedServices.authChip.nowVia', { source: 'Claude: Work pool' }), changePending: true });
-        // The popover's Now / Next lines name both ends, and stay silent while either is unknown.
-        expect(presentSessionRouteChange(switching, pool)).toEqual({
-            now: 'Claude: Work pool · opus', next: 'DeepSeek · deepseek-v4', nowSource: 'Claude: Work pool' });
-        expect(presentSessionRouteChange(running, pool)).toBeNull();
-        expect(presentSessionRouteChange(draft, pool)).toBeNull();
+            label: t('connectedServices.authChip.nextVia', { source: 'DeepSeek' }) });
+        expect(presentArmedSessionRouteSource(switching, pool)).toBe('DeepSeek');
+        // Even before the applied route is readable, the armed one is known and named.
+        const armedUnread = resolveSessionRoutePresentation({ phase: 'running', selection: provider, appliedSelection: null,
+            transitionPending: true, sources: [source], native: { ...pool, connectedCount: 1 } });
+        expect(presentArmedSessionRouteSource(armedUnread, pool)).toBe('DeepSeek');
+        // Nothing armed in a draft or a settled session.
+        expect(presentArmedSessionRouteSource(draft, pool)).toBeNull();
+        // Arming back to the native account names that account.
+        const toNative = resolveSessionRoutePresentation({ phase: 'running', selection: null, appliedSelection: provider,
+            transitionPending: true, sources: [source], native: { ...pool, connectedCount: 1 } });
+        expect(presentArmedSessionRouteSource(toNative, pool)).toBe('Claude: Work pool');
         // The picker heading names a connected account or pool, and keeps its default for the Agent's own sign-in.
         expect(presentNativeRouteSourceLabel(pool)).toBe('Claude: Work pool');
         expect(presentNativeRouteSourceLabel({ label: 'Native', authSource: 'native' })).toBeNull();

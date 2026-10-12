@@ -1,5 +1,6 @@
 import type { ProviderErrorV1, SessionProviderBindingMetadataV1 } from '@happier-dev/protocol';
 import type { DaemonProviderBindingStatusResponseV1 } from '@happier-dev/protocol/rpc';
+import { presentProviderConnectionIdentity } from '@/providers/connection/presentation';
 
 export type SessionProviderBindingBanner = Readonly<{
     kind: 'changed' | 'unavailable' | 'disabled' | 'incompatible' | 'status-error';
@@ -18,9 +19,9 @@ export function presentSessionProviderBinding(input: Readonly<{
     banner: SessionProviderBindingBanner | null;
 }> {
     const snapshot = input.binding.displaySnapshot;
-    const launchLabel = snapshot.connectionRole === 'default' && snapshot.connectionDisplayNameMode === 'automatic'
-        ? snapshot.providerName
-        : `${snapshot.providerName} · ${snapshot.connectionName}`;
+    const launchLabel = presentProviderConnectionIdentity({ providerName: snapshot.providerName,
+        displayName: snapshot.connectionName, role: snapshot.connectionRole,
+        displayNameMode: snapshot.connectionDisplayNameMode }).sourceLabel;
     const common = { providerName: snapshot.providerName, connectionName: snapshot.connectionName };
     if (input.error) {
         return { launchLabel, banner: { kind: 'status-error', action: 'retry', ...common } };

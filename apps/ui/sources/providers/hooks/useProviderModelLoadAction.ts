@@ -43,7 +43,7 @@ export function useProviderModelLoadAction(input: Readonly<{
     /** Re-checks an owner-scoped target immediately before dispatching a model load. */
     resolveExecutionTarget?: () => ProviderModelExecutionTarget | null;
 }>) {
-    const { cancelProviderModelLoad, loadProviderModel } = useProviderActionClient(input.serverId);
+    const { cancelProviderModelLoad, loadProviderModel, pendingApproval } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const [loadingModelKey, setLoadingModelKey] = React.useState<string | null>(null);
     const [cancelledProviderMayContinue, setCancelledProviderMayContinue] = React.useState(false);
@@ -229,5 +229,5 @@ export function useProviderModelLoadAction(input: Readonly<{
         }
     }, [cancelProviderModelLoad]);
 
-    return { loadingModelKey, cancelledProviderMayContinue, load, cancel };
+    return { loadingModelKey, cancelledProviderMayContinue, load, cancel, pendingApproval };
 }

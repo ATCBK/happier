@@ -7,10 +7,14 @@ import type { z } from 'zod';
 import {
     createProviderConnectionViewFixture,
     createProviderSettingsAccountHarness,
+    installProviderConnectionsCatalogHttpBoundary,
 } from '@/dev/testkit/harness/providerSettingsHarness';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { buildCustomProviderTemplate, createCustomProviderDraft } from '@/providers/authoring/state';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { PROVIDER_CONNECTION_ACTION_ID_BY_OPERATION_V1 } from '@happier-dev/protocol/providers/providerActionsV1';
 
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
@@ -19,15 +23,30 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 const account = createProviderSettingsAccountHarness();
 let serverId = '';
 let otherServerId = '';
+await loadSyncSingletonForTests();
 const { useProviderConnectionMutation } = await import('./useProviderConnectionMutation');
 
 /**
- * Stable per-server target resolvers. The hook treats a new resolver identity
- * as a new scope, so a suite that wants the SAME scope across renders must pass
- * the same function, exactly like the Provider target owner does.
+ * Machine target resolvers are stable unless a test changes the selected
+ * machine. Account Actions keep their Account scope through that change.
  */
 const resolveTargetOnServerA = () => ({ machineId: 'machine-a', serverId });
 const resolveTargetOnServerB = () => ({ machineId: 'machine-a', serverId: otherServerId });
+const resolveNoTarget = () => null;
+
+function connectionCatalog() {
+    return ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+        connections: ['pc_a', 'pc_prior', 'pc_first', 'pc_second', 'pc_other'].map(id => ({
+            v: 1, id, source: { kind: 'custom', template: buildCustomProviderTemplate({
+                ...createCustomProviderDraft('openai-responses'), name: 'Test source',
+                baseUrl: 'https://models.example.test/v1', requiresApiKey: false,
+            }) }, role: 'named', displayName: 'Test source', displayNameMode: 'custom', revision: 1, createdAt: 1, updatedAt: 1,
+        })),
+    });
+}
+function writableCatalog(reply?: Parameters<typeof installProviderConnectionsCatalogHttpBoundary>[0]['reply'], targetServerId = serverId) {
+    return installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId: targetServerId, catalog: connectionCatalog(), reply });
+}
 
 function createDeferred<T>() {
     let resolve!: (value: T) => void;
@@ -50,16 +69,101 @@ describe('useProviderConnectionMutation', () => {
         machineRpcWithServerScope.mockReset();
         const waivedActions = Object.values(PROVIDER_CONNECTION_ACTION_ID_BY_OPERATION_V1);
         const settings = { actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: Object.fromEntries(waivedActions.map(id => [id, ['ui']])) } };
-        serverId = (await account.restore({ settings })).serverId;
+        serverId = (await account.restore({ settings, catalog: connectionCatalog() })).serverId;
+        const { storage } = await import('@/sync/domains/state/storage');
+        await waitForHomeGovernance(() => expect(storage.getState().settings.actionsSettingsV1
+            .approvalWaivedSurfaces['providers.connections.delete']).toContain('ui'));
         otherServerId = await account.addHome({ name: 'Other Provider Home', serverUrl: 'https://provider-settings-other.test', accountId: 'account-a', active: false });
         account.home.answer(otherServerId, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: settings } } });
     });
 
+    it('writes Account configuration without a selected machine', async () => {
+        const catalog = writableCatalog();
+        const refresh = vi.fn(async () => undefined);
+        const hook = await renderHook(() => useProviderConnectionMutation({ serverId, resolveTarget: resolveNoTarget, refresh }));
+        await act(async () => {
+            expect(await hook.getCurrent().run({ action: 'delete', connectionId: 'pc_a' }))
+                .toMatchObject({ status: 'success', action: 'delete', deletedConnectionId: 'pc_a' });
+        });
+        expect(catalog.catalog.connections.some(connection => connection.id === 'pc_a')).toBe(false);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+        expect(refresh).toHaveBeenCalledOnce();
+    });
+
+    it('keeps an Account write pending and delivers its ACK when only the selected machine changes', async () => {
+        const deferred = createDeferred<void>();
+        const catalog = writableCatalog(mutation => ({ respondAfter: deferred.promise,
+            body: { status: 'updated', revision: Number(mutation.expectedRevision) + 1, cursor: Number(mutation.expectedRevision) + 1 } }));
+        const refresh = vi.fn(async () => undefined);
+        const hook = await renderHook(({ resolveTarget }: { resolveTarget: typeof resolveTargetOnServerA }) =>
+            useProviderConnectionMutation({ serverId, resolveTarget, refresh }),
+            { initialProps: { resolveTarget: resolveTargetOnServerA } });
+        let operation!: Promise<unknown>;
+        await act(async () => { operation = hook.getCurrent().run({ action: 'delete', connectionId: 'pc_a' }); });
+        await waitForHomeGovernance(() => expect(catalog.writes).toBe(1));
+        await hook.rerender({ resolveTarget: () => ({ machineId: 'machine-b', serverId }) });
+        const wasPending = hook.getCurrent().isPending('delete:pc_a');
+        let result: unknown;
+        await act(async () => { deferred.resolve(); result = await operation; });
+        expect(wasPending).toBe(true);
+        expect(result).toMatchObject({ status: 'success', deletedConnectionId: 'pc_a' });
+        expect(refresh).toHaveBeenCalledWith('account');
+        expect(hook.getCurrent().isPending('delete:pc_a')).toBe(false);
+    });
+
+    it('settles an acknowledged Account write while presentation refresh is pending', async () => {
+        const catalog = writableCatalog();
+        const revalidation = createDeferred<void>();
+        const refresh = vi.fn(() => revalidation.promise);
+        const hook = await renderHook(() => useProviderConnectionMutation({ serverId, resolveTarget: resolveNoTarget, refresh }));
+        let settled = false;
+        let operation!: Promise<unknown>;
+        await act(async () => {
+            operation = hook.getCurrent().run({ action: 'delete', connectionId: 'pc_a' }).then(result => {
+                settled = true;
+                return result;
+            });
+        });
+        try {
+            await waitForHomeGovernance(() => expect(refresh).toHaveBeenCalled());
+            expect(catalog.catalog.connections.some(connection => connection.id === 'pc_a')).toBe(false);
+            await act(async () => { await Promise.resolve(); });
+            expect(settled).toBe(true);
+            expect(hook.getCurrent().isPending('delete:pc_a')).toBe(false);
+        } finally {
+            await act(async () => { revalidation.resolve(); await operation; });
+        }
+    });
+
+    it('retires a machine result when only the selected machine changes on the same Account', async () => {
+        const deferred = createDeferred<unknown>();
+        machineRpcWithServerScope.mockImplementationOnce(() => deferred.promise);
+        const refresh = vi.fn(async () => undefined);
+        const hook = await renderHook(({ resolveTarget }: { resolveTarget: typeof resolveTargetOnServerA }) =>
+            useProviderConnectionMutation({ serverId, resolveTarget, refresh }),
+            { initialProps: { resolveTarget: resolveTargetOnServerA } });
+        let operation!: Promise<unknown>;
+        await act(async () => { operation = hook.getCurrent().run({ action: 'setEnabled', scope: 'machine',
+            enabled: true, connectionId: 'pc_a', machineId: 'machine-a' }); });
+        await waitForHomeGovernance(() => expect(machineRpcWithServerScope).toHaveBeenCalledOnce());
+        await hook.rerender({ resolveTarget: () => ({ machineId: 'machine-b', serverId }) });
+        const pending = hook.getCurrent().isPending('setEnabled:pc_a');
+        let result: unknown;
+        await act(async () => {
+            deferred.resolve({ status: 'error', error: createProviderErrorV1('provider_endpoint_unreachable') });
+            result = await operation;
+        });
+        expect(pending).toBe(false);
+        expect(result).toBeNull();
+        expect(hook.getCurrent().error).toBeNull();
+        expect(refresh).not.toHaveBeenCalled();
+    });
+
     it('reconciles after a commit-then-reject transport failure without exposing a replay', async () => {
         const events: string[] = [];
-        machineRpcWithServerScope.mockImplementationOnce(async () => {
+        const catalog = writableCatalog(() => {
             events.push('commit');
-            throw new Error('acknowledgement lost after dispatch');
+            return { dispatchThenFail: true };
         });
         const refresh = vi.fn(async () => { events.push('refresh'); });
         const hook = await renderHook(() => useProviderConnectionMutation({
@@ -84,17 +188,15 @@ describe('useProviderConnectionMutation', () => {
         expect(hook.getCurrent().isPending('delete:pc_a')).toBe(false);
         expect(hook.getCurrent()).not.toHaveProperty('errorCode');
         expect(events).toEqual(['commit', 'refresh']);
-        expect(machineRpcWithServerScope).toHaveBeenCalledOnce();
+        expect(catalog.writes).toBe(1);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
         expect(refresh).toHaveBeenCalledOnce();
     });
 
     it('coalesces an identical pending mutation before it can dispatch twice', async () => {
-        const deferred = createDeferred<Readonly<{
-            status: 'success';
-            action: 'delete';
-            deletedConnectionId: string;
-        }>>();
-        machineRpcWithServerScope.mockReturnValueOnce(deferred.promise);
+        const deferred = createDeferred<void>();
+        const catalog = writableCatalog(mutation => ({ respondAfter: deferred.promise,
+            body: { status: 'updated', revision: Number(mutation.expectedRevision) + 1, cursor: Number(mutation.expectedRevision) + 1 } }));
         const refresh = vi.fn(async () => undefined);
         const hook = await renderHook(() => useProviderConnectionMutation({
             resolveTarget: resolveTargetOnServerA,
@@ -119,9 +221,9 @@ describe('useProviderConnectionMutation', () => {
             await Promise.resolve();
         });
 
-        await waitForHomeGovernance(() => expect(machineRpcWithServerScope).toHaveBeenCalledOnce());
+        await waitForHomeGovernance(() => expect(catalog.writes).toBe(1));
         await act(async () => {
-            deferred.resolve({ status: 'success', action: 'delete', deletedConnectionId: 'pc_a' });
+            deferred.resolve();
             await Promise.all([first, duplicate]);
         });
 
@@ -131,16 +233,13 @@ describe('useProviderConnectionMutation', () => {
     it('keeps a captured mutation callback stable across re-renders of one target scope', async () => {
         // Unrelated re-renders must not restart the write path: the callback a
         // modal captured stays the current one, its request coalesces with an
-        // identical concurrent one, and the write follows the routing id the
-        // target resolves to at effect time rather than the rendered snapshot.
+        // identical concurrent one, including when the target acquires an
+        // alias for the same Home.
         const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
         await setServerProfileIdentityForUrl('https://provider-settings-account.test', 'srv_provider_settings');
-        const deferred = createDeferred<Readonly<{
-            status: 'success';
-            action: 'delete';
-            deletedConnectionId: string;
-        }>>();
-        machineRpcWithServerScope.mockReturnValueOnce(deferred.promise);
+        const deferred = createDeferred<void>();
+        const catalog = writableCatalog(mutation => ({ respondAfter: deferred.promise,
+            body: { status: 'updated', revision: Number(mutation.expectedRevision) + 1, cursor: Number(mutation.expectedRevision) + 1 } }));
         const selected = { current: { machineId: 'machine-a', serverId } };
         const resolveTarget = () => selected.current;
         const refresh = vi.fn(async () => undefined);
@@ -171,15 +270,13 @@ describe('useProviderConnectionMutation', () => {
         });
 
         await act(async () => {
-            deferred.resolve({ status: 'success', action: 'delete', deletedConnectionId: 'pc_a' });
+            deferred.resolve();
             await Promise.all([fromCapturedCallback, fromCurrentCallback]);
         });
 
         expect(fromCurrentCallback).toBe(fromCapturedCallback);
-        expect(machineRpcWithServerScope).toHaveBeenCalledOnce();
-        expect(machineRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
-            serverId: 'srv_provider_settings',
-        }));
+        expect(catalog.writes).toBe(1);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
         expect(currentRun).toBe(capturedUnderA);
         expect(refresh).toHaveBeenCalledOnce();
     });
@@ -197,7 +294,7 @@ describe('useProviderConnectionMutation', () => {
         selected.current = { machineId: 'machine-b', serverId: otherServerId };
         await act(async () => {
             await hook.getCurrent().run({
-                action: 'delete',
+                action: 'setEnabled', scope: 'machine', enabled: false,
                 machineId: 'machine-a',
                 connectionId: 'pc_a',
             });
@@ -252,7 +349,7 @@ describe('useProviderConnectionMutation', () => {
 
         await act(async () => {
             await capturedWhileTargetingIdentityA({
-                action: 'delete',
+                action: 'setEnabled', scope: 'machine', enabled: false,
                 machineId: 'machine-a',
                 connectionId: 'pc_a',
             }, 'delete');
@@ -276,14 +373,14 @@ describe('useProviderConnectionMutation', () => {
         const resolveTarget = () => selected.current;
         const refresh = vi.fn(async () => undefined);
         machineRpcWithServerScope.mockResolvedValueOnce({
-            status: 'success', action: 'delete', deletedConnectionId: 'pc_a',
+            status: 'success', action: 'setEnabled', connection: createProviderConnectionViewFixture(),
         });
         const hook = await renderHook(() => useProviderConnectionMutation({ resolveTarget, refresh }));
 
         selected.current = { machineId: 'machine-a', serverId: 'srv_provider_settings' };
         await act(async () => {
             await hook.getCurrent().run({
-                action: 'delete',
+                action: 'setEnabled', scope: 'machine', enabled: false,
                 machineId: 'machine-a',
                 connectionId: 'pc_a',
             });
@@ -302,7 +399,7 @@ describe('useProviderConnectionMutation', () => {
 
         await act(async () => {
             await hook.getCurrent().run({
-                action: 'delete',
+                action: 'setEnabled', scope: 'machine', enabled: false,
                 machineId: 'machine-a',
                 connectionId: 'pc_a',
             });
@@ -313,22 +410,9 @@ describe('useProviderConnectionMutation', () => {
     });
 
     it('coalesces canonically equal requests but not material differences', async () => {
-        const equivalentDeferred = createDeferred<Readonly<{
-            status: 'error';
-            error: ReturnType<typeof createProviderErrorV1>;
-        }>>();
-        const differentDeferred = createDeferred<Readonly<{
-            status: 'error';
-            error: ReturnType<typeof createProviderErrorV1>;
-        }>>();
-        const preNormalizationDuplicate = createDeferred<Readonly<{
-            status: 'error';
-            error: ReturnType<typeof createProviderErrorV1>;
-        }>>();
-        machineRpcWithServerScope
-            .mockReturnValueOnce(equivalentDeferred.promise)
-            .mockReturnValueOnce(differentDeferred.promise)
-            .mockReturnValueOnce(preNormalizationDuplicate.promise);
+        const receipt = createDeferred<void>();
+        const catalog = writableCatalog(mutation => ({ respondAfter: receipt.promise,
+            body: { status: 'updated', revision: Number(mutation.expectedRevision) + 1, cursor: Number(mutation.expectedRevision) + 1 } }));
         const refresh = vi.fn(async () => undefined);
         const hook = await renderHook(() => useProviderConnectionMutation({
             resolveTarget: resolveTargetOnServerA,
@@ -383,6 +467,7 @@ describe('useProviderConnectionMutation', () => {
         } satisfies ProviderConnectionMutationRequestInput;
         const materiallyDifferentRequest = {
             ...equivalentRequest,
+            connectionId: 'pc_custom_enabled',
             enable: true,
         } satisfies ProviderConnectionMutationRequestInput;
 
@@ -392,59 +477,49 @@ describe('useProviderConnectionMutation', () => {
         await act(async () => {
             first = hook.getCurrent().run(firstRequest, 'save');
             equivalent = hook.getCurrent().run(equivalentRequest, 'save');
-            materiallyDifferent = hook.getCurrent().run(materiallyDifferentRequest, 'save');
             await Promise.resolve();
         });
 
-        const error = createProviderErrorV1('provider_endpoint_unavailable', {
-            connectionId: 'pc_custom',
-            machineId: 'machine-a',
-        });
+        await waitForHomeGovernance(() => expect(catalog.writes).toBe(1));
+        // Keep the first receipt pending but let the next real read observe its
+        // committed CAS revision; concurrent stale snapshots may legitimately conflict.
         await act(async () => {
-            equivalentDeferred.resolve({ status: 'error', error });
-            differentDeferred.resolve({ status: 'error', error });
-            preNormalizationDuplicate.resolve({ status: 'error', error });
-            await Promise.all([first, equivalent, materiallyDifferent]);
+            materiallyDifferent = hook.getCurrent().run(materiallyDifferentRequest, 'save');
+        });
+        await waitForHomeGovernance(() => expect(catalog.writes).toBe(2));
+        let outcomes!: unknown[];
+        await act(async () => {
+            receipt.resolve();
+            outcomes = await Promise.all([first, equivalent, materiallyDifferent]);
         });
 
         expect(equivalent).toBe(first);
         expect(materiallyDifferent).not.toBe(first);
-        expect(machineRpcWithServerScope).toHaveBeenCalledTimes(2);
-        expect(machineRpcWithServerScope.mock.calls[0]?.[0]).toMatchObject({
-            payload: {
-                template: { name: 'Custom' },
-                manualModels: [],
-            },
-        });
-        expect(refresh).not.toHaveBeenCalled();
+        expect(outcomes).toMatchObject([
+            { status: 'success', action: 'createCustom', created: true },
+            { status: 'success', action: 'createCustom', created: true },
+            { status: 'success', action: 'createCustom', created: true },
+        ]);
+        expect(catalog.catalog.connections.find(connection => connection.id === 'pc_custom')?.source)
+            .toMatchObject({ kind: 'custom', template: { name: 'Custom' } });
+        expect(catalog.catalog.connections.filter(connection => connection.id.startsWith('pc_custom')))
+            .toHaveLength(2);
+        expect(catalog.writes).toBe(2);
+        expect(catalog.catalog.accountGrants.map(grant => grant.connectionId)).toEqual(['pc_custom_enabled']);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
     });
 
     it('keeps every current-scope UI key pending until its own requests settle', async () => {
-        const priorScope = createDeferred<Readonly<{
-            status: 'success';
-            action: 'delete';
-            deletedConnectionId: string;
-        }>>();
-        const currentSharedFirst = createDeferred<Readonly<{
-            status: 'success';
-            action: 'delete';
-            deletedConnectionId: string;
-        }>>();
-        const currentSharedSecond = createDeferred<Readonly<{
-            status: 'success';
-            action: 'delete';
-            deletedConnectionId: string;
-        }>>();
-        const currentOther = createDeferred<Readonly<{
-            status: 'success';
-            action: 'delete';
-            deletedConnectionId: string;
-        }>>();
-        machineRpcWithServerScope
-            .mockReturnValueOnce(priorScope.promise)
-            .mockReturnValueOnce(currentSharedFirst.promise)
-            .mockReturnValueOnce(currentSharedSecond.promise)
-            .mockReturnValueOnce(currentOther.promise);
+        const priorScope = createDeferred<void>();
+        const currentSharedFirst = createDeferred<void>();
+        const currentSharedSecond = createDeferred<void>();
+        const currentOther = createDeferred<void>();
+        const priorCatalog = writableCatalog(mutation => ({ respondAfter: priorScope.promise,
+            body: { status: 'updated', revision: Number(mutation.expectedRevision) + 1, cursor: Number(mutation.expectedRevision) + 1 } }));
+        const currentReceipts = [currentSharedFirst.promise, currentOther.promise, currentSharedSecond.promise];
+        let currentWrite = 0;
+        const currentCatalog = writableCatalog(mutation => ({ respondAfter: currentReceipts[currentWrite++],
+            body: { status: 'updated', revision: Number(mutation.expectedRevision) + 1, cursor: Number(mutation.expectedRevision) + 1 } }), otherServerId);
         const refreshA = vi.fn(async () => undefined);
         const refreshB = vi.fn(async () => undefined);
         const hook = await renderHook(
@@ -461,7 +536,7 @@ describe('useProviderConnectionMutation', () => {
             }, 'shared');
             await Promise.resolve();
         });
-        await waitForHomeGovernance(() => expect(machineRpcWithServerScope).toHaveBeenCalledOnce());
+        await waitForHomeGovernance(() => expect(priorCatalog.writes).toBe(1));
 
         await hook.rerender({ resolveTarget: resolveTargetOnServerB, refresh: refreshB });
         let firstCurrentShared!: Promise<unknown>;
@@ -471,15 +546,23 @@ describe('useProviderConnectionMutation', () => {
             firstCurrentShared = hook.getCurrent().run({
                 action: 'delete', machineId: 'machine-a', connectionId: 'pc_first',
             }, 'shared');
-            secondCurrentShared = hook.getCurrent().run({
-                action: 'delete', machineId: 'machine-a', connectionId: 'pc_second',
-            }, 'shared');
+            await Promise.resolve();
+        });
+        await waitForHomeGovernance(() => expect(currentCatalog.writes).toBe(1));
+        await act(async () => {
             currentOtherRequest = hook.getCurrent().run({
                 action: 'delete', machineId: 'machine-a', connectionId: 'pc_other',
             }, 'other');
             await Promise.resolve();
         });
-        await waitForHomeGovernance(() => expect(machineRpcWithServerScope).toHaveBeenCalledTimes(4));
+        await waitForHomeGovernance(() => expect(currentCatalog.writes).toBe(2));
+        await act(async () => {
+            secondCurrentShared = hook.getCurrent().run({
+                action: 'delete', machineId: 'machine-a', connectionId: 'pc_second',
+            }, 'shared');
+            await Promise.resolve();
+        });
+        await waitForHomeGovernance(() => expect(currentCatalog.writes).toBe(3));
 
         const observedPending = [[
             isKeyPending(hook.getCurrent(), 'shared'),
@@ -487,7 +570,7 @@ describe('useProviderConnectionMutation', () => {
         ]];
 
         await act(async () => {
-            priorScope.resolve({ status: 'success', action: 'delete', deletedConnectionId: 'pc_prior' });
+            priorScope.resolve();
             await fromPriorScope;
         });
         observedPending.push([
@@ -496,7 +579,7 @@ describe('useProviderConnectionMutation', () => {
         ]);
 
         await act(async () => {
-            currentSharedFirst.resolve({ status: 'success', action: 'delete', deletedConnectionId: 'pc_first' });
+            currentSharedFirst.resolve();
             await firstCurrentShared;
         });
         observedPending.push([
@@ -505,7 +588,7 @@ describe('useProviderConnectionMutation', () => {
         ]);
 
         await act(async () => {
-            currentOther.resolve({ status: 'success', action: 'delete', deletedConnectionId: 'pc_other' });
+            currentOther.resolve();
             await currentOtherRequest;
         });
         observedPending.push([
@@ -514,7 +597,7 @@ describe('useProviderConnectionMutation', () => {
         ]);
 
         await act(async () => {
-            currentSharedSecond.resolve({ status: 'success', action: 'delete', deletedConnectionId: 'pc_second' });
+            currentSharedSecond.resolve();
             await secondCurrentShared;
         });
         observedPending.push([
@@ -535,9 +618,9 @@ describe('useProviderConnectionMutation', () => {
 
     it('reconciles a committed create with a malformed response before offering current-state review', async () => {
         const events: string[] = [];
-        machineRpcWithServerScope.mockImplementationOnce(async () => {
+        const catalog = writableCatalog(() => {
             events.push('commit');
-            return { status: 'success', action: 'createContribution' };
+            return { body: { status: 'updated' } };
         });
         const refresh = vi.fn(async () => { events.push('refresh'); });
         const hook = await renderHook(() => useProviderConnectionMutation({
@@ -550,20 +633,16 @@ describe('useProviderConnectionMutation', () => {
                 action: 'createContribution',
                 machineId: 'machine-a',
                 connectionId: 'pc_created',
-                contributionKey: 'acme.gateway/main',
+                contributionKey: 'happier.provider.deepseek/deepseek',
                 displayName: null,
                 savedSecretId: null,
                 enable: false,
-                authoringReview: {
-                    candidateId: null,
-                    fingerprint: 'authoring-review:v1:reviewed',
-                    revision: 0,
-                },
             });
         });
 
         expect(events).toEqual(['commit', 'refresh']);
-        expect(machineRpcWithServerScope).toHaveBeenCalledOnce();
+        expect(catalog.writes).toBe(1);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
         expect(refresh).toHaveBeenCalledOnce();
         expect(hook.getCurrent().error).toEqual(createProviderErrorV1('provider_rpc_mutation_outcome_unknown', {
             connectionId: 'pc_created',
@@ -572,62 +651,61 @@ describe('useProviderConnectionMutation', () => {
     });
 
     it('preserves acknowledged create, update, and delete results when only their follow-up read fails', async () => {
+        const catalog = writableCatalog();
         const refresh = vi.fn(async () => { throw new Error('catalog refresh unavailable'); });
         const hook = await renderHook(() => useProviderConnectionMutation({
             resolveTarget: resolveTargetOnServerA,
             refresh,
         }));
-        const connection = createProviderConnectionViewFixture({ connectionId: 'pc_a' });
         const cases = [
             {
                 request: {
                     action: 'createContribution' as const,
-                    machineId: 'machine-a', connectionId: 'pc_a',
-                    contributionKey: 'acme.gateway/main', displayName: null,
+                    machineId: 'machine-a', connectionId: 'pc_created',
+                    contributionKey: 'happier.provider.deepseek/deepseek', displayName: 'Created source',
                     savedSecretId: null, enable: false,
-                    authoringReview: {
-                        candidateId: null,
-                        fingerprint: 'authoring-review:v1:reviewed',
-                        revision: 0,
-                    },
                 },
-                response: { status: 'success' as const, action: 'createContribution' as const, connection },
             },
             {
                 request: {
                     action: 'update' as const,
-                    machineId: 'machine-a', connectionId: 'pc_a', expectedRevision: 1,
+                    machineId: 'machine-a', connectionId: 'pc_created', expectedRevision: 0,
                     displayName: 'Updated', displayNameMode: 'custom' as const,
                 },
-                response: { status: 'success' as const, action: 'update' as const, connection },
             },
             {
-                request: { action: 'delete' as const, machineId: 'machine-a', connectionId: 'pc_a' },
-                response: { status: 'success' as const, action: 'delete' as const, deletedConnectionId: 'pc_a' },
+                request: { action: 'delete' as const, machineId: 'machine-a', connectionId: 'pc_created' },
             },
         ];
 
         for (const testCase of cases) {
-            machineRpcWithServerScope.mockResolvedValueOnce(testCase.response);
             let result: unknown;
             await act(async () => {
                 result = await hook.getCurrent().run(testCase.request);
             });
-            expect(result).toEqual(testCase.response);
+            expect(result).toMatchObject({ status: 'success', action: testCase.request.action });
             expect(hook.getCurrent().error).toEqual(createProviderErrorV1('agent_error', {
-                connectionId: 'pc_a',
+                connectionId: 'pc_created',
                 machineId: 'machine-a',
             }));
-            expect(hook.getCurrent().retry).toBe(refresh);
+            expect(hook.getCurrent().retry).toBeTypeOf('function');
+            const writesBeforeRetry = catalog.writes;
+            await act(async () => {
+                await expect(hook.getCurrent().retry?.()).rejects.toThrow('catalog refresh unavailable');
+            });
+            expect(catalog.writes).toBe(writesBeforeRetry);
         }
 
-        expect(machineRpcWithServerScope).toHaveBeenCalledTimes(3);
-        expect(refresh).toHaveBeenCalledTimes(3);
+        expect(catalog.writes).toBe(3);
+        expect(catalog.catalog.connections.some(connection => connection.id === 'pc_created')).toBe(false);
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+        expect(refresh).toHaveBeenCalledTimes(6);
     });
 
     it('does not refresh or publish a mutation result after the server/query scope changes', async () => {
-        const deferred = createDeferred<Readonly<{ status: 'success'; action: 'delete'; deletedConnectionId: string }>>();
-        machineRpcWithServerScope.mockReturnValueOnce(deferred.promise);
+        const deferred = createDeferred<void>();
+        const catalog = writableCatalog(mutation => ({ respondAfter: deferred.promise,
+            body: { status: 'updated', revision: Number(mutation.expectedRevision) + 1, cursor: Number(mutation.expectedRevision) + 1 } }));
         const refreshA = vi.fn(async () => undefined);
         const refreshB = vi.fn(async () => undefined);
         const hook = await renderHook(
@@ -646,9 +724,10 @@ describe('useProviderConnectionMutation', () => {
                 connectionId: 'pc_a',
             });
         });
+        await waitForHomeGovernance(() => expect(catalog.writes).toBe(1));
         await hook.rerender({ resolveTarget: resolveTargetOnServerB, refresh: refreshB });
         await act(async () => {
-            deferred.resolve({ status: 'success', action: 'delete', deletedConnectionId: 'pc_a' });
+            deferred.resolve();
             await resultPromise;
         });
 

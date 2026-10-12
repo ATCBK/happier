@@ -1,6 +1,6 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProviderErrorV1 } from '@happier-dev/protocol';
+import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 import { createProviderModelProjectionFixture, createProviderModelProjectionGroupFixture, createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -44,12 +44,13 @@ beforeEach(async () => { serverId = (await account.restore({ waivedActions: ['pr
 describe('useProviderModelProjection', () => {
     it('changes source browsing without changing the exact selected tuple or favorite identity', async () => {
         describeProviderModels.mockResolvedValue(projection(['pc_a']));
-        const currentSelection = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_a', modelId: 'same' };
-        const favorite = { ...currentSelection, providerConnectionId: 'pc_off' };
+        const currentSelection = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'same' };
+        const favorite = { ...currentSelection, providerConnectionId: ProviderConnectionIdSchema.parse('pc_off') };
+        const initialProps: { sourceConnectionId?: string } = { sourceConnectionId: 'pc_off' };
         const rendered = await renderHook((props: { sourceConnectionId?: string }) => useProviderModelProjection({
             enabled: true, machineId: 'machine-a', serverId, agentTargetKey: currentSelection.agentTargetKey,
             currentSelection, sourceConnectionId: props.sourceConnectionId, favoriteSelections: [favorite],
-        }), { initialProps: { sourceConnectionId: 'pc_off' } });
+        }), { initialProps });
         await flushHookEffects();
         expect(projectionRequests.at(-1)?.payload).toMatchObject({ sourceConnectionId: 'pc_off', currentSelection, favoriteSelections: [favorite] });
         await rendered.rerender({});

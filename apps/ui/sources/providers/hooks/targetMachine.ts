@@ -15,6 +15,7 @@ import {
 import {
     captureActiveServerAccountScopeLifetime,
 } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerProfileIdentifiersEquivalent, getServerProfileById } from '@/sync/domains/server/serverProfiles';
 
 /**
  * One machine a Provider route may address, carrying the full Administration
@@ -35,6 +36,7 @@ export type ProviderSettingsTargetV1 = Readonly<{
     selection: MachineAdministrationTargetSelectionV1;
     /** Exact machine the user selected, once it currently resolves. */
     machineId: string | null;
+    /** Exact Home for Account settings, independent of Machine execution availability. */
     serverId: string | null;
     /** Canonical permission to compose active-Account settings with this target. */
     selectedTargetServerMatchesActiveAccount: boolean;
@@ -87,12 +89,17 @@ export function useProviderSettingsTarget(): ProviderSettingsTargetV1 {
             ? resolvedTarget
             : null;
     }, [selection]);
-    const selectedServerIdentityId = executionTarget?.target.serverIdentityId ?? null;
+    // The sole active-Account lifetime fences captured execution callbacks and owns unselected Home reads.
+    const accountLifetime = captureActiveServerAccountScopeLifetime();
+    const homeIdentifier = selection.selectedTarget?.serverIdentityId
+        ?? (accountLifetime?.isCurrent() ? accountLifetime.scope.serverId : null);
+    const homeServerId = homeIdentifier ? getServerProfileById(homeIdentifier)?.id ?? homeIdentifier : null;
+    const selectedServerIdentityId = selection.selectedTarget?.serverIdentityId ?? homeServerId;
     const pickerRows = selection.pickerRows;
     const machineRows = React.useMemo<readonly ProviderSettingsMachineRowV1[]>(() => {
         if (!selectedServerIdentityId) return NO_MACHINE_ROWS;
         const rows = (pickerRows ?? [])
-            .filter((row) => row.candidate.target.serverIdentityId === selectedServerIdentityId)
+            .filter((row) => areServerProfileIdentifiersEquivalent(row.candidate.target.serverIdentityId, selectedServerIdentityId))
             .map((row) => Object.freeze({
                 target: row.candidate.target,
                 serverId: row.serverId,
@@ -106,10 +113,7 @@ export function useProviderSettingsTarget(): ProviderSettingsTargetV1 {
     // mutation scope — discarding the result of a write already in flight.
     const expectedMachineId = executionTarget?.machine.id ?? null;
     const resolveExecutionTarget = selection.resolveExecutionTarget;
-    // The sole active-Account lifetime, not a Provider-owned epoch. It is
-    // stable while one Account is mounted, so binding the resolver to it does
-    // not restart an in-flight mutation scope.
-    const accountLifetime = captureActiveServerAccountScopeLifetime();
+    // Binding to that stable Account lifetime does not restart an in-flight mutation scope.
     const resolveCurrentTarget = React.useCallback(() => {
         if (accountLifetime && !accountLifetime.isCurrent()) return null;
         const resolvedTarget = resolveExecutionTarget();
@@ -131,11 +135,11 @@ export function useProviderSettingsTarget(): ProviderSettingsTargetV1 {
     return React.useMemo(() => ({
         selection,
         machineId: executionTarget?.machine.id ?? null,
-        serverId: executionTarget?.serverId ?? null,
+        serverId: executionTarget?.serverId ?? homeServerId,
         selectedTargetServerMatchesActiveAccount: selection.selectedTarget === null
             ? accountLifetime?.isCurrent() === true
             : selection.selectedTargetServerMatchesActiveAccount,
         machineRows,
         resolveCurrentTarget,
-    }), [accountLifetime, executionTarget, machineRows, resolveCurrentTarget, selection]);
+    }), [accountLifetime, executionTarget, homeServerId, machineRows, resolveCurrentTarget, selection]);
 }

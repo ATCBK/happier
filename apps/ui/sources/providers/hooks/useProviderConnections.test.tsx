@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -12,6 +11,14 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
+    ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema,
+} from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { buildCustomProviderTemplate, createCustomProviderDraft } from '@/providers/authoring/state';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { applyProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope }));
@@ -19,6 +26,8 @@ const account = createProviderSettingsAccountHarness();
 let serverId = '';
 let otherServerId = '';
 
+// Install Home transport before the credential hook can load Sync's request graph.
+const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
 const { useProviderConnections } = await import('./useProviderConnections');
 const { useProviderConnectionMutation } = await import('./useProviderConnectionMutation');
 
@@ -33,28 +42,108 @@ describe('useProviderConnections', () => {
         otherServerId = await account.addHome({ name: 'Other Provider Home', serverUrl: 'https://provider-settings-other.test', accountId: 'account-a', active: false });
     });
 
-    it('refreshes visible peers after a same-route mutation and refreshes hidden projections only when revealed', async () => {
-        let connectionExists = true;
-        machineRpcWithServerScope.mockImplementation(async (request: { method: string; machineId: string; serverId: string }) => {
-            if (request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTION_MUTATE) {
-                connectionExists = false;
-                return { status: 'success', action: 'delete', deletedConnectionId: 'pc_a' };
-            }
-            return createProviderConnectionsDescribeFixture({
-                connections: connectionExists ? [createProviderConnectionViewFixture({ connectionId: 'pc_a' })] : [],
-            });
+    it('keeps saved editor configuration at the revision its Account describe read', async () => {
+        let revision = 1;
+        const catalogAt = (value: number) => ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            connections: [{ v: 1, id: 'pc_a', source: { kind: 'custom', template: buildCustomProviderTemplate({
+                ...createCustomProviderDraft('openai-chat'), name: `Acme ${value}`, baseUrl: 'https://models.example.test/v1', requiresApiKey: false,
+            }) }, role: 'named', displayName: `Acme ${value}`, displayNameMode: 'custom', revision: value, createdAt: 1, updatedAt: value }],
         });
+        account.home.answer(serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: catalogAt(revision) } } }),
+        });
+        const hook = await renderHook(() => useProviderConnections({ enabled: true, machineId: null, serverId, connectionId: 'pc_a' }));
+        await vi.waitFor(() => expect(hook.getCurrent().loading).toBe(false));
+        expect(hook.getCurrent().catalog?.connections[0]?.revision).toBe(1);
+        revision = 2;
+        const scope = captureActiveServerAccountScopeLifetime()!.scope;
+        await act(async () => { applyProviderCatalogSnapshot(scope, { status: 'ready', catalog: catalogAt(2), revision: 2 }, true); });
+        await hook.rerender();
+        expect(hook.getCurrent().catalog?.connections[0]?.revision).toBe(1);
+        expect(hook.getCurrent().data?.connections[0]?.revision).toBe(1);
+        await act(async () => { await hook.getCurrent().refresh('account'); });
+        expect(hook.getCurrent().catalog?.connections[0]?.revision).toBe(2);
+        expect(hook.getCurrent().data?.connections[0]?.revision).toBe(2);
+        await act(async () => { applyProviderCatalogSnapshot(scope, { status: 'unavailable', reason: 'encryption-material-unavailable' }, true); });
+        expect(hook.getCurrent().catalog).toBeNull();
+        expect(hook.getCurrent().data).toBeNull();
+    });
+
+    it('settles an unreadable Account credential without a machine and recovers on Retry', async () => {
+        // The device credential store is the boundary; scope resolution and the
+        // Provider Action/read lifecycle remain real.
+        const credentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl');
+        const workingRead = credentialRead.getMockImplementation()!;
+        credentialRead.mockRejectedValue(new Error('device credential store unavailable'));
+        const hook = await renderHook(() => ({
+            scope: useServerCredentialAccountScopeBinding(serverId),
+            connections: useProviderConnections({ enabled: true, machineId: null, serverId }),
+        }));
+        await vi.waitFor(() => expect(hook.getCurrent().scope.resolution.kind).toBe('unavailable'));
+        expect(hook.getCurrent().connections).toMatchObject({
+            data: null, loading: false, error: { code: 'provider_authorization_changed', retryable: true },
+        });
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+
+        credentialRead.mockImplementation(workingRead);
+        await act(async () => { await hook.getCurrent().connections.refresh(); });
+        await vi.waitFor(() => expect(hook.getCurrent().connections).toMatchObject({
+            data: { status: 'success', connections: [] }, error: null, loading: false,
+        }));
+        expect(machineRpcWithServerScope).not.toHaveBeenCalled();
+    });
+
+    it('refreshes visible peers after a same-route mutation and refreshes hidden projections only when revealed', async () => {
+        let catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            connections: [{ v: 1, id: 'pc_a', source: { kind: 'custom', template: buildCustomProviderTemplate({
+                ...createCustomProviderDraft('openai-chat'), name: 'Acme', baseUrl: 'https://models.example.test/v1', requiresApiKey: false,
+            }) }, role: 'named', displayName: 'Acme', displayNameMode: 'custom', revision: 1, createdAt: 1, updatedAt: 1 }],
+        });
+        let revision = 1;
+        let connectionExists = true;
+        account.home.answer(otherServerId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            body: { status: 'present', revision: 1, content: { t: 'plain', v: catalog } },
+        });
+        account.home.answer(otherServerId, '/v1/account/encryption/currentness', {
+            body: createPlainAccountEncryptionCurrentnessFixture(),
+        });
+        // Catalog CAS is the genuine Home boundary; deletion is an Account Action,
+        // not a daemon mutation. Its subsequent census changes at the machine boundary.
+        account.home.answer(serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: catalog } } }),
+        });
+        account.home.answer(serverId, `POST ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: input => {
+                const mutation = ProviderConnectionsRowMutationV1Schema.parse(input);
+                expect(mutation.expectedRevision).toBe(revision);
+                if (mutation.content?.t !== 'plain') throw new Error('Expected Plain Account catalog');
+                catalog = mutation.content.v;
+                revision += 1;
+                connectionExists = catalog.connections.some(connection => connection.id === 'pc_a');
+                return { body: { status: 'updated', revision, cursor: revision } };
+            },
+        });
+        machineRpcWithServerScope.mockImplementation(async () => createProviderConnectionsDescribeFixture({
+                connections: connectionExists ? [createProviderConnectionViewFixture({ connectionId: 'pc_a' })] : [],
+            }));
         const resolveTarget = () => ({ machineId: 'machine-a', serverId });
         const hook = await renderHook(({ visible }: { visible: boolean }) => {
             const list = useProviderConnections({ enabled: true, active: visible, ...resolveTarget() });
             const detail = useProviderConnections({ enabled: true, ...resolveTarget(), connectionId: 'pc_a' });
             const otherServer = useProviderConnections({ enabled: true, machineId: 'machine-a', serverId: otherServerId });
             const otherMachine = useProviderConnections({ enabled: true, machineId: 'machine-b', serverId });
-            const refresh = React.useCallback(async () => { await detail.refresh(); }, [detail.refresh]);
+            const refresh = React.useCallback(async (scope?: 'account' | 'machine') => { await detail.refresh(scope); }, [detail.refresh]);
             const mutation = useProviderConnectionMutation({ resolveTarget, refresh });
             return { list, detail, otherServer, otherMachine, mutation };
         }, { initialProps: { visible: true } });
-        expect(hook.getCurrent().list.data?.connections).toHaveLength(1);
+        await vi.waitFor(() => {
+            for (const projection of [hook.getCurrent().list, hook.getCurrent().detail,
+                hook.getCurrent().otherServer, hook.getCurrent().otherMachine]) {
+                expect(projection.loading).toBe(false);
+                expect(projection.error).toBeNull();
+                expect(projection.data?.connections).toHaveLength(1);
+            }
+        });
         machineRpcWithServerScope.mockClear();
 
         await act(async () => {
@@ -63,9 +152,10 @@ describe('useProviderConnections', () => {
         expect(hook.getCurrent().detail.data?.connections).toHaveLength(0);
         expect(hook.getCurrent().list.data?.connections).toHaveLength(0);
         expect(hook.getCurrent().otherServer.data?.connections).toHaveLength(1);
-        expect(hook.getCurrent().otherMachine.data?.connections).toHaveLength(1);
+        await vi.waitFor(() => expect(hook.getCurrent().otherMachine.data?.connections).toHaveLength(0));
         expect(machineRpcWithServerScope.mock.calls.map(([request]) => request)).toHaveLength(3);
-        expect(machineRpcWithServerScope.mock.calls.every(([request]) => request.machineId === 'machine-a' && request.serverId === serverId)).toBe(true);
+        expect(machineRpcWithServerScope.mock.calls.every(([request]) => request.serverId === serverId)).toBe(true);
+        expect(machineRpcWithServerScope.mock.calls.filter(([request]) => request.machineId === 'machine-b')).toHaveLength(1);
 
         await hook.rerender({ visible: false });
         connectionExists = true;
@@ -131,7 +221,7 @@ describe('useProviderConnections', () => {
         expect(hook.getCurrent().data?.connections[0]?.connectionId).toBe('pc_a');
 
         await hook.rerender({ machineId: 'machine-b' });
-        expect(hook.getCurrent().data).toBeNull();
+        expect(hook.getCurrent().data?.connections).toEqual([]);
     });
 
     it('never exposes a prior exact target during the render that changes machine, server, or connection', async () => {
@@ -189,7 +279,7 @@ describe('useProviderConnections', () => {
             await hook.rerender();
         });
 
-        expect(hook.getCurrent().data).toBeNull();
+        expect(hook.getCurrent().data?.connections).toEqual([]);
         await act(async () => {});
         expect(machineRpcWithServerScope).toHaveBeenCalledTimes(2);
 
@@ -198,7 +288,7 @@ describe('useProviderConnections', () => {
                 connections: [createProviderConnectionViewFixture({ connectionId: 'pc_a' })],
             }));
         });
-        expect(hook.getCurrent().data).toBeNull();
+        expect(hook.getCurrent().data?.connections).toEqual([]);
 
         await act(async () => {
             resolveB(createProviderConnectionsDescribeFixture({
@@ -212,7 +302,7 @@ describe('useProviderConnections', () => {
         expect(hook.getCurrent().data?.connections[0]?.connectionId).toBe('pc_b');
     });
 
-    it('retains the same-scope projection while exposing an untyped refresh transport failure', async () => {
+    it('retains Account data without stale machine facts after an untyped refresh transport failure', async () => {
         machineRpcWithServerScope
             .mockResolvedValueOnce(createProviderConnectionsDescribeFixture({
                 connections: [createProviderConnectionViewFixture({ connectionId: 'pc_a' })],
@@ -223,8 +313,9 @@ describe('useProviderConnections', () => {
         }));
         await act(async () => { await hook.getCurrent().refresh(); });
         expect(hook.getCurrent()).toMatchObject({
-            data: { connections: [{ connectionId: 'pc_a' }] },
-            error: createProviderErrorV1('agent_error', {
+            data: { connections: [] },
+            error: null,
+            machineError: createProviderErrorV1('machine_offline', {
                 machineId: 'machine-a',
             }),
             loading: false,
@@ -242,8 +333,9 @@ describe('useProviderConnections', () => {
         }));
 
         expect(hook.getCurrent()).toMatchObject({
-            data: null,
-            error: {
+            data: { connections: [] },
+            error: null,
+            machineError: {
                 v: 1,
                 code: 'provider_rpc_response_invalid',
                 machineId: 'machine-a',
@@ -252,6 +344,6 @@ describe('useProviderConnections', () => {
             },
             loading: false,
         });
-        expect(hook.getCurrent().error?.code).not.toBe('provider_endpoint_unavailable');
+        expect(hook.getCurrent().machineError?.code).not.toBe('provider_endpoint_unavailable');
     });
 });

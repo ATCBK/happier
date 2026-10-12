@@ -1,7 +1,6 @@
 import * as React from 'react';
 import type { ProviderErrorV1 } from '@happier-dev/protocol';
 
-import { Modal } from '@/modal';
 import type {
     SessionModelPickerExperimentalConfirmation,
     SessionModelPickerExperimentalConfirmationController,
@@ -9,8 +8,8 @@ import type {
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
 import { providerErrorRequestsRetry } from '@/providers/connection/recovery';
-import { t } from '@/text';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export function useConfirmExperimentalProviderModel(input: Readonly<{
     enabled: boolean;
@@ -19,7 +18,7 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
     agentTargetKey: string | null;
     refresh: () => Promise<unknown>;
 }>): SessionModelPickerExperimentalConfirmationController {
-    const { mutateProviderModelSettings } = useProviderActionClient(input.serverId);
+    const { mutateProviderModelSettings, pendingApproval } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const scopeKey = JSON.stringify([
         input.enabled,
@@ -124,12 +123,9 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
             return false;
         }
         setFailure(null);
-        try {
-            await input.refresh();
-        } catch {
-            // The Account already committed the confirmation. A stale presentation
-            // must not invite a duplicate mutation or block the requested selection.
-        }
+        // The writer published the confirmed Account record. Revalidation of
+        // model presentation must not block the requested selection.
+        fireAndForget(input.refresh());
         if (!isCurrentScope()) return false;
         commitSelection();
         return true;
@@ -155,23 +151,11 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
         if (!input.enabled || !input.agentTargetKey || confirmation.agentTargetKey !== input.agentTargetKey) return false;
         return await runPending(async () => {
             setFailure(null);
-            const confirmed = await Modal.confirm(
-                t('settingsProviders.models.experimentalConfirmTitle'),
-                t('settingsProviders.models.experimentalConfirmBody', {
-                    provider: confirmation.providerName,
-                    model: confirmation.modelName,
-                }),
-                { confirmText: t('settingsProviders.models.experimentalConfirmAction') },
-            );
-            if (
-                !confirmed
-                || activeScopeKey.current !== scopeKey
-                || activeAccountLifetime.current !== accountLifetime
-                || !(accountLifetime?.isCurrent() ?? true)
-            ) return false;
+            // The Action's configurable approval default owns Ask first. A
+            // second modal would ignore a waiver and ask twice otherwise.
             return await persist(confirmation, commitSelection);
         });
-    }, [accountLifetime, input.agentTargetKey, input.enabled, persist, runPending, scopeKey]);
+    }, [input.agentTargetKey, input.enabled, persist, runPending]);
     const retry = React.useCallback(async (): Promise<boolean> => {
         if (!input.enabled || !failure?.retryAttempt) return false;
         return await runPending(() => persist(
@@ -184,8 +168,9 @@ export function useConfirmExperimentalProviderModel(input: Readonly<{
     return React.useMemo(() => ({
         confirm,
         pending: input.enabled && pending,
+        pendingApproval: input.enabled ? pendingApproval : null,
         error: input.enabled ? failure?.error ?? null : null,
         retry: input.enabled && failure?.retryAttempt ? retry : null,
         clear,
-    }), [clear, confirm, failure, input.enabled, pending, retry]);
+    }), [clear, confirm, failure, input.enabled, pending, pendingApproval, retry]);
 }

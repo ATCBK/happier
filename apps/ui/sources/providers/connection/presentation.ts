@@ -29,15 +29,22 @@ export const PROVIDER_CONNECTION_STATUS_KEY = Object.freeze({
     sourceUnavailable: 'settingsProviders.status.sourceUnavailable',
 } as const);
 
+/** Source provenance distinguishes a named connection only when it adds an identity. */
+export function presentProviderConnectionIdentity(connection: Pick<DaemonProviderConnectionViewV1,
+    'role' | 'displayNameMode' | 'providerName' | 'displayName'>): Readonly<{ title: string; subtitle: string; sourceLabel: string }> {
+    const collapsesToProvider = connection.role === 'default' && connection.displayNameMode === 'automatic';
+    const title = collapsesToProvider ? connection.providerName : connection.displayName;
+    const subtitle = title.trim().toLocaleLowerCase() === connection.providerName.trim().toLocaleLowerCase()
+        ? '' : connection.providerName;
+    return { title, subtitle, sourceLabel: subtitle ? `${subtitle} · ${title.trim()}` : connection.providerName };
+}
+
 export function presentProviderConnection(connection: DaemonProviderConnectionViewV1): Readonly<{
     title: string;
     subtitle: string;
-    modelCount: number | null;
     status: ProviderConnectionPresentationStatus;
 }> {
-    const collapsesToProvider = connection.role === 'default' && connection.displayNameMode === 'automatic';
-    const title = collapsesToProvider ? connection.providerName : connection.displayName;
-    const provenance = collapsesToProvider ? '' : connection.providerName;
+    const identity = presentProviderConnectionIdentity(connection);
     const status: ProviderConnectionPresentationStatus = connection.sourceStatus === 'unavailable'
         ? 'sourceUnavailable'
         : connection.authorizationError?.code === 'provider_endpoint_unreachable'
@@ -54,9 +61,8 @@ export function presentProviderConnection(connection: DaemonProviderConnectionVi
                             ? 'notChecked'
                             : 'needsAttention';
     return {
-        title,
-        subtitle: provenance,
-        modelCount: connection.runtime.modelCount,
+        title: identity.title,
+        subtitle: identity.subtitle,
         status,
     };
 }

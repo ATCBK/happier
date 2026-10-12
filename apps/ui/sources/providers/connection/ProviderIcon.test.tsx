@@ -1,9 +1,14 @@
 import * as React from 'react';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
+import { Icon } from '@/components/ui/icons/Icon';
 
-vi.mock('@/components/ui/icons/Icon', () => ({
-    Icon: (props: Record<string, unknown>) => React.createElement('Icon', props),
+const bundledBrands = vi.hoisted(() => [] as Readonly<{ pluginId: string; resourceId: string; releaseVersion: string; displayName: string; digest: string; bytes: Uint8Array; monochrome: boolean }>[]);
+// The app/Expo byte inventory is a package asset boundary; presentation and admission stay real.
+vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
+    BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_BRAND_MARKS: bundledBrands,
 }));
 
 vi.mock('react-native-svg', async (importOriginal) => ({
@@ -13,21 +18,27 @@ vi.mock('react-native-svg', async (importOriginal) => ({
 
 import { ProviderIcon } from './ProviderIcon';
 
+bundledBrands.push({
+    pluginId: 'happier.provider.deepseek', resourceId: 'brand-icon', releaseVersion: '0.0.0',
+    displayName: 'DeepSeek', digest: '', monochrome: true,
+    bytes: new Uint8Array(readFileSync(new URL('../../../../../packages/plugins/deepseek/assets/brand.png', import.meta.url))),
+});
+
 describe('ProviderIcon', () => {
     it('uses a contributed installed icon token and fails safely to the generic provider icon', async () => {
         const contributed = await renderScreen(<ProviderIcon icon="sparkle" size={29} color="black" />);
-        expect(contributed.findByType('Icon').props.name).toBe('sparkle');
+        expect(contributed.findByType(Icon).props.name).toBe('sparkle');
         const fallback = await renderScreen(<ProviderIcon icon="https://remote.example/icon.svg" size={29} color="black" />);
-        expect(fallback.findByType('Icon').props.name).toBe('cube');
+        expect(fallback.findByType(Icon).props.name).toBe('cube');
     });
 
-    it('draws a bundled provider brand mark in the requested ink instead of the neutral cube', async () => {
-        const mark = await renderScreen(<ProviderIcon icon="deepseek" size={24} color="#123456" />);
-        expect(mark.findAllByType('Icon')).toHaveLength(0);
-        const svg = mark.findByType('SvgXml');
-        expect(svg.props.xml).toContain('fill="#123456"');
-        expect(svg.props.width).toBe(24);
-        const strokeMark = await renderScreen(<ProviderIcon icon="openrouter" size={24} color="#123456" />);
-        expect(strokeMark.findByType('SvgXml').props.xml).toContain('stroke="#123456"');
+    it('draws the packaged plugin mark selected by contribution identity, independent of its icon token', async () => {
+        const mark = await renderScreen(<ProviderIcon contributionKey="happier.provider.deepseek/deepseek" icon="cube" size={24} color="#123456" />);
+        expect(mark.findAllByType(Icon)).toHaveLength(0);
+        const image = mark.findByType('Image');
+        expect(image.props.source.uri).toMatch(/^data:image\/png;base64,/);
+        expect(image.props.style.tintColor).toBe('#123456');
+        const tokenOnly = await renderScreen(<ProviderIcon icon="deepseek" size={24} color="#123456" />);
+        expect(tokenOnly.findByType(Icon).props.name).toBe('cube');
     });
 });

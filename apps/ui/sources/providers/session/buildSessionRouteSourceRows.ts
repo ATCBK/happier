@@ -1,4 +1,5 @@
 import type { DaemonProviderConnectionViewV1 } from '@happier-dev/protocol/rpc';
+import { resolveProviderConnectionIcon } from '@/components/settings/providers/collection/providerCollectionModel';
 
 import { providerConnectionSourceLabel } from './resolveSessionRoutePresentation';
 
@@ -46,7 +47,7 @@ export function buildSessionRouteSourceRows(input: Readonly<{
             contributionKey: view.contributionKey,
             label: providerConnectionSourceLabel({ providerName: view.providerName, connectionName: view.displayName,
                 connectionRole: view.role, connectionDisplayNameMode: view.displayNameMode }),
-            icon: view.icon,
+            icon: resolveProviderConnectionIcon(view),
             // A hidden source can still show its favorites or the current model in the main picker,
             // so its rows there and the ones it withholds add up to what browsing it offers.
             modelCount: shown || hidden ? (shown?.rows.length ?? 0) + (hidden?.modelCount ?? 0) : null,

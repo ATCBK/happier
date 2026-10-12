@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createProviderConnectionViewFixture } from '@/dev/testkit';
-import { ProviderConnectionV1Schema, type ProviderConnectionV1 } from '@happier-dev/protocol/providers/connections/v1';
-import { buildProviderGatewayConfigurationMutation, buildProviderGatewaySlotMutation } from './gatewayConfiguration';
+import { createProviderConnectionViewFixture } from '@/dev/testkit/harness/providerSettingsHarness';
+import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { buildProviderGatewayConfigurationMutation, buildProviderGatewaySlotMutation, readProviderGatewayContribution, readProviderGatewayContributionPurposes } from './gatewayConfiguration';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 
 const gateway = () => createProviderConnectionViewFixture({ connectionId: 'pc_gateway', revision: 7,
     contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
@@ -12,10 +14,53 @@ describe('gateway configuration Action request', () => {
         expect(buildProviderGatewayConfigurationMutation({ connection: gateway(), machineId: null,
             patch: { claudeHelperModels: null },
         })).toEqual({ action: 'update', connectionId: 'pc_gateway', expectedRevision: 7, claudeHelperModels: null });
-        expect(buildProviderGatewaySlotMutation({ connectionId: 'pc_gateway', expectedRevision: 7,
+        expect(buildProviderGatewaySlotMutation({ connectionId: ProviderConnectionIdSchema.parse('pc_gateway'), expectedRevision: 7,
             machineId: null, purposeBindingDefaults: {}, purpose: 'vendor', target: null,
         })).toEqual({ action: 'update', connectionId: 'pc_gateway', expectedRevision: 7,
             deployment: { kind: 'managedLocal', purposeBindingDefaults: {} } });
+    });
+    it('makes a connection a gateway with the slots it has when no slot is named', () => {
+        const pool = { kind: 'group' as const, service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, groupId: 'work' };
+        expect(buildProviderGatewaySlotMutation({ connectionId: ProviderConnectionIdSchema.parse('pc_gateway'), expectedRevision: 0,
+            purposeBindingDefaults: { 'anthropic-upstream': pool }, purpose: null, target: null,
+        })).toEqual({ action: 'update', connectionId: 'pc_gateway', expectedRevision: 0,
+            deployment: { kind: 'managedLocal', purposeBindingDefaults: { 'anthropic-upstream': pool } } });
+    });
+    it('creates new gateways from the one admitted contribution that draws on subscriptions', () => {
+        expect(readProviderGatewayContribution(readAccountProviderDeclarations())).toEqual({
+            contributionKey: 'happier.provider.cliproxyapi/cliproxyapi',
+            purposes: expect.arrayContaining([
+                { purpose: 'openai-upstream', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } },
+                { purpose: 'anthropic-upstream', service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' } },
+            ]),
+        });
+        const [gateway] = readAccountProviderDeclarations().filter(declaration => declaration.definition.managedRuntime?.connectedAccounts?.length);
+        expect(readProviderGatewayContribution([gateway!, { ...gateway!, contributionKey: 'example.other/gateway' }])).toBeNull();
+    });
+    it('qualifies declaration-local gateway services while preserving explicit vendor identities', () => {
+        const [declaration] = readAccountProviderDeclarations().filter(entry => entry.definition.managedRuntime?.connectedAccounts?.length);
+        if (!declaration?.definition.managedRuntime) throw new Error('Expected the admitted gateway declaration');
+        const qualified = { pluginId: 'vendor.accounts', localId: 'subscription' };
+        const declarations = [{
+            ...declaration,
+            contributionKey: 'example.gateway/gateway',
+            definition: { ...declaration.definition, managedRuntime: {
+                ...declaration.definition.managedRuntime,
+                requestAuthUses: [],
+                connectedAccounts: [
+                    { purpose: 'native-upstream', service: 'subscription' },
+                    { purpose: 'other-upstream', service: qualified },
+                ],
+            } },
+        }];
+        expect(readProviderGatewayContribution(declarations)).toEqual({ contributionKey: 'example.gateway/gateway', purposes: expect.arrayContaining([
+            { purpose: 'native-upstream', service: { pluginId: 'example.gateway', localId: 'subscription' } },
+            { purpose: 'other-upstream', service: qualified },
+        ]) });
+        expect(readProviderGatewayContributionPurposes('example.gateway/gateway', declarations)).toMatchObject([
+            { purpose: 'native-upstream', service: { pluginId: 'example.gateway', localId: 'subscription' }, required: false },
+            { purpose: 'other-upstream', service: qualified, required: false },
+        ]);
     });
     it('accepts the unchanged saved Account connection rather than requiring a Machine view', () => {
         const saved = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
@@ -47,7 +92,7 @@ describe('gateway configuration Action request', () => {
 describe('gateway vendor-slot Action request', () => {
     const codex = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
     const claude = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' };
-    const saved = { connectionId: 'pc_gateway' as ProviderConnectionV1['id'], expectedRevision: 7, machineId: 'machine-a',
+    const saved = { connectionId: ProviderConnectionIdSchema.parse('pc_gateway'), expectedRevision: 7, machineId: 'machine-a',
         purposeBindingDefaults: {
             'openai-upstream': { kind: 'group' as const, service: codex, groupId: 'codex-pool' },
             'anthropic-upstream': { kind: 'group' as const, service: claude, groupId: 'lab-pool' },

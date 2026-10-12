@@ -9,7 +9,11 @@ import { ListPresentationProvider } from '@/components/ui/lists/listPresentation
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Switch } from '@/components/ui/forms/Switch';
+import { Icon } from '@/components/ui/icons/Icon';
+import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Typography } from '@/constants/Typography';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import {
     filterSelectionListSections,
     renderSelectionListAccessory,
@@ -98,7 +102,25 @@ export function ProviderModelManagerPage(props: Readonly<{
     ], [props.onHideAll, props.onResetVisibility]);
 
     const listing = !host.contentState;
-    const hasSummary = listing && Boolean(host.summary || props.onShowAll || menuActions.length > 0);
+    // The bulk actions sit with the summary line when there is one; otherwise beside the filter,
+    // never alone in a sheet of their own.
+    const hasSummary = listing && Boolean(host.summary);
+    const bulkActions = listing && (props.onShowAll || menuActions.length > 0) ? (
+        <>
+            {props.onShowAll ? (
+                <RoundButton
+                    testID="provider-model-manager.show-all"
+                    size="small"
+                    display="secondary"
+                    title={t('settingsProviders.models.showAll')}
+                    onPress={props.onShowAll}
+                />
+            ) : null}
+            {menuActions.length > 0 ? (
+                <PageHeaderMenu testID="provider-model-manager.menu" actions={menuActions} />
+            ) : null}
+        </>
+    ) : null;
     const emptyTitle = query.trim() ? t('common.noMatches') : t('settingsProviders.models.empty');
 
     // The model rows keep their segment objects while anything else on the page changes (a typed
@@ -121,12 +143,16 @@ export function ProviderModelManagerPage(props: Readonly<{
             const sourcesById = new Map(props.sections.map((section) => [section.id, section]));
             for (const section of filteredSections) {
                 const source = sourcesById.get(section.id);
+                const footerAction = source?.footerAction;
+                // A source with nothing listed closes on its header (or on its way to the rest).
+                const headerLast = section.options.length === 0 && footerAction === undefined;
                 segments.push({
                     key: `models:source:${section.id}`,
                     render: () => (
-                        <ItemGroup virtualizedSegment={{ first: true, last: false }}>
+                        <ItemGroup virtualizedSegment={{ first: true, last: headerLast }}>
                             <Item
                                 testID={`provider-model-manager.source:${section.id}`}
+                                icon={source?.mark ?? undefined}
                                 title={section.title ?? ''}
                                 subtitle={source?.description}
                                 subtitleLines={0}
@@ -139,12 +165,26 @@ export function ProviderModelManagerPage(props: Readonly<{
                 });
                 for (let start = 0; start < section.options.length; start += MODEL_ROWS_PER_SEGMENT) {
                     const segment = section.options.slice(start, start + MODEL_ROWS_PER_SEGMENT);
-                    const last = start + MODEL_ROWS_PER_SEGMENT >= section.options.length;
+                    const last = footerAction === undefined && start + MODEL_ROWS_PER_SEGMENT >= section.options.length;
                     segments.push({
                         key: `models:rows:${section.id}:${segment[0]!.id}`,
                         render: () => (
                             <ItemGroup virtualizedSegment={{ first: false, last }}>
                                 {segment.map((option) => <ProviderModelPageRow key={option.id} option={option} />)}
+                            </ItemGroup>
+                        ),
+                    });
+                }
+                if (footerAction) {
+                    segments.push({
+                        key: `models:source-footer:${section.id}`,
+                        render: () => (
+                            <ItemGroup virtualizedSegment={{ first: false, last: true }}>
+                                <Item
+                                    testID={`provider-model-manager.browse:${section.id}`}
+                                    title={footerAction.label}
+                                    onPress={footerAction.onPress}
+                                />
                             </ItemGroup>
                         ),
                     });
@@ -167,31 +207,53 @@ export function ProviderModelManagerPage(props: Readonly<{
         return segments;
     }, [emptyTitle, filteredSections, grouped, hasSummary, listing, options, props.sections]);
 
+    // A short list needs no filter: it fits in one segment, and its actions sit with the summary.
+    const filterShown = props.modelCount > MODEL_ROWS_PER_SEGMENT || query.trim() !== '';
     const rows = React.useMemo((): readonly PageRow[] => {
+        const filterRow = (
+            <View style={styles.controls}>
+                {filterShown ? <CompactSearchField
+                    testID="provider-model-manager.filter"
+                    value={query}
+                    onChangeText={setQuery}
+                    placeholder={props.modelCount > 0
+                        ? t('settingsProvidersCollection.modelsFilter', { count: props.modelCount })
+                        : t('modelPickerOverlay.searchPlaceholder')}
+                    style={styles.filter}
+                /> : null}
+                {props.actions}
+                {hasSummary ? null : bulkActions}
+            </View>
+        );
         const controls: PageRow = {
             key: 'models:controls',
-            render: () => (
+            render: () => grouped ? (
+                // Grouped by source, every sheet is a source: the filter and the key to the row
+                // controls sit on the page above them, and only a problem gets a sheet of its own.
+                <>
+                    {host.leadingRows ? (
+                        <ItemGroup title={host.title} description={host.description}>{host.leadingRows}</ItemGroup>
+                    ) : null}
+                    <ItemGroup
+                        surface="none"
+                        title={host.leadingRows ? undefined : host.title}
+                        description={host.leadingRows ? undefined : host.description}
+                    >
+                        {/* Lists here are short and a large source leads to its own page, so the page
+                            carries no filter or toolbar; its bulk operations live in the page header. */}
+                        <View style={styles.pageControls}>
+                            {listing ? <ProviderModelLegend /> : null}
+                        </View>
+                    </ItemGroup>
+                </>
+            ) : (
                 <ItemGroup
                     title={host.title}
                     description={host.description}
-                    // Grouped by source, the controls are their own sheet above the source sheets.
-                    virtualizedSegment={{ first: true, last: grouped }}
+                    virtualizedSegment={{ first: true, last: false }}
                 >
                     {host.leadingRows}
-                    <SectionContentRow>
-                        <View style={styles.controls}>
-                            <CompactSearchField
-                                testID="provider-model-manager.filter"
-                                value={query}
-                                onChangeText={setQuery}
-                                placeholder={props.modelCount > 0
-                                    ? t('settingsProvidersCollection.modelsFilter', { count: props.modelCount })
-                                    : t('modelPickerOverlay.searchPlaceholder')}
-                                style={styles.filter}
-                            />
-                            {props.actions}
-                        </View>
-                    </SectionContentRow>
+                    {filterShown || !hasSummary ? <SectionContentRow>{filterRow}</SectionContentRow> : null}
                 </ItemGroup>
             ),
         };
@@ -216,24 +278,16 @@ export function ProviderModelManagerPage(props: Readonly<{
                             >
                                 {host.summary ?? ''}
                             </Text>
-                            {props.onShowAll ? (
-                                <RoundButton
-                                    testID="provider-model-manager.show-all"
-                                    size="small"
-                                    display="secondary"
-                                    title={t('settingsProviders.models.showAll')}
-                                    onPress={props.onShowAll}
-                                />
-                            ) : null}
-                            {menuActions.length > 0 ? (
-                                <PageHeaderMenu testID="provider-model-manager.menu" actions={menuActions} />
-                            ) : null}
+                            <View style={styles.summaryActions}>
+                                {filterShown ? null : props.actions}
+                                {bulkActions}
+                            </View>
                         </View>
                     </SectionContentRow>
                 </ItemGroup>
             ),
         }];
-    }, [grouped, hasSummary, host.contentState, host.description, host.leadingRows, host.summary, host.title, listing, menuActions, modelSegments, props.actions, props.modelCount, props.onShowAll, query, theme.colors.text.secondary]);
+    }, [bulkActions, filterShown, grouped, hasSummary, host.contentState, host.description, host.leadingRows, host.summary, host.title, listing, modelSegments, props.actions, props.modelCount, query, theme.colors.text.secondary]);
 
     const revealOnMount = host.revealOnMount === true;
     React.useEffect(() => {
@@ -284,6 +338,38 @@ export function ProviderModelManagerPage(props: Readonly<{
     );
 }
 
+/**
+ * Names the three row controls of an agent's model list once (Favorite, shown, Default), each drawn
+ * as the real control at rest so the key looks exactly like the rows below it.
+ */
+function ProviderModelLegend(): React.ReactElement {
+    const { theme } = useUnistyles();
+    const textStyle = [styles.legendText, { color: theme.colors.text.secondary }];
+    return (
+        <View testID="provider-model-manager.legend" style={styles.legend}>
+            <View style={styles.legendItem}>
+                <Icon name="star" weight="fill" size={14} color={theme.colors.state.warning.foreground} />
+                <Text style={textStyle}>{t('settingsAgents.detailPage.modelsLegendFavorite')}</Text>
+            </View>
+            <View style={styles.legendItem}>
+                <View
+                    pointerEvents="none"
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                    aria-hidden
+                >
+                    <Switch compact value disabled focusable={false} />
+                </View>
+                <Text style={textStyle}>{t('settingsAgents.detailPage.modelsLegendShown')}</Text>
+            </View>
+            <View style={styles.legendItem}>
+                <StatusPill variant="info" hideDot label={t('settingsAgents.detailPage.modelsDefaultTag')} />
+                <Text style={textStyle}>{t('settingsAgents.detailPage.modelsLegendDefault')}</Text>
+            </View>
+        </View>
+    );
+}
+
 /** Matches the page list's bottom padding (`ItemList`). */
 const BASE_CONTENT_PADDING_BOTTOM = Platform.select({ ios: 34, default: 16 }) ?? 16;
 
@@ -297,6 +383,7 @@ const ProviderModelPageRow = React.memo(function ProviderModelPageRow(props: Rea
         <Item
             testID={`provider-model-manager.row:${option.id}`}
             title={option.label}
+            titleAccessory={renderSelectionListAccessory(option.titleAccessory)}
             subtitle={option.subtitle}
             accessibilityLabel={option.accessibilityLabel}
             disabled={option.disabled}
@@ -316,6 +403,9 @@ const styles = StyleSheet.create(() => ({
         alignItems: 'center',
         gap: 4,
     },
+    pageControls: {
+        gap: 12,
+    },
     filter: {
         flex: 1,
         minWidth: 0,
@@ -325,6 +415,27 @@ const styles = StyleSheet.create(() => ({
         alignItems: 'center',
         flexWrap: 'wrap',
         gap: 8,
+    },
+    legend: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        columnGap: 18,
+        rowGap: 8,
+    },
+    legendItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    legendText: {
+        ...Typography.default('regular'),
+        ...happierPageTextMetrics('rowDescription'),
+    },
+    summaryActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
     },
     summaryText: {
         ...Typography.default('regular'),

@@ -44,6 +44,60 @@ describe('useProviderConnectionMachineViews', () => {
         await account.reset();
     });
 
+    it('refreshes peer machine facts through the connection query Account refresh without crossing Homes', async () => {
+        let present = true;
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async request => (
+            createProviderConnectionsDescribeFixture({ connections: present || request.serverId === otherServerId
+                ? [createProviderConnectionViewFixture({ connectionId: 'pc_a', displayName: present ? 'Initially observed' : 'Foreign refresh' })] : [] })
+        ));
+        const { useProviderConnectionMachineViews } = await import('./useProviderConnectionMachineViews');
+        const { useProviderConnections } = await import('./useProviderConnections');
+        const targets = [row('srv_a', 'machine-a', serverId), row('srv_a', 'machine-b', serverId), row('srv_b', 'machine-b', otherServerId)];
+        const hook = await renderHook(() => ({
+            query: useProviderConnections({ enabled: true, machineId: 'machine-a', serverId, connectionId: 'pc_a' }),
+            peers: useProviderConnectionMachineViews({ enabled: true, connectionId: 'pc_a', targets }),
+        }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().peers.loading).toBe(false));
+        present = false;
+        await act(async () => { await hook.getCurrent().query.refresh('machine'); });
+        await flushHookEffects();
+        expect(hook.getCurrent().peers.byTargetKey['srv_a\u0000machine-a']).toMatchObject({ status: 'success', connection: null });
+        expect(hook.getCurrent().peers.byTargetKey['srv_a\u0000machine-b']).toMatchObject({ status: 'success', connection: { displayName: 'Initially observed' } });
+        await act(async () => { await hook.getCurrent().query.refresh('account'); });
+        await flushHookEffects();
+        expect(hook.getCurrent().peers.byTargetKey['srv_a\u0000machine-b']).toMatchObject({ status: 'success', connection: null });
+        expect(hook.getCurrent().peers.byTargetKey['srv_b\u0000machine-b']).toMatchObject({ status: 'success', connection: { connectionId: 'pc_a', displayName: 'Initially observed' } });
+    });
+
+    it('preserves a foreign Home read still pending when the active Home refreshes', async () => {
+        let settleForeign!: (value: ReturnType<typeof createProviderConnectionsDescribeFixture>) => void;
+        let label = 'Initial';
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async request => {
+            if (request.serverId === otherServerId) return await new Promise(resolve => { settleForeign = resolve; });
+            return createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({
+                connectionId: 'pc_a', displayName: label,
+            })] });
+        });
+        const { useProviderConnectionMachineViews } = await import('./useProviderConnectionMachineViews');
+        const { useProviderConnections } = await import('./useProviderConnections');
+        const targets = [row('srv_a', 'machine-b', serverId), row('srv_b', 'machine-b', otherServerId)];
+        const hook = await renderHook(() => ({
+            query: useProviderConnections({ enabled: true, machineId: 'machine-a', serverId, connectionId: 'pc_a' }),
+            peers: useProviderConnectionMachineViews({ enabled: true, connectionId: 'pc_a', targets }),
+        }));
+        await waitForHomeGovernance(() => expect(settleForeign).toBeTypeOf('function'));
+        label = 'Refreshed';
+        await act(async () => { await hook.getCurrent().query.refresh('account'); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().peers.byTargetKey['srv_a\u0000machine-b'])
+            .toMatchObject({ status: 'success', connection: { displayName: 'Refreshed' } }));
+        await act(async () => { settleForeign(createProviderConnectionsDescribeFixture({ connections: [
+            createProviderConnectionViewFixture({ connectionId: 'pc_a', displayName: 'Foreign' }),
+        ] })); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().peers.loading).toBe(false));
+        expect(hook.getCurrent().peers.byTargetKey['srv_b\u0000machine-b'])
+            .toMatchObject({ status: 'success', connection: { displayName: 'Foreign' } });
+    });
+
     it('follows each peer describe approval on its captured Home without replaying the read', async () => {
         await account.home.requireUiApproval(otherServerId, 'providers.connections.describe');
         // Keep Sync's live scopes on the active Home; the peer retains its own persisted policy.
@@ -158,7 +212,7 @@ describe('useProviderConnectionMachineViews', () => {
         expect(rendered.getCurrent().refresh).toBe(refresh);
     });
 
-    it('clears Account A rows, rejects its late read, and starts one Account B read when routing ids stay equal', async () => {
+    it.each(['active', 'peer'] as const)('clears %s Home Account A rows, rejects its late read, and starts one Account B read when routing ids stay equal', async (home) => {
         let resolveA!: (value: unknown) => void;
         let resolveB!: (value: unknown) => void;
         let calls = 0;
@@ -169,7 +223,7 @@ describe('useProviderConnectionMachineViews', () => {
             throw new Error('unexpected Provider connection read');
         });
         const { useProviderConnectionMachineViews } = await import('./useProviderConnectionMachineViews');
-        const targets = [row('srv_a', 'machine-a', serverId)];
+        const targets = [row('srv_a', 'machine-a', home === 'active' ? serverId : otherServerId)];
         const switchRendersAreEmpty: boolean[] = [];
         const rendered = await renderHook(() => {
             const views = useProviderConnectionMachineViews({
@@ -184,7 +238,8 @@ describe('useProviderConnectionMachineViews', () => {
 
         const switchRenderStart = switchRendersAreEmpty.length;
         await act(async () => {
-            await account.restore({ accountId: 'account-b' });
+            if (home === 'active') await account.restore({ accountId: 'account-b' });
+            else await account.home.switchAccount(otherServerId, 'account-b');
             await rendered.rerender();
         });
 

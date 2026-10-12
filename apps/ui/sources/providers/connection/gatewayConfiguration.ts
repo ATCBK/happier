@@ -4,6 +4,13 @@ import type { ProviderGatewayPlacementV1, ProviderClaudeHelperModelsV1, Provider
 import type { QualifiedConnectedAccountPurposeBindingTargetV1 } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
 import type { DaemonProviderConnectionViewV1 } from '@happier-dev/protocol/rpc';
 import { PROVIDER_ACTION_INPUT_SCHEMAS_V1, type ProviderActionInputByIdV1 } from '@happier-dev/protocol/providers/providerActionsV1';
+import type { AccountProviderDeclarationV1 } from '@happier-dev/protocol/providers/catalog/accountModelProjectionV1';
+import { resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
+import { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
+import { parseQualifiedPluginContributionKey,
+    type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
+import type { useProviderConnectionMutation } from '@/providers/hooks/useProviderConnectionMutation';
 
 export type ProviderGatewayConfigurationPatch = Readonly<{
     gatewayPlacement?: ProviderGatewayPlacementV1 | null;
@@ -38,12 +45,13 @@ export function buildProviderGatewaySlotMutation(input: Readonly<{
     expectedRevision: number;
     purposeBindingDefaults: ProviderConnectionPurposeBindingDefaultsV1;
     machineId?: string | null;
-    purpose: string;
+    /** `null` changes no slot: the connection becomes (or stays) a gateway with the slots it has. */
+    purpose: string | null;
     target: QualifiedConnectedAccountPurposeBindingTargetV1 | null;
 }>): ProviderActionInputByIdV1['providers.connections.update'] {
     const purposeBindingDefaults = { ...input.purposeBindingDefaults };
-    if (input.target) purposeBindingDefaults[input.purpose] = input.target;
-    else delete purposeBindingDefaults[input.purpose];
+    if (input.purpose !== null && input.target) purposeBindingDefaults[input.purpose] = input.target;
+    else if (input.purpose !== null) delete purposeBindingDefaults[input.purpose];
     const request: ProviderActionInputByIdV1['providers.connections.update'] = {
         action: 'update', ...(input.machineId ? { machineId: input.machineId } : {}), connectionId: input.connectionId,
         expectedRevision: input.expectedRevision,
@@ -51,4 +59,58 @@ export function buildProviderGatewaySlotMutation(input: Readonly<{
     };
     PROVIDER_ACTION_INPUT_SCHEMAS_V1['providers.connections.update'].parse(request);
     return request;
+}
+
+export type ProviderGatewayContribution = Readonly<{
+    contributionKey: string;
+    purposes: readonly Readonly<{ purpose: string; service: PluginContributionIdentityV1 }>[];
+}>;
+
+/** Bundled admitted declarations own saved identity; daemon views add runtime facts only. */
+export function readProviderGatewayContributionPurposes(contributionKey: string,
+    declarations: readonly AccountProviderDeclarationV1[] = readAccountProviderDeclarations(),
+): NonNullable<DaemonProviderConnectionViewV1['managedLocalOption']>['connectedAccountPurposes'] | null {
+    const declaration = declarations.find(row => areProviderContributionKeysEqualV1(row.contributionKey, contributionKey));
+    const identity = parseQualifiedPluginContributionKey(contributionKey);
+    if (!declaration || !identity) return null;
+    if (!declaration.definition.managedRuntime) return [];
+    return resolveProviderManagedRuntimeDeclarationV1({ implementationIdentity: identity,
+        managedRuntime: declaration.definition.managedRuntime }).connectedAccounts
+        .map(({ endpointTemplateIds: _endpoints, ...purpose }) => ({ ...purpose, required: purpose.required === true }));
+}
+
+/**
+ * What a new gateway is made from: the admitted contribution whose managed runtime draws on
+ * connected-account vendors (the same rule that marks a saved connection as a gateway). Today that
+ * is one contribution; with several the user would have to choose, so none is picked implicitly.
+ */
+export function readProviderGatewayContribution(
+    declarations: readonly AccountProviderDeclarationV1[],
+): ProviderGatewayContribution | null {
+    const gateways = declarations.flatMap(declaration => {
+        const purposes = readProviderGatewayContributionPurposes(declaration.contributionKey, declarations) ?? [];
+        return purposes.length > 0 ? [{ contributionKey: declaration.contributionKey,
+            purposes: purposes.map(({ purpose, service }) => ({ purpose, service })) }] : [];
+    });
+    return gateways.length === 1 ? gateways[0]! : null;
+}
+
+/**
+ * One Account create Action covers the managed deployment, slots and enablement. The existing
+ * catalog owner completes an untouched interrupted create rather than allocating a duplicate.
+ */
+export async function createProviderGateway(input: Readonly<{
+    run: ReturnType<typeof useProviderConnectionMutation>['run'];
+    contribution: ProviderGatewayContribution;
+    connectionId: string;
+    displayName: string;
+    slot: Readonly<{ purpose: string; target: QualifiedConnectedAccountPurposeBindingTargetV1 }> | null;
+    key: string;
+}>): Promise<ProviderConnectionV1['id'] | null> {
+    const created = await input.run({ action: 'createContribution', connectionId: input.connectionId,
+        contributionKey: input.contribution.contributionKey, displayName: input.displayName,
+        savedSecretId: null, enable: true, deployment: { kind: 'managedLocal',
+            purposeBindingDefaults: input.slot ? { [input.slot.purpose]: input.slot.target } : {} } }, input.key);
+    if (created?.status !== 'success' || !('connection' in created)) return null;
+    return created.connection.connectionId;
 }

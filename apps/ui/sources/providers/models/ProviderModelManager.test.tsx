@@ -1,10 +1,15 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 import { renderScreen } from '@/dev/testkit';
-import { ProviderModelManager, buildProviderModelManagerSections, buildProviderModelVisibilityChanges } from './ProviderModelManager';
+import { PageHeaderMenu } from '@/components/ui/layout/PageHeaderEntityParts';
+import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
+import { renderSelectionListAccessory } from '@/components/ui/selectionList';
+import { Switch } from '@/components/ui/forms/Switch';
+import { ProviderModelManager, buildProviderModelManagerSections, buildProviderModelVisibilityChanges, type ProviderModelManagerGroup } from './ProviderModelManager';
 import { providerModelRowKey } from './modelRowKey';
+import { MODEL_ROWS_PER_SEGMENT } from './ProviderModelManagerPage';
 
 function group(
     modelCount = 1,
@@ -40,6 +45,16 @@ function group(
 }
 
 describe('ProviderModelManager', () => {
+    it('does not claim a per-model hidden favorite stays visible in an off source', () => {
+        const projected = group(1);
+        const sections = buildProviderModelManagerSections({
+            scope: { kind: 'agent', agentTargetKey: 'agent:happier.agent.codex/codex' },
+            nativeModels: [], groups: [projected], showHidden: true, onSetVisibility: () => {},
+            grouping: { nativeTitle: 'Codex', connectionDescription: 'Shown sources',
+                favoriteRefs: [projected.rows[0]!.ref], isSourceShown: () => false },
+        });
+        expect(sections.find(section => section.id === 'source:pc_a')?.options).toEqual([]);
+    });
     it('uses only Available, Hidden, and Manual sections while retaining connection identity in rows', () => {
         const projected = group(3);
         const groups = [{
@@ -100,10 +115,30 @@ describe('ProviderModelManager', () => {
         expect(sections[1]?.description).toBe('Shown in every agent that can run it.');
         // The source header names the connection once; its rows do not repeat it.
         expect(sections[1]?.options[1]?.subtitle ?? '').not.toContain('Gateway · Work');
-        const isDefault = (option: (typeof sections)[number]['options'][number]) =>
-            (option.rightAccessory as React.ReactElement<{ isDefault?: boolean }>).props.isDefault === true;
+        // The Default tag stands beside the model's name, not among its controls.
+        const isDefault = (option: (typeof sections)[number]['options'][number]) => option.titleAccessory != null;
         expect(sections[1]?.options.map(isDefault)).toEqual([false, true]);
         expect(sections[2]?.options.map(isDefault)).toEqual([false]);
+    });
+
+    it('groups connection-neutral catalog rows without inventing Agent compatibility status', () => {
+        const source: ProviderModelManagerGroup = {
+            connectionId: 'pc_a', providerName: 'Gateway', connectionName: 'Work',
+            connectionRole: 'named', connectionDisplayNameMode: 'custom', modelLoadAction: 'descriptor_absent',
+            rows: [{ ref: { modelId: 'catalog-model' }, descriptor: { id: 'catalog-model', name: 'Catalog model' },
+                sources: { manual: false, static: true, probe: false }, catalog: { stale: false },
+                loadState: 'unknown', visibility: 'visible' }],
+        };
+        const sections = buildProviderModelManagerSections({
+            scope: { kind: 'agent', agentTargetKey: 'agent:happier.agent.codex/codex' },
+            nativeModels: [], groups: [source], showHidden: false, onSetVisibility: () => {},
+            grouping: { nativeTitle: 'Codex', nativeDescription: 'Native models',
+                connectionDescription: 'Shown sources', defaultRef: null },
+        });
+
+        expect(sections[0]?.title).toBe('Gateway · Work');
+        expect(sections[0]?.description).toBe('Shown sources');
+        expect(sections[0]?.options.map(option => option.label)).toEqual(['Catalog model']);
     });
 
     it('does not repeat the connection on every row of that connection\'s own list', () => {
@@ -131,18 +166,146 @@ describe('ProviderModelManager', () => {
                 nativeTitle: 'Codex', nativeDescription: 'Native models', connectionDescription: 'Shown sources',
                 defaultRef: { providerConnectionId: 'pc_a', modelId: 'model-1' },
                 favoriteRefs: [
-                    { agentTargetKey, providerConnectionId: 'pc_a', modelId: 'model-1' },
-                    { agentTargetKey: 'agent:another.plugin/codex', providerConnectionId: 'pc_b', modelId: 'model-1' },
+                    { agentTargetKey, providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'model-1' },
+                    { agentTargetKey: 'agent:another.plugin/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_b'), modelId: 'model-1' },
                 ],
             },
         });
         const native = await renderScreen(sections[0]!.options[0]!.rightAccessory as React.ReactElement);
         const favorite = await renderScreen(sections[1]!.options[1]!.rightAccessory as React.ReactElement);
         const otherSource = await renderScreen(sections[2]!.options[1]!.rightAccessory as React.ReactElement);
-        expect(favorite.getTextContent()).toContain('★');
-        expect(favorite.findByTestId('provider-model-manager.default')).not.toBeNull();
-        expect(native.getTextContent()).not.toContain('★');
-        expect(otherSource.getTextContent()).not.toContain('★');
+        const defaultTitle = await renderScreen(
+            <>{renderSelectionListAccessory(sections[1]!.options[1]!.titleAccessory)}</>,
+        );
+        expect(favorite.findByTestId('provider-model-manager.favorite')).not.toBeNull();
+        expect(defaultTitle.findByTestId('provider-model-manager.default')).not.toBeNull();
+        expect(favorite.findByTestId('provider-model-manager.default')).toBeNull();
+        expect(native.findByTestId('provider-model-manager.favorite')).toBeNull();
+        expect(otherSource.findByTestId('provider-model-manager.favorite')).toBeNull();
+    });
+
+    it('keeps agent rows to one line with a pinnable star, and collapses a source longer than a page segment', async () => {
+        const agentTargetKey = 'agent:happier.agent.codex/codex';
+        const onToggleFavorite = vi.fn();
+        const onOpenConnection = vi.fn();
+        const small = group(2, 'pc_a');
+        const long = group(MODEL_ROWS_PER_SEGMENT + 1, 'pc_b');
+        const withCatalogFacts = (source: ReturnType<typeof group>) => ({
+            ...source,
+            rows: source.rows.map((row) => ({
+                ...row,
+                descriptor: { ...row.descriptor, description: 'A long catalog description', contextWindowTokens: 200_000 },
+                visibility: 'visible' as const,
+            })),
+        });
+        const sections = buildProviderModelManagerSections({
+            scope: { kind: 'agent', agentTargetKey },
+            nativeModels: [{ id: 'native-1', name: 'Native', description: 'Native description', hidden: false }],
+            groups: [withCatalogFacts(small), withCatalogFacts(long)],
+            showHidden: true,
+            onSetVisibility: () => {},
+            onOpenConnection,
+            grouping: {
+                nativeTitle: 'Codex', nativeDescription: 'Native models', connectionDescription: 'Shown sources',
+                defaultRef: null,
+                favoriteRefs: [{ agentTargetKey, providerConnectionId: ProviderConnectionIdSchema.parse('pc_b'), modelId: 'model-3' }],
+                onToggleFavorite,
+            },
+        });
+        const [native, shown, collapsed] = sections;
+        // A row is its name and controls: no id or catalog description under it.
+        expect(native!.options[0]!.subtitle).toBeUndefined();
+        expect(shown!.options.map((option) => option.subtitle)).toEqual([undefined, undefined]);
+
+        const row = await renderScreen(shown!.options[0]!.rightAccessory as React.ReactElement);
+        expect(row.getTextContent()).toContain('200k');
+        // The star is a control on every row, not only a mark on pinned ones.
+        const star = row.findByTestId('provider-model-manager.favorite')!;
+        await star.props.onPress();
+        expect(onToggleFavorite).toHaveBeenCalledWith(expect.objectContaining({
+            ref: { agentTargetKey, providerConnectionId: 'pc_a', modelId: 'model-0' },
+            providerDisplaySnapshot: expect.objectContaining({ providerName: 'Gateway', connectionName: 'Work' }),
+        }));
+
+        // The long source lists only what the picker pins and leads to its own page.
+        expect(collapsed!.options.map((option) => option.id)).toEqual([providerModelRowKey('pc_b', 'model-3')]);
+        expect(collapsed!.footerAction?.label).toBe(`Browse ${MODEL_ROWS_PER_SEGMENT + 1} models`);
+        collapsed!.footerAction?.onPress();
+        expect(onOpenConnection).toHaveBeenCalledWith('pc_b');
+        expect(shown!.footerAction).toBeUndefined();
+    });
+
+    it('says an Account-view source needs a computer once in its header, never per row', async () => {
+        const agentTargetKey = 'agent:happier.agent.codex/codex';
+        const projected = group(2, 'pc_a');
+        const accountView = {
+            ...projected,
+            modelLoadAction: 'machine_required' as const,
+            authorization: { authorized: false as const, error: createProviderErrorV1('provider_machine_unavailable') },
+            rows: projected.rows.map((row) => ({
+                ...row,
+                confidence: 'account_unverified' as const,
+                visibility: 'visible' as const,
+                endpointHealth: 'not_checked' as const,
+                compatibility: {
+                    result: { status: 'experimental' as const, selectedProtocol: 'openai-chat' as const,
+                        reasons: ['compatibility_evidence_missing' as const], confirmationScope: { kind: 'connection' as const } },
+                    compatibilityFingerprint: 'compatibility:v1:account', confirmed: false,
+                },
+            })),
+        };
+        const [, source] = buildProviderModelManagerSections({
+            scope: { kind: 'agent', agentTargetKey },
+            nativeModels: [{ id: 'native-1', name: 'Native', hidden: false }],
+            groups: [accountView],
+            showHidden: true,
+            onSetVisibility: () => {},
+            grouping: {
+                nativeTitle: 'Codex', nativeDescription: 'Native models', connectionDescription: 'Shown sources',
+                defaultRef: null,
+            },
+        });
+        expect(source!.options.map((option) => option.subtitle)).toEqual([undefined, undefined]);
+        expect(source!.description).toBe('Shown sources · Experimental · Needs a machine to confirm');
+        expect(source!.description).not.toContain('Selected machine');
+    });
+
+    it('collapses a source hidden from the picker to the models it keeps and a way to browse it', async () => {
+        const agentTargetKey = 'agent:happier.agent.codex/codex';
+        const onOpenConnection = vi.fn();
+        const onSetVisibility = vi.fn();
+        const projected = group(3, 'pc_a');
+        const shownRows = (source: ReturnType<typeof group>) => ({
+            ...source, rows: source.rows.map((row) => ({ ...row, visibility: 'visible' as const })),
+        });
+        const sections = buildProviderModelManagerSections({
+            scope: { kind: 'agent', agentTargetKey },
+            nativeModels: [],
+            groups: [shownRows(projected), shownRows(group(2, 'pc_b'))],
+            showHidden: true,
+            onSetVisibility,
+            onOpenConnection,
+            grouping: {
+                nativeTitle: 'Codex', nativeDescription: 'Native models', connectionDescription: 'Shown sources',
+                defaultRef: null,
+                favoriteRefs: [{ agentTargetKey, providerConnectionId: ProviderConnectionIdSchema.parse('pc_a'), modelId: 'model-2' }],
+                isSourceShown: () => false,
+            },
+        });
+        const kept = sections.find((section) => section.id === 'source:pc_a')!;
+        const empty = sections.find((section) => section.id === 'source:pc_b')!;
+        // The source's header stays (its switch turns it back on); only the favorite the picker keeps is listed.
+        expect(kept.options.map((option) => option.id)).toEqual([providerModelRowKey('pc_a', 'model-2')]);
+        expect(kept.description).toBe('Hidden from the picker · 3 models');
+        expect(empty.options).toEqual([]);
+        expect(empty.description).toBe('Hidden from the picker · 2 models');
+        const accessory = await renderScreen(kept.options[0]!.rightAccessory as React.ReactElement);
+        expect(accessory.getTextContent()).toContain('Stays visible as a favorite');
+        expect(accessory.findAllByType(Switch)).toHaveLength(0);
+        expect(kept.footerAction?.label).toBe('Browse 3 models');
+        kept.footerAction?.onPress();
+        expect(onOpenConnection).toHaveBeenCalledWith('pc_a');
+        expect(onSetVisibility).not.toHaveBeenCalled();
     });
 
     it('sets a default from the source row without changing model visibility', async () => {
@@ -158,13 +321,16 @@ describe('ProviderModelManager', () => {
                 onSetDefault,
             },
         });
+        const rowMenuActions = (screen: Awaited<ReturnType<typeof renderScreen>>): readonly PageHeaderMenuAction[] =>
+            screen.findAllByType(PageHeaderMenu)[0]?.props.actions ?? [];
         const selected = await renderScreen(sections[0]!.options[1]!.rightAccessory as React.ReactElement);
-        expect(selected.findByTestId('provider-model-manager.set-default')).toBeNull();
+        expect(rowMenuActions(selected).map((action) => action.id)).not.toContain('setDefault');
         const other = await renderScreen(sections[1]!.options[1]!.rightAccessory as React.ReactElement);
-        const control = other.findAllByTestId('provider-model-manager.set-default')
-            .find(node => typeof node.props.onPress === 'function');
-        expect(control).toBeDefined();
-        await other.pressByTestId('provider-model-manager.set-default');
+        // Setting the default is a rare operation in the row's menu, never a glyph beside the switch.
+        expect(other.findAllByTestId('provider-model-manager.set-default')).toHaveLength(0);
+        const setDefault = rowMenuActions(other).find((action) => action.id === 'setDefault');
+        expect(setDefault?.title).toBe('Set as default');
+        await setDefault?.onSelect();
         expect(onSetDefault).toHaveBeenCalledWith({
             agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: 'pc_b', modelId: 'model-1',
         });
@@ -333,10 +499,14 @@ describe('ProviderModelManager', () => {
         const screen = await renderScreen(accessory as React.ReactElement);
         expect(screen.findAllByTestId('provider-model-manager.load')[0]?.props.accessibilityLabel)
             .toBe('Model 0, Gateway · Work, Load model');
-        expect(screen.findAllByTestId('provider-model-manager.show-only')[0]?.props.accessibilityLabel)
-            .toBe('Model 0, Gateway · Work, Show only this model');
-        expect(screen.findAllByTestId('provider-model-manager.remove')[0]?.props.accessibilityLabel)
-            .toBe('Model 0, Gateway · Work, Remove model');
+        // Show only and Remove are rare operations in one row menu whose trigger names the model.
+        expect(screen.findAllByTestId('provider-model-manager.row-menu.trigger')[0]?.props.accessibilityLabel)
+            .toBe('Model 0, Gateway · Work, More actions');
+        const menu = screen.findAllByType(PageHeaderMenu)[0];
+        expect(menu?.props.actions.map((action: PageHeaderMenuAction) => [action.id, action.title, action.destructive === true])).toEqual([
+            ['showOnly', 'Show only this model', false],
+            ['remove', 'Remove model', true],
+        ]);
     });
 
     it('replaces the exact loading row action with an accessible cancel control', async () => {

@@ -29,7 +29,7 @@ export function useProviderBindingStatus(input: Readonly<{
     selectionIntentPresent?: boolean;
     launchBinding: SessionProviderBindingMetadataV1 | null;
 }>) {
-    const { describeProviderBindingStatus, ready } = useProviderActionClient(input.serverId);
+    const { describeProviderBindingStatus, ready, pendingApproval } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const [state, setState] = React.useState<ProviderBindingStatusState>({
         scopeKey: null,
@@ -165,5 +165,6 @@ export function useProviderBindingStatus(input: Readonly<{
         error: stateMatchesScope ? state.error : null,
         loading: requestable && (!ready || !stateMatchesScope || state.loading),
         refresh,
+        pendingApproval,
     };
 }

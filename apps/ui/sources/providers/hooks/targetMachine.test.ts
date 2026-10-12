@@ -2,10 +2,10 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-    createMachineAdministrationTargetSelectionMock,
     renderHook,
     standardCleanup,
 } from '@/dev/testkit';
+import { createMachineAdministrationTargetSelectionMock } from '@/dev/testkit/mocks/machineAdministrationTargetSelection';
 
 type TestAccountLifetime = Readonly<{
     scope: Readonly<{ serverId: string; accountId: string }>;
@@ -96,9 +96,11 @@ describe('useProviderSettingsTarget', () => {
         // be issued against a machine the canonical presence owner calls offline.
         expect(rendered.getCurrent().selection.selectedTarget?.machineId).toBe('machine-a');
         expect(rendered.getCurrent().machineId).toBeNull();
-        expect(rendered.getCurrent().serverId).toBeNull();
+        // This boundary fixture has no persisted Home profile; the explicit identity stays exact.
+        expect(rendered.getCurrent().serverId).toBe(rendered.getCurrent().selection.selectedTarget?.serverIdentityId);
         expect(rendered.getCurrent().resolveCurrentTarget()).toBeNull();
-        expect(rendered.getCurrent().machineRows).toEqual([]);
+        expect(rendered.getCurrent().machineRows.map(row => ({ machineId: row.target.machineId, online: row.online })))
+            .toEqual([{ machineId: 'machine-a', online: false }]);
     });
 
     it('marks only reachable machines addressable while still projecting the rest', async () => {

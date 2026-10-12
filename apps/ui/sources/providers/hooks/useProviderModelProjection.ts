@@ -35,7 +35,7 @@ export function useProviderModelProjection(input: Readonly<{
     sourceConnectionId?: string;
     favoriteSelections?: readonly ProviderBoundModelRef[];
 }>) {
-    const { describeProviderModels, ready } = useProviderActionClient(input.serverId);
+    const { describeProviderModels, ready, pendingApproval } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     const [state, setState] = React.useState<ProjectionState>({
         scopeKey: null,
@@ -100,12 +100,13 @@ export function useProviderModelProjection(input: Readonly<{
             : { scopeKey, accountLifetime, data: null, error: null, loading: true });
         try {
             const result = await describeProviderModels({
-                ...(input.machineId ? { machineId: input.machineId } : {}),
+                // Keep the refresh discriminator correlated with its required machine.
+                ...(forceRefresh && input.machineId
+                    ? { machineId: input.machineId, forceRefresh: true as const }
+                    : input.machineId ? { machineId: input.machineId } : {}),
                 serverId: input.serverId,
                 agentTargetKey: input.agentTargetKey,
                 ...(input.mode ? { mode: input.mode } : {}),
-                // Refreshing an Account-only catalog cannot probe a runtime.
-                ...(forceRefresh && input.machineId ? { forceRefresh: true as const } : {}),
                 ...(input.currentSelection ? { currentSelection: input.currentSelection } : {}),
                 ...(input.sourceConnectionId ? { sourceConnectionId: input.sourceConnectionId } : {}),
                 ...(input.favoriteSelections ? { favoriteSelections: [...input.favoriteSelections] } : {}),
@@ -181,5 +182,6 @@ export function useProviderModelProjection(input: Readonly<{
         data, error,
         refreshFailures: data?.refreshFailures ?? [],
         loading, status, refresh, refreshWithResult,
+        pendingApproval,
     };
 }
