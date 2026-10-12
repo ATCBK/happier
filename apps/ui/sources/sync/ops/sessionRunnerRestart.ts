@@ -12,6 +12,7 @@ import {
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+import { delay } from '@/utils/timing/time';
 
 type RestartSessionRunnerInput = Readonly<{
     runtimeState: SessionRunnerRuntimeStateV1;
@@ -136,20 +137,29 @@ function readRestartIdentityGuard(
     };
 }
 
+// The daemon owns a 60-second restart completion window; transport must outlive it.
+const SESSION_RUNNER_RESTART_RPC_TIMEOUT_MS = 90_000;
+// Preserve the source restart owner's observation policy for delayed daemon publication.
+const SESSION_RUNNER_RESTART_OBSERVE_ATTEMPTS = 8;
+const SESSION_RUNNER_RESTART_OBSERVE_INTERVAL_MS = 1_500;
+
 async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRunnerInput & Readonly<{
     method:
         | typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART
         | typeof RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2;
     request: Request;
+    reconcileMode?: 'if_stale' | 'force_current_cli';
 }>): Promise<RestartSessionRunnerResultV1> {
     const machineId = input.runtimeState.machineId?.trim() ?? '';
     if (machineId.length === 0) return buildUnsupportedDaemonResult(input.runtimeState.sessionId);
+    let result: RestartSessionRunnerResultV1;
     try {
         const raw = await machineRpcWithServerScope<unknown, Request>({
             machineId,
             serverId: input.serverId ?? undefined,
             method: input.method,
             payload: input.request,
+            timeoutMs: SESSION_RUNNER_RESTART_RPC_TIMEOUT_MS,
             authorization: {
                 kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_WRITE,
                 sessionId: input.runtimeState.sessionId,
@@ -160,19 +170,18 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
         }
 
         const parsed = RestartSessionRunnerResultV1Schema.safeParse(raw);
-        if (!parsed.success || parsed.data.sessionId !== input.runtimeState.sessionId) {
-            return buildResult({
+        result = parsed.success && parsed.data.sessionId === input.runtimeState.sessionId
+            ? parsed.data
+            : buildResult({
                 sessionId: input.runtimeState.sessionId,
                 status: 'partial_failure',
                 diagnostics: { errorCode: 'invalid_response' },
             });
-        }
-        return parsed.data;
     } catch (error) {
         if (isUnsupportedDaemonError(error)) {
             return buildUnsupportedDaemonResult(input.runtimeState.sessionId);
         }
-        return buildResult({
+        result = buildResult({
             sessionId: input.runtimeState.sessionId,
             status: 'partial_failure',
             diagnostics: {
@@ -180,6 +189,29 @@ async function sendSessionRunnerRestartRequest<Request>(input: RestartSessionRun
             },
         });
     }
+
+    // Exact-process replacement cannot prove that a requested provider binding was
+    // applied: V2 runtime status carries no binding evidence. Keep that failure closed.
+    if (!input.reconcileMode || result.ok || ![
+        'partial_failure', 'stop_failed', 'spawn_failed', 'runner_identity_changed', 'not_found',
+    ].includes(result.status)) return result;
+
+    for (let attempt = 0; attempt < SESSION_RUNNER_RESTART_OBSERVE_ATTEMPTS; attempt += 1) {
+        const state = await getSessionRunnerRuntimeStatus({
+            sessionId: input.runtimeState.sessionId,
+            machineId,
+            serverId: input.serverId,
+        });
+        const replaced = state?.runner.pid != null && state.runner.pid !== input.runtimeState.runner.pid;
+        const landed = replaced || (input.reconcileMode === 'if_stale' && state?.versionState === 'current');
+        if (landed) {
+            return { ok: true, status: 'restarted', sessionId: input.runtimeState.sessionId };
+        }
+        if (attempt < SESSION_RUNNER_RESTART_OBSERVE_ATTEMPTS - 1) {
+            await delay(SESSION_RUNNER_RESTART_OBSERVE_INTERVAL_MS);
+        }
+    }
+    return result;
 }
 
 async function requestSessionRunnerRestart(
@@ -200,6 +232,7 @@ async function requestSessionRunnerRestart(
         ...input,
         method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART,
         request,
+        reconcileMode: mode,
     });
 }
 
