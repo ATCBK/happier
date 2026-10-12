@@ -250,6 +250,84 @@ describe('useMachineCapabilitiesCache (hook)', () => {
         }
     });
 
+    it('retries a transient error after the existing backoff while a reader remains mounted', async () => {
+        vi.resetModules();
+        vi.useFakeTimers();
+        process.env.EXPO_PUBLIC_HAPPIER_MACHINE_CAPABILITIES_ERROR_BACKOFF_MS = '1000';
+
+        try {
+            const machineCapabilitiesDetect = vi.fn()
+                .mockRejectedValueOnce(new Error('transient transport failure'))
+                .mockResolvedValue({ supported: true, response: { protocolVersion: 1, results: {} } });
+            vi.doMock('@/sync/ops', () => ({ machineCapabilitiesDetect }));
+
+            const { useMachineCapabilitiesCache } = await import('./useMachineCapabilitiesCache');
+            let latest: { status: string } | null = null;
+            function Test() {
+                latest = useMachineCapabilitiesCache({
+                    machineId: 'm-retry',
+                    enabled: true,
+                    request: newSessionRequest(),
+                    timeoutMs: 1,
+                }).state;
+                return React.createElement('View');
+            }
+
+            await renderScreen(React.createElement(Test));
+            await act(async () => { await flushHookEffects(); });
+            expect(machineCapabilitiesDetect).toHaveBeenCalledTimes(1);
+            expect(latest).toMatchObject({ status: 'error' });
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+            expect(machineCapabilitiesDetect).toHaveBeenCalledTimes(1);
+
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(1);
+                await flushHookEffects();
+            });
+            expect(machineCapabilitiesDetect).toHaveBeenCalledTimes(2);
+            expect(latest).toMatchObject({ status: 'loaded' });
+        } finally {
+            vi.useRealTimers();
+            delete process.env.EXPO_PUBLIC_HAPPIER_MACHINE_CAPABILITIES_ERROR_BACKOFF_MS;
+        }
+    });
+
+    it('cancels the pending error retry when the last reader unmounts', async () => {
+        vi.resetModules();
+        vi.useFakeTimers();
+        process.env.EXPO_PUBLIC_HAPPIER_MACHINE_CAPABILITIES_ERROR_BACKOFF_MS = '1000';
+
+        try {
+            const machineCapabilitiesDetect = vi.fn(async () => {
+                throw new Error('transient transport failure');
+            });
+            vi.doMock('@/sync/ops', () => ({ machineCapabilitiesDetect }));
+            const { useMachineCapabilitiesCache } = await import('./useMachineCapabilitiesCache');
+
+            function Test() {
+                useMachineCapabilitiesCache({
+                    machineId: 'm-retired',
+                    enabled: true,
+                    request: newSessionRequest(),
+                    timeoutMs: 1,
+                });
+                return React.createElement('View');
+            }
+
+            const screen = await renderScreen(React.createElement(Test));
+            await act(async () => { await flushHookEffects(); });
+            expect(machineCapabilitiesDetect).toHaveBeenCalledTimes(1);
+
+            await act(async () => { screen.tree.unmount(); });
+            await vi.advanceTimersByTimeAsync(1000);
+            expect(machineCapabilitiesDetect).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+            delete process.env.EXPO_PUBLIC_HAPPIER_MACHINE_CAPABILITIES_ERROR_BACKOFF_MS;
+        }
+    });
+
     it('retries immediately after a server-switch-abort detect result', async () => {
         vi.resetModules();
 

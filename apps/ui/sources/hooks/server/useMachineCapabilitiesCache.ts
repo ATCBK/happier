@@ -28,6 +28,7 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 const listeners = new Map<string, Set<(state: MachineCapabilitiesCacheState) => void>>();
+const scheduledErrorRetryByCacheKey = new Map<string, ReturnType<typeof setTimeout>>();
 
 const DEFAULT_STALE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const DEFAULT_ERROR_BACKOFF_MS = 60_000;
@@ -137,6 +138,11 @@ function recordLatestAnswers(cacheKey: string, state: MachineCapabilitiesCacheSt
 }
 
 function setEntry(cacheKey: string, entry: CacheEntry) {
+    if (entry.state.status !== 'error') {
+        const retry = scheduledErrorRetryByCacheKey.get(cacheKey);
+        if (retry) clearTimeout(retry);
+        scheduledErrorRetryByCacheKey.delete(cacheKey);
+    }
     cache.set(cacheKey, entry);
     notify(cacheKey);
     recordLatestAnswers(cacheKey, entry.state);
@@ -197,7 +203,12 @@ function subscribe(cacheKey: string, cb: (state: MachineCapabilitiesCacheState) 
         const current = listeners.get(cacheKey);
         if (!current) return;
         current.delete(cb);
-        if (current.size === 0) listeners.delete(cacheKey);
+        if (current.size === 0) {
+            listeners.delete(cacheKey);
+            const retry = scheduledErrorRetryByCacheKey.get(cacheKey);
+            if (retry) clearTimeout(retry);
+            scheduledErrorRetryByCacheKey.delete(cacheKey);
+        }
     };
 }
 
@@ -425,14 +436,36 @@ function shouldRefetchEntry(params: Readonly<{ entry: CacheEntry | null; staleMs
     return ageMs > staleMs;
 }
 
-async function fetchAndMerge(params: {
+type MachineCapabilitiesFetchParams = {
     machineId: string;
     serverId?: string | null;
     cacheKeySalt?: string | number | null;
     request: CapabilitiesDetectRequest;
     timeoutMs?: number;
     accountLifetime?: ServerAccountScopeLifetime;
-}): Promise<void> {
+};
+
+function scheduleObservedErrorRetry(
+    cacheKey: string,
+    params: MachineCapabilitiesFetchParams,
+    failedAt: number,
+): void {
+    if (scheduledErrorRetryByCacheKey.has(cacheKey) || !listeners.get(cacheKey)?.size) return;
+    const backoffMs = readMachineCapabilitiesErrorBackoffMsFromEnv();
+    if (backoffMs <= 0) return;
+    const retry = setTimeout(() => {
+        scheduledErrorRetryByCacheKey.delete(cacheKey);
+        const entry = getEntry(cacheKey);
+        if (!listeners.get(cacheKey)?.size
+            || entry?.state.status !== 'error'
+            || entry.updatedAt !== failedAt
+            || (params.accountLifetime && !params.accountLifetime.isCurrent())) return;
+        void fetchAndMerge(params);
+    }, backoffMs);
+    scheduledErrorRetryByCacheKey.set(cacheKey, retry);
+}
+
+async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<void> {
     const cacheKey = toCacheKey(params.machineId, params.serverId, params.cacheKeySalt, params.accountLifetime?.scope.accountId);
     const requestKey = detectRequestKey(params.request);
     const scheduled = scheduledFetchByCacheKey.get(cacheKey);
@@ -493,10 +526,12 @@ async function fetchAndMerge(params: {
                 return;
             }
 
+            const failedAt = Date.now();
             setEntry(cacheKey, {
                 state: prevSnapshot ? ({ status: 'error', snapshot: prevSnapshot } as const) : ({ status: 'error' } as const),
-                updatedAt: Date.now(),
+                updatedAt: failedAt,
             });
+            scheduleObservedErrorRetry(cacheKey, params, failedAt);
             return;
         }
 
@@ -527,10 +562,12 @@ async function fetchAndMerge(params: {
                 : ({ status: 'error' } as const);
         })();
 
+        const updatedAt = Date.now();
         setEntry(cacheKey, {
             state: nextState,
-            updatedAt: Date.now(),
+            updatedAt,
         });
+        if (nextState.status === 'error') scheduleObservedErrorRetry(cacheKey, params, updatedAt);
     });
 
     const finalPromise = scheduledPromise.finally(() => {
