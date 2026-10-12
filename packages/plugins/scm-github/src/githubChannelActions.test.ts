@@ -54,7 +54,7 @@ function githubChannelDeliveryInput(deliveryKey: string) {
       parentId: '77',
       parentLabel: 'acme/widgets',
     },
-    content: 'A reply that must not bypass endpoint revalidation',
+    content: { text: 'A reply that must not bypass endpoint revalidation' },
     deliveryKey,
     mentionPolicy: 'suppress' as const,
     linkPreviewPolicy: 'suppress' as const,
@@ -119,6 +119,59 @@ function coreContext(
 }
 
 describe('GitHub Channel Actions', () => {
+  it('refuses unsupported new threads before any GitHub request', async () => {
+    const request = vi.fn(async () => { throw new Error('Unsupported starts must not call GitHub'); });
+    await expect(deliverGithubChannelMessage({
+      ...githubChannelDeliveryInput('start-1'), content: { text: 'Brief', html: '<p>Brief</p>' },
+      newThread: { recipients: ['principal-1'], subject: 'Brief' },
+    }, coreContext({ connectedAccounts: {}, http: { request } })))
+      .resolves.toEqual({ kind: 'notReady', reason: 'unsupported' });
+    expect(request).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['unavailable service', 'plugin_service_unavailable', false, 'network'],
+    ['retryable materialization', 'plugin_connected_account_runtime_unavailable', true, 'network'],
+    ['credential denial', 'plugin_host_access_operation_denied', false, 'credentialInvalid'],
+  ] as const)('classifies pre-effect %s consistently for polling and connection tests', async (_label, code, retryable, reason) => {
+    const connectedAccounts = {
+      materialize: vi.fn(async () => {
+        throw new PluginError({ code, retryable, message: 'Materialization refused before provider I/O.' });
+      }),
+    };
+    const http = { request: vi.fn() };
+    const context = coreContext({ connectedAccounts, http });
+
+    await expect(testGithubChannelConnection({
+      ...githubChannelConnectionInput(), selectedTransport: 'checkpointedPull',
+    }, context)).resolves.toMatchObject({ kind: 'notReady', reason });
+    await expect(pollGithubChannelObservations({
+      ...githubChannelConnectionInput(), checkpoint: null, limit: 10, waitMs: 0,
+    }, context)).resolves.toMatchObject({ kind: 'notReady', reason });
+    await expect(resolveGithubChannelEndpoint({
+      ...githubChannelConnectionInput(), query: '#1',
+    }, context)).resolves.toMatchObject({ kind: 'notReady', reason });
+    await expect(resolveGithubChannelPrincipal({
+      ...githubChannelConnectionInput(), endpoint: githubChannelDeliveryInput('unused').endpoint, query: 'octocat',
+    }, context)).resolves.toMatchObject({ kind: 'notReady', reason });
+    expect(http.request).not.toHaveBeenCalled();
+  });
+
+  it('keeps pre-effect HTTP service unavailability retryable for polling and connection tests', async () => {
+    const connectedAccounts = {
+      materialize: vi.fn(async () => ({ kind: 'httpHeaders' as const, headers: { Authorization: 'Bearer fixture' } })),
+    };
+    const http = {
+      request: vi.fn(async () => { throw new PluginError({ code: 'plugin_service_unavailable', message: 'HTTP service unavailable before request dispatch.' }); }),
+    };
+    const context = coreContext({ connectedAccounts, http });
+    await expect(testGithubChannelConnection({
+      ...githubChannelConnectionInput(), selectedTransport: 'checkpointedPull',
+    }, context)).resolves.toMatchObject({ kind: 'notReady', reason: 'network' });
+    await expect(pollGithubChannelObservations({
+      ...githubChannelConnectionInput(), checkpoint: null, limit: 10, waitMs: 0,
+    }, context)).resolves.toMatchObject({ kind: 'notReady', reason: 'network' });
+  });
+
   it('polls selected CI bindings through the authenticated Channel operation', async () => {
     const credentialRequests: GithubHttpRequestInput[] = [];
     const connectedAccounts = { materialize: vi.fn(async () => ({ kind: 'httpHeaders' as const,
@@ -129,7 +182,7 @@ describe('GitHub Channel Actions', () => {
       const path = new URL(request.url).pathname;
       if (path.endsWith('/issues/comments')) return jsonResponse([]);
       if (path.endsWith('/issues/1')) return jsonResponse({ id: 5, number: 1, pull_request: {} });
-      if (path.endsWith('/pulls/1')) return jsonResponse({ head: { sha: 'abc123' } });
+      if (path.endsWith('/pulls/1')) return jsonResponse({ number: 1, head: { sha: 'abc123' } });
       if (path.endsWith('/permission')) return jsonResponse({ permission: 'write', user: { id: 99, login: 'happier-bot' } });
       if (path === '/graphql') return jsonResponse({ data: { repository: { pullRequest: {
         headRefOid: 'abc123', commits: { nodes: [{ commit: { oid: 'abc123', statusCheckRollup: {
@@ -162,7 +215,9 @@ describe('GitHub Channel Actions', () => {
       ? jsonResponse({ id: 99, login: 'happier-bot' })
       : jsonResponse({ id: 77, name: 'widgets', full_name: 'acme/widgets', owner: { login: 'acme' } })) };
     await expect(setupGithubChannels({ repository: 'acme/widgets' }, coreContext({ connectedAccounts, http })))
-      .resolves.toMatchObject({ credentialRef: GITHUB_ACCOUNT, providerConnectionKey: 'github:repository:77' });
+      .resolves.toMatchObject({ credentialRef: GITHUB_ACCOUNT, providerConnectionKey: 'github:repository:77',
+        outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
+      });
     expect(connectedAccounts.materialize).toHaveBeenCalledWith('github-connected-account', expect.any(Object), expect.objectContaining({ expectedAccount: GITHUB_ACCOUNT }));
   });
   it.each([
@@ -324,7 +379,8 @@ describe('GitHub Channel Actions', () => {
       recommendedTransport: 'checkpointedPull',
       overlapSafety: 'safe',
       replayContinuity: 'checkpointed',
-      outboundTextLimit: { maximum: 65_536, unit: 'utf8Bytes' },
+      recommendedMaximumObservationAgeMs: 30 * 86_400_000,
+      outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
     });
 
     expect(connectedAccounts.materialize).toHaveBeenCalledOnce();
@@ -651,13 +707,6 @@ describe('GitHub Channel Actions', () => {
   });
 
   it.each([
-    {
-      label: 'an over-limit comment',
-      body: 'x'.repeat(64 * 1024 + 1),
-      reason: 'messageTooLarge' as const,
-      createdAt: '2026-08-10T12:00:02Z',
-      updatedAt: '2026-08-10T12:00:02Z',
-    },
     {
       label: 'a comment with unsupported content',
       body: null,
@@ -1291,7 +1340,7 @@ describe('GitHub Channel Actions', () => {
         parentId: '77',
         parentLabel: 'acme/widgets',
       },
-      content: 'Thanks @octocat and @acme/team',
+      content: { text: 'Thanks @octocat and @acme/team' },
       deliveryKey: 'delivery-1',
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'suppress',
@@ -1306,7 +1355,7 @@ describe('GitHub Channel Actions', () => {
     ]);
     const body = http.request.mock.calls[1]?.[0]?.body;
     expect(JSON.parse(new TextDecoder().decode(body))).toEqual({
-      body: 'Thanks @\u200Boctocat and @\u200Bacme/team',
+      body: 'Thanks ＠octocat and ＠acme/team',
     });
   });
 
@@ -1353,7 +1402,7 @@ describe('GitHub Channel Actions', () => {
         parentId: '77',
         parentLabel: 'acme/widgets',
       },
-      content: 'The endpoint, not the comment ID, is GitHub’s reply target.',
+      content: { text: 'The endpoint, not the comment ID, is GitHub’s reply target.' },
       deliveryKey: 'delivery-unrepresentable-reply-context',
       replyContext: { replyToMessageId: '123' },
       mentionPolicy: 'suppress',
@@ -1409,7 +1458,7 @@ describe('GitHub Channel Actions', () => {
         parentId: '77',
         parentLabel: 'acme/widgets',
       },
-      content: 'A reply that must not bypass endpoint revalidation',
+      content: { text: 'A reply that must not bypass endpoint revalidation' },
       deliveryKey: 'delivery-secondary-rate-limit',
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'suppress',
@@ -1666,7 +1715,7 @@ describe('GitHub Channel Actions', () => {
         parentId: '77',
         parentLabel: 'acme/widgets',
       },
-      content: 'A reply that GitHub rejects before creating a comment',
+      content: { text: 'A reply that GitHub rejects before creating a comment' },
       deliveryKey: 'delivery-secondary-rate-limit-after-revalidation',
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'suppress',
@@ -1678,7 +1727,10 @@ describe('GitHub Channel Actions', () => {
     expect(http.request).toHaveBeenCalledTimes(2);
   });
 
-  it('splits mention-neutralized GitHub output at the native byte ceiling without splitting the suppression pair', async () => {
+  it.each([
+    ['astral text', `${'😀'.repeat(65_528)}@octocat`],
+    ['all mentions', '@'.repeat(65_536)],
+  ])('keeps mention suppression within the native code-point limit without splitting or truncation (%s)', async (_label, content) => {
     const connectedAccounts = {
       materialize: vi.fn(async () => ({
         kind: 'httpHeaders' as const,
@@ -1707,10 +1759,7 @@ describe('GitHub Channel Actions', () => {
       integrationPrincipal: { id: '99', label: 'happier-bot' },
     };
 
-    // The raw content satisfies the generic 192 KiB action schema. Formatting
-    // the final mention expands it beyond one native GitHub comment, so the
-    // provider must make two ordered comments rather than reject after custody.
-    const content = `${'x'.repeat(65_535)}@octocat`;
+    // Both bodies reach the exact native code-point limit, beyond 64 KiB UTF-8.
     await expect(deliverGithubChannelMessage({
       v: 1,
       connectionId: 'connection-1',
@@ -1726,85 +1775,29 @@ describe('GitHub Channel Actions', () => {
         parentId: '77',
         parentLabel: 'acme/widgets',
       },
-      content,
+      content: { text: content },
       deliveryKey: 'delivery-chunk-after-formatting',
       mentionPolicy: 'suppress',
       linkPreviewPolicy: 'suppress',
     }, coreContext({ connectedAccounts, http }))).resolves.toEqual({
       kind: 'delivered',
-      providerMessageIds: ['1', '2'],
+      providerMessageIds: ['1'],
     });
 
     expect(http.request.mock.calls.map(([request]) => request.url)).toEqual([
       'https://api.github.com/repos/acme/widgets/issues/1',
       'https://api.github.com/repos/acme/widgets/issues/1/comments',
-      'https://api.github.com/repos/acme/widgets/issues/1/comments',
     ]);
+    const postedBody = JSON.parse(new TextDecoder().decode(http.request.mock.calls[1]![0].body)).body;
+    expect([...postedBody].length).toBe(65_536);
+    expect(postedBody).not.toContain('@');
     expect(http.request.mock.calls.slice(1).map(([request]) => (
       JSON.parse(new TextDecoder().decode(request.body))
     ))).toEqual([
-      { body: 'x'.repeat(65_535) },
-      { body: '@\u200Boctocat' },
+      { body: content.replaceAll('@', '＠') },
     ]);
   });
 
-  it('retains accepted GitHub comment IDs when a later output chunk has a known no-effect failure', async () => {
-    const connectedAccounts = {
-      materialize: vi.fn(async () => ({
-        kind: 'httpHeaders' as const,
-        headers: { Authorization: 'Bearer exact-account-token' },
-      })),
-    };
-    let deliveredCommentCount = 0;
-    const http = {
-      request: vi.fn(async (request: GithubHttpRequestInput) => (
-        request.url === 'https://api.github.com/repos/acme/widgets/issues/1'
-          ? jsonResponse({ id: 5, number: 1, title: 'Issue title' })
-          : request.url === 'https://api.github.com/repos/acme/widgets/issues/1/comments'
-            ? ++deliveredCommentCount === 1
-              ? jsonResponse({ id: '700' }, 201)
-              : jsonResponse({ message: 'Validation Failed' }, 422)
-            : Promise.reject(new Error(`Unexpected GitHub request: ${request.url}`))
-      )),
-    };
-    const providerConfig = {
-      v: 1,
-      repository: {
-        v: 1,
-        repositoryId: '77',
-        owner: 'acme',
-        name: 'widgets',
-        nameWithOwner: 'acme/widgets',
-      },
-      integrationPrincipal: { id: '99', label: 'happier-bot' },
-    };
-
-    await expect(deliverGithubChannelMessage({
-      v: 1,
-      connectionId: 'connection-1',
-      providerConnectionKey: 'github:repository:77',
-      providerConfigVersion: 1,
-      providerConfig,
-      credentialRef: GITHUB_ACCOUNT,
-      endpoint: {
-        kind: 'githubIssue',
-        audience: 'shared',
-        id: 'github:repository:77:issue:5:number:1',
-        label: '#1 Issue title',
-        parentId: '77',
-        parentLabel: 'acme/widgets',
-      },
-      content: `${'x'.repeat(65_535)}@octocat`,
-      deliveryKey: 'delivery-partial-after-formatting',
-      mentionPolicy: 'suppress',
-      linkPreviewPolicy: 'suppress',
-    }, coreContext({ connectedAccounts, http }))).resolves.toEqual({
-      kind: 'partial',
-      providerMessageIds: ['700'],
-      failedChunk: 1,
-      retrySafe: false,
-    });
-  });
 });
 
 describe('GitHub content-creation 422 classification', () => {

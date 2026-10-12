@@ -3,10 +3,17 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyGithubRepositoryEvents,
   createGithubRepositoryEventsBaseline,
+  parseGithubRepositoryEventsCursor,
   reuseGithubRepositoryEventsCheckpointOnNotModified,
 } from './githubRepositoryEventsCursor.js';
 
 describe('GitHub repository-events checkpoint', () => {
+  it('reads a retained cursor with unknown fields while preserving its ordering boundary', () => {
+    const cursor = { v: 1, observationStartsAtMs: 1_000, observedAtMs: 2_000, seenEventIds: ['1'], etag: 'old' };
+    expect(parseGithubRepositoryEventsCursor({ ...cursor, retiredCursorField: true })).toEqual(cursor);
+    expect(() => parseGithubRepositoryEventsCursor({ ...cursor, observedAtMs: 'wrong', retiredCursorField: true })).toThrow(RangeError);
+  });
+
   it('baselines without importing history, then emits new supported events oldest first', () => {
     const baseline = createGithubRepositoryEventsBaseline({
       observationStartsAtMs: 1_000,

@@ -177,6 +177,7 @@ export function toTriageSnapshot(
     // publishes no such line: the body, its comments and its activity are live detail
     // materializations and never ride a list result.
     scopeLabel,
+    ...(snapshot.scopeDisplayName === undefined ? {} : { scopeDisplayName: snapshot.scopeDisplayName }),
     ...(snapshot.authorLabel === undefined ? {} : { authorLabel: snapshot.authorLabel }),
     ...(snapshot.designation === undefined ? {} : { designation: snapshot.designation }),
     ...(isEmittableInstant(snapshot.createdAtMs) ? { createdAtMs: snapshot.createdAtMs } : {}),

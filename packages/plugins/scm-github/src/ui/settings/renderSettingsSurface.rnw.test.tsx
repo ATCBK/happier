@@ -73,6 +73,58 @@ afterEach(async () => {
 });
 
 describe('the mounted GitHub PRs & Issues settings page', () => {
+  it('edits the retained exact Account scope when GitHub discovery cannot reach that login', async () => {
+    const sourceInstanceId = '11111111-1111-4111-8111-111111111111';
+    const binding = {
+      purpose: GITHUB_CONNECTED_ACCOUNT_PURPOSE,
+      account: { service: GITHUB_CONNECTED_ACCOUNT_SERVICE, accountId: 'retained-account' },
+    };
+    const configured = {
+      v: 1 as const, binding, localInstanceKey: 'github.com',
+      configuration: { v: 1 as const, token: JSON.stringify({ v: 1, scope: { kind: 'account' } }) },
+      locator: { v: 1 as const, displayLabel: 'Retained login' },
+      instance: { source: { pluginId: GITHUB_PLUGIN_ID, localId: 'github-forge' }, sourceInstanceId },
+    };
+    const administrations: unknown[] = [];
+    const page = await mountSettings(async ({ action, input }): Promise<JsonValue> => {
+      const ref = action as Readonly<{ localId?: string }>;
+      if (ref.localId === GITHUB_TRIAGE_ACTION_IDS_V1.listInstances) return {
+        kind: 'complete', candidates: [],
+        failures: [{ binding, failure: { class: 'authentication', code: 'github_authentication_unavailable' } }],
+      };
+      if (ref.localId === TRIAGE_SOURCES_READ_CONFIGURED_ACTION_REF_V1.localId) return {
+        kind: 'read', status: 'complete', instances: [{ v: 1, lifecycle: 'active', configured }],
+      };
+      const administration = TriageSourceAdministrationActionInputV1Schema.parse(input);
+      if (administration.kind !== 'reconfigure') throw new Error('Expected retained source Update');
+      administrations.push(administration);
+      return { kind: 'reconfigured', sourceInstanceId };
+    });
+    const press = async (name: string, role: 'button' | 'radio' = 'button') => {
+      await act(async () => { await page.press(await page.getByRole(role, { name })); });
+    };
+    await press('Update Retained login from the provider');
+    expect(administrations).toEqual([]);
+    await press('Repository', 'radio');
+    const repository = document.querySelector<HTMLInputElement>('input[aria-label="Repository"]');
+    if (repository === null) throw new Error('Repository field is absent');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(repository, 'happier-dev/happier');
+      repository.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await press('Save scope');
+    expect(administrations).toEqual([{
+      v: 1, kind: 'reconfigure', sourceInstanceId,
+      draft: {
+        v: 1, binding, localInstanceKey: configured.localInstanceKey, keyStability: 'locatorDerived',
+        locator: configured.locator,
+        configuration: { v: 1, token: JSON.stringify({ v: 1, scope: { kind: 'repository', repositoryKey: 'happier-dev/happier' } }) },
+      },
+    }]);
+    await press('Update Retained login from the provider');
+    await expect(page.getByRole('textbox', { label: 'Repository', value: 'happier-dev/happier' })).resolves.toBeDefined();
+  });
+
   it('reconfigures the exact native instance to an explicitly chosen repository through the shared administration Action', async () => {
     const sourceInstanceId = '11111111-1111-4111-8111-111111111111';
     const draft = TriageSourceInstanceDraftV1Schema.parse({

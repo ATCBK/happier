@@ -1,14 +1,27 @@
-export type GithubRepositoryEventsCursorV1 = Readonly<{
-  v: 1;
+import {
+  createProtocolStoredReadSchema,
+  defineProtocolArray,
+  defineProtocolLiteral,
+  defineProtocolNumber,
+  defineProtocolObject,
+  defineProtocolString,
+} from '@happier-dev/plugin-sdk/protocol';
+
+const GithubRepositoryEventsCursorV1Schema = defineProtocolObject({
+  v: defineProtocolLiteral(1),
   /**
    * The immutable point at which this source began observing. It is not a
    * polling watermark: GitHub can expose a pre-existing event late.
    */
-  observationStartsAtMs: number;
-  observedAtMs: number;
-  seenEventIds: readonly string[];
-  etag: string | null;
-}>;
+  observationStartsAtMs: defineProtocolNumber({ integer: true, minimum: 0 }),
+  observedAtMs: defineProtocolNumber({ integer: true, minimum: 0 }),
+  seenEventIds: defineProtocolArray(defineProtocolString()),
+  etag: defineProtocolString().nullable(),
+}, { policy: 'closed' });
+
+export type GithubRepositoryEventsCursorV1 = ReturnType<typeof GithubRepositoryEventsCursorV1Schema.parse>;
+
+const storedRepositoryEventsCursor = createProtocolStoredReadSchema(GithubRepositoryEventsCursorV1Schema);
 
 export type GithubRepositoryTimelineEntryV1<TObservation> = Readonly<{
   eventId: string;
@@ -26,10 +39,6 @@ export type GithubRepositoryEventsClassificationV1<TObservation> =
 
 const GITHUB_REPOSITORY_EVENT_TIMELINE_LIMIT = 300;
 const GITHUB_REPOSITORY_EVENTS_RETENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000;
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function validateTimestamp(value: number): number {
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -55,27 +64,22 @@ function validateCursor(cursor: GithubRepositoryEventsCursorV1): void {
 
 /** Parses the provider-owned cursor before a background observer lends it any cursor semantics. */
 export function parseGithubRepositoryEventsCursor(value: unknown): GithubRepositoryEventsCursorV1 {
-  if (!isRecord(value)
-    || Object.keys(value).length !== 5
-    || value.v !== 1
-    || typeof value.observationStartsAtMs !== 'number'
-    || typeof value.observedAtMs !== 'number'
-    || !Array.isArray(value.seenEventIds)
-    || value.seenEventIds.some((eventId) => typeof eventId !== 'string')
-    || (value.etag !== null && typeof value.etag !== 'string')) {
+  const parsed = storedRepositoryEventsCursor.safeParse(value);
+  if (!parsed.success) {
     throw new RangeError('GitHub repository event checkpoint must use strict V1 cursor fields');
   }
-  const seenEventIds = value.seenEventIds.map((eventId) => validateEventId(eventId));
+  const current = parsed.data;
+  const seenEventIds = current.seenEventIds.map((eventId) => validateEventId(eventId));
   if (seenEventIds.length > GITHUB_REPOSITORY_EVENT_TIMELINE_LIMIT
     || new Set(seenEventIds).size !== seenEventIds.length) {
     throw new RangeError('GitHub repository event checkpoint has an invalid seen-event set');
   }
   const cursor = Object.freeze({
     v: 1 as const,
-    observationStartsAtMs: validateTimestamp(value.observationStartsAtMs),
-    observedAtMs: validateTimestamp(value.observedAtMs),
+    observationStartsAtMs: validateTimestamp(current.observationStartsAtMs),
+    observedAtMs: validateTimestamp(current.observedAtMs),
     seenEventIds: Object.freeze(seenEventIds),
-    etag: value.etag,
+    etag: current.etag,
   });
   validateCursor(cursor);
   return cursor;

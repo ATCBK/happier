@@ -4,6 +4,7 @@ import { isPluginActionApprovalRequestCreated } from '@happier-dev/plugin-sdk/ac
 import type { PluginActionInputById, PluginActionResultById } from '@happier-dev/plugin-sdk/actions';
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
 import type { ConnectedAccountRef } from '@happier-dev/plugin-sdk/connected-accounts';
+import { createProtocolStoredReadSchema, defineProtocolLiteral, defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 import {
   isAutomationEventSourcesListPageProgressingV1,
   projectPluginEventAdmissionSourceStatusV1,
@@ -76,6 +77,12 @@ import { projectGithubChecksSourceEvents, githubChecksSourceInstanceId, isGithub
 import { readGithubPullRequestChecks } from '../triage/checks.js';
 
 const REPOSITORY_EVENTS_ENDPOINT_KIND = 'repositoryEvents' as const;
+const storedRepositoryEventsContinuitySchema = createProtocolStoredReadSchema(defineProtocolObject({
+  v: defineProtocolLiteral(1),
+  endpointKind: defineProtocolLiteral(REPOSITORY_EVENTS_ENDPOINT_KIND),
+  repositoryId: defineProtocolString(),
+  historyGap: defineProtocolLiteral(true).optional(),
+}, { policy: 'closed' }));
 const REPOSITORY_EVENTS_PAGE_SIZE = 100;
 const DEFAULT_SOURCE_POLL_INTERVAL_MS = 60_000;
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 60_000;
@@ -367,16 +374,9 @@ function parseRepositoryEventsContinuity(
   value: unknown,
   repositoryId: string,
 ): Readonly<{ historyGap: boolean }> | null {
-  if (!isRecord(value)
-    || Object.keys(value).some((key) => key !== 'v'
-      && key !== 'endpointKind'
-      && key !== 'repositoryId'
-      && key !== 'historyGap')
-    || value.v !== 1
-    || value.endpointKind !== REPOSITORY_EVENTS_ENDPOINT_KIND
-    || value.repositoryId !== repositoryId
-    || (value.historyGap !== undefined && value.historyGap !== true)) return null;
-  return Object.freeze({ historyGap: value.historyGap === true });
+  const parsed = storedRepositoryEventsContinuitySchema.safeParse(value);
+  if (!parsed.success || parsed.data.repositoryId !== repositoryId) return null;
+  return Object.freeze({ historyGap: parsed.data.historyGap === true });
 }
 
 function parseGithubAutomationRepositoryEventSourceConfig(
@@ -1861,10 +1861,8 @@ async function runGithubAutomationSourceAttempt(input: Readonly<{
 function nextCycleAt(input: Readonly<{
   state: GithubAutomationObserverStateV1;
   candidates: readonly GithubAutomationObservedSourceCandidateV1[];
-  now: number;
-  reconciliationIntervalMs: number;
 }>): number {
-  let next = addDelay(input.now, input.reconciliationIntervalMs);
+  let next = Number.POSITIVE_INFINITY;
   for (const candidate of input.candidates) {
     const eligibleAt = input.state.nextEligibleAtBySource.get(sourceScheduleKey(candidate));
     if (eligibleAt !== undefined && eligibleAt < next) next = eligibleAt;
@@ -2015,8 +2013,6 @@ export function createGithubAutomationEventCheckpointedPullObserver(
     return nextCycleAt({
       state,
       candidates: adopted.candidates,
-      now: readObserverNow(now),
-      reconciliationIntervalMs,
     });
   };
 
@@ -2103,25 +2099,52 @@ export function createGithubAutomationEventCheckpointedPullObserver(
 
   return Object.freeze({
     async run(context: BackgroundServiceContext): Promise<void> {
-      while (!context.signal.aborted) {
-        let wakeAt: number;
-        try {
-          wakeAt = await runCycleInternal(context);
-        } catch (error) {
+      let invalidated = false;
+      let wake: (() => void) | undefined;
+      const notify = () => { invalidated = true; wake?.(); };
+      // Subscribe before the first catalog read, including invalidations that
+      // arrive during pagination. This is a wake, never catalog authority.
+      const subscription = context.services.events.host.subscribe({
+        eventId: '@happier/automation/event-sources-invalidated',
+        scope: { kind: 'account' },
+      }, notify);
+      try {
+        while (!context.signal.aborted) {
+          invalidated = false;
+          let wakeAt: number;
+          try {
+            wakeAt = await runCycleInternal(context);
+          } catch (error) {
+            if (context.signal.aborted) return;
+            throw error;
+          }
           if (context.signal.aborted) return;
-          throw error;
+          if (invalidated) continue;
+          // Only provider eligibility or a failed/incomplete catalog read can
+          // set a deadline. An empty healthy catalog has no work to poll.
+          await new Promise<void>((resolve, reject) => {
+            const waiting = new AbortController();
+            const done = () => {
+              waiting.abort();
+              context.signal.removeEventListener('abort', done);
+              wake = undefined;
+              resolve();
+            };
+            wake = done;
+            context.signal.addEventListener('abort', done, { once: true });
+            if (Number.isFinite(wakeAt)) {
+              void sleep(Math.max(1, wakeAt - readObserverNow(now)), waiting.signal).then(done, error => {
+                if (waiting.signal.aborted) return;
+                context.signal.removeEventListener('abort', done);
+                wake = undefined;
+                reject(error);
+              });
+            }
+            if (context.signal.aborted || invalidated) done();
+          });
         }
-        if (context.signal.aborted) return;
-        const delayMs = Math.min(
-          MAX_PROVIDER_WAIT_MS,
-          Math.max(1, wakeAt - readObserverNow(now)),
-        );
-        try {
-          await sleep(delayMs, context.signal);
-        } catch (error) {
-          if (context.signal.aborted) return;
-          throw error;
-        }
+      } finally {
+        await subscription.dispose();
       }
     },
     async runCycle(context: BackgroundServiceContext): Promise<void> {

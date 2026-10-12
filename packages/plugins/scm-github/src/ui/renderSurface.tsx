@@ -37,7 +37,6 @@
  */
 
 import * as React from 'react';
-import { Animated } from 'react-native';
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
 import {
   createReviewCommentLinkedIssueIdV1,
@@ -61,6 +60,7 @@ import {
   LoadingState,
   Markdown,
   Metadata,
+  MotionFeedback,
   Row,
   Screen,
   ScrollArea,
@@ -92,6 +92,7 @@ import {
   TriageDetailStory,
   TriageDetailChangeSummary,
   TriageDetailChecks,
+  TriageStatusRow,
   TriageActivityTimeline,
   useTriagePostMutationCompletion,
   type TriageActivityContinuationV1,
@@ -675,47 +676,14 @@ function isGithubMergedState(
 function GithubMergeSignature({ state }: Readonly<{
   state: GithubMergeSignatureStateV1;
 }>): React.ReactElement {
-  const { reducedMotion } = useSurfaceContext();
-  const progress = React.useRef(new Animated.Value(1)).current;
-  const previousSequence = React.useRef(state.celebrationSequence);
-
-  React.useEffect(() => {
-    if (state.celebrationSequence === previousSequence.current || reducedMotion) {
-      previousSequence.current = state.celebrationSequence;
-      progress.setValue(1);
-      return undefined;
-    }
-    previousSequence.current = state.celebrationSequence;
-    progress.setValue(0);
-    const motion = Animated.timing(progress, {
-      toValue: 1,
-      duration: 480,
-      useNativeDriver: true,
-    });
-    motion.start();
-    return () => motion.stop();
-  }, [progress, reducedMotion, state.celebrationSequence]);
-
   return (
-    <Animated.View
-      aria-hidden
-      style={{
-        alignSelf: 'flex-start',
-        opacity: progress,
-        transform: [{
-          scale: progress.interpolate({
-            inputRange: [0, 0.55, 1],
-            outputRange: [0.82, 1.08, 1],
-          }),
-        }],
-      }}
-    >
+    <MotionFeedback trigger={state.celebrationSequence} decorative style={{ alignSelf: 'flex-start' }}>
       <Icon
         name={state.terminal ? 'change-complete' : 'change-open'}
         tone={state.terminal ? 'neutral' : 'secondary'}
         testID={state.terminal ? 'github-merge-signature-complete' : 'github-merge-signature-open'}
       />
-    </Animated.View>
+    </MotionFeedback>
   );
 }
 
@@ -786,7 +754,7 @@ function MergeWrite({
     // honest to pin it to, so the control is absent rather than present and broken.
     return (
       <Text
-        variant="caption"
+        variant="micro"
         tone="neutral"
         valueKey="plugins.github.ui.mutations.mergeHeadUnknown"
         fallback={'This observation carries no head commit, so this pull request cannot be'
@@ -811,7 +779,7 @@ function MergeWrite({
           disabled
           onPress={() => {}}
         />
-        <Text variant="caption" tone="neutral" value={reason} />
+        <Text variant="micro" tone="neutral" value={reason} />
       </Stack>
     );
   }
@@ -837,7 +805,7 @@ function MergeWrite({
         ? null
         : (
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.github.ui.mutations.mergeHead"
             fallback="Merges {revision}, the head this observation carries. If GitHub has moved on, the merge is refused instead."
@@ -1552,7 +1520,7 @@ function IssueWrites({
   return (
     <Stack gap="medium">
       <Text
-        variant="caption"
+        variant="micro"
         tone="neutral"
         valueKey="plugins.github.ui.mutations.issueDescription"
         fallback="These change the issue on GitHub itself. Each one asks you to confirm before anything is written."
@@ -1623,7 +1591,7 @@ function UnavailableOperationWrite({
         disabled
         onPress={() => {}}
       />
-      <Text variant="caption" tone="neutral" value={reason} />
+      <Text variant="micro" tone="neutral" value={reason} />
     </Stack>
   );
 }
@@ -1716,7 +1684,7 @@ function WritesSection({
           : (
           <Stack gap="medium">
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.github.ui.mutations.description"
               fallback="These change the pull request on GitHub itself. Each one asks you to confirm before anything is written."
@@ -1916,10 +1884,10 @@ function GithubOverviewMarkdown({ body }: Readonly<{ body: string | null | undef
     [body],
   );
   if (body === undefined) {
-    return <Text variant="caption" tone="neutral" value="Description unavailable" />;
+    return <Text variant="micro" tone="neutral" value="Description unavailable" />;
   }
   if (body === null || body.length === 0) {
-    return <Text variant="caption" tone="neutral" value="No description" />;
+    return <Text variant="micro" tone="neutral" value="No description" />;
   }
   return (
     <Stack gap="small">
@@ -1928,7 +1896,7 @@ function GithubOverviewMarkdown({ body }: Readonly<{ body: string | null | undef
         : (
           <Stack key={`attachment:${index}:${segment.url}`} gap="xsmall">
             <Text
-              variant="caption"
+              variant="micro"
               tone="secondary"
               value={segment.media === 'video' ? 'Video attachment' : 'Attachment'}
             />
@@ -2035,7 +2003,7 @@ function OverviewPanel({
         />
         <GithubOverviewReadFailure controller={overview} />
         <Text
-          variant="title"
+          variant="heading"
           value={exact === null ? input.observation.snapshot.title : exact.title ?? 'Unavailable'}
         />
         <Status tone={githubOverviewStatusToneV1(statusLabel)} label={statusLabel} />
@@ -2046,7 +2014,7 @@ function OverviewPanel({
         <Stack gap="small">
           <Text variant="label" value="Description" />
           {exact === null && overview.failure === null
-            ? <Text variant="caption" tone="neutral" value="Refresh to read the current description." />
+            ? <Text variant="micro" tone="neutral" value="Refresh to read the current description." />
             : <GithubOverviewMarkdown body={exact?.body} />}
         </Stack>
         {webUrl === undefined ? null : (
@@ -2088,7 +2056,7 @@ function OverviewPanel({
         {pendingFields.length === 0 ? null : (
           <Stack gap="small">
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.github.ui.pendingPanels.description"
               fallback="Answered in the panels beside this one, not on the list row:"
@@ -2226,7 +2194,7 @@ function useGithubTimelineStream(input: TriageDetailSurfaceInputV1): GithubActiv
     summary: (
       <Stack gap="small">
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey={state.omittedRowCount === 0
             ? 'plugins.github.ui.eventsRead'
@@ -2236,7 +2204,7 @@ function useGithubTimelineStream(input: TriageDetailSurfaceInputV1): GithubActiv
             : '{count} event(s) read. {unreadable} row(s) on the pages read could not be understood.'}
           values={{ count: state.rows.length, unreadable: state.omittedRowCount }}
         />
-        {incomplete === null ? null : <Text variant="caption" tone="neutral">{incomplete}</Text>}
+        {incomplete === null ? null : <Text variant="micro" tone="neutral">{incomplete}</Text>}
       </Stack>
     ),
     refresh: controller.refresh,
@@ -2496,7 +2464,7 @@ function FilesPanel({
       footer={(
         <Stack gap="small">
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey={state.omittedRowCount === 0
               ? 'plugins.github.ui.filesRead'
@@ -2656,7 +2624,7 @@ function ChecksBody({
             )}
           {rollup.length === 0 ? null : <Metadata title="At this head" titleKey="plugins.github.ui.atHead" entries={rollup} />}
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.github.ui.readAgainstRevision"
             fallback="Read against {revision}."
@@ -2690,7 +2658,7 @@ function ChecksBody({
             ? null
             : (
               <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey="plugins.github.ui.checksNotListed"
                 fallback="{count} further check(s) are not listed."
@@ -2706,15 +2674,15 @@ function ChecksBody({
         </Stack>
       )}
       renderItem={(row) => (
-        <Item
-          title={row.name}
-          subtitle={checkStatusText(text, row)}
+        <TriageStatusRow
+          presentation="list"
+          name={row.name}
+          status={checkStatusText(text, row)}
           tone={checkTone(row)}
           {...(row.completedAtMs === undefined
             ? {}
             : { detail: formatTimestamp(locale, row.completedAtMs, 'relative', nowMs) })}
-          accessoryOutsidePressable
-          accessory={(
+          actions={(
             <Row gap="small">
               <Action.Copy
                 value={row.name}
@@ -2845,11 +2813,11 @@ function ThreadReplyRow({
   return (
     <Stack gap="small">
       <Row gap="small">
-        <Text variant="caption">{author}</Text>
+        <Text variant="micro">{author}</Text>
         {reply.createdAtMs === null
           ? null
           : (
-            <Text variant="caption" tone="neutral">
+            <Text variant="micro" tone="neutral">
               {formatTimestamp(locale, reply.createdAtMs, 'relative', nowMs)}
             </Text>
           )}
@@ -2870,7 +2838,7 @@ function ThreadReplyRow({
       {reply.body === ''
         ? (
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.github.ui.commentNoText"
             fallback="This comment carries no text."
@@ -2894,7 +2862,7 @@ function useGithubCommentsStream(input: TriageDetailSurfaceInputV1): GithubActiv
       : null,
     header: (
       <Stack gap="small">
-        <Text variant="caption" tone="neutral">{commentScopeDisclosure(text)}</Text>
+        <Text variant="micro" tone="neutral">{commentScopeDisclosure(text)}</Text>
         <PageFailureBanner state={state} />
       </Stack>
     ),
@@ -2920,7 +2888,7 @@ function useGithubCommentsStream(input: TriageDetailSurfaceInputV1): GithubActiv
     summary: (
       <Stack gap="small">
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey={state.omittedRowCount === 0
             ? 'plugins.github.ui.commentsRead'
@@ -2933,14 +2901,14 @@ function useGithubCommentsStream(input: TriageDetailSurfaceInputV1): GithubActiv
         {state.projectionTruncated
           ? (
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.github.ui.commentsShortened.description"
               fallback="Some comments were shortened. Open the entry on GitHub to read them in full."
             />
           )
           : null}
-        {incomplete === null ? null : <Text variant="caption" tone="neutral">{incomplete}</Text>}
+        {incomplete === null ? null : <Text variant="micro" tone="neutral">{incomplete}</Text>}
       </Stack>
     ),
     refresh: controller.refresh,
@@ -3181,7 +3149,7 @@ function ThreadFeedbackFinding({
         {mobile
           ? (
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.github.ui.threadReplyCount"
               fallback="{count} replies"
@@ -3354,7 +3322,7 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
           )
           : (
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.github.ui.reviewUnresolved"
               fallback={'GitHub\'s current reviews read did not report a review decision, so'
@@ -3363,7 +3331,7 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
           )}
         <ReviewPeople people={view.people} locale={locale} nowMs={nowMs} />
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.github.ui.feedbackScope"
           fallback={'This keeps issue comments, review bodies, outstanding requests, line'
@@ -3421,7 +3389,7 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
     summary: (
       <Stack gap="small">
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey={conversation.state.omittedRowCount === 0
             ? 'plugins.github.ui.feedbackRead'
@@ -3438,7 +3406,7 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
         {conversation.state.projectionTruncated
           ? (
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.github.ui.commentsShortened.description"
               fallback="Some comments were shortened. Open the entry on GitHub to read them in full."
@@ -3447,7 +3415,7 @@ function useGithubFeedbackStream(context: GithubFeedbackWriteContextV1): GithubA
           : null}
         {commentsIncomplete === null
           ? null
-          : <Text variant="caption" tone="neutral">{commentsIncomplete}</Text>}
+          : <Text variant="micro" tone="neutral">{commentsIncomplete}</Text>}
       </Stack>
     ),
     refresh: () => {
@@ -3636,11 +3604,11 @@ function GithubChangeStep({ input, overview }: Readonly<{
       {pullRequest?.headBranch === undefined || pullRequest.baseBranch === undefined ? null
         : <Text variant="code" tone="secondary" value={`${pullRequest.headBranch} → ${pullRequest.baseBranch}`} />}
       {files.state.kind === 'loading' || files.state.kind === 'idle'
-        ? <Text variant="caption" tone="secondary" valueKey="plugins.github.ui.readingFiles" fallback="Reading the changed files from GitHub" />
+        ? <Text variant="micro" tone="secondary" valueKey="plugins.github.ui.readingFiles" fallback="Reading the changed files from GitHub" />
         : null}
       {files.state.failure === null ? null : (
         <Text
-          variant="caption"
+          variant="micro"
           tone="warning"
           value={failureDescription(files.state.failure, text('plugins.github.ui.readFailed', 'GitHub could not complete this read.'))}
         />
@@ -3692,7 +3660,7 @@ function GithubStoryFacts({ overview }: Readonly<{ overview: GithubOverviewValue
   return (
     <Stack gap="small">
       {labels.length === 0 ? null : <Row gap="small" wrap>{labels.map((label) => <Badge key={label} value={label} />)}</Row>}
-      {parts.length === 0 ? null : <Text variant="caption" tone="secondary" value={parts.join(' · ')} />}
+      {parts.length === 0 ? null : <Text variant="micro" tone="secondary" value={parts.join(' · ')} />}
     </Stack>
   );
 }
@@ -3727,7 +3695,7 @@ function GithubStoryOverview({
     <TriageDetailStory kind={kindId === 'issue' ? 'report' : 'ask'}
         changes={kindId === 'pull-request' ? <GithubChangeStep input={input} overview={exact} /> : null}
         checks={kindId === 'pull-request' ? <GithubChecksStep input={input} /> : null}
-        trailing={byline.length === 0 ? undefined : <Text variant="caption" tone="secondary" value={byline.join(' · ')} />}
+        trailing={byline.length === 0 ? undefined : <Text variant="micro" tone="secondary" value={byline.join(' · ')} />}
       >
         <GithubOverviewReadFailure controller={overview} />
         {overview.failure === null ? null : (
@@ -3738,7 +3706,7 @@ function GithubStoryOverview({
           />
         )}
         {ask === undefined || ask === null || ask.length === 0
-          ? <Text variant="caption" tone="secondary" valueKey="plugins.github.ui.story.noDescription" fallback="No description." />
+          ? <Text variant="micro" tone="secondary" valueKey="plugins.github.ui.story.noDescription" fallback="No description." />
           : <GithubOverviewMarkdown body={ask} />}
         {exact === null ? null : <GithubStoryFacts overview={exact} />}
     </TriageDetailStory>

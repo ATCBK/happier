@@ -11,9 +11,10 @@ import {
 import {
   GITHUB_PLUGIN_ID,
 } from './githubProviderContracts.js';
+import { GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION_ID, GITHUB_COLLECTION_MIGRATIONS } from './githubCollectionMigrations.js';
+export { GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION_ID } from './githubCollectionMigrations.js';
 
-/** Provider-owned Account Collection for repository-source GitHub Event checkpoints. */
-export const GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION_ID = 'automation-event-checkpoints-v1';
+/** Provider-owned checkpoint payload contract; independent of the Collection schema version. */
 export const GITHUB_AUTOMATION_EVENT_CHECKPOINT_CONTRACT_VERSION = 1;
 export const GITHUB_AUTOMATION_EVENT_CHECKPOINT_CURSOR_AND_CONTINUITY_MAX_UTF8_BYTES = 64 * 1024;
 
@@ -305,7 +306,8 @@ export function createGithubAutomationEventCheckpointRowV1(input: Readonly<{
  */
 export const GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION = defineAccountCollection({
   id: GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION_ID,
-  schemaVersion: 1,
+  schemaVersion: 2,
+  readableSchemaVersions: [1],
   schema: {
     type: 'object',
     additionalProperties: false,
@@ -361,5 +363,8 @@ export const GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION = defineAccountCollec
   // Event and selector IDs that address this row are host-known plaintext
   // facts, so an Account encryption-mode change cannot move it.
   identityFields: [],
+  // The Event-id enum widened without changing the checkpoint payload or address.
+  migrations: GITHUB_COLLECTION_MIGRATIONS[GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION_ID],
+  migrationArtifact: { artifactId: 'github-collection-migrations', exportName: 'collectionMigrations' },
   quota: { maxRowEncodedBytes: MAX_CHECKPOINT_ROW_ENCODED_BYTES },
 });

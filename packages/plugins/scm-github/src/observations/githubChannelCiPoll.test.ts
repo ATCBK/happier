@@ -15,6 +15,24 @@ function response(body: unknown, status = 200) {
 }
 
 describe('GitHub Channel CI observations', () => {
+  it.each([['open', false, 'open'], ['closed', true, 'merged'], ['closed', false, 'closed'], ['unexpected', false, 'unknown']] as const)(
+    'refreshes exact PR state without comments or a CI subscription: %s', async (state, merged, expected) => {
+      const client = { requestWithoutFollowingRedirects: async () => { throw new Error('No redirects'); }, request: async ({ url }: Parameters<GithubApiClientV1['request']>[0]) => {
+        if (url.includes('/issues/comments')) return response([]);
+        if (url.endsWith('/issues/1')) return response({ id: 5, number: 1, pull_request: {} });
+        if (url.endsWith('/pulls/1')) return response({ id: 5, number: 1, state, merged, draft: true });
+        throw new Error(`Unexpected request ${url}`);
+      } } satisfies GithubApiClientV1;
+      const result = await pollGithubIssueCommentsForChannels({ client, config, checkpoint, limit: 10,
+        connectionId: 'connection-1', providerConnectionKey: 'github:repository:77',
+        pullRequestEndpoints: [endpoint], nowMs: 1000, signal: new AbortController().signal });
+      expect(result).toMatchObject({ kind: 'batch', pullRequestEndpoints: [{ ...endpoint,
+        pullRequest: { repository: 'acme/widgets', number: 1 },
+        pullRequestState: { state: expected, observedAt: 1000 },
+      }] });
+      expect(result.kind === 'batch' ? result.observations : []).toEqual([]);
+    });
+
   it.each([
     ['writer', 'write', 99, true, true, '2026-08-10T11:59:59Z'], ['reader', 'read', 99, false, true, '2026-08-10T11:59:59Z'],
     ['unknown', 'unexpected', 99, null, true, '2026-08-10T11:59:59Z'], ['identity mismatch', 'write', 123, null, true, '2026-08-10T11:59:59Z'],
@@ -28,7 +46,7 @@ describe('GitHub Channel CI observations', () => {
       urls.push(input.url);
       if (input.url.includes('/issues/comments')) return response([]);
       if (input.url.endsWith('/issues/1')) return response({ id: 5, number: 1, pull_request: {} });
-      if (input.url.endsWith('/pulls/1')) return response({ head: { sha: 'abc123' } });
+      if (input.url.endsWith('/pulls/1')) return response({ number: 1, head: { sha: 'abc123' } });
       if (input.url.endsWith('/permission')) return response({ permission, user: { id, login: 'happier-bot' } });
       if (input.url.endsWith('/graphql')) return response({ data: { repository: { pullRequest: {
         headRefOid: 'abc123', commits: { nodes: [{ commit: { oid: 'abc123', statusCheckRollup: {
@@ -68,7 +86,7 @@ describe('GitHub Channel CI observations', () => {
     const client = { requestWithoutFollowingRedirects: async () => { throw new Error('No redirect reads expected'); }, request: async (input: Parameters<GithubApiClientV1['request']>[0]) => {
       if (input.url.includes('/issues/comments')) return response([]);
       if (input.url.endsWith('/issues/1')) return response({ id: 5, number: 1, pull_request: {} });
-      if (input.url.endsWith('/pulls/1')) return response({ head: { sha: 'abc123' } });
+      if (input.url.endsWith('/pulls/1')) return response({ number: 1, head: { sha: 'abc123' } });
       if (input.url.endsWith('/graphql')) return response({ data: { repository: { pullRequest: {
         headRefOid: 'abc123', commits: { nodes: [{ commit: { oid: 'abc123', statusCheckRollup: {
           contexts: { nodes: [{ __typename: 'CheckRun', id: 'check-1', name: 'Tests', status: 'COMPLETED',

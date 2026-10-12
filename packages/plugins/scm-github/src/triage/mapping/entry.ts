@@ -337,6 +337,7 @@ export function projectGithubEntry(
     view.repositoryLabel,
     MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
   );
+  const scopeDisplayName = projectTriageDisplayTextV1(view.name, MAX_TRIAGE_TEXT_UTF8_BYTES_V1);
   const state = view.kindId === 'pull-request'
     ? mapGithubPullRequestState(view.state)
     : mapGithubIssueState(view.state);
@@ -369,6 +370,7 @@ export function projectGithubEntry(
       kindId: view.kindId,
       title: title.value,
       scopeLabel: scopeLabel.value,
+      ...(scopeDisplayName.value === '' ? {} : { scopeDisplayName: scopeDisplayName.value }),
       ...(author === null || author.value === '' ? {} : { authorLabel: author.value }),
       ...(designation.value === '' ? {} : { designation: designation.value }),
       webUrl: locator.webUrl,
@@ -378,7 +380,7 @@ export function projectGithubEntry(
       nativeRevision: view.nativeRevision,
       state,
       rowFacts: facts.rowFacts,
-      projectionTruncated: title.truncated || scopeLabel.truncated || author?.truncated === true
+      projectionTruncated: title.truncated || scopeLabel.truncated || scopeDisplayName.truncated || author?.truncated === true
         || designation.truncated || facts.truncated,
     }),
   });

@@ -7,6 +7,7 @@ import { createReviewCommentLinkedIssueIdV1 } from '@happier-dev/plugin-sdk/revi
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
+import { HAPPIER_MOTION_V1 } from '@happier-dev/plugin-ui/components';
 import { TriagePostMutationCompletionProvider } from '@happier-dev/triage-sources/ui';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -489,7 +490,9 @@ describe('the mounted GitHub write controls', () => {
       await detail.press(await detail.getByRole('button', { name: 'Merge pull request' }));
     });
 
-    expect(animation).toHaveBeenCalled();
+    expect(animation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      duration: HAPPIER_MOTION_V1.slowMs,
+    }));
     expect((await detail.getByRole('button', { name: 'Merge pull request' })).state?.disabled)
       .toBe(true);
   });

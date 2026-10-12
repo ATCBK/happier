@@ -65,6 +65,13 @@ describe('GitHub triage entry mapping', () => {
       entryId: '1284',
     });
     expect(projection.localRef.entryId).not.toBe(String(GITHUB_SEARCH_PULL_REQUEST_ITEM.id));
+    const snapshot = TriageSourceEntrySnapshotV1Schema.parse(
+      toTriageSnapshot(projection.snapshot, projection.locator, projection.localRef.entryId),
+    );
+    expect(snapshot).toMatchObject({
+      scopeLabel: view!.repositoryLabel,
+      scopeDisplayName: view!.name,
+    });
   });
 
   it('never persists or compares node_id', () => {

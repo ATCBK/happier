@@ -42,6 +42,9 @@ export type GithubTriageConfigurationDecodeV1 =
  */
 export const GITHUB_TRIAGE_LOCAL_INSTANCE_KEY_V1 = 'github.com';
 
+/** The deployment-derived key contract shared by discovery and retained Settings edits. */
+export const GITHUB_TRIAGE_INSTANCE_KEY_STABILITY_V1 = 'locatorDerived' as const;
+
 /**
  * The forge DEPLOYMENT an entry from this source belongs to.
  *

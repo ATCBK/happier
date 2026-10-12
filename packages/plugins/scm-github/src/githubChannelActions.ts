@@ -1,4 +1,7 @@
 import {
+  assertConversationChannelsCoreCallerV1,
+  classifyConversationProviderMaterializationFailureV1,
+  rethrowConversationProviderLifecycleFailureV1,
   MAX_CONVERSATION_RETRY_AFTER_MS,
   ConversationConnectionTestInputV1Schema,
   ConversationConnectionTestResultV1Schema,
@@ -59,8 +62,6 @@ import {
 import { parseGithubRepositorySetupInput } from './observations/githubRepositorySetupInput.js';
 import { parseGithubChannelEndpoint as parseEndpointId } from './observations/githubChannelEndpoint.js';
 
-const CHANNELS_CORE_PLUGIN_ID = 'happier.channels';
-const GITHUB_ISSUE_COMMENT_BODY_MAX_UTF8_BYTES = 65_536;
 const githubTextEncoder = new TextEncoder();
 
 type JsonRecord = Readonly<Record<string, unknown>>;
@@ -82,16 +83,10 @@ function readString(value: unknown, label: string): string {
 }
 
 function assertChannelsCoreCaller(context: PluginInvocationContext): void {
-  if (
-    context.surface !== 'plugin'
-    || context.caller?.kind !== 'plugin'
-    || context.caller.pluginId !== CHANNELS_CORE_PLUGIN_ID
-  ) {
-    throw new PluginError({
-      code: 'github_channels_core_caller_required',
-      message: 'GitHub Channel setup must be invoked by the Channels core plugin.',
-    });
-  }
+  assertConversationChannelsCoreCallerV1(context, {
+    code: 'github_channels_core_caller_required',
+    message: 'GitHub Channel setup must be invoked by the Channels core plugin.',
+  });
 }
 
 function userUrl(): string {
@@ -212,19 +207,11 @@ function providerFailure(error: unknown): ConversationProviderFailureV1 {
     return providerFailureForGithubResponse(error.response);
   }
   if (isPluginError(error)) {
+    if (error.code === 'plugin_service_unavailable') return { kind: 'notReady', reason: 'network' };
     if (error.code.includes('credential')) return { kind: 'notReady', reason: 'credentialInvalid' };
     return { kind: 'notReady', reason: error.retryable ? 'network' : 'invalidConfiguration' };
   }
   return { kind: 'notReady', reason: 'network' };
-}
-
-function rethrowPreEffectLifecycleFailure(error: unknown, signal: AbortSignal): void {
-  if (
-    signal.aborted
-    || (isPluginError(error) && error.code === 'plugin_final_generation_retired')
-  ) {
-    throw error;
-  }
 }
 
 function readCredentialRef(value: ConnectedAccountRef | null, pluginId: string): ConnectedAccountRef {
@@ -235,6 +222,17 @@ function readCredentialRef(value: ConnectedAccountRef | null, pluginId: string):
     });
   }
   return value;
+}
+
+async function createGithubChannelApiClient(
+  context: PluginInvocationContext,
+  credentialRef: ConnectedAccountRef,
+): Promise<GithubApiClientV1 | ConversationProviderFailureV1> {
+  try {
+    return await createGithubApiClient(context, credentialRef);
+  } catch (error) {
+    return classifyConversationProviderMaterializationFailureV1(error, context.signal);
+  }
 }
 
 function readGithubChannelConnection(
@@ -284,33 +282,11 @@ function makeChannelConfig(
 }
 
 /**
- * The generic delivery contract permits a larger payload than one GitHub
- * comment. Format and split at this provider boundary, because neutralizing a
- * mention adds UTF-8 bytes and the core owns neither GitHub's body format nor
- * its comment boundaries.
+ * Neutralize mentions without growing a native-limit chunk. The fullwidth
+ * at-sign remains readable and cannot become a GitHub notification mention.
  */
-function splitGithubIssueCommentBodiesForDelivery(content: string): readonly string[] {
-  const bodies: string[] = [];
-  let current = '';
-  let currentUtf8Bytes = 0;
-
-  for (const codePoint of content) {
-    // Keep the suppression pair atomic: a chunk boundary cannot leave an
-    // un-neutralized `@` before a mention target in the preceding comment.
-    const formatted = codePoint === '@' ? '@\u200B' : codePoint;
-    const formattedUtf8Bytes = githubTextEncoder.encode(formatted).byteLength;
-    if (currentUtf8Bytes + formattedUtf8Bytes > GITHUB_ISSUE_COMMENT_BODY_MAX_UTF8_BYTES) {
-      bodies.push(current);
-      current = formatted;
-      currentUtf8Bytes = formattedUtf8Bytes;
-      continue;
-    }
-    current += formatted;
-    currentUtf8Bytes += formattedUtf8Bytes;
-  }
-
-  if (current) bodies.push(current);
-  return bodies;
+function formatGithubIssueCommentBodyForDelivery(content: string): string {
+  return content.replaceAll('@', '＠');
 }
 
 export async function setupGithubChannels(
@@ -344,7 +320,12 @@ export async function setupGithubChannels(
     recommendedTransport: 'checkpointedPull',
     overlapSafety: 'safe',
     replayContinuity: 'checkpointed',
-    outboundTextLimit: { maximum: GITHUB_ISSUE_COMMENT_BODY_MAX_UTF8_BYTES, unit: 'utf8Bytes' },
+    // The REST comment history supports `since`, not Telegram's update expiry:
+    // https://docs.github.com/en/rest/issues/comments#list-issue-comments-for-a-repository
+    // This provider's recommendation is policy, not a GitHub retention guarantee.
+    recommendedMaximumObservationAgeMs: 30 * 86_400_000,
+    // GitHub's native REST comment limit; Channels owns lossless chunking.
+    outboundTextLimit: { maximum: 65_536, unit: 'unicodeCodePoints' },
   });
 }
 
@@ -363,7 +344,8 @@ export async function testGithubChannelConnection(
       });
     }
     const connection = readGithubChannelConnection(request, context.plugin.id);
-    const client = await createGithubApiClient(context, connection.credentialRef);
+    const client = await createGithubChannelApiClient(context, connection.credentialRef);
+    if ('kind' in client) return ConversationConnectionTestResultV1Schema.parse(client);
     const identity = await readConfiguredIdentityWithClient(client);
     if (identity.id !== connection.config.integrationPrincipal.id) {
       return ConversationConnectionTestResultV1Schema.parse({
@@ -380,7 +362,7 @@ export async function testGithubChannelConnection(
       providerConnectionKey: request.providerConnectionKey,
     });
   } catch (error) {
-    rethrowPreEffectLifecycleFailure(error, context.signal);
+    rethrowConversationProviderLifecycleFailureV1(error, context.signal);
     return ConversationConnectionTestResultV1Schema.parse(providerFailure(error));
   }
 }
@@ -398,7 +380,8 @@ export async function resolveGithubChannelEndpoint(
     }
     const issueNumber = decodeIssueNumber(request.query, config.repository);
     if (issueNumber === null) return ConversationEndpointResolveResultV1Schema.parse({ kind: 'resolved', candidates: [] });
-    const client = await createGithubApiClient(context, credentialRef);
+    const client = await createGithubChannelApiClient(context, credentialRef);
+    if ('kind' in client) return ConversationEndpointResolveResultV1Schema.parse(client);
     const response = await client.request({ url: issueUrl(config.repository, issueNumber) });
     if (response.status !== 200) throw new GithubApiResponseError(response);
     const issue = parseGithubIssue(decodeGithubJsonResponse(response));
@@ -416,7 +399,7 @@ export async function resolveGithubChannelEndpoint(
       }],
     });
   } catch (error) {
-    rethrowPreEffectLifecycleFailure(error, context.signal);
+    rethrowConversationProviderLifecycleFailureV1(error, context.signal);
     return ConversationEndpointResolveResultV1Schema.parse(providerFailure(error));
   }
 }
@@ -433,7 +416,8 @@ export async function resolveGithubChannelPrincipal(
     const url = new URL('/search/users', 'https://api.github.com');
     url.searchParams.set('q', request.query);
     url.searchParams.set('per_page', '50');
-    const client = await createGithubApiClient(context, credentialRef);
+    const client = await createGithubChannelApiClient(context, credentialRef);
+    if ('kind' in client) return ConversationPrincipalResolveResultV1Schema.parse(client);
     const response = await client.request({ url: url.toString() });
     if (response.status !== 200) throw new GithubApiResponseError(response);
     const payload = decodeGithubJsonResponse(response);
@@ -461,7 +445,7 @@ export async function resolveGithubChannelPrincipal(
       .sort(compareCanonicalConversationResolutionCandidatesV1);
     return ConversationPrincipalResolveResultV1Schema.parse({ kind: 'resolved', candidates });
   } catch (error) {
-    rethrowPreEffectLifecycleFailure(error, context.signal);
+    rethrowConversationProviderLifecycleFailureV1(error, context.signal);
     return ConversationPrincipalResolveResultV1Schema.parse(providerFailure(error));
   }
 }
@@ -474,7 +458,8 @@ export async function pollGithubChannelObservations(
   try {
     const request = ConversationPollInputV1Schema.parse(input);
     const { config, credentialRef } = readGithubChannelConnection(request, context.plugin.id);
-    const client = await createGithubApiClient(context, credentialRef);
+    const client = await createGithubChannelApiClient(context, credentialRef);
+    if ('kind' in client) return ConversationPollResultV1Schema.parse(client);
     return ConversationPollResultV1Schema.parse(await pollGithubIssueCommentsForChannels({
       client,
       config,
@@ -483,10 +468,11 @@ export async function pollGithubChannelObservations(
       connectionId: request.connectionId,
       providerConnectionKey: request.providerConnectionKey,
       ciEndpoints: request.bindings?.filter((binding) => binding.scopedTriggerKind === 'ciFailed').map((binding) => binding.endpoint),
+      pullRequestEndpoints: request.bindings?.filter((binding) => binding.endpoint.kind === 'githubPullRequest').map((binding) => binding.endpoint),
       signal: context.signal,
     }));
   } catch (error) {
-    rethrowPreEffectLifecycleFailure(error, context.signal);
+    rethrowConversationProviderLifecycleFailureV1(error, context.signal);
     if (error instanceof GithubIssueCommentCheckpointError) {
       return ConversationPollResultV1Schema.parse({
         kind: 'historyGap',
@@ -522,34 +508,24 @@ export async function deliverGithubChannelMessage(
 ): Promise<ConversationDeliveryResultV1> {
   assertChannelsCoreCaller(context);
   const request = ConversationDeliveryInputV1Schema.parse(input);
+  if (request.newThread !== undefined) return { kind: 'notReady', reason: 'unsupported' };
   const { config, credentialRef } = readGithubChannelConnection(request, context.plugin.id);
   // GitHub issue comments have one conversation endpoint and no native
   // comment-reply target. The core retains reply context for custody, but it
   // cannot alter this provider's already-frozen issue or pull-request route.
-  const bodies = splitGithubIssueCommentBodiesForDelivery(request.content);
-  if (bodies.length === 0) {
-    return ConversationDeliveryResultV1Schema.parse({ kind: 'notDelivered', retry: 'never' });
-  }
+  const body = formatGithubIssueCommentBodyForDelivery(request.content.text);
   const endpoint = parseEndpointId(request.endpoint, config.repository.repositoryId);
-  let client: GithubApiClientV1;
-  try {
-    client = await createGithubApiClient(context, credentialRef);
-  } catch (error) {
-    rethrowPreEffectLifecycleFailure(error, context.signal);
-    if (isPluginError(error)) {
-      if (error.retryable || error.code === 'plugin_service_unavailable') {
-        return ConversationDeliveryResultV1Schema.parse({ kind: 'notDelivered', retry: 'safe' });
-      }
-      return ConversationDeliveryResultV1Schema.parse({ kind: 'notDelivered', retry: 'never' });
-    }
-    // Account materialization finishes before a GitHub request can be made.
-    return safeRetryBeforeGithubCommentPost();
+  const client = await createGithubChannelApiClient(context, credentialRef);
+  if ('kind' in client) {
+    return ConversationDeliveryResultV1Schema.parse({
+      kind: 'notDelivered', retry: client.reason === 'network' ? 'safe' : 'never',
+    });
   }
   let revalidated: GithubApiResponseV1;
   try {
     revalidated = await client.request({ url: issueUrl(config.repository, endpoint.issueNumber) });
   } catch (error) {
-    rethrowPreEffectLifecycleFailure(error, context.signal);
+    rethrowConversationProviderLifecycleFailureV1(error, context.signal);
     // This is the endpoint GET, not a comment POST, so GitHub has no message
     // effect to reconcile and the normal delivery owner may retry it safely.
     return safeRetryBeforeGithubCommentPost();
@@ -569,57 +545,34 @@ export async function deliverGithubChannelMessage(
   if (issue.id !== endpoint.issueId || issue.number !== endpoint.issueNumber || issue.kind !== endpoint.kind) {
     return ConversationDeliveryResultV1Schema.parse({ kind: 'notDelivered', retry: 'never' });
   }
-  const providerMessageIds: string[] = [];
-  for (const [index, body] of bodies.entries()) {
-    try {
-      const response = await client.request({
-        url: commentUrl(config.repository, endpoint.issueNumber),
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // GitHub has no request-level mention suppression switch. The body is
-        // neutralized and bounded before every provider request.
-        body: githubTextEncoder.encode(JSON.stringify({ body })),
-      });
-      if (response.status === 201) {
-        const value = decodeGithubJsonResponse(response);
-        if (!isRecord(value)) throw new RangeError('GitHub comment delivery response must be an object');
-        providerMessageIds.push(readGithubPositiveDecimal(value.id, 'delivered comment ID'));
-        continue;
-      }
-      const deliveryFailureAtMs = Date.now();
-      const failure = classifyGithubResponseFailure(response, deliveryFailureAtMs);
-      const retryAfterMs = readBoundedGithubRetryAfterMs(failure, deliveryFailureAtMs);
-      if (retryAfterMs !== null) {
-        if (providerMessageIds.length === 0) {
-          return ConversationDeliveryResultV1Schema.parse({
-            kind: 'notDelivered',
-            retry: 'after',
-            retryAfterMs,
-          });
-        }
-        return ConversationDeliveryResultV1Schema.parse({
-          kind: 'partial', providerMessageIds, failedChunk: index, retrySafe: false,
-        });
-      }
-      if (isGithubDefiniteRejection(failure)) {
-        if (providerMessageIds.length === 0) {
-          return ConversationDeliveryResultV1Schema.parse({ kind: 'notDelivered', retry: 'never' });
-        }
-        return ConversationDeliveryResultV1Schema.parse({
-          kind: 'partial', providerMessageIds, failedChunk: index, retrySafe: false,
-        });
-      }
+  try {
+    const response = await client.request({
+      url: commentUrl(config.repository, endpoint.issueNumber),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // GitHub has no request-level mention suppression switch. Acceptance
+      // and any service-side text limit remain owned by the REST API.
+      body: githubTextEncoder.encode(JSON.stringify({ body })),
+    });
+    if (response.status === 201) {
+      const value = decodeGithubJsonResponse(response);
+      if (!isRecord(value)) throw new RangeError('GitHub comment delivery response must be an object');
       return ConversationDeliveryResultV1Schema.parse({
-        kind: 'outcomeUnknown',
-        ...(providerMessageIds.length === 0 ? {} : { providerMessageIds }),
-      });
-    } catch (error) {
-      if (context.signal.aborted) throw error;
-      return ConversationDeliveryResultV1Schema.parse({
-        kind: 'outcomeUnknown',
-        ...(providerMessageIds.length === 0 ? {} : { providerMessageIds }),
+        kind: 'delivered', providerMessageIds: [readGithubPositiveDecimal(value.id, 'delivered comment ID')],
       });
     }
+    const deliveryFailureAtMs = Date.now();
+    const failure = classifyGithubResponseFailure(response, deliveryFailureAtMs);
+    const retryAfterMs = readBoundedGithubRetryAfterMs(failure, deliveryFailureAtMs);
+    if (retryAfterMs !== null) {
+      return ConversationDeliveryResultV1Schema.parse({ kind: 'notDelivered', retry: 'after', retryAfterMs });
+    }
+    if (isGithubDefiniteRejection(failure)) {
+      return ConversationDeliveryResultV1Schema.parse({ kind: 'notDelivered', retry: 'never' });
+    }
+    return ConversationDeliveryResultV1Schema.parse({ kind: 'outcomeUnknown' });
+  } catch (error) {
+    if (context.signal.aborted) throw error;
+    return ConversationDeliveryResultV1Schema.parse({ kind: 'outcomeUnknown' });
   }
-  return ConversationDeliveryResultV1Schema.parse({ kind: 'delivered', providerMessageIds });
 }

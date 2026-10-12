@@ -78,6 +78,7 @@ export type GithubTriageEntrySnapshotV1 = Readonly<{
   kindId: GithubTriageKindIdV1;
   title: string;
   scopeLabel: string;
+  scopeDisplayName?: string;
   /** Who opened the entry (their login), one bounded display line; absent when GitHub names nobody. */
   authorLabel?: string;
   /** The entry's number as GitHub writes it ("#2481"), one bounded display line. */

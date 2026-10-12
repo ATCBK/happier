@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import {
-  MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES,
   MAX_CONVERSATION_RETRY_AFTER_MS,
   type ConversationNormalizedIngressV1,
   type ConversationObservationV1,
@@ -29,11 +28,11 @@ import { parseGithubChannelEndpoint } from './githubChannelEndpoint.js';
 import { readGithubPullRequestChecks } from '../triage/checks.js';
 import { projectGithubChecksSourceEvents } from './githubChecksSource.js';
 import { GITHUB_AUTOMATION_EVENT_LOCAL_IDS } from '../githubAutomationEvents.js';
+import { readGithubPullRequestState } from '../pullRequests/mapping.js';
 
 const MAX_GITHUB_ISSUE_COMMENT_PAGES_PER_POLL = 10;
 const MAX_GITHUB_ISSUE_COMMENT_SCOPE_LENGTH = 512;
 const MAX_GITHUB_ISSUE_COMMENT_PAGE_URL_LENGTH = 2_048;
-const githubIssueCommentTextEncoder = new TextEncoder();
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 
@@ -663,6 +662,7 @@ type GithubChannelPollInput = Readonly<{
   providerConnectionKey: string;
   nowMs?: number;
   ciEndpoints?: readonly ConversationResolvedEndpointV1[];
+  pullRequestEndpoints?: readonly ConversationResolvedEndpointV1[];
   signal?: AbortSignal;
 }>;
 
@@ -684,10 +684,11 @@ export async function pollGithubIssueCommentsForChannels(input: GithubChannelPol
   const observations = result.kind === 'batch' ? [...result.observations] : [];
   const signal = input.signal ?? new AbortController().signal;
   let repositoryWriteAccess: boolean | null | undefined;
-  const endpoints = new Map((input.ciEndpoints ?? []).map((endpoint) => [endpoint.id, endpoint]));
+  const ciEndpointIds = new Set((input.ciEndpoints ?? []).map(endpoint => endpoint.id));
+  const endpoints = new Map([...(input.pullRequestEndpoints ?? []), ...(input.ciEndpoints ?? [])].map((endpoint) => [endpoint.id, endpoint]));
+  const pullRequestEndpoints: ConversationResolvedEndpointV1[] = [];
   for (const endpoint of endpoints.values()) {
     signal.throwIfAborted();
-    if (observations.length >= input.limit) break;
     const parsed = parseGithubChannelEndpoint(endpoint, input.config.repository.repositoryId);
     if (parsed.kind !== 'githubPullRequest') throw new RangeError('GitHub CI polling requires a pull-request endpoint');
     const repositoryRoute = `/repos/${encodeURIComponent(input.config.repository.owner)}/${encodeURIComponent(input.config.repository.name)}`;
@@ -700,6 +701,15 @@ export async function pollGithubIssueCommentsForChannels(input: GithubChannelPol
     const prResponse = await input.client.request({ url: `${GITHUB_API_ORIGIN}${repositoryRoute}/pulls/${parsed.issueNumber}` });
     if (prResponse.status !== 200) throw new GithubIssueCommentPollResponseError(prResponse);
     const pr = decodeJson(prResponse);
+    if (!isRecord(pr) || pr.number !== parsed.issueNumber) throw new RangeError('GitHub PR response identity does not match its endpoint');
+    // The issue endpoint establishes the immutable issue identity; /pulls establishes
+    // remote merge/close state. Neither an empty open-PR list nor CI implies closure.
+    const remoteState = readGithubPullRequestState(pr);
+    pullRequestEndpoints.push({ ...endpoint, kind: 'githubPullRequest', audience: 'shared',
+      pullRequest: { repository: input.config.repository.nameWithOwner, number: parsed.issueNumber },
+      pullRequestState: { state: remoteState === 'draft' ? 'open' : remoteState, observedAt: input.nowMs ?? Date.now() },
+    });
+    if (!ciEndpointIds.has(endpoint.id) || observations.length >= input.limit) continue;
     const head = isRecord(pr) && isRecord(pr.head) ? pr.head : null;
     if (!head || typeof head.sha !== 'string' || !head.sha) throw new RangeError('GitHub PR head is unavailable');
     const surface = await readGithubPullRequestChecks({ route: input.config.repository, headSha: head.sha,
@@ -738,8 +748,9 @@ export async function pollGithubIssueCommentsForChannels(input: GithubChannelPol
   const checkpointAfterBatch = { ...parseGithubIssueCommentCursor(result.checkpointAfterBatch),
     ...(Object.keys(checks).length === 0 ? {} : { pullRequestChecks: checks }),
   };
-  return result.kind === 'checkpointOnly' ? { ...result, checkpointAfterBatch }
-    : { ...result, observations, checkpointAfterBatch };
+  const refreshedEndpoints = pullRequestEndpoints.length === 0 ? {} : { pullRequestEndpoints };
+  return result.kind === 'checkpointOnly' ? { ...result, ...refreshedEndpoints, checkpointAfterBatch }
+    : { ...result, ...refreshedEndpoints, observations, checkpointAfterBatch };
 }
 
 async function pollGithubIssueComments(input: GithubChannelPollInput): Promise<ConversationPollResultV1> {
@@ -908,14 +919,6 @@ async function pollGithubIssueComments(input: GithubChannelPollInput): Promise<C
         kind: 'routableNonAdmission' as const,
         shell,
         reason: 'unsupportedContent' as const,
-      }));
-      continue;
-    }
-    if (githubIssueCommentTextEncoder.encode(comment.body).byteLength > MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES) {
-      observations.push(Object.freeze({
-        kind: 'routableNonAdmission' as const,
-        shell,
-        reason: 'messageTooLarge' as const,
       }));
       continue;
     }

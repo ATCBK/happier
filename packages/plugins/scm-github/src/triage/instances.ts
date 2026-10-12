@@ -22,6 +22,7 @@ import {
   encodeGithubTriageConfiguration,
   GITHUB_TRIAGE_ACCOUNT_SCOPE_V1,
   GITHUB_TRIAGE_LOCAL_INSTANCE_KEY_V1,
+  GITHUB_TRIAGE_INSTANCE_KEY_STABILITY_V1,
 } from './configuration.js';
 import { GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1 } from './contribution.js';
 import {
@@ -128,7 +129,7 @@ async function readCandidate(
       localInstanceKey: GITHUB_TRIAGE_LOCAL_INSTANCE_KEY_V1,
       // Derived from the configured normalized API origin, not from immutable
       // provider identity: an origin change is explicit reconfiguration.
-      keyStability: 'locatorDerived' as const,
+      keyStability: GITHUB_TRIAGE_INSTANCE_KEY_STABILITY_V1,
       configuration: Object.freeze({ v: 1 as const, token }),
       locator: Object.freeze({
         v: 1 as const,

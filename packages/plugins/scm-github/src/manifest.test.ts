@@ -180,9 +180,8 @@ describe('GitHub SCM manifest', () => {
       (PLUGIN_MANIFEST.contributes.actions ?? []).map((action) => [action.id, action]),
     );
 
-    // Discovery and the authoritative read keep their Protocol-owned `plugin`
-    // + `ui` surfaces — the Triage daemon consumes `plugin` — while the five
-    // source-native detail reads also admit agents. All reads declare the same
+    // Discovery also admits automation through the shared Protocol role;
+    // authoritative reads retain their targeted-plugin path. All reads declare the same
     // mounted-only placement: the explicit empty list withdraws them from
     // global placement discovery without disabling any invocation surface.
     const mountedOnly = [

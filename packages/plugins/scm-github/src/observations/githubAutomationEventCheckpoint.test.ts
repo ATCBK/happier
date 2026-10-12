@@ -5,7 +5,10 @@ import {
   isValidPluginJsonSchemaValue,
 } from '@happier-dev/plugin-sdk/manifest';
 
-import { PLUGIN_MANIFEST } from '../manifest.js';
+import { PLUGIN_MANIFEST, collectionMigrations } from '../manifest.js';
+import { collectionMigrations as portableMigrations } from '../collectionMigrationArtifact.js';
+import { normalizePluginAccountCollectionMigrationRuntimeProjection } from '@happier-dev/plugin-sdk/host/registration';
+import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
 import {
   GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION,
   GITHUB_AUTOMATION_EVENT_CHECKPOINT_FIELD,
@@ -91,6 +94,11 @@ describe('GitHub Automation Event checkpoint identity', () => {
       expect(row[GITHUB_AUTOMATION_EVENT_CHECKPOINT_FIELD.eventLocalId]).toBe(localId);
       expect(isGithubAutomationEventCheckpointRowV1(row)).toBe(true);
       expect(isValidPluginJsonSchemaValue(validate, row)).toBe(true);
+      expect(GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION.schemaVersion).toBe(2);
+      expect(GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION.readableSchemaVersions).toEqual([1]);
+      const migration = collectionMigrations[GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION.id]?.[0];
+      expect(migration).toMatchObject({ fromSchemaVersion: 1, toSchemaVersion: 2 });
+      expect(migration?.migrate(row)).toEqual(row);
     }
     const genericRow = {
       ...createGithubAutomationEventCheckpointRowV1({
@@ -156,5 +164,13 @@ describe('GitHub Automation Event checkpoint identity', () => {
     }]);
     const admitted = ingestPluginManifestV2(PLUGIN_MANIFEST);
     expect(admitted, JSON.stringify(admitted)).toMatchObject({ ok: true });
+    const portable = portableMigrations();
+    // The authored entry supplies callbacks; the build embeds this manifest.
+    // Real compiled-payload validation lives in collectionMigrationArtifact.test.
+    const parsed = parsePluginManifest(PLUGIN_MANIFEST);
+    if (!parsed.ok) throw new Error('Expected the canonical migration manifest to parse');
+    const projection = normalizePluginAccountCollectionMigrationRuntimeProjection(portable, parsed.manifest.contributes.accountCollections);
+    expect(projection[GITHUB_AUTOMATION_EVENT_CHECKPOINT_COLLECTION.id]?.[0])
+      .toMatchObject({ fromSchemaVersion: 1, toSchemaVersion: 2, migrate: expect.any(Function) });
   });
 });

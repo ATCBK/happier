@@ -70,12 +70,16 @@ function sameNameWithOwner(left: string, right: string): boolean {
   return left.trim().toLowerCase() === right.trim().toLowerCase();
 }
 
-function mapGithubPullState(raw: Record<string, unknown>, mergedAtMs: number | null): ScmPullRequestState {
+export function readGithubPullRequestState(value: unknown): ScmPullRequestState {
+  if (!isRecord(value)) return 'unknown';
+  const raw = value;
+  const mergedAtMs = parseTimestampMs(raw.merged_at) ?? parseTimestampMs(raw.mergedAt);
   const state = readGithubString(raw.state)?.toLowerCase();
   if (readGithubBoolean(raw.merged) === true || state === 'merged' || mergedAtMs !== null) return 'merged';
   if (state === 'closed') return 'closed';
-  if (readGithubBoolean(raw.draft) === true || readGithubBoolean(raw.isDraft) === true) return 'draft';
-  if (state === 'open' || state === 'draft') return state;
+  if (state === 'open' || state === 'draft') {
+    return state === 'draft' || readGithubBoolean(raw.draft) === true || readGithubBoolean(raw.isDraft) === true ? 'draft' : 'open';
+  }
   return 'unknown';
 }
 
@@ -151,7 +155,7 @@ export function mapGithubPullRequest(
       : {}),
     ...(headSha !== null ? { headSha } : {}),
     ...(baseSha !== null ? { baseSha } : {}),
-    state: mapGithubPullState(raw, mergedAtMs),
+    state: readGithubPullRequestState(raw),
     ...(createdAtMs !== null ? { createdAtMs } : {}),
     ...(closedAtMs !== null ? { closedAtMs } : {}),
     ...(mergedAtMs !== null ? { mergedAtMs } : {}),

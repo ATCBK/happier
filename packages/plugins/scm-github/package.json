@@ -17,7 +17,8 @@
       "default": "./dist/manifest.js"
     },
     "./happier-plugin-ui/github-detail-native": "./src/ui/renderSurface.tsx",
-    "./happier-plugin-ui/github-triage-sources-native": "./src/ui/settings/renderSettingsSurface.tsx"
+    "./happier-plugin-ui/github-triage-sources-native": "./src/ui/settings/renderSettingsSurface.tsx",
+    "./happier-plugin-ui/github-collection-migrations": "./src/collectionMigrationArtifact.ts"
   },
   "files": [
     "dist",
