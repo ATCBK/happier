@@ -115,7 +115,7 @@ describe('launch_profiles.publish', () => {
     const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
     expect(resolveActionApprovalRouting({ actionId: 'launch_profiles.publish', spec: getActionSpec('launch_profiles.publish'),
       context: { ...context, authority: 'account_automation' }, defaultSafety: 'danger' }))
-      .toMatchObject({ required: true, flow: 'blocking' });
+      .toMatchObject({ required: true, flow: 'deferred', result: 'required' });
     const autonomous = await executor.execute('launch_profiles.publish', { profileId: 'work' }, { ...context, authority: 'account_automation' });
     expect(autonomous, JSON.stringify(autonomous)).toMatchObject({ ok: false });
     expect(state.artifacts.size).toBe(0);
