@@ -1,6 +1,7 @@
 import type { ResolvedAgentCatalogEntry } from '@/agents/backendCatalog/agentCatalogProjection';
 import type { MachineAgent, MachineAgentState } from '@/agents/machineAgents/machineAgentTypes';
 import { resolveHappierCollectionInitialKey } from '@happier-dev/plugin-ui/presentation';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 
 export type AgentCollectionRowStatus = MachineAgentState | 'disabled';
 
@@ -34,7 +35,9 @@ export function buildAgentCollection(params: Readonly<{
     const onMachine: AgentCollectionRow[] = [];
     const available: AgentCollectionRow[] = [];
     const agentsById = new Map(params.agents.map((agent) => [agent.agentId, agent]));
-    for (const entry of params.entries) {
+    // Configured custom ACP agents are listed once, in their own group with their editor.
+    const entries = params.entries.filter((entry) => !isCustomAcpAgentEntry(entry));
+    for (const entry of entries) {
         if (query && !entry.title.toLocaleLowerCase().includes(query)) continue;
         const agent = agentsById.get(entry.agentId);
         if (agent?.state === 'notInstalled' || agent?.state === 'unsupported') {
@@ -46,7 +49,12 @@ export function buildAgentCollection(params: Readonly<{
             : agent?.state ?? 'unknown';
         onMachine.push({ entry, status, signIn: agent?.signIn ?? null, trouble: status === 'needsSignIn' && agent?.stale !== true });
     }
-    return { onMachine, available, total: params.entries.length };
+    return { onMachine, available, total: entries.length };
+}
+
+function isCustomAcpAgentEntry(entry: ResolvedAgentCatalogEntry): boolean {
+    return entry.identity?.pluginId === CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId
+        && entry.identity.localId === CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.localId;
 }
 
 /** The agent the detail route addresses, matched the way `createAgentSettingsRoute` builds it. */

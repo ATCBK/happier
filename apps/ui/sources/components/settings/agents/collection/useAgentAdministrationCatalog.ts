@@ -16,7 +16,7 @@ import {
     type MachineAdministrationTargetSelectionV1,
 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
-import { describeMachineLockedReason, getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { describeMachineLockedReason, getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { presentMachineAdministrationTargetState } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 
 /**
@@ -70,12 +70,18 @@ export function useAgentsMachineScope(targetSelection: MachineAdministrationTarg
     const machineId = executionTarget?.machine.id ?? selectedRow?.machine.id ?? null;
     const serverId = executionTarget?.serverId ?? selectedRow?.serverId ?? null;
     const machine = executionTarget?.machine ?? selectedRow?.machine ?? null;
+    // Named as the picker chip names it: same-name machines of one Home carry their disambiguator.
+    const machineLabel = machine && serverId
+        ? resolveMachineDisplayNames(targetSelection.pickerRows
+            .filter((row) => row.serverId === serverId)
+            .map((row) => row.machine)).get(machine.id) ?? getMachineDisplayName(machine)
+        : getMachineDisplayName(machine);
     return {
         executionTarget,
         /** Presence comes from the canonical target state, not execution admission. */
         offline: targetSelection.state.kind === 'offline',
         projectionScope: machineId && serverId ? { machineId, serverId } : null,
-        machineLabel: getMachineDisplayName(machine),
+        machineLabel,
         machineLockedReason: describeMachineLockedReason(machine),
     } as const;
 }
@@ -116,6 +122,7 @@ export function useAgentAdministrationCatalog(options?: Readonly<{
     return {
         targetSelection,
         executionTarget: scope.executionTarget,
+        projectionScope: scope.projectionScope,
         machineOnline: scope.executionTarget !== null,
         machineLabel: scope.machineLabel,
         projectionCurrent: daemonMergedProjection.phase === 'ready',

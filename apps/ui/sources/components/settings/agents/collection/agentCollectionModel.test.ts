@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ResolvedAgentCatalogEntry } from '@/agents/backendCatalog/agentCatalogProjection';
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { projectMachineAgent } from '@/agents/machineAgents/machineAgentModel';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 
 import {
     buildAgentCollection,
@@ -95,6 +96,22 @@ describe('buildAgentCollection', () => {
         expect(collection.onMachine).toEqual([]);
         expect(collection.available.map((row) => row.entry.agentId)).toEqual(['cursor']);
         expect(collection.total).toBe(3);
+    });
+
+    it('leaves configured custom ACP agents to their own group instead of listing them twice', () => {
+        const custom = { pluginId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId, localId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.localId };
+        const collection = buildAgentCollection({
+            entries: [
+                entry('claude'),
+                entry('custom-acp', { identity: custom, title: 'Reviewer bot', isBuiltIn: false, cli: null }),
+                entry('custom-acp', { identity: custom, title: 'Local Qwen', isBuiltIn: false, cli: null, enabled: false }),
+            ],
+            agents: [agent('claude', 'ready')],
+            query: '',
+        });
+
+        expect([...collection.onMachine, ...collection.available].map((row) => row.entry.title)).toEqual(['Claude']);
+        expect(collection.total).toBe(1);
     });
 
     it('retains canonical unsupported and job states, and does not flag stale sign-in facts as trouble', () => {
