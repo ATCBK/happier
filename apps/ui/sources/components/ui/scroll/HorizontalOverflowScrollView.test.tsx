@@ -4,10 +4,6 @@ import { renderScreen } from '@/dev/testkit';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
-}));
-
 async function renderSelectableTextInScroller(
     os: 'android' | 'ios' | 'web',
     props: Readonly<{ keepNativeTextSelection?: boolean }> = {},
