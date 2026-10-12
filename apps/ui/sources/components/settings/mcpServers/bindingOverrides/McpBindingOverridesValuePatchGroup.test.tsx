@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { McpValueRefV1 } from '@happier-dev/protocol';
+import type { ValueRefV1 } from '@happier-dev/protocol';
 import { renderSettingsView } from '@/dev/testkit';
 
 
@@ -41,7 +41,7 @@ vi.mock('@/text', async () => {
 describe('McpBindingOverridesValuePatchGroup', () => {
     it('renders malformed value refs with a safe fallback instead of throwing', async () => {
         const { McpBindingOverridesValuePatchGroup } = await import('./McpBindingOverridesValuePatchGroup');
-        const invalidValueRef = { t: 'savedSecret' } as unknown as McpValueRefV1;
+        const invalidValueRef = { t: 'savedSecret' } as unknown as ValueRefV1;
 
         const screen = await renderSettingsView(React.createElement(McpBindingOverridesValuePatchGroup, {
                     kind: 'env',

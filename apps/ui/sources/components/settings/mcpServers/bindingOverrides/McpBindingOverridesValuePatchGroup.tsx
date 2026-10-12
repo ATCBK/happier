@@ -1,7 +1,7 @@
 import * as React from 'react';
 
-import type { McpValueRefV1 } from '@happier-dev/protocol';
-import { McpValueRefV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import type { ValueRefV1 } from '@happier-dev/protocol';
+import { ValueRefV1Schema } from '@happier-dev/protocol/valueRefs/valueRefV1';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -9,32 +9,32 @@ import { t } from '@/text';
 
 type PatchKind = 'env' | 'header';
 
-function describeValueRef(valueRef: McpValueRefV1): string {
+function describeValueRef(valueRef: ValueRefV1): string {
     if (valueRef.t === 'literal') return t('settings.mcpServersValueSourceLiteral');
     if (valueRef.t === 'sessionAttested') return valueRef.field;
     return t('settings.mcpServersValueSourceSavedSecret');
 }
 
-function describePatchedValue(value: McpValueRefV1 | null): string {
+function describePatchedValue(value: ValueRefV1 | null): string {
     if (value === null) {
         return t('settings.mcpServersOverridesDeleteValue');
     }
 
-    const parsed = McpValueRefV1Schema.safeParse(value);
+    const parsed = ValueRefV1Schema.safeParse(value);
     return parsed.success ? describeValueRef(parsed.data) : t('settings.mcpServersValidationFailed');
 }
 
 export type McpBindingOverridesValuePatchGroupProps = Readonly<{
     kind: PatchKind;
-    patch: Record<string, McpValueRefV1 | null>;
-    setPatch: React.Dispatch<React.SetStateAction<Record<string, McpValueRefV1 | null>>>;
+    patch: Record<string, ValueRefV1 | null>;
+    setPatch: React.Dispatch<React.SetStateAction<Record<string, ValueRefV1 | null>>>;
     openValueRefModal: (params: Readonly<{
         kind: PatchKind;
         initialKey: string;
-        initialValueRef: McpValueRefV1;
+        initialValueRef: ValueRefV1;
         existingKeys: ReadonlySet<string>;
         onDelete: () => void;
-        onSubmit: (next: { key: string; valueRef: McpValueRefV1 }) => void;
+        onSubmit: (next: { key: string; valueRef: ValueRefV1 }) => void;
     }>) => void;
     onPressDeleteKey: () => void;
 }>;

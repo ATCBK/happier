@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
-import type { McpValueRefV1, SavedSecretCatalogEntryV1 } from '@happier-dev/protocol';
+import type { ValueRefV1, SavedSecretCatalogEntryV1 } from '@happier-dev/protocol';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -18,7 +18,7 @@ import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalo
 type ValueRefKind = 'env' | 'header';
 
 function describeValueRef(
-    valueRef: McpValueRefV1,
+    valueRef: ValueRefV1,
     secrets: readonly SavedSecret[],
     catalogEntries: readonly SavedSecretCatalogEntryV1[],
 ): string {
@@ -42,10 +42,10 @@ export const McpValueRefMapEditor = React.memo(function McpValueRefMapEditor(pro
     /** Section description on configuration pages (page presentation). */
     description?: string;
     iconName: IconName;
-    entries: Record<string, McpValueRefV1>;
+    entries: Record<string, ValueRefV1>;
     secrets: SavedSecret[];
     scope?: AccountSettingsScope | null;
-    onChangeEntries: (next: Record<string, McpValueRefV1>) => void;
+    onChangeEntries: (next: Record<string, ValueRefV1>) => void;
     addRowTitle: string;
     addRowSubtitle?: string;
     emptyTitle: string;
@@ -66,9 +66,9 @@ export const McpValueRefMapEditor = React.memo(function McpValueRefMapEditor(pro
     const openEditor = React.useCallback((params: Readonly<{
         mode: 'add' | 'edit';
         initialKey: string;
-        initialValueRef: McpValueRefV1;
+        initialValueRef: ValueRefV1;
         onDelete?: (() => void) | null;
-        onSubmit: (result: Readonly<{ key: string; valueRef: McpValueRefV1 }>) => boolean;
+        onSubmit: (result: Readonly<{ key: string; valueRef: ValueRefV1 }>) => boolean;
     }>) => {
         Modal.show({
             component: ValueRefEditorModal,
@@ -140,7 +140,7 @@ export const McpValueRefMapEditor = React.memo(function McpValueRefMapEditor(pro
                                         Modal.alert(t('common.error'), t('settings.mcpServersKeyAlreadyExists'));
                                         return false;
                                     }
-                                    const next: Record<string, McpValueRefV1> = { ...props.entries };
+                                    const next: Record<string, ValueRefV1> = { ...props.entries };
                                     delete next[key];
                                     next[nextKey] = nextValueRef;
                                     props.onChangeEntries(next);

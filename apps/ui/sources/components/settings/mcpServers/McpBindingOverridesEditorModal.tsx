@@ -5,7 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import type {
     McpServerConfigOverrideFieldsV1,
     McpServerCatalogEntryTransportV1,
-    McpValueRefV1,
+    ValueRefV1,
 } from '@happier-dev/protocol';
 
 import type { CustomModalInjectedProps } from '@/modal';
@@ -85,16 +85,16 @@ export function McpBindingOverridesEditorModal(props: McpBindingOverridesEditorM
     const [urlOverrideEnabled, setUrlOverrideEnabled] = React.useState(() => initialOverrides.remote?.url !== undefined);
     const [urlOverride, setUrlOverride] = React.useState(() => initialOverrides.remote?.url ?? '');
 
-    const [envPatch, setEnvPatch] = React.useState<Record<string, McpValueRefV1 | null>>(() => initialOverrides.envPatch ?? {});
-    const [headersPatch, setHeadersPatch] = React.useState<Record<string, McpValueRefV1 | null>>(() => initialOverrides.remote?.headersPatch ?? {});
+    const [envPatch, setEnvPatch] = React.useState<Record<string, ValueRefV1 | null>>(() => initialOverrides.envPatch ?? {});
+    const [headersPatch, setHeadersPatch] = React.useState<Record<string, ValueRefV1 | null>>(() => initialOverrides.remote?.headersPatch ?? {});
 
     const openValueRefModal = React.useCallback((params: Readonly<{
         kind: 'env' | 'header';
         initialKey: string;
-        initialValueRef: McpValueRefV1;
+        initialValueRef: ValueRefV1;
         existingKeys: ReadonlySet<string>;
         onDelete: () => void;
-        onSubmit: (next: { key: string; valueRef: McpValueRefV1 }) => void;
+        onSubmit: (next: { key: string; valueRef: ValueRefV1 }) => void;
     }>) => {
         Modal.show({
             component: ValueRefEditorModal,
@@ -161,7 +161,7 @@ export function McpBindingOverridesEditorModal(props: McpBindingOverridesEditorM
 
         const remoteOverride = (() => {
             if (props.serverTransport === 'stdio') return undefined;
-            const next: { url?: string; headersPatch?: Record<string, McpValueRefV1 | null> } = {};
+            const next: { url?: string; headersPatch?: Record<string, ValueRefV1 | null> } = {};
             if (urlOverrideEnabled) {
                 const value = urlOverride.trim();
                 if (!value) {
